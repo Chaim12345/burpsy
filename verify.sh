@@ -30,22 +30,31 @@ else
 fi
 
 step "clippy"
-# Two traps here, both of which cost real time to rediscover.
+# Three traps here, each of which cost real time to rediscover.
 #
 # 1. cargo and clippy can come from DIFFERENT toolchains. On this machine /usr/bin/cargo is a
 #    distro build of 1.92.0 and shadows rustup's shims in PATH, while clippy-driver exists only
-#    under rustup at 1.95.0. Running `cargo clippy` then mixes them and every workspace crate
+#    under rustup at 1.95.0. Running plain `cargo clippy` mixes them and every workspace crate
 #    fails with E0514, "found crate X compiled by an incompatible version of rustc". So clippy is
 #    invoked through rustup's own cargo, which is guaranteed to match its clippy-driver.
 #    A rust-toolchain.toml would NOT fix this: it is a rustup feature, and /usr/bin/cargo ignores
 #    it entirely.
 #
-# 2. Even on a single toolchain, clippy sets RUSTC_WORKSPACE_WRAPPER, which changes the fingerprint
-#    of every workspace crate. Sharing target/ therefore makes clippy and build invalidate each
-#    other, rebuilding the world on every alternation. Its own target dir costs disk and buys back
-#    all of that time.
-if command -v rustup >/dev/null 2>&1 && RUSTUP_CARGO=$(rustup which cargo 2>/dev/null); then
-  CLIPPY=$(CARGO_TARGET_DIR=target/clippy "$RUSTUP_CARGO" clippy --workspace --all-targets 2>&1)
+# 2. Pinning `cargo` is NOT enough — cargo (even rustup's own binary) resolves the `rustc` it
+#    shells out to via a bare PATH lookup unless told otherwise, and /usr/bin/rustc (1.92) sits
+#    ahead of the rustup shim in PATH here too. So rustup's cargo would happily go compile every
+#    dependency with the WRONG rustc, and clippy-driver (1.95) would then reject its own build's
+#    output with the identical E0514. `RUSTC` must be pinned explicitly, to rustup's rustc, not
+#    just `cargo`.
+#
+# 3. Even on a fully consistent toolchain, clippy sets RUSTC_WORKSPACE_WRAPPER, which changes the
+#    fingerprint of every workspace crate. Sharing target/ therefore makes clippy and a plain build
+#    invalidate each other, rebuilding the world on every alternation. Its own target dir costs disk
+#    and buys back all of that time.
+if command -v rustup >/dev/null 2>&1 \
+   && RUSTUP_CARGO=$(rustup which cargo 2>/dev/null) \
+   && RUSTUP_RUSTC=$(rustup which rustc 2>/dev/null); then
+  CLIPPY=$(RUSTC="$RUSTUP_RUSTC" CARGO_TARGET_DIR=target/clippy "$RUSTUP_CARGO" clippy --workspace --all-targets 2>&1)
   if grep -qE '^error' <<<"$CLIPPY"; then
     no "clippy failed to run"
     grep -E '^error' -A8 <<<"$CLIPPY" | head -30
