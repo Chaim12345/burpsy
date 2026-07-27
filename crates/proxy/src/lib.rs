@@ -9,7 +9,16 @@
 //!   the user installing that CA in their trust store — a separate chunk, deliberately not faked.
 //!
 //! So today: full visibility on HTTP, connection-level visibility on HTTPS. A tunnel is recorded
-//! rather than silently dropped, so history never lies about what happened.
+//! rather than silently dropped, so history never lies about what happened — and a `CONNECT` that
+//! never reaches its origin is recorded too, with the reason, because "unreachable" and "never
+//! visited" must not both look like an empty history.
+//!
+//! # Request interception
+//!
+//! Optional and off by default. When a hold queue is attached (see [`ProxyConfig::with_interceptor`]
+//! and the [`intercept`] module), an in-scope request is parked before it is forwarded so an
+//! operator can rewrite or refuse it. Out-of-scope traffic is never held, and holding one request
+//! parks only its own connection task.
 //!
 //! # Memory
 //!
@@ -24,9 +33,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+pub mod intercept;
 pub mod sender;
 pub mod tls;
 pub mod tls_policy;
+pub use intercept::{HeldMeta, HeldView, Interceptor, Verdict};
 pub use tls::{CertAuthority, TlsEngine, default_ca_dir, load_or_generate_ca};
 pub use tls_policy::{TlsAction, TlsPolicy};
 
@@ -42,6 +53,9 @@ pub struct ProxyConfig {
     pub scope: Arc<burpsy_core::Scope>,
     /// Passive scanner. Runs on a spawned task so scan cost never adds proxy latency.
     pub scanner: Option<Arc<burpsy_scanner::PassiveScanner>>,
+    /// Hold queue for operator review. `None` means the feature is not wired up at all, which is
+    /// cheaper than a wired-but-disabled queue and impossible to switch on by accident.
+    pub intercept: Option<Arc<intercept::Interceptor>>,
 }
 
 impl ProxyConfig {
@@ -54,6 +68,7 @@ impl ProxyConfig {
             // traffic on a fresh run before the operator has configured anything.
             scope: Arc::new(burpsy_core::Scope::allow_everything()),
             scanner: None,
+            intercept: None,
         }
     }
 
@@ -77,6 +92,13 @@ impl ProxyConfig {
         self.engine = Some(e);
         self
     }
+
+    /// Attach a hold queue. Share the same `Arc` with the API layer — that is the only link between
+    /// the operator's decisions and the connection tasks waiting on them.
+    pub fn with_interceptor(mut self, i: Arc<intercept::Interceptor>) -> Self {
+        self.intercept = Some(i);
+        self
+    }
 }
 
 /// Run the proxy until cancelled. Each connection gets its own task.
@@ -93,7 +115,15 @@ pub async fn run_with(bind: &str, cfg: ProxyConfig) -> Result<()> {
         "proxy listening on {bind} ({} passthrough pattern(s))",
         cfg.tls.passthrough.len()
     );
+    serve(listener, cfg).await
+}
 
+/// Accept loop over a listener the caller already bound.
+///
+/// Split out from [`run_with`] so a test can bind port 0, learn the port, and still drive the real
+/// accept path — asserting proxy behaviour against a hardcoded port is how test suites start
+/// colliding with each other.
+pub async fn serve(listener: TcpListener, cfg: ProxyConfig) -> Result<()> {
     loop {
         let (sock, peer) = match listener.accept().await {
             Ok(v) => v,
@@ -194,10 +224,40 @@ async fn forward_http(
     let in_scope = cfg.scope.contains(&host_only, port, &path, false);
     if !in_scope {
         // Forward transparently but do not retain. Counted so the UI can show it is happening.
+        // Interception is deliberately downstream of this test: out-of-scope traffic is not the
+        // engagement's business, and holding it would freeze whatever else the browser is doing.
         return forward_only(client, upstream_req, &host_only, port).await;
     }
 
-    let req_id = store.put(Bytes::from(upstream_req.clone()), Direction::Request);
+    // Hold BEFORE the store write so history records what was actually sent — see `intercept`.
+    let upstream_req = match hold_for_review(
+        &cfg,
+        &host_only,
+        port,
+        false,
+        method,
+        &path,
+        Bytes::from(upstream_req),
+    )
+    .await
+    {
+        Reviewed::Send(b) => b,
+        Reviewed::Dropped { raw, reason } => {
+            let resp = dropped_response(&reason);
+            let _ = client.write_all(&resp).await;
+            let _ = client.flush().await;
+            record_drop(&store, &host_only, port, false, method, &path, raw, resp, &reason);
+            return Ok(());
+        }
+    };
+
+    // Re-derive the start line from the bytes that are actually going out. An operator who rewrote
+    // the path must not find the pre-edit path in history — the index has to agree with the
+    // message it indexes. The upstream host and port stay as originally addressed: editing the
+    // `Host` header changes what the origin is told, not which origin we dial.
+    let (method, path) = start_line_parts(&upstream_req);
+
+    let req_id = store.put(upstream_req.clone(), Direction::Request);
     let ex_id = store.add_exchange(Exchange {
         id: 0,
         request: req_id,
@@ -319,7 +379,8 @@ async fn tunnel(mut client: TcpStream, target: &str, cfg: ProxyConfig) -> Result
     let started = Instant::now();
     let mut upstream = match TcpStream::connect((host.as_str(), port)).await {
         Ok(s) => s,
-        Err(_) => {
+        Err(e) => {
+            record_failed_connect(&store, &host, port, &format!("upstream connect failed: {e}"), started);
             let _ = client
                 .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
                 .await;
@@ -394,18 +455,44 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         }
     };
 
-    // Upstream side.
-    let upstream_tcp = TcpStream::connect((host.as_str(), port))
-        .await
-        .with_context(|| format!("connect upstream {host}:{port}"))?;
+    // Upstream side. Every way this can fail is recorded before returning: an intercepted CONNECT
+    // that never reached the origin must still leave a trace, or history reads as "never visited".
+    let connect_started = Instant::now();
+    let upstream_tcp = match TcpStream::connect((host.as_str(), port)).await {
+        Ok(s) => s,
+        Err(e) => {
+            record_failed_connect(
+                &store,
+                &host,
+                port,
+                &format!("upstream connect failed: {e}"),
+                connect_started,
+            );
+            return Ok(());
+        }
+    };
     upstream_tcp.set_nodelay(true).ok();
     let connector = TlsConnector::from(tls::upstream_client_config());
-    let dns = rustls_pki_types::ServerName::try_from(host.clone())
-        .map_err(|_| anyhow::anyhow!("invalid DNS name {host:?}"))?;
-    let mut tls_upstream = connector
-        .connect(dns, upstream_tcp)
-        .await
-        .with_context(|| format!("upstream TLS handshake {host}"))?;
+    let dns = match rustls_pki_types::ServerName::try_from(host.clone()) {
+        Ok(d) => d,
+        Err(_) => {
+            record_failed_connect(&store, &host, port, "invalid DNS name for TLS", connect_started);
+            return Ok(());
+        }
+    };
+    let mut tls_upstream = match connector.connect(dns, upstream_tcp).await {
+        Ok(s) => s,
+        Err(e) => {
+            record_failed_connect(
+                &store,
+                &host,
+                port,
+                &format!("upstream TLS handshake failed: {e}"),
+                connect_started,
+            );
+            return Ok(());
+        }
+    };
 
     // Now it is just HTTP over two streams.
     loop {
@@ -415,7 +502,24 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         };
 
         let (method, path) = start_line_parts(&req);
-        let req_id = store.put(Bytes::from(req.clone()), Direction::Request);
+        let req = match hold_for_review(&cfg, &host, port, true, &method, &path, Bytes::from(req)).await
+        {
+            Reviewed::Send(b) => b,
+            Reviewed::Dropped { raw, reason } => {
+                let resp = dropped_response(&reason);
+                let _ = tls_client.write_all(&resp).await;
+                let _ = tls_client.flush().await;
+                record_drop(&store, &host, port, true, &method, &path, raw, resp, &reason);
+                // The client asked for one request and got a complete answer, so the TLS session is
+                // still in a sane state: keep serving it rather than tearing down every other
+                // pipelined request on this connection.
+                continue;
+            }
+        };
+        // As on the plain path: index the bytes that go out, not the ones that came in.
+        let (method, path) = start_line_parts(&req);
+
+        let req_id = store.put(req.clone(), Direction::Request);
         let ex_id = store.add_exchange(Exchange {
             id: 0,
             request: req_id,
@@ -611,6 +715,144 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
     hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Outcome of showing a request to the operator.
+enum Reviewed {
+    /// Send these bytes upstream. Identical to the input unless the operator rewrote them.
+    Send(Bytes),
+    /// Do not send. Carries the bytes that would have gone out, so history can still record them.
+    Dropped { raw: Bytes, reason: String },
+}
+
+/// Park a request for operator review, if interception is on and the target is in scope.
+///
+/// The scope test is repeated here even though `forward_http` already made it: the MITM path has no
+/// equivalent gate, and "out-of-scope traffic passes through untouched" is a property that must hold
+/// for every caller, not just the one that happens to check first.
+async fn hold_for_review(
+    cfg: &ProxyConfig,
+    host: &str,
+    port: u16,
+    tls: bool,
+    method: &str,
+    path: &str,
+    raw: Bytes,
+) -> Reviewed {
+    let Some(ic) = cfg.intercept.as_ref() else {
+        return Reviewed::Send(raw);
+    };
+    if !ic.is_enabled() || !cfg.scope.contains(host, port, path, tls) {
+        return Reviewed::Send(raw);
+    }
+    let meta = intercept::HeldMeta {
+        host: host.to_string(),
+        port,
+        tls,
+        method: method.to_string(),
+        path: path.to_string(),
+    };
+    match ic.hold(meta, raw.clone()).await {
+        intercept::Verdict::Forward(b) => Reviewed::Send(b),
+        intercept::Verdict::Drop(reason) => Reviewed::Dropped { raw, reason },
+    }
+}
+
+/// The answer a dropped request's client gets.
+///
+/// A real status rather than a closed socket: a client that sees the connection die cannot tell an
+/// operator's decision from a network fault, and browsers retry the latter. 403 is what a refusing
+/// proxy is supposed to say, and the header makes the origin of the refusal unambiguous.
+fn dropped_response(reason: &str) -> Bytes {
+    let body = format!("burpsy: request dropped by operator ({reason})");
+    Bytes::from(format!(
+        "HTTP/1.1 403 Forbidden\r\n\
+         Content-Type: text/plain\r\n\
+         X-Burpsy-Intercept: dropped\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        body.len(),
+        body
+    ))
+}
+
+/// Record a request the operator refused to forward, with the synthetic reply its client received.
+#[allow(clippy::too_many_arguments)]
+fn record_drop(
+    store: &TrafficStore,
+    host: &str,
+    port: u16,
+    tls: bool,
+    method: &str,
+    path: &str,
+    raw: Bytes,
+    response: Bytes,
+    reason: &str,
+) {
+    let req_id = store.put(raw, Direction::Request);
+    let ex_id = store.add_exchange(Exchange {
+        id: 0,
+        request: req_id,
+        response: None,
+        host: host.to_string(),
+        port,
+        tls,
+        method: method.to_string(),
+        path: path.to_string(),
+        status: None,
+        response_len: 0,
+        started_ms: now_ms(),
+        duration_ms: 0,
+        notes: Some(format!("dropped by operator: {reason}")),
+    });
+    let len = response.len();
+    let resp_id = store.put(response, Direction::Response);
+    store.set_response(ex_id, resp_id, 403, len, 0);
+}
+
+/// Record a `CONNECT` that never became a tunnel.
+///
+/// Without this the failure is invisible: a host that is unreachable, DNS-broken or presenting a
+/// TLS handshake we cannot complete looks exactly like a host nobody ever visited. That ambiguity
+/// is worse than a noisy history — an operator concluding "the app never talks to that domain" from
+/// silence is drawing a conclusion from missing evidence.
+fn record_failed_connect(
+    store: &TrafficStore,
+    host: &str,
+    port: u16,
+    reason: &str,
+    started: Instant,
+) -> u64 {
+    let marker = Bytes::from(format!(
+        "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
+    ));
+    let req_id = store.put(marker, Direction::Request);
+    let ex_id = store.add_exchange(Exchange {
+        id: 0,
+        request: req_id,
+        response: None,
+        host: host.to_string(),
+        port,
+        tls: true,
+        method: "CONNECT".into(),
+        path: String::new(),
+        status: None,
+        response_len: 0,
+        started_ms: now_ms(),
+        duration_ms: 0,
+        notes: Some(format!("connect failed: {reason}")),
+    });
+    let body = format!("burpsy: {reason}");
+    let synthetic = Bytes::from(format!(
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    ));
+    let len = synthetic.len();
+    let resp_id = store.put(synthetic, Direction::Response);
+    store.set_response(ex_id, resp_id, 502, len, started.elapsed().as_millis() as u64);
+    tracing::debug!("recorded failed CONNECT {host}:{port}: {reason}");
+    ex_id
 }
 
 /// Queue a passive scan without blocking the response path.
