@@ -851,6 +851,7 @@ given response then
             Direction::Request,
         );
         let ex = store.add_exchange(Exchange {
+            related: Vec::new(),
             id: 0,
             request: req,
             response: None,
@@ -881,6 +882,7 @@ given response then
             Direction::Response,
         );
         let ex = store.add_exchange(Exchange {
+            related: Vec::new(),
             id: 0,
             request: req,
             response: Some(resp),
@@ -1496,6 +1498,7 @@ given response then
             Direction::Request,
         );
         let ex = store.add_exchange(Exchange {
+            related: Vec::new(),
             id: 0,
             request: req,
             response: None,

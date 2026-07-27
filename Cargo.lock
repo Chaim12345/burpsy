@@ -204,6 +204,7 @@ dependencies = [
  "bytes",
  "parking_lot",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

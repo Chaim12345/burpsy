@@ -30,10 +30,11 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Handle to a stored message. Cheap to copy; carries no payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct MsgId(pub u64);
 
 /// A span within a message: the only thing we ever hold instead of bytes.
@@ -256,8 +257,32 @@ fn split3(raw: &[u8], start: usize, end: usize) -> Option<(Span, Span, Span)> {
     }
 }
 
+/// A reference from an exchange to a record that belongs to it.
+///
+/// HTTP/1 gives an exchange exactly one request and at most one response, which is why
+/// [`Exchange`] names those two directly. Every protocol after that breaks the assumption: an
+/// HTTP/2 exchange is a stream of frames, and a WebSocket connection carries frames indefinitely
+/// in both directions. Rather than widen `Exchange` once per protocol, a record carries a list of
+/// children and the variant says what kind each one is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChildRef {
+    /// A WebSocket frame carried by this connection.
+    WsFrame(MsgId),
+    /// An HTTP/2 frame belonging to this stream.
+    H2Frame(MsgId),
+}
+
+impl ChildRef {
+    /// The stored message this reference points at, whatever its kind.
+    pub fn msg(&self) -> MsgId {
+        match self {
+            ChildRef::WsFrame(m) | ChildRef::H2Frame(m) => *m,
+        }
+    }
+}
+
 /// One proxied exchange. Holds ids, never payloads.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Exchange {
     pub id: u64,
     pub request: MsgId,
@@ -273,6 +298,12 @@ pub struct Exchange {
     pub started_ms: u64,
     pub duration_ms: u64,
     pub notes: Option<String>,
+    /// Records belonging to this exchange beyond its request/response pair.
+    ///
+    /// Empty for every HTTP/1 exchange, and `#[serde(default)]` so a capture serialised before
+    /// this field existed still deserialises.
+    #[serde(default)]
+    pub related: Vec<ChildRef>,
 }
 
 /// Append-only message log plus an exchange index.
@@ -280,17 +311,32 @@ pub struct Exchange {
 /// Bytes for a message are written once and never moved. `Bytes` gives refcounted slices, so
 /// handing a request to the repeater, an intruder attack and the web UI simultaneously costs
 /// three pointers, not three copies.
+/// # The one invariant
+///
+/// **Position is the id.** `messages[i].id == MsgId(i)` and `exchanges[i].id == i`, always. Every
+/// lookup below is a bounds-checked index rather than a scan, and that is only sound because ids
+/// are handed out by the same lock acquisition that appends the record.
+///
+/// This used to be false in a way nothing caught. `put` took its id from an
+/// `AtomicU64::fetch_add`, then parsed (unlocked), then took the write lock to push — so two
+/// threads could reserve ids 7 and 8 and push in the order 8, 7, leaving `messages[7].id ==
+/// MsgId(8)`. Lookups scanned for `.id`, so they stayed correct and the defect was invisible; it
+/// would have become a silent mis-resolution the moment any index trusted position. Parsing still
+/// happens outside the lock — it needs nothing from the store and is the expensive part — but the
+/// id is now assigned under the lock that appends, so the two cannot disagree.
 #[derive(Debug, Default)]
 pub struct TrafficStore {
     inner: RwLock<StoreInner>,
-    next_msg: AtomicU64,
-    next_exchange: AtomicU64,
 }
 
 #[derive(Debug, Default)]
 struct StoreInner {
+    /// Position is the id: `messages[i].id == MsgId(i)`.
     messages: Vec<StoredMessage>,
+    /// Position is the id: `exchanges[i].id == i`.
     exchanges: Vec<Exchange>,
+    /// Running total of stored bytes, so `counts()` does not walk the log.
+    bytes: usize,
 }
 
 impl TrafficStore {
@@ -300,7 +346,8 @@ impl TrafficStore {
 
     /// Store raw bytes, parse to spans, return the handle.
     pub fn put(&self, raw: Bytes, direction: Direction) -> MsgId {
-        let id = MsgId(self.next_msg.fetch_add(1, Ordering::Relaxed));
+        // Parsed outside the lock: it needs nothing from the store, and holding a write lock
+        // across it would serialise every concurrent capture behind one parse.
         let shape = parse(&raw, direction).unwrap_or(MessageShape {
             direction,
             first_token: Span::new(0, 0),
@@ -309,22 +356,28 @@ impl TrafficStore {
             headers: Vec::new(),
             body: Span::new(0, raw.len()),
         });
-        self.inner
-            .write()
-            .messages
-            .push(StoredMessage { id, raw, shape });
+        let len = raw.len();
+        let mut g = self.inner.write();
+        // Assigned under the lock that appends — see the type's invariant note.
+        let id = MsgId(g.messages.len() as u64);
+        g.messages.push(StoredMessage { id, raw, shape });
+        g.bytes += len;
         id
     }
 
+    /// Resolve a message id to its bytes. O(1): the id *is* the position.
     pub fn get(&self, id: MsgId) -> Option<StoredMessage> {
         let g = self.inner.read();
-        g.messages.iter().find(|m| m.id == id).cloned()
+        let m = g.messages.get(id.0 as usize)?;
+        debug_assert_eq!(m.id, id, "message index desynchronised from id");
+        Some(m.clone())
     }
 
     pub fn add_exchange(&self, mut ex: Exchange) -> u64 {
-        let id = self.next_exchange.fetch_add(1, Ordering::Relaxed);
+        let mut g = self.inner.write();
+        let id = g.exchanges.len() as u64;
         ex.id = id;
-        self.inner.write().exchanges.push(ex);
+        g.exchanges.push(ex);
         id
     }
 
@@ -337,7 +390,7 @@ impl TrafficStore {
         dur_ms: u64,
     ) {
         let mut g = self.inner.write();
-        if let Some(e) = g.exchanges.iter_mut().find(|e| e.id == exchange_id) {
+        if let Some(e) = g.exchanges.get_mut(exchange_id as usize) {
             e.response = Some(resp);
             e.status = Some(status);
             e.response_len = len;
@@ -357,19 +410,92 @@ impl TrafficStore {
             .collect()
     }
 
+    /// Resolve an exchange id. O(1): the id *is* the position.
     pub fn exchange(&self, id: u64) -> Option<Exchange> {
+        let g = self.inner.read();
+        let e = g.exchanges.get(id as usize)?;
+        debug_assert_eq!(e.id, id, "exchange index desynchronised from id");
+        Some(e.clone())
+    }
+
+    /// Attach a child record to an exchange. `false` if the exchange id is unknown.
+    pub fn add_related(&self, exchange_id: u64, child: ChildRef) -> bool {
+        let mut g = self.inner.write();
+        match g.exchanges.get_mut(exchange_id as usize) {
+            Some(e) => {
+                e.related.push(child);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Children of an exchange, in the order they were attached.
+    pub fn related(&self, exchange_id: u64) -> Vec<ChildRef> {
         self.inner
             .read()
             .exchanges
-            .iter()
-            .find(|e| e.id == id)
-            .cloned()
+            .get(exchange_id as usize)
+            .map(|e| e.related.clone())
+            .unwrap_or_default()
     }
 
+    /// `(exchanges, messages, stored bytes)`. O(1) — `bytes` is maintained on write.
     pub fn counts(&self) -> (usize, usize, usize) {
         let g = self.inner.read();
-        let bytes = g.messages.iter().map(|m| m.raw.len()).sum();
-        (g.exchanges.len(), g.messages.len(), bytes)
+        (g.exchanges.len(), g.messages.len(), g.bytes)
+    }
+
+    /// Check the position-is-the-id invariant every O(1) lookup above depends on, plus the
+    /// running byte total.
+    ///
+    /// Exists so the invariant is *checkable* rather than merely asserted in a doc comment: a
+    /// caller that has just migrated or replayed a capture can prove the index is coherent instead
+    /// of inferring it from the absence of a crash. Returns the first disagreement it finds, naming
+    /// the id — a verifier that only said "mismatch" would leave you no better off than a panic.
+    pub fn verify_index(&self) -> Result<(), String> {
+        let g = self.inner.read();
+        for (i, m) in g.messages.iter().enumerate() {
+            if m.id.0 != i as u64 {
+                return Err(format!(
+                    "message at position {i} carries id {} — position is not the id",
+                    m.id.0
+                ));
+            }
+        }
+        for (i, e) in g.exchanges.iter().enumerate() {
+            if e.id != i as u64 {
+                return Err(format!(
+                    "exchange at position {i} carries id {} — position is not the id",
+                    e.id
+                ));
+            }
+            for child in &e.related {
+                let cid = child.msg();
+                if cid.0 as usize >= g.messages.len() {
+                    return Err(format!(
+                        "exchange {i} references child message {} which does not exist",
+                        cid.0
+                    ));
+                }
+            }
+            if let Some(r) = e.response
+                && r.0 as usize >= g.messages.len()
+            {
+                return Err(format!(
+                    "exchange {i} references response message {} which does not exist",
+                    r.0
+                ));
+            }
+        }
+        let summed: usize = g.messages.iter().map(|m| m.raw.len()).sum();
+        if summed != g.bytes {
+            return Err(format!(
+                "byte total drifted: counted {summed}, tracked {}",
+                g.bytes
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -416,5 +542,155 @@ mod tests {
         let a = store.get(id).unwrap().raw;
         // Same allocation, not a copy.
         assert_eq!(a.as_ptr(), raw.as_ptr());
+    }
+
+    /// STORE-03. The id a caller was handed must resolve to *that caller's* message, no matter how
+    /// many threads were appending at the time.
+    ///
+    /// Because `get` is now a positional index rather than a scan for `.id`, this test only passes
+    /// while position-is-the-id holds. Under the previous implementation — id from an atomic, then
+    /// an unlocked parse, then the push — the two could interleave out of order, and a positional
+    /// `get` would hand back another thread's bytes. The per-message payload is unique so that
+    /// failure reads as "resolved to another thread's message", not merely as a count mismatch.
+    #[test]
+    fn ids_and_insertion_order_agree_under_concurrent_puts() {
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 400;
+
+        let store = TrafficStore::new();
+        let start = Arc::new(std::sync::Barrier::new(THREADS));
+        let mut handles = Vec::with_capacity(THREADS);
+
+        for t in 0..THREADS {
+            let store = Arc::clone(&store);
+            let start = Arc::clone(&start);
+            handles.push(std::thread::spawn(move || {
+                // Release all threads together, so the appends genuinely contend.
+                start.wait();
+                let mut issued = Vec::with_capacity(PER_THREAD);
+                for i in 0..PER_THREAD {
+                    let raw =
+                        Bytes::from(format!("GET /t{t}/i{i} HTTP/1.1\r\nHost: x.test\r\n\r\n"));
+                    let id = store.put(raw.clone(), Direction::Request);
+                    issued.push((id, raw));
+                }
+                issued
+            }));
+        }
+
+        let issued: Vec<(MsgId, Bytes)> = handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("worker thread panicked"))
+            .collect();
+
+        assert_eq!(issued.len(), THREADS * PER_THREAD);
+
+        for (id, expected) in &issued {
+            let got = store.get(*id).expect("every issued id must resolve");
+            assert_eq!(got.id, *id);
+            assert_eq!(
+                &got.raw[..],
+                &expected[..],
+                "id {id:?} resolved to another thread's message"
+            );
+        }
+
+        // Ids are dense and unique across the whole run: exactly 0..n, each once.
+        let mut ids: Vec<u64> = issued.iter().map(|(i, _)| i.0).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..(THREADS * PER_THREAD) as u64).collect::<Vec<_>>());
+
+        store.verify_index().expect("index must be coherent");
+    }
+
+    /// STORE-02. Lookups are positional, so an id past the end is `None` rather than a panic or a
+    /// scan that quietly finds nothing.
+    #[test]
+    fn unknown_ids_resolve_to_none_not_a_panic() {
+        let store = TrafficStore::new();
+        let id = store.put(
+            Bytes::from_static(b"GET / HTTP/1.1\r\n\r\n"),
+            Direction::Request,
+        );
+        assert!(store.get(id).is_some());
+        assert!(store.get(MsgId(id.0 + 1)).is_none());
+        assert!(store.get(MsgId(u64::MAX)).is_none());
+        assert!(store.exchange(0).is_none());
+        assert!(store.exchange(u64::MAX).is_none());
+    }
+
+    /// STORE-04. An exchange owns many children, starts with none, and rejects an unknown id
+    /// rather than silently dropping the reference.
+    #[test]
+    fn an_exchange_carries_many_related_records() {
+        let store = TrafficStore::new();
+        let req = store.put(
+            Bytes::from_static(b"GET /ws HTTP/1.1\r\n\r\n"),
+            Direction::Request,
+        );
+        let ex = store.add_exchange(Exchange {
+            related: Vec::new(),
+            request: req,
+            host: "x.test".into(),
+            port: 443,
+            tls: true,
+            method: "GET".into(),
+            path: "/ws".into(),
+            ..Default::default()
+        });
+
+        assert!(store.related(ex).is_empty(), "children start empty");
+
+        let f1 = store.put(Bytes::from_static(b"frame-one"), Direction::Request);
+        let f2 = store.put(Bytes::from_static(b"frame-two"), Direction::Response);
+        let f3 = store.put(Bytes::from_static(b"h2-frame"), Direction::Request);
+        assert!(store.add_related(ex, ChildRef::WsFrame(f1)));
+        assert!(store.add_related(ex, ChildRef::WsFrame(f2)));
+        assert!(store.add_related(ex, ChildRef::H2Frame(f3)));
+
+        let kids = store.related(ex);
+        assert_eq!(kids.len(), 3, "one exchange owns many children");
+        assert_eq!(kids[0], ChildRef::WsFrame(f1));
+        assert_eq!(kids[2].msg(), f3);
+        assert_eq!(store.exchange(ex).unwrap().related, kids);
+
+        // An unknown exchange reports the failure rather than swallowing the reference.
+        assert!(!store.add_related(ex + 99, ChildRef::WsFrame(f1)));
+
+        store.verify_index().expect("index must be coherent");
+    }
+
+    /// STORE-02. `counts` reports the byte total from a running tally, so it does not walk the log.
+    /// `verify_index` is what proves the tally has not drifted from reality.
+    #[test]
+    fn counts_tracks_bytes_without_walking_the_log() {
+        let store = TrafficStore::new();
+        let mut expected = 0usize;
+        for i in 0..50 {
+            let raw = Bytes::from(format!(
+                "GET /{i} HTTP/1.1\r\nHost: x\r\n\r\n{}",
+                "b".repeat(i)
+            ));
+            expected += raw.len();
+            store.put(raw, Direction::Request);
+        }
+        let (exchanges, messages, bytes) = store.counts();
+        assert_eq!(exchanges, 0);
+        assert_eq!(messages, 50);
+        assert_eq!(bytes, expected);
+        store
+            .verify_index()
+            .expect("tracked total must match reality");
+    }
+
+    /// STORE-04 forward-compatibility: a capture serialised before `related` existed still loads.
+    #[test]
+    fn an_exchange_without_a_related_field_still_deserialises() {
+        let legacy = r#"{"id":3,"request":7,"response":null,"host":"x.test","port":80,
+            "tls":false,"method":"GET","path":"/","status":null,"response_len":0,
+            "started_ms":0,"duration_ms":0,"notes":null}"#;
+        let ex: Exchange = serde_json::from_str(legacy).expect("legacy exchange must deserialise");
+        assert_eq!(ex.id, 3);
+        assert!(ex.related.is_empty());
     }
 }

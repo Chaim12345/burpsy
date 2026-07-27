@@ -261,6 +261,7 @@ async fn forward_http(
 
     let req_id = store.put(upstream_req.clone(), Direction::Request);
     let ex_id = store.add_exchange(Exchange {
+        related: Vec::new(),
         id: 0,
         request: req_id,
         response: None,
@@ -399,6 +400,7 @@ async fn tunnel(mut client: TcpStream, target: &str, cfg: ProxyConfig) -> Result
     let marker = Bytes::from(format!("CONNECT {host}:{port}\r\n\r\n"));
     let req_id = store.put(marker, Direction::Request);
     let ex_id = store.add_exchange(Exchange {
+        related: Vec::new(),
         id: 0,
         request: req_id,
         response: None,
@@ -544,6 +546,7 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
 
         let req_id = store.put(req.clone(), Direction::Request);
         let ex_id = store.add_exchange(Exchange {
+            related: Vec::new(),
             id: 0,
             request: req_id,
             response: None,
@@ -814,6 +817,7 @@ fn record_drop(
 ) {
     let req_id = store.put(raw, Direction::Request);
     let ex_id = store.add_exchange(Exchange {
+        related: Vec::new(),
         id: 0,
         request: req_id,
         response: None,
@@ -851,6 +855,7 @@ fn record_failed_connect(
     ));
     let req_id = store.put(marker, Direction::Request);
     let ex_id = store.add_exchange(Exchange {
+        related: Vec::new(),
         id: 0,
         request: req_id,
         response: None,

@@ -401,6 +401,7 @@ mod tests {
         status: Option<u16>,
     ) -> Exchange {
         Exchange {
+            related: Vec::new(),
             id,
             request: MsgId(id),
             response: status.map(|_| MsgId(id)),
@@ -554,6 +555,7 @@ mod tests {
                 Direction::Request,
             );
             store.add_exchange(Exchange {
+                related: Vec::new(),
                 id: 0,
                 request: id,
                 response: None,
@@ -593,6 +595,7 @@ mod tests {
             Direction::Request,
         );
         let ex_id = store.add_exchange(Exchange {
+            related: Vec::new(),
             id: 0,
             request: req,
             response: None,

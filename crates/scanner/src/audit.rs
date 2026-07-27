@@ -608,6 +608,7 @@ mod tests {
 
     fn exchange(id: u64, host: &str, path: &str, tls: bool) -> Exchange {
         Exchange {
+            related: Vec::new(),
             id,
             request: burpsy_core::MsgId(0),
             response: None,

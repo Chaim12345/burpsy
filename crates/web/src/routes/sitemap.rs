@@ -191,6 +191,7 @@ mod tests {
             Direction::Request,
         );
         let ex = store.add_exchange(Exchange {
+            related: Vec::new(),
             id: 0,
             request: req,
             response: None,

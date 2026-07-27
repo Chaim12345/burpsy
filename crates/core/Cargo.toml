@@ -9,3 +9,6 @@ bytes = { workspace = true }
 serde = { workspace = true }
 anyhow = { workspace = true }
 parking_lot = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
