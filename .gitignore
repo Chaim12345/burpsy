@@ -12,3 +12,9 @@
 
 # Researcher web-fetch cache — machine-generated, churns, not planning content.
 .planning/research/.cache/
+
+# GSD operational artifacts (runtime state, notifications) — not planning content.
+/.gsd/
+
+# Background-shell scratch from agent runs.
+/.bg-shell/
