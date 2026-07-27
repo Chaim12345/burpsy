@@ -214,9 +214,11 @@ name = "burpsy-proxy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "burpsy-bcheck",
  "burpsy-core",
  "burpsy-scanner",
+ "burpsy-web",
  "bytes",
  "parking_lot",
  "rcgen",
@@ -224,10 +226,12 @@ dependencies = [
  "rustls-pemfile",
  "rustls-pki-types",
  "serde",
+ "serde_json",
  "time",
  "tokio",
  "tokio-rustls",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
