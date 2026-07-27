@@ -1,0 +1,22 @@
+[package]
+name = "burpsy-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+burpsy-bcheck = { path = "../bcheck" }
+burpsy-scanner = { path = "../scanner" }
+tokio = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+parking_lot = { workspace = true }
+rcgen = { version = "0.14.8", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
+rustls = { version = "0.23.42", default-features = false, features = ["std", "aws-lc-rs", "tls12", "logging"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12", "logging"] }
+rustls-pemfile = "2.2.0"
+rustls-pki-types = "1.15.1"
+time = "0.3"

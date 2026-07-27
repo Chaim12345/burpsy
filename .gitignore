@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+# Runtime state and generated CA material — never commit private keys.
+/ca/
+*.pem
+*.key
+# OMC operational artifacts
+/.omc/

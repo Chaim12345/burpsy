@@ -1,0 +1,13 @@
+[package]
+name = "burpsy-intruder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+bytes = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }

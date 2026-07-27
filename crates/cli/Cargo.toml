@@ -1,0 +1,21 @@
+[package]
+name = "burpsy-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "burpsy"
+path = "src/main.rs"
+
+[dependencies]
+burpsy-core = { path = "../core" }
+burpsy-proxy = { path = "../proxy" }
+burpsy-web = { path = "../web" }
+burpsy-scanner = { path = "../scanner" }
+
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

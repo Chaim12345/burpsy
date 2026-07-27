@@ -1,0 +1,11 @@
+[package]
+name = "burpsy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }

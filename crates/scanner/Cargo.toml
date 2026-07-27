@@ -1,0 +1,14 @@
+[package]
+name = "burpsy-scanner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+burpsy-bcheck = { path = "../bcheck" }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }

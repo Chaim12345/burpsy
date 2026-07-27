@@ -1,0 +1,11 @@
+[package]
+name = "burpsy-tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = "1"

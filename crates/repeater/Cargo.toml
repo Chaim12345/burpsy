@@ -1,0 +1,12 @@
+[package]
+name = "burpsy-repeater"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+tokio = { workspace = true }
+tokio-rustls = "0.26"
+bytes = { workspace = true }
+anyhow = { workspace = true }

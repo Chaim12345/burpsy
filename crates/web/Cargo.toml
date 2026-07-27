@@ -1,0 +1,18 @@
+[package]
+name = "burpsy-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+burpsy-repeater = { path = "../repeater" }
+burpsy-intruder = { path = "../intruder" }
+axum = "0.8"
+tokio = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
