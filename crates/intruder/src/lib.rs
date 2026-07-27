@@ -17,6 +17,24 @@
 //! cross-checked against its config keys (`insert_url_params`, `insert_body_params`,
 //! `insert_param_name`, `insert_cookies`, `insert_http_headers`, `insert_entire_body`,
 //! `insert_url_path_filename`, `insert_url_path_folders`).
+//!
+//! # Layout
+//!
+//! * this module — insertion-point discovery and payload splicing;
+//! * [`mod@plan`] — the four attack shapes, generated lazily from an ordinal;
+//! * [`limit`] — the rate limiter and in-flight cap every send passes through;
+//! * [`engine`] — the driver, and the bucketed result summary it produces.
+
+pub mod engine;
+pub mod limit;
+pub mod plan;
+
+pub use engine::{
+    Attack, AttackReport, Attempt, ErrorBucket, RecordFn, ResultBucket, SendFn, SendFuture, Sent,
+    run,
+};
+pub use limit::{RateLimit, RateLimiter};
+pub use plan::{Assignment, AttackKind, AttackPlan, Slot, plan};
 
 use burpsy_core::{Direction, Span, StoredMessage, parse};
 use serde::{Deserialize, Serialize};
@@ -286,12 +304,44 @@ fn push_kv_points(
 /// The only place a request is copied, and it happens once per attempt — not once per insertion
 /// point per check, which is where Burp's memory goes.
 pub fn apply(raw: &[u8], point: &InsertionPoint, payload: &[u8]) -> Vec<u8> {
-    let start = point.span.offset.min(raw.len());
-    let end = point.span.end().min(raw.len()).max(start);
-    let mut out = Vec::with_capacity(raw.len() + payload.len());
-    out.extend_from_slice(&raw[..start]);
-    out.extend_from_slice(payload);
-    out.extend_from_slice(&raw[end..]);
+    apply_all(raw, &[(point, payload)])
+}
+
+/// Splice several payloads into one request in a single pass.
+///
+/// Pitchfork and cluster bomb fill *every* selected position in the same request, so the obvious
+/// "call [`apply`] once per position" is wrong twice over: it copies the whole request N times, and
+/// every splice invalidates the spans of the positions to its right — the second payload would land
+/// at an offset computed against the pre-splice bytes and silently corrupt the request.
+///
+/// Overlapping positions are real input, not a hypothetical: `EntireBody` contains every
+/// `BodyParamValue`, and a `UrlParamName` sits directly against its value. The rule is
+/// **earliest-starting span wins, later overlapping spans are skipped**, so the output is always a
+/// well-formed request and never a half-spliced one. Callers that care should reject overlapping
+/// selections before getting here.
+pub fn apply_all(raw: &[u8], places: &[(&InsertionPoint, &[u8])]) -> Vec<u8> {
+    let mut spliced: Vec<(usize, usize, &[u8])> = places
+        .iter()
+        .map(|(p, payload)| {
+            let start = p.span.offset.min(raw.len());
+            let end = p.span.end().min(raw.len()).max(start);
+            (start, end, *payload)
+        })
+        .collect();
+    spliced.sort_by_key(|(start, end, _)| (*start, *end));
+
+    let extra: usize = spliced.iter().map(|(_, _, p)| p.len()).sum();
+    let mut out = Vec::with_capacity(raw.len() + extra);
+    let mut cursor = 0usize;
+    for (start, end, payload) in spliced {
+        if start < cursor {
+            continue;
+        }
+        out.extend_from_slice(&raw[cursor..start]);
+        out.extend_from_slice(payload);
+        cursor = end;
+    }
+    out.extend_from_slice(&raw[cursor..]);
     fix_content_length(&out)
 }
 
@@ -319,36 +369,6 @@ fn fix_content_length(raw: &[u8]) -> Vec<u8> {
             out
         }
     }
-}
-
-/// Attack shapes. `Sniper` matches Burp's default: one position at a time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AttackKind {
-    Sniper,
-    BatteringRam,
-}
-
-/// Plan an attack as `(point index, payload index)` pairs.
-///
-/// Indices, not materialised requests — a 10k-payload attack over 50 positions is a 500k-element
-/// index list, not 500k request copies.
-pub fn plan(points: usize, payloads: usize, kind: AttackKind) -> Vec<(usize, usize)> {
-    let mut v = Vec::new();
-    match kind {
-        AttackKind::Sniper => {
-            for p in 0..points {
-                for i in 0..payloads {
-                    v.push((p, i));
-                }
-            }
-        }
-        AttackKind::BatteringRam => {
-            for i in 0..payloads {
-                v.push((usize::MAX, i));
-            }
-        }
-    }
-    v
 }
 
 // ---- span helpers ------------------------------------------------------------------------
@@ -465,10 +485,50 @@ mod tests {
     }
 
     #[test]
-    fn plan_is_indices_not_requests() {
-        let v = plan(50, 10_000, AttackKind::Sniper);
-        assert_eq!(v.len(), 500_000);
-        assert_eq!(v[0], (0, 0));
-        assert_eq!(v[499_999], (49, 9_999));
+    fn apply_all_fills_several_positions_in_one_request() {
+        let m = store_req(b"GET /?user=aaa&role=bbb HTTP/1.1\r\nHost: t.test\r\n\r\n");
+        let pts = find_points(&m, &PointConfig::default());
+        let user = pts.iter().find(|p| p.label == "user").unwrap();
+        let role = pts.iter().find(|p| p.label == "role").unwrap();
+        // Longest payload first, so a naive left-to-right splice would shift the second one.
+        let out = apply_all(&m.raw, &[(user, b"LONGPAYLOAD"), (role, b"x")]);
+        assert_eq!(
+            String::from_utf8_lossy(&out).lines().next().unwrap(),
+            "GET /?user=LONGPAYLOAD&role=x HTTP/1.1"
+        );
+    }
+
+    #[test]
+    fn apply_all_is_order_independent() {
+        let m = store_req(b"GET /?a=1&b=2&c=3 HTTP/1.1\r\nHost: t.test\r\n\r\n");
+        let pts = find_points(&m, &PointConfig::default());
+        let (a, b, c) = (
+            pts.iter().find(|p| p.label == "a").unwrap(),
+            pts.iter().find(|p| p.label == "b").unwrap(),
+            pts.iter().find(|p| p.label == "c").unwrap(),
+        );
+        let forward = apply_all(&m.raw, &[(a, b"AA"), (b, b"BB"), (c, b"CC")]);
+        let reverse = apply_all(&m.raw, &[(c, b"CC"), (b, b"BB"), (a, b"AA")]);
+        assert_eq!(forward, reverse);
+        assert!(String::from_utf8_lossy(&forward).contains("?a=AA&b=BB&c=CC"));
+    }
+
+    #[test]
+    fn overlapping_positions_yield_a_valid_request_not_a_corrupt_one() {
+        // `entire_body` contains both body params, so all three overlap.
+        let m = store_req(
+            b"POST / HTTP/1.1\r\nHost: t.test\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 7\r\n\r\na=1&b=2",
+        );
+        let pts = find_points(&m, &PointConfig::all());
+        let body = pts.iter().find(|p| p.kind == PointKind::EntireBody).unwrap();
+        let a = pts
+            .iter()
+            .find(|p| p.kind == PointKind::BodyParamValue && p.label == "a")
+            .unwrap();
+        let out = apply_all(&m.raw, &[(body, b"WHOLE"), (a, b"IGNORED")]);
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.ends_with("\r\n\r\nWHOLE"), "body should be replaced once: {s}");
+        assert!(!s.contains("IGNORED"), "the overlapping later span must be skipped: {s}");
+        assert!(s.contains("Content-Length: 5"), "and framing must still be right: {s}");
     }
 }

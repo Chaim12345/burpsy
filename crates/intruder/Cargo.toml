@@ -8,6 +8,8 @@ license.workspace = true
 burpsy-core = { path = "../core" }
 bytes = { workspace = true }
 serde = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
