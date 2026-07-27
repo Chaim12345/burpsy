@@ -244,6 +244,44 @@ impl Check {
             && !matches!(self.frequency, Frequency::InsertionPoint(_))
             && !contains_send_payload(&self.body)
     }
+
+    /// True when the evaluator can run this check with a sender and a base request, but no
+    /// interaction server — M2's set plus insertion points and `send payload`.
+    ///
+    /// Written as its own set of exclusions rather than as `m2_runnable() || …`, so the two
+    /// milestones can diverge: a construct M2 cannot run must not automatically be assumed runnable
+    /// here, and vice versa.
+    pub fn m3_runnable(&self) -> bool {
+        if self.needs_collaborator() {
+            return false;
+        }
+        // `differs from` needs Burp's response-variation analysis, which the evaluator refuses to
+        // approximate — see `Unsupported::ResponseVariations`. A check that uses it cannot reach a
+        // verdict, so counting it as runnable would inflate the load report with checks that only
+        // ever error.
+        if contains_differs_from(&self.body) {
+            return false;
+        }
+        // `send payload` has nothing to aim at unless the check binds to insertion points.
+        matches!(self.frequency, Frequency::InsertionPoint(_)) || !contains_send_payload(&self.body)
+    }
+}
+
+fn contains_differs_from(ss: &[Statement]) -> bool {
+    fn in_expr(e: &BoolExpr) -> bool {
+        match e {
+            BoolExpr::Cmp { op, .. } => *op == CmpOp::DiffersFrom,
+            BoolExpr::And(a, b) | BoolExpr::Or(a, b) => in_expr(a) || in_expr(b),
+            BoolExpr::Not(a) => in_expr(a),
+            BoolExpr::Interactions(_) => false,
+        }
+    }
+    ss.iter().any(|s| match s {
+        Statement::If { cond, then, otherwise } => {
+            in_expr(cond) || contains_differs_from(then) || contains_differs_from(otherwise)
+        }
+        _ => false,
+    })
 }
 
 fn contains_send_payload(ss: &[Statement]) -> bool {

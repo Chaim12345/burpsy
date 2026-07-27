@@ -24,11 +24,15 @@
 //! * **M1 (this module set) — 33.3% of the corpus**: `given response`, `if`/`end if`,
 //!   `report issue`, `in`/`is`/`matches`, booleans, `define`, `run for each`. No outbound traffic.
 //! * M2 — 80.7%: interpolation into requests, `send request`, `given host`/`request`/`path`.
-//! * M3 — 89.8%: insertion points, `send payload`. The remaining 10.2% needs Collaborator.
+//! * **M3 (current) — 89.4%**: insertion points and `send payload`. 236 of the 264 checks, not the
+//!   238 that "everything except Collaborator" would suggest: the two `differs from` checks are
+//!   excluded because that operator needs Burp's response-variation analysis and the evaluator
+//!   refuses it rather than guessing. The remaining 26 need Collaborator.
 
 pub mod ast;
 pub mod funcs;
 pub mod eval;
+pub mod insertion;
 pub mod lexer;
 pub mod parser;
 
@@ -37,4 +41,5 @@ pub use ast::{
     Severity, Statement, Value,
 };
 pub use eval::{Ctx, Finding, Unsupported, run_passive};
+pub use insertion::InsertionPoint;
 pub use parser::{ParseError, parse};

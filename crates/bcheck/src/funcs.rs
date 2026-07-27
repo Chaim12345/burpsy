@@ -135,8 +135,49 @@ fn split_args(s: &str) -> Vec<String> {
     out
 }
 
+/// Rewrite Java's `$N` group references into Rust's `${N}`.
+///
+/// `regex_replace` is Java `Matcher.replaceAll`, where `$` takes only the digits that follow it, so
+/// `$1eyJhbGci…` means group 1 followed by literal text. Rust's `Replacer` takes the longest run of
+/// `[0-9A-Za-z_]` as a group *name*: it looks for a group called `1eyJhbGci…`, finds none, and
+/// expands to nothing — destroying both the capture and the literal that followed it.
+///
+/// That is not hypothetical. `other/tokens/jwt-none-algorithm.bcheck:15` replaces a JWT header with
+/// `"$1eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"`; untranslated, the check sends a token with an *empty*
+/// header and then reports on how the server answers it — a probe for a vulnerability it never
+/// tested. Cases like `` `$1{extension}` `` happened to work only because `{` cannot continue a
+/// group name.
+pub fn java_backrefs(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'$' && b.get(i + 1).is_some_and(u8::is_ascii_digit) {
+            let mut j = i + 1;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            out.push_str("${");
+            out.push_str(&s[i + 1..j]);
+            out.push('}');
+            i = j;
+        } else {
+            // Step by whole characters so a multi-byte replacement survives. `${1}` already in
+            // Rust's form passes through here untouched, because `{` is not a digit.
+            let c = s[i..].chars().next().expect("i is a char boundary");
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
 /// Standard-alphabet base64 decode, tolerant of missing padding and embedded whitespace.
-/// Returns lossy UTF-8, because callers compare it as text.
+///
+/// Returns lossy UTF-8, because callers compare it as text. **Known limitation:** the corpus does
+/// decode genuinely binary values into request paths — `PathSuffix_WAF_Proxy.bcheck:32-34` decodes
+/// `"DA=="`, `"oA=="` and `"hQ=="` to `\x0C`, `\xA0` and `\x85` — and those bytes become U+FFFD
+/// here. Fixing it means a byte-typed value throughout the evaluator, not a change in this function.
 pub fn base64_decode(s: &str) -> String {
     fn val(c: u8) -> Option<u8> {
         match c {
@@ -239,6 +280,27 @@ mod tests {
     fn a_path_containing_parens_is_not_mistaken_for_a_call() {
         // Not a call: the parens do not wrap the whole remainder.
         assert!(matches!(parse_expr("foo(a) bar"), Expr::Path(_)));
+    }
+
+    #[test]
+    fn a_group_reference_followed_by_letters_survives_translation() {
+        // Without this, Rust reads `1eyJhbGci` as a group *name*, finds none, and drops both the
+        // capture and the literal — silently emptying the jwt-none payload.
+        let re = regex::Regex::new("^(Bearer )?[a-zA-Z0-9_-]+").unwrap();
+        let raw = "$1eyJhbGciOiJub25l";
+        assert_eq!(re.replace_all("Bearer eyJabc.rest", raw), ".rest", "premise: Rust eats it");
+        assert_eq!(
+            re.replace_all("Bearer eyJabc.rest", java_backrefs(raw).as_str()),
+            "Bearer eyJhbGciOiJub25l.rest"
+        );
+    }
+
+    #[test]
+    fn translation_leaves_other_dollar_forms_alone() {
+        assert_eq!(java_backrefs("$1.php"), "${1}.php");
+        assert_eq!(java_backrefs("${1}x"), "${1}x", "already Rust's spelling");
+        assert_eq!(java_backrefs("cost $ and $x"), "cost $ and $x", "not a group reference");
+        assert_eq!(java_backrefs("$12abc"), "${12}abc", "all the digits, as Java takes them");
     }
 
     #[test]
