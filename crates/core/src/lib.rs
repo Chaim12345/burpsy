@@ -22,6 +22,7 @@
 pub mod edit;
 pub mod findings;
 pub mod scope;
+pub mod sitemap;
 pub use findings::{Confidence, Finding, FindingStore, Inserted, NewFinding, Occurrence, Severity};
 pub use scope::{RuleKind, Scope, ScopeRule};
 
