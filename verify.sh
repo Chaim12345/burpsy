@@ -29,6 +29,41 @@ else
   fi
 fi
 
+step "clippy"
+# Two traps here, both of which cost real time to rediscover.
+#
+# 1. cargo and clippy can come from DIFFERENT toolchains. On this machine /usr/bin/cargo is a
+#    distro build of 1.92.0 and shadows rustup's shims in PATH, while clippy-driver exists only
+#    under rustup at 1.95.0. Running `cargo clippy` then mixes them and every workspace crate
+#    fails with E0514, "found crate X compiled by an incompatible version of rustc". So clippy is
+#    invoked through rustup's own cargo, which is guaranteed to match its clippy-driver.
+#    A rust-toolchain.toml would NOT fix this: it is a rustup feature, and /usr/bin/cargo ignores
+#    it entirely.
+#
+# 2. Even on a single toolchain, clippy sets RUSTC_WORKSPACE_WRAPPER, which changes the fingerprint
+#    of every workspace crate. Sharing target/ therefore makes clippy and build invalidate each
+#    other, rebuilding the world on every alternation. Its own target dir costs disk and buys back
+#    all of that time.
+if command -v rustup >/dev/null 2>&1 && RUSTUP_CARGO=$(rustup which cargo 2>/dev/null); then
+  CLIPPY=$(CARGO_TARGET_DIR=target/clippy "$RUSTUP_CARGO" clippy --workspace --all-targets 2>&1)
+  if grep -qE '^error' <<<"$CLIPPY"; then
+    no "clippy failed to run"
+    grep -E '^error' -A8 <<<"$CLIPPY" | head -30
+  else
+    CW=$(grep -cE '^warning: .*$' <<<"$CLIPPY" | head -1)
+    # Ignore the per-crate roll-up lines ("generated N warnings"), count only real lints.
+    CW=$(grep -E '^warning:' <<<"$CLIPPY" | grep -vcE 'generated [0-9]+ warning')
+    if [ "$CW" -gt 0 ]; then
+      no "$CW clippy warning(s)"
+      grep -E '^warning:' <<<"$CLIPPY" | grep -vE 'generated [0-9]+ warning' | head -15
+    else
+      ok "clippy clean"
+    fi
+  fi
+else
+  ok "rustup not available, clippy skipped"
+fi
+
 step "unit tests"
 TESTS=$(cargo test --workspace 2>&1)
 NFAIL=$(grep -cE '^test .* FAILED' <<<"$TESTS")

@@ -886,7 +886,7 @@ given response then
         assert!(!sent.contains("\\r\\n"), "literal backslash-r survived: {sent:?}");
         // The length must match the decoded body, not the longer escaped text. Split only at the
         // FIRST blank line: a multipart body contains `\r\n\r\n` itself.
-        let body = sent.splitn(2, "\r\n\r\n").nth(1).unwrap_or("");
+        let body = sent.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
         assert_eq!(body.len(), 55, "decoded body length");
         assert!(sent.contains("Content-Length: 55"), "sent: {sent:?}");
     }
@@ -1300,10 +1300,10 @@ given response then
             CmpOp::In,
             Value::Var("latest.response".into()),
         );
-        if let Statement::If { then, .. } = &mut c.body[0] {
-            if let Statement::Report(r) = &mut then[0] {
-                r.detail = Some(Value::Template("saw [{nope}] here".into()));
-            }
+        if let Statement::If { then, .. } = &mut c.body[0]
+            && let Statement::Report(r) = &mut then[0]
+        {
+            r.detail = Some(Value::Template("saw [{nope}] here".into()));
         }
         let f = run_passive(&c, &Ctx::new(&r)).unwrap();
         assert_eq!(f[0].detail.as_deref(), Some("saw [] here"));

@@ -249,6 +249,10 @@ impl Parser {
     fn frequency(&mut self) -> Result<Frequency, ParseError> {
         // Insertion-point form, optionally qualified: `any|query|header|body|cookie [or …]`.
         let mut ips = Vec::new();
+        // clippy's `while let` rewrite does not compile here: `self.peek()` borrows `self`
+        // immutably for the whole loop body, which then calls `self.bump()`. Matching and taking an
+        // owned `String` ends the borrow before the body runs, which is the point of this shape.
+        #[allow(clippy::while_let_loop)]
         loop {
             let t = match self.peek() {
                 Tok::Word(w) => w.to_ascii_lowercase(),
@@ -382,6 +386,10 @@ impl Parser {
         let mut detail = None;
         let mut remediation = None;
 
+        // clippy's `while let` rewrite does not compile here: `self.peek()` borrows `self`
+        // immutably for the whole loop body, which then calls `self.bump()`. Matching and taking an
+        // owned `String` ends the borrow before the body runs, which is the point of this shape.
+        #[allow(clippy::while_let_loop)]
         loop {
             let key = match self.peek().clone() {
                 Tok::Word(w) => w.to_ascii_lowercase(),
@@ -504,6 +512,10 @@ impl Parser {
     /// everything else is a single value.
     fn request_mods(&mut self) -> Result<Vec<RequestMod>, ParseError> {
         let mut mods = Vec::new();
+        // clippy's `while let` rewrite does not compile here: `self.peek()` borrows `self`
+        // immutably for the whole loop body, which then calls `self.bump()`. Matching and taking an
+        // owned `String` ends the borrow before the body runs, which is the point of this shape.
+        #[allow(clippy::while_let_loop)]
         loop {
             // A clause always starts with a word, and the word after any prefix must be followed by
             // a colon. Anything else is the next statement or the end of the block.

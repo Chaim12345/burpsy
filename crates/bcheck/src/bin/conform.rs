@@ -53,7 +53,7 @@ fn main() {
     println!("files          : {}", files.len());
     println!("parsed OK      : {ok}");
     println!("failed         : {fail}");
-    if files.len() > 0 {
+    if !files.is_empty() {
         println!("accept rate    : {:.1}%", ok as f64 * 100.0 / files.len() as f64);
         println!("M1 runnable    : {passive} ({:.1}%)", passive as f64 * 100.0 / files.len() as f64);
         println!("needs collab   : {collab} ({:.1}%)", collab as f64 * 100.0 / files.len() as f64);

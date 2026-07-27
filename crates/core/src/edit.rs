@@ -232,8 +232,7 @@ fn find_header_end(raw: &[u8]) -> Option<(usize, usize)> {
 /// tolerance the message parser applies.
 fn dechunk(mut b: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len());
-    loop {
-        let Some(nl) = b.iter().position(|&c| c == b'\n') else { break };
+    while let Some(nl) = b.iter().position(|&c| c == b'\n') {
         let line = std::str::from_utf8(&b[..nl]).unwrap_or("").trim();
         // Ignore any chunk extension after ';'.
         let size_hex = line.split(';').next().unwrap_or("");

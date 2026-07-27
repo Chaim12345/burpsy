@@ -442,10 +442,9 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         let mut chunk = vec![0u8; 16 * 1024];
         let mut client_gone = false;
         loop {
-            let n = match tls_upstream.read(&mut chunk).await {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
+            // A read error is treated as end of stream: we already have whatever the server
+            // managed to send, and surfacing the error would discard a usable partial response.
+            let n = tls_upstream.read(&mut chunk).await.unwrap_or(0);
             if n == 0 {
                 break;
             }

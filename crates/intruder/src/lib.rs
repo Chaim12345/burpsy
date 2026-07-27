@@ -152,20 +152,20 @@ pub fn find_points(msg: &StoredMessage, cfg: &PointConfig) -> Vec<InsertionPoint
         }
     }
 
-    if let Some(q) = qpos {
-        if cfg.url_params || cfg.param_names {
-            let qstart = target.offset + q + 1;
-            let qspan = Span::new(qstart, tend.saturating_sub(qstart));
-            push_kv_points(
-                raw,
-                qspan,
-                cfg.url_params,
-                cfg.param_names,
-                PointKind::UrlParamValue,
-                PointKind::UrlParamName,
-                &mut out,
-            );
-        }
+    if let Some(q) = qpos
+        && (cfg.url_params || cfg.param_names)
+    {
+        let qstart = target.offset + q + 1;
+        let qspan = Span::new(qstart, tend.saturating_sub(qstart));
+        push_kv_points(
+            raw,
+            qspan,
+            cfg.url_params,
+            cfg.param_names,
+            PointKind::UrlParamValue,
+            PointKind::UrlParamName,
+            &mut out,
+        );
     }
 
     if cfg.cookies {
