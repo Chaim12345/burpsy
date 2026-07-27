@@ -67,8 +67,11 @@ None yet.
 
 ### Blockers/Concerns
 
-- **REQUIREMENTS.md stated "52 total v1 requirements"; the itemized v1 list actually contains 56.** All 56 are mapped to a phase (0 orphans); the stale summary count was corrected during traceability update. Flagged here so it isn't silently rediscovered.
-- **PROJECT.md is stale against this roadmap's operator decisions** in four places: (1) Active section still lists "Bambda-style filter expressions — evaluate `rhai`" — superseded by the typed DSL decision; (2) Active section still lists Sequencer as in-scope — now deferred to v2; (3) Active section still says DOM/JS analysis "needs an embedded JS engine" — superseded by the static+dynamic-browser split, no engine; (4) Key Decisions row "HTTP/2 sequenced late, DOM/JS analysis last" no longer describes H2's position. Not corrected here (out of this agent's scope) — reconcile at the next `/gsd-transition` or phase-1 completion.
+None currently open.
+
+**Resolved during roadmap creation (2026-07-27):**
+- REQUIREMENTS.md's summary line said "52 total v1 requirements" against an itemized list of 56 (the miscount traced to a regex that silently drops alphanumeric category prefixes like `H2-01` — reproduced independently before trusting the correction). Fixed; coverage re-verified at 56/56, 0 orphans, 0 duplicates.
+- PROJECT.md was stale against this roadmap's operator decisions in four places (`rhai`, Sequencer, embedded JS engine, "HTTP/2 sequenced late"). Reconciled in commit `a3c9db8`, including logging the three roadmap-time decisions (HTTP/2 to Phase 2, DOM split into static/dynamic, scope chokepoint as a Phase 1 deliverable) to Key Decisions.
 
 ## Deferred Items
 
