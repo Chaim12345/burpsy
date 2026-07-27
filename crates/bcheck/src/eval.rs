@@ -10,6 +10,10 @@
 //! provides — request mutation (via [`burpsy_core::edit::RequestEdit`]), named bindings, and the
 //! builtin functions that appear inside `{…}`.
 //!
+//! **M3** adds `given insertion point` and `send payload`. [`run_active`] expands such a check into
+//! one run per point (see [`crate::insertion`]), each with its own bindings, so a finding names the
+//! parameter that produced it.
+//!
 //! # Semantics that are easy to get backwards
 //!
 //! * **`in` is containment with the needle on the LEFT**: `"secret" in {latest.response}` asks
@@ -17,14 +21,18 @@
 //! * **`matches` takes a literal regex on the right** and never interpolates it, which is what makes
 //!   `"oy2[a-z0-9]{43}"` work.
 //! * **`base` and `latest` are different messages.** `base.*` is the exchange the scan started from;
-//!   `latest.*` is the most recent send. While M1 had no sends they aliased, but treating them as
-//!   the same message in M2 would make `differs from` compare a message to itself and never fire.
+//!   `latest.*` is the most recent send, and every send updates it — named or not, `send request` or
+//!   `send payload`. Before the first send they are the same exchange, which is what lets
+//!   `other/bypass/path-bypass.bcheck:32` gate on `{latest.response.status_code}` before sending.
+//! * **Every send is built from `base.request`, never from the previous send.** See
+//!   [`build_request`].
 //! * **An absent binding is not an empty string.** See [`Ctx::value_opt`].
 //! * **A failed send abandons the check.** Continuing would leave `{check.response.body}` absent and
 //!   invite exactly the false positive the absence rules exist to prevent.
 
 use crate::ast::*;
 use crate::funcs::{self, Expr};
+use crate::insertion::{self, InsertionPoint};
 use burpsy_core::edit::RequestEdit;
 use burpsy_core::{Direction, MsgId, StoredMessage};
 use bytes::Bytes;
@@ -155,6 +163,9 @@ pub struct Ctx<'a> {
     sent: RefCell<Vec<(Option<String>, Bound)>>,
     /// `define:` bindings plus any `run for each` value for this iteration.
     pub vars: HashMap<String, String>,
+    /// The one place `send payload` may write, for a `given insertion point` run. `None` everywhere
+    /// else, which is what makes `send payload` outside such a check an error rather than a no-op.
+    point: Option<InsertionPoint>,
     /// Paths a check referenced that this context could not supply.
     unresolved: RefCell<BTreeSet<String>>,
     /// `random_str` state, seeded from the message so probes are reproducible per target.
@@ -174,6 +185,7 @@ impl<'a> Ctx<'a> {
             base_request: None,
             sent: RefCell::new(Vec::new()),
             vars: HashMap::new(),
+            point: None,
             unresolved: RefCell::new(BTreeSet::new()),
             rng: Cell::new(seed | 1),
         }
@@ -201,6 +213,26 @@ impl<'a> Ctx<'a> {
             base_request: self.base_request.clone(),
             sent: RefCell::new(Vec::new()),
             vars,
+            point: self.point.clone(),
+            unresolved: RefCell::new(BTreeSet::new()),
+            rng: Cell::new(self.rng.get()),
+        }
+    }
+
+    /// Same base data, aimed at one insertion point.
+    ///
+    /// `insertion_point_base_value` goes into the variable map rather than being resolved specially,
+    /// because that is where Burp puts it (`Zpao.java:69`) — which means `define:` and
+    /// `run for each:` values can read it, not only the check body.
+    fn for_point(&self, point: InsertionPoint) -> Ctx<'a> {
+        let mut vars = self.vars.clone();
+        vars.insert("insertion_point_base_value".to_string(), point.base_value.clone());
+        Ctx {
+            response: self.response,
+            base_request: self.base_request.clone(),
+            sent: RefCell::new(Vec::new()),
+            vars,
+            point: Some(point),
             unresolved: RefCell::new(BTreeSet::new()),
             rng: Cell::new(self.rng.get()),
         }
@@ -210,15 +242,6 @@ impl<'a> Ctx<'a> {
     /// written against data the engine does not expose, which is a bug to fix, not a finding.
     pub fn unresolved(&self) -> Vec<String> {
         self.unresolved.borrow().iter().cloned().collect()
-    }
-
-    /// The request a `send request` should be built from: the most recent send, else the base.
-    fn latest_request(&self) -> Option<RequestEdit> {
-        self.sent
-            .borrow()
-            .last()
-            .and_then(|(_, b)| b.request.clone())
-            .or_else(|| self.base_request.clone())
     }
 
     fn record_send(&self, name: Option<String>, request: RequestEdit, response: Option<StoredMessage>) {
@@ -290,6 +313,8 @@ impl<'a> Ctx<'a> {
                 // An invalid pattern yields absent rather than a panic; Java's flavour is a
                 // superset of Rust's in places.
                 let re = Regex::new(&pattern).ok()?;
+                // `$1` is Java's spelling and means something else to Rust — see `java_backrefs`.
+                let replacement = funcs::java_backrefs(&replacement);
                 Some(re.replace_all(&subject, replacement.as_str()).into_owned())
             }
             ("random_str", 1) => {
@@ -432,6 +457,20 @@ pub enum Unsupported {
     NotPassive(Frequency),
     /// A regex the Rust engine rejects (Java's flavour is a superset in places).
     BadRegex(String),
+    /// `differs from`, which needs Burp's response-variation analysis.
+    ///
+    /// Refused rather than approximated. Both corpus uses compare two whole responses fetched from
+    /// *different* URLs — a candidate and a random-garbage control — so byte comparison would report
+    /// "differs" on any error page that echoes the requested path, i.e. on almost every path, and
+    /// both published checks would fire everywhere. Burp instead re-issues requests under the
+    /// `repeat:diff:` key to learn which of 33 response attributes are naturally volatile
+    /// (`ResponseVariationsAnalyzer`) and compares only the invariant ones.
+    ///
+    /// The alternative to refusing is the status quo ante, where the operands were single-segment
+    /// paths that resolved to nothing, the comparison was silently false, and the check was counted
+    /// as runnable while being incapable of ever firing. A skipped check is honest; an inert one is
+    /// not.
+    ResponseVariations,
 }
 
 /// Why an active run produced no verdict.
@@ -476,7 +515,11 @@ pub fn run_passive(check: &Check, ctx: &Ctx<'_>) -> Result<Vec<Finding>, Unsuppo
 ///
 /// The scan point (`given host` / `request` / `path`) decides *how often* the caller invokes this —
 /// once per host, per request, per path — not how the body evaluates, so it is the caller's business.
-/// `given insertion point` additionally needs payload placement and is rejected here.
+///
+/// `given insertion point` is the exception, because its iteration is over data only this module can
+/// see: the points of the base request. So it is expanded here, once per point, and each point gets
+/// its own `latest`, its own named bindings and its own `insertion_point_base_value`. A finding is
+/// then attributable to one parameter, which is the entire reason the construct exists.
 pub fn run_active(
     check: &Check,
     ctx: &Ctx<'_>,
@@ -486,10 +529,30 @@ pub fn run_active(
     if check.needs_collaborator() {
         return Err(Unsupported::NeedsCollaborator.into());
     }
-    if matches!(check.frequency, Frequency::InsertionPoint(_)) {
-        return Err(EvalError::NeedsInsertionPoint);
+    let Frequency::InsertionPoint(kinds) = &check.frequency else {
+        return run_inner(check, ctx, Some(sender), Some(target));
+    };
+    let Some(base) = ctx.base_request.clone() else {
+        return Err(EvalError::SendFailed(
+            "no base request to enumerate insertion points in".into(),
+        ));
+    };
+
+    let mut findings = Vec::new();
+    // An empty point list is not an error: a bare `GET /` has nowhere to inject, and the check
+    // simply has nothing to do against this request.
+    for p in insertion::enumerate(&base, kinds) {
+        let it = ctx.for_point(p);
+        let r = run_inner(check, &it, Some(sender), Some(target));
+        // Fold diagnostics and RNG state back, including on the error path — see `run_inner`.
+        ctx.unresolved.borrow_mut().extend(it.unresolved.borrow().iter().cloned());
+        ctx.rng.set(it.rng.get());
+        // A send failure abandons the remaining points too. It is nearly always systemic — a dead
+        // host, a closed port — and hammering it once per parameter would turn one failure into
+        // dozens while still producing no verdict.
+        findings.extend(r?);
     }
-    run_inner(check, ctx, Some(sender), Some(target))
+    Ok(findings)
 }
 
 fn run_inner(
@@ -498,8 +561,10 @@ fn run_inner(
     sender: Option<&dyn Sender>,
     target: Option<&Target>,
 ) -> Result<Vec<Finding>, EvalError> {
-    // `define:` bindings, then each `run for each` value in turn.
-    let mut base = HashMap::new();
+    // Seeded from the context's own variables so that anything already bound — a caller-supplied
+    // value, or `insertion_point_base_value` — is visible to `define:` and to `run for each:`, not
+    // only to the body. Then `define:` bindings, then each `run for each` value in turn.
+    let mut base = ctx.vars.clone();
     for (k, v) in &check.defines {
         base.insert(k.clone(), ctx.value_text(v));
     }
@@ -557,6 +622,15 @@ fn exec(
                     remediation: r.remediation.as_ref().map(|v| ctx.value_text(v)),
                 });
                 // Without `and continue`, the first report ends this check.
+                //
+                // OPEN QUESTION, deliberately left as-is: this ends the current `run for each`
+                // iteration (and, for `given insertion point`, the current point) but not the
+                // remaining ones. PortSwigger's docs say plain `report issue` "terminates the
+                // BCheck", while the v2 wiki justifies `and continue` as the way to raise multiple
+                // issues from a loop — which only makes sense if plain reporting suppresses later
+                // iterations. 77 corpus files sit on the difference. Burp expands iterables into
+                // independent copied contexts, which favours the per-iteration reading, so that is
+                // what this keeps; changing it needs an A/B against real Burp, not a coin flip.
                 if !r.and_continue {
                     return Ok(());
                 }
@@ -566,29 +640,69 @@ fn exec(
                     return Err(EvalError::Unsupported(Unsupported::NeedsSending));
                 };
                 let req = build_request(ctx, raw.as_ref(), mods)?;
-                let bytes = req.to_raw();
-                match sender.send(target, &bytes) {
-                    Ok(resp) => {
-                        let stored = as_stored_response(resp);
-                        if stored.is_none() {
-                            return Err(EvalError::SendFailed("unparsable response".into()));
-                        }
-                        ctx.record_send(called.clone(), req, stored);
-                    }
-                    // Abandon rather than continue: see EvalError::SendFailed.
-                    Err(e) => return Err(EvalError::SendFailed(e)),
-                }
+                dispatch(ctx, sender, target, called.clone(), req)?;
             }
-            Statement::SendPayload { .. } => return Err(EvalError::NeedsInsertionPoint),
+            Statement::SendPayload { called, appending, value } => {
+                let (Some(sender), Some(target)) = (sender, target) else {
+                    return Err(EvalError::Unsupported(Unsupported::NeedsSending));
+                };
+                // No point means the check said `send payload` outside `given insertion point`.
+                // There is nowhere to put the payload, and sending the base request unmodified
+                // would be a probe that tests nothing while looking like it ran.
+                let Some(point) = ctx.point.as_ref() else {
+                    return Err(EvalError::NeedsInsertionPoint);
+                };
+                // Always from the base request: the point's offsets address *that* request, and a
+                // second `send payload` in the same check must be base+payload, not
+                // payload+payload. `jwt-none-algorithm.bcheck` depends on it — its second probe
+                // strips the signature from the original token, not from the first probe's token.
+                let mut req = ctx.base_request.clone().ok_or_else(|| {
+                    EvalError::SendFailed("no base request to place a payload in".into())
+                })?;
+                point.apply(&mut req, &ctx.value_text(value), *appending);
+                dispatch(ctx, sender, target, called.clone(), req)?;
+            }
         }
     }
     Ok(())
 }
 
+/// Send a built request and bind the result. Shared by `send request` and `send payload` because
+/// everything after "which bytes go out" — parsing, binding `latest`, abandoning on failure — is
+/// identical, and a divergence between the two would be invisible until a check misread its probe.
+fn dispatch(
+    ctx: &Ctx<'_>,
+    sender: &dyn Sender,
+    target: &Target,
+    called: Option<String>,
+    req: RequestEdit,
+) -> Result<(), EvalError> {
+    let bytes = req.to_raw();
+    match sender.send(target, &bytes) {
+        Ok(resp) => match as_stored_response(resp) {
+            Some(stored) => {
+                ctx.record_send(called, req, Some(stored));
+                Ok(())
+            }
+            None => Err(EvalError::SendFailed("unparsable response".into())),
+        },
+        // Abandon rather than continue: see EvalError::SendFailed.
+        Err(e) => Err(EvalError::SendFailed(e)),
+    }
+}
+
 /// Build the request a `send request` should issue.
 ///
-/// Modifiers apply to the most recent request in the chain, so a second send inside the same check
-/// builds on the first — which is what the follow-up probes in the corpus assume.
+/// **Each send starts a fresh accumulator seeded from `base.request`; modifiers then apply in source
+/// order within that one block.** Seeding from the *previous* send instead is the tempting reading
+/// and it is wrong. `other/bypass/PathSuffix_WAF_Proxy.bcheck:44-49` sends a candidate
+/// `appending path: {suffix}` and then a control `appending path: {random_str(10)}{suffix}`; chained
+/// seeding applies the suffix twice and the control is no longer a control, so the check's whole
+/// false-positive guard collapses.
+///
+/// Within one block the accumulator is real, and `other/Perl Jam 2 - RCE.bcheck:22-25` proves it: a
+/// `replacing body` followed by an `appending body` must append to the *replaced* body, which is why
+/// that check stashes the original body in a variable first — after the replace it is gone.
 fn build_request(
     ctx: &Ctx<'_>,
     raw: Option<&Value>,
@@ -600,7 +714,8 @@ fn build_request(
             .map_err(|e| EvalError::SendFailed(format!("raw request: {e}")));
     }
     let mut r = ctx
-        .latest_request()
+        .base_request
+        .clone()
         .ok_or_else(|| EvalError::SendFailed("no base request to modify".into()))?;
 
     for m in mods {
@@ -684,28 +799,34 @@ fn eval_bool(e: &BoolExpr, ctx: &Ctx<'_>) -> Result<bool, EvalError> {
         BoolExpr::Interactions(_) => {
             return Err(EvalError::Unsupported(Unsupported::NeedsCollaborator));
         }
-        BoolExpr::Cmp { lhs, op, rhs } => {
-            // An operand this context cannot supply makes the comparison false. It can never make
-            // it true: absence is not evidence.
-            let Some(l) = ctx.value_opt(lhs) else { return Ok(false) };
-            match op {
-                CmpOp::Matches => {
-                    // RHS is always a literal, never interpolated.
-                    let pat = rhs.raw();
-                    let re = Regex::new(pat)
-                        .map_err(|_| EvalError::Unsupported(Unsupported::BadRegex(pat.to_string())))?;
-                    re.is_match(&l)
-                }
-                // Containment, needle on the left — the way the corpus writes it.
-                CmpOp::In => {
-                    let Some(r) = ctx.value_opt(rhs) else { return Ok(false) };
-                    r.contains(&l)
-                }
-                CmpOp::Is => ctx.value_opt(rhs).is_some_and(|r| l == r),
-                // Absent must not read as "differs" — that would report on a missing binding.
-                CmpOp::DiffersFrom => ctx.value_opt(rhs).is_some_and(|r| l != r),
+        // An operand this context cannot supply makes a comparison false. It can never make one
+        // true: absence is not evidence.
+        BoolExpr::Cmp { lhs, op, rhs } => match op {
+            // Rejected without resolving anything. Its operands are whole objects (`{garbage}`,
+            // `{check}`) which resolve to nothing, so resolving first would produce a quiet `false`
+            // — and a `false` here is indistinguishable from "the responses were the same".
+            CmpOp::DiffersFrom => {
+                return Err(EvalError::Unsupported(Unsupported::ResponseVariations));
             }
-        }
+            CmpOp::Matches => {
+                let Some(l) = ctx.value_opt(lhs) else { return Ok(false) };
+                // RHS is always a literal, never interpolated.
+                let pat = rhs.raw();
+                let re = Regex::new(pat)
+                    .map_err(|_| EvalError::Unsupported(Unsupported::BadRegex(pat.to_string())))?;
+                re.is_match(&l)
+            }
+            // Containment, needle on the left — the way the corpus writes it.
+            CmpOp::In => {
+                let Some(l) = ctx.value_opt(lhs) else { return Ok(false) };
+                let Some(r) = ctx.value_opt(rhs) else { return Ok(false) };
+                r.contains(&l)
+            }
+            CmpOp::Is => {
+                let Some(l) = ctx.value_opt(lhs) else { return Ok(false) };
+                ctx.value_opt(rhs).is_some_and(|r| l == r)
+            }
+        },
     })
 }
 
@@ -1072,12 +1193,13 @@ given response then
 
     #[test]
     fn base_and_latest_are_different_messages_after_a_send() {
-        // If these aliased, `differs from` would compare a message to itself and never fire.
+        // If these aliased, every "did the probe change anything?" comparison would compare a
+        // message to itself and no such check could ever fire.
         let check = parse_check(
             r#"given host then
                  send request:
                    path: "/probe"
-                 if {latest.response.status_code} differs from {base.response.status_code} then
+                 if not({latest.response.status_code} is {base.response.status_code}) then
                    report issue:
                      severity: medium
                      confidence: firm
@@ -1172,7 +1294,11 @@ given response then
     }
 
     #[test]
-    fn a_second_send_builds_on_the_first() {
+    fn each_send_starts_from_the_base_request_not_from_the_previous_send() {
+        // The corpus idiom this protects is the control probe:
+        // `PathSuffix_WAF_Proxy.bcheck:44-49` sends `appending path: {suffix}` and then
+        // `appending path: {random_str(10)}{suffix}`. Chaining would apply the suffix twice, so the
+        // "random garbage" control would carry the very payload it exists to rule out.
         let check = parse_check(
             r#"given host then
                  send request:
@@ -1185,7 +1311,69 @@ given response then
         run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
         let all = m.sent.lock().unwrap().clone();
         assert!(all[0].starts_with("GET /orig?a=1&p=1 "), "first: {:?}", all[0]);
-        assert!(all[1].starts_with("GET /orig?a=1&p=1&q=2 "), "second: {:?}", all[1]);
+        assert!(
+            all[1].starts_with("GET /orig?a=1&q=2 "),
+            "the second send must not carry the first's `p=1`: {:?}",
+            all[1]
+        );
+    }
+
+    #[test]
+    fn modifiers_within_one_send_accumulate_in_source_order() {
+        // The other half of the rule, and the reason the seeding fix cannot be "just use base
+        // everywhere": `other/Perl Jam 2 - RCE.bcheck:24-25` replaces the body and then appends to
+        // it, and the append must land on the replacement, not on `base.request.body`.
+        let check = parse_check(
+            r#"given host then
+                 send request:
+                   method: "POST"
+                   replacing body: "HEAD-"
+                   appending body: "TAIL""#,
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = MockSender::new(vec![Ok(MockSender::ok("x"))]);
+        run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
+        let sent = m.first();
+        assert!(sent.ends_with("HEAD-TAIL"), "sent: {sent:?}");
+        assert!(sent.contains("Content-Length: 9"), "sent: {sent:?}");
+    }
+
+    #[test]
+    fn differs_from_is_refused_rather_than_guessed() {
+        // It used to resolve `{garbage}` to nothing, compare false, and report nothing — a check
+        // counted as running that could never fire. Byte comparison would be worse: the two
+        // responses are for different URLs, so any error page echoing the path differs every time.
+        let check = parse_check(
+            r#"given path then
+                 send request called check:
+                   appending path: "sub"
+                 send request called garbage:
+                   appending path: "zzz"
+                 if {garbage} differs from {check} then
+                   report issue:
+                     severity: high
+                     confidence: firm
+                 end if"#,
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = MockSender::new(vec![Ok(MockSender::ok("a")), Ok(MockSender::ok("b"))]);
+        assert_eq!(
+            run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap_err(),
+            EvalError::Unsupported(Unsupported::ResponseVariations)
+        );
+    }
+
+    #[test]
+    fn a_check_that_uses_differs_from_is_not_counted_as_m3_runnable() {
+        let check = parse_check(
+            r#"given path then
+                 if {a} differs from {b} then
+                   report issue:
+                     severity: low
+                     confidence: firm
+                 end if"#,
+        );
+        assert!(!check.m3_runnable(), "an inert check must not be counted as runnable");
     }
 
     #[test]
@@ -1200,17 +1388,366 @@ given response then
         assert_eq!(m.count(), 0, "nothing should have been sent");
     }
 
+    // ---- M3: insertion points and `send payload` -------------------------------------------
+    //
+    // Every assertion here reads the mutated bytes. "A send happened" would pass even if the
+    // payload landed in the wrong parameter — or in none of them.
+
+    /// A request with several attackable positions of every family.
+    fn wide_req() -> RequestEdit {
+        RequestEdit::from_raw(
+            b"POST /app?q=cat&page=2 HTTP/1.1\r\n\
+              Host: x.test\r\n\
+              User-Agent: burpsy\r\n\
+              Cookie: sid=abc; theme=dark\r\n\
+              Content-Type: application/x-www-form-urlencoded\r\n\
+              Content-Length: 11\r\n\
+              \r\n\
+              user=bo&n=1",
+        )
+        .unwrap()
+    }
+
+    fn ctx_with(r: &StoredMessage, req: RequestEdit) -> Ctx<'_> {
+        Ctx::new(r).with_request(req)
+    }
+
+    fn ok_replies(n: usize) -> MockSender {
+        MockSender::new((0..n).map(|i| Ok(MockSender::ok(&format!("r{i}")))).collect())
+    }
+
     #[test]
-    fn insertion_point_checks_are_deferred_not_run() {
+    fn a_query_payload_lands_in_one_parameter_and_leaves_the_rest_byte_identical() {
+        // This is the property that makes a finding attributable. A run that also perturbed
+        // `page` could not say which parameter was injectable.
+        let check = parse_check("given query insertion point then\n send payload:\n  appending: \"'\"");
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(4);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2, "one send per query parameter");
+        assert!(sent[0].starts_with("POST /app?q=cat'&page=2 "), "sent[0]: {:?}", sent[0]);
+        assert!(sent[1].starts_with("POST /app?q=cat&page=2' "), "sent[1]: {:?}", sent[1]);
+        for s in &sent {
+            assert!(s.contains("Cookie: sid=abc; theme=dark"), "cookies moved: {s:?}");
+            assert!(s.ends_with("user=bo&n=1"), "body moved: {s:?}");
+            assert!(s.contains("User-Agent: burpsy"), "header moved: {s:?}");
+        }
+    }
+
+    #[test]
+    fn replacing_overwrites_the_parameter_instead_of_extending_it() {
         let check = parse_check(
-            "given insertion point then\n send payload:\n  appending: \"'\"",
+            "given query insertion point then\n send payload:\n  replacing: \"PAY\"",
         );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(4);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert!(sent[0].starts_with("POST /app?q=PAY&page=2 "), "sent[0]: {:?}", sent[0]);
+        assert!(sent[1].starts_with("POST /app?q=cat&page=PAY "), "sent[1]: {:?}", sent[1]);
+    }
+
+    #[test]
+    fn a_header_payload_rewrites_only_that_header() {
+        let check = parse_check(
+            "given header insertion point then\n send payload:\n  appending: \"/probe\"",
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(4);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        // Host, Content-Length and Cookie are reserved, so User-Agent and Content-Type remain.
+        assert_eq!(sent.len(), 2, "sent: {sent:?}");
+        assert!(sent[0].contains("User-Agent: burpsy/probe\r\n"), "sent[0]: {:?}", sent[0]);
+        assert!(sent[0].contains("Host: x.test\r\n"), "Host must be untouched: {:?}", sent[0]);
+        assert!(
+            sent[1].contains("Content-Type: application/x-www-form-urlencoded/probe\r\n"),
+            "sent[1]: {:?}",
+            sent[1]
+        );
+    }
+
+    #[test]
+    fn a_cookie_payload_touches_one_cookie_inside_the_shared_header() {
+        let check = parse_check(
+            "given cookie insertion point then\n send payload:\n  appending: \"XX\"",
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(4);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert!(sent[0].contains("Cookie: sid=abcXX; theme=dark\r\n"), "sent[0]: {:?}", sent[0]);
+        assert!(sent[1].contains("Cookie: sid=abc; theme=darkXX\r\n"), "sent[1]: {:?}", sent[1]);
+    }
+
+    #[test]
+    fn a_form_body_payload_lands_in_one_field_with_a_corrected_length() {
+        let check = parse_check(
+            "given body insertion point then\n send payload:\n  appending: \"12345\"",
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(4);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2, "one send per form field");
+        assert!(sent[0].ends_with("user=bo12345&n=1"), "sent[0]: {:?}", sent[0]);
+        // 11 original bytes + 5. A stale length would truncate the payload server-side.
+        assert!(sent[0].contains("Content-Length: 16"), "sent[0]: {:?}", sent[0]);
+        assert!(sent[1].ends_with("user=bo&n=112345"), "sent[1]: {:?}", sent[1]);
+    }
+
+    #[test]
+    fn a_json_body_payload_lands_inside_the_string_and_keeps_the_body_parsable() {
+        let check = parse_check(
+            "given body insertion point then\n send payload:\n  appending: `\"x`",
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let req = RequestEdit::from_raw(
+            b"POST /api HTTP/1.1\r\nHost: x.test\r\nContent-Type: application/json\r\nContent-Length: 29\r\n\r\n{\"user\":\"bo\",\"n\":1,\"r\":\"adm\"}",
+        )
+        .unwrap();
+        let m = ok_replies(4);
+        run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2, "the number 1 is not an insertion point: {sent:?}");
+        assert!(sent[0].ends_with(r#"{"user":"bo\"x","n":1,"r":"adm"}"#), "sent[0]: {:?}", sent[0]);
+        assert!(sent[1].ends_with(r#"{"user":"bo","n":1,"r":"adm\"x"}"#), "sent[1]: {:?}", sent[1]);
+    }
+
+    #[test]
+    fn a_payload_carrying_a_separator_cannot_forge_an_extra_parameter() {
+        // Unescaped, `x&admin=1` would make the probe send a parameter the check never wrote, and
+        // any resulting finding would be attributed to `q`.
+        let check = parse_check(
+            "given query insertion point then\n send payload:\n  replacing: \"x&admin=1\"",
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let req = RequestEdit::from_raw(b"GET /a?q=1 HTTP/1.1\r\nHost: x.test\r\n\r\n").unwrap();
+        let m = ok_replies(2);
+        run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap();
+        assert!(m.first().starts_with("GET /a?q=x%26admin%3D1 "), "sent: {:?}", m.first());
+    }
+
+    #[test]
+    fn the_given_line_restricts_which_families_are_attacked() {
+        let check = parse_check(
+            "given query or body insertion point then\n send payload:\n  appending: \"'\"",
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(8);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 4, "2 query + 2 body, no headers and no cookies: {sent:?}");
+        for s in &sent {
+            assert!(s.contains("Cookie: sid=abc; theme=dark\r\n"), "a cookie was attacked: {s:?}");
+            assert!(s.contains("User-Agent: burpsy\r\n"), "a header was attacked: {s:?}");
+        }
+    }
+
+    #[test]
+    fn each_point_gets_its_own_latest_so_a_finding_names_one_parameter() {
+        // Only the reply to the `page` probe carries the marker, so exactly one point may report.
+        let check = parse_check(
+            r#"given query insertion point then
+                 send payload:
+                   appending: "'"
+                 if "SQLSTATE" in {latest.response.body} then
+                   report issue:
+                     severity: high
+                     confidence: firm
+                     detail: `broke on {insertion_point_base_value}`
+                 end if"#,
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = MockSender::new(vec![
+            Ok(MockSender::ok("fine")),
+            Ok(MockSender::ok("SQLSTATE[42000]")),
+        ]);
+        let f = run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        assert_eq!(f.len(), 1, "only the second point should report: {f:?}");
+        assert_eq!(f[0].detail.as_deref(), Some("broke on 2"));
+    }
+
+    #[test]
+    fn insertion_point_base_value_resolves_braced_and_bare_inside_a_call() {
+        // `jwt-none-algorithm.bcheck` uses both spellings, and the bare one appears only there.
+        let check = parse_check(
+            r#"given header insertion point then
+                 if {insertion_point_base_value} is "burpsy" then
+                   send payload:
+                     replacing: `{to_upper(insertion_point_base_value)}`
+                 end if"#,
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(4);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1, "only the User-Agent point matches the guard: {sent:?}");
+        assert!(sent[0].contains("User-Agent: BURPSY\r\n"), "sent: {:?}", sent[0]);
+    }
+
+    #[test]
+    fn a_second_send_payload_starts_from_the_base_value_again() {
+        // `jwt-none-algorithm.bcheck` sends two payloads into the same point; the second derives
+        // from the original token, not from the first probe's token. Chaining would make its
+        // false-positive control test the wrong thing.
+        let check = parse_check(
+            r#"given header insertion point then
+                 if {insertion_point_base_value} is "burpsy" then
+                   send payload:
+                     appending: "-A"
+                   send payload:
+                     appending: "-B"
+                 end if"#,
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(4);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert!(sent[0].contains("User-Agent: burpsy-A\r\n"), "sent[0]: {:?}", sent[0]);
+        assert!(
+            sent[1].contains("User-Agent: burpsy-B\r\n"),
+            "the second payload must not stack on the first: {:?}",
+            sent[1]
+        );
+    }
+
+    #[test]
+    fn the_jwt_none_algorithm_corpus_check_sends_an_unsigned_none_token() {
+        // The hardest of the six insertion-point files, reproduced verbatim from
+        // /tmp/BChecks/other/tokens/jwt-none-algorithm.bcheck. It exercises the bare
+        // `insertion_point_base_value` argument, Java `$1` backreferences, and two `send payload`s
+        // into the same point.
+        let check = parse_check(
+            r#"given insertion point then
+    if {insertion_point_base_value} matches "^(?:Bearer )?eyJ[a-zA-Z0-9_\-]+\.eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+" then
+        send payload:
+            replacing:
+                `{regex_replace(regex_replace(insertion_point_base_value, "^(Bearer )?[a-zA-Z0-9_\-]+", "$1eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"), "[a-zA-Z0-9_\-]+$", "")}`
+        if {latest.response.status_code} is {base.response.status_code} then
+            send payload:
+                replacing:
+                    `{regex_replace(insertion_point_base_value, "[a-zA-Z0-9_\-]+$", "")}`
+            if not ({latest.response.status_code} is {base.response.status_code}) then
+                report issue:
+                    severity: high
+                    confidence: firm
+                    detail: "The server appears to trust JWT's with the 'none' algorithm and an empty signature!"
+            end if
+        end if
+   end if"#,
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let req = RequestEdit::from_raw(
+            b"GET /me HTTP/1.1\r\nHost: x.test\r\nAuthorization: Bearer eyJhbG.eyJzdWI.SIGVAL\r\n\r\n",
+        )
+        .unwrap();
+        // First probe answers 200 (same as base) so the check proceeds; the control answers 401.
+        let m = MockSender::new(vec![
+            Ok(MockSender::with_status("200", "ok")),
+            Ok(MockSender::with_status("401", "no")),
+        ]);
+        let f = run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2, "one attack probe and one control: {sent:?}");
+        // The `Bearer ` prefix survives `$1` and the alg:none header replaces the real one — the
+        // whole point of the check. Untranslated Java backreferences produced `Authorization: .eyJzdWI.`
+        // here, a token with no header at all.
+        assert!(
+            sent[0].contains(
+                "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWI.\r\n"
+            ),
+            "attack probe: {:?}",
+            sent[0]
+        );
+        // The control keeps the original header and only drops the signature.
+        assert!(
+            sent[1].contains("Authorization: Bearer eyJhbG.eyJzdWI.\r\n"),
+            "control probe: {:?}",
+            sent[1]
+        );
+        assert_eq!(f.len(), 1, "a 401 for the unsigned control differs from the base 200");
+    }
+
+    #[test]
+    fn a_request_with_nowhere_to_inject_runs_clean_and_sends_nothing() {
+        let check = parse_check("given insertion point then\n send payload:\n  appending: \"'\"");
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let req = RequestEdit::from_raw(b"GET / HTTP/1.1\r\nHost: x.test\r\n\r\n").unwrap();
+        let m = MockSender::new(vec![]);
+        assert_eq!(run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap(), vec![]);
+        assert_eq!(m.count(), 0);
+    }
+
+    #[test]
+    fn send_payload_outside_an_insertion_point_check_is_an_error() {
+        // There is nowhere to place the payload; sending the base request unmodified would be a
+        // probe that tests nothing while looking like it ran.
+        let check = Check {
+            metadata: Metadata { name: "misplaced".into(), ..Default::default() },
+            defines: vec![],
+            for_each: vec![],
+            frequency: Frequency::Host,
+            body: vec![Statement::SendPayload {
+                called: None,
+                appending: true,
+                value: Value::Literal("'".into()),
+            }],
+        };
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = MockSender::new(vec![]);
         assert_eq!(
             run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap_err(),
             EvalError::NeedsInsertionPoint
         );
+        assert_eq!(m.count(), 0, "nothing should have been sent");
+        assert!(!check.m3_runnable(), "and it must not be counted as runnable");
+    }
+
+    #[test]
+    fn run_for_each_iterates_inside_each_insertion_point() {
+        // Points are the outer loop: 2 query points x 3 payloads = 6 sends, and the payloads for a
+        // given point are consecutive, so a finding still belongs to one parameter.
+        let check = parse_check(
+            r#"run for each:
+                 p = "a", "b", "c"
+
+               given query insertion point then
+                 send payload:
+                   replacing: {p}"#,
+        );
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(8);
+        run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
+        let sent = m.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 6);
+        let lines: Vec<&str> = sent.iter().map(|s| s.lines().next().unwrap()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "POST /app?q=a&page=2 HTTP/1.1",
+                "POST /app?q=b&page=2 HTTP/1.1",
+                "POST /app?q=c&page=2 HTTP/1.1",
+                "POST /app?q=cat&page=a HTTP/1.1",
+                "POST /app?q=cat&page=b HTTP/1.1",
+                "POST /app?q=cat&page=c HTTP/1.1",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_insertion_point_check_needs_a_base_request() {
+        let check = parse_check("given insertion point then\n send payload:\n  appending: \"'\"");
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = MockSender::new(vec![]);
+        assert!(matches!(
+            run_active(&check, &Ctx::new(&base), &m, &tgt()).unwrap_err(),
+            EvalError::SendFailed(_)
+        ));
+        assert_eq!(m.count(), 0);
     }
 
     // ---- absent bindings must never read as evidence -------------------------------------
@@ -1266,17 +1803,31 @@ given response then
     }
 
     #[test]
-    fn an_absent_operand_does_not_fire_is_or_differs_from() {
-        // `differs from` is the subtle one: absent must not count as "different".
+    fn an_absent_operand_does_not_fire_is() {
         let r = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nclean");
-        for op in [CmpOp::Is, CmpOp::DiffersFrom] {
-            let c = cmp_check(
-                Value::Literal("x".into()),
-                op,
-                Value::Var("check.response.body".into()),
-            );
-            assert_eq!(run_passive(&c, &Ctx::new(&r)).unwrap(), vec![], "{op:?} fired on absence");
-        }
+        let c = cmp_check(
+            Value::Literal("x".into()),
+            CmpOp::Is,
+            Value::Var("check.response.body".into()),
+        );
+        assert_eq!(run_passive(&c, &Ctx::new(&r)).unwrap(), vec![], "`is` fired on absence");
+    }
+
+    #[test]
+    fn an_absent_operand_makes_differs_from_refuse_rather_than_report() {
+        // This used to be the subtlest absence case — absent must not count as "different". It is
+        // now settled a stronger way: the operator is refused before its operands are even looked
+        // at, so there is no absence for it to misread.
+        let r = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nclean");
+        let c = cmp_check(
+            Value::Literal("x".into()),
+            CmpOp::DiffersFrom,
+            Value::Var("check.response.body".into()),
+        );
+        assert_eq!(
+            run_passive(&c, &Ctx::new(&r)).unwrap_err(),
+            Unsupported::ResponseVariations
+        );
     }
 
     #[test]
