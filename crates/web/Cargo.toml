@@ -8,6 +8,8 @@ license.workspace = true
 burpsy-core = { path = "../core" }
 burpsy-repeater = { path = "../repeater" }
 burpsy-intruder = { path = "../intruder" }
+burpsy-tools = { path = "../tools" }
+burpsy-proxy = { path = "../proxy" }
 axum = "0.8"
 tokio = { workspace = true }
 bytes = { workspace = true }

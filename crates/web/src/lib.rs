@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
+pub mod routes;
+
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<TrafficStore>,
@@ -35,6 +37,8 @@ pub struct AppState {
     /// the sender: the binary owns that wiring, and the web layer only needs "given an exchange id,
     /// audit it".
     pub audit: Option<AuditHook>,
+    /// Held-request state, when interception is enabled.
+    pub intercept: Option<Arc<routes::intercept::InterceptState>>,
 }
 
 /// Audits one exchange by id and returns a JSON summary. Blocking — callers must offload it.
@@ -81,12 +85,14 @@ pub fn router_audit(
         .route("/api/scope", get(get_scope))
         .route("/api/issues", get(get_issues))
         .route("/api/audit/{id}", post(run_audit))
+        .merge(routes::all())
         .with_state(AppState {
             store,
             ca_pem: ca_pem.map(Arc::new),
             scope: Arc::new(scope),
             findings,
             audit,
+            intercept: None,
         })
 }
 
