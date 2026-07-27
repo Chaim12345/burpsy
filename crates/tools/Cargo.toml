@@ -8,4 +8,10 @@ burpsy-core = { path = "../core" }
 bytes = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+parking_lot = { workspace = true }
 regex = "1"
+# The one job here that earns a dependency. A correct inflate is a few thousand lines of Huffman
+# decoding, and getting it wrong on attacker-controlled bytes is a memory-safety bug rather than a
+# cosmetic one. `rust_backend` is flate2's default and resolves to miniz_oxide — pure Rust, no C
+# toolchain, no libz. Pinned explicitly so a future default change cannot pull in a `cc` build.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
