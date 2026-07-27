@@ -306,15 +306,16 @@ async fn repeater_send(
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad target: {e}")).into_response(),
     };
-    // Refuse before a single byte leaves the box: scope is the record of what we may attack.
-    if !s.scope.contains_host(&target.host, target.port, target.tls) {
-        return (
-            StatusCode::FORBIDDEN,
-            format!("refused: {}", s.scope.explain(&target.host, target.port, "/", target.tls)),
-        )
-            .into_response();
-    }
     let raw = req.raw.replace("\r\n", "\n").replace('\n', "\r\n");
+    // Refuse before a single byte leaves the box, and judge the bytes themselves rather than the
+    // target line: the operator types the request here, so its path is whatever they wrote, and a
+    // host-level test would happily pass a request aimed at an excluded path.
+    if let Err(why) = s
+        .scope
+        .authorise_request(&target.host, target.port, target.tls, raw.as_bytes())
+    {
+        return (StatusCode::FORBIDDEN, why).into_response();
+    }
     let req_id = s.store.put(raw.clone().into_bytes().into(), Direction::Request);
     let ex_id = s.store.add_exchange(Exchange {
         id: 0,
@@ -457,6 +458,9 @@ struct RunView {
 
 /// Rate an operator gets if they do not choose one. Slow enough to be safe on a fragile target.
 const DEFAULT_RPS: f64 = 20.0;
+/// Floor on the operator-supplied rate. Below this the wait between requests stops being a rate and
+/// starts being an arithmetic hazard — see the `rps` validation in `intruder_run`.
+const MIN_RPS: f64 = 0.01;
 /// Burp's own ceiling on a resource pool's concurrent-request limit (`burp.Zuwo`, 1..=999).
 const MAX_IN_FLIGHT_CEILING: usize = 999;
 
@@ -479,15 +483,21 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad target: {e}")).into_response(),
     };
-    // Before anything is planned, spliced or sent. Attacking a host outside the engagement is the
-    // one bug in this tool that has consequences outside the tool.
-    if !s.scope.contains_host(&target.host, target.port, target.tls) {
+    // Two layers, because one cannot do this job. Here we only know the host: the paths this attack
+    // will actually request do not exist yet, and a payload spliced into a path position invents
+    // them. So this refuses a host that is wholly out of scope, and every spliced request is judged
+    // again on its own bytes by the guard below. Attacking something outside the engagement is the
+    // one bug in this tool with consequences outside the tool.
+    if !s.scope.may_contain_host(&target.host, target.port, target.tls) {
         return (
             StatusCode::FORBIDDEN,
             format!("refused: {}", s.scope.explain(&target.host, target.port, "/", target.tls)),
         )
             .into_response();
     }
+    // Kept before `target` is moved into the sender's Arc, so the guard below can name the target
+    // it is authorising against.
+    let (gh, gp, gt) = (target.host.clone(), target.port, target.tls);
 
     let legacy = req.mode.is_none() && req.payload_sets.is_none();
     let kind = match req.mode.as_deref() {
@@ -592,13 +602,17 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
         })
         .collect();
 
+    // Bounded at BOTH ends. The ceiling is obvious; the floor is not, and its absence was a real
+    // defect: `rps` of 1e-300 passed `> 0.0`, and the limiter then computed a 1e300-second wait,
+    // which is not a representable `Duration`. A rate below one request per two minutes is not a
+    // rate anyone means, so it is rejected with a message rather than silently clamped.
     let rps = match req.rps {
         None => DEFAULT_RPS,
-        Some(r) if r > 0.0 => r.min(1_000.0),
+        Some(r) if r >= MIN_RPS => r.min(1_000.0),
         Some(r) => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("rps must be greater than zero, got {r}"),
+                format!("rps must be at least {MIN_RPS}, got {r}"),
             )
                 .into_response();
         }
@@ -638,7 +652,16 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
     let store = s.store.clone();
     let record: RecordFn = Arc::new(move |raw| store.put(raw, Direction::Response).0);
 
-    let attack = Attack::new(&m.raw, &selected, &sets, &plan).with_limits(limits);
+    // The authorisation decision, made once per spliced request rather than once per attack. A
+    // payload landing in a `UrlPathFolder` or `UrlPathFilename` position rewrites the path, so the
+    // request that goes out may address something the host-level check never saw.
+    let guard: burpsy_intruder::Guard = {
+        let scope = s.scope.clone();
+        Arc::new(move |raw: &[u8]| scope.authorise_request(&gh, gp, gt, raw))
+    };
+    let attack = Attack::new(&m.raw, &selected, &sets, &plan)
+        .with_limits(limits)
+        .with_guard(guard);
     let report = burpsy_intruder::run(attack, sender, Some(record)).await;
 
     let mut buf = Assignment::default();

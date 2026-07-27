@@ -89,6 +89,12 @@ impl RateLimit {
     }
 }
 
+/// Ceiling on a single computed wait.
+///
+/// An hour is already far past the point where an operator would conclude the attack has stalled,
+/// so clamping here loses nothing real and keeps the arithmetic total.
+const MAX_WAIT: Duration = Duration::from_secs(3600);
+
 #[derive(Debug)]
 struct Bucket {
     /// May go negative: see [`RateLimiter::reserve`].
@@ -156,10 +162,14 @@ impl RateLimiter {
         b.last = now;
         b.tokens = (b.tokens + elapsed * rps).min(self.burst) - 1.0;
         if b.tokens >= 0.0 {
-            None
-        } else {
-            Some(Duration::from_secs_f64(-b.tokens / rps))
+            return None;
         }
+        // `try_from_secs_f64`, not `from_secs_f64`: the latter PANICS on a value too large to
+        // represent, and `-tokens / rps` gets there easily for a very small rps — 1.0 / 1e-300 is
+        // 1e300 seconds. That input was reachable from the HTTP edge, which capped rps only from
+        // above. The edge now has a floor too, but a limiter that panics on a legal `f64` is a
+        // sharp edge regardless of who is holding it, so it saturates here instead.
+        Some(Duration::try_from_secs_f64(-b.tokens / rps).unwrap_or(MAX_WAIT).min(MAX_WAIT))
     }
 
     /// Slots currently free. Exposed so callers can report progress, not to make decisions with.
@@ -277,6 +287,33 @@ mod tests {
             peak.load(Ordering::SeqCst),
             cap,
             "concurrency peaked outside the {cap}-slot cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_absurdly_small_rate_saturates_instead_of_panicking() {
+        // `Duration::from_secs_f64` PANICS on a value it cannot represent, and 1.0 / 1e-300 is
+        // 1e300 seconds. This exact input was reachable over HTTP, because the edge capped rps only
+        // from above. The edge has a floor now, but the limiter must not be a landmine for any
+        // caller holding a legal f64.
+        let l = RateLimiter::new(RateLimit::new(Some(1e-300), 1, 4));
+        let _first = l.acquire().await; // free: the burst token
+        // The second computes a wait. It must clamp, not panic — and must not actually sleep for
+        // an hour inside a test, so we only check that reserve() produced a finite bounded value.
+        let wait = l.reserve(Instant::now()).expect("a spent bucket must ask for a wait");
+        assert_eq!(wait, MAX_WAIT, "an unrepresentable wait must clamp to the ceiling");
+    }
+
+    #[test]
+    fn a_normal_rate_is_unaffected_by_the_clamp() {
+        // Guard against over-correcting: the clamp must not distort ordinary waits.
+        let l = RateLimiter::new(RateLimit::new(Some(10.0), 1, 4));
+        assert!(l.reserve(Instant::now()).is_none(), "the burst token is free");
+        let wait = l.reserve(Instant::now()).expect("second must wait");
+        // 1 token at 10/s == 100ms, give or take the nanoseconds this took to run.
+        assert!(
+            wait > Duration::from_millis(90) && wait < Duration::from_millis(110),
+            "expected ~100ms, got {wait:?}"
         );
     }
 

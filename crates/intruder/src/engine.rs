@@ -73,7 +73,18 @@ pub struct Attack<'a> {
     pub detail_limit: usize,
     /// How many distinct result buckets to keep before giving up on further distinctions.
     pub max_buckets: usize,
+    /// Refuses a spliced request before it goes out. `Err(reason)` means do not send.
+    ///
+    /// The engine has no concept of engagement scope and should not grow one — but it is the only
+    /// place that sees the request a payload actually produced. A caller checked the *target* the
+    /// operator named; a payload spliced into a path position can move the request somewhere else
+    /// entirely. So the caller supplies the predicate and the engine guarantees nothing bypasses
+    /// it. Refusals are counted as errors, never dropped silently.
+    pub guard: Option<Guard>,
 }
+
+/// Decides whether a spliced request may be sent. See [`Attack::guard`].
+pub type Guard = Arc<dyn Fn(&[u8]) -> Result<(), String> + Send + Sync>;
 
 impl<'a> Attack<'a> {
     /// Defaults sized for a UI: enough rows to render a small attack, enough buckets that a real
@@ -92,7 +103,14 @@ impl<'a> Attack<'a> {
             limits: RateLimit::default(),
             detail_limit: 500,
             max_buckets: 2_000,
+            guard: None,
         }
+    }
+
+    /// Attach the predicate every spliced request must satisfy before it is sent.
+    pub fn with_guard(mut self, g: Guard) -> Self {
+        self.guard = Some(g);
+        self
     }
 
     pub fn with_limits(mut self, limits: RateLimit) -> Self {
@@ -212,6 +230,16 @@ pub async fn run(a: Attack<'_>, sender: SendFn, record: Option<RecordFn>) -> Att
         // so it must not exist until this attempt is cleared to go out.
         let permit = limiter.acquire().await;
         let bytes = apply_all(a.base, &places);
+        // Between splice and send: this is the first moment the real request exists, and the last
+        // moment before it leaves. A refusal costs the rate token that was just spent, which is
+        // correct — a refused attempt still occupied a slot in the operator's budget.
+        if let Some(g) = &a.guard
+            && let Err(why) = g(&bytes)
+        {
+            drop(permit);
+            collector.absorb(Ok(Outcome { ordinal: i, result: Err(why) }));
+            continue;
+        }
         let sender = sender.clone();
         tasks.spawn(async move {
             let result = sender(bytes).await.map(|sent| Hit {
@@ -425,6 +453,87 @@ mod tests {
                 })
             })
         })
+    }
+
+    // ---- the guard ---------------------------------------------------------------------
+    //
+    // The attack this defends against: the operator's scope excludes /admin, the host-level check
+    // authorises the host anyway, and a payload spliced into a path position then rewrites the
+    // request onto the excluded path. Nothing upstream ever sees that request.
+
+    #[tokio::test]
+    async fn a_payload_that_rewrites_the_path_out_of_scope_is_never_sent() {
+        // A filename position, which is exactly what lets a payload move the path.
+        let s = TrafficStore::new();
+        let id = s.put(
+            Bytes::from_static(b"GET /search HTTP/1.1\r\nHost: shop.test\r\n\r\n"),
+            Direction::Request,
+        );
+        let m = s.get(id).unwrap();
+        let points = find_points(&m, &PointConfig::all());
+        let sel: Vec<InsertionPoint> = points
+            .iter()
+            .filter(|p| p.kind == crate::PointKind::UrlPathFilename)
+            .cloned()
+            .collect();
+        assert_eq!(sel.len(), 1, "expected one filename position in /search");
+
+        let payloads = sets(&[&["products", "admin", "help"]]);
+        let plan = AttackPlan::new(AttackKind::Sniper, 1, &[3], 1_000);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+
+        // Stand-in for the real scope predicate: /admin is excluded.
+        let guard: Guard = Arc::new(|raw: &[u8]| {
+            let path = burpsy_core::scope::request_path(raw).unwrap_or("");
+            if path.starts_with("/admin") {
+                Err(format!("refused: {path} is out of scope"))
+            } else {
+                Ok(())
+            }
+        });
+
+        let a = Attack::new(&m.raw, &sel, &payloads, &plan)
+            .with_limits(RateLimit::unthrottled(4))
+            .with_guard(guard);
+        let r = run(a, recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"), None).await;
+
+        let sent: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|b| String::from_utf8_lossy(b).lines().next().unwrap_or("").to_string())
+            .collect();
+        assert!(
+            !sent.iter().any(|l| l.contains("/admin")),
+            "an out-of-scope request reached the sender: {sent:?}"
+        );
+        assert_eq!(r.sent, 2, "the two in-scope payloads must still go");
+        assert_eq!(r.failed, 1, "and the refused one must be counted, not dropped silently");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_reported_with_its_reason() {
+        // A refusal the operator cannot see is indistinguishable from a target that said nothing.
+        let (base, points) = request(b"GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n");
+        let sel = vec![points[0].clone()];
+        let payloads = sets(&[&["x"]]);
+        let plan = AttackPlan::new(AttackKind::Sniper, 1, &[1], 10);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+
+        let guard: Guard = Arc::new(|_: &[u8]| Err("refused: out of scope".into()));
+        let a = Attack::new(&base, &sel, &payloads, &plan)
+            .with_limits(RateLimit::unthrottled(2))
+            .with_guard(guard);
+        let r = run(a, recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"), None).await;
+
+        assert_eq!(r.sent, 0);
+        assert_eq!(r.failed, 1);
+        assert!(seen.lock().unwrap().is_empty(), "nothing may reach the sender");
+        assert!(
+            r.errors.iter().any(|e| e.error.contains("out of scope")),
+            "the reason must survive into the report: {:?}",
+            r.errors
+        );
     }
 
     #[tokio::test]

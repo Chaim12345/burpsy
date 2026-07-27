@@ -403,7 +403,7 @@ impl PassiveScanner {
         o.state = ItemState::Auditing;
         let target =
             burpsy_bcheck::eval::Target { host: ex.host.clone(), port: ex.port, tls: ex.tls };
-        let metered = Metered::new(sender);
+        let metered = Metered::new(sender, &self.scope);
         let mut breaker = ItemBreaker::new(run.cfg);
 
         // The plan is built before anything is dispatched, so "how much did we not do" is
@@ -492,6 +492,7 @@ impl PassiveScanner {
             }
         };
         o.requests_sent = metered.sent();
+        o.requests_refused = metered.refused();
         run.requests_sent = run.requests_sent.saturating_add(o.requests_sent);
         debug_assert_eq!(o.considered(), self.active.len(), "every check must be accounted for");
         o
@@ -585,21 +586,46 @@ impl<'a> Run<'a> {
 /// estimate of it.
 struct Metered<'a> {
     inner: &'a dyn burpsy_bcheck::eval::Sender,
+    scope: &'a Scope,
     sent: std::cell::Cell<u32>,
+    refused: std::cell::Cell<u32>,
 }
 
 impl<'a> Metered<'a> {
-    fn new(inner: &'a dyn burpsy_bcheck::eval::Sender) -> Self {
-        Self { inner, sent: std::cell::Cell::new(0) }
+    fn new(inner: &'a dyn burpsy_bcheck::eval::Sender, scope: &'a Scope) -> Self {
+        Self {
+            inner,
+            scope,
+            sent: std::cell::Cell::new(0),
+            refused: std::cell::Cell::new(0),
+        }
     }
 
     fn sent(&self) -> u32 {
         self.sent.get()
     }
+
+    fn refused(&self) -> u32 {
+        self.refused.get()
+    }
 }
 
 impl burpsy_bcheck::eval::Sender for Metered<'_> {
+    /// Meters the request, and refuses it if its own bytes fall outside scope.
+    ///
+    /// The scope test lives here, wrapping the sender, rather than inside the evaluator: a BCheck
+    /// interpreter has no business knowing about engagement authorisation, and putting the check on
+    /// the send path makes it unbypassable instead of merely present. `audit_item` already tested
+    /// the *base* exchange, but a check that does `replacing path:` sends something else entirely,
+    /// and only these bytes say where it is really going.
     fn send(&self, target: &burpsy_bcheck::eval::Target, raw: &[u8]) -> Result<Vec<u8>, String> {
+        if let Err(why) = self
+            .scope
+            .authorise_request(&target.host, target.port, target.tls, raw)
+        {
+            self.refused.set(self.refused.get().saturating_add(1));
+            return Err(why);
+        }
         self.sent.set(self.sent.get().saturating_add(1));
         self.inner.send(target, raw)
     }
@@ -637,6 +663,10 @@ pub struct AuditOutcome {
     pub session_paused: usize,
     /// Probe requests this item actually sent.
     pub requests_sent: u32,
+    /// Probes refused because the request's own path fell outside scope — typically a check that
+    /// rewrote the path onto something the operator excluded. Reported, never silent: a refusal is
+    /// the engine declining to look, not the target coming back clean.
+    pub requests_refused: u32,
     /// True when the time budget stopped the run. Reported so "found nothing" is distinguishable
     /// from "never finished looking".
     pub timed_out: bool,
@@ -1413,6 +1443,53 @@ given response then
         let g = f.read();
         assert_eq!(g.all()[0].remediation, None, "no near-enough match may be attached");
         assert!(definition_for(&g.all()[0]).is_none());
+    }
+
+    #[test]
+    fn a_check_that_rewrites_the_path_out_of_scope_is_refused_before_it_sends() {
+        // The base exchange is in scope at /p, so `audit_item`'s own check passes. The check then
+        // does `replacing path: "/x"` — which is excluded. Only the outgoing bytes know that, so
+        // this is the case a base-request scope test structurally cannot catch.
+        let mut scope = Scope::new();
+        scope.add(ScopeRule::include("t.test"));
+        scope.add(ScopeRule::exclude("t.test").with_path_prefix("/x"));
+
+        let checks = vec![burpsy_bcheck::parse(ACTIVE).unwrap()];
+        let s = PassiveScanner::from_checks(checks, Arc::new(scope));
+        assert_eq!(s.active_loaded(), 1);
+
+        let store = TrafficStore::new();
+        let ex = auditable(&store, "t.test", "/p");
+        let sender = RecordingSender::default();
+        let o = s.audit(&store, ex, &sender);
+
+        assert!(
+            sender.0.read().is_empty(),
+            "an out-of-scope request reached the network: {:?}",
+            sender.0.read()
+        );
+        assert_eq!(o.requests_sent, 0, "nothing may be counted as sent");
+        assert_eq!(o.requests_refused, 1, "the refusal must be visible, not silent");
+        assert_eq!(o.findings, 0, "and a refused probe must never yield a finding");
+    }
+
+    #[test]
+    fn a_check_staying_within_scope_still_sends_normally() {
+        // Guard against over-correcting: the refusal must be about the path, not about active
+        // checks in general.
+        let mut scope = Scope::new();
+        scope.add(ScopeRule::include("t.test"));
+        scope.add(ScopeRule::exclude("t.test").with_path_prefix("/nowhere-near"));
+
+        let checks = vec![burpsy_bcheck::parse(ACTIVE).unwrap()];
+        let s = PassiveScanner::from_checks(checks, Arc::new(scope));
+        let store = TrafficStore::new();
+        let ex = auditable(&store, "t.test", "/p");
+        let sender = RecordingSender::default();
+        let o = s.audit(&store, ex, &sender);
+
+        assert_eq!(o.requests_sent, 1, "an in-scope rewrite must still go out");
+        assert_eq!(o.requests_refused, 0);
     }
 
     #[test]

@@ -30,8 +30,8 @@ pub mod limit;
 pub mod plan;
 
 pub use engine::{
-    Attack, AttackReport, Attempt, ErrorBucket, RecordFn, ResultBucket, SendFn, SendFuture, Sent,
-    run,
+    Attack, AttackReport, Attempt, ErrorBucket, Guard, RecordFn, ResultBucket, SendFn, SendFuture,
+    Sent, run,
 };
 pub use limit::{RateLimit, RateLimiter};
 pub use plan::{Assignment, AttackKind, AttackPlan, Slot, plan};
