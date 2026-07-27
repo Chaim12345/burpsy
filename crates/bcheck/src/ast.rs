@@ -158,13 +158,22 @@ pub enum ModOp {
 pub enum RequestMod {
     /// Replace-only in practice; `appending method` is meaningless and rejected.
     Method(Value),
-    Path { op: ModOp, value: Value },
+    Path {
+        op: ModOp,
+        value: Value,
+    },
     QueryString(Value),
     /// `appending queries:` — each entry is one `k=v` clause, joined with `?` or `&` depending on
     /// whether the request already has a query.
     Queries(Vec<Value>),
-    Headers { op: ModOp, pairs: Vec<(Value, Value)> },
-    Body { op: ModOp, value: Value },
+    Headers {
+        op: ModOp,
+        pairs: Vec<(Value, Value)>,
+    },
+    Body {
+        op: ModOp,
+        value: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,16 +222,20 @@ impl Check {
     pub fn needs_collaborator(&self) -> bool {
         fn walk(ss: &[Statement]) -> bool {
             ss.iter().any(|s| match s {
-                Statement::If { cond, then, otherwise } => {
-                    has_interactions(cond) || walk(then) || walk(otherwise)
-                }
+                Statement::If {
+                    cond,
+                    then,
+                    otherwise,
+                } => has_interactions(cond) || walk(then) || walk(otherwise),
                 _ => false,
             })
         }
         fn has_interactions(e: &BoolExpr) -> bool {
             match e {
                 BoolExpr::Interactions(_) => true,
-                BoolExpr::And(a, b) | BoolExpr::Or(a, b) => has_interactions(a) || has_interactions(b),
+                BoolExpr::And(a, b) | BoolExpr::Or(a, b) => {
+                    has_interactions(a) || has_interactions(b)
+                }
                 BoolExpr::Not(a) => has_interactions(a),
                 BoolExpr::Cmp { .. } => false,
             }
@@ -277,9 +290,11 @@ fn contains_differs_from(ss: &[Statement]) -> bool {
         }
     }
     ss.iter().any(|s| match s {
-        Statement::If { cond, then, otherwise } => {
-            in_expr(cond) || contains_differs_from(then) || contains_differs_from(otherwise)
-        }
+        Statement::If {
+            cond,
+            then,
+            otherwise,
+        } => in_expr(cond) || contains_differs_from(then) || contains_differs_from(otherwise),
         _ => false,
     })
 }
@@ -287,9 +302,9 @@ fn contains_differs_from(ss: &[Statement]) -> bool {
 fn contains_send_payload(ss: &[Statement]) -> bool {
     ss.iter().any(|s| match s {
         Statement::SendPayload { .. } => true,
-        Statement::If { then, otherwise, .. } => {
-            contains_send_payload(then) || contains_send_payload(otherwise)
-        }
+        Statement::If {
+            then, otherwise, ..
+        } => contains_send_payload(then) || contains_send_payload(otherwise),
         _ => false,
     })
 }
@@ -297,7 +312,9 @@ fn contains_send_payload(ss: &[Statement]) -> bool {
 fn contains_send(ss: &[Statement]) -> bool {
     ss.iter().any(|s| match s {
         Statement::SendRequest { .. } | Statement::SendPayload { .. } => true,
-        Statement::If { then, otherwise, .. } => contains_send(then) || contains_send(otherwise),
+        Statement::If {
+            then, otherwise, ..
+        } => contains_send(then) || contains_send(otherwise),
         Statement::Report(_) => false,
     })
 }

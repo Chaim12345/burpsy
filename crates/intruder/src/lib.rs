@@ -520,15 +520,27 @@ mod tests {
             b"POST / HTTP/1.1\r\nHost: t.test\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 7\r\n\r\na=1&b=2",
         );
         let pts = find_points(&m, &PointConfig::all());
-        let body = pts.iter().find(|p| p.kind == PointKind::EntireBody).unwrap();
+        let body = pts
+            .iter()
+            .find(|p| p.kind == PointKind::EntireBody)
+            .unwrap();
         let a = pts
             .iter()
             .find(|p| p.kind == PointKind::BodyParamValue && p.label == "a")
             .unwrap();
         let out = apply_all(&m.raw, &[(body, b"WHOLE"), (a, b"IGNORED")]);
         let s = String::from_utf8_lossy(&out);
-        assert!(s.ends_with("\r\n\r\nWHOLE"), "body should be replaced once: {s}");
-        assert!(!s.contains("IGNORED"), "the overlapping later span must be skipped: {s}");
-        assert!(s.contains("Content-Length: 5"), "and framing must still be right: {s}");
+        assert!(
+            s.ends_with("\r\n\r\nWHOLE"),
+            "body should be replaced once: {s}"
+        );
+        assert!(
+            !s.contains("IGNORED"),
+            "the overlapping later span must be skipped: {s}"
+        );
+        assert!(
+            s.contains("Content-Length: 5"),
+            "and framing must still be right: {s}"
+        );
     }
 }

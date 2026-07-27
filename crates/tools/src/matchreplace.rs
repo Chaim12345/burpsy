@@ -250,7 +250,9 @@ impl Rule {
                 ));
             }
             if spec.string_replace.is_empty() {
-                return Err(err("neither a match nor a replacement: this rule does nothing"));
+                return Err(err(
+                    "neither a match nor a replacement: this rule does nothing",
+                ));
             }
             Action::AddHeader
         } else {
@@ -434,9 +436,7 @@ impl RuleSet {
         let applicable: Vec<&Rule> = self
             .rules
             .iter()
-            .filter(|r| {
-                r.enabled() && r.target().direction() == direction && r.in_scope(ctx)
-            })
+            .filter(|r| r.enabled() && r.target().direction() == direction && r.in_scope(ctx))
             .collect();
         if applicable.is_empty() {
             return None;
@@ -551,7 +551,11 @@ fn parse_message(raw: &[u8]) -> Parsed<'_> {
         match raw[i..].iter().position(|&c| c == b'\n') {
             Some(rel) => {
                 let nl = i + rel;
-                let text_end = if nl > i && raw[nl - 1] == b'\r' { nl - 1 } else { nl };
+                let text_end = if nl > i && raw[nl - 1] == b'\r' {
+                    nl - 1
+                } else {
+                    nl
+                };
                 let term = &raw[text_end..nl + 1];
                 if text_end == i {
                     blank_term = term;
@@ -651,7 +655,12 @@ mod tests {
     #[test]
     fn a_bad_pattern_is_rejected_at_construction_not_at_request_time() {
         let e = Rule::new(RuleSpec::new(Target::RequestHeader, "([unclosed", "")).unwrap_err();
-        assert!(e.message.contains("regex") || e.message.contains("repetition") || e.message.contains("class"), "{e}");
+        assert!(
+            e.message.contains("regex")
+                || e.message.contains("repetition")
+                || e.message.contains("class"),
+            "{e}"
+        );
         // And through serde, which is the path a config file takes.
         let json = r#"{"rule_type":"request_header","string_match":"([unclosed"}"#;
         assert!(serde_json::from_str::<Rule>(json).is_err());
@@ -675,8 +684,14 @@ mod tests {
         assert_eq!(rules.len(), 4);
         assert_eq!(rules[0].comment(), "Emulate Edge");
         assert_eq!(rules[2].target(), Target::RequestHeader);
-        assert!(matches!(rules[2].action, Action::AddHeader), "absent match means add");
-        assert!(rules.iter().all(|r| !r.enabled()), "all shipped defaults are off");
+        assert!(
+            matches!(rules[2].action, Action::AddHeader),
+            "absent match means add"
+        );
+        assert!(
+            rules.iter().all(|r| !r.enabled()),
+            "all shipped defaults are off"
+        );
     }
 
     #[test]
@@ -690,18 +705,34 @@ mod tests {
         )]);
         let out = s(rs.apply(Direction::Request, &ctx(), REQ).unwrap());
         assert!(out.contains("User-Agent: burpsy"), "{out}");
-        assert!(out.contains("Host: x.test"), "other headers untouched: {out}");
-        assert!(out.starts_with("POST /login HTTP/1.1"), "request line untouched: {out}");
+        assert!(
+            out.contains("Host: x.test"),
+            "other headers untouched: {out}"
+        );
+        assert!(
+            out.starts_with("POST /login HTTP/1.1"),
+            "request line untouched: {out}"
+        );
     }
 
     #[test]
     fn an_emptied_header_line_is_dropped_entirely() {
         // Burp's "Hide Referer header": match the whole line, replace with nothing.
-        let rs = set(vec![RuleSpec::new(Target::RequestHeader, "^User-Agent.*$", "")]);
+        let rs = set(vec![RuleSpec::new(
+            Target::RequestHeader,
+            "^User-Agent.*$",
+            "",
+        )]);
         let out = s(rs.apply(Direction::Request, &ctx(), REQ).unwrap());
         assert!(!out.contains("User-Agent"), "{out}");
-        assert!(!out.contains("\r\n\r\nHost"), "no blank line left behind: {out:?}");
-        assert!(out.starts_with("POST /login HTTP/1.1\r\nHost: x.test\r\nContent-Length: 7\r\n\r\n"), "{out:?}");
+        assert!(
+            !out.contains("\r\n\r\nHost"),
+            "no blank line left behind: {out:?}"
+        );
+        assert!(
+            out.starts_with("POST /login HTTP/1.1\r\nHost: x.test\r\nContent-Length: 7\r\n\r\n"),
+            "{out:?}"
+        );
     }
 
     #[test]
@@ -711,7 +742,10 @@ mod tests {
             "Origin: foo.example.org",
         )]);
         let out = s(rs.apply(Direction::Request, &ctx(), REQ).unwrap());
-        assert!(out.contains("Content-Length: 7\r\nOrigin: foo.example.org\r\n\r\n"), "{out:?}");
+        assert!(
+            out.contains("Content-Length: 7\r\nOrigin: foo.example.org\r\n\r\n"),
+            "{out:?}"
+        );
 
         // The same shape on a body target would match at every position and mangle the body, so
         // it is a construction error rather than a surprise at run time.
@@ -731,7 +765,11 @@ mod tests {
 
     #[test]
     fn no_match_returns_none_so_the_proxy_keeps_its_original_bytes() {
-        let rs = set(vec![RuleSpec::new(Target::RequestHeader, "^Nothing.*$", "x")]);
+        let rs = set(vec![RuleSpec::new(
+            Target::RequestHeader,
+            "^Nothing.*$",
+            "x",
+        )]);
         assert!(rs.apply(Direction::Request, &ctx(), REQ).is_none());
     }
 
@@ -758,7 +796,10 @@ mod tests {
         // the tool quietly refuse to run the experiment.
         let rs = set(vec![RuleSpec::new(Target::RequestBody, "b=2", "b=22222")]);
         let out = s(rs.apply(Direction::Request, &ctx(), REQ).unwrap());
-        assert!(out.contains("Content-Length: 7"), "stale length preserved: {out:?}");
+        assert!(
+            out.contains("Content-Length: 7"),
+            "stale length preserved: {out:?}"
+        );
         assert!(out.ends_with("a=1&b=22222"), "{out:?}");
     }
 
@@ -780,7 +821,11 @@ mod tests {
         let rs = RuleSet::compile(RuleSetSpec {
             rules: vec![
                 RuleSpec::new(Target::RequestBody, "b=2", "b=22222"),
-                RuleSpec::new(Target::RequestHeader, "^Content-Length: .*$", "Content-Length: 4"),
+                RuleSpec::new(
+                    Target::RequestHeader,
+                    "^Content-Length: .*$",
+                    "Content-Length: 4",
+                ),
             ],
             update_content_length: true,
         })
@@ -820,7 +865,11 @@ mod tests {
             rs.apply(Direction::Request, &ctx(), REQ).is_none(),
             "the request line needs an explicit request_first_line rule"
         );
-        let rs = set(vec![RuleSpec::new(Target::RequestFirstLine, "^POST", "GET")]);
+        let rs = set(vec![RuleSpec::new(
+            Target::RequestFirstLine,
+            "^POST",
+            "GET",
+        )]);
         let out = s(rs.apply(Direction::Request, &ctx(), REQ).unwrap());
         assert!(out.starts_with("GET /login HTTP/1.1"), "{out:?}");
     }
@@ -830,7 +879,10 @@ mod tests {
         // An empty first line is not a message; dropping it would produce a truncated head.
         let rs = set(vec![RuleSpec::new(Target::RequestFirstLine, "^.*$", "")]);
         let out = s(rs.apply(Direction::Request, &ctx(), REQ).unwrap());
-        assert!(out.starts_with("\r\nHost: x.test"), "kept as an empty line: {out:?}");
+        assert!(
+            out.starts_with("\r\nHost: x.test"),
+            "kept as an empty line: {out:?}"
+        );
     }
 
     #[test]
@@ -840,7 +892,10 @@ mod tests {
         let rs = set(vec![
             RuleSpec::new(Target::RequestHeader, "^Host: .*$", "Host: rewritten").with_scope(scope),
         ]);
-        assert!(rs.apply(Direction::Request, &ctx(), REQ).is_none(), "x.test is out of scope");
+        assert!(
+            rs.apply(Direction::Request, &ctx(), REQ).is_none(),
+            "x.test is out of scope"
+        );
         let staging = Ctx {
             host: "staging.test",
             ..ctx()
@@ -851,10 +906,8 @@ mod tests {
 
     #[test]
     fn an_empty_scope_is_refused_because_it_would_silently_disable_the_rule() {
-        let e = Rule::new(
-            RuleSpec::new(Target::RequestHeader, "a", "b").with_scope(Scope::new()),
-        )
-        .unwrap_err();
+        let e = Rule::new(RuleSpec::new(Target::RequestHeader, "a", "b").with_scope(Scope::new()))
+            .unwrap_err();
         assert!(e.message.contains("authorises nothing"), "{e}");
     }
 
@@ -863,7 +916,11 @@ mod tests {
         // Line endings are load-bearing when you are testing smuggling; rebuilding with CRLF would
         // quietly repair the very thing under test.
         let raw = b"GET / HTTP/1.1\nHost: x\nX-A: 1\n\nbody";
-        let rs = set(vec![RuleSpec::new(Target::RequestHeader, "^X-A: 1$", "X-A: 2")]);
+        let rs = set(vec![RuleSpec::new(
+            Target::RequestHeader,
+            "^X-A: 1$",
+            "X-A: 2",
+        )]);
         let out = rs.apply(Direction::Request, &ctx(), raw).unwrap();
         assert_eq!(s(out), "GET / HTTP/1.1\nHost: x\nX-A: 2\n\nbody");
     }

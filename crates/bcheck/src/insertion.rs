@@ -190,7 +190,10 @@ fn body_points(req: &RequestEdit, out: &mut Vec<InsertionPoint>) {
     let Ok(body) = std::str::from_utf8(&req.body) else {
         return;
     };
-    let ctype = req.header("content-type").unwrap_or("").to_ascii_lowercase();
+    let ctype = req
+        .header("content-type")
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let trimmed = body.trim_start();
 
     if ctype.contains("json") || trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -208,7 +211,8 @@ fn body_points(req: &RequestEdit, out: &mut Vec<InsertionPoint>) {
 
     // A missing Content-Type on a `k=v&k=v` body is still a form as far as every server is
     // concerned; requiring the header would leave those bodies untested.
-    let is_form = ctype.contains("x-www-form-urlencoded") || (ctype.is_empty() && body.contains('='));
+    let is_form =
+        ctype.contains("x-www-form-urlencoded") || (ctype.is_empty() && body.contains('='));
     if is_form {
         for (name, value) in kv_pairs(body, b'&') {
             out.push(InsertionPoint {
@@ -472,14 +476,20 @@ mod tests {
         // `?debug` has no value; inventing `?debug=payload` would send a parameter the application
         // was never given, under the original's name.
         let r = req(b"GET /s?debug&q=1 HTTP/1.1\r\nHost: x\r\n\r\n");
-        assert_eq!(names(&enumerate(&r, &[IpType::Query])), vec![(IpType::Query, "q")]);
+        assert_eq!(
+            names(&enumerate(&r, &[IpType::Query])),
+            vec![(IpType::Query, "q")]
+        );
     }
 
     #[test]
     fn a_form_body_yields_one_point_per_field() {
         let r = req(b"POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\na=1&user=bo");
         let ps = enumerate(&r, &[IpType::Body]);
-        assert_eq!(names(&ps), vec![(IpType::Body, "a"), (IpType::Body, "user")]);
+        assert_eq!(
+            names(&ps),
+            vec![(IpType::Body, "a"), (IpType::Body, "user")]
+        );
         assert_eq!(ps[1].base_value, "bo");
     }
 
@@ -506,7 +516,11 @@ mod tests {
         // We do not model multipart framing, and a payload spliced blind into it produces a body the
         // server rejects before the application sees the payload.
         let r = req(b"POST /u HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n");
-        assert!(enumerate(&r, &[IpType::Any]).iter().all(|p| p.kind != IpType::Body));
+        assert!(
+            enumerate(&r, &[IpType::Any])
+                .iter()
+                .all(|p| p.kind != IpType::Body)
+        );
     }
 
     #[test]

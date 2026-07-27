@@ -189,7 +189,9 @@ impl ToolLog {
 
     pub fn get(&self, id: u64) -> Option<Entry> {
         let g = self.inner.read();
-        g.binary_search_by_key(&id, |e| e.id).ok().map(|i| g[i].clone())
+        g.binary_search_by_key(&id, |e| e.id)
+            .ok()
+            .map(|i| g[i].clone())
     }
 
     /// Newest first, matching the way history is read.
@@ -303,7 +305,10 @@ mod tests {
             vec!["/c", "/b", "/a"]
         );
         let rep = log.by_tool(Tool::Repeater, 0, 10);
-        assert_eq!(rep.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), vec!["/c", "/a"]);
+        assert_eq!(
+            rep.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["/c", "/a"]
+        );
         assert_eq!(log.counts(), [2, 1, 0, 0]);
     }
 
@@ -339,7 +344,11 @@ mod tests {
         let second = log.started(started(Tool::Repeater, "/b"));
         assert!(second > first, "{second} must not reuse {first}");
         log.finished(first, MsgId(5), Some(200), 1, 1);
-        assert_eq!(log.get(second).unwrap().response, None, "the new entry is untouched");
+        assert_eq!(
+            log.get(second).unwrap().response,
+            None,
+            "the new entry is untouched"
+        );
     }
 
     #[test]

@@ -30,8 +30,8 @@
 //!   refuses it rather than guessing. The remaining 26 need Collaborator.
 
 pub mod ast;
-pub mod funcs;
 pub mod eval;
+pub mod funcs;
 pub mod insertion;
 pub mod lexer;
 pub mod parser;

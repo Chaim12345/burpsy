@@ -54,7 +54,11 @@ async fn main() -> anyhow::Result<()> {
             other => anyhow::bail!("unknown argument {other:?}"),
         }
     }
-    let scope = if scope_set { scope } else { Scope::allow_everything() };
+    let scope = if scope_set {
+        scope
+    } else {
+        Scope::allow_everything()
+    };
 
     let store = TrafficStore::new();
     let interceptor = Interceptor::new();
@@ -81,7 +85,9 @@ async fn main() -> anyhow::Result<()> {
 
     let web = tokio::net::TcpListener::bind(&web_bind).await?;
     let proxy = tokio::net::TcpListener::bind(&proxy_bind).await?;
-    tracing::info!("intercept e2e: proxy {proxy_bind}, api http://{web_bind} (intercept on: {start_on})");
+    tracing::info!(
+        "intercept e2e: proxy {proxy_bind}, api http://{web_bind} (intercept on: {start_on})"
+    );
 
     tokio::select! {
         r = burpsy_proxy::serve(proxy, cfg) => r?,
@@ -140,10 +146,21 @@ fn three() -> usize {
 /// number of probes against the number of TCP connections the origin accepted.
 async fn probe(Query(a): Query<ProbeArgs>) -> axum::Json<serde_json::Value> {
     let out = tokio::task::spawn_blocking(move || {
-        let sender = if a.no_reuse { NetSender::without_reuse() } else { NetSender::default() };
-        let target = Target { host: a.host.clone(), port: a.port, tls: false };
+        let sender = if a.no_reuse {
+            NetSender::without_reuse()
+        } else {
+            NetSender::default()
+        };
+        let target = Target {
+            host: a.host.clone(),
+            port: a.port,
+            tls: false,
+        };
         let raw = if a.force_close {
-            format!("GET /probe HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n", a.host, a.port)
+            format!(
+                "GET /probe HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
+                a.host, a.port
+            )
         } else {
             format!("GET /probe HTTP/1.1\r\nHost: {}:{}\r\n\r\n", a.host, a.port)
         };

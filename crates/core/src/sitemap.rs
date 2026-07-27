@@ -221,7 +221,12 @@ impl SiteMap {
 
         // Overshoot by the resolve window when something is pending, so late statuses are visible
         // even on a sync that has no new traffic to fold.
-        let want = behind + if self.pending.is_empty() { 0 } else { RESOLVE_WINDOW };
+        let want = behind
+            + if self.pending.is_empty() {
+                0
+            } else {
+                RESOLVE_WINDOW
+            };
         let batch = store.exchanges(0, want);
         let by_id: HashMap<u64, &Exchange> = batch.iter().map(|e| (e.id, e)).collect();
 
@@ -259,7 +264,11 @@ impl SiteMap {
             return *id;
         }
         let id = self.nodes.len() as u32;
-        let owner = if parent == NO_PARENT { None } else { Some(parent) };
+        let owner = if parent == NO_PARENT {
+            None
+        } else {
+            Some(parent)
+        };
         self.nodes
             .push(SiteNode::new(id, owner, segment.to_owned(), depth));
         match owner {
@@ -383,7 +392,14 @@ mod tests {
     use crate::{Direction, MsgId};
     use bytes::Bytes;
 
-    fn ex(id: u64, host: &str, tls: bool, method: &str, path: &str, status: Option<u16>) -> Exchange {
+    fn ex(
+        id: u64,
+        host: &str,
+        tls: bool,
+        method: &str,
+        path: &str,
+        status: Option<u16>,
+    ) -> Exchange {
         Exchange {
             id,
             request: MsgId(id),
@@ -438,14 +454,23 @@ mod tests {
         ];
         let m = SiteMap::from_exchanges(&rows);
 
-        let admin = m.node(m.find("http://a.test:80", "/admin").unwrap()).unwrap();
+        let admin = m
+            .node(m.find("http://a.test:80", "/admin").unwrap())
+            .unwrap();
         assert!(!admin.requested(), "inferred from a deeper path only");
-        assert_eq!(admin.subtree_exchanges, 1, "but it does have traffic beneath it");
+        assert_eq!(
+            admin.subtree_exchanges, 1,
+            "but it does have traffic beneath it"
+        );
         assert!(admin.methods.is_empty(), "nothing was ever sent to it");
 
-        let js = m.node(m.find("http://a.test:80", "/admin/login.js").unwrap()).unwrap();
+        let js = m
+            .node(m.find("http://a.test:80", "/admin/login.js").unwrap())
+            .unwrap();
         assert!(js.requested());
-        let public = m.node(m.find("http://a.test:80", "/public").unwrap()).unwrap();
+        let public = m
+            .node(m.find("http://a.test:80", "/public").unwrap())
+            .unwrap();
         assert!(public.requested());
     }
 
@@ -458,7 +483,11 @@ mod tests {
         ];
         let m = SiteMap::from_exchanges(&rows);
         assert_eq!(m.roots().len(), 2);
-        let names: Vec<&str> = m.roots().iter().map(|r| m.node(*r).unwrap().segment.as_str()).collect();
+        let names: Vec<&str> = m
+            .roots()
+            .iter()
+            .map(|r| m.node(*r).unwrap().segment.as_str())
+            .collect();
         assert_eq!(names, vec!["http://a.test:80", "https://a.test:443"]);
     }
 
@@ -471,8 +500,13 @@ mod tests {
             ex(3, "a.test", false, "GET", "/search", Some(500)),
         ];
         let m = SiteMap::from_exchanges(&rows);
-        let n = m.node(m.find("http://a.test:80", "/search").unwrap()).unwrap();
-        assert_eq!(n.exchanges, 4, "distinct query strings are one node, not four");
+        let n = m
+            .node(m.find("http://a.test:80", "/search").unwrap())
+            .unwrap();
+        assert_eq!(
+            n.exchanges, 4,
+            "distinct query strings are one node, not four"
+        );
         assert_eq!(n.methods, vec!["GET", "POST"]);
         assert_eq!(n.statuses, vec![200, 302, 500]);
         assert_eq!(n.params, vec!["page", "q", "sort"]);
@@ -483,11 +517,20 @@ mod tests {
     fn absolute_form_and_fragments_land_on_the_origin_form_node() {
         let rows = [
             ex(0, "a.test", false, "GET", "/docs/index.html", Some(200)),
-            ex(1, "a.test", false, "GET", "http://a.test/docs/index.html", Some(200)),
+            ex(
+                1,
+                "a.test",
+                false,
+                "GET",
+                "http://a.test/docs/index.html",
+                Some(200),
+            ),
             ex(2, "a.test", false, "GET", "/docs/index.html#top", Some(200)),
         ];
         let m = SiteMap::from_exchanges(&rows);
-        let n = m.node(m.find("http://a.test:80", "/docs/index.html").unwrap()).unwrap();
+        let n = m
+            .node(m.find("http://a.test:80", "/docs/index.html").unwrap())
+            .unwrap();
         assert_eq!(n.exchanges, 3);
         assert_eq!(m.len(), 3, "root + docs + index.html, nothing else");
     }
@@ -506,7 +549,10 @@ mod tests {
     fn sync_folds_only_what_is_new() {
         let store = TrafficStore::new();
         let put = |path: &str| {
-            let id = store.put(Bytes::from_static(b"GET / HTTP/1.1\r\n\r\n"), Direction::Request);
+            let id = store.put(
+                Bytes::from_static(b"GET / HTTP/1.1\r\n\r\n"),
+                Direction::Request,
+            );
             store.add_exchange(Exchange {
                 id: 0,
                 request: id,
@@ -542,7 +588,10 @@ mod tests {
         // The proxy adds the exchange when the request arrives and fills the status later; a fold
         // that visited each row once would show the path with no status forever.
         let store = TrafficStore::new();
-        let req = store.put(Bytes::from_static(b"GET /late HTTP/1.1\r\n\r\n"), Direction::Request);
+        let req = store.put(
+            Bytes::from_static(b"GET /late HTTP/1.1\r\n\r\n"),
+            Direction::Request,
+        );
         let ex_id = store.add_exchange(Exchange {
             id: 0,
             request: req,
@@ -565,12 +614,19 @@ mod tests {
         assert!(m.node(node).unwrap().statuses.is_empty(), "no response yet");
         assert_eq!(m.pending_responses(), 1);
 
-        let resp = store.put(Bytes::from_static(b"HTTP/1.1 503 x\r\n\r\n"), Direction::Response);
+        let resp = store.put(
+            Bytes::from_static(b"HTTP/1.1 503 x\r\n\r\n"),
+            Direction::Response,
+        );
         store.set_response(ex_id, resp, 503, 0, 7);
 
         assert_eq!(m.sync(&store), 0, "no new exchange, only a late status");
         assert_eq!(m.node(node).unwrap().statuses, vec![503]);
-        assert_eq!(m.node(node).unwrap().exchanges, 1, "the row is still counted once");
+        assert_eq!(
+            m.node(node).unwrap().exchanges,
+            1,
+            "the row is still counted once"
+        );
         assert_eq!(m.pending_responses(), 0);
     }
 
@@ -596,10 +652,16 @@ mod tests {
         assert_eq!(m.total_exchanges(), 20_000);
         assert_eq!(m.node(m.roots()[0]).unwrap().subtree_exchanges, 20_000);
 
-        let leaf = m.node(m.find("https://a.test:443", "/d0/p0").unwrap()).unwrap();
+        let leaf = m
+            .node(m.find("https://a.test:443", "/d0/p0").unwrap())
+            .unwrap();
         assert_eq!(leaf.exchanges, 100, "every 200th request lands here");
         assert_eq!(leaf.methods, vec!["GET", "POST"]);
         assert_eq!(leaf.statuses, vec![200, 404]);
-        assert_eq!(leaf.params, vec!["id"], "20k distinct values, one param name");
+        assert_eq!(
+            leaf.params,
+            vec!["id"],
+            "20k distinct values, one param name"
+        );
     }
 }

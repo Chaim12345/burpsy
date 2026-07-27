@@ -5,13 +5,16 @@
 use std::path::PathBuf;
 
 fn main() {
-    let root = std::env::args().nth(1).unwrap_or_else(|| "/tmp/BChecks".into());
+    let root = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/tmp/BChecks".into());
     let mut files: Vec<PathBuf> = Vec::new();
     walk(PathBuf::from(&root), &mut files);
     files.sort();
 
     let (mut ok, mut fail) = (0usize, 0usize);
-    let (mut passive, mut collab, mut by_freq) = (0usize, 0usize, std::collections::BTreeMap::new());
+    let (mut passive, mut collab, mut by_freq) =
+        (0usize, 0usize, std::collections::BTreeMap::new());
     let mut failures = Vec::new();
     // Modifier tally, cross-checked against a grep of the same tree. If the parser silently drops a
     // clause these counts fall below the grep and the discrepancy is visible.
@@ -40,7 +43,11 @@ fn main() {
                     let mut m = std::collections::BTreeMap::new();
                     let (mut a, mut b) = (0, 0);
                     count_mods(&c.body, &mut m, &mut a, &mut b);
-                    println!("PERFILE\t{}\t{}", f.display(), m.get("method").copied().unwrap_or(0));
+                    println!(
+                        "PERFILE\t{}\t{}",
+                        f.display(),
+                        m.get("method").copied().unwrap_or(0)
+                    );
                 }
             }
             Err(e) => {
@@ -54,9 +61,18 @@ fn main() {
     println!("parsed OK      : {ok}");
     println!("failed         : {fail}");
     if !files.is_empty() {
-        println!("accept rate    : {:.1}%", ok as f64 * 100.0 / files.len() as f64);
-        println!("M1 runnable    : {passive} ({:.1}%)", passive as f64 * 100.0 / files.len() as f64);
-        println!("needs collab   : {collab} ({:.1}%)", collab as f64 * 100.0 / files.len() as f64);
+        println!(
+            "accept rate    : {:.1}%",
+            ok as f64 * 100.0 / files.len() as f64
+        );
+        println!(
+            "M1 runnable    : {passive} ({:.1}%)",
+            passive as f64 * 100.0 / files.len() as f64
+        );
+        println!(
+            "needs collab   : {collab} ({:.1}%)",
+            collab as f64 * 100.0 / files.len() as f64
+        );
     }
     println!("\nby given-frequency:");
     for (k, v) in &by_freq {
@@ -87,7 +103,9 @@ fn count_mods(
     use burpsy_bcheck::ast::{ModOp, RequestMod, Statement};
     for s in ss {
         match s {
-            Statement::If { then, otherwise, .. } => {
+            Statement::If {
+                then, otherwise, ..
+            } => {
                 count_mods(then, out, sends, raw_sends);
                 count_mods(otherwise, out, sends, raw_sends);
             }
@@ -100,7 +118,9 @@ fn count_mods(
                     let key = match m {
                         RequestMod::Method(_) => "method".to_string(),
                         RequestMod::QueryString(_) => "query_string".to_string(),
-                        RequestMod::Queries(v) => format!("appending queries ({} entries)", v.len()),
+                        RequestMod::Queries(v) => {
+                            format!("appending queries ({} entries)", v.len())
+                        }
                         RequestMod::Path { op, .. } => format!("{} path", opname(*op)),
                         RequestMod::Body { op, .. } => format!("{} body", opname(*op)),
                         RequestMod::Headers { op, pairs } => {

@@ -28,13 +28,17 @@ async fn spawn_origin() -> Origin {
     let counter = hits.clone();
     tokio::spawn(async move {
         loop {
-            let Ok((mut sock, _)) = listener.accept().await else { break };
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
             let counter = counter.clone();
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 let mut chunk = [0u8; 4096];
                 loop {
-                    let Ok(n) = sock.read(&mut chunk).await else { return };
+                    let Ok(n) = sock.read(&mut chunk).await else {
+                        return;
+                    };
                     if n == 0 {
                         return;
                     }
@@ -76,9 +80,8 @@ async fn spawn_proxy(cfg: ProxyConfig) -> SocketAddr {
 /// Send one absolute-form request through the proxy and read the whole reply.
 async fn through_proxy(proxy: SocketAddr, origin: SocketAddr, path: &str) -> String {
     let mut s = TcpStream::connect(proxy).await.unwrap();
-    let req = format!(
-        "GET http://{origin}{path} HTTP/1.1\r\nHost: {origin}\r\nAccept: */*\r\n\r\n",
-    );
+    let req =
+        format!("GET http://{origin}{path} HTTP/1.1\r\nHost: {origin}\r\nAccept: */*\r\n\r\n",);
     s.write_all(req.as_bytes()).await.unwrap();
     s.flush().await.unwrap();
     read_response(&mut s).await
@@ -117,11 +120,16 @@ async fn wait_for_pending(ic: &Interceptor, n: usize) {
         }
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
-    panic!("timed out waiting for {n} held request(s); have {}", ic.pending());
+    panic!(
+        "timed out waiting for {n} held request(s); have {}",
+        ic.pending()
+    );
 }
 
 fn config(store: Arc<TrafficStore>, ic: Arc<Interceptor>, scope: Scope) -> ProxyConfig {
-    ProxyConfig::new(store).with_scope(scope).with_interceptor(ic)
+    ProxyConfig::new(store)
+        .with_scope(scope)
+        .with_interceptor(ic)
 }
 
 /// The property most likely to break, and the reason for a oneshot per request rather than a gate.
@@ -171,7 +179,10 @@ async fn holding_one_request_does_not_block_another_connection() {
     let b = held_b.await.unwrap();
     assert!(b.contains("ORIGIN GET /held-b"), "B got {b:?}");
     assert_eq!(ic.pending(), 1, "only A should remain held");
-    assert!(!held_a.is_finished(), "forwarding B must not have released A");
+    assert!(
+        !held_a.is_finished(),
+        "forwarding B must not have released A"
+    );
 
     assert!(ic.forward(a_id, None));
     let a = held_a.await.unwrap();
@@ -195,23 +206,45 @@ async fn an_edited_request_is_what_reaches_the_origin_and_what_history_records()
     wait_for_pending(&ic, 1).await;
 
     let held = ic.list().remove(0);
-    assert!(held.raw.contains("GET /original HTTP/1.1"), "held raw was {:?}", held.raw);
-    let edited = held.raw.replace("/original", "/rewritten").replace("Accept: */*", "Accept: edited");
+    assert!(
+        held.raw.contains("GET /original HTTP/1.1"),
+        "held raw was {:?}",
+        held.raw
+    );
+    let edited = held
+        .raw
+        .replace("/original", "/rewritten")
+        .replace("Accept: */*", "Accept: edited");
     assert!(ic.forward(held.id, Some(Bytes::from(edited))));
 
     // The origin saw the edit...
     let body = client.await.unwrap();
-    assert!(body.contains("ORIGIN GET /rewritten"), "origin echoed {body:?}");
+    assert!(
+        body.contains("ORIGIN GET /rewritten"),
+        "origin echoed {body:?}"
+    );
 
     // ...and so does history, both in the indexed path and in the stored bytes.
     let exchanges = store.exchanges(0, 10);
     assert_eq!(exchanges.len(), 1, "one forwarded request, one exchange");
-    assert_eq!(exchanges[0].path, "/rewritten", "the index must not keep the pre-edit path");
+    assert_eq!(
+        exchanges[0].path, "/rewritten",
+        "the index must not keep the pre-edit path"
+    );
     let stored = store.get(exchanges[0].request).unwrap();
     let text = String::from_utf8_lossy(&stored.raw);
-    assert!(text.contains("GET /rewritten HTTP/1.1"), "stored request was {text:?}");
-    assert!(text.contains("Accept: edited"), "stored request was {text:?}");
-    assert!(!text.contains("/original"), "the original bytes must not survive: {text:?}");
+    assert!(
+        text.contains("GET /rewritten HTTP/1.1"),
+        "stored request was {text:?}"
+    );
+    assert!(
+        text.contains("Accept: edited"),
+        "stored request was {text:?}"
+    );
+    assert!(
+        !text.contains("/original"),
+        "the original bytes must not survive: {text:?}"
+    );
 }
 
 #[tokio::test]
@@ -236,15 +269,26 @@ async fn a_dropped_request_gets_a_synthetic_response_and_never_reaches_the_origi
         .unwrap();
     assert!(body.starts_with("HTTP/1.1 403 Forbidden"), "got {body:?}");
     assert!(body.contains("X-Burpsy-Intercept: dropped"), "got {body:?}");
-    assert!(body.contains("testing the drop path"), "the reason must reach the client: {body:?}");
-    assert_eq!(origin.hits.load(Ordering::SeqCst), 0, "a dropped request must not be sent");
+    assert!(
+        body.contains("testing the drop path"),
+        "the reason must reach the client: {body:?}"
+    );
+    assert_eq!(
+        origin.hits.load(Ordering::SeqCst),
+        0,
+        "a dropped request must not be sent"
+    );
 
     // The attempt is still history: an operator needs to see what they refused.
     let exchanges = store.exchanges(0, 10);
     assert_eq!(exchanges.len(), 1);
     assert_eq!(exchanges[0].status, Some(403));
     assert!(
-        exchanges[0].notes.as_deref().unwrap_or_default().contains("dropped by operator"),
+        exchanges[0]
+            .notes
+            .as_deref()
+            .unwrap_or_default()
+            .contains("dropped by operator"),
         "notes were {:?}",
         exchanges[0].notes
     );
@@ -270,7 +314,11 @@ async fn out_of_scope_traffic_passes_through_untouched_while_interception_is_on(
     .to_string();
 
     assert!(body.contains("ORIGIN GET /elsewhere"), "got {body:?}");
-    assert_eq!(ic.pending(), 0, "out-of-scope traffic must never enter the queue");
+    assert_eq!(
+        ic.pending(),
+        0,
+        "out-of-scope traffic must never enter the queue"
+    );
     assert_eq!(
         store.exchanges(0, 10).len(),
         0,
@@ -311,7 +359,9 @@ async fn a_connect_that_cannot_reach_upstream_is_recorded_rather_than_vanishing(
     assert_eq!(ex.status, Some(502));
     let note = ex.notes.clone().unwrap_or_default();
     assert!(note.contains("connect failed"), "notes were {note:?}");
-    let resp = store.get(ex.response.expect("a synthetic response is recorded")).unwrap();
+    let resp = store
+        .get(ex.response.expect("a synthetic response is recorded"))
+        .unwrap();
     assert!(
         String::from_utf8_lossy(&resp.raw).contains("upstream connect failed"),
         "the recorded reason must name the failure"
@@ -344,6 +394,16 @@ async fn a_successful_connect_and_a_failed_one_are_distinguishable_in_history() 
     rows.sort_by_key(|e| e.port == dead);
     assert_eq!(rows.len(), 2, "both attempts are recorded");
     assert_eq!(rows[0].status, Some(200), "the reachable host tunnelled");
-    assert_eq!(rows[1].status, Some(502), "the unreachable host is a distinct row");
-    assert!(rows[1].notes.clone().unwrap_or_default().contains("connect failed"));
+    assert_eq!(
+        rows[1].status,
+        Some(502),
+        "the unreachable host is a distinct row"
+    );
+    assert!(
+        rows[1]
+            .notes
+            .clone()
+            .unwrap_or_default()
+            .contains("connect failed")
+    );
 }

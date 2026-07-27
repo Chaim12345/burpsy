@@ -54,8 +54,8 @@ impl RequestEdit {
     pub fn from_raw(raw: &[u8]) -> Result<Self, EditError> {
         let split = find_header_end(raw).ok_or(EditError("no header terminator"))?;
         let (head, body_start) = split;
-        let head = std::str::from_utf8(&raw[..head])
-            .map_err(|_| EditError("non-UTF-8 request head"))?;
+        let head =
+            std::str::from_utf8(&raw[..head]).map_err(|_| EditError("non-UTF-8 request head"))?;
 
         let mut lines = head.split('\n').map(|l| l.trim_end_matches('\r'));
         let start = lines.next().ok_or(EditError("empty request"))?;
@@ -94,12 +94,25 @@ impl RequestEdit {
         }
 
         let raw_body = &raw[body_start..];
-        let chunked = headers
-            .iter()
-            .any(|(n, v)| n.eq_ignore_ascii_case("transfer-encoding") && v.to_ascii_lowercase().contains("chunked"));
-        let body = if chunked { dechunk(raw_body) } else { raw_body.to_vec() };
+        let chunked = headers.iter().any(|(n, v)| {
+            n.eq_ignore_ascii_case("transfer-encoding")
+                && v.to_ascii_lowercase().contains("chunked")
+        });
+        let body = if chunked {
+            dechunk(raw_body)
+        } else {
+            raw_body.to_vec()
+        };
 
-        Ok(Self { method, origin, path, query, version, headers, body })
+        Ok(Self {
+            method,
+            origin,
+            path,
+            query,
+            version,
+            headers,
+            body,
+        })
     }
 
     /// The request-line target in origin-form.
@@ -135,7 +148,11 @@ impl RequestEdit {
 
     /// Replace every header with this name, or append if absent.
     pub fn set_header(&mut self, name: &str, value: &str) {
-        if let Some(i) = self.headers.iter().position(|(n, _)| n.eq_ignore_ascii_case(name)) {
+        if let Some(i) = self
+            .headers
+            .iter()
+            .position(|(n, _)| n.eq_ignore_ascii_case(name))
+        {
             self.headers[i].1 = value.to_string();
             // Drop any later duplicates so the replacement is unambiguous.
             let name_owned = name.to_ascii_lowercase();
@@ -185,7 +202,8 @@ impl RequestEdit {
 
         for (n, v) in &self.headers {
             // Length and framing are rewritten below; never echo the originals.
-            if n.eq_ignore_ascii_case("content-length") || n.eq_ignore_ascii_case("transfer-encoding")
+            if n.eq_ignore_ascii_case("content-length")
+                || n.eq_ignore_ascii_case("transfer-encoding")
             {
                 continue;
             }
@@ -236,7 +254,9 @@ fn dechunk(mut b: &[u8]) -> Vec<u8> {
         let line = std::str::from_utf8(&b[..nl]).unwrap_or("").trim();
         // Ignore any chunk extension after ';'.
         let size_hex = line.split(';').next().unwrap_or("");
-        let Ok(size) = usize::from_str_radix(size_hex, 16) else { break };
+        let Ok(size) = usize::from_str_radix(size_hex, 16) else {
+            break;
+        };
         b = &b[nl + 1..];
         if size == 0 {
             break;
@@ -267,7 +287,11 @@ mod tests {
         assert_eq!(r.path, "/a");
         assert_eq!(r.query, "b=1");
         assert_eq!(r.header("host"), Some("x.test"));
-        assert_eq!(r.to_raw(), raw.to_vec(), "round trip must be byte-identical");
+        assert_eq!(
+            r.to_raw(),
+            raw.to_vec(),
+            "round trip must be byte-identical"
+        );
     }
 
     #[test]
@@ -293,14 +317,22 @@ mod tests {
         let out = String::from_utf8(r.to_raw()).unwrap();
         assert!(out.contains("Content-Length: 7"), "got {out:?}");
         assert!(out.ends_with("a=1&b=2"));
-        assert_eq!(out.matches("Content-Length").count(), 1, "no duplicate length header");
+        assert_eq!(
+            out.matches("Content-Length").count(),
+            1,
+            "no duplicate length header"
+        );
     }
 
     #[test]
     fn chunked_bodies_are_decoded_and_re_emitted_length_delimited() {
         let raw = b"POST /f HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
         let r = RequestEdit::from_raw(raw).unwrap();
-        assert_eq!(r.body, b"Wikipedia".to_vec(), "chunk framing must not survive");
+        assert_eq!(
+            r.body,
+            b"Wikipedia".to_vec(),
+            "chunk framing must not survive"
+        );
         let out = String::from_utf8(r.to_raw()).unwrap();
         assert!(out.contains("Content-Length: 9"), "got {out:?}");
         assert!(!out.to_lowercase().contains("transfer-encoding"));
@@ -318,8 +350,8 @@ mod tests {
 
     #[test]
     fn set_header_replaces_all_duplicates_add_header_keeps_them() {
-        let mut r =
-            RequestEdit::from_raw(b"GET / HTTP/1.1\r\nHost: x\r\nX-A: 1\r\nX-A: 2\r\n\r\n").unwrap();
+        let mut r = RequestEdit::from_raw(b"GET / HTTP/1.1\r\nHost: x\r\nX-A: 1\r\nX-A: 2\r\n\r\n")
+            .unwrap();
         r.set_header("X-A", "9");
         assert_eq!(r.headers.iter().filter(|(n, _)| n == "X-A").count(), 1);
         assert_eq!(r.header("x-a"), Some("9"));

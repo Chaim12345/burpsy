@@ -241,7 +241,11 @@ mod tests {
         o.add(9, "GET /a again, with a different note", 0);
         assert!(o.contains_exchange(9));
         assert!(!o.contains_exchange(10));
-        assert_eq!(o.len(), 2, "duplicates are the operator's choice, not an error");
+        assert_eq!(
+            o.len(),
+            2,
+            "duplicates are the operator's choice, not an error"
+        );
     }
 
     #[test]

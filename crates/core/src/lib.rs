@@ -328,7 +328,14 @@ impl TrafficStore {
         id
     }
 
-    pub fn set_response(&self, exchange_id: u64, resp: MsgId, status: u16, len: usize, dur_ms: u64) {
+    pub fn set_response(
+        &self,
+        exchange_id: u64,
+        resp: MsgId,
+        status: u16,
+        len: usize,
+        dur_ms: u64,
+    ) {
         let mut g = self.inner.write();
         if let Some(e) = g.exchanges.iter_mut().find(|e| e.id == exchange_id) {
             e.response = Some(resp);

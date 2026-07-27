@@ -243,7 +243,9 @@ impl Scope {
         raw: &[u8],
     ) -> Result<(), String> {
         let Some(path) = request_path(raw) else {
-            return Err("refused: request has no readable request line to check scope against".into());
+            return Err(
+                "refused: request has no readable request line to check scope against".into(),
+            );
         };
         if self.contains(host, port, path, tls) {
             return Ok(());
@@ -331,10 +333,14 @@ mod tests {
         let err = sc
             .authorise_request("shop.test", 443, true, raw)
             .expect_err("an excluded path must not be authorised");
-        assert!(err.contains("/admin/delete-all"), "unhelpful refusal: {err}");
+        assert!(
+            err.contains("/admin/delete-all"),
+            "unhelpful refusal: {err}"
+        );
         // And the ordinary path on the same host still works, or the fix would be a regression.
         assert!(
-            sc.authorise_request("shop.test", 443, true, b"GET /search HTTP/1.1\r\n\r\n").is_ok()
+            sc.authorise_request("shop.test", 443, true, b"GET /search HTTP/1.1\r\n\r\n")
+                .is_ok()
         );
     }
 
@@ -344,12 +350,17 @@ mod tests {
         // against paths that were explicitly in scope.
         let mut sc = Scope::new();
         sc.add(ScopeRule::include("api.test").with_path_prefix("/v1/"));
-        assert!(sc.may_contain_host("api.test", 443, true), "pre-filter must let this through");
         assert!(
-            sc.authorise_request("api.test", 443, true, b"GET /v1/orders HTTP/1.1\r\n\r\n").is_ok()
+            sc.may_contain_host("api.test", 443, true),
+            "pre-filter must let this through"
         );
         assert!(
-            sc.authorise_request("api.test", 443, true, b"GET /v2/orders HTTP/1.1\r\n\r\n").is_err(),
+            sc.authorise_request("api.test", 443, true, b"GET /v1/orders HTTP/1.1\r\n\r\n")
+                .is_ok()
+        );
+        assert!(
+            sc.authorise_request("api.test", 443, true, b"GET /v2/orders HTTP/1.1\r\n\r\n")
+                .is_err(),
             "/v2/ is outside the included prefix"
         );
     }
@@ -368,7 +379,10 @@ mod tests {
     fn an_empty_scope_authorises_nothing() {
         let sc = Scope::new();
         assert!(!sc.may_contain_host("anything.test", 443, true));
-        assert!(sc.authorise_request("anything.test", 443, true, b"GET / HTTP/1.1\r\n\r\n").is_err());
+        assert!(
+            sc.authorise_request("anything.test", 443, true, b"GET / HTTP/1.1\r\n\r\n")
+                .is_err()
+        );
     }
 
     #[test]
@@ -377,13 +391,19 @@ mod tests {
         let mut sc = Scope::new();
         sc.add(ScopeRule::include("shop.test"));
         assert!(sc.authorise_request("shop.test", 443, true, b"").is_err());
-        assert!(sc.authorise_request("shop.test", 443, true, b"GARBAGE").is_err());
+        assert!(
+            sc.authorise_request("shop.test", 443, true, b"GARBAGE")
+                .is_err()
+        );
     }
 
     #[test]
     fn request_path_reads_both_origin_and_absolute_form() {
         assert_eq!(request_path(b"GET /a?b=1 HTTP/1.1\r\n"), Some("/a"));
-        assert_eq!(request_path(b"GET http://h.test/a?b=1 HTTP/1.1\r\n"), Some("/a"));
+        assert_eq!(
+            request_path(b"GET http://h.test/a?b=1 HTTP/1.1\r\n"),
+            Some("/a")
+        );
         // A proxied absolute-form request with no path at all addresses the root.
         assert_eq!(request_path(b"GET http://h.test HTTP/1.1\r\n"), Some("/"));
         assert_eq!(request_path(b"POST /x HTTP/1.1"), Some("/x"));
@@ -397,7 +417,9 @@ mod tests {
         let sc = shop();
         assert!(
             sc.authorise_request(
-                "shop.test", 443, true,
+                "shop.test",
+                443,
+                true,
                 b"GET /search?next=/admin HTTP/1.1\r\n\r\n"
             )
             .is_ok()
@@ -409,7 +431,10 @@ mod tests {
         let s = Scope::new();
         assert!(!s.contains("anything.test", 443, "/", true));
         assert!(s.is_empty());
-        assert!(s.explain("anything.test", 443, "/", true).contains("no scope rules"));
+        assert!(
+            s.explain("anything.test", 443, "/", true)
+                .contains("no scope rules")
+        );
     }
 
     #[test]
@@ -419,7 +444,10 @@ mod tests {
             .add(ScopeRule::exclude("admin.target.test"));
         assert!(s.contains("app.target.test", 443, "/", true));
         assert!(!s.contains("admin.target.test", 443, "/", true));
-        assert!(s.explain("admin.target.test", 443, "/", true).contains("excluded by"));
+        assert!(
+            s.explain("admin.target.test", 443, "/", true)
+                .contains("excluded by")
+        );
     }
 
     #[test]
@@ -455,9 +483,18 @@ mod tests {
                 .with_tls(true),
         );
         assert!(s.contains("api.test", 8443, "/v1/users", true));
-        assert!(!s.contains("api.test", 8443, "/v2/users", true), "path prefix must bind");
-        assert!(!s.contains("api.test", 443, "/v1/users", true), "port must bind");
-        assert!(!s.contains("api.test", 8443, "/v1/users", false), "tls must bind");
+        assert!(
+            !s.contains("api.test", 8443, "/v2/users", true),
+            "path prefix must bind"
+        );
+        assert!(
+            !s.contains("api.test", 443, "/v1/users", true),
+            "port must bind"
+        );
+        assert!(
+            !s.contains("api.test", 8443, "/v1/users", false),
+            "tls must bind"
+        );
     }
 
     #[test]

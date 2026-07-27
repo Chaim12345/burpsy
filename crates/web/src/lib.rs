@@ -142,9 +142,12 @@ pub async fn serve_audit(
         .await
         .with_context(|| format!("bind web ui on {bind}"))?;
     tracing::info!("web ui on http://{bind}");
-    axum::serve(listener, router_audit(store, ca_pem, scope, findings, audit))
-        .await
-        .context("serve")?;
+    axum::serve(
+        listener,
+        router_audit(store, ca_pem, scope, findings, audit),
+    )
+    .await
+    .context("serve")?;
     Ok(())
 }
 
@@ -156,7 +159,10 @@ async fn ca_cert(State(s): State<AppState>) -> impl IntoResponse {
             StatusCode::OK,
             [
                 ("content-type", "application/x-x509-ca-cert"),
-                ("content-disposition", "attachment; filename=\"burpsy-ca.crt\""),
+                (
+                    "content-disposition",
+                    "attachment; filename=\"burpsy-ca.crt\"",
+                ),
             ],
             pem.as_str().to_owned(),
         )
@@ -196,8 +202,9 @@ async fn run_audit(
     };
     match tokio::task::spawn_blocking(move || hook(id)).await {
         Ok(v) => Json(v).into_response(),
-        Err(e) => Json(serde_json::json!({ "error": format!("audit task failed: {e}") }))
-            .into_response(),
+        Err(e) => {
+            Json(serde_json::json!({ "error": format!("audit task failed: {e}") })).into_response()
+        }
     }
 }
 
@@ -233,7 +240,11 @@ struct Stats {
 
 async fn stats(State(s): State<AppState>) -> Json<Stats> {
     let (exchanges, messages, stored_bytes) = s.store.counts();
-    Json(Stats { exchanges, messages, stored_bytes })
+    Json(Stats {
+        exchanges,
+        messages,
+        stored_bytes,
+    })
 }
 
 #[derive(Deserialize)]
@@ -298,10 +309,7 @@ struct SendResp {
     exchange_id: u64,
 }
 
-async fn repeater_send(
-    State(s): State<AppState>,
-    Json(req): Json<SendReq>,
-) -> impl IntoResponse {
+async fn repeater_send(State(s): State<AppState>, Json(req): Json<SendReq>) -> impl IntoResponse {
     let target = match Target::parse(&req.target) {
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad target: {e}")).into_response(),
@@ -310,13 +318,15 @@ async fn repeater_send(
     // Refuse before a single byte leaves the box, and judge the bytes themselves rather than the
     // target line: the operator types the request here, so its path is whatever they wrote, and a
     // host-level test would happily pass a request aimed at an excluded path.
-    if let Err(why) = s
-        .scope
-        .authorise_request(&target.host, target.port, target.tls, raw.as_bytes())
+    if let Err(why) =
+        s.scope
+            .authorise_request(&target.host, target.port, target.tls, raw.as_bytes())
     {
         return (StatusCode::FORBIDDEN, why).into_response();
     }
-    let req_id = s.store.put(raw.clone().into_bytes().into(), Direction::Request);
+    let req_id = s
+        .store
+        .put(raw.clone().into_bytes().into(), Direction::Request);
     let ex_id = s.store.add_exchange(Exchange {
         id: 0,
         request: req_id,
@@ -333,7 +343,13 @@ async fn repeater_send(
         notes: Some("repeater".into()),
     });
 
-    match send(&target, raw.as_bytes(), Duration::from_millis(req.timeout_ms)).await {
+    match send(
+        &target,
+        raw.as_bytes(),
+        Duration::from_millis(req.timeout_ms),
+    )
+    .await
+    {
         Ok(r) => {
             let len = r.raw_response.len();
             let resp_id = s.store.put(r.raw_response.clone(), Direction::Response);
@@ -382,7 +398,11 @@ async fn intruder_points(
     let Some(m) = s.store.get(MsgId(req.msg_id)) else {
         return (StatusCode::NOT_FOUND, "no such message").into_response();
     };
-    let cfg = if req.all { PointConfig::all() } else { PointConfig::default() };
+    let cfg = if req.all {
+        PointConfig::all()
+    } else {
+        PointConfig::default()
+    };
     let pts = find_points(&m, &cfg);
     let out: Vec<PointView> = pts
         .iter()
@@ -488,10 +508,16 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
     // them. So this refuses a host that is wholly out of scope, and every spliced request is judged
     // again on its own bytes by the guard below. Attacking something outside the engagement is the
     // one bug in this tool with consequences outside the tool.
-    if !s.scope.may_contain_host(&target.host, target.port, target.tls) {
+    if !s
+        .scope
+        .may_contain_host(&target.host, target.port, target.tls)
+    {
         return (
             StatusCode::FORBIDDEN,
-            format!("refused: {}", s.scope.explain(&target.host, target.port, "/", target.tls)),
+            format!(
+                "refused: {}",
+                s.scope.explain(&target.host, target.port, "/", target.tls)
+            ),
         )
             .into_response();
     }
@@ -516,7 +542,11 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
         },
     };
 
-    let cfg = if req.all { PointConfig::all() } else { PointConfig::default() };
+    let cfg = if req.all {
+        PointConfig::all()
+    } else {
+        PointConfig::default()
+    };
     let discovered: Vec<InsertionPoint> = find_points(&m, &cfg);
 
     let wanted: Vec<usize> = match (&req.points, req.point_index) {
@@ -621,7 +651,9 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
     let limits = RateLimit::new(
         Some(rps),
         1,
-        req.max_in_flight.unwrap_or(10).clamp(1, MAX_IN_FLIGHT_CEILING),
+        req.max_in_flight
+            .unwrap_or(10)
+            .clamp(1, MAX_IN_FLIGHT_CEILING),
     );
     // The legacy form keeps its original 500-request cap so a fat paste cannot become an accidental
     // DoS; the new form's bound is the operator's, and comes back in the report either way.
@@ -715,10 +747,16 @@ fn payloads_at(
 }
 
 fn first_token(raw: &str) -> String {
-    raw.split_whitespace().next().unwrap_or_default().to_string()
+    raw.split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 fn second_token(raw: &str) -> String {
-    raw.split_whitespace().nth(1).unwrap_or_default().to_string()
+    raw.split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string()
 }
 
 // ---- UI ------------------------------------------------------------------------------------
@@ -939,7 +977,10 @@ mod tests {
             .nth(1)
             .and_then(|c| c.parse().ok())
             .unwrap_or(0);
-        let body = text.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
         (status, body)
     }
 
@@ -958,8 +999,10 @@ mod tests {
                         .next()
                         .unwrap_or("")
                         .to_string();
-                    let resp =
-                        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
                     let _ = sock.write_all(resp.as_bytes()).await;
                     let _ = sock.shutdown().await;
                 });
@@ -994,7 +1037,10 @@ mod tests {
         );
         let (status, out) = post_json(&format!("{base}/api/intruder/run"), &body).await;
         assert_eq!(status, 200, "{out}");
-        assert!(out.starts_with('['), "the legacy reply must stay a flat array: {out}");
+        assert!(
+            out.starts_with('['),
+            "the legacy reply must stay a flat array: {out}"
+        );
         let rows: serde_json::Value = serde_json::from_str(&out).unwrap();
         let rows = rows.as_array().unwrap();
         assert_eq!(rows.len(), 3);
@@ -1029,7 +1075,10 @@ mod tests {
         assert!(buckets.iter().all(|b| b["reflected"] == true), "{out}");
         // One stored exemplar per bucket, not one per request.
         assert_eq!(
-            buckets.iter().filter(|b| !b["example_response_id"].is_null()).count(),
+            buckets
+                .iter()
+                .filter(|b| !b["example_response_id"].is_null())
+                .count(),
             6
         );
 
@@ -1038,7 +1087,15 @@ mod tests {
         assert_eq!(examples.len(), 6);
         let mut combos: Vec<String> = examples
             .iter()
-            .map(|e| e["payloads"].as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect::<Vec<_>>().join("+"))
+            .map(|e| {
+                e["payloads"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| p.as_str().unwrap())
+                    .collect::<Vec<_>>()
+                    .join("+")
+            })
             .collect();
         combos.sort();
         assert_eq!(
@@ -1067,9 +1124,15 @@ mod tests {
         let (status, out) = post_json(&format!("{base}/api/intruder/run"), &body).await;
         assert_eq!(status, 200, "{out}");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["report"]["combinations"], 400, "the real size is reported");
+        assert_eq!(
+            v["report"]["combinations"], 400,
+            "the real size is reported"
+        );
         assert_eq!(v["report"]["max_requests"], 5);
-        assert_eq!(v["report"]["truncated"], true, "and so is the fact it was cut");
+        assert_eq!(
+            v["report"]["truncated"], true,
+            "and so is the fact it was cut"
+        );
         assert_eq!(v["report"]["sent"], 5);
     }
 
@@ -1091,7 +1154,15 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|e| e["payloads"].as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect::<Vec<_>>().join("+"))
+            .map(|e| {
+                e["payloads"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| p.as_str().unwrap())
+                    .collect::<Vec<_>>()
+                    .join("+")
+            })
             .collect();
         combos.sort();
         assert_eq!(combos, vec!["u+p", "uuuu+pppppppp"], "sets must not cross");

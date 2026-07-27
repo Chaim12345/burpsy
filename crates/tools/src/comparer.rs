@@ -43,11 +43,18 @@ pub enum Granularity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Op {
-    Equal { a: Span, b: Span },
+    Equal {
+        a: Span,
+        b: Span,
+    },
     /// Present in `a`, absent from `b`.
-    Delete { a: Span },
+    Delete {
+        a: Span,
+    },
     /// Absent from `a`, present in `b`.
-    Insert { b: Span },
+    Insert {
+        b: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -415,11 +422,18 @@ mod tests {
         b[123_456] = b'Z';
 
         let d = diff_with_budget(&a, &b, Granularity::Byte, 4);
-        assert!(!d.truncated, "a one-byte change must not exhaust a budget of 4");
+        assert!(
+            !d.truncated,
+            "a one-byte change must not exhaust a budget of 4"
+        );
         assert_eq!(d.deleted_tokens, 1);
         assert_eq!(d.inserted_tokens, 1);
         assert_eq!(d.equal_tokens, 199_999);
-        let changed: Vec<&Op> = d.ops.iter().filter(|o| !matches!(o, Op::Equal { .. })).collect();
+        let changed: Vec<&Op> = d
+            .ops
+            .iter()
+            .filter(|o| !matches!(o, Op::Equal { .. }))
+            .collect();
         assert_eq!(changed.len(), 2, "one delete and one insert, nothing else");
         assert!(
             matches!(changed[0], Op::Delete { a } if a.offset == 123_456 && a.len == 1),
@@ -443,9 +457,17 @@ mod tests {
         let a = b"the quick brown fox";
         let b = b"the quick brawn fox";
         let w = check(a, b, Granularity::Word);
-        assert_eq!((w.deleted_tokens, w.inserted_tokens), (1, 1), "one word replaced");
+        assert_eq!(
+            (w.deleted_tokens, w.inserted_tokens),
+            (1, 1),
+            "one word replaced"
+        );
         let by = check(a, b, Granularity::Byte);
-        assert_eq!((by.deleted_tokens, by.inserted_tokens), (1, 1), "one byte replaced");
+        assert_eq!(
+            (by.deleted_tokens, by.inserted_tokens),
+            (1, 1),
+            "one byte replaced"
+        );
         // The word diff points at the whole word; the byte diff at the single character.
         let w_del = w.ops.iter().find_map(|o| match o {
             Op::Delete { a } => Some(*a),
@@ -499,9 +521,16 @@ mod tests {
         let b: Vec<u8> = (0..2000u32).map(|i| (i % 241 + 3) as u8).collect();
         let d = diff_with_budget(&a, &b, Granularity::Byte, 2);
         assert!(d.truncated, "two unrelated buffers cannot align within D=2");
-        assert_eq!(rebuild(&a, &b, &d), b, "a truncated diff is still a correct one");
         assert_eq!(
-            d.ops.iter().filter(|o| matches!(o, Op::Delete { .. })).count(),
+            rebuild(&a, &b, &d),
+            b,
+            "a truncated diff is still a correct one"
+        );
+        assert_eq!(
+            d.ops
+                .iter()
+                .filter(|o| matches!(o, Op::Delete { .. }))
+                .count(),
             1
         );
     }
@@ -532,8 +561,10 @@ mod tests {
 
     #[test]
     fn two_realistic_responses_differing_in_one_header_align_on_that_header() {
-        let a = b"HTTP/1.1 200 OK\r\nServer: nginx\r\nSet-Cookie: id=aaa\r\nX-Frame: DENY\r\n\r\n{}";
-        let b = b"HTTP/1.1 200 OK\r\nServer: nginx\r\nSet-Cookie: id=bbb\r\nX-Frame: DENY\r\n\r\n{}";
+        let a =
+            b"HTTP/1.1 200 OK\r\nServer: nginx\r\nSet-Cookie: id=aaa\r\nX-Frame: DENY\r\n\r\n{}";
+        let b =
+            b"HTTP/1.1 200 OK\r\nServer: nginx\r\nSet-Cookie: id=bbb\r\nX-Frame: DENY\r\n\r\n{}";
         let d = check(a, b, Granularity::Word);
         assert_eq!(d.changes(), 2, "one token out, one token in");
         let del = d.ops.iter().find_map(|o| match o {

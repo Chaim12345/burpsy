@@ -743,7 +743,10 @@ fn probe_gzip(b: &[u8], i: usize, _o: &SmartOptions) -> Option<Hit> {
 /// two bytes are a multiple of 31 is a 1-in-31 accident on top of a fixed compression-method nibble.
 fn probe_zlib(b: &[u8], i: usize, _o: &SmartOptions) -> Option<Hit> {
     let s = &b[i..];
-    if s.len() < 2 || s[0] & 0x0f != 8 || s[0] >> 4 > 7 || (u16::from(s[0]) * 256 + u16::from(s[1])) % 31 != 0
+    if s.len() < 2
+        || s[0] & 0x0f != 8
+        || s[0] >> 4 > 7
+        || (u16::from(s[0]) * 256 + u16::from(s[1])) % 31 != 0
     {
         return None;
     }
@@ -873,7 +876,10 @@ fn probe_base64(b: &[u8], i: usize, o: &SmartOptions) -> Option<Hit> {
         if i > 0 && (b64_val(b[i - 1], url).is_some() || b[i - 1] == b'=') {
             continue;
         }
-        let n = b[i..].iter().take_while(|&&c| b64_val(c, url).is_some()).count();
+        let n = b[i..]
+            .iter()
+            .take_while(|&&c| b64_val(c, url).is_some())
+            .count();
         let pad = b[i + n..].iter().take_while(|&&c| c == b'=').count().min(2);
         // The floor is on the *encoded* length, padding included: `SGVsbG8=` is a legitimate
         // eight-character token, while a five-letter word is not worth guessing at.
@@ -958,7 +964,9 @@ mod tests {
     #[test]
     fn html_decode_handles_named_decimal_and_hex_references() {
         assert_eq!(
-            s(html_decode(b"&lt;script&gt;alert&#40;&#x31;&#41;&lt;/script&gt;")),
+            s(html_decode(
+                b"&lt;script&gt;alert&#40;&#x31;&#41;&lt;/script&gt;"
+            )),
             "<script>alert(1)</script>"
         );
     }
@@ -966,12 +974,18 @@ mod tests {
     #[test]
     fn an_unknown_entity_is_preserved_not_dropped() {
         // Losing `&unicorn;` would hide what a filter did with it.
-        assert_eq!(s(html_decode(b"a &unicorn; b &amp; c")), "a &unicorn; b & c");
+        assert_eq!(
+            s(html_decode(b"a &unicorn; b &amp; c")),
+            "a &unicorn; b & c"
+        );
     }
 
     #[test]
     fn base64_round_trips_and_tolerates_missing_padding_and_whitespace() {
-        assert_eq!(s(base64_encode(b"Hello, world", false, true)), "SGVsbG8sIHdvcmxk");
+        assert_eq!(
+            s(base64_encode(b"Hello, world", false, true)),
+            "SGVsbG8sIHdvcmxk"
+        );
         assert_eq!(s(base64_encode(b"ab", false, true)), "YWI=");
         assert_eq!(s(base64_decode(b"SGVs bG8", false)), "Hello");
         assert_eq!(s(base64_decode(b"YWI=", false)), "ab");
@@ -1016,12 +1030,17 @@ mod tests {
     #[test]
     fn a_decompression_bomb_is_capped_rather_than_exhausting_memory() {
         let bomb = encode(Layer::Gzip, &vec![0u8; 100 * 1024 * 1024]).unwrap();
-        assert!(bomb.len() < 200_000, "the bomb itself is small: {} bytes", bomb.len());
+        assert!(
+            bomb.len() < 200_000,
+            "the bomb itself is small: {} bytes",
+            bomb.len()
+        );
         let out = decode(Layer::Gzip, &bomb).unwrap();
         assert_eq!(out.len() as u64, MAX_INFLATE, "inflation stops at the cap");
     }
 
-    const TOKEN: &[u8] = b"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiYWRtaW4iOmZhbHNlfQ.c2ln";
+    const TOKEN: &[u8] =
+        b"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiYWRtaW4iOmZhbHNlfQ.c2ln";
 
     #[test]
     fn jwt_splits_a_token_and_reads_its_algorithm() {
@@ -1042,7 +1061,10 @@ mod tests {
     fn encoding_a_jwt_is_refused_rather_than_faked() {
         // Re-encoding needs the signing key. Emitting something token-shaped and unsigned would
         // look like it worked, which is worse than an error.
-        assert_eq!(encode(Layer::Jwt, TOKEN), Err(DecodeError::NotReversible(Layer::Jwt)));
+        assert_eq!(
+            encode(Layer::Jwt, TOKEN),
+            Err(DecodeError::NotReversible(Layer::Jwt))
+        );
     }
 
     // ---- smart decode ---------------------------------------------------------------------
@@ -1065,7 +1087,11 @@ mod tests {
         // alphabets are indistinguishable from ordinary text.
         for input in [&b"SGVsbG8sIHdvcmxk"[..], b"48656c6c6f2c20776f726c64"] {
             let r = smart_decode(input, &SmartOptions::default());
-            assert!(r.passes.is_empty(), "{:?} was decoded", String::from_utf8_lossy(input));
+            assert!(
+                r.passes.is_empty(),
+                "{:?} was decoded",
+                String::from_utf8_lossy(input)
+            );
             assert_eq!(r.output, input.to_vec());
         }
     }
@@ -1122,7 +1148,11 @@ mod tests {
     fn smart_decode_recognises_a_jwt_and_does_not_mistake_it_for_base64() {
         let r = smart_decode(TOKEN, &guessing());
         assert_eq!(r.passes[0].runs[0].layer, Some(Layer::Jwt));
-        assert!(s(r.output.clone()).contains("\"admin\": false"), "{}", s(r.output));
+        assert!(
+            s(r.output.clone()).contains("\"admin\": false"),
+            "{}",
+            s(r.output)
+        );
     }
 
     #[test]

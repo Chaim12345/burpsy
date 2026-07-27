@@ -91,13 +91,21 @@ impl NetSender {
     /// For callers whose correctness depends on one request per connection across the board, rather
     /// than the per-probe [`probe_wants_close`] hatch.
     pub fn without_reuse() -> Self {
-        Self { reuse: false, ..Self::default() }
+        Self {
+            reuse: false,
+            ..Self::default()
+        }
     }
 
     /// How many connections are parked for reuse right now. Exposed so a caller can prove reuse is
     /// happening instead of assuming it.
     pub fn pooled_connections(&self) -> usize {
-        self.pool.entries.lock().values().map(|e| e.idle.len()).sum()
+        self.pool
+            .entries
+            .lock()
+            .values()
+            .map(|e| e.idle.len())
+            .sum()
     }
 
     fn connect(&self, target: &Target) -> Result<Conn, String> {
@@ -148,7 +156,9 @@ impl NetSender {
                 // is the expected cost of pooling, not a finding: retry the same probe once on a
                 // fresh connection. Only a zero-byte failure qualifies, so a probe that got a
                 // partial response is never silently sent twice.
-                Err(Wire::Dead(why)) => tracing::debug!("pooled connection to {key:?} was dead ({why}); reconnecting"),
+                Err(Wire::Dead(why)) => {
+                    tracing::debug!("pooled connection to {key:?} was dead ({why}); reconnecting")
+                }
                 Err(Wire::Failed(msg)) => return Err(msg),
             }
         }
@@ -288,7 +298,11 @@ impl Default for Pool {
 
 impl Pool {
     fn framing(&self, k: &Key) -> Framed {
-        self.entries.lock().get(k).map(|e| e.framed).unwrap_or_default()
+        self.entries
+            .lock()
+            .get(k)
+            .map(|e| e.framed)
+            .unwrap_or_default()
     }
 
     fn learn(&self, k: &Key, f: Framed) {
@@ -312,7 +326,10 @@ impl Pool {
         if e.idle.len() >= self.max_idle_per_key {
             e.idle.remove(0);
         }
-        e.idle.push(Idle { conn, since: Instant::now() });
+        e.idle.push(Idle {
+            conn,
+            since: Instant::now(),
+        });
     }
 }
 
@@ -421,10 +438,16 @@ struct ReadFail {
 
 impl ReadFail {
     fn silent(message: String) -> Self {
-        Self { message, silent: true }
+        Self {
+            message,
+            silent: true,
+        }
     }
     fn loud(message: String) -> Self {
-        Self { message, silent: false }
+        Self {
+            message,
+            silent: false,
+        }
     }
 }
 
@@ -444,7 +467,10 @@ fn read_response_framed(s: &mut impl Read, max: usize) -> Result<(Vec<u8>, Frami
             // and re-sending after waiting the full budget both doubles the worst case and risks
             // performing a probe's side effect twice.
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                return Err(ReadFail::loud(format!("read timeout after {} bytes", buf.len())));
+                return Err(ReadFail::loud(format!(
+                    "read timeout after {} bytes",
+                    buf.len()
+                )));
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             // A server that closes without a clean shutdown still gave us bytes worth parsing.
@@ -485,7 +511,10 @@ fn read_response_framed(s: &mut impl Read, max: usize) -> Result<(Vec<u8>, Frami
                 server_wants_close: wants_close(&head),
             }
         }
-        _ => Framing { exact_content_length: false, server_wants_close: true },
+        _ => Framing {
+            exact_content_length: false,
+            server_wants_close: true,
+        },
     };
     Ok((buf, framing))
 }
@@ -503,15 +532,17 @@ fn wants_close(lower_head: &str) -> bool {
 }
 
 fn find_head_end(b: &[u8]) -> Option<usize> {
-    b.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4).or_else(|| {
-        b.windows(2).position(|w| w == b"\n\n").map(|i| i + 2)
-    })
+    b.windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .or_else(|| b.windows(2).position(|w| w == b"\n\n").map(|i| i + 2))
 }
 
 /// True when the buffer holds a whole response given where its headers ended.
 fn response_complete(buf: &[u8], head_end: usize) -> bool {
     let head = String::from_utf8_lossy(&buf[..head_end]).to_ascii_lowercase();
-    if let Some(len) = header_value(&head, "content-length").and_then(|v| v.trim().parse::<usize>().ok())
+    if let Some(len) =
+        header_value(&head, "content-length").and_then(|v| v.trim().parse::<usize>().ok())
     {
         return buf.len() >= head_end + len;
     }
@@ -575,7 +606,11 @@ mod tests {
         let mut wire = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
         wire.extend(std::iter::repeat_n(b'x', 100_000));
         let got = read_response(&mut Cursor::new(wire), 4096).unwrap();
-        assert!(got.len() <= 4096 + 16 * 1024, "cap must bound the buffer, got {}", got.len());
+        assert!(
+            got.len() <= 4096 + 16 * 1024,
+            "cap must bound the buffer, got {}",
+            got.len()
+        );
     }
 
     #[test]
@@ -621,7 +656,9 @@ mod tests {
         // HTTP/1.0 has no persistent connections by default.
         assert!(probe_wants_close(b"GET / HTTP/1.0\r\nHost: x\r\n\r\n"));
         // The caller said so outright.
-        assert!(probe_wants_close(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
+        assert!(probe_wants_close(
+            b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        ));
     }
 
     #[test]
@@ -630,7 +667,10 @@ mod tests {
         // become the next probe's response, so this classification is what prevents that.
         let wire = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhelloEXTRA";
         let (_, f) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20).unwrap();
-        assert!(!f.exact_content_length, "surplus bytes must not count as exact framing");
+        assert!(
+            !f.exact_content_length,
+            "surplus bytes must not count as exact framing"
+        );
         assert!(!f.reusable());
     }
 
@@ -638,7 +678,10 @@ mod tests {
     fn a_chunked_response_is_never_reusable_even_though_it_is_complete() {
         let wire = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n0\r\n\r\n";
         let (_, f) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20).unwrap();
-        assert!(!f.reusable(), "the terminal-chunk scan is a substring match, so reuse is unsafe");
+        assert!(
+            !f.reusable(),
+            "the terminal-chunk scan is a substring match, so reuse is unsafe"
+        );
     }
 
     #[test]
@@ -654,7 +697,10 @@ mod tests {
 
         let old = b"HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
         let (_, f) = read_response_framed(&mut Cursor::new(old.to_vec()), 1 << 20).unwrap();
-        assert!(!f.reusable(), "HTTP/1.0 is not persistent unless it says so");
+        assert!(
+            !f.reusable(),
+            "HTTP/1.0 is not persistent unless it says so"
+        );
     }
 
     // ---- against a real listener ---------------------------------------------------------
@@ -694,10 +740,9 @@ mod tests {
                         let body = b"PONG";
                         let head = match mode {
                             Origin::Unframed => "HTTP/1.1 200 OK\r\nServer: t\r\n\r\n".to_string(),
-                            _ => format!(
-                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-                                body.len()
-                            ),
+                            _ => {
+                                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len())
+                            }
                         };
                         if sock.write_all(head.as_bytes()).is_err() || sock.write_all(body).is_err()
                         {
@@ -730,7 +775,11 @@ mod tests {
     }
 
     fn target_of(s: &Server) -> Target {
-        Target { host: s.addr.ip().to_string(), port: s.addr.port(), tls: false }
+        Target {
+            host: s.addr.ip().to_string(),
+            port: s.addr.port(),
+            tls: false,
+        }
     }
 
     const PROBE: &[u8] = b"GET /probe HTTP/1.1\r\nHost: t\r\n\r\n";
@@ -742,8 +791,14 @@ mod tests {
         let t = target_of(&origin);
 
         for i in 0..3 {
-            let r = sender.send(&t, PROBE).unwrap_or_else(|e| panic!("probe {i}: {e}"));
-            assert!(r.ends_with(b"PONG"), "probe {i} got {:?}", String::from_utf8_lossy(&r));
+            let r = sender
+                .send(&t, PROBE)
+                .unwrap_or_else(|e| panic!("probe {i}: {e}"));
+            assert!(
+                r.ends_with(b"PONG"),
+                "probe {i} got {:?}",
+                String::from_utf8_lossy(&r)
+            );
         }
         // One connection to learn the framing (close-per-probe), one shared by probes 2 and 3.
         assert_eq!(
@@ -751,7 +806,11 @@ mod tests {
             2,
             "three probes should cost two connections, not three"
         );
-        assert_eq!(sender.pooled_connections(), 1, "the shared connection stays parked");
+        assert_eq!(
+            sender.pooled_connections(),
+            1,
+            "the shared connection stays parked"
+        );
     }
 
     #[test]
@@ -761,8 +820,14 @@ mod tests {
         let t = target_of(&origin);
 
         for i in 0..3 {
-            let r = sender.send(&t, PROBE).unwrap_or_else(|e| panic!("probe {i}: {e}"));
-            assert!(r.ends_with(b"PONG"), "probe {i} got {:?}", String::from_utf8_lossy(&r));
+            let r = sender
+                .send(&t, PROBE)
+                .unwrap_or_else(|e| panic!("probe {i}: {e}"));
+            assert!(
+                r.ends_with(b"PONG"),
+                "probe {i} got {:?}",
+                String::from_utf8_lossy(&r)
+            );
         }
         assert_eq!(
             origin.accepts.load(Ordering::SeqCst),
@@ -780,9 +845,15 @@ mod tests {
         let smuggle = b"GET /probe HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n";
 
         for i in 0..3 {
-            sender.send(&t, smuggle).unwrap_or_else(|e| panic!("probe {i}: {e}"));
+            sender
+                .send(&t, smuggle)
+                .unwrap_or_else(|e| panic!("probe {i}: {e}"));
         }
-        assert_eq!(origin.accepts.load(Ordering::SeqCst), 3, "the escape hatch must bypass the pool");
+        assert_eq!(
+            origin.accepts.load(Ordering::SeqCst),
+            3,
+            "the escape hatch must bypass the pool"
+        );
     }
 
     #[test]
@@ -793,8 +864,14 @@ mod tests {
 
         // Every probe must still succeed even though the socket we parked was already dead.
         for i in 0..3 {
-            let r = sender.send(&t, PROBE).unwrap_or_else(|e| panic!("probe {i}: {e}"));
-            assert!(r.ends_with(b"PONG"), "probe {i} got {:?}", String::from_utf8_lossy(&r));
+            let r = sender
+                .send(&t, PROBE)
+                .unwrap_or_else(|e| panic!("probe {i}: {e}"));
+            assert!(
+                r.ends_with(b"PONG"),
+                "probe {i} got {:?}",
+                String::from_utf8_lossy(&r)
+            );
         }
         assert_eq!(origin.accepts.load(Ordering::SeqCst), 3);
     }
@@ -806,7 +883,9 @@ mod tests {
         let t = target_of(&origin);
 
         for i in 0..3 {
-            sender.send(&t, PROBE).unwrap_or_else(|e| panic!("probe {i}: {e}"));
+            sender
+                .send(&t, PROBE)
+                .unwrap_or_else(|e| panic!("probe {i}: {e}"));
         }
         assert_eq!(origin.accepts.load(Ordering::SeqCst), 3);
         assert_eq!(sender.pooled_connections(), 0);
@@ -824,6 +903,10 @@ mod tests {
         }
         assert_eq!(a.accepts.load(Ordering::SeqCst), 2);
         assert_eq!(b.accepts.load(Ordering::SeqCst), 2);
-        assert_eq!(sender.pooled_connections(), 2, "one parked connection per target");
+        assert_eq!(
+            sender.pooled_connections(),
+            2,
+            "one parked connection per target"
+        );
     }
 }

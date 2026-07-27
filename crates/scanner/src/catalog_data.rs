@@ -26,20 +26,35 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         typical_severity: Severity::High,
         description: r#"<p>Operating system command injection vulnerabilities arise when an application incorporates user-controllable data into a command that is processed by a shell command interpreter. If the user data is not strictly validated, an attacker can use shell metacharacters to modify the command that is executed, and inject arbitrary further commands that will be executed by the server.</p>
 <p>OS command injection vulnerabilities are usually very serious and may lead to compromise of the server hosting the application, or of the application's own data and functionality. It may also be possible to use the server as a platform for attacks against other systems. The exact potential for exploitation depends upon the security context in which the command is executed, and the privileges that this context has regarding sensitive resources on the server.</p>"#,
-        remediation: Some(r#"<p>If possible, applications should avoid incorporating user-controllable data into operating system commands. In almost every situation, there are safer alternative methods of performing server-level tasks, which cannot be manipulated to perform additional commands than the one intended.</p>
+        remediation: Some(
+            r#"<p>If possible, applications should avoid incorporating user-controllable data into operating system commands. In almost every situation, there are safer alternative methods of performing server-level tasks, which cannot be manipulated to perform additional commands than the one intended.</p>
 <p>If it is considered unavoidable to incorporate user-supplied data into operating system commands, the following two layers of defense should be used to prevent attacks: </p>
 <ul>
   <li>The user data should be strictly validated. Ideally, a whitelist of specific accepted values should be used. Otherwise, only short alphanumeric strings should be accepted. Input containing any other data, including any conceivable shell metacharacter or whitespace, should be rejected.</li>
   <li>The application should use command APIs that launch a specific process via its name and command-line parameters, rather than passing a command string to a shell interpreter that supports command chaining and redirection. For example, the Java API Runtime.exec and the ASP.NET API Process.Start do not support shell metacharacters. This defense can mitigate the impact of an attack even in the event that an attacker circumvents the input validation defenses.</li>
-</ul>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: OS command injection"#, url: r#"https://portswigger.net/web-security/os-command-injection"# },
-        ],
+</ul>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: OS command injection"#,
+            url: r#"https://portswigger.net/web-security/os-command-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-77: Improper Neutralization of Special Elements used in a Command ('Command Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/77.html"# },
-            Classification { title: r#"CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/78.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-248: Command Injection"#, url: r#"https://capec.mitre.org/data/definitions/248.html"# },
+            Classification {
+                title: r#"CWE-77: Improper Neutralization of Special Elements used in a Command ('Command Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/77.html"#,
+            },
+            Classification {
+                title: r#"CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/78.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-248: Command Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/248.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -49,22 +64,45 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         typical_severity: Severity::High,
         description: r#"<p>SQL injection vulnerabilities arise when user-controllable data is incorporated into database SQL queries in an unsafe manner. An attacker can supply crafted input to break out of the data context in which their input appears and interfere with the structure of the surrounding query.</p>
 <p>A wide range of damaging attacks can often be delivered via SQL injection, including reading or modifying critical application data, interfering with application logic, escalating privileges within the database and taking control of the database server. </p>"#,
-        remediation: Some(r#"<p>The most effective way to prevent SQL injection attacks is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. You should review the documentation for your database and application platform to determine the appropriate APIs which you can use to perform parameterized queries. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>
+        remediation: Some(
+            r#"<p>The most effective way to prevent SQL injection attacks is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. You should review the documentation for your database and application platform to determine the appropriate APIs which you can use to perform parameterized queries. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>
 <p>You should be aware that some commonly employed and recommended mitigations for SQL injection vulnerabilities are not always effective: </p>
 <ul>
   <li>One common defense is to double up any single quotation marks appearing within user input before incorporating that input into a SQL query. This defense is designed to prevent malformed data from terminating the string into which it is inserted. However, if the data being incorporated into queries is numeric, then the defense may fail, because numeric data may not be encapsulated within quotes, in which case only a space is required to break out of the data context and interfere with the query. Further, in second-order SQL injection attacks, data that has been safely escaped when initially inserted into the database is subsequently read from the database and then passed back to it again. Quotation marks that have been doubled up initially will return to their original form when the data is reused, allowing the defense to be bypassed.</li>
   <li>Another often cited defense is to use stored procedures for database access. While stored procedures can provide security benefits, they are not guaranteed to prevent SQL injection attacks. The same kinds of vulnerabilities that arise within standard dynamic SQL queries can arise if any SQL is dynamically constructed within stored procedures. Further, even if the procedure is sound, SQL injection can arise if the procedure is invoked in an unsafe manner using user-controllable data.</li>
-</ul>"#),
+</ul>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: SQL injection"#, url: r#"https://portswigger.net/web-security/sql-injection"# },
-            Reference { title: r#"Using Burp to Test for Injection Flaws"#, url: r#"https://support.portswigger.net/customer/portal/articles/1965677-using-burp-to-test-for-injection-flaws"# },
-            Reference { title: r#"Web Security Academy: SQL Injection Cheat Sheet"#, url: r#"https://portswigger.net/web-security/sql-injection/cheat-sheet"# },
+            Reference {
+                title: r#"Web Security Academy: SQL injection"#,
+                url: r#"https://portswigger.net/web-security/sql-injection"#,
+            },
+            Reference {
+                title: r#"Using Burp to Test for Injection Flaws"#,
+                url: r#"https://support.portswigger.net/customer/portal/articles/1965677-using-burp-to-test-for-injection-flaws"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: SQL Injection Cheat Sheet"#,
+                url: r#"https://portswigger.net/web-security/sql-injection/cheat-sheet"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/89.html"# },
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-66: SQL Injection"#, url: r#"https://capec.mitre.org/data/definitions/66.html"# },
+            Classification {
+                title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/89.html"#,
+            },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-66: SQL Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/66.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -76,22 +114,45 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
 <p>A wide range of damaging attacks can often be delivered via SQL injection, including reading or modifying critical application data, interfering with application logic, escalating privileges within the database and taking control of the database server. </p>
 
 <p>Second-order SQL injection arises when user-supplied data is stored by the application and later incorporated into SQL queries in an unsafe way. To detect the vulnerability, it is normally necessary to submit suitable data in one location, and then use some other application function that processes the data in an unsafe way.</p>"#,
-        remediation: Some(r#"<p>The most effective way to prevent SQL injection attacks is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. You should review the documentation for your database and application platform to determine the appropriate APIs which you can use to perform parameterized queries. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>
+        remediation: Some(
+            r#"<p>The most effective way to prevent SQL injection attacks is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. You should review the documentation for your database and application platform to determine the appropriate APIs which you can use to perform parameterized queries. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>
 <p>You should be aware that some commonly employed and recommended mitigations for SQL injection vulnerabilities are not always effective: </p>
 <ul>
   <li>One common defense is to double up any single quotation marks appearing within user input before incorporating that input into a SQL query. This defense is designed to prevent malformed data from terminating the string into which it is inserted. However, if the data being incorporated into queries is numeric, then the defense may fail, because numeric data may not be encapsulated within quotes, in which case only a space is required to break out of the data context and interfere with the query. Further, in second-order SQL injection attacks, data that has been safely escaped when initially inserted into the database is subsequently read from the database and then passed back to it again. Quotation marks that have been doubled up initially will return to their original form when the data is reused, allowing the defense to be bypassed.</li>
   <li>Another often cited defense is to use stored procedures for database access. While stored procedures can provide security benefits, they are not guaranteed to prevent SQL injection attacks. The same kinds of vulnerabilities that arise within standard dynamic SQL queries can arise if any SQL is dynamically constructed within stored procedures. Further, even if the procedure is sound, SQL injection can arise if the procedure is invoked in an unsafe manner using user-controllable data.</li>
-</ul>"#),
+</ul>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: SQL injection"#, url: r#"https://portswigger.net/web-security/sql-injection"# },
-            Reference { title: r#"Using Burp to Test for Injection Flaws"#, url: r#"https://support.portswigger.net/customer/portal/articles/1965677-using-burp-to-test-for-injection-flaws"# },
-            Reference { title: r#"Web Security Academy: SQL Injection Cheat Sheet"#, url: r#"https://portswigger.net/web-security/sql-injection/cheat-sheet"# },
+            Reference {
+                title: r#"Web Security Academy: SQL injection"#,
+                url: r#"https://portswigger.net/web-security/sql-injection"#,
+            },
+            Reference {
+                title: r#"Using Burp to Test for Injection Flaws"#,
+                url: r#"https://support.portswigger.net/customer/portal/articles/1965677-using-burp-to-test-for-injection-flaws"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: SQL Injection Cheat Sheet"#,
+                url: r#"https://portswigger.net/web-security/sql-injection/cheat-sheet"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/89.html"# },
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-66: SQL Injection"#, url: r#"https://capec.mitre.org/data/definitions/66.html"# },
+            Classification {
+                title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/89.html"#,
+            },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-66: SQL Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/66.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -102,17 +163,29 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         description: r#"<p>ASP.NET tracing is a debugging feature that is designed for use during development to help troubleshoot problems. It discloses sensitive information to users, and if enabled in production contexts may present a serious security threat.</p>
 <p>Application-level tracing enables any user to retrieve full details about recent requests to the application, including those of other users. This information typically includes session tokens and request parameters, which may enable an attacker to compromise other users and even take control of the entire application.</p>
 <p>Page-level tracing returns the same information, but relating only to the current request. This may still contain sensitive data in session and server variables that would be of use to an attacker.</p>"#,
-        remediation: Some(r#"<p>To disable tracing, open the Web.config file for the application, and find the &lt;trace&gt; element within the &lt;system.web&gt; section. Either set the enabled attribute to "false" (to disable tracing) or set the localOnly attribute to "true" (to enable tracing only on the server itself).</p>
+        remediation: Some(
+            r#"<p>To disable tracing, open the Web.config file for the application, and find the &lt;trace&gt; element within the &lt;system.web&gt; section. Either set the enabled attribute to "false" (to disable tracing) or set the localOnly attribute to "true" (to enable tracing only on the server itself).</p>
 <p>Note that even with tracing disabled in this way, it is possible for individual pages to turn on page-level tracing either within the Page directive of the ASP.NET page, or programmatically through application code. If you observe tracing output only on some application pages, you should review the page source and the code behind, to find the reason why tracing is occurring.</p>
-<p>It is strongly recommended that you refer to your platform's documentation relating to this issue, and do not rely solely on the above remediation.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+<p>It is strongly recommended that you refer to your platform's documentation relating to this issue, and do not rely solely on the above remediation.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-10: ASP.NET Environment Issues
-"#, url: r#"https://cwe.mitre.org/data/definitions/10.html"# },
-            Classification { title: r#"CWE-11: ASP.NET Misconfiguration: Creating Debug Binary"#, url: r#"https://cwe.mitre.org/data/definitions/11.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-10: ASP.NET Environment Issues
+"#,
+                url: r#"https://cwe.mitre.org/data/definitions/10.html"#,
+            },
+            Classification {
+                title: r#"CWE-11: ASP.NET Misconfiguration: Creating Debug Binary"#,
+                url: r#"https://cwe.mitre.org/data/definitions/11.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -122,18 +195,36 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         typical_severity: Severity::High,
         description: r#"<p>File path traversal vulnerabilities arise when user-controllable data is used within a filesystem operation in an unsafe manner. Typically, a user-supplied filename is appended to a directory prefix in order to read or write the contents of a file. If vulnerable, an attacker can supply path traversal sequences (using dot-dot-slash characters) to break out of the intended directory and read or write files elsewhere on the filesystem.</p>
 <p>This is typically a very serious vulnerability, enabling an attacker to access sensitive files containing configuration data, passwords, database records, log data, source code, and program scripts and binaries. </p>"#,
-        remediation: Some(r#"<p>Ideally, application functionality should be designed in such a way that user-controllable data does not need to be passed to filesystem operations. This can normally be achieved by referencing known files via an index number rather than their name, and using application-generated filenames to save user-supplied file content.</p>
+        remediation: Some(
+            r#"<p>Ideally, application functionality should be designed in such a way that user-controllable data does not need to be passed to filesystem operations. This can normally be achieved by referencing known files via an index number rather than their name, and using application-generated filenames to save user-supplied file content.</p>
 <p>If it is considered unavoidable to pass user-controllable data to a filesystem operation, three layers of defense can be employed to prevent path traversal attacks: </p>
-<ul><li>User-controllable data should be strictly validated before being passed to any filesystem operation. In particular, input containing dot-dot sequences should be blocked.</li><li>After validating user input, the application can use a suitable filesystem API to verify that the file to be accessed is actually located within the base directory used by the application. In Java, this can be achieved by instantiating a java.io.File object using the user-supplied filename and then calling the getCanonicalPath method on this object. If the string returned by this method does not begin with the name of the start directory, then the user has somehow bypassed the application's input filters, and the request should be rejected. In ASP.NET, the same check can be performed by passing the user-supplied filename to the System.Io.Path.GetFullPath method and checking the returned string in the same way as described for Java.</li><li>The directory used to store files that are accessed using user-controllable data can be located on a separate logical volume to other sensitive application and operating system files, so that these cannot be reached via path traversal attacks. In Unix-based systems, this can be achieved using a chrooted filesystem; on Windows, this can be achieved by mounting the base directory as a new logical drive and using the associated drive letter to access its contents.</li></ul>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Directory traversal"#, url: r#"https://portswigger.net/web-security/file-path-traversal"# },
-        ],
+<ul><li>User-controllable data should be strictly validated before being passed to any filesystem operation. In particular, input containing dot-dot sequences should be blocked.</li><li>After validating user input, the application can use a suitable filesystem API to verify that the file to be accessed is actually located within the base directory used by the application. In Java, this can be achieved by instantiating a java.io.File object using the user-supplied filename and then calling the getCanonicalPath method on this object. If the string returned by this method does not begin with the name of the start directory, then the user has somehow bypassed the application's input filters, and the request should be rejected. In ASP.NET, the same check can be performed by passing the user-supplied filename to the System.Io.Path.GetFullPath method and checking the returned string in the same way as described for Java.</li><li>The directory used to store files that are accessed using user-controllable data can be located on a separate logical volume to other sensitive application and operating system files, so that these cannot be reached via path traversal attacks. In Unix-based systems, this can be achieved using a chrooted filesystem; on Windows, this can be achieved by mounting the base directory as a new logical drive and using the associated drive letter to access its contents.</li></ul>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Directory traversal"#,
+            url: r#"https://portswigger.net/web-security/file-path-traversal"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#, url: r#"https://cwe.mitre.org/data/definitions/22.html"# },
-            Classification { title: r#"CWE-23: Relative Path Traversal"#, url: r#"https://cwe.mitre.org/data/definitions/23.html"# },
-            Classification { title: r#"CWE-35: Path Traversal: '.../...//'"#, url: r#"https://cwe.mitre.org/data/definitions/35.html"# },
-            Classification { title: r#"CWE-36: Absolute Path Traversal"#, url: r#"https://cwe.mitre.org/data/definitions/36.html"# },
-            Classification { title: r#"CAPEC-126: Path Traversal"#, url: r#"https://capec.mitre.org/data/definitions/126.html"# },
+            Classification {
+                title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/22.html"#,
+            },
+            Classification {
+                title: r#"CWE-23: Relative Path Traversal"#,
+                url: r#"https://cwe.mitre.org/data/definitions/23.html"#,
+            },
+            Classification {
+                title: r#"CWE-35: Path Traversal: '.../...//'"#,
+                url: r#"https://cwe.mitre.org/data/definitions/35.html"#,
+            },
+            Classification {
+                title: r#"CWE-36: Absolute Path Traversal"#,
+                url: r#"https://cwe.mitre.org/data/definitions/36.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-126: Path Traversal"#,
+                url: r#"https://capec.mitre.org/data/definitions/126.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -148,15 +239,24 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
   This may include public third-party systems, internal systems within the same organization, or services available on the local loopback adapter of the application server itself. 
   Depending on the network architecture, this may expose highly vulnerable internal services that are not otherwise accessible to external attackers.
 </p>"#,
-        remediation: Some(r#"<p>Parsers that are used to process XML from untrusted sources should be configured to disable processing of all external resources. This is usually possible, and will prevent a number of related attacks.&nbsp;You should consult the documentation for your XML parsing library to determine how to achieve this.</p>
+        remediation: Some(
+            r#"<p>Parsers that are used to process XML from untrusted sources should be configured to disable processing of all external resources. This is usually possible, and will prevent a number of related attacks.&nbsp;You should consult the documentation for your XML parsing library to determine how to achieve this.</p>
 
-<p>XML external entity injection makes use of the DOCTYPE tag to define the injected entity. It may also be possible to disable the DOCTYPE tag or use input validation to block input containing it.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: XXE injection"#, url: r#"https://portswigger.net/web-security/xxe"# },
-        ],
+<p>XML external entity injection makes use of the DOCTYPE tag to define the injected entity. It may also be possible to disable the DOCTYPE tag or use input validation to block input containing it.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: XXE injection"#,
+            url: r#"https://portswigger.net/web-security/xxe"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-611: Improper Restriction of XML External Entity Reference ('XXE')"#, url: r#"https://cwe.mitre.org/data/definitions/611.html"# },
-            Classification { title: r#"CAPEC-228: DTD Injection"#, url: r#"https://capec.mitre.org/data/definitions/228.html"# },
+            Classification {
+                title: r#"CWE-611: Improper Restriction of XML External Entity Reference ('XXE')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/611.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-228: DTD Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/228.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -166,12 +266,23 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         typical_severity: Severity::High,
         description: r#"<p>LDAP injection arises when user-controllable data is copied in an unsafe way into an LDAP query that is performed by the application. If an attacker can inject LDAP metacharacters into the query, then they can interfere with the query's logic. Depending on the function for which the query is used, the attacker may be able to retrieve sensitive data to which they are not authorized, or subvert the application's logic to perform some unauthorized action.</p>
 <p>Note that automated difference-based tests for LDAP injection flaws can often be unreliable and are prone to false positive results. Scanner results should be manually reviewed to confirm whether a vulnerability is actually present. </p>"#,
-        remediation: Some(r#"<p>If possible, applications should avoid copying user-controllable data into LDAP queries. If this is unavoidable, then the data should be strictly validated to prevent LDAP injection attacks. In most situations, it will be appropriate to allow only short alphanumeric strings to be copied into queries, and any other input should be rejected. At a minimum, input containing any LDAP metacharacters should be rejected; characters that should be blocked include ( ) ; , * | & = and whitespace.</p>"#),
+        remediation: Some(
+            r#"<p>If possible, applications should avoid copying user-controllable data into LDAP queries. If this is unavoidable, then the data should be strictly validated to prevent LDAP injection attacks. In most situations, it will be appropriate to allow only short alphanumeric strings to be copied into queries, and any other input should be rejected. At a minimum, input containing any LDAP metacharacters should be rejected; characters that should be blocked include ( ) ; , * | & = and whitespace.</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-90: Improper Neutralization of Special Elements used in an LDAP Query ('LDAP Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/90.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-136: LDAP Injection"#, url: r#"https://capec.mitre.org/data/definitions/136.html"# },
+            Classification {
+                title: r#"CWE-90: Improper Neutralization of Special Elements used in an LDAP Query ('LDAP Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/90.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-136: LDAP Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/136.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -181,21 +292,39 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         typical_severity: Severity::High,
         description: r#"<p>XPath injection vulnerabilities arise when user-controllable data is incorporated into XPath queries in an unsafe manner. An attacker can supply crafted input to break out of the data context in which their input appears and interfere with the structure of the surrounding query.</p>
 <p>Depending on the purpose for which the vulnerable query is being used, an attacker may be able to exploit an XPath injection flaw to read sensitive application data or interfere with application logic. </p>"#,
-        remediation: Some(r#"<p>User input should be strictly validated before being 
+        remediation: Some(
+            r#"<p>User input should be strictly validated before being 
   incorporated into XPath queries. 
   In most cases, it will be appropriate to accept input containing only short 
   alphanumeric strings. At the very least, input containing any XPath metacharacters 
-  such as " ' / @ = * [ ] ( and ) should be rejected.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Client-side XPath injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-xpath-injection"# },
-        ],
+  such as " ' / @ = * [ ] ( and ) should be rejected.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Client-side XPath injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/client-side-xpath-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')
-"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CWE-643: Improper Neutralization of Data within XPath Expressions ('XPath Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/643.html"# },
-            Classification { title: r#"CAPEC-83: XPath Injection"#, url: r#"https://capec.mitre.org/data/definitions/83.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')
+"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CWE-643: Improper Neutralization of Data within XPath Expressions ('XPath Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/643.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-83: XPath Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/83.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -205,17 +334,38 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         typical_severity: Severity::Medium,
         description: r#"<p>XML or SOAP injection vulnerabilities arise when user input is inserted into a server-side XML document or SOAP message in an unsafe way. It may be possible to use XML metacharacters to modify the structure of the resulting XML. Depending on the function in which the XML is used, it may be possible to interfere with the application's logic, to perform unauthorized actions or access sensitive data.</p>
 <p>This kind of vulnerability can be difficult to detect and exploit remotely; you should review the application's response, and the purpose that the relevant input performs within the application's functionality, to determine whether it is indeed vulnerable. </p>"#,
-        remediation: Some(r#"<p>The application should validate or sanitize user input before incorporating it into an XML document or SOAP message. It may be possible to block any input containing XML metacharacters such as &lt; and &gt;. Alternatively, these characters can be replaced with the corresponding entities: &amp;lt; and &amp;gt;.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: XXE injection"#, url: r#"https://portswigger.net/web-security/xxe"# },
-        ],
+        remediation: Some(
+            r#"<p>The application should validate or sanitize user input before incorporating it into an XML document or SOAP message. It may be possible to block any input containing XML metacharacters such as &lt; and &gt;. Alternatively, these characters can be replaced with the corresponding entities: &amp;lt; and &amp;gt;.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: XXE injection"#,
+            url: r#"https://portswigger.net/web-security/xxe"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-91: XML Injection (aka Blind XPath Injection)"#, url: r#"https://cwe.mitre.org/data/definitions/91.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CWE-611: Improper Restriction of XML External Entity Reference ('XXE')"#, url: r#"https://cwe.mitre.org/data/definitions/611.html"# },
-            Classification { title: r#"CWE-776: Improper Restriction of Recursive Entity References in DTDs ('XML Entity Expansion')"#, url: r#"https://cwe.mitre.org/data/definitions/776.html"# },
-            Classification { title: r#"CAPEC-250: XML Injection"#, url: r#"https://capec.mitre.org/data/definitions/250.html"# },
+            Classification {
+                title: r#"CWE-91: XML Injection (aka Blind XPath Injection)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/91.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CWE-611: Improper Restriction of XML External Entity Reference ('XXE')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/611.html"#,
+            },
+            Classification {
+                title: r#"CWE-776: Improper Restriction of Recursive Entity References in DTDs ('XML Entity Expansion')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/776.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-250: XML Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/250.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -225,14 +375,23 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         typical_severity: Severity::Medium,
         description: r#"<p>ASP.NET allows remote debugging of web applications, if configured to do so. By default, debugging is subject to access control and requires platform-level authentication. </p>
 <p>If an attacker can successfully start a remote debugging session, this is likely to disclose sensitive information about the web application and supporting infrastructure that may be valuable in formulating targeted attacks against the system. </p>"#,
-        remediation: Some(r#"<p>To disable debugging, open the Web.config file for the application, and find the &lt;compilation&gt; element within the &lt;system.web&gt; section. Set the debug attribute to "false". Note that it is also possible to enable debugging for all applications within the Machine.config file. You should confirm that the debug attribute in the &lt;compilation&gt; element has not been set to "true" within the Machine.config file.</p>
-<p>It is strongly recommended that you refer to your platform's documentation relating to this issue, and do not rely solely on the above remediation. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        remediation: Some(
+            r#"<p>To disable debugging, open the Web.config file for the application, and find the &lt;compilation&gt; element within the &lt;system.web&gt; section. Set the debug attribute to "false". Note that it is also possible to enable debugging for all applications within the Machine.config file. You should confirm that the debug attribute in the &lt;compilation&gt; element has not been set to "true" within the Machine.config file.</p>
+<p>It is strongly recommended that you refer to your platform's documentation relating to this issue, and do not rely solely on the above remediation. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-11: ASP.NET Misconfiguration: Creating Debug Binary"#, url: r#"https://cwe.mitre.org/data/definitions/11.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-11: ASP.NET Misconfiguration: Creating Debug Binary"#,
+                url: r#"https://cwe.mitre.org/data/definitions/11.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -242,16 +401,25 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         typical_severity: Severity::Info,
         description: r#"<p>Access control is the application of constraints on who or what is authorized to perform actions or access resources.</p>
 <p>Broken access controls often present a serious security vulnerability as they can allow attackers to access resources or perform actions they should not be able to.</p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     If this endpoint is intended to be restricted to authenticated users, implement access controls that enforce this.
-</p>"#),
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Access Control"#, url: r#"https://portswigger.net/web-security/access-control"# },
-            Reference { title: r#"OWASP A01:2021 - Broken Access Control"#, url: r#"https://owasp.org/Top10/A01_2021-Broken_Access_Control/"# },
+            Reference {
+                title: r#"Web Security Academy: Access Control"#,
+                url: r#"https://portswigger.net/web-security/access-control"#,
+            },
+            Reference {
+                title: r#"OWASP A01:2021 - Broken Access Control"#,
+                url: r#"https://owasp.org/Top10/A01_2021-Broken_Access_Control/"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-284: Improper Access Control"#, url: r#"https://cwe.mitre.org/data/definitions/284.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-284: Improper Access Control"#,
+            url: r#"https://cwe.mitre.org/data/definitions/284.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 1050880,
@@ -259,12 +427,15 @@ pub(crate) static ISSUES: &[IssueDefinition] = &[
         name: r#"HTTP PUT method is enabled"#,
         typical_severity: Severity::High,
         description: r#"<p>The HTTP PUT method is normally used to upload data that is saved on the server at a user-supplied URL. If enabled, an attacker may be able to place arbitrary, and potentially malicious, content into the application. Depending on the server's configuration, this may lead to compromise of other users (by uploading client-executable scripts), compromise of the server (by uploading server-executable code), or other attacks.</p>"#,
-        remediation: Some(r#"<p>Refer to your platform's documentation to determine how to disable the HTTP PUT method on the server.</p>"#),
+        remediation: Some(
+            r#"<p>Refer to your platform's documentation to determine how to disable the HTTP PUT method on the server.</p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-650: Trusting HTTP Permission Methods on the Server Side
-"#, url: r#"https://cwe.mitre.org/data/definitions/650.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-650: Trusting HTTP Permission Methods on the Server Side
+"#,
+            url: r#"https://cwe.mitre.org/data/definitions/650.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 1051136,
@@ -281,19 +452,36 @@ However, in many cases, it can indicate a vulnerability with serious consequence
   An attacker can deploy a web server that returns malicious content, and then induce the application to retrieve and process that content. 
   This processing might give rise to the types of input-based vulnerabilities that are normally found when unexpected input is submitted directly in requests to the application. 
   The out-of-band attack surface that the application exposes should be thoroughly tested for these types of vulnerabilities. </p>"#,
-        remediation: Some(r#"<p>You should review the purpose and intended use of the relevant application functionality, and determine whether the ability to trigger arbitrary out-of-band resource load is intended behavior. 
+        remediation: Some(
+            r#"<p>You should review the purpose and intended use of the relevant application functionality, and determine whether the ability to trigger arbitrary out-of-band resource load is intended behavior. 
   If so, you should be aware of the types of attacks that can be performed via this behavior and take appropriate measures. 
   These measures might include blocking network access from the application server to other internal systems, and hardening the application server itself to remove any services available on the local loopback adapter. 
 You should also ensure that content retrieved from other systems is processed in a safe manner, with the usual precautions that are applicable when processing input from direct incoming web requests.</p>
-<p>If the ability to trigger arbitrary out-of-band resource load is not intended behavior, then you should implement a whitelist of permitted URLs, and block requests to URLs that do not appear on this whitelist.</p>"#),
+<p>If the ability to trigger arbitrary out-of-band resource load is not intended behavior, then you should implement a whitelist of permitted URLs, and block requests to URLs that do not appear on this whitelist.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Burp Collaborator"#, url: r#"https://portswigger.net/blog/introducing-burp-collaborator"# },
-            Reference { title: r#"Out-of-band application security testing (OAST)"#, url: r#"https://portswigger.net/burp/application-security-testing/oast"# },
-            Reference { title: r#"PortSwigger Research: Cracking the Lens"#, url: r#"https://portswigger.net/research/cracking-the-lens-targeting-https-hidden-attack-surface"# },
+            Reference {
+                title: r#"Burp Collaborator"#,
+                url: r#"https://portswigger.net/blog/introducing-burp-collaborator"#,
+            },
+            Reference {
+                title: r#"Out-of-band application security testing (OAST)"#,
+                url: r#"https://portswigger.net/burp/application-security-testing/oast"#,
+            },
+            Reference {
+                title: r#"PortSwigger Research: Cracking the Lens"#,
+                url: r#"https://portswigger.net/research/cracking-the-lens-targeting-https-hidden-attack-surface"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-610: Externally Controlled Reference to a Resource in Another Sphere"#, url: r#"https://cwe.mitre.org/data/definitions/610.html"# },
-            Classification { title: r#"CWE-918: Server-Side Request Forgery (SSRF)"#, url: r#"https://cwe.mitre.org/data/definitions/918.html"# },
+            Classification {
+                title: r#"CWE-610: Externally Controlled Reference to a Resource in Another Sphere"#,
+                url: r#"https://cwe.mitre.org/data/definitions/610.html"#,
+            },
+            Classification {
+                title: r#"CWE-918: Server-Side Request Forgery (SSRF)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/918.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -302,17 +490,35 @@ You should also ensure that content retrieved from other systems is processed in
         name: r#"File path manipulation"#,
         typical_severity: Severity::High,
         description: r#"<p>File path manipulation vulnerabilities arise when user-controllable data is placed into a file or URL path that is used on the server to access local resources, which may be within or outside the web root. If vulnerable, an attacker can modify the file path to access different resources, which may contain sensitive information. Even where an attack is constrained within the web root, it is often possible to retrieve items that are normally protected from direct access, such as application configuration files, the source code for server-executable scripts, or files with extensions that the web server is not configured to serve directly.</p>"#,
-        remediation: Some(r#"<p>Ideally, application functionality should be designed in such a way that user-controllable data does not need to be placed into file or URL paths in order to access local resources on the server. This can normally be achieved by referencing known files via an index number rather than their name.</p>
-<p>If it is considered unavoidable to place user data into file or URL paths, the data should be strictly validated against a whitelist of accepted values. Note that when accessing resources within the web root, simply blocking input containing file path traversal sequences (such as dot-dot-slash) is not always sufficient to prevent retrieval of sensitive information, because some protected items may be accessible at the original path without using any traversal sequences. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Directory traversal"#, url: r#"https://portswigger.net/web-security/file-path-traversal"# },
-        ],
+        remediation: Some(
+            r#"<p>Ideally, application functionality should be designed in such a way that user-controllable data does not need to be placed into file or URL paths in order to access local resources on the server. This can normally be achieved by referencing known files via an index number rather than their name.</p>
+<p>If it is considered unavoidable to place user data into file or URL paths, the data should be strictly validated against a whitelist of accepted values. Note that when accessing resources within the web root, simply blocking input containing file path traversal sequences (such as dot-dot-slash) is not always sufficient to prevent retrieval of sensitive information, because some protected items may be accessible at the original path without using any traversal sequences. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Directory traversal"#,
+            url: r#"https://portswigger.net/web-security/file-path-traversal"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#, url: r#"https://cwe.mitre.org/data/definitions/22.html"# },
-            Classification { title: r#"CWE-23: Relative Path Traversal"#, url: r#"https://cwe.mitre.org/data/definitions/23.html"# },
-            Classification { title: r#"CWE-35: Path Traversal: '.../...//'"#, url: r#"https://cwe.mitre.org/data/definitions/35.html"# },
-            Classification { title: r#"CWE-36: Absolute Path Traversal"#, url: r#"https://cwe.mitre.org/data/definitions/36.html"# },
-            Classification { title: r#"CAPEC-126: Path Traversal"#, url: r#"https://capec.mitre.org/data/definitions/126.html"# },
+            Classification {
+                title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/22.html"#,
+            },
+            Classification {
+                title: r#"CWE-23: Relative Path Traversal"#,
+                url: r#"https://cwe.mitre.org/data/definitions/23.html"#,
+            },
+            Classification {
+                title: r#"CWE-35: Path Traversal: '.../...//'"#,
+                url: r#"https://cwe.mitre.org/data/definitions/35.html"#,
+            },
+            Classification {
+                title: r#"CWE-36: Absolute Path Traversal"#,
+                url: r#"https://cwe.mitre.org/data/definitions/36.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-126: Path Traversal"#,
+                url: r#"https://capec.mitre.org/data/definitions/126.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -329,23 +535,43 @@ You should also ensure that content retrieved from other systems is processed in
   complete compromise of the application's 
   data and functionality, and often of the server that is hosting the application.
   It may also be possible to use the server as a platform for further attacks against other systems.</p>"#,
-        remediation: Some(r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
+        remediation: Some(
+            r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
   dynamically evaluated code. In almost every situation, there are safer alternative 
   methods of implementing application functions, which cannot be 
   manipulated to inject arbitrary code into the server's processing.</p>
 <p>If it is considered unavoidable to incorporate user-supplied data into 
   dynamically evaluated code, then the data should be strictly validated. Ideally, a whitelist of specific accepted 
   values should be used. Otherwise, only short alphanumeric strings should be accepted. 
-  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#),
+  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')
-"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-193: PHP Remote File Inclusion"#, url: r#"https://capec.mitre.org/data/definitions/193.html"# },
-            Classification { title: r#"CAPEC-242: Code Injection"#, url: r#"https://capec.mitre.org/data/definitions/242.html"# },
-            Classification { title: r#"CAPEC-252: PHP Local File Inclusion"#, url: r#"https://capec.mitre.org/data/definitions/252.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')
+"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-193: PHP Remote File Inclusion"#,
+                url: r#"https://capec.mitre.org/data/definitions/193.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-242: Code Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/242.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-252: PHP Local File Inclusion"#,
+                url: r#"https://capec.mitre.org/data/definitions/252.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -362,20 +588,34 @@ You should also ensure that content retrieved from other systems is processed in
   complete compromise of the application's 
   data and functionality, and often of the server that is hosting the application.
   It may also be possible to use the server as a platform for further attacks against other systems.</p>"#,
-        remediation: Some(r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
+        remediation: Some(
+            r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
   dynamically evaluated code. In almost every situation, there are safer alternative 
   methods of implementing application functions, which cannot be 
   manipulated to inject arbitrary code into the server's processing.</p>
 <p>If it is considered unavoidable to incorporate user-supplied data into 
   dynamically evaluated code, then the data should be strictly validated. Ideally, a whitelist of specific accepted 
   values should be used. Otherwise, only short alphanumeric strings should be accepted. 
-  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#),
+  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-242: Code Injection"#, url: r#"https://capec.mitre.org/data/definitions/242.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-242: Code Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/242.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -392,20 +632,34 @@ You should also ensure that content retrieved from other systems is processed in
   complete compromise of the application's 
   data and functionality, and often of the server that is hosting the application.
   It may also be possible to use the server as a platform for further attacks against other systems.</p>"#,
-        remediation: Some(r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
+        remediation: Some(
+            r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
   dynamically evaluated code. In almost every situation, there are safer alternative 
   methods of implementing application functions, which cannot be 
   manipulated to inject arbitrary code into the server's processing.</p>
 <p>If it is considered unavoidable to incorporate user-supplied data into 
   dynamically evaluated code, then the data should be strictly validated. Ideally, a whitelist of specific accepted 
   values should be used. Otherwise, only short alphanumeric strings should be accepted. 
-  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#),
+  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-242: Code Injection"#, url: r#"https://capec.mitre.org/data/definitions/242.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-242: Code Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/242.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -422,20 +676,34 @@ You should also ensure that content retrieved from other systems is processed in
   complete compromise of the application's 
   data and functionality, and often of the server that is hosting the application.
   It may also be possible to use the server as a platform for further attacks against other systems.</p>"#,
-        remediation: Some(r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
+        remediation: Some(
+            r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
   dynamically evaluated code. In almost every situation, there are safer alternative 
   methods of implementing application functions, which cannot be 
   manipulated to inject arbitrary code into the server's processing.</p>
 <p>If it is considered unavoidable to incorporate user-supplied data into 
   dynamically evaluated code, then the data should be strictly validated. Ideally, a whitelist of specific accepted 
   values should be used. Otherwise, only short alphanumeric strings should be accepted. 
-  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#),
+  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-242: Code Injection"#, url: r#"https://capec.mitre.org/data/definitions/242.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-242: Code Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/242.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -452,20 +720,34 @@ You should also ensure that content retrieved from other systems is processed in
   complete compromise of the application's 
   data and functionality, and often of the server that is hosting the application.
   It may also be possible to use the server as a platform for further attacks against other systems.</p>"#,
-        remediation: Some(r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
+        remediation: Some(
+            r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
   dynamically evaluated code. In almost every situation, there are safer alternative 
   methods of implementing application functions, which cannot be 
   manipulated to inject arbitrary code into the server's processing.</p>
 <p>If it is considered unavoidable to incorporate user-supplied data into 
   dynamically evaluated code, then the data should be strictly validated. Ideally, a whitelist of specific accepted 
   values should be used. Otherwise, only short alphanumeric strings should be accepted. 
-  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#),
+  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-242: Code Injection"#, url: r#"https://capec.mitre.org/data/definitions/242.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-242: Code Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/242.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -482,23 +764,43 @@ You should also ensure that content retrieved from other systems is processed in
   complete compromise of the application's 
   data and functionality, and often of the server that is hosting the application.
   It may also be possible to use the server as a platform for further attacks against other systems.</p>"#,
-        remediation: Some(r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
+        remediation: Some(
+            r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
   dynamically evaluated code. In almost every situation, there are safer alternative 
   methods of implementing application functions, which cannot be 
   manipulated to inject arbitrary code into the server's processing.</p>
 <p>If it is considered unavoidable to incorporate user-supplied data into 
   dynamically evaluated code, then the data should be strictly validated. Ideally, a whitelist of specific accepted 
   values should be used. Otherwise, only short alphanumeric strings should be accepted. 
-  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#),
+  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#,
+        ),
         references: &[
-            Reference { title: r#"Spring Expression Language Injection"#, url: r#"https://www.mindedsecurity.com/fileshare/ExpressionLanguageInjection.pdf"# },
-            Reference { title: r#"Remote Code Execution with Spring Expression Language Injection"#, url: r#"http://danamodio.com/appsec/research/spring-remote-code-with-expression-language-injection/"# },
+            Reference {
+                title: r#"Spring Expression Language Injection"#,
+                url: r#"https://www.mindedsecurity.com/fileshare/ExpressionLanguageInjection.pdf"#,
+            },
+            Reference {
+                title: r#"Remote Code Execution with Spring Expression Language Injection"#,
+                url: r#"http://danamodio.com/appsec/research/spring-remote-code-with-expression-language-injection/"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CWE-917: Improper Neutralization of Special Elements used in an Expression Language Statement ('Expression Language Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/917.html"# },
-            Classification { title: r#"CAPEC-242: Code Injection"#, url: r#"https://capec.mitre.org/data/definitions/242.html"# },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CWE-917: Improper Neutralization of Special Elements used in an Expression Language Statement ('Expression Language Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/917.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-242: Code Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/242.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -515,20 +817,34 @@ You should also ensure that content retrieved from other systems is processed in
   complete compromise of the application's 
   data and functionality, and often of the server that is hosting the application.
   It may also be possible to use the server as a platform for further attacks against other systems.</p>"#,
-        remediation: Some(r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
+        remediation: Some(
+            r#"<p>Whenever possible, applications should avoid incorporating user-controllable data into 
   dynamically evaluated code. In almost every situation, there are safer alternative 
   methods of implementing application functions, which cannot be 
   manipulated to inject arbitrary code into the server's processing.</p>
 <p>If it is considered unavoidable to incorporate user-supplied data into 
   dynamically evaluated code, then the data should be strictly validated. Ideally, a whitelist of specific accepted 
   values should be used. Otherwise, only short alphanumeric strings should be accepted. 
-  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#),
+  Input containing any other data, including any conceivable code metacharacters, should be rejected. </p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-242: Code Injection"#, url: r#"https://capec.mitre.org/data/definitions/242.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-242: Code Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/242.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -546,19 +862,45 @@ You should also ensure that content retrieved from other systems is processed in
 <p>
 Template injection vulnerabilities can be very serious and can lead to complete compromise of the application's data and functionality, and often of the server that is hosting the application. It may also be possible to use the server as a platform for further attacks against other systems. On the other hand, some template injection vulnerabilities may pose no significant security risk.
 </p>"#,
-        remediation: Some(r#"<p>Wherever possible, avoid creating templates from user input. Passing user input into templates as parameters is normally a safe alternative.</p>
-<p>If supporting user-submitted templates is a business requirement, consider using a simple logic-less template engine such as Mustache or one provided by the native language like Python's Template. If this is not an option, review the chosen template engine's documentation for hardening advice, and consider rendering the template within a sandboxed execution environment.</p>"#),
+        remediation: Some(
+            r#"<p>Wherever possible, avoid creating templates from user input. Passing user input into templates as parameters is normally a safe alternative.</p>
+<p>If supporting user-submitted templates is a business requirement, consider using a simple logic-less template engine such as Mustache or one provided by the native language like Python's Template. If this is not an option, review the chosen template engine's documentation for hardening advice, and consider rendering the template within a sandboxed execution environment.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Server-side template injection"#, url: r#"https://portswigger.net/web-security/server-side-template-injection"# },
-            Reference { title: r#"Server-side template injection"#, url: r#"https://portswigger.net/research/server-side-template-injection"# },
-            Reference { title: r#"FreeMarker hardening"#, url: r#"http://freemarker.org/docs/app_faq.html#faq_template_uploading_security"# },
-            Reference { title: r#"Velocity Hardening"#, url: r#"https://velocity.apache.org/engine/devel/apidocs/org/apache/velocity/util/introspection/SecureUberspector.html"# },
-            Reference { title: r#"Twig hardening"#, url: r#"http://twig.sensiolabs.org/doc/api.html#sandbox-extension"# },
+            Reference {
+                title: r#"Web Security Academy: Server-side template injection"#,
+                url: r#"https://portswigger.net/web-security/server-side-template-injection"#,
+            },
+            Reference {
+                title: r#"Server-side template injection"#,
+                url: r#"https://portswigger.net/research/server-side-template-injection"#,
+            },
+            Reference {
+                title: r#"FreeMarker hardening"#,
+                url: r#"http://freemarker.org/docs/app_faq.html#faq_template_uploading_security"#,
+            },
+            Reference {
+                title: r#"Velocity Hardening"#,
+                url: r#"https://velocity.apache.org/engine/devel/apidocs/org/apache/velocity/util/introspection/SecureUberspector.html"#,
+            },
+            Reference {
+                title: r#"Twig hardening"#,
+                url: r#"http://twig.sensiolabs.org/doc/api.html#sandbox-extension"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -568,15 +910,30 @@ Template injection vulnerabilities can be very serious and can lead to complete 
         typical_severity: Severity::High,
         description: r#"<p>Server-Side Include (SSI) injection vulnerabilities arise when an application incorporates user-controllable data into response that is then parsed for Server-Side Include directives. If the data is not strictly validated, an attacker can modify or inject directives to carry out malicious actions.</p>
 <p>SSI injection vulnerabilities can typically be exploited to inject arbitrary content, including JavaScript, into the application's response, with the same impact as cross-site scripting. Depending on the server configuration, it may also be possible to read protected files, or perform arbitrary code execution on the server, with the same impact as OS command injection. </p>"#,
-        remediation: Some(r#"<p>If possible, applications should avoid incorporating user-controllable data into pages that are processed for SSI directives. In almost every situation, there are safer alternative methods of implementing the required functionality. If this is not considered feasible, then the data should be strictly validated. Ideally, a whitelist of specific accepted values should be used. Otherwise, only short alphanumeric strings should be accepted. Input containing any other data, including any conceivable SSI metacharacter, should be rejected.</p>"#),
-        references: &[
-            Reference { title: r#"Introduction to Server-Side Includes"#, url: r#"http://httpd.apache.org/docs/current/howto/ssi.html"# },
-        ],
+        remediation: Some(
+            r#"<p>If possible, applications should avoid incorporating user-controllable data into pages that are processed for SSI directives. In almost every situation, there are safer alternative methods of implementing the required functionality. If this is not considered feasible, then the data should be strictly validated. Ideally, a whitelist of specific accepted values should be used. Otherwise, only short alphanumeric strings should be accepted. Input containing any other data, including any conceivable SSI metacharacter, should be rejected.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Introduction to Server-Side Includes"#,
+            url: r#"http://httpd.apache.org/docs/current/howto/ssi.html"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-96: Improper Neutralization of Directives in Statically Saved Code ('Static Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/96.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-101: Server Side Include (SSI) Injection"#, url: r#"https://capec.mitre.org/data/definitions/101.html"# },
+            Classification {
+                title: r#"CWE-96: Improper Neutralization of Directives in Statically Saved Code ('Static Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/96.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-101: Server Side Include (SSI) Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/101.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -585,15 +942,27 @@ Template injection vulnerabilities can be very serious and can lead to complete 
         name: r#"React Server Components remote code execution (React2Shell)"#,
         typical_severity: Severity::High,
         description: r#"<p>The application is vulnerable to <b>CVE-2025-55182</b> (React) and <b>CVE-2025-66478</b> (Next.js), critical Remote Code Execution vulnerabilities in React Server Components with CVSS score of 10.0.</p><p><b>Vulnerability Overview:</b></p><ul><li>Unauthenticated Remote Code Execution via insecure deserialization</li><li>The RSC Flight protocol fails to validate property existence in colon-delimited references</li><li>Malformed multipart form-data triggers unhandled exceptions leading to RCE</li><li>No prerequisites or special configuration required for exploitation</li></ul>"#,
-        remediation: Some(r#"<p><b>CRITICAL - Immediate Action Required</b></p><p>This vulnerability allows unauthenticated attackers to execute arbitrary code on the server. Patch immediately.</p><p><b>Upgrade to Patched Versions:</b></p><ul><li><b>React:</b> 19.0.1, 19.1.2, or 19.2.1</li><li><b>Next.js:</b> 15.0.5, 15.1.9, 15.2.6, 15.3.6, 15.4.8, 15.5.7, or 16.0.7</li></ul><p><b>Remediation Steps:</b></p><ol><li>Update package.json dependencies to patched versions</li><li>Run npm install or npm update</li><li>Rebuild and redeploy application</li><li>Verify fix by re-scanning</li></ol>"#),
+        remediation: Some(
+            r#"<p><b>CRITICAL - Immediate Action Required</b></p><p>This vulnerability allows unauthenticated attackers to execute arbitrary code on the server. Patch immediately.</p><p><b>Upgrade to Patched Versions:</b></p><ul><li><b>React:</b> 19.0.1, 19.1.2, or 19.2.1</li><li><b>Next.js:</b> 15.0.5, 15.1.9, 15.2.6, 15.3.6, 15.4.8, 15.5.7, or 16.0.7</li></ul><p><b>Remediation Steps:</b></p><ol><li>Update package.json dependencies to patched versions</li><li>Run npm install or npm update</li><li>Rebuild and redeploy application</li><li>Verify fix by re-scanning</li></ol>"#,
+        ),
         references: &[
-            Reference { title: r#"Next.js Security Advisory"#, url: r#"https://nextjs.org/blog/CVE-2025-66478"# },
-            Reference { title: r#"CVE-2025-55182 Details"#, url: r#"https://www.wiz.io/blog/critical-vulnerability-in-react-cve-2025-55182"# },
-            Reference { title: r#"Detection of CVE-2025-55182"#, url: r#"https://slcyber.io/research-center/high-fidelity-detection-mechanism-for-rsc-next-js-rce-cve-2025-55182-cve-2025-66478/"# },
+            Reference {
+                title: r#"Next.js Security Advisory"#,
+                url: r#"https://nextjs.org/blog/CVE-2025-66478"#,
+            },
+            Reference {
+                title: r#"CVE-2025-55182 Details"#,
+                url: r#"https://www.wiz.io/blog/critical-vulnerability-in-react-cve-2025-55182"#,
+            },
+            Reference {
+                title: r#"Detection of CVE-2025-55182"#,
+                url: r#"https://slcyber.io/research-center/high-fidelity-detection-mechanism-for-rsc-next-js-rce-cve-2025-55182-cve-2025-66478/"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-502: Deserialization of Untrusted Data"#, url: r#"https://cwe.mitre.org/data/definitions/502.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-502: Deserialization of Untrusted Data"#,
+            url: r#"https://cwe.mitre.org/data/definitions/502.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2097408,
@@ -605,7 +974,8 @@ Template injection vulnerabilities can be very serious and can lead to complete 
 <p>Methods for introducing malicious content include any function where request parameters or headers are processed and stored by the application, and any out-of-band channel whereby data can be introduced into the application's processing space (for example, email messages sent over SMTP that are ultimately rendered within a web mail application).</p>
 <p>Stored cross-site scripting flaws are typically more serious than reflected vulnerabilities because they do not require a separate delivery mechanism in order to reach target users, and are not hindered by web browsers' XSS filters. Depending on the affected page, ordinary users may be exploited during normal use of the application. In some situations this can be used to create web application worms that spread exponentially and ultimately exploit all active users.</p>
 <p>Note that automated detection of stored cross-site scripting vulnerabilities cannot reliably determine whether attacks that are persisted within the application can be accessed by any other user, only by authenticated users, or only by the attacker themselves. You should review the functionality in which the vulnerability appears to determine whether the application's behavior can feasibly be used to compromise other application users. </p>"#,
-        remediation: Some(r#"<p>In most situations where user-controllable data is copied into application responses, cross-site scripting 
+        remediation: Some(
+            r#"<p>In most situations where user-controllable data is copied into application responses, cross-site scripting 
   attacks can be prevented using two layers of defenses:</p>
 <ul>
   <li>Input should be validated as strictly as possible on arrival, given the kind of content that 
@@ -619,18 +989,43 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>In cases where the application's functionality allows users to author content using 
   a restricted subset of HTML tags and attributes (for example, blog comments which 
   allow limited formatting and linking), it is necessary to parse the supplied HTML to 
-  validate that it does not use any dangerous syntax; this is a non-trivial task.</p>"#),
+  validate that it does not use any dangerous syntax; this is a non-trivial task.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-            Reference { title: r#"Web Security Academy: Stored cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/stored"# },
-            Reference { title: r#"Using Burp to Find XSS issues"#, url: r#"https://support.portswigger.net/customer/portal/articles/1965737-Methodology_XSS.html"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Stored cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/stored"#,
+            },
+            Reference {
+                title: r#"Using Burp to Find XSS issues"#,
+                url: r#"https://support.portswigger.net/customer/portal/articles/1965737-Methodology_XSS.html"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#, url: r#"https://cwe.mitre.org/data/definitions/80.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-592: Stored XSS"#, url: r#"https://capec.mitre.org/data/definitions/592.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/80.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-592: Stored XSS"#,
+                url: r#"https://capec.mitre.org/data/definitions/592.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -644,18 +1039,32 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>
     By supplying a request that different servers interpret as having different lengths, an attacker can poison the back-end TCP/TLS socket and prepend arbitrary data to the next request. Depending on the website's functionality, this can be used to bypass front-end security rules, access internal systems, poison web caches, and launch assorted attacks on users who are actively browsing the site.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     You can resolve all variants of this vulnerability by configuring the front-end server to exclusively use HTTP/2 when communicating with back-end systems. Alternatively, you could ensure all servers in the chain run the same web server software with the same configuration. Disabling back-end connection reuse is likely to reduce the impact of this vulnerability, but does not mitigate all possible exploits.
 </p><p>
     Specific instances of this vulnerability can be resolved by reconfiguring the front-end server to normalize ambiguous requests before routing them onward. Alternatively, you could configure the back-end server to reject the message and close the connection when it encounters an ambiguous request.
-</p>"#),
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"HTTP Request Smuggling"#, url: r#"https://portswigger.net/web-security/request-smuggling"# },
-            Reference { title: r#"HTTP Desync Attacks"#, url: r#"https://portswigger.net/blog/http-desync-attacks"# },
+            Reference {
+                title: r#"HTTP Request Smuggling"#,
+                url: r#"https://portswigger.net/web-security/request-smuggling"#,
+            },
+            Reference {
+                title: r#"HTTP Desync Attacks"#,
+                url: r#"https://portswigger.net/blog/http-desync-attacks"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-444: Inconsistent Interpretation of HTTP Requests ('HTTP Request Smuggling')"#, url: r#"https://cwe.mitre.org/data/definitions/444.html"# },
-            Classification { title: r#"CAPEC-33: HTTP Request Smuggling"#, url: r#"https://capec.mitre.org/data/definitions/33.html"# },
+            Classification {
+                title: r#"CWE-444: Inconsistent Interpretation of HTTP Requests ('HTTP Request Smuggling')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/444.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-33: HTTP Request Smuggling"#,
+                url: r#"https://capec.mitre.org/data/definitions/33.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -666,18 +1075,32 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>
     Client-side desync (CSD) vulnerabilities occur when a web server fails to correctly process the Content-Length of POST requests. By exploiting this behavior, an attacker can force a victim's browser to desynchronize its connection with the website, typically leading to XSS.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     You can resolve this vulnerability by patching the server so that it either processes POST requests correctly, or closes the connection after handling them. You could also disable connection reuse entirely, but this may reduce performance.
 
     You can also resolve this issue by enabling HTTP/2.
-</p>"#),
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"HTTP Request Smuggling"#, url: r#"https://portswigger.net/web-security/request-smuggling"# },
-            Reference { title: r#"Browser-Powered Desync Attacks"#, url: r#"https://portswigger.net/research/browser-powered-desync-attacks"# },
+            Reference {
+                title: r#"HTTP Request Smuggling"#,
+                url: r#"https://portswigger.net/web-security/request-smuggling"#,
+            },
+            Reference {
+                title: r#"Browser-Powered Desync Attacks"#,
+                url: r#"https://portswigger.net/research/browser-powered-desync-attacks"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-444: Inconsistent Interpretation of HTTP Requests ('HTTP Request Smuggling')"#, url: r#"https://cwe.mitre.org/data/definitions/444.html"# },
-            Classification { title: r#"CAPEC-33: HTTP Request Smuggling"#, url: r#"https://capec.mitre.org/data/definitions/33.html"# },
+            Classification {
+                title: r#"CWE-444: Inconsistent Interpretation of HTTP Requests ('HTTP Request Smuggling')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/444.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-33: HTTP Request Smuggling"#,
+                url: r#"https://capec.mitre.org/data/definitions/33.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -692,17 +1115,37 @@ Web cache poisoning vulnerabilities arise when an application behind a cache pro
 <p>
 The impact is potentially serious as the malicious cached page may be served to a large number of users without other interaction. The threat posed by this vulnerability depends largely on what can be achieved with the input. Often the input is vulnerable to XSS, or can be used to trigger a redirect to another domain. Other times, it can simply be used to swap pages around.
 </p>"#,
-        remediation: Some(r#"<p>To resolve this issue, either disable support for the affected input, or disable caching on all affected pages.</p>
-<p>If both the affected input and caching behavior are required, configure the cache to ensure that the input is included in the cache key. Depending on which caching solution you use, if the input is in a request header it might be possible to achieve this using the Vary response header.</p>"#),
+        remediation: Some(
+            r#"<p>To resolve this issue, either disable support for the affected input, or disable caching on all affected pages.</p>
+<p>If both the affected input and caching behavior are required, configure the cache to ensure that the input is included in the cache key. Depending on which caching solution you use, if the input is in a request header it might be possible to achieve this using the Vary response header.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Web cache poisoning"#, url: r#"https://portswigger.net/web-security/web-cache-poisoning"# },
-            Reference { title: r#"PortSwigger Research: Practical Web Cache Poisoning"#, url: r#"https://portswigger.net/research/web-cache-poisoning"# },
-            Reference { title: r#"PortSwigger Research: Web Cache Entanglement"#, url: r#"https://portswigger.net/research/web-cache-entanglement-novel-pathways-to-poisoning"# },
-            Reference { title: r#"HTTP Vary header"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Vary"# },
+            Reference {
+                title: r#"Web Security Academy: Web cache poisoning"#,
+                url: r#"https://portswigger.net/web-security/web-cache-poisoning"#,
+            },
+            Reference {
+                title: r#"PortSwigger Research: Practical Web Cache Poisoning"#,
+                url: r#"https://portswigger.net/research/web-cache-poisoning"#,
+            },
+            Reference {
+                title: r#"PortSwigger Research: Web Cache Entanglement"#,
+                url: r#"https://portswigger.net/research/web-cache-entanglement-novel-pathways-to-poisoning"#,
+            },
+            Reference {
+                title: r#"HTTP Vary header"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Vary"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-436: Interpretation Conflict"#, url: r#"https://cwe.mitre.org/data/definitions/436.html"# },
-            Classification { title: r#"CAPEC-141: Cache Poisoning"#, url: r#"https://capec.mitre.org/data/definitions/141.html"# },
+            Classification {
+                title: r#"CWE-436: Interpretation Conflict"#,
+                url: r#"https://cwe.mitre.org/data/definitions/436.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-141: Cache Poisoning"#,
+                url: r#"https://capec.mitre.org/data/definitions/141.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -713,11 +1156,19 @@ The impact is potentially serious as the malicious cached page may be served to 
         description: r#"<p>HTTP response header injection vulnerabilities arise when user-supplied data is copied into a response header in an unsafe way. If an attacker can inject newline characters into the header, then they can inject new HTTP headers and also, by injecting an empty line, break out of the headers into the message body and write arbitrary content into the application's response.</p>
 <p>Various kinds of attack can be delivered via HTTP response header injection vulnerabilities. Any attack that can be delivered via cross-site scripting can usually be delivered via response header injection, because the attacker can construct a request that causes arbitrary JavaScript to appear within the response body. Further, it is sometimes possible to leverage response header injection vulnerabilities to poison the cache of any proxy server via which users access the application. Here, an attacker sends a crafted request that results in a "split" response containing arbitrary content. If the proxy server can be manipulated to associate the injected response with another URL used within the application, then the attacker can perform a "stored" attack against this URL, which will compromise other users who request that URL in future.
 </p>"#,
-        remediation: Some(r#"<p>If possible, applications should avoid copying user-controllable data into HTTP response headers. If this is unavoidable, then the data should be strictly validated to prevent response header injection attacks. In most situations, it will be appropriate to allow only short alphanumeric strings to be copied into headers, and any other input should be rejected. At a minimum, input containing any characters with ASCII codes less than 0x20 should be rejected.</p>"#),
+        remediation: Some(
+            r#"<p>If possible, applications should avoid copying user-controllable data into HTTP response headers. If this is unavoidable, then the data should be strictly validated to prevent response header injection attacks. In most situations, it will be appropriate to allow only short alphanumeric strings to be copied into headers, and any other input should be rejected. At a minimum, input containing any characters with ASCII codes less than 0x20 should be rejected.</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"#, url: r#"https://cwe.mitre.org/data/definitions/113.html"# },
-            Classification { title: r#"CAPEC-34: HTTP Response Splitting"#, url: r#"https://capec.mitre.org/data/definitions/34.html"# },
+            Classification {
+                title: r#"CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/113.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-34: HTTP Response Splitting"#,
+                url: r#"https://capec.mitre.org/data/definitions/34.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -729,7 +1180,8 @@ The impact is potentially serious as the malicious cached page may be served to 
 <p>The attacker-supplied code can perform a wide variety of actions, such as stealing the victim's session token or login credentials, performing arbitrary actions on the victim's behalf, and logging their keystrokes.</p>
 <p>Users can be induced to issue the attacker's crafted request in various ways. For example, the attacker can send a victim a link containing a malicious URL in an email or instant message. They can submit the link to popular web sites that allow content authoring, for example in blog comments. And they can create an innocuous looking web site that causes anyone viewing it to make arbitrary cross-domain requests to the vulnerable application (using either the GET or the POST method).</p>
 <p>The security impact of cross-site scripting vulnerabilities is dependent upon the nature of the vulnerable application, the kinds of data and functionality that it contains, and the other applications that belong to the same domain and organization. If the application is used only to display non-sensitive public content, with no authentication or access control functionality, then a cross-site scripting flaw may be considered low risk. However, if the same application resides on a domain that can access cookies for other more security-critical applications, then the vulnerability could be used to attack those other applications, and so may be considered high risk. Similarly, if the organization that owns the application is a likely target for phishing attacks, then the vulnerability could be leveraged to lend credibility to such attacks, by injecting Trojan functionality into the vulnerable application and exploiting users' trust in the organization in order to capture credentials for other applications that it owns. In many kinds of application, such as those providing online banking functionality, cross-site scripting should always be considered high risk. </p>"#,
-        remediation: Some(r#"<p>In most situations where user-controllable data is copied into application responses, cross-site scripting 
+        remediation: Some(
+            r#"<p>In most situations where user-controllable data is copied into application responses, cross-site scripting 
   attacks can be prevented using two layers of defenses:</p>
 <ul>
   <li>Input should be validated as strictly as possible on arrival, given the kind of content that 
@@ -743,18 +1195,43 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>In cases where the application's functionality allows users to author content using 
   a restricted subset of HTML tags and attributes (for example, blog comments which 
   allow limited formatting and linking), it is necessary to parse the supplied HTML to 
-  validate that it does not use any dangerous syntax; this is a non-trivial task.</p>"#),
+  validate that it does not use any dangerous syntax; this is a non-trivial task.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-            Reference { title: r#"Web Security Academy: Reflected cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/reflected"# },
-            Reference { title: r#"Using Burp to Find XSS issues"#, url: r#"https://support.portswigger.net/customer/portal/articles/1965737-Methodology_XSS.html"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Reflected cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/reflected"#,
+            },
+            Reference {
+                title: r#"Using Burp to Find XSS issues"#,
+                url: r#"https://support.portswigger.net/customer/portal/articles/1965737-Methodology_XSS.html"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#, url: r#"https://cwe.mitre.org/data/definitions/80.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-591: Reflected XSS"#, url: r#"https://capec.mitre.org/data/definitions/591.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/80.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-591: Reflected XSS"#,
+                url: r#"https://capec.mitre.org/data/definitions/591.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -767,18 +1244,41 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>The security impact of client-side template injection vulnerabilities is dependent upon the nature of the vulnerable application, the kinds of data and functionality that it contains, and the other applications that belong to the same domain and organization. If the application is used only to display non-sensitive public content, with no authentication or access control functionality, then a client-side template injection flaw may be considered low risk. However, if the same application resides on a domain that can access cookies for other more security-critical applications, then the vulnerability could be used to attack those other applications, and so may be considered high risk. Similarly, if the organization that owns the application is a likely target for phishing attacks, then the vulnerability could be leveraged to lend credibility to such attacks, by injecting Trojan functionality into the vulnerable application and exploiting users' trust in the organization in order to capture credentials for other applications that it owns. In many kinds of application, such as those providing online banking functionality, client-side template injection should always be considered high risk. </p>
 <p>Client-side template frameworks often implement a sandbox aimed at hindering direct execution of arbitrary JavaScript from within a template expression. However, these sandboxes are not intended to be a security control and can normally be bypassed.</p>
 <p>Browser cross-site scripting filters are typically unable to detect or prevent client-side template injection attacks.</p>"#,
-        remediation: Some(r#"<p>If possible, avoid using server-side code to dynamically embed user input into client-side templates. If this is not practical, consider filtering out template expression syntax from user input prior to embedding it within client-side templates. </p>
-<p>Note that HTML-encoding is not sufficient to prevent client-side template injection attacks, because frameworks perform an HTML-decode of relevant content prior to locating and executing template expressions.</p>"#),
+        remediation: Some(
+            r#"<p>If possible, avoid using server-side code to dynamically embed user input into client-side templates. If this is not practical, consider filtering out template expression syntax from user input prior to embedding it within client-side templates. </p>
+<p>Note that HTML-encoding is not sufficient to prevent client-side template injection attacks, because frameworks perform an HTML-decode of relevant content prior to locating and executing template expressions.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"XSS without HTML: Client-Side Template Injection with AngularJS"#, url: r#"https://portswigger.net/research/xss-without-html-client-side-template-injection-with-angularjs"# },
-            Reference { title: r#"Web Security Academy: AngularJS sandbox escapes"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/contexts/angularjs-sandbox"# },
-            Reference { title: r#"AngularJS Security Considerations"#, url: r#"https://docs.angularjs.org/guide/security"# },
-            Reference { title: r#"JavaScript MVC Security Pitfalls"#, url: r#"https://code.google.com/p/mustache-security/"# },
+            Reference {
+                title: r#"XSS without HTML: Client-Side Template Injection with AngularJS"#,
+                url: r#"https://portswigger.net/research/xss-without-html-client-side-template-injection-with-angularjs"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: AngularJS sandbox escapes"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/contexts/angularjs-sandbox"#,
+            },
+            Reference {
+                title: r#"AngularJS Security Considerations"#,
+                url: r#"https://docs.angularjs.org/guide/security"#,
+            },
+            Reference {
+                title: r#"JavaScript MVC Security Pitfalls"#,
+                url: r#"https://code.google.com/p/mustache-security/"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-588: DOM-Based XSS"#, url: r#"https://capec.mitre.org/data/definitions/588.html"# },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-588: DOM-Based XSS"#,
+                url: r#"https://capec.mitre.org/data/definitions/588.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -792,17 +1292,40 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Users can be induced to visit the attacker's crafted URL in various ways, similar to the usual attack delivery vectors for reflected cross-site scripting vulnerabilities.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based cross-site scripting vulnerabilities is not to dynamically write data from any untrusted source into the HTML document. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing script code into the document. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and depending on the context that the data is to be inserted may need to involve a combination of JavaScript escaping, HTML encoding, and URL encoding, in the appropriate sequence. </p>"#),
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based cross-site scripting vulnerabilities is not to dynamically write data from any untrusted source into the HTML document. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing script code into the document. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and depending on the context that the data is to be inserted may need to involve a combination of JavaScript escaping, HTML encoding, and URL encoding, in the appropriate sequence. </p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-            Reference { title: r#"Web Security Academy: DOM-based cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/dom-based"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: DOM-based cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/dom-based"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#, url: r#"https://cwe.mitre.org/data/definitions/80.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-588: DOM-Based XSS"#, url: r#"https://capec.mitre.org/data/definitions/588.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/80.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-588: DOM-Based XSS"#,
+                url: r#"https://capec.mitre.org/data/definitions/588.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -816,18 +1339,44 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Users can be induced to visit the attacker's crafted URL in various ways, similar to the usual attack delivery vectors for reflected cross-site scripting vulnerabilities.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based cross-site scripting vulnerabilities is not to dynamically write data from any untrusted source into the HTML document. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing script code into the document. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and depending on the context that the data is to be inserted may need to involve a combination of JavaScript escaping, HTML encoding, and URL encoding, in the appropriate sequence. </p>"#),
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based cross-site scripting vulnerabilities is not to dynamically write data from any untrusted source into the HTML document. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing script code into the document. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and depending on the context that the data is to be inserted may need to involve a combination of JavaScript escaping, HTML encoding, and URL encoding, in the appropriate sequence. </p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-            Reference { title: r#"Web Security Academy: Reflected cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/reflected"# },
-            Reference { title: r#"Web Security Academy: DOM-based cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/dom-based"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Reflected cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/reflected"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: DOM-based cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/dom-based"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#, url: r#"https://cwe.mitre.org/data/definitions/80.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-591: Reflected XSS"#, url: r#"https://capec.mitre.org/data/definitions/591.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/80.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-591: Reflected XSS"#,
+                url: r#"https://capec.mitre.org/data/definitions/591.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -841,18 +1390,44 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Users can be induced to visit the attacker's crafted URL in various ways, similar to the usual attack delivery vectors for reflected cross-site scripting vulnerabilities.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based cross-site scripting vulnerabilities is not to dynamically write data from any untrusted source into the HTML document. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing script code into the document. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and depending on the context that the data is to be inserted may need to involve a combination of JavaScript escaping, HTML encoding, and URL encoding, in the appropriate sequence. </p>"#),
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based cross-site scripting vulnerabilities is not to dynamically write data from any untrusted source into the HTML document. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing script code into the document. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and depending on the context that the data is to be inserted may need to involve a combination of JavaScript escaping, HTML encoding, and URL encoding, in the appropriate sequence. </p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-            Reference { title: r#"Web Security Academy: Stored cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/stored"# },
-            Reference { title: r#"Web Security Academy: DOM-based cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/dom-based"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Stored cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/stored"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: DOM-based cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/dom-based"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#, url: r#"https://cwe.mitre.org/data/definitions/80.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-592: Stored XSS"#, url: r#"https://capec.mitre.org/data/definitions/592.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/80.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-592: Stored XSS"#,
+                url: r#"https://capec.mitre.org/data/definitions/592.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -866,16 +1441,25 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>
     Client-side prototype pollution is not a vulnerability in its own right. However, when paired with a gadget, this may lead to vulnerabilities such as DOM XSS, which could enable the attacker to control JavaScript on the page.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     Ensure that property keys, such as __proto__, constructor, and prototype are correctly filtered when merging objects. When creating objects, we recommend using the Object.create(null) API to ensure that your object does not inherit from the Object.prototype and, therefore, won't be vulnerable to prototype pollution.
-</p>"#),
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Testing for client-side prototype pollution in DOM Invader"#, url: r#"https://portswigger.net/burp/documentation/desktop/tools/dom-invader/prototype-pollution.html"# },
-            Reference { title: r#"Web Security Academy: Prototype pollution"#, url: r#"https://portswigger.net/web-security/prototype-pollution"# },
+            Reference {
+                title: r#"Testing for client-side prototype pollution in DOM Invader"#,
+                url: r#"https://portswigger.net/burp/documentation/desktop/tools/dom-invader/prototype-pollution.html"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Prototype pollution"#,
+                url: r#"https://portswigger.net/web-security/prototype-pollution"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-1321: Improperly Controlled Modification of Object Prototype Attributes ('Prototype Pollution')"#, url: r#"https://cwe.mitre.org/data/definitions/1321.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-1321: Improperly Controlled Modification of Object Prototype Attributes ('Prototype Pollution')"#,
+            url: r#"https://cwe.mitre.org/data/definitions/1321.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2097952,
@@ -889,15 +1473,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Users can be induced to visit the attacker's crafted URL in various ways, similar to the usual attack delivery vectors for reflected cross-site scripting vulnerabilities.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based JavaScript injection vulnerabilities is not to execute as JavaScript any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from executing as script. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and may need to involve a combination of JavaScript escaping and HTML encoding, in the appropriate sequence. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: JavaScript injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/javascript-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based JavaScript injection vulnerabilities is not to execute as JavaScript any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from executing as script. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and may need to involve a combination of JavaScript escaping and HTML encoding, in the appropriate sequence. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: JavaScript injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/javascript-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#, url: r#"https://capec.mitre.org/data/definitions/63.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#,
+                url: r#"https://capec.mitre.org/data/definitions/63.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -912,15 +1511,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Users can be induced to visit the attacker's crafted URL in various ways, similar to the usual attack delivery vectors for reflected cross-site scripting vulnerabilities.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based JavaScript injection vulnerabilities is not to execute as JavaScript any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from executing as script. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and may need to involve a combination of JavaScript escaping and HTML encoding, in the appropriate sequence. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: JavaScript injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/javascript-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based JavaScript injection vulnerabilities is not to execute as JavaScript any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from executing as script. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and may need to involve a combination of JavaScript escaping and HTML encoding, in the appropriate sequence. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: JavaScript injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/javascript-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#, url: r#"https://capec.mitre.org/data/definitions/63.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#,
+                url: r#"https://capec.mitre.org/data/definitions/63.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -935,15 +1549,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Users can be induced to visit the attacker's crafted URL in various ways, similar to the usual attack delivery vectors for reflected cross-site scripting vulnerabilities.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based JavaScript injection vulnerabilities is not to execute as JavaScript any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from executing as script. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and may need to involve a combination of JavaScript escaping and HTML encoding, in the appropriate sequence. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: JavaScript injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/javascript-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based JavaScript injection vulnerabilities is not to execute as JavaScript any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from executing as script. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. In other cases, it will be necessary to sanitize or encode the data. This can be a complex task, and may need to involve a combination of JavaScript escaping and HTML encoding, in the appropriate sequence. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: JavaScript injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/javascript-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/95.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#, url: r#"https://capec.mitre.org/data/definitions/63.html"# },
+            Classification {
+                title: r#"CWE-94: Improper Control of Generation of Code ('Code Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/95.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#,
+                url: r#"https://capec.mitre.org/data/definitions/63.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -960,16 +1589,28 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <ul>
   <li>Executing arbitrary JavaScript using IE's expression() function.</li><li>Using CSS selectors to read parts of the HTML source, which may include sensitive data such as anti-CSRF tokens.</li>
 <li>Capturing any sensitive data within the URL query string by making a further style sheet import to a URL on the attacker's domain, and monitoring the incoming Referer header.</li></ul>"#,
-        remediation: Some(r#"<p>The root cause of the vulnerability can be resolved by not using path-relative URLs in style sheet imports. Aside from this, attacks can also be prevented by implementing all of the following defensive measures: </p>
+        remediation: Some(
+            r#"<p>The root cause of the vulnerability can be resolved by not using path-relative URLs in style sheet imports. Aside from this, attacks can also be prevented by implementing all of the following defensive measures: </p>
 <ul><li>Setting the HTTP response header "X-Frame-Options: deny" in all responses. One method that an attacker can use to make a page render in quirks mode is to frame it within their own page that is rendered in quirks mode. Setting this header prevents the page from being framed.</li><li>Setting a modern doctype (e.g. "&lt;!doctype html&gt;") in all HTML responses. This prevents the page from being rendered in quirks mode (unless it is being framed, as described above).</li>
-<li>Setting the HTTP response header "X-Content-Type-Options: nosniff" in all responses. This prevents the browser from processing a non-CSS response as CSS, even if another page loads the response via a style sheet import.</li></ul>"#),
-        references: &[
-            Reference { title: r#"Detecting and exploiting path-relative stylesheet import (PRSSI) vulnerabilities"#, url: r#"https://portswigger.net/research/detecting-and-exploiting-path-relative-stylesheet-import-prssi-vulnerabilities"# },
-        ],
+<li>Setting the HTTP response header "X-Content-Type-Options: nosniff" in all responses. This prevents the browser from processing a non-CSS response as CSS, even if another page loads the response via a style sheet import.</li></ul>"#,
+        ),
+        references: &[Reference {
+            title: r#"Detecting and exploiting path-relative stylesheet import (PRSSI) vulnerabilities"#,
+            url: r#"https://portswigger.net/research/detecting-and-exploiting-path-relative-stylesheet-import-prssi-vulnerabilities"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CAPEC-154: Resource Location Spoofing"#, url: r#"https://capec.mitre.org/data/definitions/154.html"# },
-            Classification { title: r#"CAPEC-468: Generic Cross-Browser Cross-Domain Theft"#, url: r#"https://capec.mitre.org/data/definitions/468.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-154: Resource Location Spoofing"#,
+                url: r#"https://capec.mitre.org/data/definitions/154.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-468: Generic Cross-Browser Cross-Domain Theft"#,
+                url: r#"https://capec.mitre.org/data/definitions/468.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -983,16 +1624,36 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>The potential impact of the vulnerability depends on the application's usage of the SQL database. If the database is used to store sensitive data (such as messages in a social networking application), then the attacker may be able to retrieve this data. If the database is used to store pending user actions (such as outgoing messages in an email application), then the attacker may be able to modify this data and carry out actions on the user's behalf.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based client-side SQL injection vulnerabilities is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. In the JavaScript executeSql() API, parameterized items can be designated within the query string using the query character (?), and for each parameterized item, an additional parameter is passed to the API containing the item's value. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>"#),
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based client-side SQL injection vulnerabilities is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. In the JavaScript executeSql() API, parameterized items can be designated within the query string using the query character (?), and for each parameterized item, an additional parameter is passed to the API containing the item's value. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: SQL injection"#, url: r#"https://portswigger.net/web-security/sql-injection"# },
-            Reference { title: r#"Web Security Academy: Client-side SQL injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-sql-injection"# },
+            Reference {
+                title: r#"Web Security Academy: SQL injection"#,
+                url: r#"https://portswigger.net/web-security/sql-injection"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Client-side SQL injection (DOM-based)"#,
+                url: r#"https://portswigger.net/web-security/dom-based/client-side-sql-injection"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/89.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-66: SQL Injection"#, url: r#"https://capec.mitre.org/data/definitions/66.html"# },
+            Classification {
+                title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/89.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-66: SQL Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/66.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1006,16 +1667,36 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>The potential impact of the vulnerability depends on the application's usage of the SQL database. If the database is used to store sensitive data (such as messages in a social networking application), then the attacker may be able to retrieve this data. If the database is used to store pending user actions (such as outgoing messages in an email application), then the attacker may be able to modify this data and carry out actions on the user's behalf.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based client-side SQL injection vulnerabilities is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. In the JavaScript executeSql() API, parameterized items can be designated within the query string using the query character (?), and for each parameterized item, an additional parameter is passed to the API containing the item's value. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>"#),
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based client-side SQL injection vulnerabilities is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. In the JavaScript executeSql() API, parameterized items can be designated within the query string using the query character (?), and for each parameterized item, an additional parameter is passed to the API containing the item's value. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: SQL injection"#, url: r#"https://portswigger.net/web-security/sql-injection"# },
-            Reference { title: r#"Web Security Academy: Client-side SQL injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-sql-injection"# },
+            Reference {
+                title: r#"Web Security Academy: SQL injection"#,
+                url: r#"https://portswigger.net/web-security/sql-injection"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Client-side SQL injection (DOM-based)"#,
+                url: r#"https://portswigger.net/web-security/dom-based/client-side-sql-injection"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/89.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-66: SQL Injection"#, url: r#"https://capec.mitre.org/data/definitions/66.html"# },
+            Classification {
+                title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/89.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-66: SQL Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/66.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1029,16 +1710,36 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>The potential impact of the vulnerability depends on the application's usage of the SQL database. If the database is used to store sensitive data (such as messages in a social networking application), then the attacker may be able to retrieve this data. If the database is used to store pending user actions (such as outgoing messages in an email application), then the attacker may be able to modify this data and carry out actions on the user's behalf.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based client-side SQL injection vulnerabilities is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. In the JavaScript executeSql() API, parameterized items can be designated within the query string using the query character (?), and for each parameterized item, an additional parameter is passed to the API containing the item's value. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>"#),
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based client-side SQL injection vulnerabilities is to use parameterized queries (also known as prepared statements) for all database access. This method uses two steps to incorporate potentially tainted data into SQL queries: first, the application specifies the structure of the query, leaving placeholders for each item of user input; second, the application specifies the contents of each placeholder. Because the structure of the query has already been defined in the first step, it is not possible for malformed data in the second step to interfere with the query structure. In the JavaScript executeSql() API, parameterized items can be designated within the query string using the query character (?), and for each parameterized item, an additional parameter is passed to the API containing the item's value. It is strongly recommended that you parameterize <i>every</i> variable data item that is incorporated into database queries, even if it is not obviously tainted, to prevent oversights occurring and avoid vulnerabilities being introduced by changes elsewhere within the code base of the application.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: SQL injection"#, url: r#"https://portswigger.net/web-security/sql-injection"# },
-            Reference { title: r#"Web Security Academy: Client-side SQL injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-sql-injection"# },
+            Reference {
+                title: r#"Web Security Academy: SQL injection"#,
+                url: r#"https://portswigger.net/web-security/sql-injection"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Client-side SQL injection (DOM-based)"#,
+                url: r#"https://portswigger.net/web-security/dom-based/client-side-sql-injection"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/89.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-66: SQL Injection"#, url: r#"https://capec.mitre.org/data/definitions/66.html"# },
+            Classification {
+                title: r#"CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/89.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-66: SQL Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/66.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1051,14 +1752,26 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>The potential impact of the vulnerability depends on the application's usage of WebSockets. If the application transmits sensitive data from the user's browser to the WebSocket server, then the attacker may be able to capture this data. If the application reads data from the WebSocket server and performs processing on this data, then the attacker may be able to subvert the application's logic or deliver additional client-side attacks against the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based WebSocket URL poisoning vulnerabilities is not to dynamically set the target URL of a WebSocket connection using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a target of a WebSocket. In general, this is best achieved by using a whitelist of URLs that are permitted WebSocket targets, and strictly validating the target against this list before creating the WebSocket. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: WebSocket URL poisoning (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/websocket-url-poisoning"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based WebSocket URL poisoning vulnerabilities is not to dynamically set the target URL of a WebSocket connection using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a target of a WebSocket. In general, this is best achieved by using a whitelist of URLs that are permitted WebSocket targets, and strictly validating the target against this list before creating the WebSocket. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: WebSocket URL poisoning (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/websocket-url-poisoning"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-345: Insufficient Verification of Data Authenticity"#, url: r#"https://cwe.mitre.org/data/definitions/345.html"# },
-            Classification { title: r#"CWE-346: Origin Validation Error"#, url: r#"https://cwe.mitre.org/data/definitions/346.html"# },
-            Classification { title: r#"CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"#, url: r#"https://cwe.mitre.org/data/definitions/441.html"# },
+            Classification {
+                title: r#"CWE-345: Insufficient Verification of Data Authenticity"#,
+                url: r#"https://cwe.mitre.org/data/definitions/345.html"#,
+            },
+            Classification {
+                title: r#"CWE-346: Origin Validation Error"#,
+                url: r#"https://cwe.mitre.org/data/definitions/346.html"#,
+            },
+            Classification {
+                title: r#"CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/441.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1071,14 +1784,26 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>The potential impact of the vulnerability depends on the application's usage of WebSockets. If the application transmits sensitive data from the user's browser to the WebSocket server, then the attacker may be able to capture this data. If the application reads data from the WebSocket server and performs processing on this data, then the attacker may be able to subvert the application's logic or deliver additional client-side attacks against the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based WebSocket URL poisoning vulnerabilities is not to dynamically set the target URL of a WebSocket connection using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a target of a WebSocket. In general, this is best achieved by using a whitelist of URLs that are permitted WebSocket targets, and strictly validating the target against this list before creating the WebSocket. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: WebSocket URL poisoning (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/websocket-url-poisoning"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based WebSocket URL poisoning vulnerabilities is not to dynamically set the target URL of a WebSocket connection using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a target of a WebSocket. In general, this is best achieved by using a whitelist of URLs that are permitted WebSocket targets, and strictly validating the target against this list before creating the WebSocket. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: WebSocket URL poisoning (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/websocket-url-poisoning"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-345: Insufficient Verification of Data Authenticity"#, url: r#"https://cwe.mitre.org/data/definitions/345.html"# },
-            Classification { title: r#"CWE-346: Origin Validation Error"#, url: r#"https://cwe.mitre.org/data/definitions/346.html"# },
-            Classification { title: r#"CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"#, url: r#"https://cwe.mitre.org/data/definitions/441.html"# },
+            Classification {
+                title: r#"CWE-345: Insufficient Verification of Data Authenticity"#,
+                url: r#"https://cwe.mitre.org/data/definitions/345.html"#,
+            },
+            Classification {
+                title: r#"CWE-346: Origin Validation Error"#,
+                url: r#"https://cwe.mitre.org/data/definitions/346.html"#,
+            },
+            Classification {
+                title: r#"CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/441.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1091,14 +1816,26 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>The potential impact of the vulnerability depends on the application's usage of WebSockets. If the application transmits sensitive data from the user's browser to the WebSocket server, then the attacker may be able to capture this data. If the application reads data from the WebSocket server and performs processing on this data, then the attacker may be able to subvert the application's logic or deliver additional client-side attacks against the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based WebSocket URL poisoning vulnerabilities is not to dynamically set the target URL of a WebSocket connection using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a target of a WebSocket. In general, this is best achieved by using a whitelist of URLs that are permitted WebSocket targets, and strictly validating the target against this list before creating the WebSocket. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: WebSocket URL poisoning (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/websocket-url-poisoning"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based WebSocket URL poisoning vulnerabilities is not to dynamically set the target URL of a WebSocket connection using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a target of a WebSocket. In general, this is best achieved by using a whitelist of URLs that are permitted WebSocket targets, and strictly validating the target against this list before creating the WebSocket. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: WebSocket URL poisoning (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/websocket-url-poisoning"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-345: Insufficient Verification of Data Authenticity"#, url: r#"https://cwe.mitre.org/data/definitions/345.html"# },
-            Classification { title: r#"CWE-346: Origin Validation Error"#, url: r#"https://cwe.mitre.org/data/definitions/346.html"# },
-            Classification { title: r#"CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"#, url: r#"https://cwe.mitre.org/data/definitions/441.html"# },
+            Classification {
+                title: r#"CWE-345: Insufficient Verification of Data Authenticity"#,
+                url: r#"https://cwe.mitre.org/data/definitions/345.html"#,
+            },
+            Classification {
+                title: r#"CWE-346: Origin Validation Error"#,
+                url: r#"https://cwe.mitre.org/data/definitions/346.html"#,
+            },
+            Classification {
+                title: r#"CWE-441: Unintended Proxy or Intermediary ('Confused Deputy')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/441.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1111,14 +1848,26 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Local file path manipulation  arises when a script uses controllable data as the filename parameter to a file handling API. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will cause the user's browser to open an arbitrary local file.</p>
 <p>The potential impact of the vulnerability depends on the application's usage of the opened file. If the application reads data from the file, then the attacker may be able to retrieve this data. If the application writes data to the file, then the attacker may be able to write specific data to a sensitive file, such as an operating system configuration file. In both these cases, the actual exploitability of the potential vulnerability may depend on other suitable functionality being present in the application.</p>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based local file path manipulation vulnerabilities is not to dynamically pass a filename to a file handling API using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from accessing arbitrary files. In general, this is best achieved by using a whitelist of permitted filenames, and strictly validating the filename against this list before invoking the file handling API. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Local file path manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/local-file-path-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based local file path manipulation vulnerabilities is not to dynamically pass a filename to a file handling API using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from accessing arbitrary files. In general, this is best achieved by using a whitelist of permitted filenames, and strictly validating the filename against this list before invoking the file handling API. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Local file path manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/local-file-path-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#, url: r#"https://cwe.mitre.org/data/definitions/22.html"# },
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CAPEC-126: Path Traversal"#, url: r#"https://capec.mitre.org/data/definitions/126.html"# },
+            Classification {
+                title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/22.html"#,
+            },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-126: Path Traversal"#,
+                url: r#"https://capec.mitre.org/data/definitions/126.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1131,14 +1880,26 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Local file path manipulation  arises when a script uses controllable data as the filename parameter to a file handling API. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will cause the user's browser to open an arbitrary local file.</p>
 <p>The potential impact of the vulnerability depends on the application's usage of the opened file. If the application reads data from the file, then the attacker may be able to retrieve this data. If the application writes data to the file, then the attacker may be able to write specific data to a sensitive file, such as an operating system configuration file. In both these cases, the actual exploitability of the potential vulnerability may depend on other suitable functionality being present in the application.</p>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based local file path manipulation vulnerabilities is not to dynamically pass a filename to a file handling API using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from accessing arbitrary files. In general, this is best achieved by using a whitelist of permitted filenames, and strictly validating the filename against this list before invoking the file handling API. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Local file path manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/local-file-path-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based local file path manipulation vulnerabilities is not to dynamically pass a filename to a file handling API using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from accessing arbitrary files. In general, this is best achieved by using a whitelist of permitted filenames, and strictly validating the filename against this list before invoking the file handling API. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Local file path manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/local-file-path-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#, url: r#"https://cwe.mitre.org/data/definitions/22.html"# },
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CAPEC-126: Path Traversal"#, url: r#"https://capec.mitre.org/data/definitions/126.html"# },
+            Classification {
+                title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/22.html"#,
+            },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-126: Path Traversal"#,
+                url: r#"https://capec.mitre.org/data/definitions/126.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1151,14 +1912,26 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>Local file path manipulation  arises when a script uses controllable data as the filename parameter to a file handling API. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will cause the user's browser to open an arbitrary local file.</p>
 <p>The potential impact of the vulnerability depends on the application's usage of the opened file. If the application reads data from the file, then the attacker may be able to retrieve this data. If the application writes data to the file, then the attacker may be able to write specific data to a sensitive file, such as an operating system configuration file. In both these cases, the actual exploitability of the potential vulnerability may depend on other suitable functionality being present in the application.</p>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based local file path manipulation vulnerabilities is not to dynamically pass a filename to a file handling API using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from accessing arbitrary files. In general, this is best achieved by using a whitelist of permitted filenames, and strictly validating the filename against this list before invoking the file handling API. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Local file path manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/local-file-path-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based local file path manipulation vulnerabilities is not to dynamically pass a filename to a file handling API using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from accessing arbitrary files. In general, this is best achieved by using a whitelist of permitted filenames, and strictly validating the filename against this list before invoking the file handling API. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Local file path manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/local-file-path-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#, url: r#"https://cwe.mitre.org/data/definitions/22.html"# },
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CAPEC-126: Path Traversal"#, url: r#"https://capec.mitre.org/data/definitions/126.html"# },
+            Classification {
+                title: r#"CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/22.html"#,
+            },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-126: Path Traversal"#,
+                url: r#"https://capec.mitre.org/data/definitions/126.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1171,15 +1944,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>DOM-based XPath injection  arises when a script incorporates controllable data into an XPath query. An attacker may be able to use this behavior to construct a URL that, if visited by another application user, will cause an arbitrary XPath query to execute, causing different data to be retrieved and processed by the application. Depending on the purpose for which the query results are used, it may be possible to subvert the application's logic, or cause unintended actions on behalf of the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based XPath injection vulnerabilities is not to incorporate into an XPath query any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the XPath query in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the query when it is parsed. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Client-side XPath injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-xpath-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based XPath injection vulnerabilities is not to incorporate into an XPath query any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the XPath query in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the query when it is parsed. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Client-side XPath injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/client-side-xpath-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-83: XPath Injection"#, url: r#"https://capec.mitre.org/data/definitions/83.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-83: XPath Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/83.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1192,15 +1980,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>DOM-based XPath injection  arises when a script incorporates controllable data into an XPath query. An attacker may be able to use this behavior to construct a URL that, if visited by another application user, will cause an arbitrary XPath query to execute, causing different data to be retrieved and processed by the application. Depending on the purpose for which the query results are used, it may be possible to subvert the application's logic, or cause unintended actions on behalf of the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based XPath injection vulnerabilities is not to incorporate into an XPath query any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the XPath query in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the query when it is parsed. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Client-side XPath injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-xpath-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based XPath injection vulnerabilities is not to incorporate into an XPath query any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the XPath query in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the query when it is parsed. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Client-side XPath injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/client-side-xpath-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-83: XPath Injection"#, url: r#"https://capec.mitre.org/data/definitions/83.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-83: XPath Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/83.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1213,15 +2016,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>DOM-based XPath injection  arises when a script incorporates controllable data into an XPath query. An attacker may be able to use this behavior to construct a URL that, if visited by another application user, will cause an arbitrary XPath query to execute, causing different data to be retrieved and processed by the application. Depending on the purpose for which the query results are used, it may be possible to subvert the application's logic, or cause unintended actions on behalf of the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based XPath injection vulnerabilities is not to incorporate into an XPath query any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the XPath query in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the query when it is parsed. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Client-side XPath injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-xpath-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based XPath injection vulnerabilities is not to incorporate into an XPath query any data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the XPath query in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the query when it is parsed. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Client-side XPath injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/client-side-xpath-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-83: XPath Injection"#, url: r#"https://capec.mitre.org/data/definitions/83.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-83: XPath Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/83.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1233,15 +2051,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>DOM-based JSON injection  arises when a script  incorporates controllable data into a string that is parsed as a JSON data structure and then processed by the application. An attacker may be able to use this behavior to construct a URL that, if visited by another application user, will cause arbitrary JSON data to be processed. Depending on the purpose for which this data is used, it may be possible to subvert the application's logic, or cause unintended actions on behalf of the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based JSON injection vulnerabilities is not to parse as JSON any string containing data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the JSON structure in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the JSON when it is parsed.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Client-side JSON injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-json-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based JSON injection vulnerabilities is not to parse as JSON any string containing data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the JSON structure in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the JSON when it is parsed.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Client-side JSON injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/client-side-json-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1253,15 +2086,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>DOM-based JSON injection  arises when a script  incorporates controllable data into a string that is parsed as a JSON data structure and then processed by the application. An attacker may be able to use this behavior to construct a URL that, if visited by another application user, will cause arbitrary JSON data to be processed. Depending on the purpose for which this data is used, it may be possible to subvert the application's logic, or cause unintended actions on behalf of the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based JSON injection vulnerabilities is not to parse as JSON any string containing data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the JSON structure in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the JSON when it is parsed.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Client-side JSON injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-json-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based JSON injection vulnerabilities is not to parse as JSON any string containing data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the JSON structure in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the JSON when it is parsed.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Client-side JSON injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/client-side-json-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1273,15 +2121,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
 <p>DOM-based JSON injection  arises when a script  incorporates controllable data into a string that is parsed as a JSON data structure and then processed by the application. An attacker may be able to use this behavior to construct a URL that, if visited by another application user, will cause arbitrary JSON data to be processed. Depending on the purpose for which this data is used, it may be possible to subvert the application's logic, or cause unintended actions on behalf of the user.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based JSON injection vulnerabilities is not to parse as JSON any string containing data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the JSON structure in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the JSON when it is parsed.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Client-side JSON injection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/client-side-json-injection"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based JSON injection vulnerabilities is not to parse as JSON any string containing data that originated from an untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from modifying the JSON structure in inappropriate ways. This may involve strict validation of specific items to ensure they do not contain any characters that may interfere with the structure of the JSON when it is parsed.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Client-side JSON injection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/client-side-json-injection"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1291,11 +2154,14 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         typical_severity: Severity::High,
         description: r#"<p>The Flash cross-domain policy controls whether Flash client components running on other domains can perform two-way interaction with the domain that publishes the policy. If another domain is allowed by the policy, then that domain can potentially attack users of the application. If a user is logged in to the application, and visits a domain allowed by the policy, then any malicious content running on that domain can potentially gain full access to the application within the security context of the logged in user.</p>
 <p>Even if an allowed domain is not overtly malicious in itself, security vulnerabilities within that domain could potentially be leveraged by a third-party attacker to exploit the trust relationship and attack the application that allows access. Any domains that are allowed by the Flash cross-domain policy should be reviewed to determine whether it is appropriate for the application to fully trust both their intentions and security posture. </p>"#,
-        remediation: Some(r#"<p>Any inappropriate entries in the Flash cross-domain policy file should be removed.</p>"#),
+        remediation: Some(
+            r#"<p>Any inappropriate entries in the Flash cross-domain policy file should be removed.</p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#, url: r#"https://cwe.mitre.org/data/definitions/942.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#,
+            url: r#"https://cwe.mitre.org/data/definitions/942.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098432,
@@ -1304,11 +2170,14 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         typical_severity: Severity::High,
         description: r#"<p>The Silverlight cross-domain policy controls whether Silverlight client components running on other domains can perform two-way interaction with the domain that publishes the policy. If another domain is allowed by the policy, then that domain can potentially attack users of the application. If a user is logged in to the application, and visits a domain allowed by the policy, then any malicious content running on that domain can potentially gain full access to the application within the security context of the logged in user.</p>
 <p>Even if an allowed domain is not overtly malicious in itself, security vulnerabilities within that domain could potentially be leveraged by a third-party attacker to exploit the trust relationship and attack the application that allows access. Any domains that are allowed by the Silverlight cross-domain policy should be reviewed to determine whether it is appropriate for the application to fully trust both their intentions and security posture. </p>"#,
-        remediation: Some(r#"<p>Any inappropriate entries in the Silverlight cross-domain policy file should be removed.</p>"#),
+        remediation: Some(
+            r#"<p>Any inappropriate entries in the Silverlight cross-domain policy file should be removed.</p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#, url: r#"https://cwe.mitre.org/data/definitions/942.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#,
+            url: r#"https://cwe.mitre.org/data/definitions/942.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098435,
@@ -1318,20 +2187,52 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>Content Security Policy (CSP) is a security mechanism designed to mitigate cross-site scripting attacks by disabling dangerous behaviours such as untrusted JavaScript execution.
     Websites can specify their security policy in a response header or meta tag, enabling fine-grained control over dangerous features like scripts and stylesheets.
 </p>"#,
-        remediation: Some(r#"<p>To prevent untrusted JavaScript execution, replace allowlisted resources in script-based directives with a secure, random nonce of at least 8 characters 'nonce-RANDOM'.</p>"#),
+        remediation: Some(
+            r#"<p>To prevent untrusted JavaScript execution, replace allowlisted resources in script-based directives with a secure, random nonce of at least 8 characters 'nonce-RANDOM'.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: What is CSP?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"# },
-            Reference { title: r#"Web Security Academy: What is XSS?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting#what-is-cross-site-scripting-xss"# },
-            Reference { title: r#"Web Security Academy: Mitigating XSS attacks using CSP"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy#mitigating-xss-attacks-using-csp"# },
-            Reference { title: r#"Web Security Academy: Preventing XSS"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/preventing"# },
-            Reference { title: r#"Content Security Policy (CSP)"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"# },
+            Reference {
+                title: r#"Web Security Academy: What is CSP?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: What is XSS?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting#what-is-cross-site-scripting-xss"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Mitigating XSS attacks using CSP"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy#mitigating-xss-attacks-using-csp"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Preventing XSS"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/preventing"#,
+            },
+            Reference {
+                title: r#"Content Security Policy (CSP)"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#, url: r#"https://cwe.mitre.org/data/definitions/80.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-588: DOM-Based XSS"#, url: r#"https://capec.mitre.org/data/definitions/588.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/80.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-588: DOM-Based XSS"#,
+                url: r#"https://capec.mitre.org/data/definitions/588.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1342,23 +2243,55 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>Content Security Policy (CSP) is a security mechanism designed to mitigate cross-site scripting attacks by disabling dangerous behaviours such as untrusted JavaScript execution.
     Websites can specify their security policy in a response header or meta tag, enabling fine-grained control over dangerous features like scripts and stylesheets.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     Mitigate cross-site scripting by avoiding 'unsafe-inline', 'unsafe-eval', data: URLs, and global wildcards in script directives. Use a secure, random
     nonce of at least 8 characters 'nonce-RANDOM' to prevent untrusted JavaScript execution.
-</p>"#),
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: What is CSP?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"# },
-            Reference { title: r#"Web Security Academy: What is XSS?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting#what-is-cross-site-scripting-xss"# },
-            Reference { title: r#"Web Security Academy: Mitigating XSS attacks using CSP"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy#mitigating-xss-attacks-using-csp"# },
-            Reference { title: r#"Web Security Academy: Preventing XSS"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/preventing"# },
-            Reference { title: r#"Content Security Policy (CSP)"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"# },
+            Reference {
+                title: r#"Web Security Academy: What is CSP?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: What is XSS?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting#what-is-cross-site-scripting-xss"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Mitigating XSS attacks using CSP"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy#mitigating-xss-attacks-using-csp"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Preventing XSS"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/preventing"#,
+            },
+            Reference {
+                title: r#"Content Security Policy (CSP)"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#, url: r#"https://cwe.mitre.org/data/definitions/79.html"# },
-            Classification { title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#, url: r#"https://cwe.mitre.org/data/definitions/80.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-588: DOM-Based XSS"#, url: r#"https://capec.mitre.org/data/definitions/588.html"# },
+            Classification {
+                title: r#"CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/79.html"#,
+            },
+            Classification {
+                title: r#"CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/80.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-588: DOM-Based XSS"#,
+                url: r#"https://capec.mitre.org/data/definitions/588.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1369,20 +2302,43 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>Content Security Policy (CSP) is a security mechanism designed to mitigate cross-site scripting attacks by disabling dangerous behaviours such as untrusted JavaScript execution.
     Websites can specify their security policy in a response header or meta tag, enabling fine-grained control over dangerous features like scripts and stylesheets.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     Mitigate style-based data exfiltration by avoiding 'unsafe-inline', data: URLs, and global wildcards in style directives.
     Use a secure, random nonce of at least 8 characters 'nonce-RANDOM' in the relevant directive.
-</p>"#),
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: What is CSP?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"# },
-            Reference { title: r#"PortSwigger Research: Blind CSS exfiltration"#, url: r#"https://portswigger.net/research/blind-css-exfiltration"# },
-            Reference { title: r#"PortSwigger Research: Offensive CSS research"#, url: r#"https://portswigger.net/research/detecting-and-exploiting-path-relative-stylesheet-import-prssi-vulnerabilities#badcss"# },
-            Reference { title: r#"Content Security Policy (CSP)"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"# },
+            Reference {
+                title: r#"Web Security Academy: What is CSP?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"#,
+            },
+            Reference {
+                title: r#"PortSwigger Research: Blind CSS exfiltration"#,
+                url: r#"https://portswigger.net/research/blind-css-exfiltration"#,
+            },
+            Reference {
+                title: r#"PortSwigger Research: Offensive CSS research"#,
+                url: r#"https://portswigger.net/research/detecting-and-exploiting-path-relative-stylesheet-import-prssi-vulnerabilities#badcss"#,
+            },
+            Reference {
+                title: r#"Content Security Policy (CSP)"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-468: Generic Cross-Browser Cross-Domain Theft"#, url: r#"https://capec.mitre.org/data/definitions/468.html"# },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-468: Generic Cross-Browser Cross-Domain Theft"#,
+                url: r#"https://capec.mitre.org/data/definitions/468.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1393,10 +2349,18 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>Content Security Policy (CSP) is a security mechanism designed to mitigate cross-site scripting attacks by disabling dangerous behaviours such as untrusted JavaScript execution.
     Websites can specify their security policy in a response header or meta tag, enabling fine-grained control over dangerous features like scripts and stylesheets.
 </p>"#,
-        remediation: Some(r#"<p>Using malformed syntax in your policy causes the browser to ignore the directive. Ensure that you use the correct syntax in your policy.</p>"#),
+        remediation: Some(
+            r#"<p>Using malformed syntax in your policy causes the browser to ignore the directive. Ensure that you use the correct syntax in your policy.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: What is CSP?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"# },
-            Reference { title: r#"Content Security Policy (CSP)"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"# },
+            Reference {
+                title: r#"Web Security Academy: What is CSP?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"#,
+            },
+            Reference {
+                title: r#"Content Security Policy (CSP)"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"#,
+            },
         ],
         classifications: &[],
     },
@@ -1409,21 +2373,47 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
     Content Security Policy (CSP) is a security mechanism designed to mitigate cross-site scripting attacks by disabling dangerous behaviours such as untrusted JavaScript execution.
     Websites can specify their security policy in a response header or meta tag, enabling fine-grained control over dangerous features like scripts and stylesheets.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     We recommend that you set the frame-ancestors directive to 'none' if you do not want your site to be framed, or 'self' if you want to allow it to frame itself. In addition,
     use the X-Frame-Options header with DENY or SAMEORIGIN, based on your needs.
-</p>"#),
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Clickjacking"#, url: r#"https://portswigger.net/web-security/clickjacking"# },
-            Reference { title: r#"X-Frame-Options"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options"# },
-            Reference { title: r#"Web Security Academy: What is CSP?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"# },
-            Reference { title: r#"Web Security Academy: Protecting against clickjacking using CSP"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy#protecting-against-clickjacking-using-csp"# },
-            Reference { title: r#"Content Security Policy (CSP)"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"# },
+            Reference {
+                title: r#"Web Security Academy: Clickjacking"#,
+                url: r#"https://portswigger.net/web-security/clickjacking"#,
+            },
+            Reference {
+                title: r#"X-Frame-Options"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: What is CSP?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Protecting against clickjacking using CSP"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy#protecting-against-clickjacking-using-csp"#,
+            },
+            Reference {
+                title: r#"Content Security Policy (CSP)"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-693: Protection Mechanism Failure"#, url: r#"https://cwe.mitre.org/data/definitions/693.html"# },
-            Classification { title: r#"CWE-1021: Improper Restriction of Rendered UI Layers or Frames"#, url: r#"https://cwe.mitre.org/data/definitions/1021.html"# },
-            Classification { title: r#"CAPEC-103: Clickjacking"#, url: r#"https://capec.mitre.org/data/definitions/103.html"# },
+            Classification {
+                title: r#"CWE-693: Protection Mechanism Failure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/693.html"#,
+            },
+            Classification {
+                title: r#"CWE-1021: Improper Restriction of Rendered UI Layers or Frames"#,
+                url: r#"https://cwe.mitre.org/data/definitions/1021.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-103: Clickjacking"#,
+                url: r#"https://capec.mitre.org/data/definitions/103.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1434,18 +2424,30 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>Content Security Policy (CSP) is a security mechanism designed to mitigate cross-site scripting attacks by disabling dangerous behaviours such as untrusted JavaScript execution.
     Websites can specify their security policy in a response header or meta tag, enabling fine-grained control over dangerous features like scripts and stylesheets.
 </p>"#,
-        remediation: Some(r#"<p>We recommend using the form-action directive in the CSP response header to control form post destinations. If no form actions are used, set form-action to 'none' to block
+        remediation: Some(
+            r#"<p>We recommend using the form-action directive in the CSP response header to control form post destinations. If no form actions are used, set form-action to 'none' to block
     untrusted forms. For applications without external form URLs, use 'self' to allow only same-origin URLs. If needed, allow list hosts for external URL form submissions, but
     be aware this lets attackers submit to these external resources.
-</p>"#),
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"PortSwigger Research: Stealing passwords from infosec Mastodon - without bypassing CSP"#, url: r#"https://portswigger.net/research/stealing-passwords-from-infosec-mastodon-without-bypassing-csp"# },
-            Reference { title: r#"Web Security Academy: What is CSP?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"# },
-            Reference { title: r#"Content Security Policy (CSP)"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"# },
+            Reference {
+                title: r#"PortSwigger Research: Stealing passwords from infosec Mastodon - without bypassing CSP"#,
+                url: r#"https://portswigger.net/research/stealing-passwords-from-infosec-mastodon-without-bypassing-csp"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: What is CSP?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"#,
+            },
+            Reference {
+                title: r#"Content Security Policy (CSP)"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+            url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098441,
@@ -1455,10 +2457,18 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>Content Security Policy (CSP) is a security mechanism designed to mitigate cross-site scripting attacks by disabling dangerous behaviours such as untrusted JavaScript execution.
     Websites can specify their security policy in a response header or meta tag, enabling fine-grained control over dangerous features like scripts and stylesheets.
 </p>"#,
-        remediation: Some(r#"<p>We recommend transitioning from using the Content-Security-Policy-Report-Only header to the Content-Security-Policy header for CSP deployment, ensuring effective policy enforcement.</p>"#),
+        remediation: Some(
+            r#"<p>We recommend transitioning from using the Content-Security-Policy-Report-Only header to the Content-Security-Policy header for CSP deployment, ensuring effective policy enforcement.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: What is CSP?"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"# },
-            Reference { title: r#"Content Security Policy (CSP)"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"# },
+            Reference {
+                title: r#"Web Security Academy: What is CSP?"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/content-security-policy"#,
+            },
+            Reference {
+                title: r#"Content Security Policy (CSP)"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP"#,
+            },
         ],
         classifications: &[],
     },
@@ -1469,11 +2479,14 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         typical_severity: Severity::Info,
         description: r#"<p>Unlike REST APIs, GraphQL servers operate on a single endpoint. All messages are sent to this endpoint, with the body of the message determining how the server handles the request.</p>
 <p>A publicly-available endpoint does not necessarily present a security vulnerability in and of itself. However, this information can still be valuable to attackers, as by definition any attacks on the GraphQL server will use the endpoint discovered. For example, an attacker could then attempt to run an introspection query against the endpoint, which could reveal the entire GraphQL schema if successful.</p>"#,
-        remediation: Some(r#"<p>Ensure that you have disabled introspection on your GraphQL server when deploying to production. This will prevent attackers from using introspection queries to discover more about the operations available in your API, and other potentially sensitive information such as field descriptions.</p>
-<p>Also, ensure that your GraphQL endpoint is only available over the POST HTTP method. Having your API available over methods such as GET or OPTIONS presents an additional attack surface and can leave the endpoint open to vulnerabilities such as CSRF.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: GraphQL API vulnerabilities"#, url: r#"https://portswigger.net/web-security/graphql"# },
-        ],
+        remediation: Some(
+            r#"<p>Ensure that you have disabled introspection on your GraphQL server when deploying to production. This will prevent attackers from using introspection queries to discover more about the operations available in your API, and other potentially sensitive information such as field descriptions.</p>
+<p>Also, ensure that your GraphQL endpoint is only available over the POST HTTP method. Having your API available over methods such as GET or OPTIONS presents an additional attack surface and can leave the endpoint open to vulnerabilities such as CSRF.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: GraphQL API vulnerabilities"#,
+            url: r#"https://portswigger.net/web-security/graphql"#,
+        }],
         classifications: &[],
     },
     IssueDefinition {
@@ -1483,11 +2496,14 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         typical_severity: Severity::Info,
         description: r#"<p>Unlike REST APIs, GraphQL servers operate on a single endpoint. All messages are sent to this endpoint, with the body of the message determining how the server handles the request.</p>
 <p>A publicly-available endpoint does not necessarily present a security vulnerability in and of itself. However, this information can still be valuable to attackers, as by definition any attacks on the GraphQL server will use the endpoint discovered. For example, an attacker could then attempt to run an introspection query against the endpoint, which could reveal the entire GraphQL schema if successful.</p>"#,
-        remediation: Some(r#"<p>Ensure that you have disabled introspection on your GraphQL server when deploying to production. This will prevent attackers from using introspection queries to discover more about the operations available in your API, and other potentially sensitive information such as field descriptions.</p>
-<p>Also, ensure that your GraphQL endpoint is only available over the POST HTTP method. Having your API available over methods such as GET or OPTIONS presents an additional attack surface and can leave the endpoint open to vulnerabilities such as CSRF.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: GraphQL API vulnerabilities"#, url: r#"https://portswigger.net/web-security/graphql"# },
-        ],
+        remediation: Some(
+            r#"<p>Ensure that you have disabled introspection on your GraphQL server when deploying to production. This will prevent attackers from using introspection queries to discover more about the operations available in your API, and other potentially sensitive information such as field descriptions.</p>
+<p>Also, ensure that your GraphQL endpoint is only available over the POST HTTP method. Having your API available over methods such as GET or OPTIONS presents an additional attack surface and can leave the endpoint open to vulnerabilities such as CSRF.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: GraphQL API vulnerabilities"#,
+            url: r#"https://portswigger.net/web-security/graphql"#,
+        }],
         classifications: &[],
     },
     IssueDefinition {
@@ -1497,14 +2513,23 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         typical_severity: Severity::Low,
         description: r#"<p>Introspection uses built-in queries to return information on a GraphQL schema itself. Like regular GraphQL queries, introspection queries are highly customizable, enabling users to specify the content and data shape of the response.</p>
 <p>GraphQL introspection can represent a significant security risk when enabled in production, as it enables attackers to see what operations are available to them within the API, as well as other potentially sensitive information such as type descriptions and private fields.</p>"#,
-        remediation: Some(r#"<p>Ensure that you have disabled introspection on your GraphQL server. Consult your server documentation if you are unsure how to do this.</p>"#),
+        remediation: Some(
+            r#"<p>Ensure that you have disabled introspection on your GraphQL server. Consult your server documentation if you are unsure how to do this.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"GraphQL Introspection"#, url: r#"https://graphql.org/learn/introspection/"# },
-            Reference { title: r#"Web Security Academy: GraphQL API vulnerabilities"#, url: r#"https://portswigger.net/web-security/graphql"# },
+            Reference {
+                title: r#"GraphQL Introspection"#,
+                url: r#"https://graphql.org/learn/introspection/"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: GraphQL API vulnerabilities"#,
+                url: r#"https://portswigger.net/web-security/graphql"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098451,
@@ -1513,15 +2538,27 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         typical_severity: Severity::Low,
         description: r#"<p>GraphQL suggestions are an Apollo feature in which the server is configured to respond to invalid queries with suggestions for valid queries that have a similar syntax.</p>
 <p>Suggestions can represent a significant security risk, as they enable attackers to glean information about a GraphQL schema even if introspection is disabled. By sending intentionally invalid queries and collating suggestions in responses, attackers can learn the names and structures of valid queries and mutations.</p>"#,
-        remediation: Some(r#"<p>Ensure that you have disabled or otherwise masked error messages containing suggestions on your GraphQL server.</p>"#),
+        remediation: Some(
+            r#"<p>Ensure that you have disabled or otherwise masked error messages containing suggestions on your GraphQL server.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Disabling Apollo suggestions"#, url: r#"https://github.com/apollographql/apollo-server/issues/3919"# },
-            Reference { title: r#"Clairvoyance: A tool to gather information from suggestions"#, url: r#"https://github.com/nikitastupin/clairvoyance"# },
-            Reference { title: r#"Web Security Academy: GraphQL API vulnerabilities"#, url: r#"https://portswigger.net/web-security/graphql"# },
+            Reference {
+                title: r#"Disabling Apollo suggestions"#,
+                url: r#"https://github.com/apollographql/apollo-server/issues/3919"#,
+            },
+            Reference {
+                title: r#"Clairvoyance: A tool to gather information from suggestions"#,
+                url: r#"https://github.com/nikitastupin/clairvoyance"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: GraphQL API vulnerabilities"#,
+                url: r#"https://portswigger.net/web-security/graphql"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098452,
@@ -1531,14 +2568,28 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>Cross-site request forgery (CSRF) vulnerabilities enable an attacker to induce users to perform actions that they do not intend to perform. This is done by creating a malicious website that forges a cross-domain request to the vulnerable application.</p>
 <p>Cross-site request forgery (CSRF) vulnerabilities in a GraphQL endpoint can arise when the content type is not validated. POST requests using a content-type of application/json are secure against forgery as long as the content type is validated, as an attacker wouldn't be able to make the victim's browser send this request.</p>
 <p>However, alternative methods such as GET, or any request that has a content-type of x-www-form-urlencoded, can be sent by a browser and so may leave users vulnerable to attack. Where this is the case, attackers may be able to craft exploits that use a valid CSRF token from a previous request to send malicious requests to the API.</p>"#,
-        remediation: Some(r#"<p>Ensure that your GraphQL endpoint validates the content type. If the content type cannot be validated, ensure a valid CSRF token is required.</p>"#),
+        remediation: Some(
+            r#"<p>Ensure that your GraphQL endpoint validates the content type. If the content type cannot be validated, ensure a valid CSRF token is required.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: GraphQL API vulnerabilities"#, url: r#"https://portswigger.net/web-security/graphql"# },
-            Reference { title: r#"Web Security Academy: Cross-site request forgery"#, url: r#"https://portswigger.net/web-security/csrf"# },
+            Reference {
+                title: r#"Web Security Academy: GraphQL API vulnerabilities"#,
+                url: r#"https://portswigger.net/web-security/graphql"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Cross-site request forgery"#,
+                url: r#"https://portswigger.net/web-security/csrf"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-352: Cross-Site Request Forgery"#, url: r#"https://cwe.mitre.org/data/definitions/352.html"# },
-            Classification { title: r#"CAPEC-62: Cross-Site Request Forgery"#, url: r#"https://capec.mitre.org/data/definitions/62.html"# },
+            Classification {
+                title: r#"CWE-352: Cross-Site Request Forgery"#,
+                url: r#"https://cwe.mitre.org/data/definitions/352.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-62: Cross-Site Request Forgery"#,
+                url: r#"https://capec.mitre.org/data/definitions/62.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1548,14 +2599,23 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         typical_severity: Severity::Info,
         description: r#"<p>An HTML5 cross-origin resource sharing (CORS) policy controls whether and how content running on other domains can perform two-way interaction with the domain that publishes the policy. The policy is fine-grained and can apply access controls per-request based on the URL and other features of the request.</p><p>If another domain is allowed by the policy, then that domain can potentially attack users of the application. If a user is logged in to the application, and visits a domain allowed by the policy, then any malicious content running on that domain can potentially retrieve content from the application, and sometimes carry out actions within the security context of the logged in user.</p>
 <p>Even if an allowed domain is not overtly malicious in itself, security vulnerabilities within that domain could potentially be leveraged by an attacker to exploit the trust relationship and attack the application that allows access. CORS policies on pages containing sensitive information should be reviewed to determine whether it is appropriate for the application to trust both the intentions and security posture of any domains granted access.</p>"#,
-        remediation: Some(r#"<p>Any inappropriate domains should be removed from the CORS policy.</p>"#),
+        remediation: Some(
+            r#"<p>Any inappropriate domains should be removed from the CORS policy.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-origin resource sharing (CORS)"#, url: r#"https://portswigger.net/web-security/cors"# },
-            Reference { title: r#"Exploiting CORS Misconfigurations"#, url: r#"https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-origin resource sharing (CORS)"#,
+                url: r#"https://portswigger.net/web-security/cors"#,
+            },
+            Reference {
+                title: r#"Exploiting CORS Misconfigurations"#,
+                url: r#"https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#, url: r#"https://cwe.mitre.org/data/definitions/942.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#,
+            url: r#"https://cwe.mitre.org/data/definitions/942.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098689,
@@ -1565,14 +2625,23 @@ replaced with the corresponding HTML entities (&amp;lt; &amp;gt; etc).</li></ul>
         description: r#"<p>An HTML5 cross-origin resource sharing (CORS) policy controls whether and how content running on other domains can perform two-way interaction with the domain that publishes the policy. The policy is fine-grained and can apply access controls per-request based on the URL and other features of the request.</p><p>
 Trusting arbitrary origins effectively disables the same-origin policy, allowing two-way interaction by third-party web sites. Unless the response consists only of unprotected public content, this policy is likely to present a security risk.</p>
 <p>If the site  specifies the header Access-Control-Allow-Credentials: true, third-party sites may be able to carry out privileged actions and retrieve sensitive information. Even if it does not, attackers may be able to  bypass any IP-based access controls by proxying through users'  browsers.</p>"#,
-        remediation: Some(r#"<p>Rather than using a wildcard or programmatically verifying supplied origins, use a whitelist of trusted domains.</p>"#),
+        remediation: Some(
+            r#"<p>Rather than using a wildcard or programmatically verifying supplied origins, use a whitelist of trusted domains.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-origin resource sharing (CORS)"#, url: r#"https://portswigger.net/web-security/cors"# },
-            Reference { title: r#"Exploiting CORS Misconfigurations"#, url: r#"https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-origin resource sharing (CORS)"#,
+                url: r#"https://portswigger.net/web-security/cors"#,
+            },
+            Reference {
+                title: r#"Exploiting CORS Misconfigurations"#,
+                url: r#"https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#, url: r#"https://cwe.mitre.org/data/definitions/942.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#,
+            url: r#"https://cwe.mitre.org/data/definitions/942.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098690,
@@ -1583,12 +2652,19 @@ Trusting arbitrary origins effectively disables the same-origin policy, allowing
 <p>If a site allows interaction from an origin that uses unencrypted HTTP communications, then it is vulnerable to an attacker who is in a position to view and modify a user's unencrypted network traffic. The attacker can control the responses from unencrypted origins, thereby injecting content that is able to interact with the application that publishes the policy. This means that the application is effectively extending trust to all such attackers, thereby undoing much of the benefit of using HTTPS communications. </p>"#,
         remediation: Some(r#"<p>Only trust origins that use encrypted HTTPS communications.</p>"#),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-origin resource sharing (CORS)"#, url: r#"https://portswigger.net/web-security/cors"# },
-            Reference { title: r#"Exploiting CORS Misconfigurations"#, url: r#"https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-origin resource sharing (CORS)"#,
+                url: r#"https://portswigger.net/web-security/cors"#,
+            },
+            Reference {
+                title: r#"Exploiting CORS Misconfigurations"#,
+                url: r#"https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#, url: r#"https://cwe.mitre.org/data/definitions/942.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#,
+            url: r#"https://cwe.mitre.org/data/definitions/942.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098691,
@@ -1597,14 +2673,23 @@ Trusting arbitrary origins effectively disables the same-origin policy, allowing
         typical_severity: Severity::Low,
         description: r#"<p>An HTML5 cross-origin resource sharing (CORS) policy controls whether and how content running on other domains can perform two-way interaction with the domain that publishes the policy. The policy is fine-grained and can apply access controls per-request based on the URL and other features of the request.</p>
 <p>If an application allows interaction from all subdomains, then this significantly increases its attack surface. For example, a cross-site scripting (XSS) vulnerability in any subdomain could potentially compromise the application that publishes the policy. Some consumer ISPs return custom content when requests are made to unregistered subdomains, which can introduce XSS vulnerabilities even if all of an organization's own applications are secure.</p>"#,
-        remediation: Some(r#"<p>Rather than trusting all subdomains,  use a whitelisted of trusted subdomains.</p>"#),
+        remediation: Some(
+            r#"<p>Rather than trusting all subdomains,  use a whitelisted of trusted subdomains.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-origin resource sharing (CORS)"#, url: r#"https://portswigger.net/web-security/cors"# },
-            Reference { title: r#"Exploiting CORS Misconfigurations"#, url: r#"https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-origin resource sharing (CORS)"#,
+                url: r#"https://portswigger.net/web-security/cors"#,
+            },
+            Reference {
+                title: r#"Exploiting CORS Misconfigurations"#,
+                url: r#"https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#, url: r#"https://cwe.mitre.org/data/definitions/942.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-942: Overly Permissive Cross-domain Whitelist"#,
+            url: r#"https://cwe.mitre.org/data/definitions/942.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2098768,
@@ -1616,14 +2701,16 @@ This vulnerability is often exploited by attackers adding fake static file exten
 When users click on these modified links, the caching system erroneously identifies the request as for a static resource and caches the response, making the user's sensitive information public.
 If subsequent unauthorized users make a request to the same URL then they will be served the cached page, potentially exposing the sensitive information repeatedly.
 The distributed nature of web caches means that even a single web cache deception attack can have far-reaching effects, extending the potential for sensitive data exposure across various users and sessions.</p>"#,
-        remediation: Some(r#"<p>To mitigate the risk of web cache deception vulnerabilities, web administrators should:</p>
+        remediation: Some(
+            r#"<p>To mitigate the risk of web cache deception vulnerabilities, web administrators should:</p>
 <ul>
     <li>Clearly specify which content should be cached. This involves setting up clear caching rules within your application.</li>
     <li>Implement strong cache management by using Cache-Control headers. For dynamic content, use settings like no-cache to prevent it from being stored.</li>
     <li>Implement strong URL parameters validation, blocking any unexpected file extensions or paths that could be exploited.</li>
     <li>Regularly review your cache configuration and audit the content it contains. This can help you identify and address any potential issues quickly.</li>
     <li>Treat all content as non-cacheable unless it has been explicitly approved for caching. This approach helps minimize the risk of inadvertently caching sensitive information.</li>
-</ul>"#),
+</ul>"#,
+        ),
         references: &[],
         classifications: &[],
     },
@@ -1637,16 +2724,33 @@ The distributed nature of web caches means that even a single web cache deceptio
 <li>The request can be issued cross-domain, for example using an HTML form. If the request contains non-standard headers or body content, then it may only be issuable from a page that originated on the same domain.</li>
 <li>The application relies solely on HTTP cookies or Basic Authentication to identify the user that issued the request. If the application places session-related tokens elsewhere within the request, then it may not be vulnerable.</li>
 <li>The request performs some privileged action within the application, which modifies the application's state based on the identity of the issuing user.</li><li>The attacker can determine all the parameters required to construct a request that performs the action. If the request contains any values that the attacker cannot determine or predict, then it is not vulnerable.</li></ul>"#,
-        remediation: Some(r#"<p>The most effective way to protect against CSRF vulnerabilities is to include within relevant requests an additional token that is not transmitted in a cookie: for example, a parameter in a hidden form field. This additional token should contain sufficient entropy, and be generated using a cryptographic random number generator, such that it is not feasible for an attacker to determine or predict the value of any token that was issued to another user. The token should be associated with the user's session, and the application should validate that the correct token is received before performing any action resulting from the request.</p>
-<p>An alternative approach, which may be easier to implement, is to validate that Host and Referer headers in relevant requests are both present and contain the same domain name. However, this approach is somewhat less robust: historically, quirks in browsers and plugins have often enabled attackers to forge cross-domain requests that manipulate these headers to bypass such defenses. </p>"#),
+        remediation: Some(
+            r#"<p>The most effective way to protect against CSRF vulnerabilities is to include within relevant requests an additional token that is not transmitted in a cookie: for example, a parameter in a hidden form field. This additional token should contain sufficient entropy, and be generated using a cryptographic random number generator, such that it is not feasible for an attacker to determine or predict the value of any token that was issued to another user. The token should be associated with the user's session, and the application should validate that the correct token is received before performing any action resulting from the request.</p>
+<p>An alternative approach, which may be easier to implement, is to validate that Host and Referer headers in relevant requests are both present and contain the same domain name. However, this approach is somewhat less robust: historically, quirks in browsers and plugins have often enabled attackers to forge cross-domain requests that manipulate these headers to bypass such defenses. </p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-site request forgery"#, url: r#"https://portswigger.net/web-security/csrf"# },
-            Reference { title: r#"Using Burp to Test for Cross-Site Request Forgery"#, url: r#"https://support.portswigger.net/customer/portal/articles/1965674-using-burp-to-test-for-cross-site-request-forgery-csrf-"# },
-            Reference { title: r#"The Deputies Are Still Confused"#, url: r#"https://media.blackhat.com/eu-13/briefings/Lundeen/bh-eu-13-deputies-still-confused-lundeen-wp.pdf"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-site request forgery"#,
+                url: r#"https://portswigger.net/web-security/csrf"#,
+            },
+            Reference {
+                title: r#"Using Burp to Test for Cross-Site Request Forgery"#,
+                url: r#"https://support.portswigger.net/customer/portal/articles/1965674-using-burp-to-test-for-cross-site-request-forgery-csrf-"#,
+            },
+            Reference {
+                title: r#"The Deputies Are Still Confused"#,
+                url: r#"https://media.blackhat.com/eu-13/briefings/Lundeen/bh-eu-13-deputies-still-confused-lundeen-wp.pdf"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-352: Cross-Site Request Forgery (CSRF)"#, url: r#"https://cwe.mitre.org/data/definitions/352.html"# },
-            Classification { title: r#"CAPEC-62: Cross Site Request Forgery"#, url: r#"https://capec.mitre.org/data/definitions/62.html"# },
+            Classification {
+                title: r#"CWE-352: Cross-Site Request Forgery (CSRF)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/352.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-62: Cross Site Request Forgery"#,
+                url: r#"https://capec.mitre.org/data/definitions/62.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1659,16 +2763,28 @@ The distributed nature of web caches means that even a single web cache deceptio
 <p>
 This issue is particularly serious if the email contains sensitive information not intended for the attacker, such as a password reset token.
 </p>"#,
-        remediation: Some(r#"<p>Validate that user input conforms to a whitelist of safe characters before placing it into email headers. In particular, input containing newlines and carriage returns should be rejected.
+        remediation: Some(
+            r#"<p>Validate that user input conforms to a whitelist of safe characters before placing it into email headers. In particular, input containing newlines and carriage returns should be rejected.
 Alternatively, consider switching to an email library that automatically prevents such attacks.
-</p>"#),
-        references: &[
-            Reference { title: r#"Burp Collaborator"#, url: r#"https://portswigger.net/blog/introducing-burp-collaborator"# },
-        ],
+</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Burp Collaborator"#,
+            url: r#"https://portswigger.net/blog/introducing-burp-collaborator"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-93: Improper Neutralization of CRLF Sequences ('CRLF Injection')"#, url: r#"https://cwe.mitre.org/data/definitions/93.html"# },
-            Classification { title: r#"CWE-159: Failure to Sanitize Special Element"#, url: r#"https://cwe.mitre.org/data/definitions/159.html"# },
-            Classification { title: r#"CAPEC-183: IMAP/SMTP Command Injection"#, url: r#"https://capec.mitre.org/data/definitions/183.html"# },
+            Classification {
+                title: r#"CWE-93: Improper Neutralization of CRLF Sequences ('CRLF Injection')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/93.html"#,
+            },
+            Classification {
+                title: r#"CWE-159: Failure to Sanitize Special Element"#,
+                url: r#"https://cwe.mitre.org/data/definitions/159.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-183: IMAP/SMTP Command Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/183.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1690,13 +2806,21 @@ Alternatively, consider switching to an email library that automatically prevent
   Although this is a reliable detection method, it is not bulletproof. When this issue is reported, we recommend manually checking that the difference in responses was
   indeed caused by the different JWT permutations.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
   Ensure that the signature of the JWT is properly verified for all supported algorithms.
-</p>"#),
+</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-345: Insufficient Verification of Data Authenticity"#, url: r#"https://cwe.mitre.org/data/definitions/345.html"# },
-            Classification { title: r#"CWE-347: Improper Verification of Cryptographic Signature"#, url: r#"https://cwe.mitre.org/data/definitions/347.html"# },
+            Classification {
+                title: r#"CWE-345: Insufficient Verification of Data Authenticity"#,
+                url: r#"https://cwe.mitre.org/data/definitions/345.html"#,
+            },
+            Classification {
+                title: r#"CWE-347: Improper Verification of Cryptographic Signature"#,
+                url: r#"https://cwe.mitre.org/data/definitions/347.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1719,15 +2843,18 @@ Alternatively, consider switching to an email library that automatically prevent
   If it does, they could exploit this vulnerability by supplying an arbitrary claim in the JWT payload to escalate their privileges or impersonate other users.
   For example, if the token contains a "username": "joe" claim, they could change this to  "username": "admin".
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
   Ensure that unsecured JWTs are rejected by the server and only cryptographically strong algorithms are accepted and verified.
   Even if the application does not directly use unsecured JWTs, it's important to make sure that the "alg": "none" header parameter is
   restricted by the underlying JWT parsing library.
-</p>"#),
+</p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-345: Insufficient Verification of Data Authenticity"#, url: r#"https://cwe.mitre.org/data/definitions/345.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-345: Insufficient Verification of Data Authenticity"#,
+            url: r#"https://cwe.mitre.org/data/definitions/345.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 2099458,
@@ -1754,7 +2881,8 @@ Alternatively, consider switching to an email library that automatically prevent
   If it does, they could exploit this vulnerability by supplying an arbitrary claim in the JWT payload to escalate their privileges
   or impersonate other users. For example, if the token contains a "username": "joe" claim, they could change this to  "username": "admin".
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
   Configure the server so that it does not implicitly trust the "jwk" header parameter.
   If this is present, the server should verify it against the whitelist of trusted values if possible.
 </p>
@@ -1762,7 +2890,8 @@ Alternatively, consider switching to an email library that automatically prevent
 <p>
   We recommend that you only use verification keys obtained from trusted sources, rather than from data that can be modified client-side.
   Even if the application does not directly use the "jwk" header, it's important to make sure that it is restricted by the underlying JWT parsing library.
-</p>"#),
+</p>"#,
+        ),
         references: &[],
         classifications: &[],
     },
@@ -1788,9 +2917,11 @@ Alternatively, consider switching to an email library that automatically prevent
   They could then exploit this vulnerability by supplying an arbitrary claim in the JWT payload to escalate their privileges or impersonate other users.
   For example, if the token contains a "username": "joe" claim, they could change this to  "username": "admin".
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
   Ensure that a strong, unpredictable secret is used for calculating the HMAC signature on the server. We recommend using a randomly generated value at least 32 bytes in length.
-</p>"#),
+</p>"#,
+        ),
         references: &[],
         classifications: &[],
     },
@@ -1818,7 +2949,8 @@ Alternatively, consider switching to an email library that automatically prevent
   If it does, they could exploit this vulnerability by supplying an arbitrary claim in the JWT payload to escalate their privileges or impersonate other users.
   For example, if the token contains a "username": "joe" claim, they could change this to  "username": "admin".
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
   Configure the server so that it does not implicitly trust the "jku" header parameter.
   If this is present, the server should verify it against the whitelist of trusted values if possible.
 </p>
@@ -1826,7 +2958,8 @@ Alternatively, consider switching to an email library that automatically prevent
 <p>
   We recommend that you only use verification keys obtained from trusted sources, rather than from data that can be modified client-side.
   Even if the application does not directly use the "jku" header, it's important to make sure that it is restricted by the underlying JWT parsing library.
-</p>"#),
+</p>"#,
+        ),
         references: &[],
         classifications: &[],
     },
@@ -1855,7 +2988,8 @@ Alternatively, consider switching to an email library that automatically prevent
   If it does, they could exploit this vulnerability by supplying an arbitrary claim in the JWT payload to escalate their privileges or impersonate other users.
   For example, if the token contains a "username": "joe" claim, they could change this to  "username": "admin".
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
   Configure the server so that it does not implicitly trust the "x5u" header parameter.
   If this is present, the server should verify it against the whitelist of trusted values if possible.
 </p>
@@ -1863,7 +2997,8 @@ Alternatively, consider switching to an email library that automatically prevent
 <p>
   We recommend that you only use verification keys obtained from trusted sources, rather than from data that can be modified client-side.
   Even if the application does not directly use the "x5u" header, it's important to make sure that it is restricted by the underlying JWT parsing library.
-</p>"#),
+</p>"#,
+        ),
         references: &[],
         classifications: &[],
     },
@@ -1874,11 +3009,19 @@ Alternatively, consider switching to an email library that automatically prevent
         typical_severity: Severity::High,
         description: r#"<p>Some applications transmit passwords over unencrypted connections, making them vulnerable to interception. To exploit this vulnerability, an attacker must be suitably positioned to eavesdrop on the victim's network traffic. This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure.</p>
 <p>Vulnerabilities that result in the disclosure of users' passwords can result in compromises that are extremely difficult to investigate due to obscured audit trails. Even if the application itself only handles non-sensitive information, exposing passwords puts users who have re-used their password elsewhere at risk.</p>"#,
-        remediation: Some(r#"<p>Applications should use transport-level encryption (SSL or TLS) to protect all sensitive communications passing between the client and the server. Communications that should be protected include the login mechanism and related functionality, and any functions where sensitive data can be accessed or privileged actions can be performed. These areas should employ their own session handling mechanism, and the session tokens used should never be transmitted over unencrypted communications. If HTTP cookies are used for transmitting session tokens, then the secure flag should be set to prevent transmission over clear-text HTTP.</p>"#),
+        remediation: Some(
+            r#"<p>Applications should use transport-level encryption (SSL or TLS) to protect all sensitive communications passing between the client and the server. Communications that should be protected include the login mechanism and related functionality, and any functions where sensitive data can be accessed or privileged actions can be performed. These areas should employ their own session handling mechanism, and the session tokens used should never be transmitted over unencrypted communications. If HTTP cookies are used for transmitting session tokens, then the secure flag should be set to prevent transmission over clear-text HTTP.</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-319: Cleartext Transmission of Sensitive Information"#, url: r#"https://cwe.mitre.org/data/definitions/319.html"# },
-            Classification { title: r#"CAPEC-117: Interception"#, url: r#"https://capec.mitre.org/data/definitions/117.html"# },
+            Classification {
+                title: r#"CWE-319: Cleartext Transmission of Sensitive Information"#,
+                url: r#"https://cwe.mitre.org/data/definitions/319.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-117: Interception"#,
+                url: r#"https://capec.mitre.org/data/definitions/117.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1889,21 +3032,38 @@ Alternatively, consider switching to an email library that automatically prevent
         description: r#"<p>The ability to induce an application to interact with an arbitrary external service, such as a web or mail server, does not constitute a vulnerability in its own right. This might even be the intended behavior of the application. However, in some cases, it can indicate a vulnerability with serious consequences.</p>
 <p>If you can trigger DNS-based interactions, it is normally possible to trigger interactions using other service types. Burp Scanner reports these as separate issues. You may find that a payload, such as a URL, only triggers a DNS-based interaction, even though you were expecting interactions with a different service as well. This could be due to egress filters on the network layer that prevent the application from connecting to these other services. However, some systems perform DNS lookups without any intention of connecting to the remote host. This behavior is typically harmless.</p>
 <p>The ability to send requests to other systems can allow the vulnerable server to be used as an attack proxy. By submitting suitable payloads, an attacker can cause the application server to attack other systems that it can interact with. This may include public third-party systems, internal systems within the same organization, or services available on the local loopback adapter of the application server itself. Depending on the network architecture, this may expose highly vulnerable internal services that are not otherwise accessible to external attackers.</p>"#,
-        remediation: Some(r#"<p>You should review the purpose and intended use of the relevant application functionality, 
+        remediation: Some(
+            r#"<p>You should review the purpose and intended use of the relevant application functionality, 
   and determine whether the ability to trigger arbitrary external service interactions is intended behavior. 
   If so, you should be aware of the types of attacks that can be performed via this behavior and take appropriate measures. 
   These measures might include blocking network access from the application server to other internal systems, and hardening the application server itself to remove any services available on the local loopback adapter.</p>
 <p>If the ability to trigger arbitrary external service interactions is not intended behavior, then you should implement a whitelist of permitted services and hosts, and block any interactions that do not appear on this whitelist.</p>
 
-<p>Out-of-Band Application Security Testing (OAST) is highly effective at uncovering high-risk features, to the point where finding the root cause of an interaction can be quite challenging. To find the source of an external service interaction, try to identify whether it is triggered by specific application functionality, or occurs indiscriminately on all requests. If it occurs on all endpoints, a front-end CDN or application firewall may be responsible, or a back-end analytics system parsing server logs. In some cases, interactions may originate from third-party systems; for example, a HTTP request may trigger a poisoned email which passes through a link-scanner on its way to the recipient.</p>"#),
+<p>Out-of-Band Application Security Testing (OAST) is highly effective at uncovering high-risk features, to the point where finding the root cause of an interaction can be quite challenging. To find the source of an external service interaction, try to identify whether it is triggered by specific application functionality, or occurs indiscriminately on all requests. If it occurs on all endpoints, a front-end CDN or application firewall may be responsible, or a back-end analytics system parsing server logs. In some cases, interactions may originate from third-party systems; for example, a HTTP request may trigger a poisoned email which passes through a link-scanner on its way to the recipient.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Burp Collaborator"#, url: r#"https://portswigger.net/blog/introducing-burp-collaborator"# },
-            Reference { title: r#"Out-of-band application security testing (OAST)"#, url: r#"https://portswigger.net/burp/application-security-testing/oast"# },
-            Reference { title: r#"PortSwigger Research: Cracking the Lens"#, url: r#"https://portswigger.net/research/cracking-the-lens-targeting-https-hidden-attack-surface"# },
+            Reference {
+                title: r#"Burp Collaborator"#,
+                url: r#"https://portswigger.net/blog/introducing-burp-collaborator"#,
+            },
+            Reference {
+                title: r#"Out-of-band application security testing (OAST)"#,
+                url: r#"https://portswigger.net/burp/application-security-testing/oast"#,
+            },
+            Reference {
+                title: r#"PortSwigger Research: Cracking the Lens"#,
+                url: r#"https://portswigger.net/research/cracking-the-lens-targeting-https-hidden-attack-surface"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-918: Server-Side Request Forgery (SSRF)"#, url: r#"https://cwe.mitre.org/data/definitions/918.html"# },
-            Classification { title: r#"CWE-406: Insufficient Control of Network Message Volume (Network Amplification)"#, url: r#"https://cwe.mitre.org/data/definitions/406.html"# },
+            Classification {
+                title: r#"CWE-918: Server-Side Request Forgery (SSRF)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/918.html"#,
+            },
+            Classification {
+                title: r#"CWE-406: Insufficient Control of Network Message Volume (Network Amplification)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/406.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1917,21 +3077,38 @@ However, in many cases, it can indicate a vulnerability with serious consequence
   By submitting suitable payloads, an attacker can cause the application server to attack other systems that it can interact with. 
   This may include public third-party systems, internal systems within the same organization, or services available on the local loopback adapter of the application server itself. 
   Depending on the network architecture, this may expose highly vulnerable internal services that are not otherwise accessible to external attackers. </p>"#,
-        remediation: Some(r#"<p>You should review the purpose and intended use of the relevant application functionality, 
+        remediation: Some(
+            r#"<p>You should review the purpose and intended use of the relevant application functionality, 
   and determine whether the ability to trigger arbitrary external service interactions is intended behavior. 
   If so, you should be aware of the types of attacks that can be performed via this behavior and take appropriate measures. 
   These measures might include blocking network access from the application server to other internal systems, and hardening the application server itself to remove any services available on the local loopback adapter.</p>
 <p>If the ability to trigger arbitrary external service interactions is not intended behavior, then you should implement a whitelist of permitted services and hosts, and block any interactions that do not appear on this whitelist.</p>
 
-<p>Out-of-Band Application Security Testing (OAST) is highly effective at uncovering high-risk features, to the point where finding the root cause of an interaction can be quite challenging. To find the source of an external service interaction, try to identify whether it is triggered by specific application functionality, or occurs indiscriminately on all requests. If it occurs on all endpoints, a front-end CDN or application firewall may be responsible, or a back-end analytics system parsing server logs. In some cases, interactions may originate from third-party systems; for example, a HTTP request may trigger a poisoned email which passes through a link-scanner on its way to the recipient.</p>"#),
+<p>Out-of-Band Application Security Testing (OAST) is highly effective at uncovering high-risk features, to the point where finding the root cause of an interaction can be quite challenging. To find the source of an external service interaction, try to identify whether it is triggered by specific application functionality, or occurs indiscriminately on all requests. If it occurs on all endpoints, a front-end CDN or application firewall may be responsible, or a back-end analytics system parsing server logs. In some cases, interactions may originate from third-party systems; for example, a HTTP request may trigger a poisoned email which passes through a link-scanner on its way to the recipient.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Burp Collaborator"#, url: r#"https://portswigger.net/blog/introducing-burp-collaborator"# },
-            Reference { title: r#"Out-of-band application security testing (OAST)"#, url: r#"https://portswigger.net/burp/application-security-testing/oast"# },
-            Reference { title: r#"PortSwigger Research: Cracking the Lens"#, url: r#"https://portswigger.net/research/cracking-the-lens-targeting-https-hidden-attack-surface"# },
+            Reference {
+                title: r#"Burp Collaborator"#,
+                url: r#"https://portswigger.net/blog/introducing-burp-collaborator"#,
+            },
+            Reference {
+                title: r#"Out-of-band application security testing (OAST)"#,
+                url: r#"https://portswigger.net/burp/application-security-testing/oast"#,
+            },
+            Reference {
+                title: r#"PortSwigger Research: Cracking the Lens"#,
+                url: r#"https://portswigger.net/research/cracking-the-lens-targeting-https-hidden-attack-surface"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-918: Server-Side Request Forgery (SSRF)"#, url: r#"https://cwe.mitre.org/data/definitions/918.html"# },
-            Classification { title: r#"CWE-406: Insufficient Control of Network Message Volume (Network Amplification)"#, url: r#"https://cwe.mitre.org/data/definitions/406.html"# },
+            Classification {
+                title: r#"CWE-918: Server-Side Request Forgery (SSRF)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/918.html"#,
+            },
+            Classification {
+                title: r#"CWE-406: Insufficient Control of Network Message Volume (Network Amplification)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/406.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1946,18 +3123,32 @@ However, in many cases, it can indicate a vulnerability with serious consequence
   This may include public third-party systems, internal systems within the same organization, or services available on the local loopback adapter of the application server itself. 
   Depending on the network architecture, this may expose highly vulnerable internal services that are not otherwise accessible to external attackers. </p>
 <p>The facility to generate an email to an arbitrary address is often intended application behavior. But this is not necessarily the case, particulary in cases where the destination address is not explicitly entered on-screen by the user.</p>"#,
-        remediation: Some(r#"<p>You should review the purpose and intended use of the relevant application functionality, 
+        remediation: Some(
+            r#"<p>You should review the purpose and intended use of the relevant application functionality, 
   and determine whether the ability to trigger arbitrary external service interactions is intended behavior. 
   If so, you should be aware of the types of attacks that can be performed via this behavior and take appropriate measures. 
   These measures might include blocking network access from the application server to other internal systems, and hardening the application server itself to remove any services available on the local loopback adapter.</p>
-<p>If the ability to trigger arbitrary external service interactions is not intended behavior, then you should implement a whitelist of permitted services and hosts, and block any interactions that do not appear on this whitelist.</p>"#),
+<p>If the ability to trigger arbitrary external service interactions is not intended behavior, then you should implement a whitelist of permitted services and hosts, and block any interactions that do not appear on this whitelist.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Burp Collaborator"#, url: r#"https://portswigger.net/blog/introducing-burp-collaborator"# },
-            Reference { title: r#"Out-of-band application security testing (OAST)"#, url: r#"https://portswigger.net/burp/application-security-testing/oast"# },
+            Reference {
+                title: r#"Burp Collaborator"#,
+                url: r#"https://portswigger.net/blog/introducing-burp-collaborator"#,
+            },
+            Reference {
+                title: r#"Out-of-band application security testing (OAST)"#,
+                url: r#"https://portswigger.net/burp/application-security-testing/oast"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CWE-406: Insufficient Control of Network Message Volume (Network Amplification)"#, url: r#"https://cwe.mitre.org/data/definitions/406.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CWE-406: Insufficient Control of Network Message Volume (Network Amplification)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/406.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1969,12 +3160,20 @@ However, in many cases, it can indicate a vulnerability with serious consequence
 <p>Common explanations for Referer-dependent responses include: </p>
 <ul><li>Referer-based access controls, where the application assumes that if you have arrived from one privileged location then you are authorized to access another privileged location. These controls can be trivially defeated by supplying an accepted Referer header in requests for the vulnerable function.</li><li>Attempts to prevent cross-site request forgery attacks by verifying that requests to perform privileged actions originated from within the application itself and not from some external location. Such defenses are often not robust, and can be bypassed by removing the Referer header entirely.</li>
 <li>Delivery of Referer-tailored content, such as welcome messages to visitors from specific domains, search-engine optimization (SEO) techniques, and other ways of tailoring the user's experience. Such behaviors often have no security impact; however, unsafe processing of the Referer header may introduce vulnerabilities such as SQL injection and cross-site scripting. If parts of the document (such as META keywords) are updated based on search engine queries contained in the Referer header, then the application may be vulnerable to persistent code injection attacks, in which search terms are manipulated to cause malicious content to appear in responses served to other application users.</li></ul>"#,
-        remediation: Some(r#"<p>The Referer header is not a robust foundation on which to build access controls. Any such measures should be replaced with more secure alternatives that are not vulnerable to Referer spoofing.</p>
-<p>If the contents of responses is updated based on Referer data, then the same defenses against malicious input should be employed here as for any other kinds of user-supplied data. </p>"#),
+        remediation: Some(
+            r#"<p>The Referer header is not a robust foundation on which to build access controls. Any such measures should be replaced with more secure alternatives that are not vulnerable to Referer spoofing.</p>
+<p>If the contents of responses is updated based on Referer data, then the same defenses against malicious input should be employed here as for any other kinds of user-supplied data. </p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CWE-213: Intentional Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/213.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CWE-213: Intentional Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/213.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -1985,12 +3184,15 @@ However, in many cases, it can indicate a vulnerability with serious consequence
         description: r#"<p>
 If an application trusts an HTTP request header like X-Forwarded-For to accurately specify the remote IP address of the connecting client, then malicious clients can spoof their IP address. This behavior does not necessarily constitute a security vulnerability, however some applications use client IP addresses to enforce access controls and rate limits. For example, an application might expose administrative functionality only to clients connecting from the local IP address of the server, or allow a certain number of failed login attempts from each unique IP address.
 Consider reviewing relevant functionality to determine whether this might be the case. </p>"#,
-        remediation: Some(r#"<p>HTTP request headers such as X-Forwarded-For, True-Client-IP, and X-Real-IP are not a robust foundation on which to build any security measures, such as access controls. Any such measures should be replaced with more secure alternatives that are not vulnerable to spoofing.</p>
-<p>If the platform application server returns incorrect information about the client's IP address due to the presence of any particular HTTP request header, then the server may need to be reconfigured, or an alternative method of identifying clients should be used. </p>"#),
+        remediation: Some(
+            r#"<p>HTTP request headers such as X-Forwarded-For, True-Client-IP, and X-Real-IP are not a robust foundation on which to build any security measures, such as access controls. Any such measures should be replaced with more secure alternatives that are not vulnerable to spoofing.</p>
+<p>If the platform application server returns incorrect information about the client's IP address due to the presence of any particular HTTP request header, then the server may need to be reconfigured, or an alternative method of identifying clients should be used. </p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-16: Configuration"#,
+            url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 4194592,
@@ -2002,9 +3204,10 @@ Consider reviewing relevant functionality to determine whether this might be the
 <p>To review the interface provided by the alternate User-Agent header, you can configure a match/replace rule in Burp Proxy to modify the User-Agent header in all requests, and then browse the application in the normal way using your normal browser. </p>"#,
         remediation: None,
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-16: Configuration"#,
+            url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 4194816,
@@ -2013,13 +3216,22 @@ Consider reviewing relevant functionality to determine whether this might be the
         typical_severity: Severity::Medium,
         description: r#"<p>Some applications return passwords submitted to the application in clear form in later responses. This behavior increases the risk that users' passwords will be captured by an attacker. Many types of vulnerability, such as weaknesses in session handling, broken access controls, and cross-site scripting, could enable an attacker to leverage this behavior to retrieve the passwords of other application users. This possibility typically exacerbates the impact of those other vulnerabilities, and in some situations can enable an attacker to quickly compromise the entire application.</p>
 <p>Vulnerabilities that result in the disclosure of users' passwords can result in compromises that are extremely difficult to investigate due to obscured audit trails. Even if the application itself only handles non-sensitive information, exposing passwords puts users who have re-used their password elsewhere at risk.</p>"#,
-        remediation: Some(r#"<p>There is usually no good reason for an application to return users' passwords in its responses. If user impersonation is a business requirement this would be better implemented as a custom function with associated logging.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        remediation: Some(
+            r#"<p>There is usually no good reason for an application to return users' passwords in its responses. If user impersonation is a business requirement this would be better implemented as a custom function with associated logging.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-204: Response Discrepancy Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/204.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-204: Response Discrepancy Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/204.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2029,12 +3241,20 @@ Consider reviewing relevant functionality to determine whether this might be the
         typical_severity: Severity::Low,
         description: r#"<p>Some applications use the GET method to submit passwords, which are transmitted within the query string of the requested URL. Sensitive information within URLs may be logged in various locations, including the user's browser, the web server, and any forward or reverse proxy servers between the two endpoints. URLs may also be displayed on-screen, bookmarked or emailed around by users. They may be disclosed to third parties via the Referer header when any off-site links are followed. Placing passwords into the URL increases the risk that they will be captured by an attacker.</p>
 <p>Vulnerabilities that result in the disclosure of users' passwords can result in compromises that are extremely difficult to investigate due to obscured audit trails. Even if the application itself only handles non-sensitive information, exposing passwords puts users who have re-used their password elsewhere at risk.</p>"#,
-        remediation: Some(r#"<p>All forms submitting passwords should use the POST method. To achieve this, applications should specify the method attribute of the FORM tag as <b>method="POST"</b>. It may also be necessary to modify the corresponding server-side form handler to ensure that submitted passwords are properly retrieved from the message body, rather than the URL.
-</p>"#),
+        remediation: Some(
+            r#"<p>All forms submitting passwords should use the POST method. To achieve this, applications should specify the method attribute of the FORM tag as <b>method="POST"</b>. It may also be necessary to modify the corresponding server-side form handler to ensure that submitted passwords are properly retrieved from the message body, rather than the URL.
+</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-598: Information Exposure Through Query Strings in GET Request"#, url: r#"https://cwe.mitre.org/data/definitions/598.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-598: Information Exposure Through Query Strings in GET Request"#,
+                url: r#"https://cwe.mitre.org/data/definitions/598.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2044,13 +3264,22 @@ Consider reviewing relevant functionality to determine whether this might be the
         typical_severity: Severity::Low,
         description: r#"<p>The application responds to login submissions with a link containing the user's password within the URL query string. Sensitive information within URLs may be logged in various locations, including the user's browser, the web server, and any forward or reverse proxy servers between the two endpoints. URLs may also be displayed on-screen, bookmarked or emailed around by users. They may be disclosed to third parties via the Referer header when any off-site links are followed. Placing passwords into the URL increases the risk that they will be captured by an attacker.</p>
 <p>Vulnerabilities that result in the disclosure of users' passwords can result in compromises that are extremely difficult to investigate due to obscured audit trails. Even if the application itself only handles non-sensitive information, exposing passwords puts users who have re-used their password elsewhere at risk.</p>"#,
-        remediation: Some(r#"<p>The application should never transmit any sensitive information within the URL query string. There is no good reason for a login mechanism to echo passwords back to the user, and the mechanism should be modified to remove this behavior.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        remediation: Some(
+            r#"<p>The application should never transmit any sensitive information within the URL query string. There is no good reason for a login mechanism to echo passwords back to the user, and the mechanism should be modified to remove this behavior.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-598: Information Exposure Through Query Strings in GET Request"#, url: r#"https://cwe.mitre.org/data/definitions/598.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-598: Information Exposure Through Query Strings in GET Request"#,
+                url: r#"https://cwe.mitre.org/data/definitions/598.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2060,15 +3289,32 @@ Consider reviewing relevant functionality to determine whether this might be the
         typical_severity: Severity::Medium,
         description: r#"<p>HTTP requests sometimes contain SQL syntax. If this is incorporated into a SQL query and executed by the server, then the application is almost certainly vulnerable to SQL injection.</p>
 <p>When SQL-like syntax is observed, you should verify whether the request contains a genuine SQL query and whether this is being executed by the server. </p>"#,
-        remediation: Some(r#"<p>Applications should not incorporate any user-controllable data directly into SQL queries. Parameterized queries (also known as prepared statements) should be used to safely insert data into predefined queries. In no circumstances should users be able to control or modify the structure of the SQL query itself.</p>"#),
+        remediation: Some(
+            r#"<p>Applications should not incorporate any user-controllable data directly into SQL queries. Parameterized queries (also known as prepared statements) should be used to safely insert data into predefined queries. In no circumstances should users be able to control or modify the structure of the SQL query itself.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: SQL injection"#, url: r#"https://portswigger.net/web-security/sql-injection"# },
-            Reference { title: r#"Using Burp to Test for Injection Flaws"#, url: r#"https://support.portswigger.net/customer/portal/articles/1965677-using-burp-to-test-for-injection-flaws"# },
-            Reference { title: r#"Web Security Academy: SQL Injection Cheat Sheet"#, url: r#"https://portswigger.net/web-security/sql-injection/cheat-sheet"# },
+            Reference {
+                title: r#"Web Security Academy: SQL injection"#,
+                url: r#"https://portswigger.net/web-security/sql-injection"#,
+            },
+            Reference {
+                title: r#"Using Burp to Test for Injection Flaws"#,
+                url: r#"https://support.portswigger.net/customer/portal/articles/1965677-using-burp-to-test-for-injection-flaws"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: SQL Injection Cheat Sheet"#,
+                url: r#"https://portswigger.net/web-security/sql-injection/cheat-sheet"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-598: Information Exposure Through Query Strings in GET Request"#, url: r#"https://cwe.mitre.org/data/definitions/598.html"# },
-            Classification { title: r#"CAPEC-66: SQL Injection"#, url: r#"https://capec.mitre.org/data/definitions/66.html"# },
+            Classification {
+                title: r#"CWE-598: Information Exposure Through Query Strings in GET Request"#,
+                url: r#"https://cwe.mitre.org/data/definitions/598.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-66: SQL Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/66.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2079,9 +3325,10 @@ Consider reviewing relevant functionality to determine whether this might be the
         description: r#"<p>Applications sometimes use POST requests to transfer sensitive information from one domain to another. This does not necessarily constitute a security vulnerability, but it creates a trust relationship between the two domains. Data transmitted between domains should be reviewed to determine whether the originating application should be trusting the receiving domain with this information.</p>"#,
         remediation: None,
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-16: Configuration"#,
+            url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 4195840,
@@ -2091,14 +3338,28 @@ Consider reviewing relevant functionality to determine whether this might be the
         description: r#"<p>The ViewState is a mechanism built in to the ASP.NET platform for persisting elements of the user interface and other data across successive requests. The data to be persisted is serialized by the server and transmitted via a hidden form field. When it is posted back to the server, the ViewState parameter is deserialized and the data is retrieved.</p>
 <p>By default, the serialized value is signed by the server to prevent tampering by the user; however, this behavior can be disabled by setting the Page.EnableViewStateMac property to false. If this is done, then an attacker can modify the contents of the ViewState and cause arbitrary data to be deserialized and processed by the server. An attacker may be able to execute arbitrary code on the server by supplying a gadget chain. Also, if the ViewState contains any items that are critical to the server's processing of the request, then this may result in a direct security exposure.</p>
 <p>You should try to identify a valid gadget chain to take control of the server and, failing that, review the contents of the ViewState to determine whether it contains any critical items that can be manipulated to attack the application. </p>"#,
-        remediation: Some(r#"<p>There is no good reason to disable the default ASP.NET behavior in which the ViewState is signed to prevent tampering. To ensure that this occurs, you should set the Page.EnableViewStateMac property to true on any pages where the ViewState is not currently signed.</p>"#),
+        remediation: Some(
+            r#"<p>There is no good reason to disable the default ASP.NET behavior in which the ViewState is signed to prevent tampering. To ensure that this occurs, you should set the Page.EnableViewStateMac property to true on any pages where the ViewState is not currently signed.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Exploiting Deserialisation in ASP.NET via ViewState"#, url: r#"https://soroush.secproject.com/blog/2019/04/exploiting-deserialisation-in-asp-net-via-viewstate/"# },
-            Reference { title: r#"Web Security Academy: Insecure deserialization"#, url: r#"https://portswigger.net/web-security/deserialization"# },
+            Reference {
+                title: r#"Exploiting Deserialisation in ASP.NET via ViewState"#,
+                url: r#"https://soroush.secproject.com/blog/2019/04/exploiting-deserialisation-in-asp-net-via-viewstate/"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Insecure deserialization"#,
+                url: r#"https://portswigger.net/web-security/deserialization"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-642: External Control of Critical State Data"#, url: r#"https://cwe.mitre.org/data/definitions/642.html"# },
-            Classification { title: r#"CAPEC-586: Object Injection"#, url: r#"https://capec.mitre.org/data/definitions/586.html"# },
+            Classification {
+                title: r#"CWE-642: External Control of Critical State Data"#,
+                url: r#"https://cwe.mitre.org/data/definitions/642.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-586: Object Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/586.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2109,14 +3370,23 @@ Consider reviewing relevant functionality to determine whether this might be the
         description: r#"<p>XML entity expansion vulnerabilities arise because the XML specification allows XML documents to define entities that reference other entities defined within the document. If this is done recursively to a significant depth, then the XML parser will consume exponentially increasing amounts of memory and processor resources as each level of recursion is processed. This might result in a denial-of-service condition, causing the entire application to stop functioning.</p>
 <p><b>Note:</b> To avoid causing an actual denial-of-service, Burp Suite merely verifies that entities are being recursively expanded to a modest depth. It is possible that reported applications are not actually vulnerable because they are designed to prevent entity expansion beyond a given depth.
 </p>"#,
-        remediation: Some(r#"<p>XML entity expansion makes use of the DOCTYPE tag to define the injected entities. XML parsers can usually be configured to disable support for this tag. You should consult the documentation for your XML parsing library to determine how to disable this feature.</p>
-<p>It may also be possible to use input validation to block input containing a DOCTYPE tag. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: XXE injection"#, url: r#"https://portswigger.net/web-security/xxe"# },
-        ],
+        remediation: Some(
+            r#"<p>XML entity expansion makes use of the DOCTYPE tag to define the injected entities. XML parsers can usually be configured to disable support for this tag. You should consult the documentation for your XML parsing library to determine how to disable this feature.</p>
+<p>It may also be possible to use input validation to block input containing a DOCTYPE tag. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: XXE injection"#,
+            url: r#"https://portswigger.net/web-security/xxe"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-776: Improper Restriction of Recursive Entity References in DTDs ('XML Entity Expansion')"#, url: r#"https://cwe.mitre.org/data/definitions/776.html"# },
-            Classification { title: r#"CAPEC-197: XML Entity Expansion"#, url: r#"https://capec.mitre.org/data/definitions/197.html"# },
+            Classification {
+                title: r#"CWE-776: Improper Restriction of Recursive Entity References in DTDs ('XML Entity Expansion')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/776.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-197: XML Entity Expansion"#,
+                url: r#"https://capec.mitre.org/data/definitions/197.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2127,13 +3397,22 @@ Consider reviewing relevant functionality to determine whether this might be the
         description: r#"<p>The application returned a redirection response containing a "long" message body. Ordinarily, this content is not displayed to the user, because the browser automatically follows the redirection.</p>
 <p>Occasionally, redirection responses contain sensitive data. For example, if the user requests a page that they are not authorized to view, then an application might issue a redirection to a different page, but also include the contents of the prohibited page.</p>
 <p>You should review the contents of the response to determine whether it contains anything sensitive. </p>"#,
-        remediation: Some(r#"<p>In cases where the application handles requests for unauthorized content by redirecting to a different URL, the application should ensure that no sensitive content is included within the redirection response. Depending on the application and the platform, this might involve checking for proper authorization earlier in the request handling logic, or using a different API to perform the redirection.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        remediation: Some(
+            r#"<p>In cases where the application handles requests for unauthorized content by redirecting to a different URL, the application should ensure that no sensitive content is included within the redirection response. Depending on the application and the platform, this might involve checking for proper authorization earlier in the request handling logic, or using a different API to perform the redirection.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-698: Execution After Redirect (EAR)"#, url: r#"https://cwe.mitre.org/data/definitions/698.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-698: Execution After Redirect (EAR)"#,
+                url: r#"https://cwe.mitre.org/data/definitions/698.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2145,13 +3424,22 @@ Consider reviewing relevant functionality to determine whether this might be the
 <ul>
 <li>Any sensitive data contained within the object can be viewed by the user.</li><li>An attacker may be able to interfere with server-side logic by tampering with the contents of the object and re-serializing it.</li><li>An attacker may be able to cause unauthorized code execution on the server, by controlling the server-side function that is invoked when the object is processed.</li></ul>
 <p>Actual exploitation of any code execution vulnerabilities arising from the application's use of serialized objects will typically require the attacker to have access to the source code of the server-side application. This may mitigate the practical impact of this issue in many situations. However, it is still highly recommended to fix the underlying vulnerability. Vulnerabilities in native deserialization functions often allow practical exploitation without source code access.</p>"#,
-        remediation: Some(r#"<p>The best way to avoid vulnerabilities that arise from the use of serialized objects is not to pass these in request parameters, or expose them in any other way to the client. Generally, it is possible to transmit application data in plain non-serialized form, and handle it with the same precautions that apply to all client-submitted data. If it is considered unavoidable to place serialized objects into request parameters, then it may be possible to prevent attacks by also placing a server-generated cryptographic signature of the object into the same request, and validating the signature before performing deserialization or other processing on the object.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Insecure deserialization"#, url: r#"https://portswigger.net/web-security/deserialization"# },
-        ],
+        remediation: Some(
+            r#"<p>The best way to avoid vulnerabilities that arise from the use of serialized objects is not to pass these in request parameters, or expose them in any other way to the client. Generally, it is possible to transmit application data in plain non-serialized form, and handle it with the same precautions that apply to all client-submitted data. If it is considered unavoidable to place serialized objects into request parameters, then it may be possible to prevent attacks by also placing a server-generated cryptographic signature of the object into the same request, and validating the signature before performing deserialization or other processing on the object.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Insecure deserialization"#,
+            url: r#"https://portswigger.net/web-security/deserialization"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-502: Deserialization of Untrusted Data"#, url: r#"https://cwe.mitre.org/data/definitions/502.html"# },
-            Classification { title: r#"CAPEC-586: Object Injection"#, url: r#"https://capec.mitre.org/data/definitions/586.html"# },
+            Classification {
+                title: r#"CWE-502: Deserialization of Untrusted Data"#,
+                url: r#"https://cwe.mitre.org/data/definitions/502.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-586: Object Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/586.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2162,9 +3450,10 @@ Consider reviewing relevant functionality to determine whether this might be the
         description: r#"<p>The response contains two or more Set-Cookie headers that attempt to set the same cookie to different values. Browsers will only accept one of these values, typically the value in the last header. The presence of the duplicate headers may indicate a programming error.</p>"#,
         remediation: None,
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-16: Configuration"#,
+            url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 4197120,
@@ -2177,8 +3466,14 @@ Consider reviewing relevant functionality to determine whether this might be the
         remediation: None,
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2190,8 +3485,14 @@ Consider reviewing relevant functionality to determine whether this might be the
         remediation: None,
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2201,13 +3502,22 @@ Consider reviewing relevant functionality to determine whether this might be the
         typical_severity: Severity::Info,
         description: r#"<p>Suspicious input transformation arises when an application receives user input, transforms it in some way, and then performs further processing on the result. The types of transformations that can lead to problems include decoding common formats, such as UTF-8 and URL-encoding, or processing of escape sequences, such as backslash escaping. </p>
 <p>Performing these input transformations does not constitute a vulnerability in its own right, but might lead to problems in conjunction with other application behaviors. An attacker might be able to bypass input filters by suitably encoding their payloads, if the input is decoded after the input filters have been applied. Or an attacker might be able to interfere with other data that is concatenated onto their input, by finishing their input with the start of a multi-character encoding or escape sequence, the transformation of which will consume the start of the following data.</p>"#,
-        remediation: Some(r#"<p>Review the transformation that is being applied, to understand whether this is intended and desirable behavior given the nature of the application functionality, and whether it gives rise to any vulnerabilities in relation to  bypassing of input filters or character consumption.</p>"#),
-        references: &[
-            Reference { title: r#"Backslash Powered Scanning: Hunting Unknown Vulnerability Classes"#, url: r#"https://portswigger.net/research/backslash-powered-scanning-hunting-unknown-vulnerability-classes"# },
-        ],
+        remediation: Some(
+            r#"<p>Review the transformation that is being applied, to understand whether this is intended and desirable behavior given the nature of the application functionality, and whether it gives rise to any vulnerabilities in relation to  bypassing of input filters or character consumption.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Backslash Powered Scanning: Hunting Unknown Vulnerability Classes"#,
+            url: r#"https://portswigger.net/research/backslash-powered-scanning-hunting-unknown-vulnerability-classes"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2219,13 +3529,22 @@ Consider reviewing relevant functionality to determine whether this might be the
 <p>Performing these input transformations does not constitute a vulnerability in its own right, but might lead to problems in conjunction with other application behaviors. An attacker might be able to bypass input filters by suitably encoding their payloads, if the input is decoded after the input filters have been applied. Or an attacker might be able to interfere with other data that is concatenated onto their input, by finishing their input with the start of a multi-character encoding or escape sequence, the transformation of which will consume the start of the following data.</p>
 
 <p>Stored suspicious input transformation arises when the transformed input is stored and later embedded into the application's responses.</p>"#,
-        remediation: Some(r#"<p>Review the transformation that is being applied, to understand whether this is intended and desirable behavior given the nature of the application functionality, and whether it gives rise to any vulnerabilities in relation to  bypassing of input filters or character consumption.</p>"#),
-        references: &[
-            Reference { title: r#"Backslash Powered Scanning: Hunting Unknown Vulnerability Classes"#, url: r#"https://portswigger.net/research/backslash-powered-scanning-hunting-unknown-vulnerability-classes"# },
-        ],
+        remediation: Some(
+            r#"<p>Review the transformation that is being applied, to understand whether this is intended and desirable behavior given the nature of the application functionality, and whether it gives rise to any vulnerabilities in relation to  bypassing of input filters or character consumption.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Backslash Powered Scanning: Hunting Unknown Vulnerability Classes"#,
+            url: r#"https://portswigger.net/research/backslash-powered-scanning-hunting-unknown-vulnerability-classes"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2236,17 +3555,34 @@ Consider reviewing relevant functionality to determine whether this might be the
         description: r#"<p>Some applications and frameworks support HTTP headers that can be used to override parts of the request URL, potentially affecting the routing and processing of the request.</p>
 <p>Intermediate systems are often oblivious to these headers. In the case of reverse proxies and web application firewalls, this can lead to security rulesets being bypassed. If a caching system is in place, this may enable cache poisoning attacks. These headers may also enable forging of log entries. </p>
 <p>Even if the application is intended to be accessed directly, some visitors may be using a corporate proxy enabling localised cache poisoning. </p>"#,
-        remediation: Some(r#"<p>To fully resolve this issue, locate the component that processes the affected headers, and disable it entirely.
+        remediation: Some(
+            r#"<p>To fully resolve this issue, locate the component that processes the affected headers, and disable it entirely.
 If you are using a framework, applying any pending security updates may do this for you.</p>
-<p>If this isn't practical, an alternative workaround is to configure an intermediate system to automatically strip the affected headers before they are processed.</p>"#),
+<p>If this isn't practical, an alternative workaround is to configure an intermediate system to automatically strip the affected headers before they are processed.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: HTTP Host header attacks"#, url: r#"https://portswigger.net/web-security/host-header"# },
-            Reference { title: r#"Web Security Academy: Web cache poisoning"#, url: r#"https://portswigger.net/web-security/web-cache-poisoning"# },
-            Reference { title: r#"Practical Web Cache Poisoning"#, url: r#"https://portswigger.net/blog/practical-web-cache-poisoning"# },
+            Reference {
+                title: r#"Web Security Academy: HTTP Host header attacks"#,
+                url: r#"https://portswigger.net/web-security/host-header"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Web cache poisoning"#,
+                url: r#"https://portswigger.net/web-security/web-cache-poisoning"#,
+            },
+            Reference {
+                title: r#"Practical Web Cache Poisoning"#,
+                url: r#"https://portswigger.net/blog/practical-web-cache-poisoning"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-436: Interpretation Conflict"#, url: r#"https://cwe.mitre.org/data/definitions/436.html"# },
-            Classification { title: r#"CAPEC-141: Cache Poisoning"#, url: r#"https://capec.mitre.org/data/definitions/141.html"# },
+            Classification {
+                title: r#"CWE-436: Interpretation Conflict"#,
+                url: r#"https://cwe.mitre.org/data/definitions/436.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-141: Cache Poisoning"#,
+                url: r#"https://capec.mitre.org/data/definitions/141.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2264,11 +3600,19 @@ Common JavaScript libraries typically enjoy the benefit of being heavily audited
 <p>
 Some library vulnerabilities expose every application that imports the library, but others only affect applications that use certain library features. Accurately identifying which library vulnerabilities apply to your website can be difficult, so we recommend applying all available security updates regardless.
 </p>"#,
-        remediation: Some(r#"<p>Develop a patch-management strategy to ensure that security updates are promptly applied to all third-party libraries in your application. Also, consider reducing your attack surface by removing any libraries that are no longer in use.</p>"#),
+        remediation: Some(
+            r#"<p>Develop a patch-management strategy to ensure that security updates are promptly applied to all third-party libraries in your application. Also, consider reducing your attack surface by removing any libraries that are no longer in use.</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-1104: Use of Unmaintained Third Party Components"#, url: r#"https://cwe.mitre.org/data/definitions/1104.html"# },
-            Classification { title: r#"A9: Using Components with Known Vulnerabilities"#, url: r#"https://owasp.org/www-project-top-ten/2017/A9_2017-Using_Components_with_Known_Vulnerabilities"# },
+            Classification {
+                title: r#"CWE-1104: Use of Unmaintained Third Party Components"#,
+                url: r#"https://cwe.mitre.org/data/definitions/1104.html"#,
+            },
+            Classification {
+                title: r#"A9: Using Components with Known Vulnerabilities"#,
+                url: r#"https://owasp.org/www-project-top-ten/2017/A9_2017-Using_Components_with_Known_Vulnerabilities"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2277,7 +3621,8 @@ Some library vulnerabilities expose every application that imports the library, 
         name: r#"Open redirection (reflected)"#,
         typical_severity: Severity::Low,
         description: r#"<p>Open redirection vulnerabilities arise when an application incorporates user-controllable data into the target of a redirection in an unsafe way. An attacker can construct a URL within the application that causes a redirection to an arbitrary external domain. This behavior can be leveraged to facilitate phishing attacks against users of the application. The ability to use an authentic application URL, targeting the correct domain and with a valid SSL certificate (if SSL is used), lends credibility to the phishing attack because many users, even if they verify these features, will not notice the subsequent redirection to a different domain.</p>"#,
-        remediation: Some(r#"<p>If possible, applications should avoid incorporating user-controllable data into redirection targets. In many cases, this behavior can be avoided in two ways:</p>
+        remediation: Some(
+            r#"<p>If possible, applications should avoid incorporating user-controllable data into redirection targets. In many cases, this behavior can be avoided in two ways:</p>
 <ul>
   <li>Remove the redirection function from the application, and replace links to it with direct links to the relevant target URLs.</li>
   <li>Maintain a server-side list of all URLs that are permitted for redirection. Instead of passing the target URL as a parameter to the redirector, pass an index into this list.</li>
@@ -2287,14 +3632,22 @@ Some library vulnerabilities expose every application that imports the library, 
   <li>The application should use relative URLs in all of its redirects, and the redirection function should strictly validate that the URL received is a relative URL.</li>
   <li>The application should use URLs relative to the web root for all of its redirects, and the redirection function should validate that the URL received starts with a slash character. It should then prepend http://yourdomainname.com to the URL before issuing the redirect.</li>
   <li>The application should use absolute URLs for all of its redirects, and the redirection function should verify that the user-supplied URL begins with http://yourdomainname.com/ before issuing the redirect.</li>
-</ul>"#),
+</ul>"#,
+        ),
         references: &[
-            Reference { title: r#"Using Burp to Test for Open Redirections"#, url: r#"https://support.portswigger.net/customer/portal/articles/1965733-Methodology_Testing%20for%20Open%20Redirections.html"# },
-            Reference { title: r#"Fun With Redirects"#, url: r#"https://www.owasp.org/images/b/b9/OWASP_Appsec_Research_2010_Redirects_XSLJ_by_Sirdarckcat_and_Thornmaker.pdf"# },
+            Reference {
+                title: r#"Using Burp to Test for Open Redirections"#,
+                url: r#"https://support.portswigger.net/customer/portal/articles/1965733-Methodology_Testing%20for%20Open%20Redirections.html"#,
+            },
+            Reference {
+                title: r#"Fun With Redirects"#,
+                url: r#"https://www.owasp.org/images/b/b9/OWASP_Appsec_Research_2010_Redirects_XSLJ_by_Sirdarckcat_and_Thornmaker.pdf"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#, url: r#"https://cwe.mitre.org/data/definitions/601.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#,
+            url: r#"https://cwe.mitre.org/data/definitions/601.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5243137,
@@ -2302,7 +3655,8 @@ Some library vulnerabilities expose every application that imports the library, 
         name: r#"Open redirection (stored)"#,
         typical_severity: Severity::Medium,
         description: r#"<p>Open redirection vulnerabilities arise when an application incorporates user-controllable data into the target of a redirection in an unsafe way. An attacker can construct a URL within the application that causes a redirection to an arbitrary external domain. This behavior can be leveraged to facilitate phishing attacks against users of the application. The ability to use an authentic application URL, targeting the correct domain and with a valid SSL certificate (if SSL is used), lends credibility to the phishing attack because many users, even if they verify these features, will not notice the subsequent redirection to a different domain.</p>"#,
-        remediation: Some(r#"<p>If possible, applications should avoid incorporating user-controllable data into redirection targets. In many cases, this behavior can be avoided in two ways:</p>
+        remediation: Some(
+            r#"<p>If possible, applications should avoid incorporating user-controllable data into redirection targets. In many cases, this behavior can be avoided in two ways:</p>
 <ul>
   <li>Remove the redirection function from the application, and replace links to it with direct links to the relevant target URLs.</li>
   <li>Maintain a server-side list of all URLs that are permitted for redirection. Instead of passing the target URL as a parameter to the redirector, pass an index into this list.</li>
@@ -2314,14 +3668,22 @@ Some library vulnerabilities expose every application that imports the library, 
   <li>The application should use absolute URLs for all of its redirects, and the redirection function should verify that the user-supplied URL begins with http://yourdomainname.com/ before issuing the redirect.</li>
 </ul>
 
-<p>Stored open redirection vulnerabilities arise when the applicable input was submitted in an previous request and stored by the application. This is often more serious than reflected open redirection because an attacker might be able to place persistent input into the application which, when viewed by other users, causes their browser to invisibly redirect to a domain of the attacker's choice.</p>"#),
+<p>Stored open redirection vulnerabilities arise when the applicable input was submitted in an previous request and stored by the application. This is often more serious than reflected open redirection because an attacker might be able to place persistent input into the application which, when viewed by other users, causes their browser to invisibly redirect to a domain of the attacker's choice.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Using Burp to Test for Open Redirections"#, url: r#"https://support.portswigger.net/customer/portal/articles/1965733-Methodology_Testing%20for%20Open%20Redirections.html"# },
-            Reference { title: r#"Fun With Redirects"#, url: r#"https://www.owasp.org/images/b/b9/OWASP_Appsec_Research_2010_Redirects_XSLJ_by_Sirdarckcat_and_Thornmaker.pdf"# },
+            Reference {
+                title: r#"Using Burp to Test for Open Redirections"#,
+                url: r#"https://support.portswigger.net/customer/portal/articles/1965733-Methodology_Testing%20for%20Open%20Redirections.html"#,
+            },
+            Reference {
+                title: r#"Fun With Redirects"#,
+                url: r#"https://www.owasp.org/images/b/b9/OWASP_Appsec_Research_2010_Redirects_XSLJ_by_Sirdarckcat_and_Thornmaker.pdf"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#, url: r#"https://cwe.mitre.org/data/definitions/601.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#,
+            url: r#"https://cwe.mitre.org/data/definitions/601.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5243152,
@@ -2334,13 +3696,17 @@ Some library vulnerabilities expose every application that imports the library, 
 <p><b>Note:</b> If an attacker is able to control the start of the string that is passed to the redirection API, then it may be possible to escalate this vulnerability into a JavaScript injection attack, by using a URL with the javascript: pseudo-protocol to execute arbitrary script code when the URL is processed by the browser.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based open redirection vulnerabilities is not to dynamically set redirection targets using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a redirection target. In general, this is best achieved by using a whitelist of URLs that are permitted redirection targets, and strictly validating the target against this list before performing the redirection.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Open redirection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/open-redirection"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#, url: r#"https://cwe.mitre.org/data/definitions/601.html"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based open redirection vulnerabilities is not to dynamically set redirection targets using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a redirection target. In general, this is best achieved by using a whitelist of URLs that are permitted redirection targets, and strictly validating the target against this list before performing the redirection.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Open redirection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/open-redirection"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#,
+            url: r#"https://cwe.mitre.org/data/definitions/601.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5243153,
@@ -2352,13 +3718,17 @@ Some library vulnerabilities expose every application that imports the library, 
 <p><b>Note:</b> If an attacker is able to control the start of the string that is passed to the redirection API, then it may be possible to escalate this vulnerability into a JavaScript injection attack, by using a URL with the javascript: pseudo-protocol to execute arbitrary script code when the URL is processed by the browser.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based open redirection vulnerabilities is not to dynamically set redirection targets using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a redirection target. In general, this is best achieved by using a whitelist of URLs that are permitted redirection targets, and strictly validating the target against this list before performing the redirection.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Open redirection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/open-redirection"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#, url: r#"https://cwe.mitre.org/data/definitions/601.html"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based open redirection vulnerabilities is not to dynamically set redirection targets using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a redirection target. In general, this is best achieved by using a whitelist of URLs that are permitted redirection targets, and strictly validating the target against this list before performing the redirection.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Open redirection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/open-redirection"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#,
+            url: r#"https://cwe.mitre.org/data/definitions/601.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5243154,
@@ -2370,13 +3740,17 @@ Some library vulnerabilities expose every application that imports the library, 
 <p><b>Note:</b> If an attacker is able to control the start of the string that is passed to the redirection API, then it may be possible to escalate this vulnerability into a JavaScript injection attack, by using a URL with the javascript: pseudo-protocol to execute arbitrary script code when the URL is processed by the browser.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based open redirection vulnerabilities is not to dynamically set redirection targets using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a redirection target. In general, this is best achieved by using a whitelist of URLs that are permitted redirection targets, and strictly validating the target against this list before performing the redirection.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Open redirection (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/open-redirection"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#, url: r#"https://cwe.mitre.org/data/definitions/601.html"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based open redirection vulnerabilities is not to dynamically set redirection targets using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a redirection target. In general, this is best achieved by using a whitelist of URLs that are permitted redirection targets, and strictly validating the target against this list before performing the redirection.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Open redirection (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/open-redirection"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"#,
+            url: r#"https://cwe.mitre.org/data/definitions/601.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5243392,
@@ -2385,11 +3759,14 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Medium,
         description: r#"<p>If the secure flag is set on a cookie, then browsers will not submit the cookie in any requests that use an unencrypted HTTP connection, thereby preventing the cookie from being trivially intercepted by an attacker monitoring network traffic. If the secure flag is not set, then the cookie will be transmitted in clear-text if the user visits any HTTP URLs within the cookie's scope. An attacker may be able to induce this event by feeding a user suitable links, either directly or via another web site. Even if the domain that issued the cookie does not host any content that is accessed over HTTP, an attacker may be able to use links of the form http://example.com:443/ to perform the same attack.</p>
 <p>To exploit this vulnerability, an attacker must be suitably positioned to eavesdrop on the victim's network traffic. This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure.</p>"#,
-        remediation: Some(r#"<p>The secure flag should be set on all cookies that are used for transmitting sensitive data when accessing content over HTTPS. If cookies are used to transmit session tokens, then areas of the application that are accessed over HTTPS should employ their own session handling mechanism, and the session tokens used should never be transmitted over unencrypted communications.</p>"#),
+        remediation: Some(
+            r#"<p>The secure flag should be set on all cookies that are used for transmitting sensitive data when accessing content over HTTPS. If cookies are used to transmit session tokens, then areas of the application that are accessed over HTTPS should employ their own session handling mechanism, and the session tokens used should never be transmitted over unencrypted communications.</p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute"#, url: r#"https://cwe.mitre.org/data/definitions/614.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute"#,
+            url: r#"https://cwe.mitre.org/data/definitions/614.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5243648,
@@ -2397,11 +3774,14 @@ Some library vulnerabilities expose every application that imports the library, 
         name: r#"Cookie scoped to parent domain"#,
         typical_severity: Severity::Low,
         description: r#"<p>A cookie's domain attribute determines which domains can access the cookie. Browsers will automatically submit the cookie in requests to in-scope domains, and those domains will also be able to access the cookie via JavaScript. If a cookie is scoped to a parent domain, then that cookie will be accessible by the parent domain and also by any other subdomains of the parent domain. If the cookie contains sensitive data (such as a session token) then this data may be accessible by less trusted or less secure applications residing at those domains, leading to a security compromise.</p>"#,
-        remediation: Some(r#"<p>By default, cookies are scoped to the issuing domain, and on IE/Edge to subdomains. If you remove the explicit domain attribute from your Set-cookie directive, then the cookie will have this default scope, which is safe and appropriate in most situations. If you particularly need a cookie to be accessible by a parent domain, then you should thoroughly review the security of the applications residing on that domain and its subdomains, and confirm that you are willing to trust the people and systems that support those applications.</p>"#),
+        remediation: Some(
+            r#"<p>By default, cookies are scoped to the issuing domain, and on IE/Edge to subdomains. If you remove the explicit domain attribute from your Set-cookie directive, then the cookie will have this default scope, which is safe and appropriate in most situations. If you particularly need a cookie to be accessible by a parent domain, then you should thoroughly review the security of the applications residing on that domain and its subdomains, and confirm that you are willing to trust the people and systems that support those applications.</p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-16: Configuration"#,
+            url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5243904,
@@ -2413,15 +3793,24 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>You should review the contents of the information being transmitted to other domains, and also determine whether those domains are fully trusted by the originating application.</p>
 <p>Today's browsers may withhold the Referer header in some situations (for example, when loading a non-HTTPS resource from a page that was loaded over HTTPS, or when a Refresh directive is issued), but this behavior should not be relied upon to protect the originating URL from disclosure.</p>
 <p>Note also that if users can author content within the application then an attacker may be able to inject links referring to a domain they control in order to capture data from URLs used within the application. </p>"#,
-        remediation: Some(r#"<p>Applications should never transmit any sensitive information within the URL query string. In addition to being leaked in the Referer header, such information may be logged in various locations and may be visible on-screen to untrusted parties. If placing sensitive information in the URL is unavoidable, consider using the Referrer-Policy HTTP header to reduce the chance of it being disclosed to third parties.
-</p>"#),
+        remediation: Some(
+            r#"<p>Applications should never transmit any sensitive information within the URL query string. In addition to being leaked in the Referer header, such information may be logged in various locations and may be visible on-screen to untrusted parties. If placing sensitive information in the URL is unavoidable, consider using the Referrer-Policy HTTP header to reduce the chance of it being disclosed to third parties.
+</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Referer Policy"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy"# },
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
+            Reference {
+                title: r#"Referer Policy"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Referrer-Policy"#,
+            },
+            Reference {
+                title: r#"Web Security Academy: Information disclosure"#,
+                url: r#"https://portswigger.net/web-security/information-disclosure"#,
+            },
         ],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5244160,
@@ -2430,13 +3819,17 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>When an application includes a script from an external domain, this script is executed by the browser within the security context of the invoking application. The script can therefore do anything that the application's own scripts can do, such as accessing application data and performing actions within the context of the current user.</p>
 <p>If you include a script from an external domain, then you are trusting that domain with the data and functionality of your application, and you are trusting the domain's own security to prevent an attacker from modifying the script to perform malicious actions within your application. </p>"#,
-        remediation: Some(r#"<p>Scripts should ideally not be included from untrusted domains. Applications that rely on static third-party scripts should consider using Subresource Integrity to make browsers verify them, or copying the contents of these scripts onto their own domain and including them from there. If that is not possible (e.g. for licensing reasons) then consider reimplementing the script's functionality within application code.</p>"#),
-        references: &[
-            Reference { title: r#"Subresource Integrity"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-829: Inclusion of Functionality from Untrusted Control Sphere"#, url: r#"https://cwe.mitre.org/data/definitions/829.html"# },
-        ],
+        remediation: Some(
+            r#"<p>Scripts should ideally not be included from untrusted domains. Applications that rely on static third-party scripts should consider using Subresource Integrity to make browsers verify them, or copying the contents of these scripts onto their own domain and including them from there. If that is not possible (e.g. for licensing reasons) then consider reimplementing the script's functionality within application code.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Subresource Integrity"#,
+            url: r#"https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-829: Inclusion of Functionality from Untrusted Control Sphere"#,
+            url: r#"https://cwe.mitre.org/data/definitions/829.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5244416,
@@ -2444,15 +3837,29 @@ Some library vulnerabilities expose every application that imports the library, 
         name: r#"Cookie without HttpOnly flag set"#,
         typical_severity: Severity::Low,
         description: r#"<p>If the HttpOnly attribute is set on a cookie, then the cookie's value cannot be read or set by client-side JavaScript. This measure makes certain client-side attacks, such as cross-site scripting, slightly harder to exploit by preventing them from trivially capturing the cookie's value via an injected script.</p>"#,
-        remediation: Some(r#"<p>There is usually no good reason not to set the HttpOnly flag on all cookies. Unless you specifically require legitimate client-side scripts within your application to read or set a cookie's value, you should set the HttpOnly flag by including this attribute within the relevant Set-cookie directive.</p>
-<p>You should be aware that the restrictions imposed by the HttpOnly flag can potentially be circumvented in some circumstances, and that numerous other serious attacks can be delivered by client-side script injection, aside from simple cookie stealing. </p>"#),
+        remediation: Some(
+            r#"<p>There is usually no good reason not to set the HttpOnly flag on all cookies. Unless you specifically require legitimate client-side scripts within your application to read or set a cookie's value, you should set the HttpOnly flag by including this attribute within the relevant Set-cookie directive.</p>
+<p>You should be aware that the restrictions imposed by the HttpOnly flag can potentially be circumvented in some circumstances, and that numerous other serious attacks can be delivered by client-side script injection, aside from simple cookie stealing. </p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Exploiting XSS vulnerabilities"#, url: r#"https://portswigger.net/web-security/cross-site-scripting/exploiting"# },
-            Reference { title: r#"HttpOnly effectiveness"#, url: r#"https://portswigger.net/research/web-storage-the-lesser-evil-for-session-tokens#httponly"# },
+            Reference {
+                title: r#"Web Security Academy: Exploiting XSS vulnerabilities"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting/exploiting"#,
+            },
+            Reference {
+                title: r#"HttpOnly effectiveness"#,
+                url: r#"https://portswigger.net/research/web-storage-the-lesser-evil-for-session-tokens#httponly"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CAPEC-31: Accessing/Intercepting/Modifying HTTP Cookies"#, url: r#"https://capec.mitre.org/data/definitions/31.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-31: Accessing/Intercepting/Modifying HTTP Cookies"#,
+                url: r#"https://capec.mitre.org/data/definitions/31.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2461,13 +3868,27 @@ Some library vulnerabilities expose every application that imports the library, 
         name: r#"Session token in URL"#,
         typical_severity: Severity::Medium,
         description: r#"<p>Sensitive information within URLs may be logged in various locations, including the user's browser, the web server, and any forward or reverse proxy servers between the two endpoints. URLs may also be displayed on-screen, bookmarked or emailed around by users. They may be disclosed to third parties via the Referer header when any off-site links are followed. Placing session tokens into the URL increases the risk that they will be captured by an attacker.</p>"#,
-        remediation: Some(r#"<p>Applications should use an alternative mechanism for transmitting session tokens, such as HTTP cookies or hidden fields in forms that are submitted using the POST method.</p>"#),
+        remediation: Some(
+            r#"<p>Applications should use an alternative mechanism for transmitting session tokens, such as HTTP cookies or hidden fields in forms that are submitted using the POST method.</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-            Classification { title: r#"CWE-384: Session Fixation"#, url: r#"https://cwe.mitre.org/data/definitions/384.html"# },
-            Classification { title: r#"CWE-598: Information Exposure Through Query Strings in GET Request"#, url: r#"https://cwe.mitre.org/data/definitions/598.html"# },
-            Classification { title: r#"CAPEC-593: Session Hijacking"#, url: r#"https://capec.mitre.org/data/definitions/593.html"# },
+            Classification {
+                title: r#"CWE-200: Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+            },
+            Classification {
+                title: r#"CWE-384: Session Fixation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/384.html"#,
+            },
+            Classification {
+                title: r#"CWE-598: Information Exposure Through Query Strings in GET Request"#,
+                url: r#"https://cwe.mitre.org/data/definitions/598.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-593: Session Hijacking"#,
+                url: r#"https://capec.mitre.org/data/definitions/593.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2477,12 +3898,15 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Low,
         description: r#"<p>Most browsers have a facility to remember user credentials that are entered into HTML forms. This function can be configured by the user and also by applications that employ user credentials. If the function is enabled, then credentials entered by the user are stored on their local computer and retrieved by the browser on future visits to the same application.</p>
 <p>The stored credentials can be captured by an attacker who gains control over the user's computer. Further, an attacker who finds a separate application vulnerability such as cross-site scripting may be able to exploit this to retrieve a user's browser-stored credentials. </p>"#,
-        remediation: Some(r#"<p>To prevent browsers from storing credentials entered into HTML forms, include the attribute <b>autocomplete="off"</b> within the FORM tag (to protect all form fields) or within the relevant INPUT tags (to protect specific individual fields).</p>
-<p>Please note that modern web browsers may ignore this directive. In spite of this there is a chance that not disabling autocomplete may cause problems obtaining PCI compliance.</p>"#),
+        remediation: Some(
+            r#"<p>To prevent browsers from storing credentials entered into HTML forms, include the attribute <b>autocomplete="off"</b> within the FORM tag (to protect all form fields) or within the relevant INPUT tags (to protect specific individual fields).</p>
+<p>Please note that modern web browsers may ignore this directive. In spite of this there is a chance that not disabling autocomplete may cause problems obtaining PCI compliance.</p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5245184,
@@ -2491,11 +3915,19 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Medium,
         description: r#"<p>Some applications issue a cookie containing the clear-text value of the password supplied by the user. This behavior increases the risk that users' passwords will be captured by an attacker. Any cookie-stealing vulnerabilities within the application or browser would enable an attacker to steal the user's credentials to the application.</p>
 <p>Vulnerabilities that result in the disclosure of users' passwords can result in compromises that are extremely difficult to investigate due to obscured audit trails. Even if the application itself only handles non-sensitive information, exposing passwords puts users who have re-used their password elsewhere at risk.</p>"#,
-        remediation: Some(r#"<p>Applications should not store user credentials within any client-side mechanism such as cookies.</p>"#),
+        remediation: Some(
+            r#"<p>Applications should not store user credentials within any client-side mechanism such as cookies.</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-287: Improper Authentication"#, url: r#"https://cwe.mitre.org/data/definitions/287.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-287: Improper Authentication"#,
+                url: r#"https://cwe.mitre.org/data/definitions/287.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2510,18 +3942,32 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>Some factors to consider when evaluating the security impact of this functionality include:</p>
 <ul>
 <li>Whether uploaded content can subsequently be downloaded via a URL within the application.</li><li>What Content-type and Content-disposition headers the application returns when the file's content is downloaded.</li><li>Whether it is possible to place executable HTML/JavaScript into the file, which executes when the file's contents are viewed.</li><li>Whether the application performs any filtering on the file extension or MIME type of the uploaded file.</li><li>Whether it is possible to construct a hybrid file containing both executable and non-executable content, to bypass any content filters - for example, a file containing both a GIF image and a Java archive (known as a GIFAR file).</li><li>What location is used to store uploaded content, and whether it is possible to supply a crafted filename to escape from this location.</li><li>Whether archive formats such as ZIP are unpacked by the application.</li><li>How the application handles attempts to upload very large files, or decompression bomb files.</li></ul>"#,
-        remediation: Some(r#"<p>File upload functionality is not straightforward to implement securely. Some recommendations to consider in the design of this functionality include:</p>
+        remediation: Some(
+            r#"<p>File upload functionality is not straightforward to implement securely. Some recommendations to consider in the design of this functionality include:</p>
 <ul>
 <li>Use a server-generated filename if storing uploaded files on disk.</li><li>Inspect the content of uploaded files, and enforce a whitelist of accepted, non-executable content types. Additionally, enforce a blacklist of common executable formats, to hinder hybrid file attacks.</li><li>Enforce a whitelist of accepted, non-executable file extensions.</li>
 <li>If uploaded files are downloaded by users, supply an accurate non-generic Content-Type header, the X-Content-Type-Options: nosniff header, and also a Content-Disposition header that specifies that browsers should handle the file as an attachment.</li>
-<li>Enforce a size limit on uploaded files (for defense-in-depth, this can be implemented both within application code and in the web server's configuration).</li><li>Reject attempts to upload archive formats such as ZIP.</li></ul>"#),
+<li>Enforce a size limit on uploaded files (for defense-in-depth, this can be implemented both within application code and in the web server's configuration).</li><li>Reject attempts to upload archive formats such as ZIP.</li></ul>"#,
+        ),
         references: &[
-            Reference { title: r#"Various proof-of-concept files"#, url: r#"https://github.com/cure53/H5SC/tree/master/attachments"# },
-            Reference { title: r#"An XSS polyglot attack"#, url: r#"http://labs.detectify.com/post/120088174539/building-an-xss-polyglot-through-swf-and-csp"# },
+            Reference {
+                title: r#"Various proof-of-concept files"#,
+                url: r#"https://github.com/cure53/H5SC/tree/master/attachments"#,
+            },
+            Reference {
+                title: r#"An XSS polyglot attack"#,
+                url: r#"http://labs.detectify.com/post/120088174539/building-an-xss-polyglot-through-swf-and-csp"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-434: Unrestricted Upload of File with Dangerous Type"#, url: r#"https://cwe.mitre.org/data/definitions/434.html"# },
-            Classification { title: r#"CAPEC-17: Using Malicious Files"#, url: r#"https://capec.mitre.org/data/definitions/17.html"# },
+            Classification {
+                title: r#"CWE-434: Unrestricted Upload of File with Dangerous Type"#,
+                url: r#"https://cwe.mitre.org/data/definitions/434.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-17: Using Malicious Files"#,
+                url: r#"https://capec.mitre.org/data/definitions/17.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2532,15 +3978,32 @@ Some library vulnerabilities expose every application that imports the library, 
         description: r#"<p>If a page fails to set an appropriate X-Frame-Options or Content-Security-Policy HTTP header, it might be possible for a page controlled by an attacker to load it within an iframe. This may enable a clickjacking attack, in which the attacker's page overlays the target application's interface with a different interface provided by the attacker. By inducing victim users to perform actions such as mouse clicks and keystrokes, the attacker can cause them to unwittingly carry out actions within the application that is being targeted. This technique allows the attacker to circumvent defenses against cross-site request forgery, and may result in unauthorized actions.</p>
 <p>Note that some applications attempt to prevent these attacks from within the HTML page itself, using "framebusting" code. However, this type of defense is normally ineffective and can usually be circumvented by a skilled attacker.</p>
 <p>You should determine whether any functions accessible within frameable pages can be used by application users to perform any sensitive actions within the application. </p>"#,
-        remediation: Some(r#"<p>To effectively prevent framing attacks, the application should return a response header with the name <b>X-Frame-Options</b> and the value <b>DENY</b> to prevent framing altogether, or the value <b>SAMEORIGIN</b> to allow framing only by pages on the same origin as the response itself. Note that the SAMEORIGIN header can be partially bypassed if the application itself can be made to frame untrusted websites.</p>"#),
+        remediation: Some(
+            r#"<p>To effectively prevent framing attacks, the application should return a response header with the name <b>X-Frame-Options</b> and the value <b>DENY</b> to prevent framing altogether, or the value <b>SAMEORIGIN</b> to allow framing only by pages on the same origin as the response itself. Note that the SAMEORIGIN header can be partially bypassed if the application itself can be made to frame untrusted websites.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Clickjacking"#, url: r#"https://portswigger.net/web-security/clickjacking"# },
-            Reference { title: r#"X-Frame-Options"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/X-Frame-Options"# },
+            Reference {
+                title: r#"Web Security Academy: Clickjacking"#,
+                url: r#"https://portswigger.net/web-security/clickjacking"#,
+            },
+            Reference {
+                title: r#"X-Frame-Options"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/HTTP/X-Frame-Options"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-693: Protection Mechanism Failure"#, url: r#"https://cwe.mitre.org/data/definitions/693.html"# },
-            Classification { title: r#"CWE-1021: Improper Restriction of Rendered UI Layers or Frames"#, url: r#"https://cwe.mitre.org/data/definitions/1021.html"# },
-            Classification { title: r#"CAPEC-103: Clickjacking"#, url: r#"https://capec.mitre.org/data/definitions/103.html"# },
+            Classification {
+                title: r#"CWE-693: Protection Mechanism Failure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/693.html"#,
+            },
+            Classification {
+                title: r#"CWE-1021: Improper Restriction of Rendered UI Layers or Frames"#,
+                url: r#"https://cwe.mitre.org/data/definitions/1021.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-103: Clickjacking"#,
+                url: r#"https://capec.mitre.org/data/definitions/103.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2551,16 +4014,30 @@ Some library vulnerabilities expose every application that imports the library, 
         description: r#"<p>Some browsers, including Internet Explorer, contain built-in filters designed to protect against cross-site scripting (XSS) attacks. Applications can instruct browsers to disable this filter by setting the following response header:</p>
 <p><b>X-XSS-Protection: 0</b></p>
 <p>This behavior does not in itself constitute a vulnerability; in some cases XSS filters may themselves be leveraged to perform attacks against application users. However, in typical situations XSS filters do provide basic protection for application users against some XSS vulnerabilities in applications. The presence of this header should be reviewed to establish whether it affects the application's security posture. </p>"#,
-        remediation: Some(r#"<p>Review whether the application needs to disable XSS filters. In most cases you can gain the protection provided by XSS filters without the associated risks by using the following response header:</p>
+        remediation: Some(
+            r#"<p>Review whether the application needs to disable XSS filters. In most cases you can gain the protection provided by XSS filters without the associated risks by using the following response header:</p>
 <p><b>X-XSS-Protection: 1; mode=block</b></p>
-<p>When this header is set, browsers that detect an XSS attack will simply render a blank page instead of attempting to sanitize the injected script. This behavior is considerably less likely to introduce new security issues. </p>"#),
+<p>When this header is set, browsers that detect an XSS attack will simply render a blank page instead of attempting to sanitize the injected script. This behavior is considerably less likely to introduce new security issues. </p>"#,
+        ),
         references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-            Reference { title: r#"Controlling the XSS Filter"#, url: r#"http://blogs.msdn.com/b/ieinternals/archive/2011/01/31/controlling-the-internet-explorer-xss-filter-with-the-x-xss-protection-http-header.aspx"# },
+            Reference {
+                title: r#"Web Security Academy: Cross-site scripting"#,
+                url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+            },
+            Reference {
+                title: r#"Controlling the XSS Filter"#,
+                url: r#"http://blogs.msdn.com/b/ieinternals/archive/2011/01/31/controlling-the-internet-explorer-xss-filter-with-the-x-xss-protection-http-header.aspx"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#, url: r#"https://capec.mitre.org/data/definitions/63.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#,
+                url: r#"https://capec.mitre.org/data/definitions/63.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2570,13 +4047,17 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>The HTTP TRACE  method is designed for diagnostic purposes. If enabled, the web server will respond to requests that use the TRACE method by echoing in its response the exact request that was received.</p>
 <p>This behavior is often harmless, but occasionally leads to the disclosure of sensitive information such as internal authentication headers appended by reverse proxies. This functionality could historically be used to bypass the HttpOnly cookie flag on cookies, but this is no longer possible in modern web browsers. </p>"#,
-        remediation: Some(r#"<p>The TRACE method should be disabled on production web servers.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure via TRACE method"#, url: r#"https://portswigger.net/web-security/information-disclosure/exploiting#information-disclosure-due-to-insecure-configuration"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-        ],
+        remediation: Some(
+            r#"<p>The TRACE method should be disabled on production web servers.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure via TRACE method"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure/exploiting#information-disclosure-due-to-insecure-configuration"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-16: Configuration"#,
+            url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 5245696,
@@ -2589,14 +4070,26 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>The potential impact of the vulnerability depends on the role that the cookie plays within the application. If the cookie is used to control the behavior that results from certain user actions (for example, a 'production' versus 'demo' mode setting), then the attacker may be able to cause the user to perform unintended actions by manipulating the cookie's value. If the cookie is used to track the user's session, then the attacker may be able to perform a session fixation attack, in which they set the cookie's value to a valid token that they have obtained from the application, and then hijack the session during the victim user's subsequent interaction with the application.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based cookie manipulation vulnerabilities is not to dynamically write to cookies using data that originated from any untrusted source. This behavior should never be implemented for cookies that have any role in controlling privileged actions or user sessions within the application.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Cookie manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/cookie-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based cookie manipulation vulnerabilities is not to dynamically write to cookies using data that originated from any untrusted source. This behavior should never be implemented for cookies that have any role in controlling privileged actions or user sessions within the application.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Cookie manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/cookie-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-565: Reliance on Cookies without Validation and Integrity Checking"#, url: r#"https://cwe.mitre.org/data/definitions/565.html"# },
-            Classification { title: r#"CWE-829: Inclusion of Functionality from Untrusted Control Sphere"#, url: r#"https://cwe.mitre.org/data/definitions/829.html"# },
-            Classification { title: r#"CAPEC-31: Accessing/Intercepting/Modifying HTTP Cookies"#, url: r#"https://capec.mitre.org/data/definitions/31.html"# },
+            Classification {
+                title: r#"CWE-565: Reliance on Cookies without Validation and Integrity Checking"#,
+                url: r#"https://cwe.mitre.org/data/definitions/565.html"#,
+            },
+            Classification {
+                title: r#"CWE-829: Inclusion of Functionality from Untrusted Control Sphere"#,
+                url: r#"https://cwe.mitre.org/data/definitions/829.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-31: Accessing/Intercepting/Modifying HTTP Cookies"#,
+                url: r#"https://capec.mitre.org/data/definitions/31.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2610,14 +4103,26 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>The potential impact of the vulnerability depends on the role that the cookie plays within the application. If the cookie is used to control the behavior that results from certain user actions (for example, a 'production' versus 'demo' mode setting), then the attacker may be able to cause the user to perform unintended actions by manipulating the cookie's value. If the cookie is used to track the user's session, then the attacker may be able to perform a session fixation attack, in which they set the cookie's value to a valid token that they have obtained from the application, and then hijack the session during the victim user's subsequent interaction with the application.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based cookie manipulation vulnerabilities is not to dynamically write to cookies using data that originated from any untrusted source. This behavior should never be implemented for cookies that have any role in controlling privileged actions or user sessions within the application.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Cookie manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/cookie-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based cookie manipulation vulnerabilities is not to dynamically write to cookies using data that originated from any untrusted source. This behavior should never be implemented for cookies that have any role in controlling privileged actions or user sessions within the application.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Cookie manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/cookie-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-565: Reliance on Cookies without Validation and Integrity Checking"#, url: r#"https://cwe.mitre.org/data/definitions/565.html"# },
-            Classification { title: r#"CWE-829: Inclusion of Functionality from Untrusted Control Sphere"#, url: r#"https://cwe.mitre.org/data/definitions/829.html"# },
-            Classification { title: r#"CAPEC-31: Accessing/Intercepting/Modifying HTTP Cookies"#, url: r#"https://capec.mitre.org/data/definitions/31.html"# },
+            Classification {
+                title: r#"CWE-565: Reliance on Cookies without Validation and Integrity Checking"#,
+                url: r#"https://cwe.mitre.org/data/definitions/565.html"#,
+            },
+            Classification {
+                title: r#"CWE-829: Inclusion of Functionality from Untrusted Control Sphere"#,
+                url: r#"https://cwe.mitre.org/data/definitions/829.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-31: Accessing/Intercepting/Modifying HTTP Cookies"#,
+                url: r#"https://capec.mitre.org/data/definitions/31.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2631,14 +4136,26 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>The potential impact of the vulnerability depends on the role that the cookie plays within the application. If the cookie is used to control the behavior that results from certain user actions (for example, a 'production' versus 'demo' mode setting), then the attacker may be able to cause the user to perform unintended actions by manipulating the cookie's value. If the cookie is used to track the user's session, then the attacker may be able to perform a session fixation attack, in which they set the cookie's value to a valid token that they have obtained from the application, and then hijack the session during the victim user's subsequent interaction with the application.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based cookie manipulation vulnerabilities is not to dynamically write to cookies using data that originated from any untrusted source. This behavior should never be implemented for cookies that have any role in controlling privileged actions or user sessions within the application.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Cookie manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/cookie-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based cookie manipulation vulnerabilities is not to dynamically write to cookies using data that originated from any untrusted source. This behavior should never be implemented for cookies that have any role in controlling privileged actions or user sessions within the application.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Cookie manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/cookie-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-565: Reliance on Cookies without Validation and Integrity Checking"#, url: r#"https://cwe.mitre.org/data/definitions/565.html"# },
-            Classification { title: r#"CWE-829: Inclusion of Functionality from Untrusted Control Sphere"#, url: r#"https://cwe.mitre.org/data/definitions/829.html"# },
-            Classification { title: r#"CAPEC-31: Accessing/Intercepting/Modifying HTTP Cookies"#, url: r#"https://capec.mitre.org/data/definitions/31.html"# },
+            Classification {
+                title: r#"CWE-565: Reliance on Cookies without Validation and Integrity Checking"#,
+                url: r#"https://cwe.mitre.org/data/definitions/565.html"#,
+            },
+            Classification {
+                title: r#"CWE-829: Inclusion of Functionality from Untrusted Control Sphere"#,
+                url: r#"https://cwe.mitre.org/data/definitions/829.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-31: Accessing/Intercepting/Modifying HTTP Cookies"#,
+                url: r#"https://capec.mitre.org/data/definitions/31.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2650,13 +4167,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>Ajax request header manipulation  arises when a script writes controllable data into a header of an Ajax request that is issued using XmlHttpRequest. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will set an arbitrary header in the subsequent Ajax request.</p>
 <p>The potential impact of the vulnerability depends on the role of specific HTTP headers in the server-side application's processing of the Ajax request. If the header is used to control the behavior that results from the Ajax request, then the attacker may be able to cause the user to perform unintended actions by manipulating the header.</p>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based Ajax request header manipulation vulnerabilities is not to dynamically set Ajax request headers using data that originated from any untrusted source. This behavior should never be implemented for headers that have any role in controlling the effects of privileged actions within the application. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Ajax request header manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/ajax-request-header-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based Ajax request header manipulation vulnerabilities is not to dynamically set Ajax request headers using data that originated from any untrusted source. This behavior should never be implemented for headers that have any role in controlling the effects of privileged actions within the application. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Ajax request header manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/ajax-request-header-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-6: Argument Injection"#, url: r#"https://capec.mitre.org/data/definitions/6.html"# },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-6: Argument Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/6.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2668,13 +4194,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>Ajax request header manipulation  arises when a script writes controllable data into a header of an Ajax request that is issued using XmlHttpRequest. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will set an arbitrary header in the subsequent Ajax request.</p>
 <p>The potential impact of the vulnerability depends on the role of specific HTTP headers in the server-side application's processing of the Ajax request. If the header is used to control the behavior that results from the Ajax request, then the attacker may be able to cause the user to perform unintended actions by manipulating the header.</p>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based Ajax request header manipulation vulnerabilities is not to dynamically set Ajax request headers using data that originated from any untrusted source. This behavior should never be implemented for headers that have any role in controlling the effects of privileged actions within the application. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Ajax request header manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/ajax-request-header-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based Ajax request header manipulation vulnerabilities is not to dynamically set Ajax request headers using data that originated from any untrusted source. This behavior should never be implemented for headers that have any role in controlling the effects of privileged actions within the application. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Ajax request header manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/ajax-request-header-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-6: Argument Injection"#, url: r#"https://capec.mitre.org/data/definitions/6.html"# },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-6: Argument Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/6.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2686,13 +4221,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>Ajax request header manipulation  arises when a script writes controllable data into a header of an Ajax request that is issued using XmlHttpRequest. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will set an arbitrary header in the subsequent Ajax request.</p>
 <p>The potential impact of the vulnerability depends on the role of specific HTTP headers in the server-side application's processing of the Ajax request. If the header is used to control the behavior that results from the Ajax request, then the attacker may be able to cause the user to perform unintended actions by manipulating the header.</p>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based Ajax request header manipulation vulnerabilities is not to dynamically set Ajax request headers using data that originated from any untrusted source. This behavior should never be implemented for headers that have any role in controlling the effects of privileged actions within the application. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Ajax request header manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/ajax-request-header-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based Ajax request header manipulation vulnerabilities is not to dynamically set Ajax request headers using data that originated from any untrusted source. This behavior should never be implemented for headers that have any role in controlling the effects of privileged actions within the application. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Ajax request header manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/ajax-request-header-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-116: Improper Encoding or Escaping of Output"#, url: r#"https://cwe.mitre.org/data/definitions/116.html"# },
-            Classification { title: r#"CAPEC-6: Argument Injection"#, url: r#"https://capec.mitre.org/data/definitions/6.html"# },
+            Classification {
+                title: r#"CWE-116: Improper Encoding or Escaping of Output"#,
+                url: r#"https://cwe.mitre.org/data/definitions/116.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-6: Argument Injection"#,
+                url: r#"https://capec.mitre.org/data/definitions/6.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2705,13 +4249,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>DOM-based denial of service  arises when a script passes controllable data to a problematic platform API in an unsafe way. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will cause a denial of service condition on the user's computer when the relevant API is invoked. Depending on the nature of the API, the invocation may cause the user's computer to consume excessive amounts of CPU or disk space. This may result in side effects if the web browser restricts application functionality; for example, by rejecting attempts to store data in localStorage or killing busy scripts.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based denial of service vulnerabilities is not to dynamically pass data into problematic platform APIs that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from causing a denial of service condition. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Denial of service (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/denial-of-service"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based denial of service vulnerabilities is not to dynamically pass data into problematic platform APIs that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from causing a denial of service condition. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Denial of service (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/denial-of-service"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-400: Uncontrolled Resource Consumption ('Resource Exhaustion')"#, url: r#"https://cwe.mitre.org/data/definitions/400.html"# },
-            Classification { title: r#"CAPEC-125: Flooding"#, url: r#"https://capec.mitre.org/data/definitions/125.html"# },
+            Classification {
+                title: r#"CWE-400: Uncontrolled Resource Consumption ('Resource Exhaustion')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/400.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-125: Flooding"#,
+                url: r#"https://capec.mitre.org/data/definitions/125.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2724,13 +4277,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>DOM-based denial of service  arises when a script passes controllable data to a problematic platform API in an unsafe way. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will cause a denial of service condition on the user's computer when the relevant API is invoked. Depending on the nature of the API, the invocation may cause the user's computer to consume excessive amounts of CPU or disk space. This may result in side effects if the web browser restricts application functionality; for example, by rejecting attempts to store data in localStorage or killing busy scripts.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based denial of service vulnerabilities is not to dynamically pass data into problematic platform APIs that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from causing a denial of service condition. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Denial of service (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/denial-of-service"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based denial of service vulnerabilities is not to dynamically pass data into problematic platform APIs that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from causing a denial of service condition. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Denial of service (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/denial-of-service"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-400: Uncontrolled Resource Consumption ('Resource Exhaustion')"#, url: r#"https://cwe.mitre.org/data/definitions/400.html"# },
-            Classification { title: r#"CAPEC-125: Flooding"#, url: r#"https://capec.mitre.org/data/definitions/125.html"# },
+            Classification {
+                title: r#"CWE-400: Uncontrolled Resource Consumption ('Resource Exhaustion')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/400.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-125: Flooding"#,
+                url: r#"https://capec.mitre.org/data/definitions/125.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2743,13 +4305,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>DOM-based denial of service  arises when a script passes controllable data to a problematic platform API in an unsafe way. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will cause a denial of service condition on the user's computer when the relevant API is invoked. Depending on the nature of the API, the invocation may cause the user's computer to consume excessive amounts of CPU or disk space. This may result in side effects if the web browser restricts application functionality; for example, by rejecting attempts to store data in localStorage or killing busy scripts.</p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based denial of service vulnerabilities is not to dynamically pass data into problematic platform APIs that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from causing a denial of service condition. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Denial of service (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/denial-of-service"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based denial of service vulnerabilities is not to dynamically pass data into problematic platform APIs that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from causing a denial of service condition. In many cases, the relevant data can be validated on a whitelist basis, to allow only content that is known to be safe. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Denial of service (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/denial-of-service"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-400: Uncontrolled Resource Consumption ('Resource Exhaustion')"#, url: r#"https://cwe.mitre.org/data/definitions/400.html"# },
-            Classification { title: r#"CAPEC-125: Flooding"#, url: r#"https://capec.mitre.org/data/definitions/125.html"# },
+            Classification {
+                title: r#"CWE-400: Uncontrolled Resource Consumption ('Resource Exhaustion')"#,
+                url: r#"https://cwe.mitre.org/data/definitions/400.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-125: Flooding"#,
+                url: r#"https://capec.mitre.org/data/definitions/125.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2763,13 +4334,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based HTML5 web message manipulation vulnerabilities is not to send a web message containing data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from compromising the user. This validation can be carried out by the document that sends the message, or by the document that receives the message, or both, depending on the trust relationship between the two documents.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Web message manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/web-message-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based HTML5 web message manipulation vulnerabilities is not to send a web message containing data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from compromising the user. This validation can be carried out by the document that sends the message, or by the document that receives the message, or both, depending on the trust relationship between the two documents.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Web message manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/web-message-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2783,13 +4363,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based HTML5 web message manipulation vulnerabilities is not to send a web message containing data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from compromising the user. This validation can be carried out by the document that sends the message, or by the document that receives the message, or both, depending on the trust relationship between the two documents.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Web message manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/web-message-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based HTML5 web message manipulation vulnerabilities is not to send a web message containing data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from compromising the user. This validation can be carried out by the document that sends the message, or by the document that receives the message, or both, depending on the trust relationship between the two documents.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Web message manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/web-message-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2803,13 +4392,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based HTML5 web message manipulation vulnerabilities is not to send a web message containing data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from compromising the user. This validation can be carried out by the document that sends the message, or by the document that receives the message, or both, depending on the trust relationship between the two documents.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Web message manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/web-message-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based HTML5 web message manipulation vulnerabilities is not to send a web message containing data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from compromising the user. This validation can be carried out by the document that sends the message, or by the document that receives the message, or both, depending on the trust relationship between the two documents.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Web message manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/web-message-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2823,13 +4421,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based HTML5 storage manipulation is not to place in HTML5 storage any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: HTML5 storage manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/html5-storage-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based HTML5 storage manipulation is not to place in HTML5 storage any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: HTML5 storage manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/html5-storage-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2843,13 +4450,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based HTML5 storage manipulation is not to place in HTML5 storage any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: HTML5 storage manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/html5-storage-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based HTML5 storage manipulation is not to place in HTML5 storage any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: HTML5 storage manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/html5-storage-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2863,13 +4479,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based HTML5 storage manipulation is not to place in HTML5 storage any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: HTML5 storage manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/html5-storage-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based HTML5 storage manipulation is not to place in HTML5 storage any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: HTML5 storage manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/html5-storage-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2882,13 +4507,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <ul>
 <li>Causing the user to redirect to an arbitrary external URL, to facilitate a phishing attack.</li><li>Causing the user to submit sensitive form data to a server controlled by the attacker.</li><li>Causing the user to perform an unintended action within the application, by changing the file or query string associated with a link.</li><li>Bypassing browser anti-XSS defenses by injecting on-site links containing XSS exploits, since browser anti-XSS defenses typically do not operate on on-site links.</li></ul>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based link manipulation vulnerabilities is not to dynamically set the target URLs of links or forms using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a link target. In general, this is best achieved by using a whitelist of URLs that are permitted link targets, and strictly validating the target against this list before setting the link target.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Link manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/link-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based link manipulation vulnerabilities is not to dynamically set the target URLs of links or forms using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a link target. In general, this is best achieved by using a whitelist of URLs that are permitted link targets, and strictly validating the target against this list before setting the link target.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Link manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/link-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2901,13 +4535,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <ul>
 <li>Causing the user to redirect to an arbitrary external URL, to facilitate a phishing attack.</li><li>Causing the user to submit sensitive form data to a server controlled by the attacker.</li><li>Causing the user to perform an unintended action within the application, by changing the file or query string associated with a link.</li><li>Bypassing browser anti-XSS defenses by injecting on-site links containing XSS exploits, since browser anti-XSS defenses typically do not operate on on-site links.</li></ul>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based link manipulation vulnerabilities is not to dynamically set the target URLs of links or forms using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a link target. In general, this is best achieved by using a whitelist of URLs that are permitted link targets, and strictly validating the target against this list before setting the link target.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Link manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/link-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based link manipulation vulnerabilities is not to dynamically set the target URLs of links or forms using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a link target. In general, this is best achieved by using a whitelist of URLs that are permitted link targets, and strictly validating the target against this list before setting the link target.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Link manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/link-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2920,13 +4563,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <ul>
 <li>Causing the user to redirect to an arbitrary external URL, to facilitate a phishing attack.</li><li>Causing the user to submit sensitive form data to a server controlled by the attacker.</li><li>Causing the user to perform an unintended action within the application, by changing the file or query string associated with a link.</li><li>Bypassing browser anti-XSS defenses by injecting on-site links containing XSS exploits, since browser anti-XSS defenses typically do not operate on on-site links.</li></ul>
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based link manipulation vulnerabilities is not to dynamically set the target URLs of links or forms using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a link target. In general, this is best achieved by using a whitelist of URLs that are permitted link targets, and strictly validating the target against this list before setting the link target.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Link manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/link-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based link manipulation vulnerabilities is not to dynamically set the target URLs of links or forms using data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from introducing an arbitrary URL as a link target. In general, this is best achieved by using a whitelist of URLs that are permitted link targets, and strictly validating the target against this list before setting the link target.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Link manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/link-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2942,14 +4594,26 @@ Some library vulnerabilities expose every application that imports the library, 
   <li>Injecting on-site links containing XSS exploits, thereby bypassing browser anti-XSS defenses, since those defenses typically do not operate on on-site links.</li>
 </ul>
 <p>The security impact of this issue depends largely on the nature of the application functionality. Even if it has no direct impact on its own, an attacker may use it in conjunction with other vulnerabilities to escalate their overall severity.</p>"#,
-        remediation: Some(r#"<p>Consider using a whitelist to restrict user input to safe values. Please note that in some situations this issue will have no security impact, meaning no remediation is necessary.</p>"#),
-        references: &[
-            Reference { title: r#"Using path manipulation to hijack Flickr accounts"#, url: r#"https://mishresec.wordpress.com/2017/10/13/yahoo-bug-bounty-chaining-3-minor-issues-to-takeover-flickr-accounts/"# },
-        ],
+        remediation: Some(
+            r#"<p>Consider using a whitelist to restrict user input to safe values. Please note that in some situations this issue will have no security impact, meaning no remediation is necessary.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Using path manipulation to hijack Flickr accounts"#,
+            url: r#"https://mishresec.wordpress.com/2017/10/13/yahoo-bug-bounty-chaining-3-minor-issues-to-takeover-flickr-accounts/"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2967,14 +4631,26 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>The security impact of this issue depends largely on the nature of the application functionality. Even if it has no direct impact on its own, an attacker may use it in conjunction with other vulnerabilities to escalate their overall severity.</p>
 
 <p>Stored link manipulation vulnerabilities arise when the applicable input was submitted in an previous request and stored by the application.</p>"#,
-        remediation: Some(r#"<p>Consider using a whitelist to restrict user input to safe values. Please note that in some situations this issue will have no security impact, meaning no remediation is necessary.</p>"#),
-        references: &[
-            Reference { title: r#"Using path manipulation to hijack Flickr accounts"#, url: r#"https://mishresec.wordpress.com/2017/10/13/yahoo-bug-bounty-chaining-3-minor-issues-to-takeover-flickr-accounts/"# },
-        ],
+        remediation: Some(
+            r#"<p>Consider using a whitelist to restrict user input to safe values. Please note that in some situations this issue will have no security impact, meaning no remediation is necessary.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Using path manipulation to hijack Flickr accounts"#,
+            url: r#"https://mishresec.wordpress.com/2017/10/13/yahoo-bug-bounty-chaining-3-minor-issues-to-takeover-flickr-accounts/"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -2990,13 +4666,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based document domain manipulation vulnerabilities is not to dynamically set the document.domain property using data that originated from any untrusted source. If it is necessary to programmatically set the document.domain property from within client-side code, then the application should employ a set list of acceptable values, and assign only from values in that list. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Document domain manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/document-domain-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based document domain manipulation vulnerabilities is not to dynamically set the document.domain property using data that originated from any untrusted source. If it is necessary to programmatically set the document.domain property from within client-side code, then the application should employ a set list of acceptable values, and assign only from values in that list. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Document domain manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/document-domain-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3012,13 +4697,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based document domain manipulation vulnerabilities is not to dynamically set the document.domain property using data that originated from any untrusted source. If it is necessary to programmatically set the document.domain property from within client-side code, then the application should employ a set list of acceptable values, and assign only from values in that list. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Document domain manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/document-domain-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based document domain manipulation vulnerabilities is not to dynamically set the document.domain property using data that originated from any untrusted source. If it is necessary to programmatically set the document.domain property from within client-side code, then the application should employ a set list of acceptable values, and assign only from values in that list. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Document domain manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/document-domain-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3034,13 +4728,22 @@ Some library vulnerabilities expose every application that imports the library, 
 </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based document domain manipulation vulnerabilities is not to dynamically set the document.domain property using data that originated from any untrusted source. If it is necessary to programmatically set the document.domain property from within client-side code, then the application should employ a set list of acceptable values, and assign only from values in that list. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Document domain manipulation (DOM-based)"#, url: r#"https://portswigger.net/web-security/dom-based/document-domain-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based document domain manipulation vulnerabilities is not to dynamically set the document.domain property using data that originated from any untrusted source. If it is necessary to programmatically set the document.domain property from within client-side code, then the application should employ a set list of acceptable values, and assign only from values in that list. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Document domain manipulation (DOM-based)"#,
+            url: r#"https://portswigger.net/web-security/dom-based/document-domain-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3052,13 +4755,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>DOM data manipulation arises when a script writes controllable data to a field within the DOM that is used within the visible UI or client-side application logic. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will modify the appearance or behavior of the client-side UI. An attacker may be able to leverage this to perform virtual defacement of the application, or possibly to induce the user to perform unintended actions. </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based DOM data manipulation vulnerabilities is not to dynamically write to DOM data fields any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored. In general, this is best achieved by using a whitelist of permitted values.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: DOM data manipulation"#, url: r#"https://portswigger.net/web-security/dom-based/dom-data-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based DOM data manipulation vulnerabilities is not to dynamically write to DOM data fields any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored. In general, this is best achieved by using a whitelist of permitted values.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: DOM data manipulation"#,
+            url: r#"https://portswigger.net/web-security/dom-based/dom-data-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3070,13 +4782,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>DOM data manipulation arises when a script writes controllable data to a field within the DOM that is used within the visible UI or client-side application logic. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will modify the appearance or behavior of the client-side UI. An attacker may be able to leverage this to perform virtual defacement of the application, or possibly to induce the user to perform unintended actions. </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based DOM data manipulation vulnerabilities is not to dynamically write to DOM data fields any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored. In general, this is best achieved by using a whitelist of permitted values.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: DOM data manipulation"#, url: r#"https://portswigger.net/web-security/dom-based/dom-data-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based DOM data manipulation vulnerabilities is not to dynamically write to DOM data fields any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored. In general, this is best achieved by using a whitelist of permitted values.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: DOM data manipulation"#,
+            url: r#"https://portswigger.net/web-security/dom-based/dom-data-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3088,13 +4809,22 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>DOM data manipulation arises when a script writes controllable data to a field within the DOM that is used within the visible UI or client-side application logic. An attacker may be able to use the vulnerability to construct a URL that, if visited by another application user, will modify the appearance or behavior of the client-side UI. An attacker may be able to leverage this to perform virtual defacement of the application, or possibly to induce the user to perform unintended actions. </p>
 
 <p>Burp Suite automatically identifies this issue using dynamic and static code analysis. Static analysis can lead to false positives that are not actually exploitable. If Burp Scanner has not provided any evidence resulting from dynamic analysis, you should review the relevant code and execution paths  to determine whether this vulnerability is indeed present, or whether mitigations are in place that would prevent exploitation.</p>"#,
-        remediation: Some(r#"<p>The most effective way to avoid DOM-based DOM data manipulation vulnerabilities is not to dynamically write to DOM data fields any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored. In general, this is best achieved by using a whitelist of permitted values.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: DOM data manipulation"#, url: r#"https://portswigger.net/web-security/dom-based/dom-data-manipulation"# },
-        ],
+        remediation: Some(
+            r#"<p>The most effective way to avoid DOM-based DOM data manipulation vulnerabilities is not to dynamically write to DOM data fields any data that originated from any untrusted source. If the desired functionality of the application means that this behavior is unavoidable, then defenses must be implemented within the client-side code to prevent malicious data from being stored. In general, this is best achieved by using a whitelist of permitted values.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: DOM data manipulation"#,
+            url: r#"https://portswigger.net/web-security/dom-based/dom-data-manipulation"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3107,15 +4837,32 @@ Some library vulnerabilities expose every application that imports the library, 
 <ul>
   <li>Executing arbitrary JavaScript using IE's expression() function.</li><li>Using CSS selectors to read parts of the HTML source, which may include sensitive data such as anti-CSRF tokens.</li>
 <li>Capturing any sensitive data within the URL query string by making a further style sheet import to a URL on the attacker's domain, and monitoring the incoming Referer header.</li></ul>"#,
-        remediation: Some(r#"<p>Ensure that user input is adequately escaped before embedding it in CSS blocks, and consider using a whitelist to prevent loading of arbitrary style sheets.</p>"#),
+        remediation: Some(
+            r#"<p>Ensure that user input is adequately escaped before embedding it in CSS blocks, and consider using a whitelist to prevent loading of arbitrary style sheets.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Malicious CSS"#, url: r#"https://portswigger.net/research/detecting-and-exploiting-path-relative-stylesheet-import-prssi-vulnerabilities#badcss"# },
-            Reference { title: r#"Abusing unicode-range of @font-face"#, url: r#"http://mksben.l0.cm/2015/10/css-based-attack-abusing-unicode-range.html"# },
+            Reference {
+                title: r#"Malicious CSS"#,
+                url: r#"https://portswigger.net/research/detecting-and-exploiting-path-relative-stylesheet-import-prssi-vulnerabilities#badcss"#,
+            },
+            Reference {
+                title: r#"Abusing unicode-range of @font-face"#,
+                url: r#"http://mksben.l0.cm/2015/10/css-based-attack-abusing-unicode-range.html"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-468: Generic Cross-Browser Cross-Domain Theft"#, url: r#"https://capec.mitre.org/data/definitions/468.html"# },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-468: Generic Cross-Browser Cross-Domain Theft"#,
+                url: r#"https://capec.mitre.org/data/definitions/468.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3128,15 +4875,32 @@ Some library vulnerabilities expose every application that imports the library, 
 <ul>
   <li>Executing arbitrary JavaScript using IE's expression() function.</li><li>Using CSS selectors to read parts of the HTML source, which may include sensitive data such as anti-CSRF tokens.</li>
 <li>Capturing any sensitive data within the URL query string by making a further style sheet import to a URL on the attacker's domain, and monitoring the incoming Referer header.</li></ul><p>Stored CSS injection vulnerabilities arise when the applicable input was submitted in an previous request and stored by the application.</p>"#,
-        remediation: Some(r#"<p>Ensure that user input is adequately escaped before embedding it in CSS blocks, and consider using a whitelist to prevent loading of arbitrary style sheets.</p>"#),
+        remediation: Some(
+            r#"<p>Ensure that user input is adequately escaped before embedding it in CSS blocks, and consider using a whitelist to prevent loading of arbitrary style sheets.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Malicious CSS"#, url: r#"https://portswigger.net/research/detecting-and-exploiting-path-relative-stylesheet-import-prssi-vulnerabilities#badcss"# },
-            Reference { title: r#"Abusing unicode-range of @font-face"#, url: r#"http://mksben.l0.cm/2015/10/css-based-attack-abusing-unicode-range.html"# },
+            Reference {
+                title: r#"Malicious CSS"#,
+                url: r#"https://portswigger.net/research/detecting-and-exploiting-path-relative-stylesheet-import-prssi-vulnerabilities#badcss"#,
+            },
+            Reference {
+                title: r#"Abusing unicode-range of @font-face"#,
+                url: r#"http://mksben.l0.cm/2015/10/css-based-attack-abusing-unicode-range.html"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-468: Generic Cross-Browser Cross-Domain Theft"#, url: r#"https://capec.mitre.org/data/definitions/468.html"# },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-468: Generic Cross-Browser Cross-Domain Theft"#,
+                url: r#"https://capec.mitre.org/data/definitions/468.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3146,14 +4910,26 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Low,
         description: r#"<p>Client-side HTTP parameter pollution (HPP) vulnerabilities arise when an application embeds user input in URLs in an unsafe manner.  An attacker can use this vulnerability to construct a URL that, if visited by another application user, will modify URLs within the response by inserting additional query string parameters and sometimes overriding existing ones. This may result in links and forms having unexpected side effects. For example, it may be possible to modify an invitation form using HPP so that the invitation is delivered to an unexpected recipient. </p>
 <p>The security impact of this issue depends largely on the nature of the application functionality. Even if it has no direct impact on its own, an attacker may use it in conjunction with other vulnerabilities to escalate their overall severity.</p>"#,
-        remediation: Some(r#"<p>Ensure that user input is URL-encoded before it is embedded in a URL.</p>"#),
-        references: &[
-            Reference { title: r#"HTTP Parameter Pollution"#, url: r#"https://wiki.owasp.org/images/b/ba/AppsecEU09_CarettoniDiPaola_v0.8.pdf"# },
-        ],
+        remediation: Some(
+            r#"<p>Ensure that user input is URL-encoded before it is embedded in a URL.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"HTTP Parameter Pollution"#,
+            url: r#"https://wiki.owasp.org/images/b/ba/AppsecEU09_CarettoniDiPaola_v0.8.pdf"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-233: Improper Handling of Parameters"#, url: r#"https://cwe.mitre.org/data/definitions/233.html"# },
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-460: HTTP Parameter Pollution (HPP)"#, url: r#"https://capec.mitre.org/data/definitions/460.html"# },
+            Classification {
+                title: r#"CWE-233: Improper Handling of Parameters"#,
+                url: r#"https://cwe.mitre.org/data/definitions/233.html"#,
+            },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-460: HTTP Parameter Pollution (HPP)"#,
+                url: r#"https://capec.mitre.org/data/definitions/460.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3165,14 +4941,26 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>The security impact of this issue depends largely on the nature of the application functionality. Even if it has no direct impact on its own, an attacker may use it in conjunction with other vulnerabilities to escalate their overall severity.</p>
 
 <p>Stored client-side HTTP parameter pollution vulnerabilities arise when the applicable input was submitted in an previous request and stored by the application.</p>"#,
-        remediation: Some(r#"<p>Ensure that user input is URL-encoded before it is embedded in a URL.</p>"#),
-        references: &[
-            Reference { title: r#"HTTP Parameter Pollution"#, url: r#"https://wiki.owasp.org/images/b/ba/AppsecEU09_CarettoniDiPaola_v0.8.pdf"# },
-        ],
+        remediation: Some(
+            r#"<p>Ensure that user input is URL-encoded before it is embedded in a URL.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"HTTP Parameter Pollution"#,
+            url: r#"https://wiki.owasp.org/images/b/ba/AppsecEU09_CarettoniDiPaola_v0.8.pdf"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-233: Improper Handling of Parameters"#, url: r#"https://cwe.mitre.org/data/definitions/233.html"# },
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-460: HTTP Parameter Pollution (HPP)"#, url: r#"https://capec.mitre.org/data/definitions/460.html"# },
+            Classification {
+                title: r#"CWE-233: Improper Handling of Parameters"#,
+                url: r#"https://cwe.mitre.org/data/definitions/233.html"#,
+            },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-460: HTTP Parameter Pollution (HPP)"#,
+                url: r#"https://capec.mitre.org/data/definitions/460.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3182,12 +4970,23 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Medium,
         description: r#"<p>Form action hijacking vulnerabilities arise when an application places user-supplied input into the action URL of an HTML form. An attacker can use this vulnerability to construct a URL that, if visited by another application user, will modify the action URL of a form to point to the attacker's server. If a user submits the form then its contents, including any input from the victim user, will be delivered directly to the attacker.</p>
 <p> Even if the user doesn't enter any sensitive information, the form may still deliver a valid CSRF token to the attacker, enabling them to perform CSRF attacks. In some cases web browsers may help exacerbate this issue by autocompleting forms with previously entered user input. </p>"#,
-        remediation: Some(r#"<p>Consider hard-coding the form action URL, or implementing a whitelist of allowed values.</p>"#),
+        remediation: Some(
+            r#"<p>Consider hard-coding the form action URL, or implementing a whitelist of allowed values.</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3199,12 +4998,23 @@ Some library vulnerabilities expose every application that imports the library, 
 <p> Even if the user doesn't enter any sensitive information, the form may still deliver a valid CSRF token to the attacker, enabling them to perform CSRF attacks. In some cases web browsers may help exacerbate this issue by autocompleting forms with previously entered user input. </p>
 
 <p>Stored form action hijacking vulnerabilities arise when the applicable input was submitted in an previous request and stored by the application.</p>"#,
-        remediation: Some(r#"<p>Consider hard-coding the form action URL, or implementing a whitelist of allowed values.</p>"#),
+        remediation: Some(
+            r#"<p>Consider hard-coding the form action URL, or implementing a whitelist of allowed values.</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-73: External Control of File Name or Path"#, url: r#"https://cwe.mitre.org/data/definitions/73.html"# },
-            Classification { title: r#"CWE-20: Improper Input Validation"#, url: r#"https://cwe.mitre.org/data/definitions/20.html"# },
-            Classification { title: r#"CAPEC-153: Input Data Manipulation"#, url: r#"https://capec.mitre.org/data/definitions/153.html"# },
+            Classification {
+                title: r#"CWE-73: External Control of File Name or Path"#,
+                url: r#"https://cwe.mitre.org/data/definitions/73.html"#,
+            },
+            Classification {
+                title: r#"CWE-20: Improper Input Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/20.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-153: Input Data Manipulation"#,
+                url: r#"https://capec.mitre.org/data/definitions/153.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3213,14 +5023,26 @@ Some library vulnerabilities expose every application that imports the library, 
         name: r#"Database connection string disclosed"#,
         typical_severity: Severity::Medium,
         description: r#"<p>A database connection string specifies information about a data source and the means of connecting to it. In web applications, connection strings are generally used by the application tier to connect to the back database used for storing application data. They are usually read from server-side configuration files or hard-coded into application source code.</p>"#,
-        remediation: Some(r#"<p>It is almost never necessary for applications to disclose database connection strings to clients. The reason for the disclosure should be reviewed and addressed.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        remediation: Some(
+            r#"<p>It is almost never necessary for applications to disclose database connection strings to clients. The reason for the disclosure should be reviewed and addressed.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-15: External Control of System or Configuration Setting"#, url: r#"https://cwe.mitre.org/data/definitions/15.html"# },
-            Classification { title: r#"CWE-497: Exposure of System Data to an Unauthorized Control Sphere"#, url: r#"https://cwe.mitre.org/data/definitions/497.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-15: External Control of System or Configuration Setting"#,
+                url: r#"https://cwe.mitre.org/data/definitions/15.html"#,
+            },
+            Classification {
+                title: r#"CWE-497: Exposure of System Data to an Unauthorized Control Sphere"#,
+                url: r#"https://cwe.mitre.org/data/definitions/497.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3229,18 +5051,42 @@ Some library vulnerabilities expose every application that imports the library, 
         name: r#"Source code disclosure"#,
         typical_severity: Severity::Low,
         description: r#"<p>Source code intended to be kept server-side can sometimes end up being disclosed to users. Such code may contain sensitive information such as database passwords and secret keys, which may help malicious users formulate attacks against the application.</p>"#,
-        remediation: Some(r#"<p>Server-side source code is normally disclosed to clients as a result of typographical errors in scripts or because of misconfiguration, such as failing to grant executable permissions to a script or directory. Review the cause of the code disclosure and prevent it from happening.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        remediation: Some(
+            r#"<p>Server-side source code is normally disclosed to clients as a result of typographical errors in scripts or because of misconfiguration, such as failing to grant executable permissions to a script or directory. Review the cause of the code disclosure and prevent it from happening.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-18: Source Code"#, url: r#"https://cwe.mitre.org/data/definitions/18.html"# },
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-            Classification { title: r#"CWE-388: Error Handling"#, url: r#"https://cwe.mitre.org/data/definitions/388.html"# },
-            Classification { title: r#"CWE-540: Information Exposure Through Source Code"#, url: r#"https://cwe.mitre.org/data/definitions/540.html"# },
-            Classification { title: r#"CWE-541: Information Exposure Through Include Source Code"#, url: r#"https://cwe.mitre.org/data/definitions/541.html"# },
-            Classification { title: r#"CWE-615: Information Exposure Through Comments"#, url: r#"https://cwe.mitre.org/data/definitions/615.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-18: Source Code"#,
+                url: r#"https://cwe.mitre.org/data/definitions/18.html"#,
+            },
+            Classification {
+                title: r#"CWE-200: Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+            },
+            Classification {
+                title: r#"CWE-388: Error Handling"#,
+                url: r#"https://cwe.mitre.org/data/definitions/388.html"#,
+            },
+            Classification {
+                title: r#"CWE-540: Information Exposure Through Source Code"#,
+                url: r#"https://cwe.mitre.org/data/definitions/540.html"#,
+            },
+            Classification {
+                title: r#"CWE-541: Information Exposure Through Include Source Code"#,
+                url: r#"https://cwe.mitre.org/data/definitions/541.html"#,
+            },
+            Classification {
+                title: r#"CWE-615: Information Exposure Through Comments"#,
+                url: r#"https://cwe.mitre.org/data/definitions/615.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3249,14 +5095,26 @@ Some library vulnerabilities expose every application that imports the library, 
         name: r#"Backup file"#,
         typical_severity: Severity::Info,
         description: r#"<p>Publicly accessible backups and outdated copies of files can provide attackers with extra attack surface. Depending on the server configuration and file type, they may also expose source code, configuration details, and other information intended to remain secret.</p>"#,
-        remediation: Some(r#"<p>Review the file to identify whether it's intended to be publicly accessible, and remove it from the server's web root if it isn't. It may also be worth auditing the server contents to find other outdated files, and taking measures to prevent the problem from reoccurring. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure via backup files"#, url: r#"https://portswigger.net/web-security/information-disclosure/exploiting#source-code-disclosure-via-backup-files"# },
-        ],
+        remediation: Some(
+            r#"<p>Review the file to identify whether it's intended to be publicly accessible, and remove it from the server's web root if it isn't. It may also be worth auditing the server contents to find other outdated files, and taking measures to prevent the problem from reoccurring. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure via backup files"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure/exploiting#source-code-disclosure-via-backup-files"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-530: Exposure of Backup File to an Unauthorized Control Sphere"#, url: r#"https://cwe.mitre.org/data/definitions/530.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
-            Classification { title: r#"CAPEC-204: Lifting Sensitive Data Embedded in Cache"#, url: r#"https://capec.mitre.org/data/definitions/204.html"# },
+            Classification {
+                title: r#"CWE-530: Exposure of Backup File to an Unauthorized Control Sphere"#,
+                url: r#"https://cwe.mitre.org/data/definitions/530.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-204: Lifting Sensitive Data Embedded in Cache"#,
+                url: r#"https://capec.mitre.org/data/definitions/204.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3266,17 +5124,29 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>Web servers can be configured to automatically list the contents of directories that do not have an index page present. This can aid an attacker by enabling them to quickly identify the resources at a given path, and proceed directly to analyzing and attacking those resources. It particularly increases the exposure of sensitive files within the directory that are not intended to be accessible to users, such as temporary files and crash dumps.</p>
 <p>Directory listings themselves do not necessarily constitute a security vulnerability. Any sensitive resources within the web root should in any case be properly access-controlled, and should not be accessible by an unauthorized party who happens to know or guess the URL. Even when directory listings are disabled, an attacker may guess the location of sensitive files using automated tools.</p>"#,
-        remediation: Some(r#"<p>There is not usually any good reason to provide directory listings, and disabling them may place additional hurdles in the path of an attacker. This can normally be achieved in two ways:</p>
+        remediation: Some(
+            r#"<p>There is not usually any good reason to provide directory listings, and disabling them may place additional hurdles in the path of an attacker. This can normally be achieved in two ways:</p>
 <ul>
 <li>Configure your web server to prevent directory listings for all paths beneath the web root; </li>
-<li>Place into each directory a default file (such as index.htm) that the web server will display instead of returning a directory listing.</li></ul>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure via directory listings"#, url: r#"https://portswigger.net/web-security/information-disclosure/exploiting#directory-listings"# },
-        ],
+<li>Place into each directory a default file (such as index.htm) that the web server will display instead of returning a directory listing.</li></ul>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure via directory listings"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure/exploiting#directory-listings"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-538: File and Directory Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/538.html"# },
-            Classification { title: r#"CWE-548: Information Exposure Through Directory Listing"#, url: r#"https://cwe.mitre.org/data/definitions/548.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-538: File and Directory Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/538.html"#,
+            },
+            Classification {
+                title: r#"CWE-548: Information Exposure Through Directory Listing"#,
+                url: r#"https://cwe.mitre.org/data/definitions/548.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3286,14 +5156,23 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>The presence of email addresses within application responses does not necessarily constitute a security vulnerability. Email addresses may appear intentionally within contact information, and many applications (such as web mail) include arbitrary third-party email addresses within their core content.</p>
 <p>However, email addresses of developers and other individuals (whether appearing on-screen or hidden within page source) may disclose information that is useful to an attacker; for example, they may represent usernames that can be used at the application's login, and they may be used in social engineering attacks against the organization's personnel. Unnecessary or excessive disclosure of email addresses may also lead to an increase in the volume of spam email received.</p>"#,
-        remediation: Some(r#"<p>Consider removing any email addresses that are unnecessary, or replacing personal addresses with anonymous mailbox addresses (such as helpdesk@example.com).</p>
-<p>To reduce the quantity of spam sent to anonymous mailbox addresses, consider hiding the email address and instead providing a form that generates the email server-side, protected by a CAPTCHA if necessary. </p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        remediation: Some(
+            r#"<p>Consider removing any email addresses that are unnecessary, or replacing personal addresses with anonymous mailbox addresses (such as helpdesk@example.com).</p>
+<p>To reduce the quantity of spam sent to anonymous mailbox addresses, consider hiding the email address and instead providing a form that generates the email server-side, protected by a CAPTCHA if necessary. </p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-200: Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3303,13 +5182,22 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>RFC 1918 specifies ranges of IP addresses that are reserved for use in private networks and cannot be routed on the public Internet. Although various methods exist by which an attacker can determine the public IP addresses in use by an organization, the private addresses used internally cannot usually be determined in the same ways.</p>
 <p>Discovering the private addresses used within an organization can help an attacker in carrying out network-layer attacks aiming to penetrate the organization's internal infrastructure. </p>"#,
-        remediation: Some(r#"<p>There is not usually any good reason to disclose the internal IP addresses used within an organization's infrastructure. If these are being returned in service banners or debug messages, then the relevant services should be configured to mask the private addresses. If they are being used to track back-end servers for load balancing purposes, then the addresses should be rewritten with innocuous identifiers from which an attacker cannot infer any useful information about the infrastructure.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        remediation: Some(
+            r#"<p>There is not usually any good reason to disclose the internal IP addresses used within an organization's infrastructure. If these are being returned in service banners or debug messages, then the relevant services should be configured to mask the private addresses. If they are being used to track back-end servers for load balancing purposes, then the addresses should be rewritten with innocuous identifiers from which an attacker cannot infer any useful information about the infrastructure.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-200: Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3319,12 +5207,19 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>Applications sometimes disclose sensitive personal information such as social security numbers. Responses containing social security numbers may not represent any security vulnerability - for example, a number may belong to the logged-in user to whom it is displayed. If a social security number is identified during a security assessment it should be verified, then application logic reviewed to identify whether its disclosure within the application is necessary and appropriate.</p>"#,
         remediation: None,
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-200: Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3334,13 +5229,23 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>Applications sometimes disclose sensitive financial information such as credit card numbers. Responses containing credit card numbers may not represent any security vulnerability - for example, a number may belong to the logged-in user to whom it is displayed. If a credit card number is identified during a security assessment it should be verified, then application logic reviewed to identify whether its disclosure within the application is necessary and appropriate.</p>"#,
         remediation: None,
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-            Classification { title: r#"CWE-388: Error Handling"#, url: r#"https://cwe.mitre.org/data/definitions/312.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-200: Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+            },
+            Classification {
+                title: r#"CWE-388: Error Handling"#,
+                url: r#"https://cwe.mitre.org/data/definitions/312.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3350,14 +5255,27 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>Disclosure of valid private keys may lead to unauthorized access to any systems that use them for authentication. Verify whether any keys disclosed are actually valid, and whether their disclosure within the application is appropriate.</p>"#,
         remediation: None,
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-            Classification { title: r#"CWE-388: Error Handling"#, url: r#"https://cwe.mitre.org/data/definitions/312.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
-            Classification { title: r#"CAPEC-204: Lifting Sensitive Data Embedded in Cache"#, url: r#"https://capec.mitre.org/data/definitions/204.html"# },
+            Classification {
+                title: r#"CWE-200: Information Exposure"#,
+                url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+            },
+            Classification {
+                title: r#"CWE-388: Error Handling"#,
+                url: r#"https://cwe.mitre.org/data/definitions/312.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-204: Lifting Sensitive Data Embedded in Cache"#,
+                url: r#"https://capec.mitre.org/data/definitions/204.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3367,11 +5285,14 @@ Some library vulnerabilities expose every application that imports the library, 
         typical_severity: Severity::Info,
         description: r#"<p>The file robots.txt is used to give instructions to web robots, such as search engine crawlers, about locations within the web site that robots are allowed, or not allowed, to crawl and index.</p>
 <p>The presence of the robots.txt does not in itself present any kind of security vulnerability. However, it is often used to identify restricted or private areas of a site's contents. The information in the file may therefore help an attacker to map out the site's contents, especially if some of the locations identified are not linked from elsewhere in the site. If the application relies on robots.txt to protect access to these areas, and does not enforce proper access control over them, then this presents a serious vulnerability.</p>"#,
-        remediation: Some(r#"<p>The robots.txt file is not itself a security threat, and its correct use can represent good practice for non-security reasons. You should not assume that all web robots will honor the file's instructions. Rather, assume that attackers will pay close attention to any locations identified in the file. Do not rely on robots.txt to provide any kind of protection over unauthorized access.</p>"#),
+        remediation: Some(
+            r#"<p>The robots.txt file is not itself a security threat, and its correct use can represent good practice for non-security reasons. You should not assume that all web robots will honor the file's instructions. Rather, assume that attackers will pay close attention to any locations identified in the file. Do not rely on robots.txt to provide any kind of protection over unauthorized access.</p>"#,
+        ),
         references: &[],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 6293248,
@@ -3388,16 +5309,20 @@ Some library vulnerabilities expose every application that imports the library, 
 <p>
     Even if no secret key components are exposed, the knowledge of public keys may be useful for other attacks, such as algorithm and key confusion for example.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     If your JWK Set is exposed publicly, make sure to omit any private key components. As long as it only contains public key components, exposing a JWK Set
     is not a security threat in itself. In fact, its correct use can represent good practice for non-security reasons.
-</p>"#),
-        references: &[
-            Reference { title: r#"JSON Web Key (JWK)"#, url: r#"https://datatracker.ietf.org/doc/html/rfc7517"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"JSON Web Key (JWK)"#,
+            url: r#"https://datatracker.ietf.org/doc/html/rfc7517"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 6293504,
@@ -3413,17 +5338,21 @@ This parameter is particularly useful for servers that are configured to use mul
 If a server is configured incorrectly, it may accidentally include private key components into the "jwk" header parameter of JWTs that it issues.
 In this case, a malicious user could use any private keys they've obtained to tamper with the signature of JWT tokens and impersonate other users.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
 If your JWK is embedded into the JWT header, make sure to omit any private key components.
 As long as it only contains public key components, using the "jwk" header is not a security threat in itself.
 In fact, its correct use can help servers to select a proper key for verification.
-</p>"#),
-        references: &[
-            Reference { title: r#"JSON Web Key (JWK)"#, url: r#"https://datatracker.ietf.org/doc/html/rfc7517"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"JSON Web Key (JWK)"#,
+            url: r#"https://datatracker.ietf.org/doc/html/rfc7517"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 6293760,
@@ -3433,13 +5362,17 @@ In fact, its correct use can help servers to select a proper key for verificatio
         description: r#"<p>A publicly available OpenAPI definition was found.</p>
 <p>An OpenAPI definition describes the structure of an HTTP-based API in YAML or JSON format, according to the OpenAPI specification. It enables humans to discover and understand the service's capabilities, and is also designed to be processed by software for automating tasks like API integration and validation.</p>
 <p>A publicly-available OpenAPI definition does not necessarily present a security vulnerability. However, the API definition can be valuable to attackers as it may include information about the API structure, potentially enabling targeted attacks. For example it may include detailed explanations, examples, and usage scenarios.</p>"#,
-        remediation: Some(r#"<p>Make sure that your API documentation only contains necessary information before you deploy it to production. This prevents attackers from using the definition to discover details about the API's available operations and other potentially sensitive information, including administrative functions.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Identifying API endpoints"#, url: r#"https://portswigger.net/web-security/api-testing#identifying-api-endpoints"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+        remediation: Some(
+            r#"<p>Make sure that your API documentation only contains necessary information before you deploy it to production. This prevents attackers from using the definition to discover details about the API's available operations and other potentially sensitive information, including administrative functions.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Identifying API endpoints"#,
+            url: r#"https://portswigger.net/web-security/api-testing#identifying-api-endpoints"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 6293761,
@@ -3449,13 +5382,17 @@ In fact, its correct use can help servers to select a proper key for verificatio
         description: r#"<p>A publicly available OpenAPI definition was found.</p>
 <p>An OpenAPI definition describes the structure of an HTTP-based API in YAML or JSON format, according to the OpenAPI specification. It enables humans to discover and understand the service's capabilities, and is also designed to be processed by software for automating tasks like API integration and validation.</p>
 <p>A publicly-available OpenAPI definition does not necessarily present a security vulnerability. However, the API definition can be valuable to attackers as it may include information about the API structure, potentially enabling targeted attacks. For example it may include detailed explanations, examples, and usage scenarios.</p>"#,
-        remediation: Some(r#"<p>Make sure that your API documentation only contains necessary information before you deploy it to production. This prevents attackers from using the definition to discover details about the API's available operations and other potentially sensitive information, including administrative functions.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Identifying API endpoints"#, url: r#"https://portswigger.net/web-security/api-testing#identifying-api-endpoints"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-200: Information Exposure"#, url: r#"https://cwe.mitre.org/data/definitions/200.html"# },
-        ],
+        remediation: Some(
+            r#"<p>Make sure that your API documentation only contains necessary information before you deploy it to production. This prevents attackers from using the definition to discover details about the API's available operations and other potentially sensitive information, including administrative functions.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Identifying API endpoints"#,
+            url: r#"https://portswigger.net/web-security/api-testing#identifying-api-endpoints"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-200: Information Exposure"#,
+            url: r#"https://cwe.mitre.org/data/definitions/200.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 7340288,
@@ -3463,16 +5400,28 @@ In fact, its correct use can help servers to select a proper key for verificatio
         name: r#"Cacheable HTTPS response"#,
         typical_severity: Severity::Info,
         description: r#"<p>Unless directed otherwise, browsers may store a local cached copy of content received from web servers. Some browsers, including Internet Explorer, cache content accessed via HTTPS. If sensitive information in application responses is stored in the local cache, then this may be retrieved by other users who have access to the same computer at a future time.</p>"#,
-        remediation: Some(r#"<p>Applications should return caching directives instructing browsers not to store local copies of any sensitive data. Often, this can be achieved by configuring the web server to prevent caching for relevant paths within the web root. Alternatively, most web development platforms allow you to control the server's caching directives from within individual scripts. Ideally, the web server should return the following HTTP headers in all responses containing sensitive content:</p>
+        remediation: Some(
+            r#"<p>Applications should return caching directives instructing browsers not to store local copies of any sensitive data. Often, this can be achieved by configuring the web server to prevent caching for relevant paths within the web root. Alternatively, most web development platforms allow you to control the server's caching directives from within individual scripts. Ideally, the web server should return the following HTTP headers in all responses containing sensitive content:</p>
 <ul>
-<li>Cache-control: no-store</li><li>Pragma: no-cache</li></ul>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Information disclosure"#, url: r#"https://portswigger.net/web-security/information-disclosure"# },
-        ],
+<li>Cache-control: no-store</li><li>Pragma: no-cache</li></ul>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Information disclosure"#,
+            url: r#"https://portswigger.net/web-security/information-disclosure"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-524: Information Exposure Through Caching"#, url: r#"https://cwe.mitre.org/data/definitions/524.html"# },
-            Classification { title: r#"CWE-525: Information Exposure Through Browser Caching"#, url: r#"https://cwe.mitre.org/data/definitions/525.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-524: Information Exposure Through Caching"#,
+                url: r#"https://cwe.mitre.org/data/definitions/524.html"#,
+            },
+            Classification {
+                title: r#"CWE-525: Information Exposure Through Browser Caching"#,
+                url: r#"https://cwe.mitre.org/data/definitions/525.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3484,9 +5433,18 @@ In fact, its correct use can help servers to select a proper key for verificatio
         remediation: None,
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-310: Cryptographic Issues"#, url: r#"https://cwe.mitre.org/data/definitions/310.html"# },
-            Classification { title: r#"CWE-311: Missing Encryption of Sensitive Data"#, url: r#"https://cwe.mitre.org/data/definitions/311.html"# },
-            Classification { title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#, url: r#"https://capec.mitre.org/data/definitions/37.html"# },
+            Classification {
+                title: r#"CWE-310: Cryptographic Issues"#,
+                url: r#"https://cwe.mitre.org/data/definitions/310.html"#,
+            },
+            Classification {
+                title: r#"CWE-311: Missing Encryption of Sensitive Data"#,
+                url: r#"https://cwe.mitre.org/data/definitions/311.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-37: Retrieve Embedded Sensitive Data"#,
+                url: r#"https://capec.mitre.org/data/definitions/37.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3496,13 +5454,22 @@ In fact, its correct use can help servers to select a proper key for verificatio
         typical_severity: Severity::Info,
         description: r#"<p>If a  response specifies multiple incompatible content types, then the browser will usually analyze the response and attempt to determine the actual MIME type of its content. This can have unexpected results, and if the content contains any user-controllable data may lead to cross-site scripting or other client-side vulnerabilities.</p>
 <p>In most cases, the presence of multiple incompatible content type statements does not constitute a security flaw, particularly if the response contains static content. You should review the contents of affected responses, and the context in which they appear, to determine whether any vulnerability exists. </p>"#,
-        remediation: Some(r#"<p>For every response containing a message body, the application should include a single Content-type header that correctly and unambiguously states the MIME type of the content in the response body.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-        ],
+        remediation: Some(
+            r#"<p>For every response containing a message body, the application should include a single Content-type header that correctly and unambiguously states the MIME type of the content in the response body.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Cross-site scripting"#,
+            url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-436: Interpretation Conflict"#, url: r#"https://cwe.mitre.org/data/definitions/436.html"# },
-            Classification { title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#, url: r#"https://capec.mitre.org/data/definitions/63.html"# },
+            Classification {
+                title: r#"CWE-436: Interpretation Conflict"#,
+                url: r#"https://cwe.mitre.org/data/definitions/436.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#,
+                url: r#"https://capec.mitre.org/data/definitions/63.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3512,12 +5479,20 @@ In fact, its correct use can help servers to select a proper key for verificatio
         typical_severity: Severity::Info,
         description: r#"<p>If a  response states that it contains HTML content but does not specify a character set, then the browser may analyze the HTML and attempt to determine which character set it appears to be using. Even if the majority of the HTML actually employs a standard character set such as UTF-8, the presence of non-standard characters anywhere in the response may cause the browser to interpret the content using a different character set. This can have unexpected results, and can lead to cross-site scripting vulnerabilities in which non-standard encodings like UTF-7 can be used to bypass the application's defensive filters.</p>
 <p>In most cases, the absence of a charset directive does not constitute a security flaw, particularly if the response contains static content. You should review the contents of affected responses, and the context in which they appear, to determine whether any vulnerability exists. </p>"#,
-        remediation: Some(r#"<p>For every response containing HTML content, the application should include within the Content-type header a directive specifying a standard recognized character set, for example <b>charset=ISO-8859-1</b>.
-</p>"#),
+        remediation: Some(
+            r#"<p>For every response containing HTML content, the application should include within the Content-type header a directive specifying a standard recognized character set, for example <b>charset=ISO-8859-1</b>.
+</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CWE-436: Interpretation Conflict"#, url: r#"https://cwe.mitre.org/data/definitions/436.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CWE-436: Interpretation Conflict"#,
+                url: r#"https://cwe.mitre.org/data/definitions/436.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3527,12 +5502,20 @@ In fact, its correct use can help servers to select a proper key for verificatio
         typical_severity: Severity::Info,
         description: r#"<p>Applications may specify a non-standard character set as a result of typographical errors within the code base, or because of intentional usage of an unusual character set that is not universally recognized by browsers. If the browser does not recognize the character set specified by the application, then the browser may analyze the HTML and attempt to determine which character set it appears to be using. Even if the majority of the HTML actually employs a standard character set such as UTF-8, the presence of non-standard characters anywhere in the response may cause the browser to interpret the content using a different character set. This can have unexpected results, and can lead to cross-site scripting vulnerabilities in which non-standard encodings like UTF-7 can be used to bypass the application's defensive filters.</p>
 <p>In most cases, the absence of a valid charset directive does not constitute a security flaw, particularly if the response contains static content. You should review the contents of affected responses, and the context in which they appear, to determine whether any vulnerability exists. </p>"#,
-        remediation: Some(r#"<p>For every response containing HTML content, the application should include within the Content-type header a directive specifying a standard recognized character set, for example <b>charset=ISO-8859-1</b>.
-</p>"#),
+        remediation: Some(
+            r#"<p>For every response containing HTML content, the application should include within the Content-type header a directive specifying a standard recognized character set, for example <b>charset=ISO-8859-1</b>.
+</p>"#,
+        ),
         references: &[],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CWE-436: Interpretation Conflict"#, url: r#"https://cwe.mitre.org/data/definitions/436.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CWE-436: Interpretation Conflict"#,
+                url: r#"https://cwe.mitre.org/data/definitions/436.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3542,15 +5525,27 @@ In fact, its correct use can help servers to select a proper key for verificatio
         typical_severity: Severity::Low,
         description: r#"<p>If a  response specifies an incorrect content type then browsers may process the response in unexpected ways. If the  content type is specified to be a renderable text-based format, then the browser will usually attempt to interpret the response as being in that format, regardless of the actual contents of the response. Additionally, some other specified content types might sometimes be interpreted as HTML due to quirks in particular browsers. This behavior might lead to otherwise &quot;safe&quot; content such as images  being rendered as HTML, enabling cross-site scripting attacks in certain conditions.</p>
 <p>The presence of an incorrect content type statement typically only constitutes a security flaw when the affected resource is dynamically generated, uploaded by a user, or otherwise contains user input. You should review the contents of affected responses, and the context in which they appear, to determine whether any vulnerability exists.</p>"#,
-        remediation: Some(r#"<p>For every response containing a message body, the application should include a single Content-type header that correctly and unambiguously states the MIME type of the content in the response body.</p>
-<p>Additionally, the response header &quot;X-content-type-options: nosniff&quot; should be returned in all responses to reduce the likelihood that browsers will interpret content in a way that disregards the Content-type header.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-        ],
+        remediation: Some(
+            r#"<p>For every response containing a message body, the application should include a single Content-type header that correctly and unambiguously states the MIME type of the content in the response body.</p>
+<p>Additionally, the response header &quot;X-content-type-options: nosniff&quot; should be returned in all responses to reduce the likelihood that browsers will interpret content in a way that disregards the Content-type header.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Cross-site scripting"#,
+            url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CWE-436: Interpretation Conflict"#, url: r#"https://cwe.mitre.org/data/definitions/436.html"# },
-            Classification { title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#, url: r#"https://capec.mitre.org/data/definitions/63.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CWE-436: Interpretation Conflict"#,
+                url: r#"https://cwe.mitre.org/data/definitions/436.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#,
+                url: r#"https://capec.mitre.org/data/definitions/63.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3560,13 +5555,22 @@ In fact, its correct use can help servers to select a proper key for verificatio
         typical_severity: Severity::Info,
         description: r#"<p>If a  response does not specify a content type, then the browser will usually analyze the response and attempt to determine the MIME type of its content. This can have unexpected results, and if the content contains any user-controllable data may lead to cross-site scripting or other client-side vulnerabilities.</p>
 <p>In most cases, the absence of a content type statement does not constitute a security flaw, particularly if the response contains static content. You should review the contents of affected responses, and the context in which they appear, to determine whether any vulnerability exists. </p>"#,
-        remediation: Some(r#"<p>For every response containing a message body, the application should include a single Content-type header that correctly and unambiguously states the MIME type of the content in the response body.</p>"#),
-        references: &[
-            Reference { title: r#"Web Security Academy: Cross-site scripting"#, url: r#"https://portswigger.net/web-security/cross-site-scripting"# },
-        ],
+        remediation: Some(
+            r#"<p>For every response containing a message body, the application should include a single Content-type header that correctly and unambiguously states the MIME type of the content in the response body.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Web Security Academy: Cross-site scripting"#,
+            url: r#"https://portswigger.net/web-security/cross-site-scripting"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#, url: r#"https://capec.mitre.org/data/definitions/63.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-63: Cross-Site Scripting (XSS)"#,
+                url: r#"https://capec.mitre.org/data/definitions/63.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3577,13 +5581,23 @@ In fact, its correct use can help servers to select a proper key for verificatio
         description: r#"<p>TLS (or SSL) helps to protect the confidentiality and integrity of information in transit between the browser and server, and to provide authentication of the server's identity. To serve this purpose, the server must present an TLS certificate that is valid for the server's hostname, is issued by a trusted authority and is valid for the current date. If any one of these requirements is not met, TLS connections to the server will not provide the full protection for which TLS is designed.</p>
 <p>It should be noted that various attacks exist against TLS in general, and in the context of HTTPS web connections in particular. It may be possible for a determined and suitably-positioned attacker to compromise TLS connections without user detection even when a valid TLS certificate is used. </p>"#,
         remediation: None,
-        references: &[
-            Reference { title: r#"SSL/TLS Configuration Guide"#, url: r#"https://wiki.mozilla.org/Security/Server_Side_TLS"# },
-        ],
+        references: &[Reference {
+            title: r#"SSL/TLS Configuration Guide"#,
+            url: r#"https://wiki.mozilla.org/Security/Server_Side_TLS"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-295: Improper Certificate Validation"#, url: r#"https://cwe.mitre.org/data/definitions/295.html"# },
-            Classification { title: r#"CWE-326: Inadequate Encryption Strength"#, url: r#"https://cwe.mitre.org/data/definitions/326.html"# },
-            Classification { title: r#"CWE-327: Use of a Broken or Risky Cryptographic Algorithm"#, url: r#"https://cwe.mitre.org/data/definitions/327.html"# },
+            Classification {
+                title: r#"CWE-295: Improper Certificate Validation"#,
+                url: r#"https://cwe.mitre.org/data/definitions/295.html"#,
+            },
+            Classification {
+                title: r#"CWE-326: Inadequate Encryption Strength"#,
+                url: r#"https://cwe.mitre.org/data/definitions/326.html"#,
+            },
+            Classification {
+                title: r#"CWE-327: Use of a Broken or Risky Cryptographic Algorithm"#,
+                url: r#"https://cwe.mitre.org/data/definitions/327.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3592,16 +5606,36 @@ In fact, its correct use can help servers to select a proper key for verificatio
         name: r#"Unencrypted communications"#,
         typical_severity: Severity::Low,
         description: r#"<p>The application allows users to connect to it over unencrypted connections. An attacker suitably positioned to view a legitimate user's network traffic could record and monitor their interactions with the application and obtain any information the user supplies. Furthermore, an attacker able to modify traffic could use the application as a platform for attacks against its users and third-party websites. Unencrypted connections have been exploited by ISPs and governments to track users, and to inject adverts and malicious JavaScript. Due to these concerns, web browser vendors are planning to visually flag unencrypted connections as hazardous.</p><p>To exploit this vulnerability, an attacker must be suitably positioned to eavesdrop on the victim's network traffic. This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure.</p><p>Please note that using a mixture of encrypted and unencrypted communications is an ineffective defense against active attackers, because they can easily remove references to encrypted resources when these references are transmitted over an unencrypted connection.</p>"#,
-        remediation: Some(r#"<p>Applications should use transport-level encryption (SSL/TLS) to protect all communications passing between the client and the server. The Strict-Transport-Security HTTP header should be used to ensure that clients refuse to access the server over an insecure connection.</p>"#),
+        remediation: Some(
+            r#"<p>Applications should use transport-level encryption (SSL/TLS) to protect all communications passing between the client and the server. The Strict-Transport-Security HTTP header should be used to ensure that clients refuse to access the server over an insecure connection.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"Marking HTTP as non-secure"#, url: r#"https://www.chromium.org/Home/chromium-security/marking-http-as-non-secure"# },
-            Reference { title: r#"Configuring Server-Side SSL/TLS"#, url: r#"https://wiki.mozilla.org/Security/Server_Side_TLS"# },
-            Reference { title: r#"HTTP Strict Transport Security"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/Security/HTTP_strict_transport_security"# },
+            Reference {
+                title: r#"Marking HTTP as non-secure"#,
+                url: r#"https://www.chromium.org/Home/chromium-security/marking-http-as-non-secure"#,
+            },
+            Reference {
+                title: r#"Configuring Server-Side SSL/TLS"#,
+                url: r#"https://wiki.mozilla.org/Security/Server_Side_TLS"#,
+            },
+            Reference {
+                title: r#"HTTP Strict Transport Security"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/Security/HTTP_strict_transport_security"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-326: Inadequate Encryption Strength"#, url: r#"https://cwe.mitre.org/data/definitions/326.html"# },
-            Classification { title: r#"CAPEC-94: Man in the Middle Attack"#, url: r#"https://capec.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CAPEC-157: Sniffing Attacks"#, url: r#"https://capec.mitre.org/data/definitions/157.html"# },
+            Classification {
+                title: r#"CWE-326: Inadequate Encryption Strength"#,
+                url: r#"https://cwe.mitre.org/data/definitions/326.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-94: Man in the Middle Attack"#,
+                url: r#"https://capec.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-157: Sniffing Attacks"#,
+                url: r#"https://capec.mitre.org/data/definitions/157.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3612,17 +5646,37 @@ In fact, its correct use can help servers to select a proper key for verificatio
         description: r#"<p> The application fails to prevent users from connecting  to it over unencrypted connections.  An attacker able to modify a legitimate user's network traffic could bypass the application's use of SSL/TLS encryption, and use the application as a platform for attacks against its users. This attack is performed by rewriting HTTPS links as HTTP, so that if a targeted user follows a link to the site from an HTTP page, their browser never attempts to use an encrypted connection. The sslstrip tool  automates this process. </p>
 <p>
 To exploit this vulnerability, an attacker must be suitably positioned to intercept and modify the victim's network traffic.This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure. </p>"#,
-        remediation: Some(r#"<p>The application should instruct web browsers to only access the application using HTTPS. To do this, enable HTTP Strict Transport Security (HSTS) by adding a response header with the name 'Strict-Transport-Security' and the value 'max-age=expireTime', where expireTime is the time in seconds that browsers should remember that the site should only be accessed using HTTPS. Consider adding the 'includeSubDomains' flag if appropriate.</p>
-<p>Note that because HSTS is a &quot;trust on first use&quot; (TOFU) protocol, a user who has never accessed the application will never have seen the HSTS header, and will therefore still be vulnerable to SSL stripping attacks. To mitigate this risk, you can optionally add the 'preload' flag to the HSTS header, and submit the domain for review by browser vendors.</p>"#),
+        remediation: Some(
+            r#"<p>The application should instruct web browsers to only access the application using HTTPS. To do this, enable HTTP Strict Transport Security (HSTS) by adding a response header with the name 'Strict-Transport-Security' and the value 'max-age=expireTime', where expireTime is the time in seconds that browsers should remember that the site should only be accessed using HTTPS. Consider adding the 'includeSubDomains' flag if appropriate.</p>
+<p>Note that because HSTS is a &quot;trust on first use&quot; (TOFU) protocol, a user who has never accessed the application will never have seen the HSTS header, and will therefore still be vulnerable to SSL stripping attacks. To mitigate this risk, you can optionally add the 'preload' flag to the HSTS header, and submit the domain for review by browser vendors.</p>"#,
+        ),
         references: &[
-            Reference { title: r#"HTTP Strict Transport Security"#, url: r#"https://developer.mozilla.org/en-US/docs/Web/Security/HTTP_strict_transport_security"# },
-            Reference { title: r#"sslstrip"#, url: r#"https://github.com/moxie0/sslstrip"# },
-            Reference { title: r#"HSTS Preload Form"#, url: r#"https://hstspreload.appspot.com/"# },
+            Reference {
+                title: r#"HTTP Strict Transport Security"#,
+                url: r#"https://developer.mozilla.org/en-US/docs/Web/Security/HTTP_strict_transport_security"#,
+            },
+            Reference {
+                title: r#"sslstrip"#,
+                url: r#"https://github.com/moxie0/sslstrip"#,
+            },
+            Reference {
+                title: r#"HSTS Preload Form"#,
+                url: r#"https://hstspreload.appspot.com/"#,
+            },
         ],
         classifications: &[
-            Classification { title: r#"CWE-523: Unprotected Transport of Credentials"#, url: r#"https://cwe.mitre.org/data/definitions/523.html"# },
-            Classification { title: r#"CAPEC-94: Man in the Middle Attack"#, url: r#"https://capec.mitre.org/data/definitions/94.html"# },
-            Classification { title: r#"CAPEC-157: Sniffing Attacks"#, url: r#"https://capec.mitre.org/data/definitions/157.html"# },
+            Classification {
+                title: r#"CWE-523: Unprotected Transport of Credentials"#,
+                url: r#"https://cwe.mitre.org/data/definitions/523.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-94: Man in the Middle Attack"#,
+                url: r#"https://capec.mitre.org/data/definitions/94.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-157: Sniffing Attacks"#,
+                url: r#"https://capec.mitre.org/data/definitions/157.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3631,14 +5685,26 @@ To exploit this vulnerability, an attacker must be suitably positioned to interc
         name: r#"Mixed content"#,
         typical_severity: Severity::Info,
         description: r#"<p>The application loads pages over HTTPS that load other resources over unencrypted connections. An attacker suitably positioned to view a legitimate user's network traffic could record and monitor their interactions with these resources, which may indirectly disclose information about the user's activity on the application itself. Furthermore, an attacker able to modify traffic could alter these resources and potentially influence the application's appearance and behavior. Due to these concerns, users' web browsers may automatically display warnings and disable affected components of the page. As a result, this vulnerability currently has more of an impact on usability than security.</p><p>To exploit this vulnerability, an attacker must be suitably positioned to eavesdrop on the victim's network traffic. This scenario typically occurs when a client communicates with the server over an insecure connection such as public Wi-Fi, or a corporate or home network that is shared with a compromised computer. Common defenses such as switched networks are not sufficient to prevent this. An attacker situated in the user's ISP or the application's hosting infrastructure could also perform this attack. Note that an advanced adversary could potentially target any connection made over the Internet's core infrastructure.</p>"#,
-        remediation: Some(r#"<p>Ensure that all external resources the page references are loaded using HTTPS.</p>"#),
-        references: &[
-            Reference { title: r#"Mixed Content"#, url: r#"https://developer.mozilla.org/en/docs/Security/MixedContent"# },
-        ],
+        remediation: Some(
+            r#"<p>Ensure that all external resources the page references are loaded using HTTPS.</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"Mixed Content"#,
+            url: r#"https://developer.mozilla.org/en/docs/Security/MixedContent"#,
+        }],
         classifications: &[
-            Classification { title: r#"CWE-16: Configuration"#, url: r#"https://cwe.mitre.org/data/definitions/16.html"# },
-            Classification { title: r#"CWE-319: Cleartext Transmission of Sensitive Information"#, url: r#"https://cwe.mitre.org/data/definitions/319.html"# },
-            Classification { title: r#"CAPEC-117: Interception"#, url: r#"https://capec.mitre.org/data/definitions/117.html"# },
+            Classification {
+                title: r#"CWE-16: Configuration"#,
+                url: r#"https://cwe.mitre.org/data/definitions/16.html"#,
+            },
+            Classification {
+                title: r#"CWE-319: Cleartext Transmission of Sensitive Information"#,
+                url: r#"https://cwe.mitre.org/data/definitions/319.html"#,
+            },
+            Classification {
+                title: r#"CAPEC-117: Interception"#,
+                url: r#"https://capec.mitre.org/data/definitions/117.html"#,
+            },
         ],
     },
     IssueDefinition {
@@ -3652,15 +5718,19 @@ To exploit this vulnerability, an attacker must be suitably positioned to interc
 <p>
     Some misconfigured servers that do support HTTP/2 fail to advertise this, making it appear as though they only support HTTP/1.1. This can lead to people overlooking viable HTTP/2 attack surface and missing associated vulnerabilities, such as HTTP/2 downgrade-based request smuggling.
 </p>"#,
-        remediation: Some(r#"<p>
+        remediation: Some(
+            r#"<p>
     If you want to use HTTP/2, make sure the server is configured to advertise it correctly. Otherwise, consider fully disabling it server-side to reduce unnecessary attack surface.
-</p>"#),
-        references: &[
-            Reference { title: r#"HTTP/2: The Sequel is Always Worse"#, url: r#"https://portswigger.net/research/http2"# },
-        ],
-        classifications: &[
-            Classification { title: r#"CWE-912: Hidden Functionality"#, url: r#"https://cwe.mitre.org/data/definitions/912.html"# },
-        ],
+</p>"#,
+        ),
+        references: &[Reference {
+            title: r#"HTTP/2: The Sequel is Always Worse"#,
+            url: r#"https://portswigger.net/research/http2"#,
+        }],
+        classifications: &[Classification {
+            title: r#"CWE-912: Hidden Functionality"#,
+            url: r#"https://cwe.mitre.org/data/definitions/912.html"#,
+        }],
     },
     IssueDefinition {
         type_index: 134217728,

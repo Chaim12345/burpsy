@@ -186,7 +186,10 @@ impl Disposition {
     /// True when the engine declined to admit the work — the reason a clean result here would be
     /// a lie.
     pub fn stopped_looking(&self) -> bool {
-        !matches!(self, Disposition::Ran | Disposition::Unsupported | Disposition::SendFailed)
+        !matches!(
+            self,
+            Disposition::Ran | Disposition::Unsupported | Disposition::SendFailed
+        )
     }
 
     /// One line an operator can act on.
@@ -194,13 +197,25 @@ impl Disposition {
         match self {
             Disposition::Ran => "the check ran to completion",
             Disposition::Unsupported => "the evaluator cannot run this check, so it proves nothing",
-            Disposition::SendFailed => "the probe could not be sent or read, so the check saw no evidence",
-            Disposition::AlreadyCovered => "an identical check already ran against this dispatch unit",
+            Disposition::SendFailed => {
+                "the probe could not be sent or read, so the check saw no evidence"
+            }
+            Disposition::AlreadyCovered => {
+                "an identical check already ran against this dispatch unit"
+            }
             Disposition::TimeBudgetSpent => "not started: the audit time budget was already spent",
-            Disposition::RequestBudgetSpent => "not started: the outbound request budget was already spent",
-            Disposition::UnitAbandoned => "not started: too many consecutive failures on this dispatch unit",
-            Disposition::ItemFailed => "not started: too many failing dispatch units on this request",
-            Disposition::SessionPaused => "not started: the session was paused by the failure breaker",
+            Disposition::RequestBudgetSpent => {
+                "not started: the outbound request budget was already spent"
+            }
+            Disposition::UnitAbandoned => {
+                "not started: too many consecutive failures on this dispatch unit"
+            }
+            Disposition::ItemFailed => {
+                "not started: too many failing dispatch units on this request"
+            }
+            Disposition::SessionPaused => {
+                "not started: the session was paused by the failure breaker"
+            }
         }
     }
 }
@@ -262,7 +277,10 @@ impl ItemState {
     /// True when checks were dispatched against this item, so its disposition counts should
     /// account for every check considered.
     pub fn dispatched(&self) -> bool {
-        matches!(self, ItemState::Audited | ItemState::Bounded | ItemState::Failed)
+        matches!(
+            self,
+            ItemState::Audited | ItemState::Bounded | ItemState::Failed
+        )
     }
 
     pub fn label(&self) -> &'static str {
@@ -608,8 +626,14 @@ mod tests {
 
     #[test]
     fn bcheck_given_clauses_reach_four_of_the_seven_dispatch_scopes() {
-        assert_eq!(DispatchScope::from_frequency(&Frequency::Host), Some(DispatchScope::PerHost));
-        assert_eq!(DispatchScope::from_frequency(&Frequency::Path), Some(DispatchScope::PerPath));
+        assert_eq!(
+            DispatchScope::from_frequency(&Frequency::Host),
+            Some(DispatchScope::PerHost)
+        );
+        assert_eq!(
+            DispatchScope::from_frequency(&Frequency::Path),
+            Some(DispatchScope::PerPath)
+        );
         assert_eq!(
             DispatchScope::from_frequency(&Frequency::Request),
             Some(DispatchScope::PerRequest)
@@ -625,7 +649,10 @@ mod tests {
     #[test]
     fn the_three_unreachable_scopes_yield_no_dispatch_unit() {
         let ex = exchange(1, "a.test", "/x", true);
-        let reachable: Vec<_> = DispatchScope::ALL.iter().filter(|s| s.is_reachable()).collect();
+        let reachable: Vec<_> = DispatchScope::ALL
+            .iter()
+            .filter(|s| s.is_reachable())
+            .collect();
         assert_eq!(reachable.len(), 4, "four of seven are wired up");
         for s in DispatchScope::ALL {
             // Nothing can be admitted to a scope with no key, so an unreachable scope cannot
@@ -649,11 +676,20 @@ mod tests {
         assert_eq!(k(DispatchScope::PerHost, &a), k(DispatchScope::PerHost, &b));
         assert_eq!(k(DispatchScope::PerPath, &a), k(DispatchScope::PerPath, &b));
         assert_ne!(k(DispatchScope::PerUrl, &a), k(DispatchScope::PerUrl, &b));
-        assert_ne!(k(DispatchScope::PerRequest, &a), k(DispatchScope::PerRequest, &b));
+        assert_ne!(
+            k(DispatchScope::PerRequest, &a),
+            k(DispatchScope::PerRequest, &b)
+        );
 
         assert_eq!(k(DispatchScope::PerHost, &a), "https://a.test:443");
-        assert_eq!(k(DispatchScope::PerPath, &a), "https://a.test:443/shop/item");
-        assert_eq!(k(DispatchScope::PerUrl, &a), "https://a.test:443/shop/item?id=1");
+        assert_eq!(
+            k(DispatchScope::PerPath, &a),
+            "https://a.test:443/shop/item"
+        );
+        assert_eq!(
+            k(DispatchScope::PerUrl, &a),
+            "https://a.test:443/shop/item?id=1"
+        );
     }
 
     #[test]
@@ -672,9 +708,18 @@ mod tests {
     fn the_ledger_admits_a_pair_once_and_refuses_the_repeat() {
         let mut l = AuditLedger::new();
         assert!(l.admit("https://a.test:443", 0));
-        assert!(!l.admit("https://a.test:443", 0), "the same pair must not be admitted twice");
-        assert!(l.admit("https://a.test:443", 1), "a different check is a different pair");
-        assert!(l.admit("https://b.test:443", 0), "a different unit is a different pair");
+        assert!(
+            !l.admit("https://a.test:443", 0),
+            "the same pair must not be admitted twice"
+        );
+        assert!(
+            l.admit("https://a.test:443", 1),
+            "a different check is a different pair"
+        );
+        assert!(
+            l.admit("https://b.test:443", 0),
+            "a different unit is a different pair"
+        );
         assert_eq!(l.units(), 2);
         assert_eq!(l.admitted(), 3);
     }
@@ -696,11 +741,20 @@ mod tests {
     fn two_consecutive_check_failures_abandon_the_unit_and_two_units_fail_the_item() {
         let mut b = ItemBreaker::new(&AuditConfig::default());
         assert!(!b.check_failed(), "one failure is not enough");
-        assert!(b.check_failed(), "the second consecutive failure abandons the unit");
-        assert!(!b.unit_finished(true), "one abandoned unit is not enough to fail the item");
+        assert!(
+            b.check_failed(),
+            "the second consecutive failure abandons the unit"
+        );
+        assert!(
+            !b.unit_finished(true),
+            "one abandoned unit is not enough to fail the item"
+        );
         assert!(!b.check_failed());
         assert!(b.check_failed());
-        assert!(b.unit_finished(true), "the second abandoned unit fails the item");
+        assert!(
+            b.unit_finished(true),
+            "the second abandoned unit fails the item"
+        );
         assert!(b.item_failed());
     }
 
@@ -709,7 +763,10 @@ mod tests {
         let mut b = ItemBreaker::new(&AuditConfig::default());
         assert!(!b.check_failed());
         b.check_succeeded();
-        assert!(!b.check_failed(), "the streak restarted, so this is failure one again");
+        assert!(
+            !b.check_failed(),
+            "the streak restarted, so this is failure one again"
+        );
         assert!(b.check_failed());
     }
 
@@ -718,7 +775,10 @@ mod tests {
         let mut b = ItemBreaker::new(&AuditConfig::default());
         assert!(!b.unit_finished(true));
         assert!(!b.unit_finished(false), "a good unit clears the streak");
-        assert!(!b.unit_finished(true), "so this is abandoned unit one again");
+        assert!(
+            !b.unit_finished(true),
+            "so this is abandoned unit one again"
+        );
         assert!(b.unit_finished(true));
     }
 
@@ -726,7 +786,10 @@ mod tests {
     fn zero_disables_a_breaker_as_the_shipped_never_stop_preset_does() {
         let mut b = ItemBreaker::new(&AuditConfig::without_breakers());
         for _ in 0..50 {
-            assert!(!b.check_failed(), "with the breaker off no failure count abandons the unit");
+            assert!(
+                !b.check_failed(),
+                "with the breaker off no failure count abandons the unit"
+            );
         }
         for _ in 0..50 {
             assert!(!b.unit_finished(true));
@@ -742,18 +805,26 @@ mod tests {
         }
         assert_eq!(off.failed_items(), 100);
 
-        let cfg = AuditConfig { pause_session_after_failed_items: 3, ..AuditConfig::default() };
+        let cfg = AuditConfig {
+            pause_session_after_failed_items: 3,
+            ..AuditConfig::default()
+        };
         let mut armed = SessionBreaker::new(&cfg);
         assert!(!armed.item_finished(true));
         assert!(!armed.item_finished(false));
         assert!(!armed.item_finished(true));
-        assert!(armed.item_finished(true), "the third failed item trips the count breaker");
+        assert!(
+            armed.item_finished(true),
+            "the third failed item trips the count breaker"
+        );
     }
 
     #[test]
     fn the_session_breaker_trips_on_a_percentage_when_armed() {
-        let cfg =
-            AuditConfig { pause_session_at_failed_item_percentage: 50, ..AuditConfig::default() };
+        let cfg = AuditConfig {
+            pause_session_at_failed_item_percentage: 50,
+            ..AuditConfig::default()
+        };
         let mut b = SessionBreaker::new(&cfg);
         assert!(b.item_finished(true), "1 of 1 failed is 100%");
 
@@ -772,7 +843,11 @@ mod tests {
     fn built_in_presets_overlay_only_the_keys_their_source_file_sets() {
         let lightweight = built_in_config("Crawl and Audit - Lightweight").unwrap();
         let cfg = lightweight.apply(AuditConfig::default());
-        assert_eq!(cfg.time_budget, Duration::from_secs(15 * 60), "maximum_crawl_and_audit_time");
+        assert_eq!(
+            cfg.time_budget,
+            Duration::from_secs(15 * 60),
+            "maximum_crawl_and_audit_time"
+        );
         assert_eq!(cfg.consecutive_check_failures_to_abandon_unit, 2);
         assert_eq!(cfg.pause_session_after_failed_items, 0);
 
@@ -780,10 +855,17 @@ mod tests {
         // an absent key is not a zero.
         let balanced = built_in_config("Crawl and Audit - Balanced").unwrap();
         let cfg = balanced.apply(AuditConfig::default());
-        assert_eq!(cfg.time_budget, DEFAULT_AUDIT_BUDGET, "absent key must not become zero");
+        assert_eq!(
+            cfg.time_budget, DEFAULT_AUDIT_BUDGET,
+            "absent key must not become zero"
+        );
         assert_eq!(cfg.consecutive_unit_failures_to_fail_item, 2);
 
-        assert_eq!(BUILT_IN_CONFIGS.len(), 6, "of Burp's 29 shipped configurations");
+        assert_eq!(
+            BUILT_IN_CONFIGS.len(),
+            6,
+            "of Burp's 29 shipped configurations"
+        );
         assert!(built_in_config("Crawl and Audit - Nonexistent").is_none());
     }
 
@@ -822,7 +904,11 @@ mod tests {
             ItemState::Unauditable,
         ] {
             assert!(s.is_terminal(), "{} should be terminal", s.label());
-            assert!(!s.completed_audit(), "{} must not count as audited", s.label());
+            assert!(
+                !s.completed_audit(),
+                "{} must not count as audited",
+                s.label()
+            );
         }
         assert!(!ItemState::Pending.is_terminal());
         assert!(!ItemState::Auditing.is_terminal());

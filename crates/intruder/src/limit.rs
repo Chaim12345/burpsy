@@ -169,7 +169,11 @@ impl RateLimiter {
         // 1e300 seconds. That input was reachable from the HTTP edge, which capped rps only from
         // above. The edge now has a floor too, but a limiter that panics on a legal `f64` is a
         // sharp edge regardless of who is holding it, so it saturates here instead.
-        Some(Duration::try_from_secs_f64(-b.tokens / rps).unwrap_or(MAX_WAIT).min(MAX_WAIT))
+        Some(
+            Duration::try_from_secs_f64(-b.tokens / rps)
+                .unwrap_or(MAX_WAIT)
+                .min(MAX_WAIT),
+        )
     }
 
     /// Slots currently free. Exposed so callers can report progress, not to make decisions with.
@@ -300,15 +304,23 @@ mod tests {
         let _first = l.acquire().await; // free: the burst token
         // The second computes a wait. It must clamp, not panic — and must not actually sleep for
         // an hour inside a test, so we only check that reserve() produced a finite bounded value.
-        let wait = l.reserve(Instant::now()).expect("a spent bucket must ask for a wait");
-        assert_eq!(wait, MAX_WAIT, "an unrepresentable wait must clamp to the ceiling");
+        let wait = l
+            .reserve(Instant::now())
+            .expect("a spent bucket must ask for a wait");
+        assert_eq!(
+            wait, MAX_WAIT,
+            "an unrepresentable wait must clamp to the ceiling"
+        );
     }
 
     #[test]
     fn a_normal_rate_is_unaffected_by_the_clamp() {
         // Guard against over-correcting: the clamp must not distort ordinary waits.
         let l = RateLimiter::new(RateLimit::new(Some(10.0), 1, 4));
-        assert!(l.reserve(Instant::now()).is_none(), "the burst token is free");
+        assert!(
+            l.reserve(Instant::now()).is_none(),
+            "the burst token is free"
+        );
         let wait = l.reserve(Instant::now()).expect("second must wait");
         // 1 token at 10/s == 100ms, give or take the nanoseconds this took to run.
         assert!(
@@ -320,7 +332,10 @@ mod tests {
     #[test]
     fn an_unset_rate_still_leaves_concurrency_bounded() {
         let l = RateLimiter::new(RateLimit::unthrottled(3));
-        assert!(l.reserve(Instant::now()).is_none(), "no rate cap must never impose a wait");
+        assert!(
+            l.reserve(Instant::now()).is_none(),
+            "no rate cap must never impose a wait"
+        );
         assert_eq!(l.available_slots(), 3);
     }
 }

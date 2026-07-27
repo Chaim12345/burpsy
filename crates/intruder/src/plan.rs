@@ -123,7 +123,11 @@ impl AttackPlan {
                 false,
             ),
             AttackKind::BatteringRam => {
-                let n = if points == 0 { 0 } else { lens.first().copied().unwrap_or(0) };
+                let n = if points == 0 {
+                    0
+                } else {
+                    lens.first().copied().unwrap_or(0)
+                };
                 (n as u128, false)
             }
             AttackKind::Pitchfork => (lens.iter().copied().min().unwrap_or(0) as u128, false),
@@ -378,7 +382,11 @@ mod tests {
         let p = AttackPlan::new(AttackKind::ClusterBomb, 3, &[1_000, 1_000, 1_000], 5_000);
         assert_eq!(p.combinations(), 1_000_000_000);
         assert!(p.combinations_exact());
-        assert_eq!(p.len(), 5_000, "the bound, not the product, is what gets sent");
+        assert_eq!(
+            p.len(),
+            5_000,
+            "the bound, not the product, is what gets sent"
+        );
         assert!(p.truncated(), "and the caller can see it was cut");
         // Nothing was materialised: the plan owns one Vec of three set lengths.
         assert_eq!(p.set_lens.len(), 3);
@@ -397,7 +405,10 @@ mod tests {
     fn an_absurd_product_saturates_and_says_so() {
         let p = AttackPlan::new(AttackKind::ClusterBomb, 8, &[usize::MAX; 8], 10);
         assert_eq!(p.combinations(), u64::MAX);
-        assert!(!p.combinations_exact(), "a saturated count must not be presented as exact");
+        assert!(
+            !p.combinations_exact(),
+            "a saturated count must not be presented as exact"
+        );
         assert!(p.truncated());
         assert_eq!(p.len(), 10);
     }

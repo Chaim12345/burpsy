@@ -284,7 +284,11 @@ mod tests {
                     candidate.issue_name.as_deref().unwrap_or(""),
                     candidate.host
                 );
-            assert_eq!(by_field, by_key, "disagreement on {:?}", candidate.check_name);
+            assert_eq!(
+                by_field, by_key,
+                "disagreement on {:?}",
+                candidate.check_name
+            );
         }
         assert!(f.same_issue_as(&base));
         assert!(!f.same_issue_as(&differs_by_check));
@@ -296,9 +300,18 @@ mod tests {
     fn same_check_same_host_different_paths_is_one_finding() {
         // The case that matters: a secret regex firing across many pages of one host.
         let mut s = FindingStore::new();
-        assert!(matches!(s.insert(nf("Leaked key", "a.test", "/1", 1)), Inserted::New(_)));
-        assert!(matches!(s.insert(nf("Leaked key", "a.test", "/2", 2)), Inserted::Merged(_)));
-        assert!(matches!(s.insert(nf("Leaked key", "a.test", "/3", 3)), Inserted::Merged(_)));
+        assert!(matches!(
+            s.insert(nf("Leaked key", "a.test", "/1", 1)),
+            Inserted::New(_)
+        ));
+        assert!(matches!(
+            s.insert(nf("Leaked key", "a.test", "/2", 2)),
+            Inserted::Merged(_)
+        ));
+        assert!(matches!(
+            s.insert(nf("Leaked key", "a.test", "/3", 3)),
+            Inserted::Merged(_)
+        ));
         assert_eq!(s.len(), 1);
         let f = &s.all()[0];
         assert_eq!(f.times_seen, 3);
@@ -321,8 +334,16 @@ mod tests {
             s.insert(nf("Header missing", "a.test", "/x", i));
         }
         let f = &s.all()[0];
-        assert_eq!(f.occurrences.len(), MAX_OCCURRENCES, "occurrences must be capped");
-        assert_eq!(f.times_seen, MAX_OCCURRENCES as u64 + 25, "true count must be kept");
+        assert_eq!(
+            f.occurrences.len(),
+            MAX_OCCURRENCES,
+            "occurrences must be capped"
+        );
+        assert_eq!(
+            f.times_seen,
+            MAX_OCCURRENCES as u64 + 25,
+            "true count must be kept"
+        );
     }
 
     #[test]

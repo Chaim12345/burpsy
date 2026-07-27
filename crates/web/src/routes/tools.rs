@@ -140,15 +140,17 @@ struct RunView {
     output_len: usize,
 }
 
-async fn decode(
-    State(s): State<AppState>,
-    Json(req): Json<DecodeReq>,
-) -> impl IntoResponse {
+async fn decode(State(s): State<AppState>, Json(req): Json<DecodeReq>) -> impl IntoResponse {
     let input = match source(&s, req.msg_id, Some(&req.input)) {
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };
-    let name = req.encoding.as_deref().unwrap_or("smart").trim().to_string();
+    let name = req
+        .encoding
+        .as_deref()
+        .unwrap_or("smart")
+        .trim()
+        .to_string();
 
     if name.is_empty() || name.eq_ignore_ascii_case("smart") {
         let opts = SmartOptions {
@@ -188,7 +190,11 @@ async fn decode(
     }
 
     let Some(layer) = Layer::parse(&name) else {
-        return (StatusCode::BAD_REQUEST, format!("unknown encoding {name:?}")).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("unknown encoding {name:?}"),
+        )
+            .into_response();
     };
     match decoder::decode(layer, &input) {
         Ok(out) => Json(serde_json::json!({
@@ -447,13 +453,10 @@ async fn log_record(
     });
     match (req.error, req.response_msg_id) {
         (Some(e), _) => t.log.failed(id, e, req.duration_ms),
-        (None, Some(r)) => t.log.finished(
-            id,
-            MsgId(r),
-            req.status,
-            req.response_len,
-            req.duration_ms,
-        ),
+        (None, Some(r)) => {
+            t.log
+                .finished(id, MsgId(r), req.status, req.response_len, req.duration_ms)
+        }
         (None, None) => {}
     }
     (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
@@ -694,7 +697,11 @@ mod tests {
             .nth(1)
             .and_then(|c| c.parse().ok())
             .unwrap_or(0);
-        let body = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("").to_string();
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b)
+            .unwrap_or("")
+            .to_string();
         (status, body)
     }
 
@@ -713,7 +720,11 @@ mod tests {
         // Two separate escape runs with plain text between them, so two regions fired — not one
         // whole-input guess. That is the per-position scan showing through the API.
         assert!(body.contains(r#""layers":["url","url"]"#), "{body}");
-        assert_eq!(body.matches(r#""layer":null"#).count(), 2, "plain regions kept: {body}");
+        assert_eq!(
+            body.matches(r#""layer":null"#).count(),
+            2,
+            "plain regions kept: {body}"
+        );
         // The ladder is exposed, which is the recoverability contract.
         assert!(body.contains("\"passes\""), "{body}");
         assert!(body.contains("\"why\""), "{body}");
@@ -728,7 +739,12 @@ mod tests {
         assert!(body.contains("a%20b"), "{body}");
 
         // Base64 is not guessed unless asked, and is when asked.
-        let (_, body) = post(&addr, "/api/tools/decode", r#"{"input":"SGVsbG8sIHdvcmxk"}"#).await;
+        let (_, body) = post(
+            &addr,
+            "/api/tools/decode",
+            r#"{"input":"SGVsbG8sIHdvcmxk"}"#,
+        )
+        .await;
         assert!(body.contains(r#""layers":[]"#), "{body}");
         let (_, body) = post(
             &addr,
@@ -853,9 +869,17 @@ mod tests {
             notes: None,
         });
 
-        let (code, body) = post(&addr, "/api/tools/organizer", &format!(r#"{{"exchange":{ex}}}"#)).await;
+        let (code, body) = post(
+            &addr,
+            "/api/tools/organizer",
+            &format!(r#"{{"exchange":{ex}}}"#),
+        )
+        .await;
         assert_eq!(code, 201, "{body}");
-        assert!(body.contains(r#""title":"GET /admin""#), "title defaulted: {body}");
+        assert!(
+            body.contains(r#""title":"GET /admin""#),
+            "title defaulted: {body}"
+        );
         let id: u64 = body
             .split(r#""id":"#)
             .nth(1)

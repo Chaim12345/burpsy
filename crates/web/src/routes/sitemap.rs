@@ -95,10 +95,12 @@ pub fn routes() -> Router<AppState> {
     let map = Arc::new(RwLock::new(SiteMap::new()));
     Router::new().route(
         "/api/sitemap",
-        get(move |State(s): State<AppState>, Query(q): Query<TreeQuery>| {
-            let map = map.clone();
-            async move { sitemap(map, s, q).await }
-        }),
+        get(
+            move |State(s): State<AppState>, Query(q): Query<TreeQuery>| {
+                let map = map.clone();
+                async move { sitemap(map, s, q).await }
+            },
+        ),
     )
 }
 
@@ -280,7 +282,10 @@ mod tests {
         // Root plus MAX_DEPTH levels: segments 1..4 are present, 5 and 6 are not.
         assert!(body.contains("\"segment\":\"4\""), "{body}");
         assert!(!body.contains("\"segment\":\"5\""), "{body}");
-        assert!(body.contains("\"nodes\":7"), "the whole tree still exists: {body}");
+        assert!(
+            body.contains("\"nodes\":7"),
+            "the whole tree still exists: {body}"
+        );
     }
 
     /// Minimal GET returning the whole raw response, so tests need no HTTP client dependency.

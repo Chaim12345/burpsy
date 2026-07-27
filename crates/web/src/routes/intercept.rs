@@ -122,7 +122,9 @@ async fn forward(
     let edited = req.raw.map(|raw| {
         // A textarea gives back bare LFs; HTTP wants CRLF. Normalise the same way Repeater does.
         let raw = raw.replace("\r\n", "\n").replace('\n', "\r\n");
-        if req.fix_content_length && let Ok(r) = RequestEdit::from_raw(raw.as_bytes()) {
+        if req.fix_content_length
+            && let Ok(r) = RequestEdit::from_raw(raw.as_bytes())
+        {
             return Bytes::from(r.to_raw());
         }
         // Unparsable after an edit is the operator's business, not ours to repair: send it as-is.
@@ -154,7 +156,9 @@ async fn drop_held(
         return unwired();
     };
     let Json(req) = body.unwrap_or_default();
-    let reason = req.reason.unwrap_or_else(|| "dropped from the intercept queue".to_string());
+    let reason = req
+        .reason
+        .unwrap_or_else(|| "dropped from the intercept queue".to_string());
     if st.interceptor.drop_request(id, reason.clone()) {
         Json(serde_json::json!({ "dropped": true, "id": id, "reason": reason })).into_response()
     } else {
@@ -244,7 +248,10 @@ mod tests {
         st.intercept = None;
         let addr = serve(st).await;
         let body = call(&addr, "GET", "/api/intercept", "").await;
-        assert!(body.starts_with("HTTP/1.1 200"), "must not 404 or 500: {body}");
+        assert!(
+            body.starts_with("HTTP/1.1 200"),
+            "must not 404 or 500: {body}"
+        );
         assert!(body.contains("\"enabled\":false"), "{body}");
         assert!(body.contains("\"wired\":false"), "{body}");
     }
@@ -312,7 +319,10 @@ mod tests {
         match held.await.unwrap() {
             Verdict::Forward(b) => {
                 let s = String::from_utf8_lossy(&b);
-                assert!(s.contains("Content-Length: 14"), "stale length not fixed: {s:?}");
+                assert!(
+                    s.contains("Content-Length: 14"),
+                    "stale length not fixed: {s:?}"
+                );
                 assert!(s.ends_with("hi there world"), "{s:?}");
             }
             Verdict::Drop(r) => panic!("expected forward, got drop: {r}"),
@@ -397,7 +407,13 @@ mod tests {
         };
         wait_for_pending(&ic, 1).await;
 
-        let body = call(&addr, "POST", "/api/intercept/enable", "{\"enabled\":false}").await;
+        let body = call(
+            &addr,
+            "POST",
+            "/api/intercept/enable",
+            "{\"enabled\":false}",
+        )
+        .await;
         assert!(body.contains("\"released\":1"), "{body}");
         assert!(body.contains("\"enabled\":false"), "{body}");
         assert!(matches!(held.await.unwrap(), Verdict::Forward(_)));

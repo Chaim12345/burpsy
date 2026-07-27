@@ -246,7 +246,9 @@ async fn forward_http(
             let resp = dropped_response(&reason);
             let _ = client.write_all(&resp).await;
             let _ = client.flush().await;
-            record_drop(&store, &host_only, port, false, method, &path, raw, resp, &reason);
+            record_drop(
+                &store, &host_only, port, false, method, &path, raw, resp, &reason,
+            );
             return Ok(());
         }
     };
@@ -325,12 +327,7 @@ async fn forward_http(
 }
 
 /// Proxy an out-of-scope request without storing anything.
-async fn forward_only(
-    mut client: TcpStream,
-    req: Vec<u8>,
-    host: &str,
-    port: u16,
-) -> Result<()> {
+async fn forward_only(mut client: TcpStream, req: Vec<u8>, host: &str, port: u16) -> Result<()> {
     let Ok(mut up) = TcpStream::connect((host, port)).await else {
         let _ = client
             .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
@@ -380,7 +377,13 @@ async fn tunnel(mut client: TcpStream, target: &str, cfg: ProxyConfig) -> Result
     let mut upstream = match TcpStream::connect((host.as_str(), port)).await {
         Ok(s) => s,
         Err(e) => {
-            record_failed_connect(&store, &host, port, &format!("upstream connect failed: {e}"), started);
+            record_failed_connect(
+                &store,
+                &host,
+                port,
+                &format!("upstream connect failed: {e}"),
+                started,
+            );
             let _ = client
                 .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
                 .await;
@@ -420,7 +423,13 @@ async fn tunnel(mut client: TcpStream, target: &str, cfg: ProxyConfig) -> Result
     ));
     let len = summary.len();
     let resp_id = store.put(summary, Direction::Response);
-    store.set_response(ex_id, resp_id, 200, len, started.elapsed().as_millis() as u64);
+    store.set_response(
+        ex_id,
+        resp_id,
+        200,
+        len,
+        started.elapsed().as_millis() as u64,
+    );
     Ok(())
 }
 
@@ -436,7 +445,10 @@ async fn tunnel(mut client: TcpStream, target: &str, cfg: ProxyConfig) -> Result
 async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) -> Result<()> {
     use tokio_rustls::{TlsAcceptor, TlsConnector};
 
-    let engine = cfg.engine.clone().context("mitm called without a TLS engine")?;
+    let engine = cfg
+        .engine
+        .clone()
+        .context("mitm called without a TLS engine")?;
     let store = cfg.store.clone();
 
     client
@@ -450,7 +462,9 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         Ok(s) => s,
         Err(e) => {
             // Almost always the CA not being trusted yet — worth saying so loudly once.
-            tracing::warn!("client TLS handshake failed for {host}: {e} (is the burpsy CA installed?)");
+            tracing::warn!(
+                "client TLS handshake failed for {host}: {e} (is the burpsy CA installed?)"
+            );
             return Ok(());
         }
     };
@@ -476,7 +490,13 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
     let dns = match rustls_pki_types::ServerName::try_from(host.clone()) {
         Ok(d) => d,
         Err(_) => {
-            record_failed_connect(&store, &host, port, "invalid DNS name for TLS", connect_started);
+            record_failed_connect(
+                &store,
+                &host,
+                port,
+                "invalid DNS name for TLS",
+                connect_started,
+            );
             return Ok(());
         }
     };
@@ -502,14 +522,17 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         };
 
         let (method, path) = start_line_parts(&req);
-        let req = match hold_for_review(&cfg, &host, port, true, &method, &path, Bytes::from(req)).await
+        let req = match hold_for_review(&cfg, &host, port, true, &method, &path, Bytes::from(req))
+            .await
         {
             Reviewed::Send(b) => b,
             Reviewed::Dropped { raw, reason } => {
                 let resp = dropped_response(&reason);
                 let _ = tls_client.write_all(&resp).await;
                 let _ = tls_client.flush().await;
-                record_drop(&store, &host, port, true, &method, &path, raw, resp, &reason);
+                record_drop(
+                    &store, &host, port, true, &method, &path, raw, resp, &reason,
+                );
                 // The client asked for one request and got a complete answer, so the TLS session is
                 // still in a sane state: keep serving it rather than tearing down every other
                 // pipelined request on this connection.
@@ -850,7 +873,13 @@ fn record_failed_connect(
     ));
     let len = synthetic.len();
     let resp_id = store.put(synthetic, Direction::Response);
-    store.set_response(ex_id, resp_id, 502, len, started.elapsed().as_millis() as u64);
+    store.set_response(
+        ex_id,
+        resp_id,
+        502,
+        len,
+        started.elapsed().as_millis() as u64,
+    );
     tracing::debug!("recorded failed CONNECT {host}:{port}: {reason}");
     ex_id
 }
@@ -861,7 +890,9 @@ fn record_failed_connect(
 /// is a proxy people switch off, and Burp's own engine shows where coupling scan cost to request
 /// handling leads (it sheds work via LIMIT_EXCEEDED).
 fn spawn_scan(cfg: &ProxyConfig, exchange_id: u64, response_id: burpsy_core::MsgId) {
-    let Some(sc) = cfg.scanner.clone() else { return };
+    let Some(sc) = cfg.scanner.clone() else {
+        return;
+    };
     let store = cfg.store.clone();
     tokio::spawn(async move {
         let n = sc.scan(&store, exchange_id, response_id);

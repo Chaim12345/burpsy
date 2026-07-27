@@ -289,9 +289,7 @@ impl ResolvesServerCert for SniResolver {
 /// pointed their own browser at — not a transparent MITM on someone else's traffic.
 pub fn upstream_client_config() -> Arc<rustls::ClientConfig> {
     use rustls::DigitallySignedStruct;
-    use rustls::client::danger::{
-        HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
-    };
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls_pki_types::{ServerName, UnixTime};
 
     #[derive(Debug)]

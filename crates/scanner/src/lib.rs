@@ -51,11 +51,11 @@ pub mod audit;
 pub mod catalog;
 mod catalog_data;
 
-use audit::{ItemBreaker, SessionBreaker};
 pub use audit::{
     AuditConfig, AuditLedger, BuiltInConfig, DEFAULT_AUDIT_BUDGET, DispatchScope, Disposition,
     ItemState,
 };
+use audit::{ItemBreaker, SessionBreaker};
 
 /// What happened when a check set was loaded — reported so coverage is explicit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -120,7 +120,10 @@ impl PassiveScanner {
         walk(dir, &mut files);
         files.sort();
 
-        let mut report = LoadReport { files: files.len(), ..Default::default() };
+        let mut report = LoadReport {
+            files: files.len(),
+            ..Default::default()
+        };
         let mut checks = Vec::new();
         for f in files {
             let Ok(src) = std::fs::read_to_string(&f) else {
@@ -136,7 +139,10 @@ impl PassiveScanner {
 
     /// Build from already-parsed checks, for tests.
     pub fn from_checks(checks: Vec<Check>, scope: Arc<Scope>) -> Self {
-        let report = LoadReport { files: checks.len(), ..Default::default() };
+        let report = LoadReport {
+            files: checks.len(),
+            ..Default::default()
+        };
         Self::build(checks, scope, report)
     }
 
@@ -290,7 +296,10 @@ impl PassiveScanner {
         sender: &dyn burpsy_bcheck::eval::Sender,
         budget: Duration,
     ) -> AuditOutcome {
-        let cfg = AuditConfig { time_budget: budget, ..AuditConfig::default() };
+        let cfg = AuditConfig {
+            time_budget: budget,
+            ..AuditConfig::default()
+        };
         let mut run = Run::new(&cfg);
         self.audit_item(store, exchange_id, sender, &mut run)
     }
@@ -325,7 +334,10 @@ impl PassiveScanner {
             // remaining request only to refuse it. Every one of them is still counted: a
             // remaining item is never an item that came back clean.
             if out.paused {
-                out.push(id, self.refuse_whole_item(ItemState::Paused, |o| &mut o.session_paused));
+                out.push(
+                    id,
+                    self.refuse_whole_item(ItemState::Paused, |o| &mut o.session_paused),
+                );
                 continue;
             }
             if run.out_of_time() {
@@ -363,7 +375,10 @@ impl PassiveScanner {
         state: ItemState,
         counter: fn(&mut AuditOutcome) -> &mut usize,
     ) -> AuditOutcome {
-        let mut o = AuditOutcome { state, ..AuditOutcome::default() };
+        let mut o = AuditOutcome {
+            state,
+            ..AuditOutcome::default()
+        };
         *counter(&mut o) = self.active.len();
         o
     }
@@ -401,8 +416,11 @@ impl PassiveScanner {
         };
 
         o.state = ItemState::Auditing;
-        let target =
-            burpsy_bcheck::eval::Target { host: ex.host.clone(), port: ex.port, tls: ex.tls };
+        let target = burpsy_bcheck::eval::Target {
+            host: ex.host.clone(),
+            port: ex.port,
+            tls: ex.tls,
+        };
         let metered = Metered::new(sender, &self.scope);
         let mut breaker = ItemBreaker::new(run.cfg);
 
@@ -494,7 +512,11 @@ impl PassiveScanner {
         o.requests_sent = metered.sent();
         o.requests_refused = metered.refused();
         run.requests_sent = run.requests_sent.saturating_add(o.requests_sent);
-        debug_assert_eq!(o.considered(), self.active.len(), "every check must be accounted for");
+        debug_assert_eq!(
+            o.considered(),
+            self.active.len(),
+            "every check must be accounted for"
+        );
         o
     }
 
@@ -511,8 +533,9 @@ impl PassiveScanner {
         // its body is the one shape that reaches here — has nowhere to run.
         let mut undispatchable = self.scopes.iter().filter(|s| s.is_none()).count();
         for scope in DispatchScope::ALL {
-            let members: Vec<usize> =
-                (0..self.active.len()).filter(|&i| self.scopes[i] == Some(scope)).collect();
+            let members: Vec<usize> = (0..self.active.len())
+                .filter(|&i| self.scopes[i] == Some(scope))
+                .collect();
             if members.is_empty() {
                 continue;
             }
@@ -566,7 +589,12 @@ struct Run<'a> {
 
 impl<'a> Run<'a> {
     fn new(cfg: &'a AuditConfig) -> Self {
-        Self { cfg, started: Instant::now(), ledger: AuditLedger::new(), requests_sent: 0 }
+        Self {
+            cfg,
+            started: Instant::now(),
+            ledger: AuditLedger::new(),
+            requests_sent: 0,
+        }
     }
 
     fn out_of_time(&self) -> bool {
@@ -749,7 +777,10 @@ impl SessionOutcome {
 
     /// Items that ran every check they were given.
     pub fn completed(&self) -> usize {
-        self.items.iter().filter(|(_, o)| o.state.completed_audit()).count()
+        self.items
+            .iter()
+            .filter(|(_, o)| o.state.completed_audit())
+            .count()
     }
 
     /// Checks the engine declined to admit across the session.
@@ -811,8 +842,14 @@ given response then
 
     fn setup(body: &str, host: &str) -> (Arc<TrafficStore>, u64, MsgId) {
         let store = TrafficStore::new();
-        let raw = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
-        let req = store.put(Bytes::from_static(b"GET /p HTTP/1.1\r\n\r\n"), Direction::Request);
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let req = store.put(
+            Bytes::from_static(b"GET /p HTTP/1.1\r\n\r\n"),
+            Direction::Request,
+        );
         let ex = store.add_exchange(Exchange {
             id: 0,
             request: req,
@@ -922,7 +959,8 @@ given response then
         let (store, ex, resp) = setup("secret is tok_abcd1234", "outside.test");
         let mut sc = Scope::new();
         sc.add(ScopeRule::include("inside.test"));
-        let s = PassiveScanner::from_checks(vec![burpsy_bcheck::parse(LEAK).unwrap()], Arc::new(sc));
+        let s =
+            PassiveScanner::from_checks(vec![burpsy_bcheck::parse(LEAK).unwrap()], Arc::new(sc));
         assert_eq!(s.scan(&store, ex, resp), 0, "must not scan out of scope");
         assert!(s.findings().read().is_empty());
     }
@@ -949,10 +987,17 @@ given response then
     fn a_broken_check_does_not_silence_the_others() {
         // A regex the Rust engine rejects must not stop later checks from running.
         let bad = r#"metadata: name: "bad" given response then if {latest.response} matches "(?<broken" then report issue: severity: low confidence: firm end if"#;
-        let checks = vec![burpsy_bcheck::parse(bad).unwrap(), burpsy_bcheck::parse(LEAK).unwrap()];
+        let checks = vec![
+            burpsy_bcheck::parse(bad).unwrap(),
+            burpsy_bcheck::parse(LEAK).unwrap(),
+        ];
         let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
         let (store, ex, resp) = setup("tok_abcd1234", "a.test");
-        assert_eq!(s.scan(&store, ex, resp), 1, "the good check must still fire");
+        assert_eq!(
+            s.scan(&store, ex, resp),
+            1,
+            "the good check must still fire"
+        );
     }
 
     /// A sender that always stalls, to exercise the time budget.
@@ -996,15 +1041,25 @@ given response then
         let slow = SlowSender(Duration::from_millis(60));
         let o = s.audit_within(&store, ex, &slow, Duration::from_millis(80));
         assert!(o.timed_out, "budget should have tripped: {o:?}");
-        assert!(o.not_run > 0, "some checks must be reported as not run: {o:?}");
+        assert!(
+            o.not_run > 0,
+            "some checks must be reported as not run: {o:?}"
+        );
         assert_eq!(
             o.ran + o.send_failures + o.skipped + o.not_run,
             4,
             "every check must be accounted for exactly once: {o:?}"
         );
         assert_eq!(o.considered(), 4);
-        assert_eq!(o.state, ItemState::Bounded, "bounded is not the same as audited");
-        assert!(!o.state.completed_audit(), "a bounded item must not read as a clean audit");
+        assert_eq!(
+            o.state,
+            ItemState::Bounded,
+            "bounded is not the same as audited"
+        );
+        assert!(
+            !o.state.completed_audit(),
+            "a bounded item must not read as a clean audit"
+        );
     }
 
     #[test]
@@ -1014,8 +1069,16 @@ given response then
         let ex = auditable(&store, "h.test", "/");
         let o = s.audit(&store, ex, &RecordingSender::default());
         assert_eq!(o.ran, 5);
-        assert_eq!(o.considered(), 5, "the partition must cover the whole check set");
-        assert_eq!(o.not_admitted(), 0, "nothing was refused, so nothing may be reported as such");
+        assert_eq!(
+            o.considered(),
+            5,
+            "the partition must cover the whole check set"
+        );
+        assert_eq!(
+            o.not_admitted(),
+            0,
+            "nothing was refused, so nothing may be reported as such"
+        );
         assert_eq!(o.state, ItemState::Audited);
         assert_eq!(o.requests_sent, 5);
     }
@@ -1030,7 +1093,10 @@ given response then
         let sender = RecordingSender::default();
         assert_eq!(s.audit(&store, ex, &sender).ran, 3);
         let second = s.audit(&store, ex, &sender);
-        assert_eq!(second.ran, 3, "a one-shot audit starts with an empty ledger");
+        assert_eq!(
+            second.ran, 3,
+            "a one-shot audit starts with an empty ledger"
+        );
         assert_eq!(second.already_covered, 0);
         assert_eq!(sender.0.read().len(), 6);
     }
@@ -1042,20 +1108,33 @@ given response then
         // be mistaken for checks that quietly stopped firing.
         let s = PassiveScanner::from_checks(host_checks(3), Arc::new(Scope::allow_everything()));
         let store = TrafficStore::new();
-        let ids: Vec<u64> =
-            (0..20).map(|i| auditable(&store, "h.test", &format!("/p{i}"))).collect();
+        let ids: Vec<u64> = (0..20)
+            .map(|i| auditable(&store, "h.test", &format!("/p{i}")))
+            .collect();
 
         let sender = RecordingSender::default();
         let out = s.audit_session(&store, &ids, &sender, &AuditConfig::default());
 
-        assert_eq!(sender.0.read().len(), 3, "one probe per check, not per exchange");
+        assert_eq!(
+            sender.0.read().len(),
+            3,
+            "one probe per check, not per exchange"
+        );
         assert_eq!(out.requests_sent, 3);
         assert_eq!(out.dispatch_units, 1, "twenty exchanges, one host");
         let ran: usize = out.items.iter().map(|(_, o)| o.ran).sum();
         let covered: usize = out.items.iter().map(|(_, o)| o.already_covered).sum();
         assert_eq!((ran, covered), (3, 57));
-        assert_eq!(ran + covered, 3 * 20, "every check on every item is accounted for");
-        assert_eq!(out.completed(), 20, "each item still completed its whole check set");
+        assert_eq!(
+            ran + covered,
+            3 * 20,
+            "every check on every item is accounted for"
+        );
+        assert_eq!(
+            out.completed(),
+            20,
+            "each item still completed its whole check set"
+        );
         assert_eq!(out.not_admitted(), 57, "the saving is visible, not silent");
     }
 
@@ -1068,23 +1147,27 @@ given response then
             "metadata:\n  language: v2-beta\n  name: \"p\"\n\ngiven path then\n  send request:\n    path: \"/probe\"",
         )
         .unwrap();
-        let s = PassiveScanner::from_checks(
-            vec![path_check],
-            Arc::new(Scope::allow_everything()),
-        );
+        let s = PassiveScanner::from_checks(vec![path_check], Arc::new(Scope::allow_everything()));
         assert_eq!(s.active_scopes(), [Some(DispatchScope::PerPath)]);
 
         let store = TrafficStore::new();
-        let mut ids: Vec<u64> =
-            (0..5).map(|i| auditable(&store, "h.test", &format!("/search?q={i}"))).collect();
+        let mut ids: Vec<u64> = (0..5)
+            .map(|i| auditable(&store, "h.test", &format!("/search?q={i}")))
+            .collect();
         ids.push(auditable(&store, "h.test", "/other"));
 
         let sender = RecordingSender::default();
         let out = s.audit_session(&store, &ids, &sender, &AuditConfig::default());
-        assert_eq!(out.dispatch_units, 2, "/search and /other, whatever the query");
+        assert_eq!(
+            out.dispatch_units, 2,
+            "/search and /other, whatever the query"
+        );
         assert_eq!(sender.0.read().len(), 2);
         let covered: usize = out.items.iter().map(|(_, o)| o.already_covered).sum();
-        assert_eq!(covered, 4, "the four query permutations are refused and counted");
+        assert_eq!(
+            covered, 4,
+            "the four query permutations are refused and counted"
+        );
         assert_eq!(out.completed(), 6);
     }
 
@@ -1128,10 +1211,20 @@ given response then
             "no probe may reach a host outside the engagement"
         );
         let states: Vec<ItemState> = out.items.iter().map(|(_, o)| o.state).collect();
-        assert_eq!(states, vec![ItemState::OutOfScope, ItemState::Audited, ItemState::OutOfScope]);
+        assert_eq!(
+            states,
+            vec![
+                ItemState::OutOfScope,
+                ItemState::Audited,
+                ItemState::OutOfScope
+            ]
+        );
         // A refused item reports zero considered checks and says why, rather than looking clean.
         assert_eq!(out.items[0].1.considered(), 0);
-        assert_eq!(out.items[0].1.error.as_deref(), Some("outside.test is out of scope"));
+        assert_eq!(
+            out.items[0].1.error.as_deref(),
+            Some("outside.test is out of scope")
+        );
         assert_eq!(out.completed(), 1);
     }
 
@@ -1142,17 +1235,26 @@ given response then
         let s = PassiveScanner::from_checks(host_checks(10), Arc::new(Scope::allow_everything()));
         let store = TrafficStore::new();
         let ex = auditable(&store, "h.test", "/");
-        let cfg = AuditConfig { max_requests: Some(4), ..AuditConfig::default() };
+        let cfg = AuditConfig {
+            max_requests: Some(4),
+            ..AuditConfig::default()
+        };
         let sender = RecordingSender::default();
         let out = s.audit_session(&store, &[ex], &sender, &cfg);
 
         let o = &out.items[0].1;
         assert_eq!(o.ran, 4, "four checks completed");
-        assert_eq!(o.request_budget_spent, 6, "six were refused before they started");
+        assert_eq!(
+            o.request_budget_spent, 6,
+            "six were refused before they started"
+        );
         assert_eq!(o.considered(), 10);
         assert_eq!(sender.0.read().len(), 4, "the ceiling bounds what is sent");
         assert_eq!(o.state, ItemState::Bounded);
-        assert!(!o.timed_out, "this bound is the request budget, not the clock");
+        assert!(
+            !o.timed_out,
+            "this bound is the request budget, not the clock"
+        );
     }
 
     #[test]
@@ -1162,12 +1264,21 @@ given response then
         // request is a real one.
         let s = PassiveScanner::from_checks(host_checks(4), Arc::new(Scope::allow_everything()));
         let store = TrafficStore::new();
-        let ids: Vec<u64> = (0..3).map(|i| auditable(&store, &format!("h{i}.test"), "/")).collect();
-        let cfg = AuditConfig { max_requests: Some(5), ..AuditConfig::default() };
+        let ids: Vec<u64> = (0..3)
+            .map(|i| auditable(&store, &format!("h{i}.test"), "/"))
+            .collect();
+        let cfg = AuditConfig {
+            max_requests: Some(5),
+            ..AuditConfig::default()
+        };
         let sender = RecordingSender::default();
         let out = s.audit_session(&store, &ids, &sender, &cfg);
 
-        assert_eq!(sender.0.read().len(), 5, "the session ceiling, not five per item");
+        assert_eq!(
+            sender.0.read().len(),
+            5,
+            "the session ceiling, not five per item"
+        );
         assert_eq!(out.requests_sent, 5);
         let per_item: Vec<(usize, usize, u32)> = out
             .items
@@ -1177,7 +1288,10 @@ given response then
         // Item 1 spends 4 of 5; item 2 gets one more check in and is cut off; item 3 never starts.
         assert_eq!(per_item, vec![(4, 0, 4), (1, 3, 1), (0, 4, 0)]);
         let states: Vec<ItemState> = out.items.iter().map(|(_, o)| o.state).collect();
-        assert_eq!(states, vec![ItemState::Audited, ItemState::Bounded, ItemState::Bounded]);
+        assert_eq!(
+            states,
+            vec![ItemState::Audited, ItemState::Bounded, ItemState::Bounded]
+        );
         assert_eq!(out.completed(), 1, "only the first item ran its whole set");
         assert_eq!(out.not_admitted(), 7);
         for (_, o) in &out.items {
@@ -1189,9 +1303,13 @@ given response then
     fn a_spent_time_budget_stops_the_session_rather_than_re_deciding_it_per_exchange() {
         let s = PassiveScanner::from_checks(host_checks(2), Arc::new(Scope::allow_everything()));
         let store = TrafficStore::new();
-        let ids: Vec<u64> = (0..4).map(|i| auditable(&store, &format!("h{i}.test"), "/")).collect();
-        let cfg =
-            AuditConfig { time_budget: Duration::from_millis(80), ..AuditConfig::default() };
+        let ids: Vec<u64> = (0..4)
+            .map(|i| auditable(&store, &format!("h{i}.test"), "/"))
+            .collect();
+        let cfg = AuditConfig {
+            time_budget: Duration::from_millis(80),
+            ..AuditConfig::default()
+        };
         let out = s.audit_session(&store, &ids, &SlowSender(Duration::from_millis(60)), &cfg);
 
         assert!(out.timed_out);
@@ -1203,8 +1321,15 @@ given response then
             .skip(2)
             .map(|(_, o)| (o.state, o.not_run, o.requests_sent))
             .collect();
-        assert_eq!(tail, vec![(ItemState::Bounded, 2, 0), (ItemState::Bounded, 2, 0)]);
-        assert_eq!(out.completed(), 1, "only the first item finished inside the budget");
+        assert_eq!(
+            tail,
+            vec![(ItemState::Bounded, 2, 0), (ItemState::Bounded, 2, 0)]
+        );
+        assert_eq!(
+            out.completed(),
+            1,
+            "only the first item finished inside the budget"
+        );
         for (_, o) in &out.items {
             assert_eq!(o.considered(), 2);
         }
@@ -1217,8 +1342,14 @@ given response then
         let ex = auditable(&store, "dead.test", "/");
         let o = s.audit(&store, ex, &FailingSender);
 
-        assert_eq!(o.send_failures, 2, "the breaker stops after two consecutive failures");
-        assert_eq!(o.unit_abandoned, 4, "the rest of the unit is refused, not attempted");
+        assert_eq!(
+            o.send_failures, 2,
+            "the breaker stops after two consecutive failures"
+        );
+        assert_eq!(
+            o.unit_abandoned, 4,
+            "the rest of the unit is refused, not attempted"
+        );
         assert_eq!(o.considered(), 6);
         assert_eq!(o.ran, 0);
         // One abandoned unit is not yet two, so the item itself is not failed.
@@ -1243,9 +1374,13 @@ given response then
         assert_eq!(s.active_loaded(), 4);
 
         let store = TrafficStore::new();
-        let ids: Vec<u64> =
-            (0..5).map(|i| auditable(&store, &format!("dead{i}.test"), "/")).collect();
-        let cfg = AuditConfig { pause_session_after_failed_items: 2, ..AuditConfig::default() };
+        let ids: Vec<u64> = (0..5)
+            .map(|i| auditable(&store, &format!("dead{i}.test"), "/"))
+            .collect();
+        let cfg = AuditConfig {
+            pause_session_after_failed_items: 2,
+            ..AuditConfig::default()
+        };
         let out = s.audit_session(&store, &ids, &FailingSender, &cfg);
 
         assert!(out.paused, "the session breaker must trip: {out:?}");
@@ -1276,9 +1411,17 @@ given response then
         let s = PassiveScanner::from_checks(host_checks(6), Arc::new(Scope::allow_everything()));
         let store = TrafficStore::new();
         let ex = auditable(&store, "dead.test", "/");
-        let out = s.audit_session(&store, &[ex], &FailingSender, &AuditConfig::without_breakers());
+        let out = s.audit_session(
+            &store,
+            &[ex],
+            &FailingSender,
+            &AuditConfig::without_breakers(),
+        );
         let o = &out.items[0].1;
-        assert_eq!(o.send_failures, 6, "with the breaker off every check is attempted");
+        assert_eq!(
+            o.send_failures, 6,
+            "with the breaker off every check is attempted"
+        );
         assert_eq!(o.unit_abandoned, 0);
         assert_eq!(o.state, ItemState::Audited);
     }
@@ -1307,7 +1450,10 @@ given response then
         let sender = RecordingSender::default();
         let o = s.audit(&store, ex, &sender);
         assert_eq!(o.ran, 2);
-        assert_eq!(o.skipped, 1, "the orphan is reported as unrunnable, not omitted");
+        assert_eq!(
+            o.skipped, 1,
+            "the orphan is reported as unrunnable, not omitted"
+        );
         assert_eq!(o.considered(), 3);
         assert_eq!(sender.0.read().len(), 2);
     }
@@ -1325,12 +1471,17 @@ given response then
         let nonzero: Vec<_> = hist.iter().filter(|(_, n)| *n > 0).copied().collect();
         assert_eq!(
             nonzero,
-            vec![(Disposition::SendFailed, 2), (Disposition::UnitAbandoned, 4)]
+            vec![
+                (Disposition::SendFailed, 2),
+                (Disposition::UnitAbandoned, 4)
+            ]
         );
         // Four sixths of the check set never looked at this host. An operator reading only
         // "0 findings" would be reading a bound as a clean result.
         assert_eq!(
-            hist.iter().filter(|(d, n)| d.stopped_looking() && *n > 0).count(),
+            hist.iter()
+                .filter(|(d, n)| d.stopped_looking() && *n > 0)
+                .count(),
             1
         );
         assert_eq!(o.not_admitted(), 4);
@@ -1340,7 +1491,10 @@ given response then
     fn an_exchange_with_no_response_is_unauditable_rather_than_clean() {
         let s = PassiveScanner::from_checks(host_checks(2), Arc::new(Scope::allow_everything()));
         let store = TrafficStore::new();
-        let req = store.put(Bytes::from_static(b"GET / HTTP/1.1\r\n\r\n"), Direction::Request);
+        let req = store.put(
+            Bytes::from_static(b"GET / HTTP/1.1\r\n\r\n"),
+            Direction::Request,
+        );
         let ex = store.add_exchange(Exchange {
             id: 0,
             request: req,
@@ -1387,7 +1541,10 @@ given response then
         let f = s.findings();
         let g = f.read();
         let one = &g.all()[0];
-        let rem = one.remediation.as_deref().expect("catalog remediation must be attached");
+        let rem = one
+            .remediation
+            .as_deref()
+            .expect("catalog remediation must be attached");
         assert!(
             rem.starts_with("The most effective way to prevent SQL injection attacks"),
             "must be Burp's shipped text: {}",
@@ -1441,7 +1598,11 @@ given response then
         s.scan(&store, ex, resp);
         let f = s.findings();
         let g = f.read();
-        assert_eq!(g.all()[0].remediation, None, "no near-enough match may be attached");
+        assert_eq!(
+            g.all()[0].remediation,
+            None,
+            "no near-enough match may be attached"
+        );
         assert!(definition_for(&g.all()[0]).is_none());
     }
 
@@ -1469,8 +1630,14 @@ given response then
             sender.0.read()
         );
         assert_eq!(o.requests_sent, 0, "nothing may be counted as sent");
-        assert_eq!(o.requests_refused, 1, "the refusal must be visible, not silent");
-        assert_eq!(o.findings, 0, "and a refused probe must never yield a finding");
+        assert_eq!(
+            o.requests_refused, 1,
+            "the refusal must be visible, not silent"
+        );
+        assert_eq!(
+            o.findings, 0,
+            "and a refused probe must never yield a finding"
+        );
     }
 
     #[test]
@@ -1527,7 +1694,10 @@ given response then
         let s = PassiveScanner::load_dir(dir, Arc::new(Scope::allow_everything()));
         assert_eq!(s.active_scopes().len(), 127);
         let count = |want: DispatchScope| {
-            s.active_scopes().iter().filter(|s| **s == Some(want)).count()
+            s.active_scopes()
+                .iter()
+                .filter(|s| **s == Some(want))
+                .count()
         };
         // Measured over the corpus, not assumed. `given url`, the in-session scope and the two
         // insertion-point scopes have no runnable BCheck form today, so nothing lands in them —
@@ -1537,15 +1707,28 @@ given response then
             count(DispatchScope::PerPath),
             count(DispatchScope::PerRequest),
         );
-        assert_eq!((host, path, request), (89, 11, 27), "given host / given path / given request");
-        assert_eq!(host + path + request, 127, "the three reached scopes cover every active check");
+        assert_eq!(
+            (host, path, request),
+            (89, 11, 27),
+            "given host / given path / given request"
+        );
+        assert_eq!(
+            host + path + request,
+            127,
+            "the three reached scopes cover every active check"
+        );
         for empty in [
             DispatchScope::PerUrl,
             DispatchScope::InSessionPerRequest,
             DispatchScope::PerInsertionPoint,
             DispatchScope::StoredPerInsertionPoint,
         ] {
-            assert_eq!(count(empty), 0, "{} has no runnable BCheck form", empty.label());
+            assert_eq!(
+                count(empty),
+                0,
+                "{} has no runnable BCheck form",
+                empty.label()
+            );
         }
         let mut used: Vec<DispatchScope> = s.active_scopes().iter().flatten().copied().collect();
         used.sort();
@@ -1579,6 +1762,9 @@ given response then
             .chain(&s.active)
             .filter(|c| catalog::by_name(&c.metadata.name).is_some())
             .count();
-        assert_eq!(matched, 0, "no published BCheck shares a name with a catalogued issue");
+        assert_eq!(
+            matched, 0,
+            "no published BCheck shares a name with a catalogued issue"
+        );
     }
 }

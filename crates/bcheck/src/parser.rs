@@ -29,7 +29,11 @@ impl std::error::Error for ParseError {}
 
 impl From<LexError> for ParseError {
     fn from(e: LexError) -> Self {
-        ParseError { msg: e.msg, line: e.line, col: e.col }
+        ParseError {
+            msg: e.msg,
+            line: e.line,
+            col: e.col,
+        }
     }
 }
 
@@ -59,7 +63,11 @@ impl Parser {
 
     fn err<T>(&self, msg: impl Into<String>) -> Result<T, ParseError> {
         let (line, col) = self.pos();
-        Err(ParseError { msg: msg.into(), line, col })
+        Err(ParseError {
+            msg: msg.into(),
+            line,
+            col,
+        })
     }
 
     fn bump(&mut self) -> Tok {
@@ -135,7 +143,13 @@ impl Parser {
         self.expect_word("then")?;
         let body = self.statements()?;
 
-        Ok(Check { metadata, defines, for_each, frequency, body })
+        Ok(Check {
+            metadata,
+            defines,
+            for_each,
+            frequency,
+            body,
+        })
     }
 
     /// True when the current token begins a new top-level section.
@@ -169,7 +183,10 @@ impl Parser {
         Ok(())
     }
 
-    fn for_each_block(&mut self, for_each: &mut Vec<(String, Vec<Value>)>) -> Result<(), ParseError> {
+    fn for_each_block(
+        &mut self,
+        for_each: &mut Vec<(String, Vec<Value>)>,
+    ) -> Result<(), ParseError> {
         if !self.is_phrase(&["run", "for", "each"]) {
             return Ok(());
         }
@@ -341,7 +358,11 @@ impl Parser {
             if self.is_word(0, "if") {
                 // `else if … then …` — nested, and it does NOT carry its own `end if`.
                 otherwise = vec![self.if_block_no_end()?];
-                return Ok(Statement::If { cond, then, otherwise });
+                return Ok(Statement::If {
+                    cond,
+                    then,
+                    otherwise,
+                });
             }
             // Bare `else` is invalid; `else then` is required.
             self.expect_word("then")?;
@@ -350,7 +371,11 @@ impl Parser {
         if !self.eat_phrase(&["end", "if"]) {
             return self.err(format!("expected 'end if', found {}", self.peek()));
         }
-        Ok(Statement::If { cond, then, otherwise })
+        Ok(Statement::If {
+            cond,
+            then,
+            otherwise,
+        })
     }
 
     /// `else if` chain: consumes the shared trailing `end if` at the outermost level only.
@@ -364,14 +389,22 @@ impl Parser {
             self.bump();
             if self.is_word(0, "if") {
                 otherwise = vec![self.if_block_no_end()?];
-                return Ok(Statement::If { cond, then, otherwise });
+                return Ok(Statement::If {
+                    cond,
+                    then,
+                    otherwise,
+                });
             }
             self.expect_word("then")?;
             otherwise = self.statements()?;
         }
         // The `end if` belongs to the enclosing `if`.
         self.eat_phrase(&["end", "if"]);
-        Ok(Statement::If { cond, then, otherwise })
+        Ok(Statement::If {
+            cond,
+            then,
+            otherwise,
+        })
     }
 
     fn report_issue(&mut self) -> Result<ReportIssue, ParseError> {
@@ -437,7 +470,14 @@ impl Parser {
         let Some(confidence) = confidence else {
             return self.err("report issue requires 'confidence'");
         };
-        Ok(ReportIssue { name, severity, confidence, detail, remediation, and_continue })
+        Ok(ReportIssue {
+            name,
+            severity,
+            confidence,
+            detail,
+            remediation,
+            and_continue,
+        })
     }
 
     /// M2 statement: parsed structurally so M1 never rejects an active check.
@@ -494,7 +534,11 @@ impl Parser {
             ));
         };
         self.expect_colon()?;
-        Ok(Statement::SendPayload { called, appending, value: self.value()? })
+        Ok(Statement::SendPayload {
+            called,
+            appending,
+            value: self.value()?,
+        })
     }
 
     /// Parse the modifier clauses of a `send request:` block.
@@ -527,7 +571,9 @@ impl Parser {
                 },
                 _ => break,
             };
-            let Tok::Word(target) = self.at(target_off).clone() else { break };
+            let Tok::Word(target) = self.at(target_off).clone() else {
+                break;
+            };
             let target = target.to_ascii_lowercase();
             // Statement keywords end the block; they never take a colon here.
             if matches!(target.as_str(), "if" | "end" | "else" | "report" | "send") {
@@ -548,7 +594,10 @@ impl Parser {
                     }
                     RequestMod::Method(self.value()?)
                 }
-                "path" => RequestMod::Path { op, value: self.value()? },
+                "path" => RequestMod::Path {
+                    op,
+                    value: self.value()?,
+                },
                 "query_string" => {
                     if op == ModOp::Append {
                         // `appending queries` is the additive form; keep the distinction sharp.
@@ -564,8 +613,14 @@ impl Parser {
                     }
                     RequestMod::Queries(vs)
                 }
-                "headers" => RequestMod::Headers { op, pairs: self.header_pairs()? },
-                "body" => RequestMod::Body { op, value: self.value()? },
+                "headers" => RequestMod::Headers {
+                    op,
+                    pairs: self.header_pairs()?,
+                },
+                "body" => RequestMod::Body {
+                    op,
+                    value: self.value()?,
+                },
                 o => return self.err(format!("unknown request modifier {o:?}")),
             });
         }
@@ -641,7 +696,8 @@ impl Parser {
         // `<type> interactions` — Collaborator poll.
         if let Tok::Word(w) = self.peek().clone() {
             let lw = w.to_ascii_lowercase();
-            if matches!(lw.as_str(), "any" | "dns" | "http" | "smtp") && self.is_word(1, "interactions")
+            if matches!(lw.as_str(), "any" | "dns" | "http" | "smtp")
+                && self.is_word(1, "interactions")
             {
                 self.bump();
                 self.bump();
@@ -733,7 +789,9 @@ given response then
             panic!("expected an if")
         };
         // The regex must survive with its brace quantifier intact.
-        let BoolExpr::Cmp { rhs, op, .. } = cond else { panic!("expected a cmp") };
+        let BoolExpr::Cmp { rhs, op, .. } = cond else {
+            panic!("expected a cmp")
+        };
         assert_eq!(*op, CmpOp::Matches);
         assert_eq!(rhs.raw(), "oy2[a-z0-9]{43}");
         assert!(matches!(&then[0], Statement::Report(r) if r.severity == Severity::Info));
@@ -753,9 +811,16 @@ given response then
         let b = r#"metadata: name: "x" given response then if {latest.response} is "a" then report issue: confidence: firm severity: low end if"#;
         for s in [a, b] {
             let c = parse(s).unwrap();
-            let Statement::If { then, .. } = &c.body[0] else { panic!() };
-            let Statement::Report(r) = &then[0] else { panic!() };
-            assert_eq!((r.severity, r.confidence), (Severity::Low, Confidence::Firm));
+            let Statement::If { then, .. } = &c.body[0] else {
+                panic!()
+            };
+            let Statement::Report(r) = &then[0] else {
+                panic!()
+            };
+            assert_eq!(
+                (r.severity, r.confidence),
+                (Severity::Low, Confidence::Firm)
+            );
         }
     }
 
@@ -773,7 +838,9 @@ given response then
 
         let good = r#"metadata: name: "x" given response then if {latest.response} is "a" then report issue: severity: low confidence: firm else then report issue: severity: high confidence: firm end if"#;
         let c = parse(good).unwrap();
-        let Statement::If { otherwise, .. } = &c.body[0] else { panic!() };
+        let Statement::If { otherwise, .. } = &c.body[0] else {
+            panic!()
+        };
         assert_eq!(otherwise.len(), 1);
     }
 
@@ -781,7 +848,9 @@ given response then
     fn boolean_operators_and_grouping() {
         let s = r#"metadata: name: "x" given response then if not({latest.response} in "a") and ({latest.response} matches "b" or {latest.response} is "c") then report issue: severity: info confidence: certain end if"#;
         let c = parse(s).unwrap();
-        let Statement::If { cond, .. } = &c.body[0] else { panic!() };
+        let Statement::If { cond, .. } = &c.body[0] else {
+            panic!()
+        };
         assert!(matches!(cond, BoolExpr::And(_, _)));
     }
 
@@ -846,9 +915,23 @@ given response then
         );
         assert_eq!(called.as_deref(), Some("check"));
         assert_eq!(mods.len(), 3, "headers + path + body");
-        assert!(matches!(&mods[0], RequestMod::Headers { op: ModOp::Replace, pairs } if pairs.len() == 1));
-        assert!(matches!(&mods[1], RequestMod::Path { op: ModOp::Replace, .. }));
-        assert!(matches!(&mods[2], RequestMod::Body { op: ModOp::Replace, .. }));
+        assert!(
+            matches!(&mods[0], RequestMod::Headers { op: ModOp::Replace, pairs } if pairs.len() == 1)
+        );
+        assert!(matches!(
+            &mods[1],
+            RequestMod::Path {
+                op: ModOp::Replace,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &mods[2],
+            RequestMod::Body {
+                op: ModOp::Replace,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -869,7 +952,10 @@ given response then
         assert!(matches!(&mods[0], RequestMod::Method(_)));
         assert!(matches!(&mods[1], RequestMod::Queries(v) if v.len() == 1));
         match &mods[2] {
-            RequestMod::Headers { op: ModOp::Replace, pairs } => assert_eq!(pairs.len(), 4),
+            RequestMod::Headers {
+                op: ModOp::Replace,
+                pairs,
+            } => assert_eq!(pairs.len(), 4),
             o => panic!("expected headers, got {o:?}"),
         }
     }
@@ -877,9 +963,8 @@ given response then
     #[test]
     fn a_backtick_name_value_header_pair_parses() {
         // waf-bypass writes the pair with both sides interpolated.
-        let (_, mods) = only_send(
-            "given host then\n send request:\n  replacing headers: `{h}`:`{v}`",
-        );
+        let (_, mods) =
+            only_send("given host then\n send request:\n  replacing headers: `{h}`:`{v}`");
         match &mods[0] {
             RequestMod::Headers { pairs, .. } => {
                 assert_eq!(pairs.len(), 1);
@@ -904,8 +989,20 @@ given response then
         let (_, mods) = only_send(
             "given path then\n send request:\n  appending path: \"/x\"\n  replacing body: \"b\"",
         );
-        assert!(matches!(&mods[0], RequestMod::Path { op: ModOp::Append, .. }));
-        assert!(matches!(&mods[1], RequestMod::Body { op: ModOp::Replace, .. }));
+        assert!(matches!(
+            &mods[0],
+            RequestMod::Path {
+                op: ModOp::Append,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &mods[1],
+            RequestMod::Body {
+                op: ModOp::Replace,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -928,16 +1025,20 @@ given response then
 
     #[test]
     fn a_raw_string_send_carries_no_modifiers() {
-        let (_, mods) = only_send(
-            "given host then\n send request: `GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n`",
-        );
+        let (_, mods) =
+            only_send("given host then\n send request: `GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n`");
         assert!(mods.is_empty());
     }
 
     #[test]
     fn an_unknown_modifier_target_is_rejected() {
         // Better to fail loudly than to silently drop a clause, which is what the old code did.
-        assert!(parse(&with_meta("given host then\n send request:\n  frobnicate: \"x\"")).is_err());
+        assert!(
+            parse(&with_meta(
+                "given host then\n send request:\n  frobnicate: \"x\""
+            ))
+            .is_err()
+        );
     }
 
     #[test]
@@ -976,8 +1077,12 @@ given response then
     fn and_continue_is_not_parsed_as_a_boolean() {
         let s = r#"metadata: name: "x" given response then if {latest.response} is "a" then report issue and continue: severity: info confidence: firm end if"#;
         let c = parse(s).unwrap();
-        let Statement::If { then, .. } = &c.body[0] else { panic!() };
-        let Statement::Report(r) = &then[0] else { panic!() };
+        let Statement::If { then, .. } = &c.body[0] else {
+            panic!()
+        };
+        let Statement::Report(r) = &then[0] else {
+            panic!()
+        };
         assert!(r.and_continue);
     }
 }

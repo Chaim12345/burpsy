@@ -127,7 +127,9 @@ fn matches_host(pattern: &str, host: &str) -> bool {
     let p = pattern.trim().to_ascii_lowercase();
     let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
     if let Some(suffix) = p.strip_prefix("*.") {
-        h.len() > suffix.len() && h.ends_with(suffix) && h.as_bytes()[h.len() - suffix.len() - 1] == b'.'
+        h.len() > suffix.len()
+            && h.ends_with(suffix)
+            && h.as_bytes()[h.len() - suffix.len() - 1] == b'.'
     } else {
         h == p
     }
@@ -175,7 +177,11 @@ mod tests {
         let p = TlsPolicy::allow_all_intercept();
         assert_eq!(p.action_for("127.0.0.1", 443), TlsAction::Passthrough);
         assert_eq!(p.action_for("::1", 443), TlsAction::Passthrough);
-        assert!(p.reason_for("127.0.0.1", 443).unwrap().contains("IP-literal"));
+        assert!(
+            p.reason_for("127.0.0.1", 443)
+                .unwrap()
+                .contains("IP-literal")
+        );
     }
 
     #[test]
@@ -196,7 +202,10 @@ mod tests {
     #[test]
     fn common_defaults_cover_pinned_hosts() {
         let p = TlsPolicy::with_common_defaults();
-        assert_eq!(p.action_for("gateway.icloud.com", 443), TlsAction::Passthrough);
+        assert_eq!(
+            p.action_for("gateway.icloud.com", 443),
+            TlsAction::Passthrough
+        );
         assert_eq!(p.action_for("app.mytarget.test", 443), TlsAction::Intercept);
     }
 }

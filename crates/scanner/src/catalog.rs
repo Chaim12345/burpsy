@@ -104,7 +104,9 @@ impl IssueDefinition {
 
     /// Every CAPEC number attached to this issue, in catalog order.
     pub fn capec_ids(&self) -> impl Iterator<Item = u32> + '_ {
-        self.classifications.iter().filter_map(Classification::capec)
+        self.classifications
+            .iter()
+            .filter_map(Classification::capec)
     }
 
     /// [`Self::description`] rendered as plain text.
@@ -164,7 +166,11 @@ struct Normalised<'a> {
 
 impl<'a> Normalised<'a> {
     fn of(s: &'a str) -> Self {
-        Self { inner: s.chars(), pending: None, started: false }
+        Self {
+            inner: s.chars(),
+            pending: None,
+            started: false,
+        }
     }
 }
 
@@ -212,10 +218,17 @@ fn html_to_text(html: &str) -> String {
         };
         let tag = &rest[lt + 1..lt + gt];
         let closing = tag.starts_with('/');
-        let name = tag.trim_start_matches('/').split_whitespace().next().unwrap_or("");
+        let name = tag
+            .trim_start_matches('/')
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
         if name.eq_ignore_ascii_case("li") && !closing {
             out.push_str("\n- ");
-        } else if ["p", "ul", "ol", "li"].iter().any(|t| name.eq_ignore_ascii_case(t)) {
+        } else if ["p", "ul", "ol", "li"]
+            .iter()
+            .any(|t| name.eq_ignore_ascii_case(t))
+        {
             out.push('\n');
         }
         rest = &rest[lt + gt + 1..];
@@ -225,8 +238,13 @@ fn html_to_text(html: &str) -> String {
 }
 
 /// The five entities the catalog uses, and nothing else.
-const ENTITIES: [(&str, char); 5] =
-    [("&quot;", '"'), ("&lt;", '<'), ("&gt;", '>'), ("&nbsp;", ' '), ("&amp;", '&')];
+const ENTITIES: [(&str, char); 5] = [
+    ("&quot;", '"'),
+    ("&lt;", '<'),
+    ("&gt;", '>'),
+    ("&nbsp;", ' '),
+    ("&amp;", '&'),
+];
 
 fn push_decoded(out: &mut String, s: &str) {
     let mut rest = s;
@@ -310,7 +328,9 @@ mod tests {
             "background must be the shipped text: {}",
             &d.description_text()[..80]
         );
-        let rem = d.remediation_text().expect("SQL injection ships a remediation");
+        let rem = d
+            .remediation_text()
+            .expect("SQL injection ships a remediation");
         assert!(
             rem.starts_with("The most effective way to prevent SQL injection attacks is to use"),
             "remediation must be the shipped text, not a paraphrase: {}",
@@ -341,15 +361,27 @@ mod tests {
             ]
         );
         // The stale values each collide with a real, different issue.
-        assert_eq!(by_type_index(0x0010_0e00).unwrap().name, "Perl code injection");
-        assert_eq!(by_type_index(0x0900_0000).unwrap().name, "BCheck generated issue");
+        assert_eq!(
+            by_type_index(0x0010_0e00).unwrap().name,
+            "Perl code injection"
+        );
+        assert_eq!(
+            by_type_index(0x0900_0000).unwrap().name,
+            "BCheck generated issue"
+        );
     }
 
     #[test]
     fn exactly_fourteen_definitions_have_no_remediation_and_report_none() {
         let missing = all().iter().filter(|i| i.remediation.is_none()).count();
-        assert_eq!(missing, 14, "an absent remediation must stay absent, not become \"\"");
-        assert!(all().iter().all(|i| !i.description.is_empty()), "every issue has background");
+        assert_eq!(
+            missing, 14,
+            "an absent remediation must stay absent, not become \"\""
+        );
+        assert!(
+            all().iter().all(|i| !i.description.is_empty()),
+            "every issue has background"
+        );
     }
 
     #[test]
@@ -373,7 +405,10 @@ mod tests {
     #[test]
     fn name_lookup_is_case_and_whitespace_insensitive_but_never_fuzzy() {
         assert_eq!(by_name("SQL injection").unwrap().type_index, 0x0010_0200);
-        assert_eq!(by_name("  sql   INJECTION ").unwrap().type_index, 0x0010_0200);
+        assert_eq!(
+            by_name("  sql   INJECTION ").unwrap().type_index,
+            0x0010_0200
+        );
         // A near miss must miss. Attaching SQL injection's remediation to a finding about
         // second-order SQL injection would be wrong advice, confidently delivered.
         assert!(by_name("SQL injection!").is_none());
@@ -397,8 +432,14 @@ mod tests {
     fn html_renders_to_readable_text_with_entities_decoded() {
         assert_eq!(html_to_text("<p>one</p>\n<p>two</p>"), "one\ntwo");
         assert_eq!(html_to_text("<p>a <b>bold</b> word</p>"), "a bold word");
-        assert_eq!(html_to_text("<ul>\n<li>first</li>\n<li>second</li>\n</ul>"), "- first\n- second");
-        assert_eq!(html_to_text("5 &lt; 6 &amp;&amp; &quot;x&quot; &gt; y"), "5 < 6 && \"x\" > y");
+        assert_eq!(
+            html_to_text("<ul>\n<li>first</li>\n<li>second</li>\n</ul>"),
+            "- first\n- second"
+        );
+        assert_eq!(
+            html_to_text("5 &lt; 6 &amp;&amp; &quot;x&quot; &gt; y"),
+            "5 < 6 && \"x\" > y"
+        );
         // An entity outside the five the catalog uses is left visible rather than swallowed.
         assert_eq!(html_to_text("A&copy;B"), "A&copy;B");
         assert_eq!(html_to_text("1 < 2"), "1 < 2");

@@ -31,7 +31,7 @@
 //! finished work either.
 
 use crate::limit::{RateLimit, RateLimiter};
-use crate::plan::{AttackKind, AttackPlan, Assignment};
+use crate::plan::{Assignment, AttackKind, AttackPlan};
 use crate::{InsertionPoint, apply_all};
 use bytes::Bytes;
 use serde::Serialize;
@@ -237,7 +237,10 @@ pub async fn run(a: Attack<'_>, sender: SendFn, record: Option<RecordFn>) -> Att
             && let Err(why) = g(&bytes)
         {
             drop(permit);
-            collector.absorb(Ok(Outcome { ordinal: i, result: Err(why) }));
+            collector.absorb(Ok(Outcome {
+                ordinal: i,
+                result: Err(why),
+            }));
             continue;
         }
         let sender = sender.clone();
@@ -382,8 +385,7 @@ impl Collector {
 
     fn finish(mut self, a: &Attack<'_>, elapsed: Duration) -> AttackReport {
         // Rarest first, then by ordinal so the output is stable across runs.
-        self.buckets
-            .sort_by_key(|b| (b.count, b.first_ordinal));
+        self.buckets.sort_by_key(|b| (b.count, b.first_ordinal));
         self.errors
             .sort_by_key(|e| (e.count, e.first_ordinal.unwrap_or(usize::MAX)));
         // Results arrive as they complete; the operator reads them in plan order.
@@ -436,7 +438,11 @@ mod tests {
 
     fn sets(v: &[&[&str]]) -> Vec<Vec<Bytes>> {
         v.iter()
-            .map(|s| s.iter().map(|p| Bytes::from(p.as_bytes().to_vec())).collect())
+            .map(|s| {
+                s.iter()
+                    .map(|p| Bytes::from(p.as_bytes().to_vec()))
+                    .collect()
+            })
             .collect()
     }
 
@@ -495,20 +501,34 @@ mod tests {
         let a = Attack::new(&m.raw, &sel, &payloads, &plan)
             .with_limits(RateLimit::unthrottled(4))
             .with_guard(guard);
-        let r = run(a, recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"), None).await;
+        let r = run(
+            a,
+            recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"),
+            None,
+        )
+        .await;
 
         let sent: Vec<String> = seen
             .lock()
             .unwrap()
             .iter()
-            .map(|b| String::from_utf8_lossy(b).lines().next().unwrap_or("").to_string())
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
             .collect();
         assert!(
             !sent.iter().any(|l| l.contains("/admin")),
             "an out-of-scope request reached the sender: {sent:?}"
         );
         assert_eq!(r.sent, 2, "the two in-scope payloads must still go");
-        assert_eq!(r.failed, 1, "and the refused one must be counted, not dropped silently");
+        assert_eq!(
+            r.failed, 1,
+            "and the refused one must be counted, not dropped silently"
+        );
     }
 
     #[tokio::test]
@@ -524,11 +544,19 @@ mod tests {
         let a = Attack::new(&base, &sel, &payloads, &plan)
             .with_limits(RateLimit::unthrottled(2))
             .with_guard(guard);
-        let r = run(a, recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"), None).await;
+        let r = run(
+            a,
+            recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"),
+            None,
+        )
+        .await;
 
         assert_eq!(r.sent, 0);
         assert_eq!(r.failed, 1);
-        assert!(seen.lock().unwrap().is_empty(), "nothing may reach the sender");
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "nothing may reach the sender"
+        );
         assert!(
             r.errors.iter().any(|e| e.error.contains("out of scope")),
             "the reason must survive into the report: {:?}",
@@ -544,16 +572,26 @@ mod tests {
         let plan = AttackPlan::new(AttackKind::Pitchfork, 2, &[3, 2], 1_000);
         let seen = Arc::new(Mutex::new(Vec::new()));
 
-        let a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::unthrottled(4));
-        let r = run(a, recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"), None).await;
+        let a = Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::unthrottled(4));
+        let r = run(
+            a,
+            recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"),
+            None,
+        )
+        .await;
 
         assert_eq!(r.sent, 2, "the 2-entry set ends the attack");
         let mut got: Vec<String> = seen
             .lock()
             .unwrap()
             .iter()
-            .map(|b| String::from_utf8_lossy(b).lines().next().unwrap_or("").to_string())
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
             .collect();
         got.sort();
         assert_eq!(
@@ -574,9 +612,13 @@ mod tests {
         let plan = AttackPlan::new(AttackKind::ClusterBomb, 2, &[2, 3], 1_000);
         let seen = Arc::new(Mutex::new(Vec::new()));
 
-        let a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::unthrottled(4));
-        let r = run(a, recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"), None).await;
+        let a = Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::unthrottled(4));
+        let r = run(
+            a,
+            recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"),
+            None,
+        )
+        .await;
 
         assert_eq!(r.sent, 6);
         assert_eq!(r.combinations, 6);
@@ -585,7 +627,13 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .map(|b| String::from_utf8_lossy(b).lines().next().unwrap_or("").to_string())
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
             .collect();
         got.sort();
         assert_eq!(
@@ -609,16 +657,26 @@ mod tests {
         let plan = AttackPlan::new(AttackKind::BatteringRam, 2, &[2], 1_000);
         let seen = Arc::new(Mutex::new(Vec::new()));
 
-        let a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::unthrottled(4));
-        let r = run(a, recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"), None).await;
+        let a = Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::unthrottled(4));
+        let r = run(
+            a,
+            recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"),
+            None,
+        )
+        .await;
 
         assert_eq!(r.sent, 2, "one request per payload, both positions filled");
         let mut got: Vec<String> = seen
             .lock()
             .unwrap()
             .iter()
-            .map(|b| String::from_utf8_lossy(b).lines().next().unwrap_or("").to_string())
+            .map(|b| {
+                String::from_utf8_lossy(b)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
             .collect();
         got.sort();
         assert_eq!(
@@ -635,7 +693,10 @@ mod tests {
         let sel = vec![points[0].clone()];
         let words: Vec<String> = (0..30).map(|i| format!("w{i:02}")).collect();
         let payloads: Vec<Vec<Bytes>> = vec![
-            words.iter().map(|w| Bytes::from(w.clone().into_bytes())).collect(),
+            words
+                .iter()
+                .map(|w| Bytes::from(w.clone().into_bytes()))
+                .collect(),
         ];
         let plan = AttackPlan::new(AttackKind::Sniper, 1, &[30], 1_000);
 
@@ -663,8 +724,7 @@ mod tests {
             })
         });
 
-        let a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::unthrottled(8));
+        let a = Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::unthrottled(8));
         let r = run(a, sender, Some(record)).await;
 
         assert_eq!(r.sent, 30);
@@ -679,7 +739,10 @@ mod tests {
 
         let reflected: Vec<&ResultBucket> = r.buckets.iter().filter(|b| b.reflected).collect();
         assert_eq!(reflected.len(), 1, "only w00 came back in its response");
-        assert_eq!(reflected[0].first_ordinal, 0, "and it was the first payload");
+        assert_eq!(
+            reflected[0].first_ordinal, 0,
+            "and it was the first payload"
+        );
 
         let five_hundred: Vec<&ResultBucket> =
             r.buckets.iter().filter(|b| b.status == Some(500)).collect();
@@ -702,16 +765,24 @@ mod tests {
         let plan = AttackPlan::new(AttackKind::ClusterBomb, 2, &[100, 100], 25);
         let seen = Arc::new(Mutex::new(Vec::new()));
 
-        let a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::unthrottled(8));
-        let r = run(a, recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"), None).await;
+        let a = Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::unthrottled(8));
+        let r = run(
+            a,
+            recording_sender(seen.clone(), "HTTP/1.1 200 OK\r\n\r\nok"),
+            None,
+        )
+        .await;
 
         assert_eq!(r.combinations, 10_000, "the operator is told the real size");
         assert_eq!(r.max_requests, 25);
         assert!(r.truncated, "and that the bound bit");
         assert_eq!(r.planned, 25);
         assert_eq!(r.sent, 25);
-        assert_eq!(seen.lock().unwrap().len(), 25, "no request beyond the bound went out");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            25,
+            "no request beyond the bound went out"
+        );
     }
 
     #[tokio::test]
@@ -736,17 +807,23 @@ mod tests {
             })
         });
 
-        let a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::unthrottled(4));
+        let a = Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::unthrottled(4));
         let r = run(a, sender, None).await;
 
         assert_eq!(r.sent, 2);
         assert_eq!(r.failed, 2);
         assert_eq!(r.errors.len(), 1, "one message, two occurrences");
         assert_eq!(r.errors[0].count, 2);
-        assert_eq!(r.errors[0].first_ordinal, Some(1), "and a replayable ordinal");
+        assert_eq!(
+            r.errors[0].first_ordinal,
+            Some(1),
+            "and a replayable ordinal"
+        );
         assert_eq!(r.attempts.len(), 4, "every attempt still has a row");
-        assert_eq!(r.attempts[1].error.as_deref(), Some("connect 127.0.0.1:1: connection refused"));
+        assert_eq!(
+            r.attempts[1].error.as_deref(),
+            Some("connect 127.0.0.1:1: connection refused")
+        );
         assert!(r.attempts[0].error.is_none());
     }
 
@@ -830,19 +907,26 @@ mod tests {
         let n = 40usize;
         let probe = probe_server(Duration::ZERO).await;
 
-        let (base, points) = request(b"GET /?a=1 HTTP/1.1\r\nHost: t.test\r\nConnection: close\r\n\r\n");
+        let (base, points) =
+            request(b"GET /?a=1 HTTP/1.1\r\nHost: t.test\r\nConnection: close\r\n\r\n");
         let sel = vec![points[0].clone()];
         let payloads: Vec<Vec<Bytes>> =
             vec![(0..n).map(|i| Bytes::from(format!("p{i}"))).collect()];
         let plan = AttackPlan::new(AttackKind::Sniper, 1, &[n], 1_000);
 
-        let a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::new(Some(rps), burst, 8));
+        let a = Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::new(
+            Some(rps),
+            burst,
+            8,
+        ));
         let t0 = Instant::now();
         let r = run(a, tcp_sender(probe.addr), None).await;
         let elapsed = t0.elapsed();
 
-        assert_eq!(r.sent, n, "every request must have actually gone out: {r:?}");
+        assert_eq!(
+            r.sent, n,
+            "every request must have actually gone out: {r:?}"
+        );
 
         let floor = Duration::from_secs_f64((n as f64 - f64::from(burst)) / rps);
         assert!(
@@ -855,7 +939,10 @@ mod tests {
         let window = Duration::from_millis(500);
         let allowed = f64::from(burst) + rps * window.as_secs_f64();
         for (i, start) in at.iter().enumerate() {
-            let count = at[i..].iter().take_while(|t| **t - *start <= window).count();
+            let count = at[i..]
+                .iter()
+                .take_while(|t| **t - *start <= window)
+                .count();
             assert!(
                 count as f64 <= allowed,
                 "{count} requests arrived within {window:?}; burst {burst} + {rps}/s allows {allowed}"
@@ -873,14 +960,15 @@ mod tests {
         let n = 32usize;
         let probe = probe_server(per_request).await;
 
-        let (base, points) = request(b"GET /?a=1 HTTP/1.1\r\nHost: t.test\r\nConnection: close\r\n\r\n");
+        let (base, points) =
+            request(b"GET /?a=1 HTTP/1.1\r\nHost: t.test\r\nConnection: close\r\n\r\n");
         let sel = vec![points[0].clone()];
         let payloads: Vec<Vec<Bytes>> =
             vec![(0..n).map(|i| Bytes::from(format!("p{i}"))).collect()];
         let plan = AttackPlan::new(AttackKind::Sniper, 1, &[n], 1_000);
 
-        let a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::unthrottled(slots));
+        let a =
+            Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::unthrottled(slots));
         let t0 = Instant::now();
         let r = run(a, tcp_sender(probe.addr), None).await;
         let elapsed = t0.elapsed();
@@ -907,19 +995,31 @@ mod tests {
             vec![(0..200).map(|i| Bytes::from(format!("p{i}"))).collect()];
         let plan = AttackPlan::new(AttackKind::Sniper, 1, &[200], 1_000);
 
-        let mut a = Attack::new(&base, &sel, &payloads, &plan)
-            .with_limits(RateLimit::unthrottled(16));
+        let mut a =
+            Attack::new(&base, &sel, &payloads, &plan).with_limits(RateLimit::unthrottled(16));
         a.detail_limit = 10;
-        let r = run(a, recording_sender(Arc::new(Mutex::new(Vec::new())), "HTTP/1.1 204 No\r\n\r\n"), None).await;
+        let r = run(
+            a,
+            recording_sender(Arc::new(Mutex::new(Vec::new())), "HTTP/1.1 204 No\r\n\r\n"),
+            None,
+        )
+        .await;
 
         assert_eq!(r.sent, 200);
         assert_eq!(r.attempts.len(), 10, "detail is bounded");
-        assert_eq!(r.detail_limit, 10, "and the bound is stated, not left to be inferred");
+        assert_eq!(
+            r.detail_limit, 10,
+            "and the bound is stated, not left to be inferred"
+        );
         assert_eq!(
             r.attempts.iter().map(|x| x.ordinal).collect::<Vec<_>>(),
             (0..10).collect::<Vec<_>>(),
             "and kept in plan order"
         );
-        assert_eq!(r.buckets.iter().map(|b| b.count).sum::<usize>(), 200, "counts are not");
+        assert_eq!(
+            r.buckets.iter().map(|b| b.count).sum::<usize>(),
+            200,
+            "counts are not"
+        );
     }
 }

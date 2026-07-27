@@ -88,7 +88,10 @@ fn url_field(r: &RequestEdit, rest: &[&str]) -> Option<String> {
         // Java's URL.getFile(): path plus query. Both corpus uses are extension regexes.
         Some("file") => r.file(),
         Some("query") | Some("query_string") => r.query.clone(),
-        Some("port") => r.header("host")?.rsplit_once(':').map(|(_, p)| p.to_string())?,
+        Some("port") => r
+            .header("host")?
+            .rsplit_once(':')
+            .map(|(_, p)| p.to_string())?,
         _ => return None,
     })
 }
@@ -140,9 +143,16 @@ fn response_field(m: &StoredMessage, rest: &[&str]) -> Option<String> {
 /// The raw header block, start line excluded. `{check.response.headers}` (94 corpus uses) is matched
 /// against as one blob, so this must be the real bytes rather than a reconstruction.
 fn header_block(m: &StoredMessage) -> String {
-    let start = m.raw.iter().position(|&c| c == b'\n').map(|i| i + 1).unwrap_or(0);
+    let start = m
+        .raw
+        .iter()
+        .position(|&c| c == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
     let end = m.shape.body.offset.min(m.raw.len()).max(start);
-    String::from_utf8_lossy(&m.raw[start..end]).trim_end().to_string()
+    String::from_utf8_lossy(&m.raw[start..end])
+        .trim_end()
+        .to_string()
 }
 
 /// Wrap raw response bytes as a `StoredMessage` so a sent response resolves like a stored one.
@@ -150,7 +160,11 @@ fn as_stored_response(raw: Vec<u8>) -> Option<StoredMessage> {
     let b = Bytes::from(raw);
     let shape = burpsy_core::parse(&b, Direction::Response).ok()?;
     // Not a store entry; the id is never used for lookup.
-    Some(StoredMessage { id: MsgId(u64::MAX), raw: b, shape })
+    Some(StoredMessage {
+        id: MsgId(u64::MAX),
+        raw: b,
+        shape,
+    })
 }
 
 /// What the check can see.
@@ -226,7 +240,10 @@ impl<'a> Ctx<'a> {
     /// `run for each:` values can read it, not only the check body.
     fn for_point(&self, point: InsertionPoint) -> Ctx<'a> {
         let mut vars = self.vars.clone();
-        vars.insert("insertion_point_base_value".to_string(), point.base_value.clone());
+        vars.insert(
+            "insertion_point_base_value".to_string(),
+            point.base_value.clone(),
+        );
         Ctx {
             response: self.response,
             base_request: self.base_request.clone(),
@@ -244,8 +261,19 @@ impl<'a> Ctx<'a> {
         self.unresolved.borrow().iter().cloned().collect()
     }
 
-    fn record_send(&self, name: Option<String>, request: RequestEdit, response: Option<StoredMessage>) {
-        self.sent.borrow_mut().push((name, Bound { request: Some(request), response }));
+    fn record_send(
+        &self,
+        name: Option<String>,
+        request: RequestEdit,
+        response: Option<StoredMessage>,
+    ) {
+        self.sent.borrow_mut().push((
+            name,
+            Bound {
+                request: Some(request),
+                response,
+            },
+        ));
     }
 
     /// Look up a binding by name, honouring `base` and `latest`.
@@ -268,7 +296,10 @@ impl<'a> Ctx<'a> {
             }
             other => {
                 let sent = self.sent.borrow();
-                sent.iter().rev().find(|(n, _)| n.as_deref() == Some(other)).and_then(|(_, b)| f(b))
+                sent.iter()
+                    .rev()
+                    .find(|(n, _)| n.as_deref() == Some(other))
+                    .and_then(|(_, b)| f(b))
             }
         }
     }
@@ -545,7 +576,9 @@ pub fn run_active(
         let it = ctx.for_point(p);
         let r = run_inner(check, &it, Some(sender), Some(target));
         // Fold diagnostics and RNG state back, including on the error path — see `run_inner`.
-        ctx.unresolved.borrow_mut().extend(it.unresolved.borrow().iter().cloned());
+        ctx.unresolved
+            .borrow_mut()
+            .extend(it.unresolved.borrow().iter().cloned());
         ctx.rng.set(it.rng.get());
         // A send failure abandons the remaining points too. It is nearly always systemic — a dead
         // host, a closed port — and hammering it once per parameter would turn one failure into
@@ -586,10 +619,19 @@ fn run_inner(
     let mut findings = Vec::new();
     for vars in iterations {
         let it = ctx.rebind(vars);
-        let r = exec(&check.body, &it, &check.metadata.name, sender, target, &mut findings);
+        let r = exec(
+            &check.body,
+            &it,
+            &check.metadata.name,
+            sender,
+            target,
+            &mut findings,
+        );
         // Fold each iteration's unresolved paths back into the caller's context, including on the
         // error path — a diagnostic that only exists inside a temporary is no diagnostic.
-        ctx.unresolved.borrow_mut().extend(it.unresolved.borrow().iter().cloned());
+        ctx.unresolved
+            .borrow_mut()
+            .extend(it.unresolved.borrow().iter().cloned());
         // Carry the RNG forward too. Without this every iteration restarts from the parent's seed,
         // so a cache-busting probe iterated over 30 payloads would send the same nonce 30 times.
         ctx.rng.set(it.rng.get());
@@ -608,8 +650,16 @@ fn exec(
 ) -> Result<(), EvalError> {
     for s in stmts {
         match s {
-            Statement::If { cond, then, otherwise } => {
-                let branch = if eval_bool(cond, ctx)? { then } else { otherwise };
+            Statement::If {
+                cond,
+                then,
+                otherwise,
+            } => {
+                let branch = if eval_bool(cond, ctx)? {
+                    then
+                } else {
+                    otherwise
+                };
                 exec(branch, ctx, check_name, sender, target, out)?;
             }
             Statement::Report(r) => {
@@ -642,7 +692,11 @@ fn exec(
                 let req = build_request(ctx, raw.as_ref(), mods)?;
                 dispatch(ctx, sender, target, called.clone(), req)?;
             }
-            Statement::SendPayload { called, appending, value } => {
+            Statement::SendPayload {
+                called,
+                appending,
+                value,
+            } => {
                 let (Some(sender), Some(target)) = (sender, target) else {
                     return Err(EvalError::Unsupported(Unsupported::NeedsSending));
                 };
@@ -751,7 +805,9 @@ fn build_request(
                     }
                 }
             }
-            RequestMod::QueryString(v) => r.query = ctx.value_text(v).trim_start_matches('?').to_string(),
+            RequestMod::QueryString(v) => {
+                r.query = ctx.value_text(v).trim_start_matches('?').to_string()
+            }
             RequestMod::Queries(vs) => {
                 for v in vs {
                     r.add_query(&ctx.value_text(v));
@@ -809,7 +865,9 @@ fn eval_bool(e: &BoolExpr, ctx: &Ctx<'_>) -> Result<bool, EvalError> {
                 return Err(EvalError::Unsupported(Unsupported::ResponseVariations));
             }
             CmpOp::Matches => {
-                let Some(l) = ctx.value_opt(lhs) else { return Ok(false) };
+                let Some(l) = ctx.value_opt(lhs) else {
+                    return Ok(false);
+                };
                 // RHS is always a literal, never interpolated.
                 let pat = rhs.raw();
                 let re = Regex::new(pat)
@@ -818,12 +876,18 @@ fn eval_bool(e: &BoolExpr, ctx: &Ctx<'_>) -> Result<bool, EvalError> {
             }
             // Containment, needle on the left — the way the corpus writes it.
             CmpOp::In => {
-                let Some(l) = ctx.value_opt(lhs) else { return Ok(false) };
-                let Some(r) = ctx.value_opt(rhs) else { return Ok(false) };
+                let Some(l) = ctx.value_opt(lhs) else {
+                    return Ok(false);
+                };
+                let Some(r) = ctx.value_opt(rhs) else {
+                    return Ok(false);
+                };
                 r.contains(&l)
             }
             CmpOp::Is => {
-                let Some(l) = ctx.value_opt(lhs) else { return Ok(false) };
+                let Some(l) = ctx.value_opt(lhs) else {
+                    return Ok(false);
+                };
                 ctx.value_opt(rhs).is_some_and(|r| l == r)
             }
         },
@@ -864,7 +928,9 @@ given response then
 
     #[test]
     fn secret_scanner_fires_on_a_match() {
-        let key: String = std::iter::once("oy2").chain(std::iter::repeat_n("a", 43)).collect();
+        let key: String = std::iter::once("oy2")
+            .chain(std::iter::repeat_n("a", 43))
+            .collect();
         let body = format!("HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\nkey={key}");
         let m = {
             let s = TrafficStore::new();
@@ -985,8 +1051,14 @@ given response then
             .iter()
             .map(|s| s.split_whitespace().nth(1).unwrap_or(""))
             .collect();
-        assert_ne!(nonces[0], nonces[1], "iterations 1 and 2 reused a nonce: {nonces:?}");
-        assert_ne!(nonces[1], nonces[2], "iterations 2 and 3 reused a nonce: {nonces:?}");
+        assert_ne!(
+            nonces[0], nonces[1],
+            "iterations 1 and 2 reused a nonce: {nonces:?}"
+        );
+        assert_ne!(
+            nonces[1], nonces[2],
+            "iterations 2 and 3 reused a nonce: {nonces:?}"
+        );
     }
 
     #[test]
@@ -1003,8 +1075,14 @@ given response then
         let m = MockSender::new(vec![Ok(MockSender::ok("x"))]);
         run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
         let sent = m.first();
-        assert!(sent.contains("--B\r\nContent-Disposition"), "escapes not decoded: {sent:?}");
-        assert!(!sent.contains("\\r\\n"), "literal backslash-r survived: {sent:?}");
+        assert!(
+            sent.contains("--B\r\nContent-Disposition"),
+            "escapes not decoded: {sent:?}"
+        );
+        assert!(
+            !sent.contains("\\r\\n"),
+            "literal backslash-r survived: {sent:?}"
+        );
         // The length must match the decoded body, not the longer escaped text. Split only at the
         // FIRST blank line: a multipart body contains `\r\n\r\n` itself.
         let body = sent.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or("");
@@ -1050,7 +1128,11 @@ given response then
         let spy = TargetSpy(std::sync::Mutex::new(Vec::new()));
         run_active(&check, &active_ctx(&base), &spy, &tgt()).unwrap();
         let seen = spy.0.lock().unwrap().clone();
-        assert_eq!(seen, vec![tgt()], "the send must go to the scoped target, not the Host header");
+        assert_eq!(
+            seen,
+            vec![tgt()],
+            "the send must go to the scoped target, not the Host header"
+        );
     }
 
     // ---- M2: sending ----------------------------------------------------------------------
@@ -1072,7 +1154,11 @@ given response then
             }
         }
         fn ok(body: &str) -> Vec<u8> {
-            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes()
         }
         fn with_status(code: &str, body: &str) -> Vec<u8> {
             format!(
@@ -1082,7 +1168,12 @@ given response then
             .into_bytes()
         }
         fn first(&self) -> String {
-            self.sent.lock().unwrap().first().cloned().unwrap_or_default()
+            self.sent
+                .lock()
+                .unwrap()
+                .first()
+                .cloned()
+                .unwrap_or_default()
         }
         fn count(&self) -> usize {
             self.sent.lock().unwrap().len()
@@ -1091,7 +1182,10 @@ given response then
 
     impl Sender for MockSender {
         fn send(&self, _t: &Target, raw: &[u8]) -> Result<Vec<u8>, String> {
-            self.sent.lock().unwrap().push(String::from_utf8_lossy(raw).into_owned());
+            self.sent
+                .lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(raw).into_owned());
             self.replies
                 .lock()
                 .unwrap()
@@ -1101,11 +1195,16 @@ given response then
     }
 
     fn tgt() -> Target {
-        Target { host: "x.test".into(), port: 80, tls: false }
+        Target {
+            host: "x.test".into(),
+            port: 80,
+            tls: false,
+        }
     }
 
     fn base_req() -> RequestEdit {
-        RequestEdit::from_raw(b"GET /orig?a=1 HTTP/1.1\r\nHost: x.test\r\nAccept: */*\r\n\r\n").unwrap()
+        RequestEdit::from_raw(b"GET /orig?a=1 HTTP/1.1\r\nHost: x.test\r\nAccept: */*\r\n\r\n")
+            .unwrap()
     }
 
     /// Build a ctx with a base request, as an active scan point would.
@@ -1131,41 +1230,52 @@ given response then
         let f = run_active(&check, &ctx, &m, &tgt()).unwrap();
         // The query survives: `path` and `query_string` are separate modifier targets, so replacing
         // one leaves the other alone. See `RequestMod::Path` for why that reading was chosen.
-        assert!(m.first().starts_with("GET /admin?a=1 HTTP/1.1"), "sent: {:?}", m.first());
+        assert!(
+            m.first().starts_with("GET /admin?a=1 HTTP/1.1"),
+            "sent: {:?}",
+            m.first()
+        );
         assert_eq!(f.len(), 1, "the 200 reply should report");
     }
 
     #[test]
     fn a_path_replacement_containing_a_question_mark_sets_both_components() {
-        let check = parse_check(
-            "given host then\n send request:\n  path: \"/new?z=9\"",
-        );
+        let check = parse_check("given host then\n send request:\n  path: \"/new?z=9\"");
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = MockSender::new(vec![Ok(MockSender::ok("x"))]);
         run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
-        assert!(m.first().starts_with("GET /new?z=9 "), "sent: {:?}", m.first());
+        assert!(
+            m.first().starts_with("GET /new?z=9 "),
+            "sent: {:?}",
+            m.first()
+        );
     }
 
     #[test]
     fn appending_path_joins_with_exactly_one_slash() {
-        let check = parse_check(
-            "given path then\n send request:\n  appending path: \"sub\"",
-        );
+        let check = parse_check("given path then\n send request:\n  appending path: \"sub\"");
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = MockSender::new(vec![Ok(MockSender::ok("x"))]);
         run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
-        assert!(m.first().starts_with("GET /orig/sub?a=1 "), "sent: {:?}", m.first());
+        assert!(
+            m.first().starts_with("GET /orig/sub?a=1 "),
+            "sent: {:?}",
+            m.first()
+        );
     }
 
     #[test]
     fn appending_queries_uses_ampersand_when_a_query_exists() {
-        let check = parse_check(
-            "given request then\n send request:\n  appending queries: `p=1`, `q=2`",
-        );
+        let check =
+            parse_check("given request then\n send request:\n  appending queries: `p=1`, `q=2`");
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = MockSender::new(vec![Ok(MockSender::ok("x"))]);
         run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
-        assert!(m.first().starts_with("GET /orig?a=1&p=1&q=2 "), "sent: {:?}", m.first());
+        assert!(
+            m.first().starts_with("GET /orig?a=1&p=1&q=2 "),
+            "sent: {:?}",
+            m.first()
+        );
     }
 
     #[test]
@@ -1183,8 +1293,14 @@ given response then
         let m = MockSender::new(vec![Ok(MockSender::ok("x"))]);
         run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
         let sent = m.first();
-        assert!(sent.starts_with("POST /orig?a=1 "), "method not applied: {sent:?}");
-        assert!(sent.contains("Content-Type: application/json"), "sent: {sent:?}");
+        assert!(
+            sent.starts_with("POST /orig?a=1 "),
+            "method not applied: {sent:?}"
+        );
+        assert!(
+            sent.contains("Content-Type: application/json"),
+            "sent: {sent:?}"
+        );
         assert!(sent.contains("X-Probe: yes"), "sent: {sent:?}");
         // 7 bytes of body; a stale or missing length would truncate the probe server-side.
         assert!(sent.contains("Content-Length: 7"), "sent: {sent:?}");
@@ -1290,7 +1406,11 @@ given response then
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = MockSender::new(vec![Ok(MockSender::ok("x"))]);
         run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
-        assert!(m.first().starts_with("GET /probe?a=1 "), "sent: {:?}", m.first());
+        assert!(
+            m.first().starts_with("GET /probe?a=1 "),
+            "sent: {:?}",
+            m.first()
+        );
     }
 
     #[test]
@@ -1310,7 +1430,11 @@ given response then
         let m = MockSender::new(vec![Ok(MockSender::ok("a")), Ok(MockSender::ok("b"))]);
         run_active(&check, &active_ctx(&base), &m, &tgt()).unwrap();
         let all = m.sent.lock().unwrap().clone();
-        assert!(all[0].starts_with("GET /orig?a=1&p=1 "), "first: {:?}", all[0]);
+        assert!(
+            all[0].starts_with("GET /orig?a=1&p=1 "),
+            "first: {:?}",
+            all[0]
+        );
         assert!(
             all[1].starts_with("GET /orig?a=1&q=2 "),
             "the second send must not carry the first's `p=1`: {:?}",
@@ -1373,7 +1497,10 @@ given response then
                      confidence: firm
                  end if"#,
         );
-        assert!(!check.m3_runnable(), "an inert check must not be counted as runnable");
+        assert!(
+            !check.m3_runnable(),
+            "an inert check must not be counted as runnable"
+        );
     }
 
     #[test]
@@ -1413,23 +1540,39 @@ given response then
     }
 
     fn ok_replies(n: usize) -> MockSender {
-        MockSender::new((0..n).map(|i| Ok(MockSender::ok(&format!("r{i}")))).collect())
+        MockSender::new(
+            (0..n)
+                .map(|i| Ok(MockSender::ok(&format!("r{i}"))))
+                .collect(),
+        )
     }
 
     #[test]
     fn a_query_payload_lands_in_one_parameter_and_leaves_the_rest_byte_identical() {
         // This is the property that makes a finding attributable. A run that also perturbed
         // `page` could not say which parameter was injectable.
-        let check = parse_check("given query insertion point then\n send payload:\n  appending: \"'\"");
+        let check =
+            parse_check("given query insertion point then\n send payload:\n  appending: \"'\"");
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = ok_replies(4);
         run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
         let sent = m.sent.lock().unwrap().clone();
         assert_eq!(sent.len(), 2, "one send per query parameter");
-        assert!(sent[0].starts_with("POST /app?q=cat'&page=2 "), "sent[0]: {:?}", sent[0]);
-        assert!(sent[1].starts_with("POST /app?q=cat&page=2' "), "sent[1]: {:?}", sent[1]);
+        assert!(
+            sent[0].starts_with("POST /app?q=cat'&page=2 "),
+            "sent[0]: {:?}",
+            sent[0]
+        );
+        assert!(
+            sent[1].starts_with("POST /app?q=cat&page=2' "),
+            "sent[1]: {:?}",
+            sent[1]
+        );
         for s in &sent {
-            assert!(s.contains("Cookie: sid=abc; theme=dark"), "cookies moved: {s:?}");
+            assert!(
+                s.contains("Cookie: sid=abc; theme=dark"),
+                "cookies moved: {s:?}"
+            );
             assert!(s.ends_with("user=bo&n=1"), "body moved: {s:?}");
             assert!(s.contains("User-Agent: burpsy"), "header moved: {s:?}");
         }
@@ -1437,15 +1580,22 @@ given response then
 
     #[test]
     fn replacing_overwrites_the_parameter_instead_of_extending_it() {
-        let check = parse_check(
-            "given query insertion point then\n send payload:\n  replacing: \"PAY\"",
-        );
+        let check =
+            parse_check("given query insertion point then\n send payload:\n  replacing: \"PAY\"");
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = ok_replies(4);
         run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
         let sent = m.sent.lock().unwrap().clone();
-        assert!(sent[0].starts_with("POST /app?q=PAY&page=2 "), "sent[0]: {:?}", sent[0]);
-        assert!(sent[1].starts_with("POST /app?q=cat&page=PAY "), "sent[1]: {:?}", sent[1]);
+        assert!(
+            sent[0].starts_with("POST /app?q=PAY&page=2 "),
+            "sent[0]: {:?}",
+            sent[0]
+        );
+        assert!(
+            sent[1].starts_with("POST /app?q=cat&page=PAY "),
+            "sent[1]: {:?}",
+            sent[1]
+        );
     }
 
     #[test]
@@ -1459,8 +1609,16 @@ given response then
         let sent = m.sent.lock().unwrap().clone();
         // Host, Content-Length and Cookie are reserved, so User-Agent and Content-Type remain.
         assert_eq!(sent.len(), 2, "sent: {sent:?}");
-        assert!(sent[0].contains("User-Agent: burpsy/probe\r\n"), "sent[0]: {:?}", sent[0]);
-        assert!(sent[0].contains("Host: x.test\r\n"), "Host must be untouched: {:?}", sent[0]);
+        assert!(
+            sent[0].contains("User-Agent: burpsy/probe\r\n"),
+            "sent[0]: {:?}",
+            sent[0]
+        );
+        assert!(
+            sent[0].contains("Host: x.test\r\n"),
+            "Host must be untouched: {:?}",
+            sent[0]
+        );
         assert!(
             sent[1].contains("Content-Type: application/x-www-form-urlencoded/probe\r\n"),
             "sent[1]: {:?}",
@@ -1470,39 +1628,56 @@ given response then
 
     #[test]
     fn a_cookie_payload_touches_one_cookie_inside_the_shared_header() {
-        let check = parse_check(
-            "given cookie insertion point then\n send payload:\n  appending: \"XX\"",
-        );
+        let check =
+            parse_check("given cookie insertion point then\n send payload:\n  appending: \"XX\"");
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = ok_replies(4);
         run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
         let sent = m.sent.lock().unwrap().clone();
         assert_eq!(sent.len(), 2);
-        assert!(sent[0].contains("Cookie: sid=abcXX; theme=dark\r\n"), "sent[0]: {:?}", sent[0]);
-        assert!(sent[1].contains("Cookie: sid=abc; theme=darkXX\r\n"), "sent[1]: {:?}", sent[1]);
+        assert!(
+            sent[0].contains("Cookie: sid=abcXX; theme=dark\r\n"),
+            "sent[0]: {:?}",
+            sent[0]
+        );
+        assert!(
+            sent[1].contains("Cookie: sid=abc; theme=darkXX\r\n"),
+            "sent[1]: {:?}",
+            sent[1]
+        );
     }
 
     #[test]
     fn a_form_body_payload_lands_in_one_field_with_a_corrected_length() {
-        let check = parse_check(
-            "given body insertion point then\n send payload:\n  appending: \"12345\"",
-        );
+        let check =
+            parse_check("given body insertion point then\n send payload:\n  appending: \"12345\"");
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let m = ok_replies(4);
         run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
         let sent = m.sent.lock().unwrap().clone();
         assert_eq!(sent.len(), 2, "one send per form field");
-        assert!(sent[0].ends_with("user=bo12345&n=1"), "sent[0]: {:?}", sent[0]);
+        assert!(
+            sent[0].ends_with("user=bo12345&n=1"),
+            "sent[0]: {:?}",
+            sent[0]
+        );
         // 11 original bytes + 5. A stale length would truncate the payload server-side.
-        assert!(sent[0].contains("Content-Length: 16"), "sent[0]: {:?}", sent[0]);
-        assert!(sent[1].ends_with("user=bo&n=112345"), "sent[1]: {:?}", sent[1]);
+        assert!(
+            sent[0].contains("Content-Length: 16"),
+            "sent[0]: {:?}",
+            sent[0]
+        );
+        assert!(
+            sent[1].ends_with("user=bo&n=112345"),
+            "sent[1]: {:?}",
+            sent[1]
+        );
     }
 
     #[test]
     fn a_json_body_payload_lands_inside_the_string_and_keeps_the_body_parsable() {
-        let check = parse_check(
-            "given body insertion point then\n send payload:\n  appending: `\"x`",
-        );
+        let check =
+            parse_check("given body insertion point then\n send payload:\n  appending: `\"x`");
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let req = RequestEdit::from_raw(
             b"POST /api HTTP/1.1\r\nHost: x.test\r\nContent-Type: application/json\r\nContent-Length: 29\r\n\r\n{\"user\":\"bo\",\"n\":1,\"r\":\"adm\"}",
@@ -1511,9 +1686,21 @@ given response then
         let m = ok_replies(4);
         run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap();
         let sent = m.sent.lock().unwrap().clone();
-        assert_eq!(sent.len(), 2, "the number 1 is not an insertion point: {sent:?}");
-        assert!(sent[0].ends_with(r#"{"user":"bo\"x","n":1,"r":"adm"}"#), "sent[0]: {:?}", sent[0]);
-        assert!(sent[1].ends_with(r#"{"user":"bo","n":1,"r":"adm\"x"}"#), "sent[1]: {:?}", sent[1]);
+        assert_eq!(
+            sent.len(),
+            2,
+            "the number 1 is not an insertion point: {sent:?}"
+        );
+        assert!(
+            sent[0].ends_with(r#"{"user":"bo\"x","n":1,"r":"adm"}"#),
+            "sent[0]: {:?}",
+            sent[0]
+        );
+        assert!(
+            sent[1].ends_with(r#"{"user":"bo","n":1,"r":"adm\"x"}"#),
+            "sent[1]: {:?}",
+            sent[1]
+        );
     }
 
     #[test]
@@ -1527,7 +1714,11 @@ given response then
         let req = RequestEdit::from_raw(b"GET /a?q=1 HTTP/1.1\r\nHost: x.test\r\n\r\n").unwrap();
         let m = ok_replies(2);
         run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap();
-        assert!(m.first().starts_with("GET /a?q=x%26admin%3D1 "), "sent: {:?}", m.first());
+        assert!(
+            m.first().starts_with("GET /a?q=x%26admin%3D1 "),
+            "sent: {:?}",
+            m.first()
+        );
     }
 
     #[test]
@@ -1539,10 +1730,20 @@ given response then
         let m = ok_replies(8);
         run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
         let sent = m.sent.lock().unwrap().clone();
-        assert_eq!(sent.len(), 4, "2 query + 2 body, no headers and no cookies: {sent:?}");
+        assert_eq!(
+            sent.len(),
+            4,
+            "2 query + 2 body, no headers and no cookies: {sent:?}"
+        );
         for s in &sent {
-            assert!(s.contains("Cookie: sid=abc; theme=dark\r\n"), "a cookie was attacked: {s:?}");
-            assert!(s.contains("User-Agent: burpsy\r\n"), "a header was attacked: {s:?}");
+            assert!(
+                s.contains("Cookie: sid=abc; theme=dark\r\n"),
+                "a cookie was attacked: {s:?}"
+            );
+            assert!(
+                s.contains("User-Agent: burpsy\r\n"),
+                "a header was attacked: {s:?}"
+            );
         }
     }
 
@@ -1584,8 +1785,16 @@ given response then
         let m = ok_replies(4);
         run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
         let sent = m.sent.lock().unwrap().clone();
-        assert_eq!(sent.len(), 1, "only the User-Agent point matches the guard: {sent:?}");
-        assert!(sent[0].contains("User-Agent: BURPSY\r\n"), "sent: {:?}", sent[0]);
+        assert_eq!(
+            sent.len(),
+            1,
+            "only the User-Agent point matches the guard: {sent:?}"
+        );
+        assert!(
+            sent[0].contains("User-Agent: BURPSY\r\n"),
+            "sent: {:?}",
+            sent[0]
+        );
     }
 
     #[test]
@@ -1607,7 +1816,11 @@ given response then
         run_active(&check, &ctx_with(&base, wide_req()), &m, &tgt()).unwrap();
         let sent = m.sent.lock().unwrap().clone();
         assert_eq!(sent.len(), 2);
-        assert!(sent[0].contains("User-Agent: burpsy-A\r\n"), "sent[0]: {:?}", sent[0]);
+        assert!(
+            sent[0].contains("User-Agent: burpsy-A\r\n"),
+            "sent[0]: {:?}",
+            sent[0]
+        );
         assert!(
             sent[1].contains("User-Agent: burpsy-B\r\n"),
             "the second payload must not stack on the first: {:?}",
@@ -1657,9 +1870,8 @@ given response then
         // whole point of the check. Untranslated Java backreferences produced `Authorization: .eyJzdWI.`
         // here, a token with no header at all.
         assert!(
-            sent[0].contains(
-                "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWI.\r\n"
-            ),
+            sent[0]
+                .contains("Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWI.\r\n"),
             "attack probe: {:?}",
             sent[0]
         );
@@ -1669,7 +1881,11 @@ given response then
             "control probe: {:?}",
             sent[1]
         );
-        assert_eq!(f.len(), 1, "a 401 for the unsigned control differs from the base 200");
+        assert_eq!(
+            f.len(),
+            1,
+            "a 401 for the unsigned control differs from the base 200"
+        );
     }
 
     #[test]
@@ -1678,7 +1894,10 @@ given response then
         let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let req = RequestEdit::from_raw(b"GET / HTTP/1.1\r\nHost: x.test\r\n\r\n").unwrap();
         let m = MockSender::new(vec![]);
-        assert_eq!(run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap(), vec![]);
+        assert_eq!(
+            run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap(),
+            vec![]
+        );
         assert_eq!(m.count(), 0);
     }
 
@@ -1687,7 +1906,10 @@ given response then
         // There is nowhere to place the payload; sending the base request unmodified would be a
         // probe that tests nothing while looking like it ran.
         let check = Check {
-            metadata: Metadata { name: "misplaced".into(), ..Default::default() },
+            metadata: Metadata {
+                name: "misplaced".into(),
+                ..Default::default()
+            },
             defines: vec![],
             for_each: vec![],
             frequency: Frequency::Host,
@@ -1704,7 +1926,10 @@ given response then
             EvalError::NeedsInsertionPoint
         );
         assert_eq!(m.count(), 0, "nothing should have been sent");
-        assert!(!check.m3_runnable(), "and it must not be counted as runnable");
+        assert!(
+            !check.m3_runnable(),
+            "and it must not be counted as runnable"
+        );
     }
 
     #[test]
@@ -1757,7 +1982,10 @@ given response then
 
     fn cmp_check(lhs: Value, op: CmpOp, rhs: Value) -> Check {
         Check {
-            metadata: Metadata { name: "absence probe".into(), ..Default::default() },
+            metadata: Metadata {
+                name: "absence probe".into(),
+                ..Default::default()
+            },
             defines: vec![],
             for_each: vec![],
             frequency: Frequency::Response,
@@ -1787,8 +2015,16 @@ given response then
             Value::Var("latest.response".into()),
         );
         let ctx = Ctx::new(&r);
-        assert_eq!(run_passive(&c, &ctx).unwrap(), vec![], "absent needle must not report");
-        assert_eq!(ctx.unresolved(), vec!["no.such.path".to_string()], "gap must be recorded");
+        assert_eq!(
+            run_passive(&c, &ctx).unwrap(),
+            vec![],
+            "absent needle must not report"
+        );
+        assert_eq!(
+            ctx.unresolved(),
+            vec!["no.such.path".to_string()],
+            "gap must be recorded"
+        );
     }
 
     #[test]
@@ -1810,7 +2046,11 @@ given response then
             CmpOp::Is,
             Value::Var("check.response.body".into()),
         );
-        assert_eq!(run_passive(&c, &Ctx::new(&r)).unwrap(), vec![], "`is` fired on absence");
+        assert_eq!(
+            run_passive(&c, &Ctx::new(&r)).unwrap(),
+            vec![],
+            "`is` fired on absence"
+        );
     }
 
     #[test]

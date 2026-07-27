@@ -342,7 +342,10 @@ mod tests {
     #[test]
     fn backtick_string_keeps_raw_interpolation_text() {
         let t = toks("`hello {latest.response} world`");
-        assert_eq!(t[0], Tok::TemplateStr("hello {latest.response} world".into()));
+        assert_eq!(
+            t[0],
+            Tok::TemplateStr("hello {latest.response} world".into())
+        );
     }
 
     #[test]

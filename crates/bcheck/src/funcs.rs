@@ -40,7 +40,10 @@ pub fn parse_expr(src: &str) -> Expr {
     {
         let name = s[..open].to_string();
         let inner = &s[open + 1..s.len() - 1];
-        return Expr::Call(name, split_args(inner).iter().map(|a| parse_expr(a)).collect());
+        return Expr::Call(
+            name,
+            split_args(inner).iter().map(|a| parse_expr(a)).collect(),
+        );
     }
     atom(s)
 }
@@ -236,14 +239,21 @@ mod tests {
 
     #[test]
     fn a_bare_path_parses_as_a_path() {
-        assert_eq!(parse_expr("latest.response.body"), Expr::Path("latest.response.body".into()));
+        assert_eq!(
+            parse_expr("latest.response.body"),
+            Expr::Path("latest.response.body".into())
+        );
     }
 
     #[test]
     fn a_nested_regex_replace_parses_to_the_right_shape() {
         // The hardest real corpus reference: a call whose first argument is another call.
-        let e = parse_expr(r#"regex_replace({regex_replace({base.request.url},"^.*?/","/")},"([^/]+)$","")"#);
-        let Expr::Call(name, args) = &e else { panic!("expected a call, got {e:?}") };
+        let e = parse_expr(
+            r#"regex_replace({regex_replace({base.request.url},"^.*?/","/")},"([^/]+)$","")"#,
+        );
+        let Expr::Call(name, args) = &e else {
+            panic!("expected a call, got {e:?}")
+        };
         assert_eq!(name, "regex_replace");
         assert_eq!(args.len(), 3, "subject, pattern, replacement");
         assert!(matches!(&args[0], Expr::Call(n, _) if n == "regex_replace"));
@@ -255,7 +265,9 @@ mod tests {
     fn a_bare_path_argument_parses() {
         // `to_lower(check1.response.body)` — no braces around the argument.
         let e = parse_expr("to_lower(check1.response.body)");
-        let Expr::Call(name, args) = &e else { panic!("expected a call") };
+        let Expr::Call(name, args) = &e else {
+            panic!("expected a call")
+        };
         assert_eq!(name, "to_lower");
         assert_eq!(args[0], Expr::Path("check1.response.body".into()));
     }
@@ -264,15 +276,23 @@ mod tests {
     fn a_comma_inside_a_regex_argument_does_not_split_it() {
         // `{2,3}` in a pattern must stay in one argument.
         let e = parse_expr(r#"regex_replace({x},"a{2,3}","z")"#);
-        let Expr::Call(_, args) = &e else { panic!("expected a call") };
-        assert_eq!(args.len(), 3, "the brace quantifier must not become an argument break");
+        let Expr::Call(_, args) = &e else {
+            panic!("expected a call")
+        };
+        assert_eq!(
+            args.len(),
+            3,
+            "the brace quantifier must not become an argument break"
+        );
         assert_eq!(args[1], Expr::Str("a{2,3}".into()));
     }
 
     #[test]
     fn a_backtick_argument_is_a_template() {
         let e = parse_expr("regex_replace({p},\"(.)/?$\",`$1{extension}`)");
-        let Expr::Call(_, args) = &e else { panic!("expected a call") };
+        let Expr::Call(_, args) = &e else {
+            panic!("expected a call")
+        };
         assert_eq!(args[2], Expr::Template("$1{extension}".into()));
     }
 
@@ -288,7 +308,11 @@ mod tests {
         // capture and the literal — silently emptying the jwt-none payload.
         let re = regex::Regex::new("^(Bearer )?[a-zA-Z0-9_-]+").unwrap();
         let raw = "$1eyJhbGciOiJub25l";
-        assert_eq!(re.replace_all("Bearer eyJabc.rest", raw), ".rest", "premise: Rust eats it");
+        assert_eq!(
+            re.replace_all("Bearer eyJabc.rest", raw),
+            ".rest",
+            "premise: Rust eats it"
+        );
         assert_eq!(
             re.replace_all("Bearer eyJabc.rest", java_backrefs(raw).as_str()),
             "Bearer eyJhbGciOiJub25l.rest"
@@ -299,8 +323,16 @@ mod tests {
     fn translation_leaves_other_dollar_forms_alone() {
         assert_eq!(java_backrefs("$1.php"), "${1}.php");
         assert_eq!(java_backrefs("${1}x"), "${1}x", "already Rust's spelling");
-        assert_eq!(java_backrefs("cost $ and $x"), "cost $ and $x", "not a group reference");
-        assert_eq!(java_backrefs("$12abc"), "${12}abc", "all the digits, as Java takes them");
+        assert_eq!(
+            java_backrefs("cost $ and $x"),
+            "cost $ and $x",
+            "not a group reference"
+        );
+        assert_eq!(
+            java_backrefs("$12abc"),
+            "${12}abc",
+            "all the digits, as Java takes them"
+        );
     }
 
     #[test]
@@ -315,7 +347,10 @@ mod tests {
         let mut st = 12345u64;
         let a = random_str(&mut st, 10);
         assert_eq!(a.len(), 10);
-        assert!(a.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        );
         let b = random_str(&mut st, 10);
         assert_ne!(a, b, "successive draws must differ or probes collide");
     }

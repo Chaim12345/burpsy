@@ -33,7 +33,11 @@ pub struct Target {
 
 impl Target {
     pub fn new(host: impl Into<String>, port: u16, tls: bool) -> Self {
-        Self { host: host.into(), port, tls }
+        Self {
+            host: host.into(),
+            port,
+            tls,
+        }
     }
 
     /// Parse `host:port`, `https://host/path`, or a bare host.
@@ -246,7 +250,10 @@ mod tests {
     #[test]
     fn target_parsing() {
         let t = Target::parse("https://example.test/a/b").unwrap();
-        assert_eq!((t.host.as_str(), t.port, t.tls), ("example.test", 443, true));
+        assert_eq!(
+            (t.host.as_str(), t.port, t.tls),
+            ("example.test", 443, true)
+        );
         let t = Target::parse("h.test:8080").unwrap();
         assert_eq!((t.host.as_str(), t.port, t.tls), ("h.test", 8080, false));
         let t = Target::parse("http://h.test").unwrap();

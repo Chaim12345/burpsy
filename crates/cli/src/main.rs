@@ -12,8 +12,7 @@ use std::sync::Arc;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -101,7 +100,10 @@ async fn main() -> Result<()> {
     // No --scope-* flags means allow everything: narrowing capture must be a deliberate act,
     // not a surprise on first run.
     let scope = if scope_set {
-        tracing::info!("scope: {} rule(s) — capture and attacks limited to them", scope.rules.len());
+        tracing::info!(
+            "scope: {} rule(s) — capture and attacks limited to them",
+            scope.rules.len()
+        );
         scope
     } else {
         burpsy_core::Scope::allow_everything()
@@ -155,7 +157,9 @@ async fn main() -> Result<()> {
             web_bind
         );
     } else {
-        tracing::info!("TLS interception disabled — HTTPS will be tunnelled blind (--intercept-tls to enable)");
+        tracing::info!(
+            "TLS interception disabled — HTTPS will be tunnelled blind (--intercept-tls to enable)"
+        );
     }
 
     let p = {

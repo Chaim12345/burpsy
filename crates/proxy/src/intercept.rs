@@ -222,7 +222,9 @@ mod tests {
     #[tokio::test]
     async fn a_disabled_interceptor_forwards_the_original_bytes_without_queueing() {
         let ic = Interceptor::new();
-        let v = ic.hold(meta(), Bytes::from_static(b"GET /x HTTP/1.1\r\n\r\n")).await;
+        let v = ic
+            .hold(meta(), Bytes::from_static(b"GET /x HTTP/1.1\r\n\r\n"))
+            .await;
         match v {
             Verdict::Forward(b) => assert_eq!(&b[..], b"GET /x HTTP/1.1\r\n\r\n"),
             Verdict::Drop(r) => panic!("disabled interceptor dropped: {r}"),
@@ -293,7 +295,11 @@ mod tests {
         };
         wait_for_pending(&ic, 2).await;
 
-        assert_eq!(ic.set_enabled(false), 2, "both held requests must be released");
+        assert_eq!(
+            ic.set_enabled(false),
+            2,
+            "both held requests must be released"
+        );
         for h in [a, b] {
             match h.await.unwrap() {
                 Verdict::Forward(_) => {}
@@ -327,6 +333,9 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
-        panic!("timed out waiting for {n} held request(s), have {}", ic.pending());
+        panic!(
+            "timed out waiting for {n} held request(s), have {}",
+            ic.pending()
+        );
     }
 }
