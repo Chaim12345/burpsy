@@ -1,0 +1,1 @@
+{"content":"Burp's crawler exposes a 'Submit forms' toggle and relies on Scope exclude-lists (default excludes logout/sign-out) plus explicit operator-added excludes for custom delete/edit-user endpoints, plus max crawl depth to bound blast radius.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-07-27T12:18:11.725Z","ttl":86400000,"kind":"web"}
