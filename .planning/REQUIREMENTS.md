@@ -141,9 +141,64 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| _(filled by the roadmapper)_ | — | Pending |
+| STORE-01 | Phase 1 | Pending |
+| STORE-02 | Phase 1 | Pending |
+| STORE-03 | Phase 1 | Pending |
+| STORE-04 | Phase 1 | Pending |
+| STORE-05 | Phase 1 | Pending |
+| HARD-03 | Phase 1 | Pending |
+| H2-01 | Phase 2 | Pending |
+| H2-02 | Phase 2 | Pending |
+| H2-03 | Phase 2 | Pending |
+| H2-04 | Phase 2 | Pending |
+| DSL-01 | Phase 3 | Pending |
+| DSL-02 | Phase 3 | Pending |
+| DSL-04 | Phase 3 | Pending |
+| TOOLS-01 | Phase 3 | Pending |
+| TOOLS-02 | Phase 3 | Pending |
+| TOOLS-03 | Phase 3 | Pending |
+| TOOLS-04 | Phase 3 | Pending |
+| REPORT-01 | Phase 4 | Pending |
+| REPORT-02 | Phase 4 | Pending |
+| REPORT-03 | Phase 4 | Pending |
+| REPORT-04 | Phase 4 | Pending |
+| SCAN-01 | Phase 4 | Pending |
+| SCAN-02 | Phase 4 | Pending |
+| SCAN-03 | Phase 4 | Pending |
+| SESSION-01 | Phase 5 | Pending |
+| SESSION-02 | Phase 5 | Pending |
+| SESSION-03 | Phase 5 | Pending |
+| SESSION-04 | Phase 5 | Pending |
+| CRAWL-01 | Phase 6 | Pending |
+| CRAWL-02 | Phase 6 | Pending |
+| CRAWL-03 | Phase 6 | Pending |
+| CRAWL-04 | Phase 6 | Pending |
+| CRAWL-05 | Phase 6 | Pending |
+| CRAWL-06 | Phase 6 | Pending |
+| CRAWL-07 | Phase 6 | Pending |
+| DSL-03 | Phase 6 | Pending |
+| DASH-01 | Phase 6 | Pending |
+| DASH-02 | Phase 6 | Pending |
+| DASH-03 | Phase 6 | Pending |
+| HARD-01 | Phase 7 | Pending |
+| HARD-02 | Phase 7 | Pending |
+| PLUGIN-01 | Phase 8 | Pending |
+| PLUGIN-02 | Phase 8 | Pending |
+| PLUGIN-03 | Phase 8 | Pending |
+| PLUGIN-04 | Phase 8 | Pending |
+| PLUGIN-05 | Phase 8 | Pending |
+| WS-01 | Phase 9 | Pending |
+| WS-02 | Phase 9 | Pending |
+| WS-03 | Phase 9 | Pending |
+| MCP-01 | Phase 10 | Pending |
+| MCP-02 | Phase 10 | Pending |
+| DOM-01 | Phase 11 | Pending |
+| DOM-02 | Phase 11 | Pending |
+| DOM-03 | Phase 11 | Pending |
+| DOM-04 | Phase 12 | Pending |
+| DOM-05 | Phase 12 | Pending |
 
 **Coverage:**
-- v1 requirements: 52 total
+- v1 requirements: 56 total (corrected from the 52 stated above — the itemized list was always 56; the summary count was stale). All 56 mapped to exactly one of 12 phases, 0 orphans.
 - v2 requirements: 2 deferred
 - Out of scope: 10 explicit exclusions
