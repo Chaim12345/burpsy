@@ -46,7 +46,6 @@ without the memory cost that forces Burp to discard scan work.
 - [ ] Intruder grep-match and grep-extract — flag and extract patterns into a result column
 - [ ] Proxy history filters — host, status, method, MIME, search
 - [ ] Repeater tabs — multiple named tabs with per-tab history and connection control
-- [ ] Sequencer — token capture and entropy analysis
 - [ ] Crawler — frontier, link and form extraction, crawl limits
 - [ ] Live passive crawl and live audit fed from proxy traffic
 - [ ] Scanner data: RetireJS, the JWT secret wordlist, and the 29 built-in scan configs
@@ -55,7 +54,7 @@ without the memory cost that forces Burp to discard scan work.
 - [ ] mmap-backed store — the payoff of the offset design; makes multi-GB captures viable
 - [ ] WebSockets — capture, history, WS repeater
 - [ ] Plugin API — WASM or a JSON-RPC child process, deliberately not an embedded JVM
-- [ ] Bambda-style filter expressions — evaluate `rhai` rather than inventing a language
+- [ ] A typed query DSL (Caido HTTPQL shape) shared by history filters, match-and-replace, and crawl/audit scoping — not `rhai`; a general scripting language reproduces Bambda's own authoring problem (slow to author, unindexable) rather than fixing it
 - [ ] Session handling — macros, recorded logins, cookie jar, re-auth on session loss
 - [ ] Reporting — HTML/JSON/SARIF backed by the issue catalog
 - [ ] Dashboard — task list, progress, event and activity logs
@@ -66,9 +65,9 @@ without the memory cost that forces Burp to discard scan work.
 **Engagement readiness**
 - [ ] Hardening pass — must precede any use on a real engagement (see Constraints)
 
-**Deferred within this milestone, by sequence**
-- [ ] HTTP/2 — first-class h2 including deliberately malformed frames; sequenced late
-- [ ] DOM/JS analysis — needs an embedded JS engine; sequenced last
+- [ ] HTTP/2 — first-class h2 including deliberately malformed frames for smuggling research; sequenced early (Phase 2, ahead of WebSockets and the plugin API) — an h1-only ALPN offer silently downgrades every h2-capable target, which costs real coverage for the smuggling/desync work this feature exists to support
+- [ ] DOM analysis, static — source-to-sink taint over the 48 catalogued DOM-based issue types; Burp's own scanner does this statically too (`max_static_time_per_item`), no embedded JS engine
+- [ ] DOM analysis, dynamic confirmation — a real headless browser drives a canary marker through each static candidate and confirms or reports it UNCONFIRMED, mirroring Burp's DOM Invader; sequenced last
 
 ### Out of Scope
 
@@ -83,6 +82,16 @@ without the memory cost that forces Burp to discard scan work.
 - **Porting Burp's Java scan-check code** — derivative work. Implement from the specs and the
   public BCheck/Montoya contracts instead.
 - **Enterprise/CI features** — Enterprise-only in the product being studied.
+- **Sequencer (token entropy analysis)** — deferred to v2. Neither Caido nor ZAP ships it in
+  core, both as an add-on; becomes the natural first dogfood of the plugin API once it exists.
+- **`rhai` (or any general scripting language) for Bambda-style filters** — reproduces Bambda's
+  actual failure (slow to author, unindexable) in different syntax. A small typed query DSL,
+  shared across filters, match-and-replace, and crawl/audit scoping, replaces it.
+- **An embedded JavaScript engine for DOM analysis** — Burp does not have one either: its
+  `javascript_analysis` scan type is static (`max_static_time_per_item`), and its Chromium is a
+  separate embedded-browser subsystem (`burp browser`), not part of the scanner. An engine would
+  add a dependency, need a hand-built DOM shim, and let `fetch()` escape every scope check, for
+  no parity gain. Dynamic confirmation drives a real browser instead.
 
 ## Context
 
@@ -100,10 +109,23 @@ from what the evaluator actually executes.
 
 **Codebase map.** `.planning/codebase/` — seven documents written 2026-07-27.
 
+**Research and roadmap.** `.planning/research/` — STACK, FEATURES, ARCHITECTURE and PITFALLS,
+synthesized into SUMMARY.md, all 2026-07-27. `.planning/REQUIREMENTS.md` (56 v1 requirements) and
+`.planning/ROADMAP.md` (12 phases) were derived from it, with four operator decisions overriding
+the research's default build order — see Key Decisions.
+
 **Known debt carried in.** `TrafficStore::set_response` is a linear scan, so bulk-filling responses
-is O(n²) — this is the concrete driver behind the mmap store. The corpus coverage test returns
-early when `/tmp/BChecks` is absent, so on a machine without the fixture the partition invariant is
-silently unchecked while the test still reports success.
+is O(n²) — this is the concrete driver behind the mmap store (Phase 1). Architecture research
+found a second, subtler defect while reading the current code: `put()`/`add_exchange()` assign a
+message's id from an atomic counter, then do variable-duration parse work with no lock held, then
+push — so two concurrent captures can push out of id order. Currently latent (every lookup scans
+by id, so nothing returns the wrong message *today*), but the mmap migration replaces those scans
+with an id→location index, and the obvious `position == id` implementation would silently break
+under this race — returning the wrong message rather than an error, which in a security tool means
+a finding attributed to the wrong request. STORE-03 exists because of this. The corpus coverage
+test returns early when `/tmp/BChecks` is absent, so on a machine without the fixture the partition
+invariant is silently unchecked while the test still reports success — HARD-02 exists because of
+this.
 
 **How the code was written.** Most of it by parallel agents merged on a `verify.sh` pass rather
 than a line-by-line human read. A review of two of six merged branches found three defects that
@@ -140,7 +162,9 @@ than a line-by-line human read. A review of two of six merged branches found thr
 | Scope authorised on outgoing bytes, not the named target | Closed a confirmed fail-open where a payload rewrote the path onto an excluded prefix | ✓ Good |
 | Active scanning is only ever operator-triggered | It generates traffic; making it automatic would send unrequested probes | ✓ Good |
 | Root `ROADMAP.md` frozen as the historical and teardown reference | `.planning/ROADMAP.md` drives forward work; different spans, so the two cannot diverge | — Pending |
-| HTTP/2 sequenced late, DOM/JS analysis last | h2 reaches into core, proxy and capture; DOM/JS adds a JS engine. Both destabilise in-flight work | — Pending |
+| HTTP/2 moved to Phase 2, ahead of WebSockets and the plugin API | Research argued late-h2 is cost-free at the build layer given a `related` slot designed in early; but h1-only ALPN silently downgrades every h2-capable target, costing real coverage for the smuggling/desync work h2 exists for. Coverage won over build-cost | — Pending |
+| DOM/JS analysis split into a static phase (11) and a separate dynamic-confirmation phase (12) | Static and dynamic have opposite failure modes (false positives vs. false negatives); the literature and Burp's own design (static scanner + DOM Invader) both run both. Static proposes, dynamic confirms; an unconfirmed candidate is reported as such, never dropped, never asserted | — Pending |
+| Scope chokepoint (`authorise_request`) is a Phase 1 deliverable, settled before the crawler | Every new request-originating surface (crawler, session macros, plugins, MCP, browser) can reintroduce the fail-open already fixed once; the crawler is the first new one this milestone adds | — Pending |
 
 ## Evolution
 
@@ -160,4 +184,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-27 after initialization*
+*Last updated: 2026-07-27 after roadmap creation (reconciled against 4 operator scope decisions made during research and roadmapping)*
