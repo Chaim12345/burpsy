@@ -9,3 +9,6 @@
 
 # Agent worktrees live inside the repo; they are checkouts, not content.
 .claude/worktrees/
+
+# Researcher web-fetch cache — machine-generated, churns, not planning content.
+.planning/research/.cache/
