@@ -88,8 +88,7 @@ async fn through_proxy(proxy: SocketAddr, origin: SocketAddr, path: &str) -> Str
 async fn read_response(s: &mut TcpStream) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
-    loop {
-        let Ok(n) = s.read(&mut chunk).await else { break };
+    while let Ok(n) = s.read(&mut chunk).await {
         if n == 0 {
             break;
         }

@@ -688,8 +688,7 @@ mod tests {
                 let Ok(mut sock) = sock else { break };
                 counter.fetch_add(1, Ordering::SeqCst);
                 std::thread::spawn(move || {
-                    loop {
-                        let Some(req) = read_one_request(&mut sock) else { break };
+                    while let Some(req) = read_one_request(&mut sock) {
                         let close_after = req.to_ascii_lowercase().contains("connection: close")
                             || mode != Origin::Framed;
                         let body = b"PONG";
