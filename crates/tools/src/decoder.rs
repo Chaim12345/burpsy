@@ -695,10 +695,13 @@ struct Hit {
     why: &'static str,
 }
 
+/// A codec probe: given the buffer and a position, score whether its encoding starts there.
+type Probe = fn(&[u8], usize, &SmartOptions) -> Option<Hit>;
+
 /// Ask every codec to score this position; the highest wins, earliest listed breaking a tie.
 fn best_hit(b: &[u8], i: usize, opts: &SmartOptions) -> Option<Hit> {
     let mut best: Option<Hit> = None;
-    let probes: [fn(&[u8], usize, &SmartOptions) -> Option<Hit>; 7] = [
+    let probes: [Probe; 7] = [
         probe_gzip,
         probe_zlib,
         probe_jwt,
