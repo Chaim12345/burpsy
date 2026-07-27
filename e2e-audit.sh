@@ -151,9 +151,20 @@ echo "=== 5. a failed send is reported, not turned into a finding ==="
 kill $ORIGIN_PID 2>/dev/null; wait $ORIGIN_PID 2>/dev/null
 sleep 0.3
 A2=$(curl -s -X POST "http://127.0.0.1:$WEB/api/audit/$EX")
+echo "$A2" | python3 -m json.tool 2>/dev/null | sed 's/^/        /' | head -14
 SF2=$(echo "$A2" | python3 -c "import json,sys; print(json.load(sys.stdin)['outcome']['send_failures'])" 2>/dev/null)
+UA2=$(echo "$A2" | python3 -c "import json,sys; print(json.load(sys.stdin)['outcome']['unit_abandoned'])" 2>/dev/null)
 N2=$(curl -s "http://127.0.0.1:$WEB/api/issues" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['findings']))")
-[ "${SF2:-0}" -eq 3 ] && ok "all 3 sends failed and were counted as failures" || no "send_failures=$SF2"
+# All 3 checks are `given host` — one dispatch unit — and the item breaker's default (mirroring
+# Burp's own consecutive_check_failures_to_abandon_unit=2) abandons the rest of a unit after 2
+# consecutive send failures, rather than burning a timeout on every remaining check. So 2 are
+# counted as send_failures and the 3rd as unit_abandoned; both together must still equal 3, and
+# either way nothing was sent successfully.
+TOTAL2=$(( ${SF2:-0} + ${UA2:-0} ))
+[ "$TOTAL2" -eq 3 ] && ok "all 3 checks accounted for as failed (send_failures=$SF2, unit_abandoned=$UA2)" \
+  || no "send_failures=$SF2 unit_abandoned=$UA2, total $TOTAL2 (expected 3)"
+[ "${SF2:-0}" -ge 2 ] && ok "the breaker waited for 2 consecutive failures before abandoning the unit" \
+  || no "unit was abandoned before 2 consecutive failures: send_failures=$SF2"
 [ "$N2" -eq "$N" ] && ok "no new findings from failed sends (still $N2)" \
   || no "findings grew $N -> $N2 on a dead origin"
 

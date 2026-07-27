@@ -108,6 +108,11 @@ pub struct PassiveScanner {
     report: LoadReport,
 }
 
+/// `(dispatch units, flat plan of (unit index, check index) steps, undispatchable count)` —
+/// named because clippy's `type_complexity` is right that the bare tuple is hard to read at a
+/// glance, and this is exactly the shape [`PassiveScanner::plan`] returns.
+type DispatchPlan = (Vec<(DispatchScope, String)>, Vec<(usize, usize)>, usize);
+
 impl PassiveScanner {
     /// Load every `.bcheck` under `dir`, keeping the passive ones.
     pub fn load_dir(dir: &Path, scope: Arc<Scope>) -> Self {
@@ -498,10 +503,7 @@ impl PassiveScanner {
     /// the number of checks that have no dispatch unit at all. Those last are counted rather than
     /// dropped: a check that silently vanishes from the plan would make the outcome's counters
     /// stop summing to the check set, and the whole point of the counters is that they do.
-    fn plan(
-        &self,
-        ex: &burpsy_core::Exchange,
-    ) -> (Vec<(DispatchScope, String)>, Vec<(usize, usize)>, usize) {
+    fn plan(&self, ex: &burpsy_core::Exchange) -> DispatchPlan {
         let mut units = Vec::new();
         let mut plan = Vec::new();
         // A check whose `given` clause binds to no active scope — `given response` with a send in
