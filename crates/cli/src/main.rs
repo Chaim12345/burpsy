@@ -8,8 +8,76 @@ use anyhow::{Context, Result};
 use burpsy_core::TrafficStore;
 use std::sync::Arc;
 
+/// `burpsy store verify DIR` — check a capture directory against its own checksums.
+///
+/// Separate from the serving path on purpose: it takes no ports, starts no proxy, and only reads.
+/// Exits non-zero when any segment reports a fault, so it is usable as a check in a script rather
+/// than something whose output a human has to read.
+fn store_subcommand(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let verb = args.next().unwrap_or_default();
+    if verb != "verify" {
+        eprintln!("usage: burpsy store verify DIR\n\nUnknown store subcommand {verb:?}.",);
+        std::process::exit(2);
+    }
+    let Some(dir) = args.next() else {
+        eprintln!("usage: burpsy store verify DIR");
+        std::process::exit(2);
+    };
+    let dir = std::path::PathBuf::from(dir);
+
+    let report = burpsy_core::verify_capture_dir(&dir)
+        .with_context(|| format!("verifying capture directory {}", dir.display()))?;
+
+    if report.is_empty() {
+        println!("{}: no sealed segments to check", dir.display());
+        return Ok(());
+    }
+
+    // One line per segment, naming the fault where there is one. A bare "ok"/"corrupt" would leave
+    // an operator no better off than a crash — the whole point of this command is that a verdict
+    // says which record went wrong and where.
+    let mut checked = 0usize;
+    let mut faults = 0usize;
+    for verdict in &report {
+        let name = verdict
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| verdict.path.display().to_string());
+        checked += verdict.checked;
+        match &verdict.fault {
+            None => println!("ok    {name}  {} records", verdict.checked),
+            Some(fault) => {
+                faults += 1;
+                println!(
+                    "FAULT {name}  {} records read, then: {fault}",
+                    verdict.checked
+                );
+            }
+        }
+    }
+
+    println!(
+        "\nchecked {checked} record(s) across {} segment(s), {faults} with faults",
+        report.len()
+    );
+    if faults > 0 {
+        // Non-zero exit: a corrupt capture must fail a script, not merely print something.
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Subcommands are checked before the logging subscriber and before flag parsing: `store verify`
+    // is a read-only offline check, and log lines on stdout would corrupt its report.
+    let mut raw = std::env::args().skip(1);
+    if matches!(raw.next().as_deref(), Some("store")) {
+        // `raw` is now positioned just past "store".
+        return store_subcommand(raw);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -24,6 +92,8 @@ async fn main() -> Result<()> {
     let mut scope = burpsy_core::Scope::new();
     let mut scope_set = false;
     let mut bchecks_dir: Option<std::path::PathBuf> = None;
+    let mut capture_dir: Option<std::path::PathBuf> = None;
+    let mut segment_target = burpsy_core::DEFAULT_SEGMENT_TARGET_BYTES;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -56,6 +126,18 @@ async fn main() -> Result<()> {
                 }
             }
             "--ca-dir" => ca_dir = args.next().map(std::path::PathBuf::from).unwrap_or(ca_dir),
+            "--capture-dir" => capture_dir = args.next().map(std::path::PathBuf::from),
+            "--segment-bytes" => {
+                if let Some(n) = args.next() {
+                    match n.parse::<usize>() {
+                        Ok(n) if n > 0 => segment_target = n,
+                        _ => {
+                            eprintln!("--segment-bytes needs a positive byte count, got {n:?}");
+                            std::process::exit(2);
+                        }
+                    }
+                }
+            }
             "-h" | "--help" => {
                 println!(
                     "burpsy {}\n\n\
@@ -81,6 +163,20 @@ async fn main() -> Result<()> {
                      --scope-include HOST / --scope-exclude HOST   (repeatable)\n  \
                      Gates what is stored AND refuses out-of-scope repeater/intruder targets.\n  \
                      With no --scope-* flags everything is in scope.\n\n\
+                     CAPTURE TO DISK:\n  \
+                     --capture-dir DIR       append traffic to sealed segments under DIR\n  \
+                     --segment-bytes N       segment rotation target (default 64 MiB)\n  \
+                     Without --capture-dir everything stays in RAM. With it, only one active\n  \
+                     segment is resident, so a multi-GB capture is bounded by disk instead. DIR\n  \
+                     must be empty or absent: there is no startup-recovery path yet, so reusing a\n  \
+                     directory that already holds a capture is refused rather than overwriting it.\n  \
+                     The size is a target, not a cap — a single message larger than it gets its own\n  \
+                     segment rather than being truncated or dropped.\n\n\
+                     SUBCOMMANDS:\n  \
+                     burpsy store verify DIR   re-read every sealed segment and check each record\n  \
+                     against the checksum written with it. Names the failing record and its byte\n  \
+                     offset; exits non-zero if anything failed. Detects accidental corruption\n  \
+                     (torn writes, truncation, bit rot) — it is not a tamper-evidence check.\n\n\
                      Point your browser's HTTP proxy at the proxy address, then open the web UI.",
                     env!("CARGO_PKG_VERSION")
                 );
@@ -93,7 +189,23 @@ async fn main() -> Result<()> {
         }
     }
 
-    let store: Arc<TrafficStore> = TrafficStore::new();
+    // With no --capture-dir the store stays entirely in RAM, which is the historical behaviour and
+    // is fine for a short session. With one, payloads append into sealed segments and only a
+    // location per message stays resident, so a long capture is bounded by disk instead.
+    let store: Arc<TrafficStore> = match &capture_dir {
+        Some(dir) => {
+            let store = TrafficStore::with_capture_dir(dir, segment_target)
+                .with_context(|| format!("opening capture directory {}", dir.display()))?;
+            tracing::info!(
+                dir = %dir.display(),
+                segment_bytes = segment_target,
+                "capturing to disk; verify later with: burpsy store verify {}",
+                dir.display()
+            );
+            store
+        }
+        None => TrafficStore::new(),
+    };
 
     // Load (or first-run generate) the CA only when interception is requested, so a plain HTTP
     // session never writes key material to disk it does not need.

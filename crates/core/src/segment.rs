@@ -766,16 +766,16 @@ pub fn scan_segment_file(path: &Path) -> anyhow::Result<SegmentScan> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A unique capture directory that removes itself. Cheaper than a `tempfile` dev-dependency,
     /// which this workspace does not otherwise have.
-    struct TempCapture(PathBuf);
+    pub(crate) struct TempCapture(PathBuf);
 
     impl TempCapture {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let dir =
@@ -783,7 +783,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             Self(dir)
         }
-        fn path(&self) -> &Path {
+        pub(crate) fn path(&self) -> &Path {
             &self.0
         }
     }
@@ -793,6 +793,12 @@ mod tests {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::TempCapture;
+    use super::*;
 
     fn log(target: usize) -> (TempCapture, SegmentLog) {
         let t = TempCapture::new();

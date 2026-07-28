@@ -326,24 +326,161 @@ pub struct Exchange {
 /// would have become a silent mis-resolution the moment any index trusted position. Parsing still
 /// happens outside the lock — it needs nothing from the store and is the expensive part — but the
 /// id is now assigned under the lock that appends, so the two cannot disagree.
+///
+/// # Where the bytes actually live
+///
+/// A store opened with [`TrafficStore::new`] keeps every payload in RAM, which is fine for tests
+/// and for a short-lived process. A store opened with [`TrafficStore::with_capture_dir`] appends
+/// each payload to a [`SegmentLog`] instead and holds only a [`segment::Location`] per message, so
+/// the resident set is bounded by one active segment rather than by the size of the capture. Both
+/// modes present the identical public API — [`Self::get`] materialises a [`StoredMessage`] either
+/// way — which is what lets the same differential test drive both and assert they agree.
 #[derive(Debug, Default)]
 pub struct TrafficStore {
     inner: RwLock<StoreInner>,
 }
 
+/// Where one message's payload is held.
+#[derive(Debug)]
+enum Body {
+    /// No capture directory: the payload stays in RAM, as it always did.
+    Resident(Bytes),
+    /// Backed by a segment file; [`TrafficStore::get`] resolves it on demand.
+    OnDisk(segment::Location),
+}
+
+/// What the log holds per message: ids and spans, never the payload itself in segment mode.
+#[derive(Debug)]
+struct MessageSlot {
+    id: MsgId,
+    shape: MessageShape,
+    body: Body,
+}
+
 #[derive(Debug, Default)]
 struct StoreInner {
     /// Position is the id: `messages[i].id == MsgId(i)`.
-    messages: Vec<StoredMessage>,
+    messages: Vec<MessageSlot>,
     /// Position is the id: `exchanges[i].id == i`.
     exchanges: Vec<Exchange>,
     /// Running total of stored bytes, so `counts()` does not walk the log.
     bytes: usize,
+    /// `Some` when this store is disk-backed. Lives inside the lock because appending is part of
+    /// the same critical section that assigns the id — the two must not be able to disagree.
+    segments: Option<SegmentLog>,
+    /// Payloads that could not be written to disk and fell back to RAM. Counted rather than
+    /// swallowed — see [`TrafficStore::capture_write_failures`].
+    write_failures: usize,
+}
+
+/// One sealed segment's integrity verdict, from [`TrafficStore::verify_segments`].
+///
+/// `fault` carries the first problem found in that file, already rendered with its byte offset and —
+/// for a checksum mismatch — the id of the record that failed. It is a message rather than a bool
+/// because "something is wrong with this capture" is not actionable and "message 41 at byte 620 does
+/// not match the checksum written with it" is.
+#[derive(Debug, Clone)]
+pub struct SegmentVerdict {
+    pub path: std::path::PathBuf,
+    /// Records that read back cleanly before any fault.
+    pub checked: usize,
+    pub fault: Option<String>,
+}
+
+/// Check every sealed segment in a capture directory against the checksums written with it.
+///
+/// The standalone form of [`TrafficStore::verify_segments`], for an operator checking a capture that
+/// no live store is holding — after a crash, after copying a capture between machines, or just to
+/// confirm a directory is still intact. Reads the files only; nothing is written or repaired.
+///
+/// Segments are returned in index order. An empty directory yields an empty report, which is a
+/// distinct outcome from a directory whose segments all failed — the caller can tell them apart by
+/// the length of the result.
+pub fn verify_capture_dir(dir: &std::path::Path) -> anyhow::Result<Vec<SegmentVerdict>> {
+    use anyhow::Context;
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading capture directory {}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("segment-") && n.ends_with(".log"))
+        })
+        .collect();
+    paths.sort();
+
+    Ok(paths
+        .into_iter()
+        .map(|path| match segment::scan_segment_file(&path) {
+            Ok(scan) => SegmentVerdict {
+                path,
+                checked: scan.records.len(),
+                fault: scan.corruption.map(|c| c.to_string()),
+            },
+            Err(e) => SegmentVerdict {
+                path,
+                checked: 0,
+                fault: Some(e.to_string()),
+            },
+        })
+        .collect())
 }
 
 impl TrafficStore {
+    /// An in-memory store. Every payload stays resident.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// A disk-backed store: payloads append into sealed segments under `dir`, and only a
+    /// `Location` per message stays in memory.
+    ///
+    /// `dir` must be empty or absent — [`SegmentLog::open`] refuses a directory that already holds
+    /// a capture, because this phase has no startup-recovery path and writing over a previous
+    /// capture would destroy it.
+    pub fn with_capture_dir(
+        dir: &std::path::Path,
+        target_bytes: usize,
+    ) -> anyhow::Result<Arc<Self>> {
+        let log = SegmentLog::open(dir, target_bytes)?;
+        Ok(Arc::new(Self {
+            inner: RwLock::new(StoreInner {
+                segments: Some(log),
+                ..Default::default()
+            }),
+        }))
+    }
+
+    /// How many payloads failed to reach disk and were kept in RAM instead.
+    ///
+    /// Non-zero means this store is no longer bounded by disk and the capture is not durable. It is
+    /// a counter rather than a hard failure because dropping captured traffic is the worse outcome
+    /// of the two — but it is surfaced, not swallowed, so "the disk filled up" cannot look like
+    /// "everything is fine".
+    pub fn capture_write_failures(&self) -> usize {
+        self.inner.read().write_failures
+    }
+
+    /// Bytes of payload currently resident in RAM for a disk-backed store: the active segment's
+    /// live handles. Zero for an in-memory store's purposes is meaningless, so this reports `None`
+    /// there rather than a misleading 0.
+    pub fn resident_bytes(&self) -> Option<usize> {
+        self.inner
+            .read()
+            .segments
+            .as_ref()
+            .map(|l| l.resident_bytes())
+    }
+
+    /// Seal the active segment, so everything captured so far is on disk and verifiable.
+    ///
+    /// A no-op for an in-memory store.
+    pub fn seal(&self) -> anyhow::Result<()> {
+        let mut g = self.inner.write();
+        match g.segments.as_mut() {
+            Some(log) => log.seal_active(),
+            None => Ok(()),
+        }
     }
 
     /// Store raw bytes, parse to spans, return the handle.
@@ -362,17 +499,45 @@ impl TrafficStore {
         let mut g = self.inner.write();
         // Assigned under the lock that appends — see the type's invariant note.
         let id = MsgId(g.messages.len() as u64);
-        g.messages.push(StoredMessage { id, raw, shape });
+        // The append happens inside the same critical section as the id assignment, so a record's
+        // location and its id are written together or not at all. Resolved before touching any
+        // other field of `g`, so the borrow of `segments` ends here.
+        let appended = g
+            .segments
+            .as_mut()
+            .map(|log| log.append(id, direction, &raw));
+        let body = match appended {
+            Some(Ok(loc)) => Body::OnDisk(loc),
+            Some(Err(_)) => {
+                // Keep the capture rather than lose it, but count the degradation so it is
+                // observable. See `capture_write_failures`.
+                g.write_failures += 1;
+                Body::Resident(raw)
+            }
+            None => Body::Resident(raw),
+        };
+        g.messages.push(MessageSlot { id, shape, body });
         g.bytes += len;
         id
     }
 
     /// Resolve a message id to its bytes. O(1): the id *is* the position.
+    ///
+    /// For a disk-backed store this resolves through the segment log — zero-copy while the segment
+    /// is still active, a slice of the mapping once it has sealed.
     pub fn get(&self, id: MsgId) -> Option<StoredMessage> {
         let g = self.inner.read();
-        let m = g.messages.get(id.0 as usize)?;
-        debug_assert_eq!(m.id, id, "message index desynchronised from id");
-        Some(m.clone())
+        let slot = g.messages.get(id.0 as usize)?;
+        debug_assert_eq!(slot.id, id, "message index desynchronised from id");
+        let raw = match &slot.body {
+            Body::Resident(b) => b.clone(),
+            Body::OnDisk(loc) => g.segments.as_ref()?.resolve(*loc)?,
+        };
+        Some(StoredMessage {
+            id: slot.id,
+            raw,
+            shape: slot.shape.clone(),
+        })
     }
 
     pub fn add_exchange(&self, mut ex: Exchange) -> u64 {
@@ -490,7 +655,42 @@ impl TrafficStore {
                 ));
             }
         }
-        let summed: usize = g.messages.iter().map(|m| m.raw.len()).sum();
+        // Every message must still resolve to a payload of the length the index believes it has.
+        // In segment mode this is the check that the store and the log have not drifted apart: a
+        // `Location` that no longer resolves, or resolves to the wrong length, is exactly the
+        // silent mis-resolution position-is-the-id exists to rule out.
+        let mut summed = 0usize;
+        for (i, m) in g.messages.iter().enumerate() {
+            let len = match &m.body {
+                Body::Resident(b) => b.len(),
+                Body::OnDisk(loc) => {
+                    let Some(log) = g.segments.as_ref() else {
+                        return Err(format!(
+                            "message {i} is recorded on disk but this store has no segment log"
+                        ));
+                    };
+                    match log.resolve(*loc) {
+                        Some(b) if b.len() == loc.len => b.len(),
+                        Some(b) => {
+                            return Err(format!(
+                                "message {i} resolves to {} bytes but its location says {} — the \
+                                 index and the log have drifted apart",
+                                b.len(),
+                                loc.len
+                            ));
+                        }
+                        None => {
+                            return Err(format!(
+                                "message {i} does not resolve: segment {} offset {} len {} is not a \
+                                 record",
+                                loc.segment, loc.offset, loc.len
+                            ));
+                        }
+                    }
+                }
+            };
+            summed += len;
+        }
         if summed != g.bytes {
             return Err(format!(
                 "byte total drifted: counted {summed}, tracked {}",
@@ -498,6 +698,40 @@ impl TrafficStore {
             ));
         }
         Ok(())
+    }
+
+    /// Re-read every sealed segment from disk and check each record against the checksum written
+    /// with it.
+    ///
+    /// This answers a different question from [`Self::verify_index`], and the two are deliberately
+    /// separate. `verify_index` proves the in-memory index is self-consistent — it would still pass
+    /// if the bytes on disk had rotted, because it reads them through the same index it is
+    /// checking. This walks the files themselves and recomputes each CRC, so it catches corruption
+    /// introduced *after* the write: a torn write, a truncation, a stale mapping, bit rot. Neither
+    /// check subsumes the other.
+    ///
+    /// Returns one verdict per sealed segment. An in-memory store has nothing on disk to check and
+    /// yields an empty report.
+    pub fn verify_segments(&self) -> Vec<SegmentVerdict> {
+        let g = self.inner.read();
+        let Some(log) = g.segments.as_ref() else {
+            return Vec::new();
+        };
+        log.sealed_paths()
+            .into_iter()
+            .map(|path| match segment::scan_segment_file(path) {
+                Ok(scan) => SegmentVerdict {
+                    path: path.to_path_buf(),
+                    checked: scan.records.len(),
+                    fault: scan.corruption.map(|c| c.to_string()),
+                },
+                Err(e) => SegmentVerdict {
+                    path: path.to_path_buf(),
+                    checked: 0,
+                    fault: Some(e.to_string()),
+                },
+            })
+            .collect()
     }
 }
 
@@ -694,5 +928,302 @@ mod tests {
         let ex: Exchange = serde_json::from_str(legacy).expect("legacy exchange must deserialise");
         assert_eq!(ex.id, 3);
         assert!(ex.related.is_empty());
+    }
+
+    // ---- STORE-01 / STORE-05: the disk-backed store ----
+
+    use crate::segment::test_support::TempCapture;
+
+    /// A representative operation sequence. Both store modes are driven through exactly this, so
+    /// the differential test compares behaviour rather than a hand-picked happy path.
+    fn drive(store: &TrafficStore) -> Vec<String> {
+        let mut log = Vec::new();
+        let mut ids = Vec::new();
+
+        // Sizes chosen to straddle the small segment target the disk-backed store is opened with,
+        // so the sequence forces rotation, sealing, and an oversized single record.
+        let payloads: Vec<Bytes> = vec![
+            Bytes::from_static(b"GET / HTTP/1.1\r\nHost: a.test\r\n\r\n"),
+            Bytes::new(),
+            Bytes::from(vec![b'p'; 300]),
+            Bytes::from_static(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"),
+            Bytes::from(vec![0xffu8; 900]),
+            Bytes::from_static(b"\x00\x01\x02not-utf8-\xff\xfe"),
+        ];
+        for (i, p) in payloads.iter().enumerate() {
+            let dir = if i % 2 == 0 {
+                Direction::Request
+            } else {
+                Direction::Response
+            };
+            let id = store.put(p.clone(), dir);
+            ids.push(id);
+            log.push(format!("put[{i}] -> {}", id.0));
+        }
+
+        let ex = store.add_exchange(Exchange {
+            request: ids[0],
+            host: "a.test".into(),
+            port: 443,
+            tls: true,
+            method: "GET".into(),
+            path: "/".into(),
+            ..Default::default()
+        });
+        log.push(format!("exchange -> {ex}"));
+        store.set_response(ex, ids[3], 200, 41, 7);
+        store.add_related(ex, ChildRef::H2Frame(ids[4]));
+        store.add_related(ex, ChildRef::WsFrame(ids[5]));
+
+        for (i, id) in ids.iter().enumerate() {
+            let got = store.get(*id).expect("every issued id resolves");
+            log.push(format!(
+                "get[{i}] id={} len={} body_len={} dir={:?}",
+                got.id.0,
+                got.raw.len(),
+                got.body().len(),
+                got.shape.direction
+            ));
+            assert_eq!(
+                got.raw, payloads[i],
+                "store returned different bytes than were put under id {}",
+                id.0
+            );
+        }
+
+        log.push(format!(
+            "get(unknown) -> {:?}",
+            store.get(MsgId(999)).is_none()
+        ));
+        let e = store.exchange(ex).expect("exchange resolves");
+        log.push(format!(
+            "exchange id={} status={:?} response={:?} related={:?}",
+            e.id, e.status, e.response, e.related
+        ));
+        let (exchanges, messages, bytes) = store.counts();
+        log.push(format!("counts {exchanges} {messages} {bytes}"));
+        log.push(format!("verify_index -> {:?}", store.verify_index()));
+        log
+    }
+
+    /// STORE-05, Mechanism A — differential parity.
+    ///
+    /// The disk-backed store is a reimplementation of where the bytes live, so the thing worth
+    /// proving is that it is *behaviourally identical* to the implementation it replaces. Driving
+    /// one operation sequence through both and comparing every observation is a stronger and more
+    /// re-runnable claim than any one hand-written assertion, and it is what turns "the port looks
+    /// right" into "the port is indistinguishable from the original".
+    ///
+    /// This is deliberately NOT the same check as `verify_segments` (Mechanism B): parity proves the
+    /// new code is correct today; the checksum scan proves nothing has rotted since it was written.
+    /// Neither catches the other's failure class.
+    #[test]
+    fn a_disk_backed_store_is_indistinguishable_from_an_in_memory_one() {
+        let t = TempCapture::new();
+        let in_memory = TrafficStore::new();
+        // A 512-byte target against payloads up to 900 bytes forces rotation and an oversized
+        // record inside the sequence.
+        let on_disk = TrafficStore::with_capture_dir(t.path(), 512).expect("open capture dir");
+
+        let a = drive(&in_memory);
+        let b = drive(&on_disk);
+
+        assert_eq!(
+            a, b,
+            "the disk-backed store diverged from the in-memory store on an identical sequence"
+        );
+        assert_eq!(
+            on_disk.capture_write_failures(),
+            0,
+            "no payload should have fallen back to RAM"
+        );
+        assert!(
+            in_memory.resident_bytes().is_none(),
+            "an in-memory store reports no segment residency rather than a misleading 0"
+        );
+    }
+
+    /// STORE-01. The point of the segment log is that the resident set tracks one active segment
+    /// instead of the whole capture, so this asserts the RAM bound directly rather than inferring it.
+    #[test]
+    fn a_disk_backed_store_keeps_only_the_active_segment_resident() {
+        let t = TempCapture::new();
+        let target = 4096;
+        let store = TrafficStore::with_capture_dir(t.path(), target).expect("open");
+        let mut total = 0usize;
+        for i in 0..200u64 {
+            let payload = Bytes::from(vec![b'a'; 500]);
+            total += payload.len();
+            store.put(payload, Direction::Request);
+            let _ = i;
+        }
+        let (_, messages, bytes) = store.counts();
+        assert_eq!(messages, 200);
+        assert_eq!(
+            bytes, total,
+            "the store still accounts for every captured byte"
+        );
+
+        let resident = store.resident_bytes().expect("disk-backed");
+        assert!(
+            resident <= target,
+            "resident payloads ({resident}) must stay within one segment target ({target}), not \
+             grow with the {total}-byte capture"
+        );
+        assert!(
+            resident < total / 10,
+            "resident {resident} is not meaningfully smaller than the {total}-byte capture"
+        );
+        store
+            .verify_index()
+            .expect("index must stay coherent across rotations");
+    }
+
+    /// STORE-05, Mechanism B — the checksum scan catches corruption that appeared after the write,
+    /// which parity cannot see because parity runs against fresh, uncorrupted data.
+    #[test]
+    fn verify_segments_names_the_record_whose_bytes_changed_after_they_were_written() {
+        let t = TempCapture::new();
+        let store = TrafficStore::with_capture_dir(t.path(), 1 << 20).expect("open");
+        for i in 0..6u64 {
+            store.put(
+                Bytes::from(format!("payload-number-{i:0>40}")),
+                Direction::Request,
+            );
+        }
+        store.seal().expect("seal");
+
+        // Clean first: a healthy capture must report no fault, or a later "fault found" proves
+        // nothing.
+        let clean = store.verify_segments();
+        assert_eq!(clean.len(), 1, "one sealed segment");
+        assert_eq!(clean[0].checked, 6, "every record read back");
+        assert!(clean[0].fault.is_none(), "a healthy capture has no fault");
+
+        // Now damage the third record's payload on disk, behind the store's back.
+        let path = &clean[0].path;
+        let record = segment::RECORD_HEADER_LEN + b"payload-number-".len() + 40;
+        let third_payload =
+            segment::SEGMENT_FILE_HEADER_LEN + 2 * record + segment::RECORD_HEADER_LEN;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open rw");
+        use std::io::{Seek, SeekFrom, Write};
+        f.seek(SeekFrom::Start(third_payload as u64)).expect("seek");
+        f.write_all(b"Z").expect("flip a byte");
+        drop(f);
+
+        let report = store.verify_segments();
+        let fault = report[0]
+            .fault
+            .as_ref()
+            .expect("corruption must be reported");
+        assert!(
+            fault.contains("message 2"),
+            "the verdict must name the failing record, got: {fault}"
+        );
+        assert!(
+            fault.contains("byte"),
+            "the verdict must name where the fault is, got: {fault}"
+        );
+        assert_eq!(
+            report[0].checked, 2,
+            "records that read back cleanly before the fault are still counted"
+        );
+    }
+
+    #[test]
+    fn verify_segments_has_nothing_to_report_for_an_in_memory_store() {
+        let store = TrafficStore::new();
+        store.put(Bytes::from_static(b"x"), Direction::Request);
+        assert!(
+            store.verify_segments().is_empty(),
+            "an in-memory store has no segments on disk to check"
+        );
+    }
+
+    #[test]
+    fn a_disk_backed_store_still_resolves_everything_after_sealing() {
+        let t = TempCapture::new();
+        let store = TrafficStore::with_capture_dir(t.path(), 1 << 20).expect("open");
+        let mut issued = Vec::new();
+        for i in 0..20u64 {
+            let payload = Bytes::from(format!("body-{i}-{}", "y".repeat(i as usize)));
+            issued.push((store.put(payload.clone(), Direction::Response), payload));
+        }
+        store.seal().expect("seal");
+        for (id, expected) in &issued {
+            assert_eq!(
+                &store.get(*id).expect("resolves after seal").raw,
+                expected,
+                "id {} lost its bytes when the segment sealed",
+                id.0
+            );
+        }
+        assert_eq!(
+            store.resident_bytes(),
+            Some(0),
+            "sealing frees the payloads"
+        );
+        store.verify_index().expect("coherent");
+    }
+
+    #[test]
+    fn a_capture_directory_already_holding_a_capture_is_refused() {
+        let t = TempCapture::new();
+        {
+            let store = TrafficStore::with_capture_dir(t.path(), 128).expect("open");
+            store.put(Bytes::from(vec![b'x'; 400]), Direction::Request);
+        }
+        assert!(
+            TrafficStore::with_capture_dir(t.path(), 128).is_err(),
+            "reopening a directory that holds a capture would overwrite it"
+        );
+    }
+
+    #[test]
+    fn concurrent_puts_against_a_disk_backed_store_keep_position_as_the_id() {
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 100;
+        let t = TempCapture::new();
+        let store = TrafficStore::with_capture_dir(t.path(), 8 * 1024).expect("open");
+        let start = Arc::new(std::sync::Barrier::new(THREADS));
+        let mut handles = Vec::new();
+        for th in 0..THREADS {
+            let store = Arc::clone(&store);
+            let start = Arc::clone(&start);
+            handles.push(std::thread::spawn(move || {
+                start.wait();
+                let mut mine = Vec::new();
+                for i in 0..PER_THREAD {
+                    let raw = Bytes::from(format!(
+                        "GET /t{th}/i{i} HTTP/1.1\r\nHost: x.test\r\n\r\n{}",
+                        "b".repeat(i)
+                    ));
+                    mine.push((store.put(raw.clone(), Direction::Request), raw));
+                }
+                mine
+            }));
+        }
+        let issued: Vec<(MsgId, Bytes)> = handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("worker panicked"))
+            .collect();
+
+        assert_eq!(issued.len(), THREADS * PER_THREAD);
+        for (id, expected) in &issued {
+            let got = store.get(*id).expect("every issued id resolves");
+            assert_eq!(
+                &got.raw, expected,
+                "id {} resolved to another thread's message once segments were involved",
+                id.0
+            );
+        }
+        let mut ids: Vec<u64> = issued.iter().map(|(i, _)| i.0).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..(THREADS * PER_THREAD) as u64).collect::<Vec<_>>());
+        store.verify_index().expect("index must be coherent");
+        assert_eq!(store.capture_write_failures(), 0);
     }
 }
