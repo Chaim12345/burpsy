@@ -611,10 +611,12 @@ impl SessionBreaker {
 mod tests {
     use super::*;
     use burpsy_bcheck::ast::IpType;
+    use burpsy_core::Protocol;
 
     fn exchange(id: u64, host: &str, path: &str, tls: bool) -> Exchange {
         Exchange {
             related: Vec::new(),
+            protocol: Protocol::Http1,
             id,
             request: burpsy_core::MsgId(0),
             response: None,

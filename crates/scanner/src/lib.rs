@@ -50,12 +50,15 @@ use std::time::{Duration, Instant};
 pub mod audit;
 pub mod catalog;
 mod catalog_data;
+mod coverage;
 
 pub use audit::{
     AuditConfig, AuditLedger, BuiltInConfig, DEFAULT_AUDIT_BUDGET, DispatchScope, Disposition,
     ItemState,
 };
 use audit::{ItemBreaker, SessionBreaker};
+use coverage::CoverageTracker;
+pub use coverage::{CheckCoverage, CoverageReport, CoverageState, ScanSkip};
 
 /// What happened when a check set was loaded — reported so coverage is explicit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,6 +109,10 @@ pub struct PassiveScanner {
     findings: Arc<RwLock<burpsy_core::FindingStore>>,
     scope: Arc<Scope>,
     report: LoadReport,
+    /// Which passive checks actually ran, and why the ones that did not. See `coverage`'s module
+    /// docs for why this exists alongside `report`: `LoadReport` is a load-time classification, this
+    /// is a runtime record, and neither substitutes for the other.
+    coverage: CoverageTracker,
 }
 
 /// `(dispatch units, flat plan of (unit index, check index) steps, undispatchable count)` —
@@ -162,6 +169,7 @@ impl PassiveScanner {
                 report.needs_insertion_point += 1;
             }
         }
+        let coverage = CoverageTracker::new(&passive);
         Self {
             passive,
             active,
@@ -169,11 +177,20 @@ impl PassiveScanner {
             findings: Arc::new(RwLock::new(burpsy_core::FindingStore::new())),
             scope,
             report,
+            coverage,
         }
     }
 
     pub fn report(&self) -> &LoadReport {
         &self.report
+    }
+
+    /// A snapshot of which passive checks have run, and why the ones that have not.
+    ///
+    /// Owned, not a lock guard: a reporting caller can hold this after the call returns rather than
+    /// holding `self` locked while it renders. Mirrors `report()` and `findings()` in shape.
+    pub fn coverage(&self) -> CoverageReport {
+        self.coverage.snapshot()
     }
 
     pub fn loaded(&self) -> usize {
@@ -200,17 +217,25 @@ impl PassiveScanner {
     ///
     /// Skips out-of-scope hosts: scanning traffic outside the engagement wastes work and pollutes
     /// results with findings the operator is not authorised to act on.
+    ///
+    /// Every early return here used to hand back a bare `0`, indistinguishable from "scanned every
+    /// check and found nothing". Each now records its own [`ScanSkip`] reason first, so `coverage()`
+    /// can tell a clean scan from one that never happened.
     pub fn scan(&self, store: &TrafficStore, exchange_id: u64, response_id: MsgId) -> usize {
         if self.passive.is_empty() {
+            self.coverage.record_skip(ScanSkip::NoChecksLoaded);
             return 0;
         }
         let Some(ex) = store.exchange(exchange_id) else {
+            self.coverage.record_skip(ScanSkip::ExchangeNotFound);
             return 0;
         };
         if !self.scope.contains(&ex.host, ex.port, &ex.path, ex.tls) {
+            self.coverage.record_skip(ScanSkip::OutOfScope);
             return 0;
         }
         let Some(resp) = store.get(response_id) else {
+            self.coverage.record_skip(ScanSkip::ResponseNotFound);
             return 0;
         };
         self.scan_message(&resp, &ex.host, &ex.path, exchange_id, response_id)
@@ -227,17 +252,27 @@ impl PassiveScanner {
     ) -> usize {
         let ctx = burpsy_bcheck::Ctx::new(resp);
         let mut n = 0usize;
+        // Index-aligned with `self.passive`, collected locally so the coverage table takes exactly
+        // one write lock for this whole call rather than one per check — see `coverage`'s module
+        // docs for why that matters on this path.
+        let mut deltas: Vec<Result<u64, String>> = Vec::with_capacity(self.passive.len());
         for check in &self.passive {
             // A check that errors at runtime (e.g. a Java-only regex construct) must not stop the
-            // rest of the set — one bad pattern would otherwise silence every later check.
-            let Ok(found) = burpsy_bcheck::run_passive(check, &ctx) else {
-                continue;
-            };
-            for f in found {
-                self.record(f, host, path, exchange_id, response_id);
-                n += 1;
+            // rest of the set — one bad pattern would otherwise silence every later check. It is
+            // still counted as errored, not silently dropped: see `coverage::CoverageState`.
+            match burpsy_bcheck::run_passive(check, &ctx) {
+                Ok(found) => {
+                    let count = found.len() as u64;
+                    for f in found {
+                        self.record(f, host, path, exchange_id, response_id);
+                        n += 1;
+                    }
+                    deltas.push(Ok(count));
+                }
+                Err(e) => deltas.push(Err(format!("{e:?}"))),
             }
         }
+        self.coverage.record_scan(&deltas);
         n
     }
 
@@ -821,7 +856,7 @@ fn walk(p: &Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burpsy_core::{Direction, Exchange, ScopeRule};
+    use burpsy_core::{Direction, Exchange, Protocol, ScopeRule};
     use bytes::Bytes;
 
     const LEAK: &str = r#"
@@ -839,6 +874,9 @@ given response then
 
     const ACTIVE: &str = r#"metadata: name: "active" given host then send request: replacing path: "/x" if "y" in {latest.response} then report issue: severity: low confidence: firm end if"#;
     const OOB: &str = r#"metadata: name: "oob" given response then if dns interactions then report issue: severity: high confidence: certain end if"#;
+    /// A regex the Rust engine rejects on every evaluation — errors on every response, never once
+    /// returning `Ok`.
+    const BAD: &str = r#"metadata: name: "bad" given response then if {latest.response} matches "(?<broken" then report issue: severity: low confidence: firm end if"#;
 
     fn setup(body: &str, host: &str) -> (Arc<TrafficStore>, u64, MsgId) {
         let store = TrafficStore::new();
@@ -852,6 +890,7 @@ given response then
         );
         let ex = store.add_exchange(Exchange {
             related: Vec::new(),
+            protocol: Protocol::Http1,
             id: 0,
             request: req,
             response: None,
@@ -883,6 +922,7 @@ given response then
         );
         let ex = store.add_exchange(Exchange {
             related: Vec::new(),
+            protocol: Protocol::Http1,
             id: 0,
             request: req,
             response: Some(resp),
@@ -988,9 +1028,8 @@ given response then
     #[test]
     fn a_broken_check_does_not_silence_the_others() {
         // A regex the Rust engine rejects must not stop later checks from running.
-        let bad = r#"metadata: name: "bad" given response then if {latest.response} matches "(?<broken" then report issue: severity: low confidence: firm end if"#;
         let checks = vec![
-            burpsy_bcheck::parse(bad).unwrap(),
+            burpsy_bcheck::parse(BAD).unwrap(),
             burpsy_bcheck::parse(LEAK).unwrap(),
         ];
         let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
@@ -1000,6 +1039,239 @@ given response then
             1,
             "the good check must still fire"
         );
+    }
+
+    /// Look up one check's coverage record by name — the only way a test can tell which entry in
+    /// the snapshot belongs to which check, since the snapshot is index-aligned to load order.
+    fn coverage_of<'a>(r: &'a CoverageReport, name: &str) -> &'a CheckCoverage {
+        r.checks
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no coverage recorded for {name:?}"))
+    }
+
+    #[test]
+    fn a_check_that_always_errors_is_recorded_as_errored_and_never_as_having_run_cleanly() {
+        let s = PassiveScanner::from_checks(
+            vec![burpsy_bcheck::parse(BAD).unwrap()],
+            Arc::new(Scope::allow_everything()),
+        );
+        let (store, ex, resp) = setup("tok_abcd1234", "a.test");
+        // Three responses, so the count on the error must be three, not one.
+        for _ in 0..3 {
+            s.scan(&store, ex, resp);
+        }
+        let cov = s.coverage();
+        let bad = coverage_of(&cov, "bad");
+        assert_eq!(bad.errored, 3, "every scan hit the same bad regex");
+        assert_eq!(
+            bad.ran, 0,
+            "a check that never once returned Ok must not show any clean runs"
+        );
+        assert!(
+            bad.last_error.is_some(),
+            "an errored check must carry the reason, not just a count"
+        );
+        assert_eq!(
+            bad.state(),
+            CoverageState::Errored,
+            "a check that errors every time must never read as a clean negative"
+        );
+    }
+
+    #[test]
+    fn a_clean_run_and_an_erroring_run_are_distinguishable_in_the_coverage_snapshot() {
+        // Same scan, same response: one check runs clean, the other errors on every call. Both
+        // return zero findings, so the finding count alone cannot tell them apart — only the
+        // coverage snapshot can.
+        let checks = vec![
+            burpsy_bcheck::parse(BAD).unwrap(),
+            burpsy_bcheck::parse(LEAK).unwrap(),
+        ];
+        let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
+        let (store, ex, resp) = setup("nothing to see here", "a.test");
+        assert_eq!(
+            s.scan(&store, ex, resp),
+            0,
+            "the leak pattern does not match"
+        );
+
+        let cov = s.coverage();
+        let bad = coverage_of(&cov, "bad");
+        let leak = coverage_of(&cov, "Leaked token");
+        assert_eq!(bad.state(), CoverageState::Errored);
+        assert_eq!(
+            leak.state(),
+            CoverageState::RanClean,
+            "ran, found nothing, never errored"
+        );
+        assert_ne!(
+            bad.state(),
+            leak.state(),
+            "an erroring check and a clean check must not collapse to the same state"
+        );
+    }
+
+    #[test]
+    fn a_check_never_scanned_reads_as_never_dispatched_rather_than_clean() {
+        let s = PassiveScanner::from_checks(
+            vec![burpsy_bcheck::parse(LEAK).unwrap()],
+            Arc::new(Scope::allow_everything()),
+        );
+        // scan() is never called at all: nothing exercises this check.
+        let cov = s.coverage();
+        let leak = coverage_of(&cov, "Leaked token");
+        assert_eq!(leak.ran, 0);
+        assert_eq!(leak.errored, 0);
+        assert_eq!(
+            leak.state(),
+            CoverageState::NeverDispatched,
+            "an uninstrumented / unexercised check must read as unknown, not as a clean negative"
+        );
+    }
+
+    #[test]
+    fn scanning_with_no_passive_checks_loaded_records_that_reason_not_a_clean_scan() {
+        let s = PassiveScanner::from_checks(Vec::new(), Arc::new(Scope::allow_everything()));
+        let store = TrafficStore::new();
+        // No exchange or response exists at all — the empty check set must be why this returns 0,
+        // not a coincidence of an also-missing exchange.
+        assert_eq!(s.scan(&store, 0, MsgId(0)), 0);
+        let cov = s.coverage();
+        assert_eq!(
+            cov.skips,
+            vec![
+                (ScanSkip::NoChecksLoaded, 1),
+                (ScanSkip::ExchangeNotFound, 0),
+                (ScanSkip::OutOfScope, 0),
+                (ScanSkip::ResponseNotFound, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn scanning_a_missing_exchange_records_that_reason_not_a_clean_scan() {
+        let s = PassiveScanner::from_checks(
+            vec![burpsy_bcheck::parse(LEAK).unwrap()],
+            Arc::new(Scope::allow_everything()),
+        );
+        let store = TrafficStore::new();
+        assert_eq!(s.scan(&store, 12345, MsgId(0)), 0);
+        let cov = s.coverage();
+        assert_eq!(
+            cov.skips
+                .iter()
+                .find(|(r, _)| *r == ScanSkip::ExchangeNotFound)
+                .unwrap()
+                .1,
+            1
+        );
+        assert_eq!(
+            cov.count(CoverageState::NeverDispatched),
+            1,
+            "the loaded check never got a response to look at"
+        );
+    }
+
+    #[test]
+    fn scanning_an_out_of_scope_host_records_that_reason_not_a_clean_scan() {
+        let (store, ex, resp) = setup("secret is tok_abcd1234", "outside.test");
+        let mut sc = Scope::new();
+        sc.add(ScopeRule::include("inside.test"));
+        let s =
+            PassiveScanner::from_checks(vec![burpsy_bcheck::parse(LEAK).unwrap()], Arc::new(sc));
+        assert_eq!(s.scan(&store, ex, resp), 0);
+        let cov = s.coverage();
+        assert_eq!(
+            cov.skips
+                .iter()
+                .find(|(r, _)| *r == ScanSkip::OutOfScope)
+                .unwrap()
+                .1,
+            1
+        );
+    }
+
+    #[test]
+    fn scanning_an_exchange_whose_response_is_not_in_the_store_records_that_reason_not_a_clean_scan()
+     {
+        let s = PassiveScanner::from_checks(
+            vec![burpsy_bcheck::parse(LEAK).unwrap()],
+            Arc::new(Scope::allow_everything()),
+        );
+        let store = TrafficStore::new();
+        let req = store.put(
+            Bytes::from_static(b"GET / HTTP/1.1\r\n\r\n"),
+            Direction::Request,
+        );
+        let ex = store.add_exchange(Exchange {
+            related: Vec::new(),
+            protocol: Protocol::Http1,
+            id: 0,
+            request: req,
+            response: None,
+            host: "a.test".into(),
+            port: 80,
+            tls: false,
+            method: "GET".into(),
+            path: "/".into(),
+            status: None,
+            response_len: 0,
+            started_ms: 0,
+            duration_ms: 0,
+            notes: None,
+        });
+        // The exchange exists and is in scope, but nothing was ever `store.put` under this id.
+        assert_eq!(s.scan(&store, ex, MsgId(u64::MAX)), 0);
+        let cov = s.coverage();
+        assert_eq!(
+            cov.skips
+                .iter()
+                .find(|(r, _)| *r == ScanSkip::ResponseNotFound)
+                .unwrap()
+                .1,
+            1
+        );
+    }
+
+    #[test]
+    fn a_coverage_snapshot_partitions_every_loaded_check_by_state() {
+        // One check of each of the three states a single scan can produce, plus one never
+        // scanned at all — every `CoverageState` variant represented at once.
+        let clean_pattern = r#"metadata: name: "clean" given response then if {latest.response} matches "will-never-match-xyz" then report issue: severity: low confidence: firm end if"#;
+        let checks = vec![
+            burpsy_bcheck::parse(BAD).unwrap(),
+            burpsy_bcheck::parse(LEAK).unwrap(),
+            burpsy_bcheck::parse(clean_pattern).unwrap(),
+        ];
+        let never_scanned = PassiveScanner::from_checks(
+            vec![burpsy_bcheck::parse(LEAK).unwrap()],
+            Arc::new(Scope::allow_everything()),
+        );
+        let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
+        let (store, ex, resp) = setup("tok_abcd1234", "a.test");
+        s.scan(&store, ex, resp);
+
+        let cov = s.coverage();
+        let hist = cov.partition();
+        assert_eq!(
+            hist.iter().map(|(_, n)| n).sum::<usize>(),
+            s.loaded(),
+            "every loaded check must land in exactly one coverage state, no more and no fewer"
+        );
+        assert_eq!(cov.count(CoverageState::Errored), 1);
+        assert_eq!(cov.count(CoverageState::RanAndFound), 1);
+        assert_eq!(cov.count(CoverageState::RanClean), 1);
+        assert_eq!(cov.count(CoverageState::NeverDispatched), 0);
+
+        // A second scanner whose one check is never scanned: the invariant must hold there too,
+        // with the whole population in a single bucket.
+        let never_cov = never_scanned.coverage();
+        assert_eq!(
+            never_cov.partition().iter().map(|(_, n)| n).sum::<usize>(),
+            never_scanned.loaded()
+        );
+        assert_eq!(never_cov.count(CoverageState::NeverDispatched), 1);
     }
 
     /// A sender that always stalls, to exercise the time budget.
@@ -1499,6 +1771,7 @@ given response then
         );
         let ex = store.add_exchange(Exchange {
             related: Vec::new(),
+            protocol: Protocol::Http1,
             id: 0,
             request: req,
             response: None,
