@@ -22,9 +22,11 @@
 pub mod edit;
 pub mod findings;
 pub mod scope;
+pub mod segment;
 pub mod sitemap;
 pub use findings::{Confidence, Finding, FindingStore, Inserted, NewFinding, Occurrence, Severity};
 pub use scope::{RuleKind, Scope, ScopeRule};
+pub use segment::{DEFAULT_SEGMENT_TARGET_BYTES, Location, SegmentLog};
 
 use bytes::Bytes;
 use parking_lot::RwLock;
