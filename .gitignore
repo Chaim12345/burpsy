@@ -14,7 +14,8 @@
 .planning/research/.cache/
 
 # GSD operational artifacts (runtime state, notifications) — not planning content.
-/.gsd/
+# Unanchored: agents run with cwd set to a crate, so these appear at any depth.
+.gsd/
 
 # Background-shell scratch from agent runs.
-/.bg-shell/
+.bg-shell/
