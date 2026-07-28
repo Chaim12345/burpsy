@@ -272,6 +272,14 @@ async fn forward_http(
     // `Host` header changes what the origin is told, not which origin we dial.
     let (method, path) = start_line_parts(&upstream_req);
 
+    // Scope was tested against the PRE-edit path; the operator may have rewritten it since. Scope
+    // governs retention, not egress (see `ProxyConfig::scope`), so a request edited onto an
+    // excluded path must not be stored or passively scanned — preventing exactly that retention is
+    // what the exclusion is for. The request still goes out, as out-of-scope traffic always does.
+    if !cfg.scope.contains(&host_only, port, &path, false) {
+        return forward_only(client, upstream_req.to_vec(), &host_only, port).await;
+    }
+
     let req_id = store.put(upstream_req.clone(), Direction::Request);
     let ex_id = store.add_exchange(Exchange {
         related: Vec::new(),

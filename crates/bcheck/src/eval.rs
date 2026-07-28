@@ -502,6 +502,17 @@ pub enum Unsupported {
     /// as runnable while being incapable of ever firing. A skipped check is honest; an inert one is
     /// not.
     ResponseVariations,
+    /// An insertion-point check whose enumeration was *declined* in full: the request had a place
+    /// to inject (a body) that the enumerator refuses to splice into — multipart, XML, a non-UTF-8
+    /// body — and no other point of the requested kinds existed. Carries the enumerator's own
+    /// reasons, one per declined place.
+    ///
+    /// Surfaced as skipped rather than clean. Returning `Ok(vec![])` here was the silent false
+    /// negative: a `given body insertion point` check against a multipart form reported "tested,
+    /// found nothing" while testing nothing at all, which is exactly the lie REPORT-04 and DASH-03
+    /// exist to prevent. A check that still has real points to test is NOT declined — it runs them
+    /// and the declined place is merely not among them.
+    InsertionDeclined(Vec<String>),
 }
 
 /// Why an active run produced no verdict.
@@ -570,9 +581,22 @@ pub fn run_active(
     };
 
     let mut findings = Vec::new();
-    // An empty point list is not an error: a bare `GET /` has nowhere to inject, and the check
-    // simply has nothing to do against this request.
-    for p in insertion::enumerate(&base, kinds) {
+    let (points, declined) = insertion::enumerate(&base, kinds);
+    // A request can have somewhere to inject that the enumerator refuses to splice into — a
+    // multipart or non-UTF-8 body, say. When that is the *only* place the check asked for, the
+    // enumeration comes back empty but not clean: surfacing the decline as `Unsupported` makes the
+    // scanner count it as skipped rather than "tested, found nothing", which was the silent false
+    // negative. When real points exist alongside a decline, the check runs them and the declined
+    // place is merely not among them — no error.
+    if points.is_empty() && !declined.is_empty() {
+        return Err(Unsupported::InsertionDeclined(
+            declined.iter().map(|d| d.reason.clone()).collect(),
+        )
+        .into());
+    }
+    // An empty point list with no declines is not an error: a bare `GET /` has nowhere to inject,
+    // and the check simply has nothing to do against this request.
+    for p in points {
         let it = ctx.for_point(p);
         let r = run_inner(check, &it, Some(sender), Some(target));
         // Fold diagnostics and RNG state back, including on the error path — see `run_inner`.

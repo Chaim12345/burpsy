@@ -152,6 +152,7 @@ impl NetSender {
         if let Some(mut conn) = self.pool.take(key) {
             match exchange(&mut conn, &wire, self.max_response) {
                 Ok((body, framing)) => {
+                    self.demote_unless_exact(key, framing);
                     if framing.reusable() {
                         self.pool.put(key, conn);
                     }
@@ -164,17 +165,52 @@ impl NetSender {
                 Err(Wire::Dead(why)) => {
                     tracing::debug!("pooled connection to {key:?} was dead ({why}); reconnecting")
                 }
-                Err(Wire::Failed(msg)) => return Err(msg),
+                // A loud failure is usually the read timeout, and the read timeout is exactly what
+                // an unframed response looks like when the server honours our keep-alive: nothing
+                // ever ends the body. Demote before returning. Leaving the target on
+                // `Framed::Exact` here is what turned one stall into one stall *per probe* for the
+                // rest of the audit — the `Ok` path above never sees this case, because it never
+                // completes.
+                Err(Wire::Failed(msg)) => {
+                    self.pool.learn(key, Framed::CloseOnly);
+                    return Err(msg);
+                }
             }
         }
 
         let mut conn = self.connect(target)?;
-        let (body, framing) =
-            exchange(&mut conn, &wire, self.max_response).map_err(Wire::into_message)?;
-        if framing.reusable() {
-            self.pool.put(key, conn);
+        match exchange(&mut conn, &wire, self.max_response) {
+            Ok((body, framing)) => {
+                self.demote_unless_exact(key, framing);
+                if framing.reusable() {
+                    self.pool.put(key, conn);
+                }
+                Ok(body)
+            }
+            // Same reasoning as the pooled arm: a probe that could not be delimited must not leave
+            // the target pinned to keep-alive for the next one to trip over.
+            Err(Wire::Failed(msg)) => {
+                self.pool.learn(key, Framed::CloseOnly);
+                Err(msg)
+            }
+            // A fresh socket that produced nothing is a target-health problem, not a framing
+            // verdict, so it says nothing about how this origin delimits its responses.
+            Err(Wire::Dead(msg)) => Err(msg),
         }
-        Ok(body)
+    }
+
+    /// Enforce the demotion this module's header promises: anything not exactly
+    /// `Content-Length`-framed pins the target to close-per-probe, permanently.
+    ///
+    /// `send` learned the framing on first contact and never revisited it, so a target that
+    /// answered framed once and unframed later stayed `Framed::Exact` for the rest of the audit.
+    /// Every subsequent unframed probe then went out `Connection: keep-alive`, found no end marker,
+    /// and blocked until the read timeout — ten seconds apiece, response discarded, check reported
+    /// as errored. Demoting here is what makes the documented invariant true after first contact.
+    fn demote_unless_exact(&self, key: &Key, framing: Framing) {
+        if !framing.exact_content_length {
+            self.pool.learn(key, Framed::CloseOnly);
+        }
     }
 }
 
@@ -360,13 +396,26 @@ fn exchange(conn: &mut Conn, wire: &[u8], max: usize) -> Result<(Vec<u8>, Framin
         return Err(Wire::Dead(format!("write: {e}")));
     }
     conn.flush().ok();
-    match read_response_framed(conn, max) {
+    // Whether a body is coming is a property of the *request* when the method is HEAD, and the
+    // response says nothing about it, so the fact has to travel with the read.
+    match read_response_framed(conn, max, request_is_head(wire)) {
         Ok(v) => Ok(v),
         // Not one byte came back. On a reused socket that is the peer having closed or reset it
         // while it sat idle, which is expected and safe to retry.
         Err(f) if f.silent => Err(Wire::Dead(f.message)),
         Err(f) => Err(Wire::Failed(f.message)),
     }
+}
+
+/// Does this request ask for headers only?
+///
+/// A `HEAD` response is complete at the end of its head, and it still echoes the `Content-Length`
+/// the body *would* have had — so believing that header would wait for bytes the server will never
+/// send. Nothing in the response reveals this; only the request does.
+fn request_is_head(raw: &[u8]) -> bool {
+    raw.split(|&b| b == b' ')
+        .next()
+        .is_some_and(|m| m.eq_ignore_ascii_case(b"HEAD"))
 }
 
 /// Set `Connection: close` on the outgoing probe, replacing any keep-alive the base request had.
@@ -458,7 +507,11 @@ impl ReadFail {
 
 /// Read one HTTP response — honour `Content-Length`, then chunked framing, else read to EOF — and
 /// report how it was delimited.
-fn read_response_framed(s: &mut impl Read, max: usize) -> Result<(Vec<u8>, Framing), ReadFail> {
+fn read_response_framed(
+    s: &mut impl Read,
+    max: usize,
+    head_only: bool,
+) -> Result<(Vec<u8>, Framing), ReadFail> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = [0u8; 16 * 1024];
     let mut head_end: Option<usize> = None;
@@ -496,7 +549,7 @@ fn read_response_framed(s: &mut impl Read, max: usize) -> Result<(Vec<u8>, Frami
             head_end = find_head_end(&buf);
         }
         if let Some(he) = head_end
-            && response_complete(&buf, he)
+            && response_complete(&buf, he, head_only)
         {
             break;
         }
@@ -544,8 +597,21 @@ fn find_head_end(b: &[u8]) -> Option<usize> {
 }
 
 /// True when the buffer holds a whole response given where its headers ended.
-fn response_complete(buf: &[u8], head_end: usize) -> bool {
+///
+/// `head_only` is set when the request was a `HEAD`.
+fn response_complete(buf: &[u8], head_end: usize, head_only: bool) -> bool {
     let head = String::from_utf8_lossy(&buf[..head_end]).to_ascii_lowercase();
+
+    // Checked *before* the framing headers, deliberately. A response that cannot carry a body is
+    // finished the moment its head is — 204, 304 and every 1xx by definition, a HEAD response by
+    // request — and all of them may still carry the `Content-Length` the body would have had.
+    // Reading that header first is precisely the bug: the loop waits for bytes the server will
+    // never send, and on a pooled connection nothing closes the socket, so the probe stalls to the
+    // read timeout. A 304 is an entirely ordinary response, not an edge case.
+    if head_only || status_is_bodiless(&head) {
+        return true;
+    }
+
     if let Some(len) =
         header_value(&head, "content-length").and_then(|v| v.trim().parse::<usize>().ok())
     {
@@ -557,6 +623,22 @@ fn response_complete(buf: &[u8], head_end: usize) -> bool {
     }
     // No framing: only EOF ends it. `Connection: close` is what makes that terminate.
     false
+}
+
+/// The numeric status of a lower-cased response head, if its start line parses.
+fn status_code(lower_head: &str) -> Option<u16> {
+    lower_head
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+/// `204`, `304` and every `1xx` carry no body, whatever their headers claim.
+fn status_is_bodiless(lower_head: &str) -> bool {
+    status_code(lower_head).is_some_and(|c| c == 204 || c == 304 || (100..200).contains(&c))
 }
 
 fn header_value<'a>(lower_head: &'a str, name: &str) -> Option<&'a str> {
@@ -576,7 +658,7 @@ mod tests {
 
     /// Just the bytes, for the framing tests that predate the pool and should still read the same.
     fn read_response(s: &mut impl Read, max: usize) -> Result<Vec<u8>, String> {
-        read_response_framed(s, max)
+        read_response_framed(s, max, false)
             .map(|(buf, _)| buf)
             .map_err(|f| f.message)
     }
@@ -588,7 +670,7 @@ mod tests {
         let wire = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhelloEXTRA";
         let got = read_response(&mut Cursor::new(wire.to_vec()), 1 << 20).unwrap();
         let head_end = find_head_end(&got).unwrap();
-        assert!(response_complete(&got, head_end));
+        assert!(response_complete(&got, head_end, false));
         assert!(got.starts_with(b"HTTP/1.1 200 OK"));
     }
 
@@ -671,7 +753,7 @@ mod tests {
         // Surplus bytes mean the connection is at an unknown offset. Under reuse those bytes would
         // become the next probe's response, so this classification is what prevents that.
         let wire = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhelloEXTRA";
-        let (_, f) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20).unwrap();
+        let (_, f) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20, false).unwrap();
         assert!(
             !f.exact_content_length,
             "surplus bytes must not count as exact framing"
@@ -682,7 +764,7 @@ mod tests {
     #[test]
     fn a_chunked_response_is_never_reusable_even_though_it_is_complete() {
         let wire = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n0\r\n\r\n";
-        let (_, f) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20).unwrap();
+        let (_, f) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20, false).unwrap();
         assert!(
             !f.reusable(),
             "the terminal-chunk scan is a substring match, so reuse is unsafe"
@@ -692,16 +774,17 @@ mod tests {
     #[test]
     fn an_exactly_framed_response_that_does_not_ask_to_close_is_reusable() {
         let wire = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
-        let (_, f) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20).unwrap();
+        let (_, f) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20, false).unwrap();
         assert!(f.reusable());
 
         let closing = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
-        let (_, f) = read_response_framed(&mut Cursor::new(closing.to_vec()), 1 << 20).unwrap();
+        let (_, f) =
+            read_response_framed(&mut Cursor::new(closing.to_vec()), 1 << 20, false).unwrap();
         assert!(f.exact_content_length);
         assert!(!f.reusable(), "a server that says close must be believed");
 
         let old = b"HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
-        let (_, f) = read_response_framed(&mut Cursor::new(old.to_vec()), 1 << 20).unwrap();
+        let (_, f) = read_response_framed(&mut Cursor::new(old.to_vec()), 1 << 20, false).unwrap();
         assert!(
             !f.reusable(),
             "HTTP/1.0 is not persistent unless it says so"
@@ -722,6 +805,19 @@ mod tests {
         /// Exact `Content-Length` but closes anyway, without saying so — so a pooled socket goes
         /// stale between probes.
         FramedButCloses,
+        /// Exact `Content-Length` on the first response and unframed on every one after, while
+        /// still honouring keep-alive.
+        ///
+        /// This is the shape the old suite could not produce, and the reason the "permanently
+        /// pinned" claim went untested: `Unframed` answers unframed from first contact, so the key
+        /// learns `CloseOnly` immediately and the demotion path never runs. Here the target is
+        /// promoted on probe one and then stops framing, which is the only way to reach it.
+        FramedThenUnframed,
+        /// `204 No Content`, persistent, still advertising the `Content-Length` a GET would have
+        /// returned. Believing that header is the stall A-2 fixes.
+        NoContent,
+        /// `304 Not Modified`, persistent, likewise carrying a length it does not send.
+        NotModified,
     }
 
     struct Server {
@@ -734,17 +830,34 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let accepts = Arc::new(AtomicUsize::new(0));
         let counter = accepts.clone();
+        // Counted across connections, so `FramedThenUnframed` can change its answer after the
+        // first probe even though that probe had a connection to itself.
+        let served = Arc::new(AtomicUsize::new(0));
+        let served_counter = served.clone();
         std::thread::spawn(move || {
             for sock in listener.incoming() {
                 let Ok(mut sock) = sock else { break };
                 counter.fetch_add(1, Ordering::SeqCst);
+                let served = served_counter.clone();
                 std::thread::spawn(move || {
                     while let Some(req) = read_one_request(&mut sock) {
-                        let close_after = req.to_ascii_lowercase().contains("connection: close")
-                            || mode != Origin::Framed;
-                        let body = b"PONG";
+                        let asked_close = req.to_ascii_lowercase().contains("connection: close");
+                        let nth = served.fetch_add(1, Ordering::SeqCst);
+                        let body: &[u8] = match mode {
+                            Origin::NoContent | Origin::NotModified => b"",
+                            _ => b"PONG",
+                        };
                         let head = match mode {
                             Origin::Unframed => "HTTP/1.1 200 OK\r\nServer: t\r\n\r\n".to_string(),
+                            Origin::FramedThenUnframed if nth > 0 => {
+                                "HTTP/1.1 200 OK\r\nServer: t\r\n\r\n".to_string()
+                            }
+                            Origin::NoContent => {
+                                "HTTP/1.1 204 No Content\r\nContent-Length: 4\r\n\r\n".to_string()
+                            }
+                            Origin::NotModified => {
+                                "HTTP/1.1 304 Not Modified\r\nContent-Length: 4\r\n\r\n".to_string()
+                            }
                             _ => {
                                 format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len())
                             }
@@ -754,6 +867,10 @@ mod tests {
                             break;
                         }
                         sock.flush().ok();
+                        // Only the modes that terminate by closing hang up unasked. The rest hold
+                        // the socket open, which is what lets an undelimitable response stall.
+                        let close_after = asked_close
+                            || matches!(mode, Origin::Unframed | Origin::FramedButCloses);
                         if close_after {
                             break;
                         }
@@ -912,6 +1029,147 @@ mod tests {
             sender.pooled_connections(),
             2,
             "one parked connection per target"
+        );
+    }
+
+    /// A short read timeout, so a stall this suite provokes deliberately costs milliseconds rather
+    /// than the ten seconds a real audit would pay for it.
+    fn impatient() -> NetSender {
+        NetSender {
+            read_timeout: Duration::from_millis(300),
+            ..NetSender::default()
+        }
+    }
+
+    #[test]
+    fn a_target_that_stops_framing_is_demoted_instead_of_stalling_every_later_probe() {
+        // A-1. The module header promises that anything not exactly `Content-Length`-framed pins
+        // the target to close-per-probe permanently, but that only ever ran on first contact.
+        let origin = spawn_origin(Origin::FramedThenUnframed);
+        let sender = impatient();
+        let t = target_of(&origin);
+
+        // Probe one is close-per-probe and framed, so the target is promoted to keep-alive.
+        let first = sender.send(&t, PROBE).expect("first probe");
+        assert!(first.ends_with(b"PONG"), "first probe should be framed");
+
+        // Probe two goes out keep-alive; the origin answers unframed and holds the socket open, so
+        // nothing ends the body and the read times out. That failure is expected here.
+        let second = sender.send(&t, PROBE);
+        assert!(
+            second.is_err(),
+            "an unframed keep-alive response cannot be delimited, got {second:?}"
+        );
+
+        // The point of the fix. That failure demotes the target, so the probe after it goes back to
+        // close-per-probe and succeeds. Before, the target stayed pinned and every remaining probe
+        // in the audit repeated the same stall.
+        let third = sender.send(&t, PROBE).expect("probe after demotion");
+        assert!(
+            third.ends_with(b"PONG"),
+            "after demotion an unframed origin is read to EOF again, got {:?}",
+            String::from_utf8_lossy(&third)
+        );
+    }
+
+    #[test]
+    fn a_204_on_a_pooled_connection_completes_at_its_head_rather_than_waiting_for_a_body() {
+        // A-2. The origin advertises `Content-Length: 4` and sends no body, which is what a 204
+        // legitimately does. Believing the header waits for bytes that never come.
+        let origin = spawn_origin(Origin::NoContent);
+        let sender = impatient();
+        let t = target_of(&origin);
+
+        let started = Instant::now();
+        for i in 0..3 {
+            let r = sender
+                .send(&t, PROBE)
+                .unwrap_or_else(|e| panic!("probe {i} stalled or failed: {e}"));
+            assert!(
+                r.starts_with(b"HTTP/1.1 204"),
+                "probe {i} got {:?}",
+                String::from_utf8_lossy(&r)
+            );
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "three bodiless responses must not wait on the read timeout even once, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_304_on_a_pooled_connection_completes_at_its_head_rather_than_waiting_for_a_body() {
+        // A-2, and the ordinary case: a conditional request answered `304 Not Modified` is not an
+        // edge case, it is most of a cached site.
+        let origin = spawn_origin(Origin::NotModified);
+        let sender = impatient();
+        let t = target_of(&origin);
+
+        let started = Instant::now();
+        for i in 0..3 {
+            let r = sender
+                .send(&t, PROBE)
+                .unwrap_or_else(|e| panic!("probe {i} stalled or failed: {e}"));
+            assert!(
+                r.starts_with(b"HTTP/1.1 304"),
+                "probe {i} got {:?}",
+                String::from_utf8_lossy(&r)
+            );
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "a 304 ends at its head, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_bodiless_status_is_complete_even_when_it_advertises_a_length() {
+        // The status decides, not the header — so the check has to run before the framing headers
+        // are consulted, which is the ordering the fix depends on.
+        for status in ["204 No Content", "304 Not Modified", "100 Continue"] {
+            let raw = format!("HTTP/1.1 {status}\r\nContent-Length: 4\r\n\r\n");
+            let b = raw.as_bytes();
+            let he = find_head_end(b).unwrap();
+            assert!(
+                response_complete(b, he, false),
+                "{status} carries no body whatever its headers claim"
+            );
+        }
+        // The same header on a 200 is real, and that response is genuinely incomplete.
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n";
+        let he = find_head_end(raw).unwrap();
+        assert!(
+            !response_complete(raw, he, false),
+            "a 200 that promised four bytes has not delivered them"
+        );
+    }
+
+    #[test]
+    fn a_head_response_is_complete_at_its_head_despite_advertising_a_length() {
+        // A HEAD response echoes the `Content-Length` a GET would have returned but sends no body.
+        // Nothing in the response reveals that, so the fact travels down from the request.
+        let wire = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n";
+        let he = find_head_end(wire).unwrap();
+        assert!(
+            response_complete(wire, he, true),
+            "a HEAD response ends where its head ends"
+        );
+        assert!(
+            !response_complete(wire, he, false),
+            "the very same bytes from a GET are incomplete — only the request tells them apart"
+        );
+    }
+
+    #[test]
+    fn the_head_method_is_recognised_case_insensitively_and_not_confused_with_a_prefix() {
+        assert!(request_is_head(b"HEAD /p HTTP/1.1\r\nHost: t\r\n\r\n"));
+        assert!(request_is_head(b"head /p HTTP/1.1\r\nHost: t\r\n\r\n"));
+        assert!(!request_is_head(b"GET /p HTTP/1.1\r\nHost: t\r\n\r\n"));
+        assert!(
+            !request_is_head(b"HEADER /p HTTP/1.1\r\nHost: t\r\n\r\n"),
+            "a method that merely starts with HEAD is a different method"
         );
     }
 }

@@ -100,6 +100,23 @@ enum Coding {
     Json,
 }
 
+/// A place the enumerator refused to build insertion points for, and why.
+///
+/// The body case is the one that matters: splicing a payload into a container whose framing is not
+/// modelled (multipart, XML, a non-UTF-8 body) produces a request the server rejects before the
+/// code under test ever sees it. Returning nothing in that case made the refusal indistinguishable
+/// from "this request genuinely has nowhere to inject" — so a `given body insertion point` check
+/// against a multipart form reported a clean bill of health while testing nothing. That is the
+/// silent false negative this type exists to prevent: a declined body is surfaced as skipped, never
+/// as tested.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declined {
+    /// What was declined, named for the operator ("request body").
+    pub what: String,
+    /// Why no points were built ("multipart body: framing not modelled").
+    pub reason: String,
+}
+
 /// Headers a payload must not be placed in.
 ///
 /// `Host` selects the virtual host, so a payload there tests a different application and the finding
@@ -116,16 +133,20 @@ const RESERVED_HEADERS: &[&str] = &[
     "cookie",
 ];
 
-/// Every point of the requested kinds, in a fixed order: query, headers, cookies, body.
+/// Every point of the requested kinds, in a fixed order: query, headers, cookies, body — plus the
+/// places that were *declined* rather than enumerated.
 ///
 /// The order is pinned because it is observable — a check reports one finding per point, and a
 /// scanner that reordered them between runs would reorder its own output.
 ///
-/// An empty result is normal (a bare `GET /` with no interesting headers has nowhere to inject) and
-/// means the check simply has nothing to do here.
-pub fn enumerate(req: &RequestEdit, kinds: &[IpType]) -> Vec<InsertionPoint> {
+/// An empty point list with no declines is normal (a bare `GET /` with no interesting headers has
+/// nowhere to inject) and means the check simply has nothing to do here. An empty point list *with*
+/// declines is different: the request had somewhere to inject that this enumerator refuses to
+/// splice into, and the caller must report that as skipped rather than clean — see [`Declined`].
+pub fn enumerate(req: &RequestEdit, kinds: &[IpType]) -> (Vec<InsertionPoint>, Vec<Declined>) {
     let want = |k: IpType| kinds.contains(&IpType::Any) || kinds.contains(&k);
     let mut out = Vec::new();
+    let mut declined = Vec::new();
 
     if want(IpType::Query) {
         for (name, value) in kv_pairs(&req.query, b'&') {
@@ -172,22 +193,30 @@ pub fn enumerate(req: &RequestEdit, kinds: &[IpType]) -> Vec<InsertionPoint> {
     }
 
     if want(IpType::Body) {
-        body_points(req, &mut out);
+        body_points(req, &mut out, &mut declined);
     }
 
-    out
+    (out, declined)
 }
 
-/// Body points, if the body is a container we can splice into without corrupting it.
+/// Body points, if the body is a container we can splice into without corrupting it — otherwise a
+/// [`Declined`] entry naming what was refused and why.
 ///
 /// Multipart, XML and plain-text bodies yield nothing. Splicing into a container whose framing we do
 /// not model would produce a body the server rejects before the code under test ever sees the
-/// payload, and a check whose probe is rejected reports nothing while looking like it ran.
-fn body_points(req: &RequestEdit, out: &mut Vec<InsertionPoint>) {
+/// payload, and a check whose probe is rejected reports nothing while looking like it ran. The
+/// refusal is therefore recorded, not swallowed: a silent empty result here was how a `given body
+/// insertion point` check against a multipart form used to report a clean bill of health while
+/// testing nothing.
+fn body_points(req: &RequestEdit, out: &mut Vec<InsertionPoint>, declined: &mut Vec<Declined>) {
     if req.body.is_empty() {
         return;
     }
     let Ok(body) = std::str::from_utf8(&req.body) else {
+        declined.push(Declined {
+            what: "request body".into(),
+            reason: "non-UTF-8 body: cannot splice without corrupting it".into(),
+        });
         return;
     };
     let ctype = req
@@ -223,6 +252,14 @@ fn body_points(req: &RequestEdit, out: &mut Vec<InsertionPoint>) {
                 coding: Coding::Form,
             });
         }
+    } else {
+        declined.push(Declined {
+            what: "request body".into(),
+            reason: "body matches no modelled container (multipart, XML or plain text): \
+                     splicing would corrupt framing the server rejects before the code under test \
+                     sees the payload"
+                .into(),
+        });
     }
 }
 
@@ -272,8 +309,18 @@ impl InsertionPoint {
 }
 
 fn splice(s: &str, r: Range<usize>, new: &str) -> String {
-    let start = r.start.min(s.len());
-    let end = r.end.min(s.len()).max(start);
+    // Ranges address the base request's bytes, and `InsertionPoint::apply` is public, so a caller
+    // can hand in an offset that lands mid-codepoint. Slicing there would panic; flooring to the
+    // preceding char boundary splices at the nearest legal position instead. (`floor_char_boundary`
+    // is still unstable on this toolchain, so the walk is manual.)
+    let mut start = r.start.min(s.len());
+    while !s.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = r.end.min(s.len()).max(start);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
     let mut out = String::with_capacity(s.len() + new.len());
     out.push_str(&s[..start]);
     out.push_str(new);
@@ -455,7 +502,7 @@ mod tests {
     #[test]
     fn any_enumerates_query_headers_and_cookies_in_a_fixed_order() {
         let r = req(b"GET /s?q=cat&page=2 HTTP/1.1\r\nHost: x.test\r\nUser-Agent: burpsy\r\nCookie: sid=abc; theme=dark\r\n\r\n");
-        let ps = enumerate(&r, &[IpType::Any]);
+        let ps = enumerate(&r, &[IpType::Any]).0;
         assert_eq!(
             names(&ps),
             vec![
@@ -477,7 +524,7 @@ mod tests {
         // was never given, under the original's name.
         let r = req(b"GET /s?debug&q=1 HTTP/1.1\r\nHost: x\r\n\r\n");
         assert_eq!(
-            names(&enumerate(&r, &[IpType::Query])),
+            names(&enumerate(&r, &[IpType::Query]).0),
             vec![(IpType::Query, "q")]
         );
     }
@@ -485,7 +532,7 @@ mod tests {
     #[test]
     fn a_form_body_yields_one_point_per_field() {
         let r = req(b"POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\na=1&user=bo");
-        let ps = enumerate(&r, &[IpType::Body]);
+        let ps = enumerate(&r, &[IpType::Body]).0;
         assert_eq!(
             names(&ps),
             vec![(IpType::Body, "a"), (IpType::Body, "user")]
@@ -498,7 +545,7 @@ mod tests {
         let r = req(
             b"POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 46\r\n\r\n{\"user\":\"bo\",\"age\":31,\"tags\":[\"a\",\"b\"],\"ok\":true}",
         );
-        let ps = enumerate(&r, &[IpType::Body]);
+        let ps = enumerate(&r, &[IpType::Body]).0;
         assert_eq!(
             names(&ps),
             vec![
@@ -518,6 +565,7 @@ mod tests {
         let r = req(b"POST /u HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n");
         assert!(
             enumerate(&r, &[IpType::Any])
+                .0
                 .iter()
                 .all(|p| p.kind != IpType::Body)
         );
@@ -526,7 +574,7 @@ mod tests {
     #[test]
     fn appending_to_a_query_point_leaves_every_other_parameter_byte_identical() {
         let mut r = req(b"GET /s?q=cat&page=2&sort=asc HTTP/1.1\r\nHost: x\r\n\r\n");
-        let ps = enumerate(&r, &[IpType::Query]);
+        let ps = enumerate(&r, &[IpType::Query]).0;
         ps[1].apply(&mut r, "'", true);
         assert_eq!(r.query, "q=cat&page=2'&sort=asc");
     }
@@ -534,7 +582,7 @@ mod tests {
     #[test]
     fn replacing_overwrites_only_the_targeted_value() {
         let mut r = req(b"GET /s?q=cat&page=2 HTTP/1.1\r\nHost: x\r\n\r\n");
-        enumerate(&r, &[IpType::Query])[0].apply(&mut r, "X", false);
+        enumerate(&r, &[IpType::Query]).0[0].apply(&mut r, "X", false);
         assert_eq!(r.query, "q=X&page=2");
     }
 
@@ -543,7 +591,7 @@ mod tests {
         // Raw, `evil&admin=1` would become a second parameter and the check would be testing a
         // request nobody wrote.
         let mut r = req(b"GET /s?q=cat HTTP/1.1\r\nHost: x\r\n\r\n");
-        enumerate(&r, &[IpType::Query])[0].apply(&mut r, "evil&admin=1", false);
+        enumerate(&r, &[IpType::Query]).0[0].apply(&mut r, "evil&admin=1", false);
         assert_eq!(r.query, "q=evil%26admin%3D1");
     }
 
@@ -551,7 +599,7 @@ mod tests {
     fn a_header_payload_is_not_percent_escaped() {
         // There is no k=v container in a header value, so escaping would only corrupt the payload.
         let mut r = req(b"GET / HTTP/1.1\r\nHost: x\r\nX-Probe: base\r\n\r\n");
-        let ps = enumerate(&r, &[IpType::Header]);
+        let ps = enumerate(&r, &[IpType::Header]).0;
         ps[0].apply(&mut r, " a=b&c ", true);
         assert_eq!(r.header("X-Probe"), Some("base a=b&c "));
     }
@@ -559,7 +607,7 @@ mod tests {
     #[test]
     fn a_cookie_payload_touches_one_cookie_and_keeps_the_separators() {
         let mut r = req(b"GET / HTTP/1.1\r\nHost: x\r\nCookie: sid=abc; theme=dark\r\n\r\n");
-        let ps = enumerate(&r, &[IpType::Cookie]);
+        let ps = enumerate(&r, &[IpType::Cookie]).0;
         ps[0].apply(&mut r, "';", true);
         assert_eq!(r.header("cookie"), Some("sid=abc'%3B; theme=dark"));
     }
@@ -569,7 +617,7 @@ mod tests {
         let mut r = req(
             b"POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 24\r\n\r\n{\"user\":\"bo\",\"role\":\"u\"}",
         );
-        let ps = enumerate(&r, &[IpType::Body]);
+        let ps = enumerate(&r, &[IpType::Body]).0;
         ps[0].apply(&mut r, "\"}); drop", true);
         assert_eq!(
             String::from_utf8(r.body.clone()).unwrap(),
@@ -581,7 +629,7 @@ mod tests {
     fn the_content_length_follows_a_body_payload() {
         // A stale length truncates the probe server-side, so the payload never arrives whole.
         let mut r = req(b"POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n\r\na=1");
-        enumerate(&r, &[IpType::Body])[0].apply(&mut r, "234", true);
+        enumerate(&r, &[IpType::Body]).0[0].apply(&mut r, "234", true);
         let out = String::from_utf8(r.to_raw()).unwrap();
         assert!(out.contains("Content-Length: 6"), "got {out:?}");
         assert!(out.ends_with("a=1234"), "got {out:?}");
@@ -590,13 +638,75 @@ mod tests {
     #[test]
     fn qualifiers_select_which_families_are_enumerated() {
         let r = req(b"POST /s?q=1 HTTP/1.1\r\nHost: x\r\nX-A: v\r\nCookie: c=1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n\r\nb=2");
-        let ps = enumerate(&r, &[IpType::Query, IpType::Body]);
+        let ps = enumerate(&r, &[IpType::Query, IpType::Body]).0;
         assert_eq!(names(&ps), vec![(IpType::Query, "q"), (IpType::Body, "b")]);
     }
 
     #[test]
     fn a_request_with_nowhere_to_inject_yields_no_points() {
         let r = req(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-        assert_eq!(enumerate(&r, &[IpType::Any]), vec![]);
+        assert_eq!(enumerate(&r, &[IpType::Any]).0, vec![]);
+    }
+
+    #[test]
+    /// C-1: a body the enumerator refuses to splice into is reported as a decline, not swallowed.
+    fn a_multipart_body_is_reported_as_declined_not_silently_empty() {
+        // The old behaviour returned no points and no record of the refusal, so a `given body
+        // insertion point` check against a multipart form reported "tested, found nothing" while
+        // testing nothing at all — the silent false negative C-1 closes.
+        let r = req(b"POST /u HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n");
+        let (points, declined) = enumerate(&r, &[IpType::Body]);
+        assert!(points.is_empty(), "multipart framing is not spliced into");
+        assert_eq!(declined.len(), 1, "the refusal is recorded, not swallowed");
+        assert_eq!(declined[0].what, "request body");
+        assert!(
+            declined[0].reason.contains("multipart"),
+            "the reason names what was refused: {:?}",
+            declined[0].reason
+        );
+    }
+
+    #[test]
+    /// C-1: a non-UTF-8 body is reported as a decline, not swallowed.
+    fn a_non_utf8_body_is_reported_as_declined() {
+        let mut raw = b"POST /u HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n\r\n".to_vec();
+        raw.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+        let r = req(&raw);
+        let (points, declined) = enumerate(&r, &[IpType::Body]);
+        assert!(points.is_empty());
+        assert_eq!(declined.len(), 1);
+        assert!(
+            declined[0].reason.contains("UTF-8"),
+            "the reason names the encoding problem: {:?}",
+            declined[0].reason
+        );
+    }
+
+    #[test]
+    /// C-1: a form body that IS spliced into yields points and no decline.
+    fn a_form_body_is_enumerated_with_no_decline() {
+        let r = req(b"POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n\r\na=1");
+        let (points, declined) = enumerate(&r, &[IpType::Body]);
+        assert_eq!(names(&points), vec![(IpType::Body, "a")]);
+        assert!(declined.is_empty(), "a modelled container is not declined");
+    }
+
+    #[test]
+    /// C-2: splicing at an offset inside a multi-byte char floors to the boundary instead of panicking.
+    fn splice_at_a_mid_codepoint_offset_floors_to_the_char_boundary() {
+        // "é" is two bytes (0xC3 0xA9), so the char boundaries of "aéb" are {0,1,3,4}. Offsets 1
+        // and 2 are not both legal: 1 is the boundary before é, 2 lands inside it. Flooring moves
+        // an interior offset to the preceding boundary rather than panicking on a mid-codepoint
+        // slice.
+        let s = "a\u{e9}b"; // a, é (2 bytes), b — len 4
+        assert_eq!(splice(s, 1..2, "X"), "aX\u{e9}b", "end=2 floors to 1, so é survives");
+        assert_eq!(splice(s, 2..3, "X"), "aXb", "start=2 floors to 1, so é is replaced");
+    }
+
+    #[test]
+    /// C-2: a splice range entirely past a multi-byte char leaves it intact.
+    fn splice_past_a_multi_byte_char_does_not_corrupt_it() {
+        let s = "\u{e9}ab"; // é (2 bytes), a, b — len 4
+        assert_eq!(splice(s, 3..4, "X"), "\u{e9}aX", "the trailing byte splice leaves é whole");
     }
 }

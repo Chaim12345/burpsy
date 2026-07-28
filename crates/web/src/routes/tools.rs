@@ -76,19 +76,32 @@ fn now_ms() -> u64 {
 
 /// Bytes as JSON. Lossy text plus the facts needed to know whether to trust it — a decoded gzip
 /// response can be a PNG, and silently handing back replacement characters would be a lie.
+///
+/// `truncated` is the other half of that standard. A decompression stopped by the inflate cap, or
+/// broken mid-stream, yields real bytes that are nonetheless only a prefix; returning them with an
+/// unqualified 200 let an operator read 40 recovered bytes, conclude the string they wanted was
+/// absent, and move on when it sat in the 3 960 that never decompressed.
 #[derive(Serialize)]
 struct BytesView {
     text: String,
     len: usize,
     utf8: bool,
+    truncated: bool,
 }
 
 impl BytesView {
+    /// For bytes that are complete by construction — anything that did not go through a decoder.
     fn new(b: &[u8]) -> Self {
+        Self::partial(b, false)
+    }
+
+    /// For bytes whose completeness the caller had to determine.
+    fn partial(b: &[u8], truncated: bool) -> Self {
         Self {
             text: String::from_utf8_lossy(b).into_owned(),
             len: b.len(),
             utf8: std::str::from_utf8(b).is_ok(),
+            truncated,
         }
     }
 }
@@ -138,6 +151,7 @@ struct RunView {
     input_len: usize,
     output_offset: usize,
     output_len: usize,
+    truncated: bool,
 }
 
 async fn decode(State(s): State<AppState>, Json(req): Json<DecodeReq>) -> impl IntoResponse {
@@ -163,7 +177,7 @@ async fn decode(State(s): State<AppState>, Json(req): Json<DecodeReq>) -> impl I
             .iter()
             .map(|p| {
                 serde_json::json!({
-                    "output": BytesView::new(&p.output),
+                    "output": BytesView::partial(&p.output, p.truncated()),
                     "runs": p.runs.iter().map(|run| RunView {
                         layer: run.layer.map(Layer::as_str),
                         confidence: run.confidence.map(|c| match c {
@@ -175,6 +189,7 @@ async fn decode(State(s): State<AppState>, Json(req): Json<DecodeReq>) -> impl I
                         input_len: run.input.len,
                         output_offset: run.output.offset,
                         output_len: run.output.len,
+                        truncated: run.truncated,
                     }).collect::<Vec<_>>(),
                 })
             })
@@ -182,7 +197,7 @@ async fn decode(State(s): State<AppState>, Json(req): Json<DecodeReq>) -> impl I
         return Json(serde_json::json!({
             "mode": "smart",
             "layers": r.layers().iter().map(|l| l.as_str()).collect::<Vec<_>>(),
-            "output": BytesView::new(&r.output),
+            "output": BytesView::partial(&r.output, r.truncated()),
             // Every intermediate, so a guess the operator disagrees with can be backed out of.
             "passes": passes,
         }))
@@ -197,10 +212,10 @@ async fn decode(State(s): State<AppState>, Json(req): Json<DecodeReq>) -> impl I
             .into_response();
     };
     match decoder::decode(layer, &input) {
-        Ok(out) => Json(serde_json::json!({
+        Ok((out, truncated)) => Json(serde_json::json!({
             "mode": "explicit",
             "layers": [layer.as_str()],
-            "output": BytesView::new(&out),
+            "output": BytesView::partial(&out, truncated),
         }))
         .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),

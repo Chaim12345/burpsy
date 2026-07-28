@@ -150,22 +150,34 @@ impl std::error::Error for DecodeError {}
 const MAX_INFLATE: u64 = 64 * 1024 * 1024;
 
 /// Decode one layer, applied to the whole input. This is the explicit "decode as" path.
-pub fn decode(layer: Layer, input: &[u8]) -> Result<Vec<u8>, DecodeError> {
+///
+/// The `bool` is **truncated**: true when the bytes returned are a prefix of the real output rather
+/// than the whole of it, because the inflate cap cut the stream short or it broke mid-way. Only the
+/// compressed layers can set it. Returning partial output as an unqualified success is the defect
+/// this signature exists to prevent — an operator who searches 40 recovered bytes and concludes a
+/// string is absent has been misled when the string sat in the 3 960 that never decompressed.
+pub fn decode(layer: Layer, input: &[u8]) -> Result<(Vec<u8>, bool), DecodeError> {
     match layer {
-        Layer::Url => Ok(url_decode(input)),
-        Layer::Html => Ok(html_decode(input)),
-        Layer::Base64 => Ok(base64_decode(input, false)),
-        Layer::Base64Url => Ok(base64_decode(input, true)),
-        Layer::Hex => hex_decode(input),
+        Layer::Url => Ok((url_decode(input), false)),
+        Layer::Html => Ok((html_decode(input), false)),
+        Layer::Base64 => Ok((base64_decode(input, false), false)),
+        Layer::Base64Url => Ok((base64_decode(input, true), false)),
+        Layer::Hex => hex_decode(input).map(|v| (v, false)),
         Layer::Gzip => inflate(flate2::read::GzDecoder::new(input)),
         // `Content-Encoding: deflate` is specified as zlib-wrapped, and that is what nearly every
         // server sends — but a minority emit a raw deflate stream, and Burp users hit both. Try the
         // spec-compliant framing first and fall back, rather than making the operator pick.
         Layer::Deflate => match inflate(flate2::read::ZlibDecoder::new(input)) {
-            Ok(v) if !v.is_empty() => Ok(v),
-            _ => inflate(flate2::read::DeflateDecoder::new(input)),
+            // Including the empty case. A valid zlib stream that decodes to zero bytes is an empty
+            // body, not a failure; sending it down the raw-deflate fallback ran that decoder over
+            // zlib-framed bytes and reported a decompression error for a body that was simply empty.
+            Ok(v) => Ok(v),
+            // Both framings failing is reported with the *zlib* error, because zlib is what the
+            // header specifies and what nearly every server sends. Handing back the raw-deflate
+            // error instead points the operator at the framing they almost certainly do not have.
+            Err(zlib_err) => inflate(flate2::read::DeflateDecoder::new(input)).map_err(|_| zlib_err),
         },
-        Layer::Jwt => jwt_decode(input),
+        Layer::Jwt => jwt_decode(input).map(|v| (v, false)),
     }
 }
 
@@ -193,14 +205,26 @@ pub fn encode(layer: Layer, input: &[u8]) -> Result<Vec<u8>, DecodeError> {
     }
 }
 
-fn inflate<R: Read>(r: R) -> Result<Vec<u8>, DecodeError> {
+/// Inflate `r`, reporting whether the result is complete or merely a prefix.
+///
+/// Reads one byte past [`MAX_INFLATE`] on purpose: if that byte arrives the stream still had output
+/// to give, so what we keep is a prefix and the caller must be told. Without that signal a capped
+/// or broken decompression is indistinguishable from a whole one.
+fn inflate<R: Read>(r: R) -> Result<(Vec<u8>, bool), DecodeError> {
     let mut out = Vec::new();
-    match r.take(MAX_INFLATE).read_to_end(&mut out) {
-        Ok(_) => Ok(out),
+    let res = r.take(MAX_INFLATE + 1).read_to_end(&mut out);
+    let capped = out.len() as u64 > MAX_INFLATE;
+    if capped {
+        out.truncate(MAX_INFLATE as usize);
+    }
+    match res {
+        Ok(_) => Ok((out, capped)),
         // A truncated capture is the common case in a pentest, and the bytes that did decompress
         // are exactly the ones being looked for. Only a stream that produced nothing is an error.
         Err(e) if out.is_empty() => Err(DecodeError::Compression(e.to_string())),
-        Err(_) => Ok(out),
+        // Bytes arrived and then the stream broke: the output is real but incomplete, and saying so
+        // is the entire point of the flag.
+        Err(_) => Ok((out, true)),
     }
 }
 
@@ -539,6 +563,9 @@ pub struct Run {
     pub input: Span,
     /// Region of this pass's output that it produced.
     pub output: Span,
+    /// The bytes this run produced are a prefix of what the codec really had, because the inflate
+    /// cap cut it short or the stream broke. Only the compressed codecs can set it.
+    pub truncated: bool,
 }
 
 impl Run {
@@ -559,6 +586,11 @@ impl Pass {
     pub fn changed(&self) -> bool {
         self.runs.iter().any(|r| !r.is_plain())
     }
+
+    /// True when any run in this pass returned a prefix rather than its whole output.
+    pub fn truncated(&self) -> bool {
+        self.runs.iter().any(|r| r.truncated)
+    }
 }
 
 /// The full decode ladder. `output` is the last pass's output, or the input when nothing fired.
@@ -575,6 +607,15 @@ impl Smart {
             .iter()
             .flat_map(|p| p.runs.iter().filter_map(|r| r.layer))
             .collect()
+    }
+
+    /// True when any pass anywhere in the ladder was cut short.
+    ///
+    /// Reported so a caller can say the output is partial. Smart decode peels layer by layer, so a
+    /// truncation in an early pass silently bounds everything above it — exactly the case where a
+    /// clean-looking result is least trustworthy.
+    pub fn truncated(&self) -> bool {
+        self.passes.iter().any(|p| p.truncated())
     }
 }
 
@@ -648,6 +689,7 @@ fn scan(input: &[u8], guess_alphabets: bool) -> Pass {
                     why: hit.why,
                     input: Span::new(i, hit.consumed),
                     output: Span::new(out.len(), hit.decoded.len()),
+                    truncated: hit.truncated,
                 };
                 out.extend_from_slice(&hit.decoded);
                 i += hit.consumed;
@@ -659,6 +701,7 @@ fn scan(input: &[u8], guess_alphabets: bool) -> Pass {
                     {
                         prev.input.len += run.input.len;
                         prev.output.len += run.output.len;
+                        prev.truncated |= run.truncated;
                     }
                     _ => runs.push(run),
                 }
@@ -676,6 +719,7 @@ fn scan(input: &[u8], guess_alphabets: bool) -> Pass {
                         why: "no codec scored above the threshold; passed through",
                         input: Span::new(i, 1),
                         output: Span::new(out.len() - 1, 1),
+                        truncated: false,
                     }),
                 }
                 i += 1;
@@ -693,6 +737,8 @@ struct Hit {
     decoded: Vec<u8>,
     confidence: Confidence,
     why: &'static str,
+    /// Set only by the compressed codecs, when what they decoded is a prefix.
+    truncated: bool,
 }
 
 /// A codec probe: given the buffer and a position, score whether its encoding starts there.
@@ -728,8 +774,9 @@ fn probe_gzip(b: &[u8], i: usize, _o: &SmartOptions) -> Option<Hit> {
     }
     // Burp's inflater reports how many bytes the stream used; flate2's reader does not, and a
     // gzip member followed by unrelated bytes does not occur in practice, so take the remainder.
-    let decoded = decode(Layer::Gzip, &b[i..]).ok()?;
+    let (decoded, truncated) = decode(Layer::Gzip, &b[i..]).ok()?;
     Some(Hit {
+        truncated,
         layer: Layer::Gzip,
         score: 4,
         consumed: b.len() - i,
@@ -750,8 +797,11 @@ fn probe_zlib(b: &[u8], i: usize, _o: &SmartOptions) -> Option<Hit> {
     {
         return None;
     }
-    let decoded = decode(Layer::Deflate, s).ok().filter(|d| !d.is_empty())?;
+    let (decoded, truncated) = decode(Layer::Deflate, s)
+        .ok()
+        .filter(|(d, _)| !d.is_empty())?;
     Some(Hit {
+        truncated,
         layer: Layer::Deflate,
         score: 4,
         consumed: s.len(),
@@ -773,6 +823,7 @@ fn probe_jwt(b: &[u8], i: usize, _o: &SmartOptions) -> Option<Hit> {
     t.alg.as_ref()?;
     let decoded = jwt_decode(tok).ok()?;
     Some(Hit {
+        truncated: false,
         layer: Layer::Jwt,
         score: 5,
         consumed: end - i,
@@ -808,6 +859,7 @@ fn probe_url(b: &[u8], i: usize, _o: &SmartOptions) -> Option<Hit> {
         }
     }
     Some(Hit {
+        truncated: false,
         layer: Layer::Url,
         score: 5,
         consumed: end - i,
@@ -836,6 +888,7 @@ fn probe_html(b: &[u8], i: usize, _o: &SmartOptions) -> Option<Hit> {
         return None;
     }
     Some(Hit {
+        truncated: false,
         layer: Layer::Html,
         score: 5,
         consumed: end - i,
@@ -857,6 +910,7 @@ fn probe_hex(b: &[u8], i: usize, o: &SmartOptions) -> Option<Hit> {
     }
     let decoded = hex_decode(&b[i..i + n]).ok().filter(|d| plausible(d))?;
     Some(Hit {
+        truncated: false,
         layer: Layer::Hex,
         score: MIN_SCORE,
         consumed: n,
@@ -897,6 +951,7 @@ fn probe_base64(b: &[u8], i: usize, o: &SmartOptions) -> Option<Hit> {
             continue;
         }
         return Some(Hit {
+            truncated: false,
             layer: if url { Layer::Base64Url } else { Layer::Base64 },
             score: MIN_SCORE,
             consumed: n + pad,
@@ -1013,7 +1068,7 @@ mod tests {
         for layer in [Layer::Gzip, Layer::Deflate] {
             let enc = encode(layer, &body).unwrap();
             assert!(enc.len() < body.len(), "{layer:?} should compress this");
-            assert_eq!(decode(layer, &enc).unwrap(), body, "{layer:?} round trip");
+            assert_eq!(decode(layer, &enc).unwrap().0, body, "{layer:?} round trip");
         }
     }
 
@@ -1024,7 +1079,7 @@ mod tests {
         let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         e.write_all(&body).unwrap();
         let raw = e.finish().unwrap();
-        assert_eq!(decode(Layer::Deflate, &raw).unwrap(), body);
+        assert_eq!(decode(Layer::Deflate, &raw).unwrap().0, body);
     }
 
     #[test]
@@ -1035,8 +1090,34 @@ mod tests {
             "the bomb itself is small: {} bytes",
             bomb.len()
         );
-        let out = decode(Layer::Gzip, &bomb).unwrap();
+        let (out, truncated) = decode(Layer::Gzip, &bomb).unwrap();
         assert_eq!(out.len() as u64, MAX_INFLATE, "inflation stops at the cap");
+        assert!(
+            truncated,
+            "a capped inflate must say the bytes are a prefix, not the whole body"
+        );
+    }
+
+    #[test]
+    fn a_valid_but_empty_deflate_stream_decodes_to_empty_rather_than_erroring() {
+        // The `Ok(v) if !v.is_empty()` guard used to send a legitimately empty zlib body down the
+        // raw-deflate fallback, which then ran over zlib-framed bytes and reported a decompression
+        // error for a body that had decoded perfectly well to nothing.
+        let enc = encode(Layer::Deflate, b"").unwrap();
+        let (out, truncated) = decode(Layer::Deflate, &enc).unwrap();
+        assert!(out.is_empty(), "an empty body decodes to empty, got {out:?}");
+        assert!(!truncated, "nothing was cut short");
+    }
+
+    #[test]
+    fn when_both_deflate_framings_fail_the_zlib_error_is_the_one_reported() {
+        // `78 9c` is a well-formed zlib header, so the input reaches the inflater and fails there;
+        // the raw-deflate fallback then fails too. The operator must see the zlib diagnostic —
+        // zlib is what `Content-Encoding: deflate` specifies and what nearly every server sends.
+        let bad = b"\x78\x9c not actually deflate data at all";
+        let zlib_only = inflate(flate2::read::ZlibDecoder::new(&bad[..])).unwrap_err();
+        let got = decode(Layer::Deflate, bad).unwrap_err();
+        assert_eq!(got, zlib_only, "the zlib diagnostic is the one worth keeping");
     }
 
     const TOKEN: &[u8] =
