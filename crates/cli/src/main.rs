@@ -311,6 +311,18 @@ async fn main() -> Result<()> {
         });
         cfg = cfg.with_scanner(sc);
     }
+
+    // The login-macro re-login feature (SESSION-01..04) is always wired, unlike --bchecks: it
+    // needs no operator flag to exist, only `PUT /api/session/macro` to configure. The sender is
+    // an `AuthorisedSender`, so a macro step or probe aimed outside scope is refused at the
+    // chokepoint (HARD-03) — there is no separate scope check to add here.
+    let session_sender = Arc::new(burpsy_sender::AuthorisedSender::blocking(
+        Arc::new(scope.clone()),
+        burpsy_sender::NetSender::default(),
+    ));
+    let session_state = burpsy_web::routes::session::SessionState::new(
+        burpsy_web::session_sender::AuthorisedMacroSender::new(session_sender),
+    );
     let mut ca_pem: Option<String> = None;
     if intercept {
         let ca = burpsy_proxy::load_or_generate_ca(&ca_dir)
@@ -336,7 +348,7 @@ async fn main() -> Result<()> {
         let store = store.clone();
         let bind = web_bind.clone();
         tokio::spawn(async move {
-            burpsy_web::serve_export(
+            burpsy_web::serve_session(
                 &bind,
                 store,
                 ca_pem,
@@ -344,6 +356,7 @@ async fn main() -> Result<()> {
                 findings,
                 audit_hook,
                 export_hook,
+                Some(session_state),
             )
             .await
         })

@@ -48,6 +48,12 @@ pub struct AppState {
     pub export: Option<routes::report::ExportHook>,
     /// Held-request state, when interception is enabled.
     pub intercept: Option<Arc<routes::intercept::InterceptState>>,
+    /// The login-macro re-login feature's state, when this process has one wired.
+    ///
+    /// Absent means the feature is not configured for this process — same convention as `audit`,
+    /// `export`, and `intercept` above: the routes must say so, not act as if there were an
+    /// unconfigured macro to run.
+    pub session: Option<Arc<routes::session::SessionState>>,
 }
 
 /// Audits one exchange by id and returns a JSON summary. Blocking — callers must offload it.
@@ -84,7 +90,6 @@ pub fn router_audit(
     router_export(store, ca_pem, scope, findings, audit, None)
 }
 
-/// The full router. Every other constructor above defaults one more argument into this one.
 pub fn router_export(
     store: Arc<TrafficStore>,
     ca_pem: Option<String>,
@@ -92,6 +97,20 @@ pub fn router_export(
     findings: Option<Arc<parking_lot::RwLock<burpsy_core::FindingStore>>>,
     audit: Option<AuditHook>,
     export: Option<routes::report::ExportHook>,
+) -> Router {
+    router_session(store, ca_pem, scope, findings, audit, export, None)
+}
+
+/// The full router. Every other constructor above defaults one more argument into this one.
+#[allow(clippy::too_many_arguments)]
+pub fn router_session(
+    store: Arc<TrafficStore>,
+    ca_pem: Option<String>,
+    scope: Scope,
+    findings: Option<Arc<parking_lot::RwLock<burpsy_core::FindingStore>>>,
+    audit: Option<AuditHook>,
+    export: Option<routes::report::ExportHook>,
+    session: Option<Arc<routes::session::SessionState>>,
 ) -> Router {
     Router::new()
         .route("/ca.crt", get(ca_cert))
@@ -115,6 +134,7 @@ pub fn router_export(
             audit,
             export,
             intercept: None,
+            session,
         })
 }
 
@@ -169,13 +189,27 @@ pub async fn serve_export(
     audit: Option<AuditHook>,
     export: Option<routes::report::ExportHook>,
 ) -> Result<()> {
+    serve_session(bind, store, ca_pem, scope, findings, audit, export, None).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_session(
+    bind: &str,
+    store: Arc<TrafficStore>,
+    ca_pem: Option<String>,
+    scope: Scope,
+    findings: Option<Arc<parking_lot::RwLock<burpsy_core::FindingStore>>>,
+    audit: Option<AuditHook>,
+    export: Option<routes::report::ExportHook>,
+    session: Option<Arc<routes::session::SessionState>>,
+) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("bind web ui on {bind}"))?;
     tracing::info!("web ui on http://{bind}");
     axum::serve(
         listener,
-        router_export(store, ca_pem, scope, findings, audit, export),
+        router_session(store, ca_pem, scope, findings, audit, export, session),
     )
     .await
     .context("serve")?;

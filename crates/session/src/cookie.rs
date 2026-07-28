@@ -55,6 +55,17 @@ impl CookieJar {
             .or_default()
             .insert(name, value);
     }
+
+    /// Every cookie currently held, grouped by host — read-only, for a caller that wants to show
+    /// an operator SESSION-03's "one jar shared across tools" rather than replay against it.
+    /// `BTreeMap` rather than the internal `HashMap` so two calls against the same contents render
+    /// in the same order, which matters the moment this backs an HTTP status endpoint.
+    pub fn snapshot(&self) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> {
+        self.by_host
+            .iter()
+            .map(|(host, cookies)| (host.clone(), cookies.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
+            .collect()
+    }
 }
 
 fn parse_name_value(raw: &str) -> Option<(String, String)> {
@@ -149,6 +160,22 @@ mod tests {
         let mut jar = CookieJar::new();
         jar.absorb_set_cookie("target.test", "garbage-no-equals-sign");
         assert_eq!(jar.cookie_header("target.test"), None);
+    }
+
+    #[test]
+    fn snapshot_groups_every_cookie_by_host() {
+        let mut jar = CookieJar::new();
+        jar.absorb_set_cookie("a.test", "session=for-a");
+        jar.absorb_set_cookie("b.test", "session=for-b");
+        let snapshot = jar.snapshot();
+        assert_eq!(
+            snapshot.get("a.test").and_then(|c| c.get("session")),
+            Some(&"for-a".to_string())
+        );
+        assert_eq!(
+            snapshot.get("b.test").and_then(|c| c.get("session")),
+            Some(&"for-b".to_string())
+        );
     }
 
     #[test]

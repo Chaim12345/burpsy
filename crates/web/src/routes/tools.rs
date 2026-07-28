@@ -684,6 +684,7 @@ mod tests {
             audit: None,
             export: None,
             intercept: None,
+            session: None,
         };
         let app = Router::new().merge(crate::routes::all()).with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

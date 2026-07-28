@@ -197,6 +197,7 @@ mod tests {
             audit: None,
             export: None,
             intercept: Some(InterceptState::new(interceptor)),
+            session: None,
         }
     }
 

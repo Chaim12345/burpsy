@@ -197,6 +197,7 @@ mod tests {
             audit: None,
             export,
             intercept: None,
+            session: None,
         });
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = l.local_addr().unwrap();

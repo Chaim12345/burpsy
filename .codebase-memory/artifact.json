@@ -1,11 +1,11 @@
 {
     "schema_version": 1,
-    "commit": "2b20bc2ca139e929742e1c727ea408c50d69378d",
-    "indexed_at": "2026-07-28T13:39:02Z",
+    "commit": "3a6f0037574f808c612885aa852d9378241fe3af",
+    "indexed_at": "2026-07-28T14:04:48Z",
     "project": "root-burpsy",
-    "nodes": 4736,
-    "edges": 16915,
-    "original_size": 13893632,
-    "compressed_size": 3125135,
+    "nodes": 61,
+    "edges": 139,
+    "original_size": 1966080,
+    "compressed_size": 124993,
     "compression_level": 3
 }

@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         audit: None,
         export: None,
         intercept: Some(InterceptState::new(interceptor)),
+        session: None,
     };
 
     let app = Router::new()

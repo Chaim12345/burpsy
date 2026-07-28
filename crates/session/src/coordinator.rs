@@ -314,7 +314,13 @@ impl ReloginCoordinator {
     /// `Set-Cookie` headers the response carries back into the jar. Used for both the macro's own
     /// steps and the retried original request, which is how a session cookie a login step sets
     /// reaches the request that needed it.
-    fn send_with_jar(
+    ///
+    /// Public so a caller driving [`Self::handle_response`] from outside this crate — e.g. a web
+    /// handler sending the probe `handle_response` will evaluate — can send that probe through the
+    /// same jar instead of bypassing it. Sending a probe without this would make it permanently
+    /// look logged-out (no `Cookie` header ever attached) and leak a stale recorded `Cookie`
+    /// header onto the wire, which [`Self::apply_jar`] exists to strip.
+    pub fn send_with_jar(
         &self,
         sender: &dyn MacroSender,
         step: &MacroStep,

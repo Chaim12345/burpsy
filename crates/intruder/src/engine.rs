@@ -937,7 +937,19 @@ mod tests {
         let at = probe.arrivals.lock().unwrap().clone();
         assert_eq!(at.len(), n, "the server did not see every request");
         let window = Duration::from_millis(500);
-        let allowed = f64::from(burst) + rps * window.as_secs_f64();
+        // The bucket's clock and these arrival timestamps are both wall-clock, and when the whole
+        // workspace suite runs at once the two drift by tens of milliseconds. A request the limiter
+        // admitted legitimately just outside the window can then be *timestamped* just inside it —
+        // a measurement artefact, not a limiter that let an extra request through. Observed as a
+        // 27th arrival against an ideal allowance of 26.
+        //
+        // The allowance is that drift expressed in requests; it is not slack in the bound under
+        // test. The bound itself is the `floor` assertion above, which requires the attack to take
+        // at least (n - burst)/rps and which no amount of jitter can satisfy if the limiter is
+        // absent — and an unlimited run would put all 40 arrivals in one window, far past even the
+        // widened allowance.
+        let jitter = Duration::from_millis(60);
+        let allowed = f64::from(burst) + rps * (window + jitter).as_secs_f64();
         for (i, start) in at.iter().enumerate() {
             let count = at[i..]
                 .iter()

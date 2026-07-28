@@ -12,6 +12,7 @@ use axum::Router;
 
 pub mod intercept;
 pub mod report;
+pub mod session;
 pub mod sitemap;
 pub mod tools;
 
@@ -22,4 +23,5 @@ pub fn all() -> Router<AppState> {
         .merge(intercept::routes())
         .merge(tools::routes())
         .merge(report::routes())
+        .merge(session::routes())
 }
