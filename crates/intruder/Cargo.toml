@@ -8,8 +8,11 @@ license.workspace = true
 burpsy-core = { path = "../core" }
 bytes = { workspace = true }
 serde = { workspace = true }
-tokio = { workspace = true }
+# Narrowed deliberately: this crate builds requests but must never send one. Production gets no
+# `net` feature; tests restore it below for their own listeners and helpers.
+tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }
 parking_lot = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }

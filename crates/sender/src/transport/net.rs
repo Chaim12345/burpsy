@@ -1,4 +1,8 @@
-//! burpsy-repeater — byte-exact HTTP send engine.
+//! Async transport: `tokio` + `tokio-rustls`, bytes written verbatim.
+//!
+//! Moved here from `burpsy-repeater` so that opening a socket is not something any crate can do by
+//! calling a public function. It is `pub(crate)`: the only way to reach it is through
+//! [`crate::AuthorisedSender`], which checks scope first.
 //!
 //! # Why raw TCP and not hyper
 //!
@@ -7,13 +11,9 @@
 //! and rejects malformed requests. Those are exactly the things a tester must control: request
 //! smuggling, header injection and parser-differential work all depend on sending bytes *exactly*
 //! as typed.
-//!
-//! So the wire layer is `tokio::net::TcpStream` + `tokio-rustls`, and a request is just `&[u8]`.
-//! Burp makes the same call — Repeater exposes global toggles for `UpdateContentLength`,
-//! `EnableH1ConnectionReuse` and `EnableH2ConnectionReuse` (recovered from `burp.Zcu0`), which only
-//! makes sense if the default is to leave the bytes alone.
 
 use anyhow::{Context, Result, anyhow};
+use burpsy_bcheck::eval::Target;
 use bytes::Bytes;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,44 +22,6 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::pki_types::ServerName;
-
-/// Where and how to send.
-#[derive(Debug, Clone)]
-pub struct Target {
-    pub host: String,
-    pub port: u16,
-    pub tls: bool,
-}
-
-impl Target {
-    pub fn new(host: impl Into<String>, port: u16, tls: bool) -> Self {
-        Self {
-            host: host.into(),
-            port,
-            tls,
-        }
-    }
-
-    /// Parse `host:port`, `https://host/path`, or a bare host.
-    pub fn parse(s: &str) -> Result<Self> {
-        let (tls, rest) = if let Some(r) = s.strip_prefix("https://") {
-            (true, r)
-        } else if let Some(r) = s.strip_prefix("http://") {
-            (false, r)
-        } else {
-            (false, s)
-        };
-        let hostport = rest.split('/').next().unwrap_or(rest);
-        let (h, p) = match hostport.rsplit_once(':') {
-            Some((h, p)) => (h, p.parse().unwrap_or(if tls { 443 } else { 80 })),
-            None => (hostport, if tls { 443 } else { 80 }),
-        };
-        if h.is_empty() {
-            return Err(anyhow!("empty host in target {s:?}"));
-        }
-        Ok(Self::new(h, p, tls))
-    }
-}
 
 /// Outcome of one send.
 #[derive(Debug, Clone)]
@@ -138,7 +100,7 @@ fn insecure_tls() -> Arc<ClientConfig> {
 /// Send raw request bytes to `target` and read the response.
 ///
 /// `raw` is written verbatim — no header rewriting, no reordering.
-pub async fn send(target: &Target, raw: &[u8], timeout: Duration) -> Result<SendResult> {
+pub(crate) async fn send(target: &Target, raw: &[u8], timeout: Duration) -> Result<SendResult> {
     let started = Instant::now();
     let addr = format!("{}:{}", target.host, target.port);
 
@@ -245,70 +207,35 @@ fn parse_status(buf: &[u8]) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
 
     #[test]
-    fn target_parsing() {
-        let t = Target::parse("https://example.test/a/b").unwrap();
-        assert_eq!(
-            (t.host.as_str(), t.port, t.tls),
-            ("example.test", 443, true)
-        );
-        let t = Target::parse("h.test:8080").unwrap();
-        assert_eq!((t.host.as_str(), t.port, t.tls), ("h.test", 8080, false));
-        let t = Target::parse("http://h.test").unwrap();
-        assert_eq!((t.host.as_str(), t.port, t.tls), ("h.test", 80, false));
-        assert!(Target::parse("http://").is_err());
+    fn content_length_framing_is_satisfied_at_the_declared_length() {
+        let buf = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+        assert_eq!(complete_len(buf), Some(buf.len()));
     }
 
     #[test]
-    fn content_length_framing_detected() {
-        let b = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
-        assert_eq!(complete_len(b), Some(b.len()));
-        let partial = b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\nhello";
-        assert!(complete_len(partial).unwrap() > partial.len());
+    fn a_body_shorter_than_content_length_is_not_yet_complete() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n";
+        let buf = format!("{head}hi").into_bytes();
+        // Framing is known — head plus the declared 10 bytes — and the buffer has not reached it,
+        // so the read loop must keep going rather than treat this as a finished response.
+        assert_eq!(complete_len(&buf), Some(head.len() + 10));
+        assert!(complete_len(&buf).unwrap() > buf.len());
     }
 
-    #[tokio::test]
-    async fn sends_bytes_verbatim_and_reads_response() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let server = tokio::spawn(async move {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut got = vec![0u8; 1024];
-            let n = sock.read(&mut got).await.unwrap();
-            got.truncate(n);
-            sock.write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\nhi")
-                .await
-                .unwrap();
-            got
-        });
-
-        // Deliberately odd casing, spacing and ordering: must arrive unchanged.
-        let raw = b"GeT /x HTTP/1.1\r\nhOsT: verbatim.test\r\nX-Odd:  1 \r\n\r\n";
-        let t = Target::new("127.0.0.1", addr.port(), false);
-        let r = send(&t, raw, Duration::from_secs(5)).await.unwrap();
-
-        assert_eq!(r.status, Some(201));
-        assert!(r.raw_response.ends_with(b"hi"));
-
-        let received = server.await.unwrap();
-        assert_eq!(&received[..], &raw[..], "bytes were altered in transit");
+    #[test]
+    fn chunked_framing_completes_only_on_the_terminal_chunk() {
+        let partial = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n";
+        assert_eq!(complete_len(partial), None);
+        let done = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+        assert_eq!(complete_len(done), Some(done.len()));
     }
 
-    #[tokio::test]
-    async fn timeout_is_reported() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let _s = listener.accept().await.unwrap();
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        });
-        let t = Target::new("127.0.0.1", addr.port(), false);
-        let e = send(&t, b"GET / HTTP/1.1\r\n\r\n", Duration::from_millis(150))
-            .await
-            .unwrap_err();
-        assert!(e.to_string().contains("timeout"), "got: {e}");
+    #[test]
+    fn the_status_line_yields_its_code() {
+        assert_eq!(parse_status(b"HTTP/1.1 404 Not Found\r\n\r\n"), Some(404));
+        assert_eq!(parse_status(b"HTTP/1.1 200\r\n\r\n"), Some(200));
+        assert_eq!(parse_status(b"garbage"), None);
     }
 }

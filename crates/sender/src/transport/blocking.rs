@@ -120,11 +120,16 @@ impl NetSender {
         sock.set_nodelay(true).ok();
 
         if target.tls {
-            let name = rustls_pki_types::ServerName::try_from(target.host.clone())
+            let name = tokio_rustls::rustls::pki_types::ServerName::try_from(target.host.clone())
                 .map_err(|_| format!("bad server name {:?}", target.host))?;
-            let conn = rustls::ClientConnection::new(crate::tls::upstream_client_config(), name)
-                .map_err(|e| format!("tls setup: {e}"))?;
-            Ok(Conn::Tls(Box::new(rustls::StreamOwned::new(conn, sock))))
+            let conn = tokio_rustls::rustls::ClientConnection::new(
+                super::tls::insecure_client_config(),
+                name,
+            )
+            .map_err(|e| format!("tls setup: {e}"))?;
+            Ok(Conn::Tls(Box::new(tokio_rustls::rustls::StreamOwned::new(
+                conn, sock,
+            ))))
         } else {
             Ok(Conn::Plain(sock))
         }

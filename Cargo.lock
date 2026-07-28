@@ -189,6 +189,7 @@ dependencies = [
  "burpsy-core",
  "burpsy-proxy",
  "burpsy-scanner",
+ "burpsy-sender",
  "burpsy-web",
  "serde_json",
  "tokio",
@@ -229,6 +230,7 @@ dependencies = [
  "burpsy-bcheck",
  "burpsy-core",
  "burpsy-scanner",
+ "burpsy-sender",
  "burpsy-web",
  "bytes",
  "parking_lot",
@@ -246,17 +248,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "burpsy-repeater"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "burpsy-core",
- "bytes",
- "tokio",
- "tokio-rustls",
-]
-
-[[package]]
 name = "burpsy-scanner"
 version = "0.1.0"
 dependencies = [
@@ -265,6 +256,21 @@ dependencies = [
  "bytes",
  "parking_lot",
  "serde",
+]
+
+[[package]]
+name = "burpsy-sender"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "burpsy-bcheck",
+ "burpsy-core",
+ "bytes",
+ "parking_lot",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
 ]
 
 [[package]]
@@ -289,7 +295,7 @@ dependencies = [
  "burpsy-core",
  "burpsy-intruder",
  "burpsy-proxy",
- "burpsy-repeater",
+ "burpsy-sender",
  "burpsy-tools",
  "bytes",
  "parking_lot",

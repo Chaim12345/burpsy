@@ -34,7 +34,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 pub mod intercept;
-pub mod sender;
+
 pub mod tls;
 pub mod tls_policy;
 pub use intercept::{HeldMeta, HeldView, Interceptor, Verdict};

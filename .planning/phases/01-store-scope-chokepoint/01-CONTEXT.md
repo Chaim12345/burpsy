@@ -117,14 +117,25 @@ in its own later phase.
   `Arc` across concurrent callers will not compile with `Cell` — it is not `Sync`. Get this right from
   the start rather than carrying the pattern over unchanged and having it break late.
 - **Enforcement is a private-field newtype, plus per-crate `tokio` feature narrowing, plus a
-  source-scan backstop test — with the bound stated honestly.** Narrow `tokio` in
-  `intruder`/`bcheck`/`scanner` `[dependencies]` (restoring `net` under `[dev-dependencies]` so
-  existing test helpers still compile) so `tokio::net` genuinely does not exist in their production
-  namespace. Then state plainly, in the plan and in the doc comments: `std::net::TcpStream` is part
-  of the standard library and remains reachable from any crate regardless of Cargo features, so the
-  feature narrowing closes the async path structurally while the source-scan test covers the residual
-  `std::net` surface. Do not write "compile error, not convention" without that qualification —
-  overclaiming what was fixed is exactly the honesty failure this project rejects elsewhere.
+  source-scan backstop test — with the bound stated honestly.** Narrow `tokio` in `intruder`
+  `[dependencies]`, restoring `net` under `[dev-dependencies]` so existing test helpers still
+  compile. (`bcheck` and `scanner` turn out to have no `tokio` dependency at all, so there is nothing
+  to narrow there.)
+
+  **CORRECTED DURING IMPLEMENTATION — the feature-narrowing claim below was wrong, and the code now
+  says so.** This decision originally asserted that narrowing "closes the async path structurally"
+  and that only `std::net` needed a backstop. Measured behaviour: narrowing does fail the build under
+  `cargo build -p burpsy-intruder`, but cargo unifies features across the dependency graph, and
+  `web`/`sender`/`cli` all enable `tokio`'s `full` — so one tokio rlib is compiled with `net` present
+  and every crate linking it can name `tokio::net` again. Verified by adding a
+  `tokio::net::TcpStream::connect` to `intruder` and watching `cargo build --workspace` succeed.
+
+  So: exactly one route is closed structurally (this crate's `pub(crate)` transports), and the
+  source-scan test is the **primary** mechanism for both `std::net` and `tokio::net` rather than a
+  supplement for the former. The narrowing is kept because it records intent and catches the mistake
+  in an isolated build. Do not write "compile error, not convention" — overclaiming what was fixed is
+  exactly the honesty failure this project rejects elsewhere, and this decision had made that error
+  itself.
 - **Do not seal the `Sender` trait.** It is deliberately implemented by test doubles
   (`SlowSender`/`RecordingSender`/`FailingSender` in scanner, `TargetSpy`/`MockSender` in
   `bcheck::eval`) precisely so tests can prove traffic did or did not reach a socket. Sealing it would

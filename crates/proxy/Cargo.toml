@@ -31,4 +31,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 bytes = { workspace = true }
 burpsy-core = { path = "../core" }
+# The example drives the blocking transport directly to measure connection pooling, which is a
+# transport concern rather than an authorisation one.
+burpsy-sender = { path = "../sender" }
 tracing-subscriber = { workspace = true }

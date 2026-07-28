@@ -1,0 +1,19 @@
+[package]
+name = "burpsy-sender"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+burpsy-bcheck = { path = "../bcheck" }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12", "logging"] }
+rustls = { version = "0.23.42", default-features = false, features = ["std", "aws-lc-rs", "tls12", "logging"] }
+
+[dev-dependencies]
+tokio = { workspace = true }

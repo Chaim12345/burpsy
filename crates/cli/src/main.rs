@@ -244,8 +244,14 @@ async fn main() -> Result<()> {
         audit_hook = Some({
             let sc = sc.clone();
             let store = store.clone();
+            let scope = std::sync::Arc::new(scope.clone());
             std::sync::Arc::new(move |id: u64| {
-                let sender = burpsy_proxy::sender::NetSender::default();
+                // The chokepoint, not a bare transport: an active audit constructs requests, so it
+                // is exactly the traffic HARD-03 exists to authorise.
+                let sender = burpsy_sender::AuthorisedSender::blocking(
+                    scope.clone(),
+                    burpsy_sender::NetSender::default(),
+                );
                 let o = sc.audit(&store, id, &sender);
                 serde_json::json!({
                     "enabled": true,

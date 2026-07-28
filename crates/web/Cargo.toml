@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 burpsy-core = { path = "../core" }
-burpsy-repeater = { path = "../repeater" }
+burpsy-sender = { path = "../sender" }
 burpsy-intruder = { path = "../intruder" }
 burpsy-tools = { path = "../tools" }
 burpsy-proxy = { path = "../proxy" }

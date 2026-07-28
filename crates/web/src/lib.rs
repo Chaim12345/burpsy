@@ -18,7 +18,7 @@ use burpsy_intruder::{
     Assignment, Attack, AttackKind, AttackPlan, AttackReport, InsertionPoint, PointConfig,
     RateLimit, RecordFn, SendFn, Sent, find_points,
 };
-use burpsy_repeater::{Target, send};
+use burpsy_sender::{AuthorisedSender, parse_target};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -310,18 +310,18 @@ struct SendResp {
 }
 
 async fn repeater_send(State(s): State<AppState>, Json(req): Json<SendReq>) -> impl IntoResponse {
-    let target = match Target::parse(&req.target) {
+    let target = match parse_target(&req.target) {
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad target: {e}")).into_response(),
     };
     let raw = req.raw.replace("\r\n", "\n").replace('\n', "\r\n");
-    // Refuse before a single byte leaves the box, and judge the bytes themselves rather than the
-    // target line: the operator types the request here, so its path is whatever they wrote, and a
-    // host-level test would happily pass a request aimed at an excluded path.
-    if let Err(why) =
-        s.scope
-            .authorise_request(&target.host, target.port, target.tls, raw.as_bytes())
-    {
+    let sender =
+        AuthorisedSender::asynchronous(s.scope.clone(), Duration::from_millis(req.timeout_ms));
+    // Asked up front only so an out-of-scope request never reaches history. The binding check is
+    // inside the send below and runs whether or not this one did — it judges the bytes themselves
+    // rather than the target line, because the operator types the request here and a host-level test
+    // would happily pass a request aimed at an excluded path.
+    if let Err(why) = sender.check_scope(&target, raw.as_bytes()) {
         return (StatusCode::FORBIDDEN, why).into_response();
     }
     let req_id = s
@@ -344,13 +344,7 @@ async fn repeater_send(State(s): State<AppState>, Json(req): Json<SendReq>) -> i
         notes: Some("repeater".into()),
     });
 
-    match send(
-        &target,
-        raw.as_bytes(),
-        Duration::from_millis(req.timeout_ms),
-    )
-    .await
-    {
+    match sender.send_async(&target, raw.as_bytes()).await {
         Ok(r) => {
             let len = r.raw_response.len();
             let resp_id = s.store.put(r.raw_response.clone(), Direction::Response);
@@ -500,7 +494,7 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
     let Some(m) = s.store.get(MsgId(req.msg_id)) else {
         return (StatusCode::NOT_FOUND, "no such message").into_response();
     };
-    let target = match Target::parse(&req.target) {
+    let target = match parse_target(&req.target) {
         Ok(t) => t,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad target: {e}")).into_response(),
     };
@@ -522,10 +516,6 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
         )
             .into_response();
     }
-    // Kept before `target` is moved into the sender's Arc, so the guard below can name the target
-    // it is authorising against.
-    let (gh, gp, gt) = (target.host.clone(), target.port, target.tls);
-
     let legacy = req.mode.is_none() && req.payload_sets.is_none();
     let kind = match req.mode.as_deref() {
         None => AttackKind::Sniper,
@@ -669,32 +659,33 @@ async fn intruder_run(State(s): State<AppState>, Json(req): Json<RunReq>) -> imp
 
     let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(15_000));
     let addr = Arc::new(target);
-    let sender: SendFn = Arc::new(move |raw: Vec<u8>| {
-        let addr = addr.clone();
-        Box::pin(async move {
-            match send(&addr, &raw, timeout).await {
-                Ok(r) => Ok(Sent {
-                    raw: r.raw_response,
-                    duration: r.duration,
-                    status: r.status,
-                }),
-                Err(e) => Err(e.to_string()),
-            }
+    // One authorising sender for the whole attack. The scope decision still happens once per spliced
+    // request — which is what matters, because a payload landing in a `UrlPathFolder` or
+    // `UrlPathFilename` position rewrites the path, so the request that goes out may address
+    // something a host-level check never saw — but it now happens *inside* the sender rather than in
+    // an `Option`al guard the caller had to remember to attach.
+    let authorised = Arc::new(AuthorisedSender::asynchronous(s.scope.clone(), timeout));
+    let sender: SendFn = {
+        let authorised = Arc::clone(&authorised);
+        Arc::new(move |raw: Vec<u8>| {
+            let addr = addr.clone();
+            let authorised = Arc::clone(&authorised);
+            Box::pin(async move {
+                match authorised.send_async(&addr, &raw).await {
+                    Ok(r) => Ok(Sent {
+                        raw: r.raw_response,
+                        duration: r.duration,
+                        status: r.status,
+                    }),
+                    Err(e) => Err(e.to_string()),
+                }
+            })
         })
-    });
+    };
     let store = s.store.clone();
     let record: RecordFn = Arc::new(move |raw| store.put(raw, Direction::Response).0);
 
-    // The authorisation decision, made once per spliced request rather than once per attack. A
-    // payload landing in a `UrlPathFolder` or `UrlPathFilename` position rewrites the path, so the
-    // request that goes out may address something the host-level check never saw.
-    let guard: burpsy_intruder::Guard = {
-        let scope = s.scope.clone();
-        Arc::new(move |raw: &[u8]| scope.authorise_request(&gh, gp, gt, raw))
-    };
-    let attack = Attack::new(&m.raw, &selected, &sets, &plan)
-        .with_limits(limits)
-        .with_guard(guard);
+    let attack = Attack::new(&m.raw, &selected, &sets, &plan).with_limits(limits);
     let report = burpsy_intruder::run(attack, sender, Some(record)).await;
 
     let mut buf = Assignment::default();
