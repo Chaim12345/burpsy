@@ -1,12 +1,12 @@
 ---
 gsd_state_version: '1.0'
-status: planning
+status: executing
 progress:
   total_phases: 12
-  completed_phases: 1
+  completed_phases: 3
   total_plans: 1
   completed_plans: 1
-  percent: 8
+  percent: 25
 ---
 
 # Project State
@@ -16,78 +16,146 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-27)
 
 **Core value:** Run PortSwigger's published BCheck corpus, unmodified and honestly counted, against real traffic without the memory cost that forces Burp to discard scan work.
-**Current focus:** Phase 2 — HTTP/2
+**Current focus:** Phase 7 gate cleared; Phases 2/3/4 carry named remainders.
+
+## Read this first
+
+This file was stale for most of the milestone. It claimed "Phase 2 of 12, 8%, ready to plan"
+while Phases 4, 5 and 7 were being delivered, because work moved to parallel worktree agents
+and nobody updated the tracker. **Git is the source of truth. The ROADMAP progress table and
+the REQUIREMENTS.md checkboxes are still stale and were NOT corrected in this session** — the
+operator deprioritised doc reconciliation in favour of implementation. Treat them as
+unreliable until someone reconciles them against `git log`.
 
 ## Current Position
 
-Phase: 2 of 12 (HTTP/2) — Phase 1 complete
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-07-28 — Phase 1 delivered: segmented mmap-backed store (STORE-01), two-mechanism verification plus `burpsy store verify` (STORE-05), and the `AuthorisedSender` chokepoint with a source-scan backstop (HARD-03). STORE-02/03/04 had landed earlier in the session. 438 workspace tests passing, 0 warnings.
+Phase: Phases 1, 5 and 7 complete. Phases 2, 3, 4 partially delivered with the remainder named
+below. Phases 6, 8–12 not started.
+Status: Executing
+Last activity: 2026-07-28
 
-Progress: [█░░░░░░░░░] 8%
+Progress: [██▌░░░░░░░] 25% by whole phases; more by requirement, since three partial phases
+carry substantial delivered work.
 
-## Performance Metrics
+**Gate:** `QUICK=1 ./verify.sh` → VERIFIED WITH GAPS (1 skipped). Build clean/0 warnings,
+clippy clean, **715 unit tests**, BCheck corpus conformance **264 checks parsed / 0 failed /
+381 modifier clauses**. The only skip is e2e, which `QUICK=1` skips by design. **Full
+`./verify.sh` including e2e has NOT been run this session** — that is the one unexercised gate.
 
-**Velocity:**
-- Total plans completed: 0
-- Average duration: - min
-- Total execution time: 0 hours
+## What landed this session
 
-**By Phase:**
+Six commits, oldest first:
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| - | - | - | - |
+| Commit | Content |
+|---|---|
+| `21a69cf` | The eight defects HARD-01 found (A-1..A-4, B-1, B-2, C-1, C-2) |
+| `6e7ab42` | `crates/session` added to `workspace.members` — 2 925 lines that had never compiled |
+| `a1e1dc7` | Two QA findings against `21a69cf`, plus the session HARD-03 proof |
+| `2b20bc2` | Salvage + repair after eight agents died on a rate limit mid-flight |
+| `3a6f003` | The last three MAJOR QA findings |
+| `141262a` | `/api/session` routes (SESSION-01..04 reachable) + intruder flake fix |
 
-**Recent Trend:**
-- Last 5 plans: -
-- Trend: -
+**Thirteen defects closed**: HARD-01's eight, plus five MAJOR found by an independent QA pass
+*over those eight fixes*. Read `21a69cf` and `3a6f003` together — the QA's own conclusion was
+that three of its five findings were the same mistake, *"a fix applied to the path the review
+named, while an equivalent sibling path was left behind"* (`forward_http` but not `mitm`, gzip
+but not zlib, the empty case but not the mixed one). That pattern is the single most useful
+thing to carry forward from this session.
 
-*Updated after each plan completion*
+Two of those were regressions introduced *by* the HARD-01 fixes, both in `a1e1dc7`:
+- 1xx was swept in with 204/304 as "bodiless". It is **interim** (RFC 9110 §15.2), so the reader
+  returned the placeholder and silently discarded the real response — a false negative on every
+  check behind a CDN sending `103 Early Hints`. A test had pinned the wrong behaviour.
+- A 304 can never satisfy `buf.len() == head_end + len`, so every bodiless response looked
+  unframed and A-1's demotion killed connection reuse for the target permanently.
 
-## Accumulated Context
+## Where each phase actually stands
 
-### Decisions
+- **Phase 1 — Store & Scope: COMPLETE.** STORE-01..05, HARD-03 chokepoint with a source-scan
+  backstop that enumerates `crates/*/src` by directory, so it picked up two new crates this
+  session with no edit.
+- **Phase 2 — HTTP/2: PARTIAL.** Frame layer, HPACK, and H2-03 (deliberate-malformation API)
+  landed. **H2-04 is proxy-side only** — the proxy mirrors the target's ALPN, but scanner and
+  Intruder egress remain HTTP/1.1. Stated in the module docs, not implied.
+- **Phase 3 — Query DSL & Tool Parity: PARTIAL.** DSL-01/02/04 and TOOLS-01..04 landed.
+  DSL-03 deferred to Phase 6 by design (not observable until the crawler exists).
+- **Phase 4 — Reporting & Scanner Data: SUBSTANTIALLY DELIVERED.** REPORT-01/02/03 (HTML, JSON,
+  SARIF 2.1.0) plus REPORT-04 coverage honesty; SCAN-01 (RetireJS by version range), SCAN-02
+  (JWT weak secret, only when a candidate actually verifies), SCAN-03. Verified live: a run with
+  zero findings reports *"Partial coverage: 102 … reached a conclusion, 162 did not. This is not
+  a clean bill of health"*, naming each gap including three checks whose evaluator errored —
+  *"this check's silence is not evidence"*.
+- **Phase 5 — Session: COMPLETE.** SESSION-01..04, `AuthorisedMacroSender`, and four
+  `/api/session` routes wired in the binary. `RecoveryOutcome`'s six variants are preserved
+  across HTTP rather than flattened: `GaveUp` is a **200** carrying its attempt count, because
+  bounded giving-up is an honest conclusion and a 500 would file it beside a crash.
+- **Phase 7 — Hardening: COMPLETE.** HARD-01 (all thirteen defects), HARD-02, HARD-03.
+- **Phases 6, 8–12:** not started (crawler, plugins, WebSockets, MCP, DOM static, DOM dynamic).
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work (made during roadmap creation, overriding research/SUMMARY.md's default build order):
+## Next steps, in the order I would take them
 
-- HTTP/2 moved to Phase 2 (before WebSockets and the plugin API), not after WebSockets as SUMMARY.md proposed — an h1-only ALPN offer silently downgrades every h2-capable target, which matters for the smuggling/desync research H2 exists to support. Trade-off accepted: the per-connection state machine generalises via H2 first, WebSockets (Phase 9) reuses it, rather than the reverse.
-- Filter DSL (DSL-01..04) built as a typed query language (Phase 3), not `rhai`. `rhai`/scripting is explicitly Out of Scope. DSL-03 (crawl/audit scoping) is deferred in mapping to Phase 6, since it isn't observable until the crawler exists — the grammar itself ships in Phase 3.
-- Sequencer (SEQ-01) deferred to v2 — no phase created for it this milestone.
-- DOM analysis split into two phases: Phase 11 (static, DOM-01..03) and Phase 12 (dynamic confirmation, DOM-04..05). No embedded JS engine — dynamic confirmation drives a real browser instead.
-- HARD-03 (shared scope chokepoint) carved out of the Hardening group and placed in Phase 1, settled architecturally before the crawler (Phase 6), the first new request-originating surface. HARD-01/02 remain a distinct Phase 7 gate, positioned once the tool is worth using (after proxy, scanner, H2, tool parity, session, crawler) rather than after all ten feature phases.
+1. **Run the full `./verify.sh`** including e2e. It has not run this session and is the only
+   unexercised gate.
+2. **Reconcile ROADMAP.md's progress table and REQUIREMENTS.md's checkboxes** against `git log`.
+   Both still describe a project several phases behind reality.
+3. **Finish H2-04**: protocol-aware egress for scanner and Intruder.
+4. **Phase 6 — crawler**, which also unblocks DSL-03.
 
-### Pending Todos
+## Blockers/Concerns
 
-[From .planning/todos/pending/ — ideas captured during sessions]
+**Open, and deliberately not hidden:**
+- Full `./verify.sh` (with e2e) unrun this session.
+- ROADMAP/REQUIREMENTS trackers stale; this file is the only reconciled one.
+- H2-04 partial (above).
+- `.codebase-memory/` (~3 MB binary, rewritten on every re-index) is committed. Intentional per
+  the tool's own `.gitattributes` (`merge=ours binary`), but a questionable trade for a project
+  whose thesis is memory frugality. Left in place pending an operator decision.
 
-None yet.
+**Resolved this session:**
+- The BCheck corpus was absent, so corpus conformance had been reporting UNVERIFIED. Cloned
+  PortSwigger/BChecks to `/tmp/BChecks`; conformance now passes (264 checks, 381 clauses). Note
+  this lives in `/tmp` and will not survive a reboot.
+- `the_target_never_receives_more_than_the_configured_rate` failed under full-suite load
+  ("27 arrived within 500ms; allows 26"). Both the bucket's clock and the arrival timestamps are
+  wall-clock, so contention timestamps a legitimately-admitted request just inside the window.
+  Given a measurement-jitter allowance; the bound itself is still the floor assertion, which
+  jitter cannot satisfy if the limiter is absent. A gate that fails under its own parallelism
+  teaches people to re-run until green.
 
-### Blockers/Concerns
+**Carried forward from Phase 1 (still true):**
+- Narrowing a crate's `tokio` features does NOT structurally close async egress: cargo unifies
+  features across the graph, and `web`/`sender`/`cli` enable `full`, so any crate linking that
+  rlib can name `tokio::net` again. Verified by planting a `TcpStream::connect` in `intruder`
+  and watching the workspace build succeed. Exactly one egress route is closed by the type
+  system; the rest rests on `crates/sender/tests/no_alternate_egress.rs`.
 
-None currently open.
+## Running instance (for manual testing)
 
-**Corrected during Phase 1 execution (2026-07-28):**
-- Phase 1's CONTEXT.md and RESEARCH.md both claimed that narrowing a crate's `tokio` features closes the async egress path *structurally*, leaving only `std::net` to be covered by a backstop test. Measured and false in this workspace: narrowing does fail an isolated `cargo build -p burpsy-intruder`, but cargo unifies features across the dependency graph, and `web`/`sender`/`cli` all enable tokio's `full` — so one tokio rlib is built with `net` present and any crate linking it can name `tokio::net` again. Verified by planting a `tokio::net::TcpStream::connect` in `intruder` and watching the workspace build succeed. Consequence: exactly one egress route is closed by the type system (the sender crate's `pub(crate)` transports), and `crates/sender/tests/no_alternate_egress.rs` is the *primary* mechanism for both `std::net` and `tokio::net`. Corrected in CONTEXT.md, the crate docs, and the test's own header.
-- `01-RESEARCH.md` was written before commit `d8fe387` and describes the id-assignment race and the `related` slot as unbuilt. CONTEXT.md's "Already landed" note is authoritative where they disagree; Phase 1 treated STORE-02/03/04 as carry-forward verification rather than rebuilding them.
+Started under `hub` supervision, so it persists between sessions:
 
-**Resolved during roadmap creation (2026-07-27):**
-- REQUIREMENTS.md's summary line said "52 total v1 requirements" against an itemized list of 56 (the miscount traced to a regex that silently drops alphanumeric category prefixes like `H2-01` — reproduced independently before trusting the correction). Fixed; coverage re-verified at 56/56, 0 orphans, 0 duplicates.
-- PROJECT.md was stale against this roadmap's operator decisions in four places (`rhai`, Sequencer, embedded JS engine, "HTTP/2 sequenced late"). Reconciled in commit `a3c9db8`, including logging the three roadmap-time decisions (HTTP/2 to Phase 2, DOM split into static/dynamic, scope chokepoint as a Phase 1 deliverable) to Key Decisions.
+```
+Web UI    http://localhost:8081   (or http://172.22.87.18:8081 from Windows)
+Proxy     127.0.0.1:8090          NOT 8080 — socat pid 409 owns that port,
+                                  which is why serve.sh's hardcoded 8080 fails
+Demo app  http://127.0.0.1:8099
+Corpus    --bchecks /tmp/BChecks  (264 checks; /tmp, so not reboot-safe)
+```
+
+Worth exercising: `GET /api/report/{html,json,sarif}` (the coverage section is the interesting
+part), `GET /api/session/macro` (reports `wired: true, configured: false` — a distinction that
+matters), and Intruder against the `/login` POST, where the demo app 500s on a quote.
 
 ## Deferred Items
-
-Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
 | Sequencer | SEQ-01 — token capture and entropy analysis | Deferred to v2 | Roadmap creation, 2026-07-27 |
 | Scanner | SCAN-04 — hand-written active checks beyond the BCheck corpus | Deferred to v2 | Roadmap creation, 2026-07-27 |
+| DSL | DSL-03 — crawl/audit scoping | Deferred to Phase 6 | Roadmap creation, 2026-07-27 |
 
 ## Session Continuity
 
-Last session: 2026-07-27
-Stopped at: ROADMAP.md and STATE.md written; REQUIREMENTS.md traceability update pending in same session
-Resume file: None
+Last session: 2026-07-28
+Stopped at: `141262a`. Gate green at VERIFIED WITH GAPS (e2e only). Nothing in flight, no agents
+running, working tree clean.
+Resume file: None — start from "Next steps" above.
