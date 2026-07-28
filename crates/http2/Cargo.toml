@@ -1,0 +1,14 @@
+[package]
+name = "burpsy-http2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Named `burpsy-http2`, not `burpsy-h2`. The external crate is `h2`, and `burpsy_h2` sitting next to it
+# in an import block is a genuinely confusing pair to read.
+
+[dependencies]
+bytes = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }

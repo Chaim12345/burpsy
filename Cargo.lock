@@ -211,6 +211,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "burpsy-http2"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
 name = "burpsy-intruder"
 version = "0.1.0"
 dependencies = [
