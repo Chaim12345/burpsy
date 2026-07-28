@@ -402,8 +402,14 @@ impl BuiltInConfig {
 
 /// The six shipped configurations that set a key this engine implements.
 ///
-/// Transcribed from `resources/BuiltInConfigs/*.json` in the Burp Suite 2026.7.1 jar. None of them
-/// sets `pause_task_failed_audit_item_percentage`, so no preset here carries one.
+/// Transcribed from `resources/BuiltInConfigs/*.json` in the Burp Suite 2026.7.1 jar.
+///
+/// Two of the 29 shipped configurations *do* set `pause_task_failed_audit_item_percentage`, both to
+/// `0` — `Crawl and Audit - CICD Optimized` and `Never stop audit due to application errors`
+/// [verified by extracting the configs from the jar]. No preset here carries it because
+/// [`BuiltInConfig`] has no field for the key, so it could not be overlaid even where it is set. That
+/// is a gap in what this engine reads, not an absence in what Burp ships — an earlier version of this
+/// comment claimed the latter, which was wrong.
 pub const BUILT_IN_CONFIGS: &[BuiltInConfig] = &[
     BuiltInConfig {
         name: "Crawl and Audit - Balanced",
