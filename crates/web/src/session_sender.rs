@@ -298,7 +298,7 @@ mod tests {
             let mut buf = [0u8; 1024];
             // Read the head plus the six body bytes this step sends, so the assertions below see the
             // whole request rather than whatever happened to arrive in the first packet.
-            while !find_header_terminator(&seen).is_some_and(|(_, start)| seen.len() >= start + 6) {
+            while find_header_terminator(&seen).is_none_or(|(_, start)| seen.len() < start + 6) {
                 match sock.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => seen.extend_from_slice(&buf[..n]),

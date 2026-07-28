@@ -38,3 +38,9 @@ burpsy-sender = { path = "../sender" }
 # only compiled because `burpsy-cli` enables the feature and cargo unified it across the workspace —
 # so `cargo test -p burpsy-proxy` alone failed to build. Depend on what you use.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The ALPN test drives a real TLS origin and a real TLS client through the proxy, because ALPN is
+# negotiated by the handshake and no unit test can observe what a target actually selected. Same
+# versions and features as the dependencies above, so cargo reuses one compiled copy of each.
+rustls = { version = "0.23.42", default-features = false, features = ["std", "aws-lc-rs", "tls12", "logging"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12", "logging"] }
+rustls-pki-types = "1.15.1"

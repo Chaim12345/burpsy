@@ -15,9 +15,10 @@ terminates TLS with a locally generated CA.
 |------|-------------|
 | `src/lib.rs` | `ProxyConfig`, the accept/forward loop, CONNECT handling, capture into the store |
 | `src/intercept.rs` | `Interceptor`, `Verdict`, `HeldView` — hold a request, let an operator rewrite it, then forward or drop |
-| `src/tls.rs` | `CertAuthority`, `TlsEngine`, `load_or_generate_ca`, `default_ca_dir`. CA generation/persistence, on-demand leaf signing, SNI resolution |
+| `src/tls.rs` | `CertAuthority`, `TlsEngine`, `load_or_generate_ca`, `default_ca_dir`, `alpn_offer`, `negotiated_protocol`. CA generation/persistence, on-demand leaf signing, SNI resolution, ALPN decision |
 | `src/tls_policy.rs` | `TlsPolicy`, `TlsAction` — which hosts get intercepted and which are tunnelled blind |
 | `tests/interception.rs` | Integration tests driving the real HTTP API |
+| `tests/alpn.rs` | ALPN negotiation through the real proxy against real TLS origins (h2-capable, http/1.1-only, no-ALPN) |
 | `examples/intercept_e2e.rs` | Harness the e2e shell scripts drive; also probes the blocking transport to compare probe count against accepted TCP connections |
 
 ## For AI Agents
@@ -44,6 +45,26 @@ sign for. Passthrough decisions are recorded and annotated in history rather tha
 A plain HTTP session must not write key material to disk it does not need. `load_or_generate_ca` is
 called from the CLI only under `--intercept-tls`. `/ca/`, `*.pem` and `*.key` are gitignored — never
 commit generated CA material.
+
+### HTTP/2 is negotiated and recorded, but not forwarded
+
+ALPN is decided from the **client's own offer**, peeked out of the ClientHello with
+`LazyConfigAcceptor` before anything is dialled. The target chooses from that list, and the
+client-facing config then offers exactly the one protocol the target picked — so the two legs never
+carry different protocols. `Exchange.protocol` records what was actually negotiated.
+
+A connection that lands on `h2` is recorded (`Protocol::Http2`, plus a note) and closed, because
+relaying it needs an h2 driver on both legs and a frame tap between them. The cost, which belongs in
+operator-facing text and not just here: **while interception is switched off, an h2-capable origin
+cannot be browsed through this proxy.** Switching interception on makes the offer `http/1.1` only,
+which restores browsing and capture at the price of a downgrade the operator caused.
+
+Two things that are easy to get wrong here:
+
+- The switch is `Interceptor::is_enabled()`, not "an interceptor is attached". Keying on attachment
+  would make a wiring decision look like an operator decision.
+- A target sending **no** ALPN extension is HTTP/1.1, not assumed-h2. `e2e-tls.sh`'s Python origin
+  sets no ALPN, so that arm runs on every gate.
 
 ### `NetSender` used to live here
 

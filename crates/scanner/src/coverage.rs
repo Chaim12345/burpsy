@@ -168,6 +168,11 @@ pub struct CoverageReport {
     pub checks: Vec<CheckCoverage>,
     /// Exchange-level skips, one count per [`ScanSkip`] reason.
     pub skips: Vec<(ScanSkip, u64)>,
+    /// The native (non-BCheck) checks, SCAN-01 and SCAN-02. A field on this struct rather than a
+    /// separate accessor so that anything already serialising coverage — the JSON report, the API —
+    /// carries an unavailable dataset or a truncated brute force without being changed to ask for
+    /// it. That is the difference between a report that *can* be honest and one that is.
+    pub native: crate::native::NativeCoverage,
 }
 
 impl CoverageReport {
@@ -249,12 +254,21 @@ impl CoverageTracker {
     }
 
     /// An owned copy of the current table, for [`crate::PassiveScanner::coverage`].
+    ///
+    /// `native` is left at its default here and filled in by
+    /// [`crate::PassiveScanner::coverage`], which is what holds the native check set. This tracker
+    /// deliberately knows nothing about them: its whole contract is index-alignment with the BCheck
+    /// set, and giving it a second, differently-shaped set to track would break that.
     pub(crate) fn snapshot(&self) -> CoverageReport {
         let checks = self.per_check.read().clone();
         let skips = ScanSkip::ALL
             .iter()
             .map(|s| (*s, self.skips[s.slot()].load(Ordering::Relaxed)))
             .collect();
-        CoverageReport { checks, skips }
+        CoverageReport {
+            checks,
+            skips,
+            native: Default::default(),
+        }
     }
 }

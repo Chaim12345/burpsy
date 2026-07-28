@@ -51,6 +51,10 @@ pub mod audit;
 pub mod catalog;
 mod catalog_data;
 mod coverage;
+pub mod js_vulns;
+pub mod jwt_weak;
+pub mod native;
+pub mod report;
 
 pub use audit::{
     AuditConfig, AuditLedger, BuiltInConfig, DEFAULT_AUDIT_BUDGET, DispatchScope, Disposition,
@@ -59,6 +63,7 @@ pub use audit::{
 use audit::{ItemBreaker, SessionBreaker};
 use coverage::CoverageTracker;
 pub use coverage::{CheckCoverage, CoverageReport, CoverageState, ScanSkip};
+pub use native::{NativeChecks, NativeCoverage};
 
 /// What happened when a check set was loaded — reported so coverage is explicit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -113,6 +118,10 @@ pub struct PassiveScanner {
     /// docs for why this exists alongside `report`: `LoadReport` is a load-time classification, this
     /// is a runtime record, and neither substitutes for the other.
     coverage: CoverageTracker,
+    /// The native (non-BCheck) passive checks: SCAN-01 and SCAN-02. Empty unless a caller asks for
+    /// them with [`PassiveScanner::with_native`] — see `native`'s module docs for why they are a
+    /// separate collection from `passive` rather than appended to it.
+    native: native::NativeChecks,
 }
 
 /// `(dispatch units, flat plan of (unit index, check index) steps, undispatchable count)` —
@@ -178,6 +187,7 @@ impl PassiveScanner {
             scope,
             report,
             coverage,
+            native: native::NativeChecks::none(),
         }
     }
 
@@ -185,12 +195,31 @@ impl PassiveScanner {
         &self.report
     }
 
+    /// Enable the native passive checks (SCAN-01, SCAN-02).
+    ///
+    /// Consuming rather than a setter on `&mut self`: the scanner is held behind an `Arc` and
+    /// scanned concurrently, so the check set must be fixed before it is shared. A mid-run swap
+    /// would leave the coverage counters describing two different check sets at once.
+    pub fn with_native(mut self, native: native::NativeChecks) -> Self {
+        self.native = native;
+        self
+    }
+
+    /// How many native checks are enabled. Kept separate from [`PassiveScanner::loaded`] because
+    /// that number is BCheck files and this one is compiled-in checks; adding them would make the
+    /// `LoadReport` percentages describe a denominator that does not exist.
+    pub fn native_loaded(&self) -> usize {
+        self.native.len()
+    }
+
     /// A snapshot of which passive checks have run, and why the ones that have not.
     ///
     /// Owned, not a lock guard: a reporting caller can hold this after the call returns rather than
     /// holding `self` locked while it renders. Mirrors `report()` and `findings()` in shape.
     pub fn coverage(&self) -> CoverageReport {
-        self.coverage.snapshot()
+        let mut r = self.coverage.snapshot();
+        r.native = self.native.coverage();
+        r
     }
 
     pub fn loaded(&self) -> usize {
@@ -222,7 +251,10 @@ impl PassiveScanner {
     /// check and found nothing". Each now records its own [`ScanSkip`] reason first, so `coverage()`
     /// can tell a clean scan from one that never happened.
     pub fn scan(&self, store: &TrafficStore, exchange_id: u64, response_id: MsgId) -> usize {
-        if self.passive.is_empty() {
+        // The native checks are a second, independent check set: an engagement running only SCAN-01
+        // and SCAN-02 with no BCheck corpus loaded still has checks to run, and returning
+        // `NoChecksLoaded` here would have silently skipped them.
+        if self.passive.is_empty() && self.native.is_empty() {
             self.coverage.record_skip(ScanSkip::NoChecksLoaded);
             return 0;
         }
@@ -238,11 +270,40 @@ impl PassiveScanner {
             self.coverage.record_skip(ScanSkip::ResponseNotFound);
             return 0;
         };
-        self.scan_message(&resp, &ex.host, &ex.path, exchange_id, response_id)
+        // The native checks want the request too — SCAN-02 reads `Authorization` headers, which only
+        // exist on the request side. `scan_message` cannot supply one, which is why that path counts
+        // its own absence rather than looking equivalent to this one.
+        let request = store.get(ex.request);
+        self.scan_bchecks(&resp, &ex.host, &ex.path, exchange_id, response_id)
+            + self.scan_native(
+                &resp,
+                request.as_ref(),
+                &ex.host,
+                &ex.path,
+                exchange_id,
+                response_id,
+            )
     }
 
     /// Scan a message directly, bypassing the store lookup. Exposed for tests.
+    ///
+    /// Sees no request message, so SCAN-02 cannot look at `Authorization` headers here and records
+    /// that gap in [`jwt_weak::JwtCoverage::requests_unavailable`]. Use [`PassiveScanner::scan`] to
+    /// give it the whole exchange.
     pub fn scan_message(
+        &self,
+        resp: &StoredMessage,
+        host: &str,
+        path: &str,
+        exchange_id: u64,
+        response_id: MsgId,
+    ) -> usize {
+        self.scan_bchecks(resp, host, path, exchange_id, response_id)
+            + self.scan_native(resp, None, host, path, exchange_id, response_id)
+    }
+
+    /// The BCheck half of a passive scan.
+    fn scan_bchecks(
         &self,
         resp: &StoredMessage,
         host: &str,
@@ -273,6 +334,32 @@ impl PassiveScanner {
             }
         }
         self.coverage.record_scan(&deltas);
+        n
+    }
+
+    /// Run the native check set and record what it finds, through the same path a BCheck finding
+    /// takes. Returns the number of findings recorded.
+    ///
+    /// Separate from the BCheck loop above rather than folded into it because the two sets have
+    /// nothing in common at the call site: one is `run_passive` over a parsed AST, the other is
+    /// compiled Rust with its own dataset. Sharing `record` is the part worth sharing.
+    fn scan_native(
+        &self,
+        resp: &StoredMessage,
+        request: Option<&StoredMessage>,
+        host: &str,
+        path: &str,
+        exchange_id: u64,
+        response_id: MsgId,
+    ) -> usize {
+        if self.native.is_empty() {
+            return 0;
+        }
+        let found = self.native.scan(resp, request, path);
+        let n = found.len();
+        for f in found {
+            self.record(f, host, path, exchange_id, response_id);
+        }
         n
     }
 
@@ -2041,6 +2128,127 @@ given response then
         assert_eq!(
             matched, 0,
             "no published BCheck shares a name with a catalogued issue"
+        );
+    }
+
+    /// A response carrying a vulnerable jQuery *and* a weakly-signed JWT, so one scan exercises
+    /// both native checks through the real registration path.
+    fn native_setup() -> (Arc<TrafficStore>, u64, MsgId) {
+        // HS256 over {"alg":"HS256","typ":"JWT"}.{"sub":"1"} signed with "secret", precomputed so
+        // this crate does not grow a test-only dependency on an HMAC implementation it already
+        // exercises directly in `jwt_weak`.
+        let store = TrafficStore::new();
+        let body = "/*! jQuery v1.7.1 */ var t = \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.8qZF8vbN3UpcanXFc-mPXJkOPN01-bRch8XX3rToP1U\";";
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let req = store.put(
+            Bytes::from_static(b"GET /static/app.js HTTP/1.1\r\nHost: h.test\r\n\r\n"),
+            Direction::Request,
+        );
+        let ex = store.add_exchange(Exchange {
+            related: Vec::new(),
+            protocol: Protocol::Http1,
+            id: 0,
+            request: req,
+            response: None,
+            host: "h.test".into(),
+            port: 443,
+            tls: true,
+            method: "GET".into(),
+            path: "/static/app.js".into(),
+            status: Some(200),
+            response_len: raw.len(),
+            started_ms: 0,
+            duration_ms: 1,
+            notes: None,
+        });
+        let resp = store.put(Bytes::from(raw), Direction::Response);
+        store.set_response(ex, resp, 200, 0, 1);
+        (store, ex, resp)
+    }
+
+    #[test]
+    fn the_native_checks_record_through_the_same_path_as_a_bcheck_finding() {
+        let s = PassiveScanner::from_checks(Vec::new(), Arc::new(Scope::allow_everything()))
+            .with_native(NativeChecks::vendored());
+        let (store, ex, _resp) = native_setup();
+        assert_eq!(s.native_loaded(), 2);
+        assert_eq!(s.loaded(), 0, "no BChecks: the native set stands on its own");
+
+        let resp_id = store.exchange(ex).unwrap().response.unwrap();
+        assert_eq!(s.scan(&store, ex, resp_id), 2, "one JS finding and one JWT finding");
+
+        let store_ref = s.findings();
+        let f = store_ref.read();
+        let names: Vec<_> = f.all().iter().filter_map(|x| x.issue_name.clone()).collect();
+        assert!(names.contains(&"Vulnerable JavaScript dependency".to_string()), "{names:?}");
+        assert!(names.contains(&"JWT weak HMAC secret".to_string()), "{names:?}");
+        // Both names are exact catalogued issues, so `enrich` attached Burp's own remediation
+        // instead of anything written in these modules.
+        for finding in f.all() {
+            assert!(
+                finding.remediation.is_some(),
+                "{:?} must carry the catalogue's remediation",
+                finding.issue_name
+            );
+        }
+    }
+
+    #[test]
+    fn native_coverage_travels_with_the_passive_coverage_report() {
+        let s = PassiveScanner::from_checks(Vec::new(), Arc::new(Scope::allow_everything()))
+            .with_native(NativeChecks::vendored());
+        let (store, ex, _) = native_setup();
+        let resp_id = store.exchange(ex).unwrap().response.unwrap();
+        s.scan(&store, ex, resp_id);
+
+        let cov = s.coverage();
+        let js = cov.native.js_libraries.as_ref().expect("SCAN-01 is enabled");
+        assert!(js.dataset.state.is_available());
+        assert_eq!(js.detections_vulnerable, 1);
+        let jwt = cov.native.jwt_weak_secret.as_ref().expect("SCAN-02 is enabled");
+        assert_eq!(jwt.tokens_cracked, 1);
+        assert_eq!(
+            jwt.requests_unavailable, 0,
+            "scan() supplies the request, so the request side was examined"
+        );
+        assert_eq!(cov.native.lines().len(), 2);
+    }
+
+    #[test]
+    fn a_scanner_with_only_native_checks_does_not_report_itself_as_having_no_checks() {
+        // `scan` used to return early on an empty BCheck set, which would have skipped the native
+        // checks entirely and blamed it on there being nothing loaded.
+        let s = PassiveScanner::from_checks(Vec::new(), Arc::new(Scope::allow_everything()))
+            .with_native(NativeChecks::vendored());
+        let (store, ex, _) = native_setup();
+        let resp_id = store.exchange(ex).unwrap().response.unwrap();
+        assert!(s.scan(&store, ex, resp_id) > 0);
+        let skipped: u64 = s
+            .coverage()
+            .skips
+            .iter()
+            .filter(|(r, _)| *r == ScanSkip::NoChecksLoaded)
+            .map(|(_, n)| *n)
+            .sum();
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn the_native_checks_are_off_unless_a_caller_asks_for_them() {
+        let s = PassiveScanner::from_checks(
+            vec![burpsy_bcheck::parse(LEAK).unwrap()],
+            Arc::new(Scope::allow_everything()),
+        );
+        assert_eq!(s.native_loaded(), 0);
+        let cov = s.coverage();
+        assert!(cov.native.js_libraries.is_none());
+        assert!(cov.native.jwt_weak_secret.is_none());
+        assert!(
+            !cov.native.inconclusive(),
+            "a check that is not enabled cannot make a report inconclusive"
         );
     }
 }

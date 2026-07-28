@@ -195,6 +195,7 @@ mod tests {
             scope: Arc::new(Scope::allow_everything()),
             findings: None,
             audit: None,
+            export: None,
             intercept: Some(InterceptState::new(interceptor)),
         }
     }

@@ -103,6 +103,9 @@ fn insecure_tls() -> Arc<ClientConfig> {
 pub(crate) async fn send(target: &Target, raw: &[u8], timeout: Duration) -> Result<SendResult> {
     let started = Instant::now();
     let addr = format!("{}:{}", target.host, target.port);
+    // Derived here, where the request bytes are: a HEAD response is complete at its head and
+    // nothing in the response itself says so.
+    let head_only = request_is_head(raw);
 
     let fut = async {
         let tcp = TcpStream::connect(&addr)
@@ -117,12 +120,12 @@ pub(crate) async fn send(target: &Target, raw: &[u8], timeout: Duration) -> Resu
             let mut s = connector.connect(dns, tcp).await.context("tls handshake")?;
             s.write_all(raw).await.context("write")?;
             s.flush().await.ok();
-            read_response(&mut s).await?
+            read_response(&mut s, head_only).await?
         } else {
             let mut s = tcp;
             s.write_all(raw).await.context("write")?;
             s.flush().await.ok();
-            read_response(&mut s).await?
+            read_response(&mut s, head_only).await?
         };
         Ok::<Vec<u8>, anyhow::Error>(buf)
     };
@@ -142,33 +145,64 @@ pub(crate) async fn send(target: &Target, raw: &[u8], timeout: Duration) -> Resu
 /// Read until framing is satisfied or the peer closes.
 ///
 /// Honours `Content-Length` and `Transfer-Encoding: chunked` so a keep-alive server does not stall
-/// us until timeout; otherwise reads to EOF.
-async fn read_response<S>(s: &mut S) -> Result<Vec<u8>>
+/// us until timeout; otherwise reads to EOF. Interim `1xx` responses are skipped: they precede the
+/// real response on the same connection (RFC 9110 §15.2) and returning one as the final answer
+/// would silently discard what the operator actually asked for.
+async fn read_response<S>(s: &mut S, head_only: bool) -> Result<Vec<u8>>
 where
     S: AsyncReadExt + Unpin,
 {
     let mut buf = Vec::with_capacity(16 * 1024);
     let mut chunk = vec![0u8; 16 * 1024];
+    // Offset past any interim 1xx responses already consumed. Framing checks and the returned
+    // slice both start here, so `parse_status` and `raw_response` describe the final response.
+    let mut start = 0usize;
     loop {
         let n = s.read(&mut chunk).await.context("read")?;
         if n == 0 {
             break;
         }
         buf.extend_from_slice(&chunk[..n]);
-        if let Some(total) = complete_len(&buf)
-            && buf.len() >= total
+
+        // Skip interim 1xx responses: they are complete at the end of their head and carry no
+        // body, but the real response follows on the same connection. Loop because `100 Continue`
+        // then `103 Early Hints` can both arrive before the final status.
+        while let Some(rel_end) = head_end(&buf[start..]) {
+            let interim = String::from_utf8_lossy(&buf[start..start + rel_end]).to_ascii_lowercase();
+            let code = interim
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|c| c.parse::<u16>().ok());
+            if code.is_some_and(|c| (100..200).contains(&c)) {
+                start += rel_end;
+            } else {
+                break;
+            }
+        }
+
+        if let Some(total) = complete_len(&buf[start..], head_only)
+            && buf.len() - start >= total
         {
             break;
         }
     }
-    Ok(buf)
+    Ok(buf[start..].to_vec())
 }
 
 /// If response framing is known and satisfied, the expected total length.
-fn complete_len(buf: &[u8]) -> Option<usize> {
+///
+/// Bodiless responses (204, 304, HEAD) are checked BEFORE the framing headers: they legitimately
+/// echo the `Content-Length` a GET would have returned, and reading that header first is the bug
+/// that stalls the read loop waiting for bytes the server will never send.
+fn complete_len(buf: &[u8], head_only: bool) -> Option<usize> {
     let head_end = find(buf, b"\r\n\r\n").map(|i| i + 4)?;
     let head = &buf[..head_end];
     let lower = head.to_ascii_lowercase();
+
+    if head_only || status_is_bodiless(&lower) {
+        return Some(head_end);
+    }
 
     if find(&lower, b"transfer-encoding: chunked").is_some() {
         return if find(&buf[head_end..], b"0\r\n\r\n").is_some() {
@@ -186,6 +220,26 @@ fn complete_len(buf: &[u8]) -> Option<usize> {
         .parse()
         .ok()?;
     Some(head_end + n)
+}
+
+/// Byte offset just past the first `\r\n\r\n`, or `None` if the head is not yet complete.
+fn head_end(buf: &[u8]) -> Option<usize> {
+    find(buf, b"\r\n\r\n").map(|i| i + 4)
+}
+
+/// `204` and `304` carry no body, whatever their headers claim. `1xx` is deliberately excluded:
+/// it is an interim response, not a bodiless final one — see `read_response`, which steps over
+/// those rather than treating them as an answer.
+///
+/// Takes bytes rather than `&str` so the caller's lower-cased head needs no lossy conversion.
+fn status_is_bodiless(lower_head: &[u8]) -> bool {
+    parse_status(lower_head).is_some_and(|c| c == 204 || c == 304)
+}
+
+/// Whether the outgoing request bytes begin with `HEAD`. Nothing in the response reveals this, so
+/// it must be derived from the request at the point where those bytes are available.
+fn request_is_head(raw: &[u8]) -> bool {
+    raw.starts_with(b"HEAD ")
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -211,7 +265,7 @@ mod tests {
     #[test]
     fn content_length_framing_is_satisfied_at_the_declared_length() {
         let buf = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
-        assert_eq!(complete_len(buf), Some(buf.len()));
+        assert_eq!(complete_len(buf, false), Some(buf.len()));
     }
 
     #[test]
@@ -220,16 +274,16 @@ mod tests {
         let buf = format!("{head}hi").into_bytes();
         // Framing is known — head plus the declared 10 bytes — and the buffer has not reached it,
         // so the read loop must keep going rather than treat this as a finished response.
-        assert_eq!(complete_len(&buf), Some(head.len() + 10));
-        assert!(complete_len(&buf).unwrap() > buf.len());
+        assert_eq!(complete_len(&buf, false), Some(head.len() + 10));
+        assert!(complete_len(&buf, false).unwrap() > buf.len());
     }
 
     #[test]
     fn chunked_framing_completes_only_on_the_terminal_chunk() {
         let partial = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n";
-        assert_eq!(complete_len(partial), None);
+        assert_eq!(complete_len(partial, false), None);
         let done = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
-        assert_eq!(complete_len(done), Some(done.len()));
+        assert_eq!(complete_len(done, false), Some(done.len()));
     }
 
     #[test]
@@ -237,5 +291,56 @@ mod tests {
         assert_eq!(parse_status(b"HTTP/1.1 404 Not Found\r\n\r\n"), Some(404));
         assert_eq!(parse_status(b"HTTP/1.1 200\r\n\r\n"), Some(200));
         assert_eq!(parse_status(b"garbage"), None);
+    }
+
+    #[test]
+    fn a_bodiless_response_completes_at_its_head_despite_advertising_a_length() {
+        // This is the async transport behind Repeater and Intruder. A repeater sends captured
+        // bytes verbatim, keep-alive included, so a 304 that echoes the length a GET would have
+        // returned used to satisfy no framing at all: the loop blocked and `tokio::time::timeout`
+        // discarded the whole response in front of the operator.
+        for status in ["204 No Content", "304 Not Modified"] {
+            let raw = format!("HTTP/1.1 {status}\r\nContent-Length: 4\r\n\r\n");
+            let b = raw.as_bytes();
+            assert_eq!(
+                complete_len(b, false),
+                Some(b.len()),
+                "{status} ends at its head"
+            );
+        }
+        // The same header on a 200 is real, so that response is genuinely unfinished.
+        let b = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n";
+        assert_eq!(complete_len(b, false), Some(b.len() + 4));
+    }
+
+    #[test]
+    fn a_head_response_completes_at_its_head_because_the_request_said_so() {
+        // Only the request knows; the response is indistinguishable from a GET's.
+        let b = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n";
+        assert_eq!(complete_len(b, true), Some(b.len()));
+        assert_eq!(complete_len(b, false), Some(b.len() + 4));
+    }
+
+    #[test]
+    fn the_head_method_is_recognised_and_not_confused_with_a_prefix() {
+        assert!(request_is_head(b"HEAD /p HTTP/1.1\r\n\r\n"));
+        assert!(!request_is_head(b"GET /p HTTP/1.1\r\n\r\n"));
+        assert!(
+            !request_is_head(b"HEADER /p HTTP/1.1\r\n\r\n"),
+            "a method that merely starts with HEAD is a different method"
+        );
+    }
+
+    #[test]
+    fn an_interim_1xx_is_not_mistaken_for_a_bodiless_final_response() {
+        // Both are bodiless; only 204/304 are final. Calling a 1xx complete would return the
+        // placeholder and silently drop the real answer.
+        for status in ["100 Continue", "103 Early Hints"] {
+            let raw = format!("HTTP/1.1 {status}\r\n\r\n");
+            assert!(
+                !status_is_bodiless(&raw.to_ascii_lowercase().into_bytes()),
+                "{status} is interim, not a final bodiless response"
+            );
+        }
     }
 }

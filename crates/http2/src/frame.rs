@@ -36,6 +36,64 @@ pub const CONNECTION_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 /// away — see [`FrameHeader::stream_id`].
 pub const STREAM_ID_RESERVED_BIT: u32 = 0x8000_0000;
 
+/// The registered frame type octets, RFC 9113 §11.2.
+///
+/// Constants rather than an enum, for the reason [`FrameHeader`] gives: an unregistered type octet
+/// is a research target, and an enum would either reject it or lose it. Nothing here narrows what
+/// [`FrameSpec`] accepts — `0xEF` is as valid an input as `types::DATA`, and the writer emits both.
+/// These exist so a caller and a violation report can say `HEADERS` instead of `0x1`.
+pub mod types {
+    pub const DATA: u8 = 0x0;
+    pub const HEADERS: u8 = 0x1;
+    pub const PRIORITY: u8 = 0x2;
+    pub const RST_STREAM: u8 = 0x3;
+    pub const SETTINGS: u8 = 0x4;
+    pub const PUSH_PROMISE: u8 = 0x5;
+    pub const PING: u8 = 0x6;
+    pub const GOAWAY: u8 = 0x7;
+    pub const WINDOW_UPDATE: u8 = 0x8;
+    pub const CONTINUATION: u8 = 0x9;
+
+    /// The registered name for a type octet, or `None` for one the registry does not define.
+    ///
+    /// `None` rather than a `"UNKNOWN(0xEF)"` string: a report that renders an unknown type as if it
+    /// were a name invites reading it as one.
+    pub fn name(ty: u8) -> Option<&'static str> {
+        Some(match ty {
+            DATA => "DATA",
+            HEADERS => "HEADERS",
+            PRIORITY => "PRIORITY",
+            RST_STREAM => "RST_STREAM",
+            SETTINGS => "SETTINGS",
+            PUSH_PROMISE => "PUSH_PROMISE",
+            PING => "PING",
+            GOAWAY => "GOAWAY",
+            WINDOW_UPDATE => "WINDOW_UPDATE",
+            CONTINUATION => "CONTINUATION",
+            _ => return None,
+        })
+    }
+}
+
+/// The defined flag bits.
+///
+/// One bit position means different things on different frame types — `0x01` is `END_STREAM` on DATA
+/// and HEADERS but `ACK` on SETTINGS and PING — so these are named per meaning, not per position, and
+/// a caller has to know which frame it is setting a flag on. Undefined bits (`0x02`, `0x10`, `0x40`,
+/// `0x80`) have no constant precisely because their only use here is to be set deliberately.
+pub mod flags {
+    /// DATA, HEADERS.
+    pub const END_STREAM: u8 = 0x01;
+    /// SETTINGS, PING. Same bit as [`END_STREAM`], different frames.
+    pub const ACK: u8 = 0x01;
+    /// HEADERS, PUSH_PROMISE, CONTINUATION.
+    pub const END_HEADERS: u8 = 0x04;
+    /// DATA, HEADERS, PUSH_PROMISE.
+    pub const PADDED: u8 = 0x08;
+    /// HEADERS.
+    pub const PRIORITY: u8 = 0x20;
+}
+
 /// One frame's header, exactly as it appears on the wire.
 ///
 /// Every field is the raw wire field. `ty` and `flags` are integers rather than enums because an
@@ -201,10 +259,17 @@ impl H2FrameProgram {
         out.freeze()
     }
 
-    /// True when any frame lies about its length, or any header block is left unterminated.
+    /// True when every frame's length field agrees with the payload actually written.
     ///
-    /// Both make a program's effect on a peer un-inferable from our own decode, which is why the
+    /// A lying length makes a program's effect on a peer un-inferable from our own decode — the peer
+    /// frames by the declared value, so it decodes a header block we never saw — which is why the
     /// authorisation layer treats such a program as a whole-host question rather than a per-path one.
+    ///
+    /// **This is one of the authorisation layer's triggers, not all of them.** An unterminated header
+    /// block, a `CONTINUATION`, and a raw header-block fragment each have the same consequence and
+    /// none of them is a length question; [`crate::malformed::audit`] reports those, and the
+    /// classifier that combines them is the authorisation layer's own. An earlier version of this
+    /// comment claimed the unterminated-block half was checked here. It was not.
     pub fn frame_layout_is_honest(&self) -> bool {
         !self.frames.iter().any(|f| f.length_is_dishonest())
     }
@@ -294,11 +359,7 @@ pub fn strip_preface(bytes: &[u8]) -> Option<&[u8]> {
 mod tests {
     use super::*;
 
-    // Frame type numbers, for readable tests. Deliberately not a public enum — see FrameHeader.
-    const DATA: u8 = 0x0;
-    const HEADERS: u8 = 0x1;
-    const SETTINGS: u8 = 0x4;
-    const CONTINUATION: u8 = 0x9;
+    use types::{CONTINUATION, DATA, HEADERS, SETTINGS};
 
     #[test]
     fn a_frame_header_round_trips_every_field_including_reserved_bits() {

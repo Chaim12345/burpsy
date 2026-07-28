@@ -11,6 +11,7 @@ use crate::AppState;
 use axum::Router;
 
 pub mod intercept;
+pub mod report;
 pub mod sitemap;
 pub mod tools;
 
@@ -20,4 +21,5 @@ pub fn all() -> Router<AppState> {
         .merge(sitemap::routes())
         .merge(intercept::routes())
         .merge(tools::routes())
+        .merge(report::routes())
 }

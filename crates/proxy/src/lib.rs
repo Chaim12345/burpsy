@@ -20,6 +20,25 @@
 //! operator can rewrite or refuse it. Out-of-scope traffic is never held, and holding one request
 //! parks only its own connection task.
 //!
+//! # HTTP/2, and exactly how far it goes
+//!
+//! An intercepted connection negotiates ALPN honestly: the client's own offer goes upstream, whatever
+//! the target picks is what the client is then offered, and the answer is recorded on every
+//! [`Exchange`] as [`Protocol`]. An h2-capable target is therefore **not** downgraded to HTTP/1.1
+//! behind the operator's back, and the two legs of a connection always carry the same protocol.
+//!
+//! What is **not** implemented is forwarding h2. A connection that negotiates `h2` is recorded — with
+//! `protocol: Protocol::Http2` and a note saying so — and then closed, because relaying it needs an
+//! h2 driver on both legs plus a frame tap between them. The practical cost is worth stating plainly:
+//! **while interception is switched off, an h2-capable origin cannot be browsed through this proxy.**
+//! Switching interception on makes the proxy offer only `http/1.1`, which restores browsing and
+//! capture at the price of a downgrade the operator caused and can see.
+//!
+//! Two other halves of "the tool uses HTTP/2 when the target supports it" are outside this crate and
+//! not done: the scanner's audit egress and Intruder still speak HTTP/1.1 to every target, because
+//! `burpsy_sender::AuthorisedSender` is not protocol-aware. Against an h2-only origin they fail
+//! rather than downgrade. `.planning/ROADMAP.md` records H2-04 as Partial for these reasons.
+//!
 //! # Memory
 //!
 //! Bodies are read once, converted to `Bytes`, handed to the store. Nothing upstream keeps a second
@@ -467,8 +486,26 @@ async fn tunnel(mut client: TcpStream, target: &str, cfg: ProxyConfig) -> Result
 ///
 /// Keep-alive is honoured: the loop keeps reading exchanges off the same TLS session until either
 /// side closes, because a browser will pipeline many requests down one CONNECT.
+///
+/// # Handshake ordering, and why it is this way round
+///
+/// The ClientHello is **peeked before anything is dialled**, via `LazyConfigAcceptor`. Two things
+/// depend on that. The protocol offered upstream has to be the client's own offer (see
+/// [`tls::alpn_offer`]), and the client-facing config has to name the single protocol the target then
+/// picked — a config committed before the target answered cannot do either, and rustls has already
+/// sent a fatal `NoApplicationProtocol` alert by the time you find out. It also keeps a client that
+/// aborts the handshake, which is the normal outcome until the burpsy CA is installed, costing zero
+/// upstream connections: peeking is cheap and needs no socket.
+///
+/// # HTTP/2 is negotiated, recorded, and not forwarded
+///
+/// An h2-negotiated connection is recorded as an exchange whose `protocol` is `Protocol::Http2` and
+/// then closed. Forwarding it needs an h2 driver on both legs and a frame tap between them, which is
+/// a later slice. Downgrading it to HTTP/1.1 instead would be the one thing H2-04 forbids, and
+/// pretending to forward it would be worse. The route to an h2-capable origin *through* this proxy
+/// today is the hold queue, which downgrades the offer deliberately and visibly.
 async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) -> Result<()> {
-    use tokio_rustls::{TlsAcceptor, TlsConnector};
+    use tokio_rustls::{LazyConfigAcceptor, TlsConnector};
 
     let engine = cfg
         .engine
@@ -481,18 +518,52 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         .await
         .context("write connect ok")?;
 
-    // Client side: leaf signed for this host. Fallback covers IP-literal CONNECTs (no SNI).
-    let acceptor = TlsAcceptor::from(Arc::new(engine.server_config(&host)));
-    let mut tls_client = match acceptor.accept(client).await {
+    // Peek only. No certificate is minted and no socket is opened until the client's offer is known.
+    let acceptor = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), client);
+    tokio::pin!(acceptor);
+    let start = match acceptor.as_mut().await {
         Ok(s) => s,
         Err(e) => {
             // Almost always the CA not being trusted yet — worth saying so loudly once.
-            tracing::warn!(
-                "client TLS handshake failed for {host}: {e} (is the burpsy CA installed?)"
-            );
+            tracing::warn!("client TLS hello failed for {host}: {e} (is the burpsy CA installed?)");
             return Ok(());
         }
     };
+    let client_offer: Vec<Vec<u8>> = start
+        .client_hello()
+        .alpn()
+        .map(|ps| ps.map(<[u8]>::to_vec).collect())
+        .unwrap_or_default();
+
+    // The operator's own switch, read per connection. Attached-but-off is not intercepting: it is
+    // the toggle the API exposes that C6's downgrade has to follow, or the downgrade is caused by a
+    // wiring decision the operator cannot see.
+    let intercepting = cfg.intercept.as_ref().is_some_and(|ic| ic.is_enabled());
+    let offer = tls::alpn_offer(&client_offer, intercepting);
+    if !client_offer.is_empty() && offer.is_empty() {
+        // Nothing the client will speak is anything we can carry. Recorded with the reason, because
+        // a bare TLS alert leaves an operator with a browser error and no history row to explain it.
+        let offered: Vec<String> = client_offer
+            .iter()
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect();
+        record_failed_connect(
+            &store,
+            &host,
+            port,
+            &format!(
+                "client offered ALPN [{}] and nothing there can be carried{}",
+                offered.join(", "),
+                if intercepting {
+                    " while the interception hold queue is on"
+                } else {
+                    ""
+                }
+            ),
+            Instant::now(),
+        );
+        return Ok(());
+    }
 
     // Upstream side. Every way this can fail is recorded before returning: an intercepted CONNECT
     // that never reached the origin must still leave a trace, or history reads as "never visited".
@@ -511,7 +582,7 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         }
     };
     upstream_tcp.set_nodelay(true).ok();
-    let connector = TlsConnector::from(tls::upstream_client_config());
+    let connector = TlsConnector::from(tls::upstream_client_config(&offer));
     let dns = match rustls_pki_types::ServerName::try_from(host.clone()) {
         Ok(d) => d,
         Err(_) => {
@@ -538,6 +609,41 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
             return Ok(());
         }
     };
+
+    // What the target actually chose — not what we hoped for, and not a default.
+    let negotiated: Option<Vec<u8>> = tls_upstream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+    let protocol = match tls::negotiated_protocol(negotiated.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            record_failed_connect(&store, &host, port, &e.to_string(), connect_started);
+            return Ok(());
+        }
+    };
+
+    // Offer the client exactly the one protocol upstream settled on, so the two legs cannot differ.
+    let client_alpn: Vec<Vec<u8>> = negotiated.into_iter().collect();
+    let mut tls_client = match start
+        .into_stream(Arc::new(engine.server_config(&host, &client_alpn)))
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                "client TLS handshake failed for {host}: {e} (is the burpsy CA installed?)"
+            );
+            return Ok(());
+        }
+    };
+
+    if protocol == Protocol::Http2 {
+        record_unforwarded_h2(&store, &host, port, connect_started);
+        tracing::info!(
+            "{host}:{port} negotiated h2; recorded and closed (h2 forwarding is a later slice — \
+             enable the interception hold queue to reach it over http/1.1)"
+        );
+        let _ = tls_client.shutdown().await;
+        return Ok(());
+    }
 
     // Now it is just HTTP over two streams.
     loop {
@@ -570,7 +676,10 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         let req_id = store.put(req.clone(), Direction::Request);
         let ex_id = store.add_exchange(Exchange {
             related: Vec::new(),
-            protocol: Protocol::Http1,
+            // The protocol this connection actually negotiated. `Http1` here is a measurement, not a
+            // default: the h2 arm returned above, so reaching this line means ALPN settled on
+            // http/1.1 or the target sent no ALPN extension at all.
+            protocol,
             id: 0,
             request: req_id,
             response: None,
@@ -921,6 +1030,55 @@ fn record_failed_connect(
         started.elapsed().as_millis() as u64,
     );
     tracing::debug!("recorded failed CONNECT {host}:{port}: {reason}");
+    ex_id
+}
+
+/// Record a connection that negotiated HTTP/2 and was therefore not forwarded.
+///
+/// The row exists because the alternative to it is a lie in one direction or the other. Downgrading
+/// the connection to HTTP/1.1 would record an exchange whose `protocol` said `Http1` about a target
+/// that asked for h2 — the silent downgrade H2-04 names. Closing the socket without a row would put
+/// this in the same undistinguishable bucket as "never visited". So the exchange is written with
+/// `Protocol::Http2`, which is true, and the note says what happened, which the operator needs
+/// because their browser is showing them a failed page.
+fn record_unforwarded_h2(store: &TrafficStore, host: &str, port: u16, started: Instant) -> u64 {
+    let marker = Bytes::from(format!(
+        "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
+    ));
+    let req_id = store.put(marker, Direction::Request);
+    let ex_id = store.add_exchange(Exchange {
+        related: Vec::new(),
+        protocol: Protocol::Http2,
+        id: 0,
+        request: req_id,
+        response: None,
+        host: host.to_string(),
+        port,
+        tls: true,
+        method: "CONNECT".into(),
+        path: String::new(),
+        status: None,
+        response_len: 0,
+        started_ms: now_ms(),
+        duration_ms: 0,
+        notes: Some("h2 negotiated on both legs; not forwarded (h2 forwarding is a later slice)".into()),
+    });
+    let body = "burpsy: this connection negotiated HTTP/2, which this build does not forward. \
+                Enabling the interception hold queue makes the proxy offer http/1.1 instead.";
+    let synthetic = Bytes::from(format!(
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    ));
+    let len = synthetic.len();
+    let resp_id = store.put(synthetic, Direction::Response);
+    store.set_response(
+        ex_id,
+        resp_id,
+        502,
+        len,
+        started.elapsed().as_millis() as u64,
+    );
     ex_id
 }
 

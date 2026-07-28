@@ -41,6 +41,11 @@ pub struct AppState {
     /// the sender: the binary owns that wiring, and the web layer only needs "given an exchange id,
     /// audit it".
     pub audit: Option<AuditHook>,
+    /// Renders a findings-and-coverage report in one format.
+    ///
+    /// Same shape and the same reason as `audit`: reporting needs the scanner's coverage model, and
+    /// this crate must not depend on the scanner. See `routes::report`.
+    pub export: Option<routes::report::ExportHook>,
     /// Held-request state, when interception is enabled.
     pub intercept: Option<Arc<routes::intercept::InterceptState>>,
 }
@@ -76,6 +81,18 @@ pub fn router_audit(
     findings: Option<Arc<parking_lot::RwLock<burpsy_core::FindingStore>>>,
     audit: Option<AuditHook>,
 ) -> Router {
+    router_export(store, ca_pem, scope, findings, audit, None)
+}
+
+/// The full router. Every other constructor above defaults one more argument into this one.
+pub fn router_export(
+    store: Arc<TrafficStore>,
+    ca_pem: Option<String>,
+    scope: Scope,
+    findings: Option<Arc<parking_lot::RwLock<burpsy_core::FindingStore>>>,
+    audit: Option<AuditHook>,
+    export: Option<routes::report::ExportHook>,
+) -> Router {
     Router::new()
         .route("/ca.crt", get(ca_cert))
         .route("/", get(index))
@@ -96,6 +113,7 @@ pub fn router_audit(
             scope: Arc::new(scope),
             findings,
             audit,
+            export,
             intercept: None,
         })
 }
@@ -139,13 +157,25 @@ pub async fn serve_audit(
     findings: Option<Arc<parking_lot::RwLock<burpsy_core::FindingStore>>>,
     audit: Option<AuditHook>,
 ) -> Result<()> {
+    serve_export(bind, store, ca_pem, scope, findings, audit, None).await
+}
+
+pub async fn serve_export(
+    bind: &str,
+    store: Arc<TrafficStore>,
+    ca_pem: Option<String>,
+    scope: Scope,
+    findings: Option<Arc<parking_lot::RwLock<burpsy_core::FindingStore>>>,
+    audit: Option<AuditHook>,
+    export: Option<routes::report::ExportHook>,
+) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("bind web ui on {bind}"))?;
     tracing::info!("web ui on http://{bind}");
     axum::serve(
         listener,
-        router_audit(store, ca_pem, scope, findings, audit),
+        router_export(store, ca_pem, scope, findings, audit, export),
     )
     .await
     .context("serve")?;

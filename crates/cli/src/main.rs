@@ -228,6 +228,13 @@ async fn main() -> Result<()> {
     // coverage is a stated number rather than an implied one.
     let mut findings = None;
     let mut audit_hook: Option<burpsy_web::AuditHook> = None;
+    let mut export_hook: Option<burpsy_web::routes::report::ExportHook> = None;
+    // Every audit this process ran, retained so a report can state what the active set actually did.
+    // Without it `audit()`'s outcome is serialised to the HTTP response and dropped, and the report
+    // would have to say "no audit was run" for a session in which the operator audited fifty
+    // exchanges — a coverage claim that is wrong in the safe direction, but still wrong.
+    let audits: Arc<std::sync::Mutex<Vec<burpsy_scanner::SessionOutcome>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     if let Some(dir) = &bchecks_dir {
         let sc = std::sync::Arc::new(burpsy_scanner::PassiveScanner::load_dir(
             dir,
@@ -245,6 +252,7 @@ async fn main() -> Result<()> {
             let sc = sc.clone();
             let store = store.clone();
             let scope = std::sync::Arc::new(scope.clone());
+            let audits = audits.clone();
             std::sync::Arc::new(move |id: u64| {
                 // The chokepoint, not a bare transport: an active audit constructs requests, so it
                 // is exactly the traffic HARD-03 exists to authorise.
@@ -253,6 +261,11 @@ async fn main() -> Result<()> {
                     burpsy_sender::NetSender::default(),
                 );
                 let o = sc.audit(&store, id, &sender);
+                // Retained before the response is built, so an outcome is never reported to the
+                // operator and then missing from the report.
+                if let Ok(mut log) = audits.lock() {
+                    log.push(burpsy_scanner::report::single_audit(id, o.clone()));
+                }
                 serde_json::json!({
                     "enabled": true,
                     "exchange": id,
@@ -260,6 +273,41 @@ async fn main() -> Result<()> {
                     "outcome": o,
                 })
             }) as burpsy_web::AuditHook
+        });
+        export_hook = Some({
+            let sc = sc.clone();
+            let scope = std::sync::Arc::new(scope.clone());
+            let audits = audits.clone();
+            std::sync::Arc::new(move |fmt: burpsy_web::routes::report::ExportFormat| {
+                use burpsy_scanner::report;
+                let findings = sc.findings().read().all();
+                // A poisoned lock means some audit thread panicked. Refused rather than reported as
+                // an empty audit log: a report that silently claims no audit ran is the exact defect
+                // the coverage model exists to prevent.
+                let retained = audits
+                    .lock()
+                    .map_err(|_| "the retained audit log is poisoned; restart to report".to_owned())?
+                    .clone();
+                let passive = sc.coverage();
+                let r = report::Report::from_facts(report::RunFacts {
+                    scope: &scope,
+                    load: sc.report(),
+                    passive: &passive,
+                    audits: &retained,
+                    findings: &findings,
+                    generated_unix_ms: report::now_unix_ms(),
+                });
+                let bytes = match fmt {
+                    burpsy_web::routes::report::ExportFormat::Html => report::html::to_html(&r),
+                    burpsy_web::routes::report::ExportFormat::Json => report::json::to_json(&r),
+                    burpsy_web::routes::report::ExportFormat::Sarif => report::sarif::to_sarif(&r),
+                }
+                .into_bytes();
+                Ok(burpsy_web::routes::report::Export {
+                    format: fmt,
+                    bytes,
+                })
+            }) as burpsy_web::routes::report::ExportHook
         });
         cfg = cfg.with_scanner(sc);
     }
@@ -288,7 +336,16 @@ async fn main() -> Result<()> {
         let store = store.clone();
         let bind = web_bind.clone();
         tokio::spawn(async move {
-            burpsy_web::serve_audit(&bind, store, ca_pem, scope, findings, audit_hook).await
+            burpsy_web::serve_export(
+                &bind,
+                store,
+                ca_pem,
+                scope,
+                findings,
+                audit_hook,
+                export_hook,
+            )
+            .await
         })
     };
 

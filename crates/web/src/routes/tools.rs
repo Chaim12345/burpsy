@@ -682,6 +682,7 @@ mod tests {
             scope: Arc::new(Scope::allow_everything()),
             findings: None,
             audit: None,
+            export: None,
             intercept: None,
         };
         let app = Router::new().merge(crate::routes::all()).with_state(state);

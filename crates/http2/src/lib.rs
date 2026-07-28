@@ -4,9 +4,12 @@
 //!
 //! Three jobs, and the reason they live together is that all three are pure functions over bytes:
 //!
-//! 1. **A frame layer that corrects nothing** ([`frame`]). Emitting a frame the spec forbids is a
-//!    requirement here, not an escape hatch — request smuggling and desync research consist of exactly
-//!    that. A compliant library refuses, correctly, which is why this is hand-written.
+//! 1. **A frame layer that corrects nothing** ([`frame`]), and a vocabulary for breaking the spec on
+//!    purpose ([`malformed`]). Emitting a frame the spec forbids is a requirement here, not an escape
+//!    hatch — request smuggling and desync research consist of exactly that. A compliant library
+//!    refuses, correctly, which is why this is hand-written. What a compliant library also cannot do
+//!    is tell you *which* rules your probe broke, which is [`malformed::audit`]'s job: an accidental
+//!    malformation and a deliberate one produce the same `RST_STREAM`.
 //! 2. **HPACK** — because a compliant library will not *show* you a malformed header block either. It
 //!    resets the stream before the octets reach you, and for a proxy whose reason to exist includes
 //!    smuggling, seeing what a peer sent is worth as much as sending it. The external `h2` crate's
@@ -42,9 +45,12 @@
 
 pub mod frame;
 pub mod hpack;
+pub mod malformed;
 
 pub use frame::{
     CONNECTION_PREFACE, FRAME_HEADER_LEN, FrameHeader, FrameSpec, H2FrameProgram,
-    MAX_FRAME_PAYLOAD, RawFrame, STREAM_ID_RESERVED_BIT, Tail, read_frames, strip_preface,
+    MAX_FRAME_PAYLOAD, RawFrame, STREAM_ID_RESERVED_BIT, Tail, flags, read_frames, strip_preface,
+    types,
 };
 pub use hpack::{Decoder, HpackError};
+pub use malformed::{Malformation, Violation, audit};

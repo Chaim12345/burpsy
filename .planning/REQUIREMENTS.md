@@ -151,8 +151,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HARD-03 | Phase 1 | Partial — chokepoint built; per-surface tests land with each surface |
 | H2-01 | Phase 2 | Pending |
 | H2-02 | Phase 2 | Pending |
-| H2-03 | Phase 2 | Pending |
-| H2-04 | Phase 2 | Pending — will be Partial: the proxy mirrors the target's ALPN and never bridges, but scanner and Intruder egress remain HTTP/1.1-only; protocol-aware audit egress is not in Phase 2 |
+| H2-03 | Phase 2 | Partial — the frame layer emits deliberate spec violations byte-for-byte and `burpsy_http2::malformed::audit` names every rule a program breaks, with the RFC section. There is no authorised route from a frame program to a socket yet: `send_h2_program` and the whole-host authorisation classifier are a later slice, so an operator can build and inspect a malformed program but cannot send one |
+| H2-04 | Phase 2 | Partial — the proxy peeks the ClientHello, offers the target the client's own ALPN list, offers the client back exactly what the target chose, and records the result on every `Exchange.protocol`. An h2-capable target is not downgraded; an h2-negotiated connection is recorded and closed rather than forwarded (h2 relay needs a driver on both legs plus the frame tap). Consequence stated in `crates/proxy/src/lib.rs`: with interception off, an h2-capable origin cannot be browsed through the proxy. Scanner and Intruder egress remain HTTP/1.1-only; protocol-aware audit egress is not in Phase 2 |
 | DSL-01 | Phase 3 | Pending |
 | DSL-02 | Phase 3 | Pending |
 | DSL-04 | Phase 3 | Pending |

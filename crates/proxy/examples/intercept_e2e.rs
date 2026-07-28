@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         scope: Arc::new(scope),
         findings: None,
         audit: None,
+        export: None,
         intercept: Some(InterceptState::new(interceptor)),
     };
 

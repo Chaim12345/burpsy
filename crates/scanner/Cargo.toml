@@ -9,6 +9,15 @@ burpsy-core = { path = "../core" }
 burpsy-bcheck = { path = "../bcheck" }
 parking_lot = { workspace = true }
 serde = { workspace = true }
+# For `report::json` and `report::sarif`. A JSON encoder hand-rolled inside a security report writer
+# is a worse trade than a dependency the workspace already builds — see `src/report/mod.rs`.
+serde_json = { workspace = true }
+# SCAN-01 runs retire.js's own extractor patterns over script URLs and bodies; SCAN-02 recomputes
+# JWT HMAC signatures. `regex` is pinned per-crate the way `bcheck` pins it rather than promoted to
+# the workspace, because only those two crates need a regex engine.
+regex = "1"
+hmac = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 bytes = { workspace = true }
