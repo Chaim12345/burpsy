@@ -255,6 +255,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "burpsy-query"
+version = "0.1.0"
+
+[[package]]
 name = "burpsy-scanner"
 version = "0.1.0"
 dependencies = [
