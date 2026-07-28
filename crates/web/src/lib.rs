@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub mod routes;
+pub mod session_sender;
 
 #[derive(Clone)]
 pub struct AppState {

@@ -56,12 +56,15 @@
 
 mod transport;
 
-use burpsy_bcheck::eval::Sender;
 use burpsy_core::Scope;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+/// Re-exported so a caller can reach the blocking send without depending on `burpsy-bcheck` for a
+/// trait. The blocking path exists only as this impl, and a second inherent method beside it would
+/// be a second way to do the one thing the chokepoint is supposed to have exactly one way to do.
+pub use burpsy_bcheck::eval::Sender;
 pub use burpsy_bcheck::eval::Target;
 pub use transport::blocking::NetSender;
 pub use transport::net::SendResult;

@@ -548,6 +548,19 @@ fn read_response_framed(
         if head_end.is_none() {
             head_end = find_head_end(&buf);
         }
+        // RFC 9110 §15.2: a `1xx` is an *interim* response. The real one follows it on the same
+        // connection, and `103 Early Hints` is routine in front of a CDN. Short-circuiting on it
+        // would hand every check a response the origin never meant as its answer and silently
+        // discard the one it did — so step over the interim head and keep reading. Looped, because
+        // an origin may emit more than one before the real response.
+        while let Some(he) = head_end {
+            let head = String::from_utf8_lossy(&buf[..he]).to_ascii_lowercase();
+            if !status_is_interim(&head) {
+                break;
+            }
+            buf.drain(..he);
+            head_end = find_head_end(&buf);
+        }
         if let Some(he) = head_end
             && response_complete(&buf, he, head_only)
         {
@@ -562,10 +575,19 @@ fn read_response_framed(
         // connection's position is unknown and it can never be reused.
         Some(he) if !truncated => {
             let head = String::from_utf8_lossy(&buf[..he]).to_ascii_lowercase();
+            // A bodiless response is exactly delimited — by its head, at `head_end`. Classifying it
+            // as unframed because `buf.len() != he + len` was a real defect: the `Content-Length` a
+            // 304 or a HEAD echoes describes the body a GET would have returned, so the arithmetic
+            // can never hold, and every such response looked unframed. `demote_unless_exact` then
+            // pinned the target to close-per-probe on one ordinary 304, destroying the connection
+            // reuse the pool exists for across exactly the cached sites where it pays most — and
+            // discarding a socket that was perfectly reusable.
+            let bodiless = head_only || status_is_bodiless(&head);
             Framing {
-                exact_content_length: header_value(&head, "content-length")
-                    .and_then(|v| v.trim().parse::<usize>().ok())
-                    .is_some_and(|len| buf.len() == he + len),
+                exact_content_length: bodiless
+                    || header_value(&head, "content-length")
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .is_some_and(|len| buf.len() == he + len),
                 server_wants_close: wants_close(&head),
             }
         }
@@ -603,11 +625,15 @@ fn response_complete(buf: &[u8], head_end: usize, head_only: bool) -> bool {
     let head = String::from_utf8_lossy(&buf[..head_end]).to_ascii_lowercase();
 
     // Checked *before* the framing headers, deliberately. A response that cannot carry a body is
-    // finished the moment its head is — 204, 304 and every 1xx by definition, a HEAD response by
-    // request — and all of them may still carry the `Content-Length` the body would have had.
-    // Reading that header first is precisely the bug: the loop waits for bytes the server will
-    // never send, and on a pooled connection nothing closes the socket, so the probe stalls to the
-    // read timeout. A 304 is an entirely ordinary response, not an edge case.
+    // finished the moment its head is — 204 and 304 by definition, a HEAD response by request —
+    // and all of them may still carry the `Content-Length` the body would have had. Reading that
+    // header first is precisely the bug: the loop waits for bytes the server will never send, and
+    // on a pooled connection nothing closes the socket, so the probe stalls to the read timeout.
+    // A 304 is an entirely ordinary response, not an edge case.
+    //
+    // `1xx` is deliberately NOT here. It is bodiless too, but it is *interim* rather than final,
+    // so "complete" would be a lie of a different kind — the caller would get the placeholder and
+    // never the answer. `read_response_framed` steps over those instead.
     if head_only || status_is_bodiless(&head) {
         return true;
     }
@@ -636,9 +662,17 @@ fn status_code(lower_head: &str) -> Option<u16> {
         .ok()
 }
 
-/// `204`, `304` and every `1xx` carry no body, whatever their headers claim.
+/// `204` and `304` carry no body, whatever `Content-Length` they echo.
+///
+/// `1xx` is excluded on purpose — see [`status_is_interim`].
 fn status_is_bodiless(lower_head: &str) -> bool {
-    status_code(lower_head).is_some_and(|c| c == 204 || c == 304 || (100..200).contains(&c))
+    status_code(lower_head).is_some_and(|c| c == 204 || c == 304)
+}
+
+/// An interim `1xx`: bodiless, but a placeholder that precedes the real response rather than being
+/// one. It must be skipped over, never returned as the answer.
+fn status_is_interim(lower_head: &str) -> bool {
+    status_code(lower_head).is_some_and(|c| (100..200).contains(&c))
 }
 
 fn header_value<'a>(lower_head: &'a str, name: &str) -> Option<&'a str> {
@@ -1128,7 +1162,7 @@ mod tests {
     fn a_bodiless_status_is_complete_even_when_it_advertises_a_length() {
         // The status decides, not the header — so the check has to run before the framing headers
         // are consulted, which is the ordering the fix depends on.
-        for status in ["204 No Content", "304 Not Modified", "100 Continue"] {
+        for status in ["204 No Content", "304 Not Modified"] {
             let raw = format!("HTTP/1.1 {status}\r\nContent-Length: 4\r\n\r\n");
             let b = raw.as_bytes();
             let he = find_head_end(b).unwrap();
@@ -1143,6 +1177,83 @@ mod tests {
         assert!(
             !response_complete(raw, he, false),
             "a 200 that promised four bytes has not delivered them"
+        );
+    }
+
+    #[test]
+    fn an_interim_1xx_is_never_treated_as_the_response() {
+        // An earlier revision of this fix lumped 1xx in with 204/304 as "bodiless". Both are
+        // bodiless, but only 204/304 are *final*: RFC 9110 §15.2 makes 1xx a placeholder that
+        // precedes the real response on the same connection. Calling it complete returns the
+        // placeholder and silently discards the answer — a false negative on every check, and
+        // `103 Early Hints` is routine in front of a CDN, so this is not a rare shape.
+        for status in ["100 Continue", "103 Early Hints"] {
+            let raw = format!("HTTP/1.1 {status}\r\n\r\n");
+            let b = raw.as_bytes();
+            let he = find_head_end(b).unwrap();
+            assert!(
+                !response_complete(b, he, false),
+                "{status} is interim, not an answer"
+            );
+        }
+    }
+
+    #[test]
+    fn an_interim_response_is_stepped_over_and_the_real_one_is_returned() {
+        // The whole point: the reader must skip the placeholder and hand back what the origin
+        // actually answered, not the first head it happened to parse.
+        let wire = b"HTTP/1.1 103 Early Hints\r\nLink: </s.css>; rel=preload\r\n\r\n\
+                     HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+        let (got, framing) =
+            read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20, false).unwrap();
+        assert!(
+            got.starts_with(b"HTTP/1.1 200 OK"),
+            "the 200 is the response, got {:?}",
+            String::from_utf8_lossy(&got)
+        );
+        assert!(got.ends_with(b"hello"), "the real body must survive the skip");
+        assert!(
+            framing.exact_content_length,
+            "framing is classified from the real response, not the interim head"
+        );
+    }
+
+    #[test]
+    fn two_interim_responses_in_a_row_are_both_stepped_over() {
+        let wire = b"HTTP/1.1 100 Continue\r\n\r\n\
+                     HTTP/1.1 103 Early Hints\r\n\r\n\
+                     HTTP/1.1 204 No Content\r\nContent-Length: 7\r\n\r\n";
+        let (got, _) = read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20, false).unwrap();
+        assert!(
+            got.starts_with(b"HTTP/1.1 204"),
+            "both placeholders are skipped, got {:?}",
+            String::from_utf8_lossy(&got)
+        );
+    }
+
+    #[test]
+    fn a_bodiless_response_is_exactly_framed_so_it_does_not_demote_the_target() {
+        // Finding 1. `exact_content_length` used to be computed purely as `buf.len() == he + len`,
+        // which a 304 can never satisfy — the length it echoes describes the body a GET would have
+        // returned. Every bodiless response therefore looked unframed, and `demote_unless_exact`
+        // pinned the target to close-per-probe on one ordinary 304, destroying connection reuse for
+        // the rest of the audit on exactly the cached sites where it pays most.
+        let wire = b"HTTP/1.1 304 Not Modified\r\nContent-Length: 4\r\n\r\n";
+        let (_, framing) =
+            read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20, false).unwrap();
+        assert!(
+            framing.exact_content_length,
+            "a 304 is exactly delimited by its head"
+        );
+        assert!(framing.reusable(), "and its connection stays reusable");
+
+        // Same for a HEAD response, where only the request knows there is no body.
+        let wire = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n";
+        let (_, framing) =
+            read_response_framed(&mut Cursor::new(wire.to_vec()), 1 << 20, true).unwrap();
+        assert!(
+            framing.exact_content_length,
+            "a HEAD response ends at its head and is exactly framed"
         );
     }
 
