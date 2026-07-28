@@ -285,6 +285,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "burpsy-session"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "parking_lot",
+]
+
+[[package]]
 name = "burpsy-tools"
 version = "0.1.0"
 dependencies = [
