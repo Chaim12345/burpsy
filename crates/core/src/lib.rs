@@ -283,6 +283,37 @@ impl ChildRef {
     }
 }
 
+/// Which protocol carried an exchange.
+///
+/// An enum rather than an `is_h2: bool`, because a bool is the shape you regret: it answers one
+/// question and cannot answer the next one. HTTP/3 is not in this milestone, and if it ever is, this
+/// grows a variant instead of growing a second bool that has to be kept consistent with the first.
+///
+/// `Http1` is the [`Default`] deliberately: an exchange captured before this field existed *was*
+/// HTTP/1, so a pre-existing capture must read as HTTP/1 rather than as unknown. Defaulting to an
+/// `Unknown` variant would turn every historical record into a question mark and make the honest
+/// answer indistinguishable from a missing one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Protocol {
+    #[default]
+    Http1,
+    Http2,
+}
+
+impl Protocol {
+    /// The version token this protocol writes into an HTTP/1-shaped start line.
+    ///
+    /// `Http2` renders `HTTP/2` — not `HTTP/2.0`, which is not a thing RFC 9113 uses. This is the
+    /// token that lets an h2 exchange sit in history in HTTP/1 shape so every existing tool keeps
+    /// working on it.
+    pub fn version_token(&self) -> &'static str {
+        match self {
+            Protocol::Http1 => "HTTP/1.1",
+            Protocol::Http2 => "HTTP/2",
+        }
+    }
+}
+
 /// One proxied exchange. Holds ids, never payloads.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Exchange {
@@ -306,6 +337,13 @@ pub struct Exchange {
     /// this field existed still deserialises.
     #[serde(default)]
     pub related: Vec<ChildRef>,
+    /// Which protocol carried this exchange.
+    ///
+    /// `#[serde(default)]` for the same reason as `related`, and [`Protocol`]'s default is `Http1`
+    /// because an exchange captured before this field existed genuinely was HTTP/1 — see the type's
+    /// note on why that is not the same as defaulting to unknown.
+    #[serde(default)]
+    pub protocol: Protocol,
 }
 
 /// Append-only message log plus an exchange index.
@@ -928,6 +966,35 @@ mod tests {
         let ex: Exchange = serde_json::from_str(legacy).expect("legacy exchange must deserialise");
         assert_eq!(ex.id, 3);
         assert!(ex.related.is_empty());
+        // The same record predates `protocol` too, and it really was HTTP/1 — so reading it as
+        // HTTP/1 is the honest answer, not a guess. Defaulting to an `Unknown` variant would make
+        // every historical exchange indistinguishable from one we genuinely could not classify.
+        assert_eq!(ex.protocol, Protocol::Http1);
+    }
+
+    #[test]
+    fn a_protocol_renders_the_version_token_its_start_line_needs() {
+        // `HTTP/2`, not `HTTP/2.0` — RFC 9113 does not use a minor version. This token is what lets
+        // an h2 exchange sit in history in HTTP/1 shape.
+        assert_eq!(Protocol::Http2.version_token(), "HTTP/2");
+        assert_eq!(Protocol::Http1.version_token(), "HTTP/1.1");
+    }
+
+    #[test]
+    fn an_h2_exchange_round_trips_its_protocol_through_serde() {
+        let ex = Exchange {
+            id: 1,
+            protocol: Protocol::Http2,
+            host: "h2.test".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&ex).expect("serialise");
+        let back: Exchange = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(
+            back.protocol,
+            Protocol::Http2,
+            "protocol must survive a round trip"
+        );
     }
 
     // ---- STORE-01 / STORE-05: the disk-backed store ----

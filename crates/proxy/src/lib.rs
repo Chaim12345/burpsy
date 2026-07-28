@@ -26,7 +26,7 @@
 //! copy — the [`Exchange`] carries `MsgId`s only.
 
 use anyhow::{Context, Result};
-use burpsy_core::{Direction, Exchange, TrafficStore};
+use burpsy_core::{Direction, Exchange, Protocol, TrafficStore};
 use bytes::Bytes;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -167,15 +167,28 @@ async fn handle(mut client: TcpStream, cfg: ProxyConfig) -> Result<()> {
 async fn read_head(s: &mut TcpStream) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = vec![0u8; 8192];
+    // Where the terminator search has already looked. Without it, every 8 KiB chunk rescanned the
+    // whole accumulated buffer from byte 0 — quadratic in body size, so a 64 MiB upload cost on the
+    // order of 10^11 byte comparisons on the proxy's own read path. A proxy that gets slower as the
+    // upload grows is a proxy people turn off, which is the failure this project exists to avoid.
+    let mut searched = 0usize;
+    let mut head_end: Option<usize> = None;
     loop {
         let n = s.read(&mut chunk).await.context("read request")?;
         if n == 0 {
             break;
         }
         buf.extend_from_slice(&chunk[..n]);
-        if let Some(head_end) = find(&buf, b"\r\n\r\n") {
-            let want = content_length(&buf[..head_end]).unwrap_or(0);
-            if buf.len() >= head_end + 4 + want {
+        if head_end.is_none() {
+            // Resume 3 bytes back: the 4-byte terminator can straddle a chunk boundary, so the
+            // overlap is what keeps the incremental search equivalent to rescanning.
+            let from = searched.saturating_sub(3);
+            head_end = find(&buf[from..], b"\r\n\r\n").map(|i| from + i);
+            searched = buf.len();
+        }
+        if let Some(end) = head_end {
+            let want = content_length(&buf[..end]).unwrap_or(0);
+            if buf.len() >= end + 4 + want {
                 break;
             }
         }
@@ -262,6 +275,7 @@ async fn forward_http(
     let req_id = store.put(upstream_req.clone(), Direction::Request);
     let ex_id = store.add_exchange(Exchange {
         related: Vec::new(),
+        protocol: Protocol::Http1,
         id: 0,
         request: req_id,
         response: None,
@@ -401,6 +415,7 @@ async fn tunnel(mut client: TcpStream, target: &str, cfg: ProxyConfig) -> Result
     let req_id = store.put(marker, Direction::Request);
     let ex_id = store.add_exchange(Exchange {
         related: Vec::new(),
+        protocol: Protocol::Http1,
         id: 0,
         request: req_id,
         response: None,
@@ -547,6 +562,7 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         let req_id = store.put(req.clone(), Direction::Request);
         let ex_id = store.add_exchange(Exchange {
             related: Vec::new(),
+            protocol: Protocol::Http1,
             id: 0,
             request: req_id,
             response: None,
@@ -617,15 +633,24 @@ where
 {
     let mut buf = Vec::with_capacity(8192);
     let mut chunk = vec![0u8; 8192];
+    // Same incremental terminator search as `read_head`, for the same reason — this is the MITM
+    // loop's read path, so it carries every intercepted request and response.
+    let mut searched = 0usize;
+    let mut head_end: Option<usize> = None;
     loop {
         let n = s.read(&mut chunk).await.unwrap_or(0);
         if n == 0 {
             break;
         }
         buf.extend_from_slice(&chunk[..n]);
-        if let Some(head_end) = find(&buf, b"\r\n\r\n") {
-            let want = content_length(&buf[..head_end]).unwrap_or(0);
-            if buf.len() >= head_end + 4 + want {
+        if head_end.is_none() {
+            let from = searched.saturating_sub(3);
+            head_end = find(&buf[from..], b"\r\n\r\n").map(|i| from + i);
+            searched = buf.len();
+        }
+        if let Some(end) = head_end {
+            let want = content_length(&buf[..end]).unwrap_or(0);
+            if buf.len() >= end + 4 + want {
                 break;
             }
         }
@@ -818,6 +843,7 @@ fn record_drop(
     let req_id = store.put(raw, Direction::Request);
     let ex_id = store.add_exchange(Exchange {
         related: Vec::new(),
+        protocol: Protocol::Http1,
         id: 0,
         request: req_id,
         response: None,
@@ -856,6 +882,7 @@ fn record_failed_connect(
     let req_id = store.put(marker, Direction::Request);
     let ex_id = store.add_exchange(Exchange {
         related: Vec::new(),
+        protocol: Protocol::Http1,
         id: 0,
         request: req_id,
         response: None,
@@ -951,6 +978,63 @@ mod tests {
             Some(42)
         );
         assert_eq!(content_length(b"GET / HTTP/1.1\r\n"), None);
+    }
+
+    /// The incremental header-terminator search in `read_head`/`read_message` must find exactly what
+    /// a full rescan would, including when the four-byte terminator straddles a chunk boundary.
+    ///
+    /// Written as a property over every possible split rather than a couple of hand-picked offsets,
+    /// because the failure mode is a specific alignment: resume without the 3-byte overlap and the
+    /// terminator is missed only when it happens to span the seam, which no fixed-size fixture is
+    /// guaranteed to hit.
+    #[test]
+    fn the_incremental_terminator_search_agrees_with_a_full_rescan_at_every_split() {
+        let msg: &[u8] = b"POST /upload HTTP/1.1\r\nHost: x.test\r\nContent-Length: 5\r\n\r\nhello";
+        let full = find(msg, b"\r\n\r\n").expect("the terminator is present");
+
+        for split in 1..msg.len() {
+            // Feed the message as two chunks split at every possible offset, mirroring the loop's
+            // resume logic exactly.
+            let mut buf: Vec<u8> = Vec::new();
+            let mut searched = 0usize;
+            let mut head_end: Option<usize> = None;
+
+            for part in [&msg[..split], &msg[split..]] {
+                buf.extend_from_slice(part);
+                if head_end.is_none() {
+                    let from = searched.saturating_sub(3);
+                    head_end = find(&buf[from..], b"\r\n\r\n").map(|i| from + i);
+                    searched = buf.len();
+                }
+            }
+
+            assert_eq!(
+                head_end,
+                Some(full),
+                "split at {split} found {head_end:?}, but a full rescan finds {full} — the resume \
+                 overlap is not covering a terminator that straddles the seam"
+            );
+        }
+    }
+
+    /// A buffer with no terminator yet must keep reading rather than settle on a wrong answer.
+    #[test]
+    fn an_incomplete_head_reports_no_terminator_rather_than_guessing() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut searched = 0usize;
+        let mut head_end: Option<usize> = None;
+        for part in [&b"GET / HTTP/1.1\r\n"[..], &b"Host: x.test\r\n"[..]] {
+            buf.extend_from_slice(part);
+            if head_end.is_none() {
+                let from = searched.saturating_sub(3);
+                head_end = find(&buf[from..], b"\r\n\r\n").map(|i| from + i);
+                searched = buf.len();
+            }
+        }
+        assert_eq!(
+            head_end, None,
+            "no CRLFCRLF has arrived, so there is no head end yet"
+        );
     }
 
     #[test]

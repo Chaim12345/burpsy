@@ -329,6 +329,7 @@ async fn repeater_send(State(s): State<AppState>, Json(req): Json<SendReq>) -> i
         .put(raw.clone().into_bytes().into(), Direction::Request);
     let ex_id = s.store.add_exchange(Exchange {
         related: Vec::new(),
+        protocol: burpsy_core::Protocol::Http1,
         id: 0,
         request: req_id,
         response: None,
@@ -927,6 +928,7 @@ mod tests {
         );
         store.add_exchange(Exchange {
             related: Vec::new(),
+            protocol: burpsy_core::Protocol::Http1,
             id: 0,
             request: id,
             response: None,

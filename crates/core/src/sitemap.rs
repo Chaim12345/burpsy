@@ -389,7 +389,7 @@ fn insert_status(v: &mut Vec<u16>, s: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Direction, MsgId};
+    use crate::{Direction, MsgId, Protocol};
     use bytes::Bytes;
 
     fn ex(
@@ -402,6 +402,7 @@ mod tests {
     ) -> Exchange {
         Exchange {
             related: Vec::new(),
+            protocol: Protocol::Http1,
             id,
             request: MsgId(id),
             response: status.map(|_| MsgId(id)),
@@ -556,6 +557,7 @@ mod tests {
             );
             store.add_exchange(Exchange {
                 related: Vec::new(),
+                protocol: Protocol::Http1,
                 id: 0,
                 request: id,
                 response: None,
@@ -596,6 +598,7 @@ mod tests {
         );
         let ex_id = store.add_exchange(Exchange {
             related: Vec::new(),
+            protocol: Protocol::Http1,
             id: 0,
             request: req,
             response: None,

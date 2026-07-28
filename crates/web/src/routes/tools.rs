@@ -855,6 +855,7 @@ mod tests {
         );
         let ex = store.add_exchange(Exchange {
             related: Vec::new(),
+            protocol: burpsy_core::Protocol::Http1,
             id: 0,
             request: req,
             response: None,
