@@ -10,9 +10,19 @@ cd "$(dirname "$0")"
 
 QUICK=${QUICK:-0}   # QUICK=1 skips the e2e suites (they need free ports and ~1 min)
 FAIL=0
+SKIP=0
+SKIPPED=()
 step(){ printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 ok(){   printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
 no(){   printf '  \033[31mFAIL\033[0m  %s\n' "$1"; FAIL=$((FAIL+1)); }
+# A check that did not run is NOT a check that passed.
+#
+# All three of these used to call `ok`, so an absent BCheck corpus, a missing rustup, or QUICK=1
+# printed green and the summary said VERIFIED. That is the failure HARD-02 names: "a skipped check
+# reports as skipped rather than as a pass". It matters more than it looks — verify.sh is the single
+# definition of "this tree is good" and integrate.sh runs it after every merge, so a skip that reads
+# as a pass silently lowers the bar a branch was held to.
+skip(){ printf '  \033[33mSKIP\033[0m  %s\n' "$1"; SKIP=$((SKIP+1)); SKIPPED+=("$1"); }
 
 step "build (warnings count as failure)"
 BUILD=$(cargo build --workspace 2>&1)
@@ -70,7 +80,7 @@ if command -v rustup >/dev/null 2>&1 \
     fi
   fi
 else
-  ok "rustup not available, clippy skipped"
+  skip "clippy did not run: rustup not available (its clippy-driver must match the rustc that built the deps)"
 fi
 
 step "unit tests"
@@ -96,11 +106,11 @@ if [ -d /tmp/BChecks ]; then
   [ "${MODS:-0}" -ge 381 ] && ok "$MODS modifier clauses captured (>=381)" \
     || no "only ${MODS:-0} modifier clauses captured, expected >=381"
 else
-  ok "corpus not present, conformance skipped"
+  skip "BCheck corpus conformance did not run: /tmp/BChecks absent — the partition invariant is UNVERIFIED on this machine"
 fi
 
 if [ "$QUICK" = "1" ]; then
-  step "e2e suites"; ok "skipped (QUICK=1)"
+  step "e2e suites"; skip "e2e suites did not run (QUICK=1)"
 else
   step "e2e suites"
   # Sequential: each script does `pkill -x burpsy` on cleanup and would kill its siblings.
@@ -115,7 +125,28 @@ else
   done
 fi
 
+# The verdict distinguishes three states, not two. "Everything that ran, passed" and "everything
+# passed" are different claims, and only the second one earns an unqualified VERIFIED.
+if [ "$SKIP" -gt 0 ]; then
+  printf '\n\033[1m%s check(s) did not run:\033[0m\n' "$SKIP"
+  for s in "${SKIPPED[@]}"; do printf '  \033[33m-\033[0m %s\n' "$s"; done
+fi
+
 printf '\n\033[1m######## '
-[ "$FAIL" -eq 0 ] && printf '\033[32mVERIFIED\033[0m' || printf "\033[31m$FAIL CHECK(S) FAILED\033[0m"
+if [ "$FAIL" -ne 0 ]; then
+  printf "\033[31m$FAIL CHECK(S) FAILED\033[0m"
+elif [ "$SKIP" -gt 0 ]; then
+  printf "\033[33mVERIFIED WITH GAPS ($SKIP skipped)\033[0m"
+else
+  printf '\033[32mVERIFIED\033[0m'
+fi
 printf '\033[1m ########\033[0m\n'
+
+# Exit code stays the failure count: a skip is not a failure, and making it one would mean nobody
+# could run QUICK=1. The distinction is carried in the summary, which is what a human reads, and in
+# STRICT=1 for a caller that wants skips to be fatal.
+if [ "${STRICT:-0}" = "1" ] && [ "$SKIP" -gt 0 ] && [ "$FAIL" -eq 0 ]; then
+  printf '\033[31mSTRICT=1: %s skipped check(s) treated as failure\033[0m\n' "$SKIP"
+  exit "$SKIP"
+fi
 exit "$FAIL"
