@@ -152,7 +152,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | H2-01 | Phase 2 | Pending |
 | H2-02 | Phase 2 | Pending |
 | H2-03 | Phase 2 | Pending |
-| H2-04 | Phase 2 | Pending |
+| H2-04 | Phase 2 | Pending — will be Partial: the proxy mirrors the target's ALPN and never bridges, but scanner and Intruder egress remain HTTP/1.1-only; protocol-aware audit egress is not in Phase 2 |
 | DSL-01 | Phase 3 | Pending |
 | DSL-02 | Phase 3 | Pending |
 | DSL-04 | Phase 3 | Pending |
