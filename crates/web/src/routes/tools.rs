@@ -780,6 +780,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_decode_endpoint_reports_truncated_for_a_broken_deflate_body() {
+        // QA finding 4's route-level half: `truncated` is threaded from `decoder::decode` into
+        // `BytesView`, but nothing asserted it actually reaches the wire. A body cut deep enough
+        // to break mid-stream, decoded explicitly as `deflate`, must come back with
+        // `"truncated":true` rather than a clean 200 that looks whole.
+        let (addr, store) = serve().await;
+        let body = b"the quick brown fox jumps over the lazy dog, repeatedly, for good measure. "
+            .repeat(200);
+        let full = decoder::encode(Layer::Deflate, &body).unwrap();
+        let cut = full.len() * 2 / 3;
+        let msg = store.put(
+            bytes::Bytes::copy_from_slice(&full[..cut]),
+            Direction::Response,
+        );
+        let (code, resp) = post(
+            &addr,
+            "/api/tools/decode",
+            &format!(r#"{{"msg_id":{},"encoding":"deflate"}}"#, msg.0),
+        )
+        .await;
+        assert_eq!(code, 200, "{resp}");
+        assert!(resp.contains(r#""truncated":true"#), "{resp}");
+
+        // A whole body decodes with `truncated` explicitly `false`, not merely absent — the
+        // client cannot distinguish "complete" from "field missing" otherwise.
+        let msg_whole = store.put(bytes::Bytes::copy_from_slice(&full), Direction::Response);
+        let (code, resp) = post(
+            &addr,
+            "/api/tools/decode",
+            &format!(r#"{{"msg_id":{},"encoding":"deflate"}}"#, msg_whole.0),
+        )
+        .await;
+        assert_eq!(code, 200, "{resp}");
+        assert!(resp.contains(r#""truncated":false"#), "{resp}");
+    }
+
+    #[tokio::test]
     async fn the_comparer_endpoint_reports_a_single_word_change() {
         let (addr, _) = serve().await;
         let (code, body) = post(

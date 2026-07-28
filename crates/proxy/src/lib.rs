@@ -255,9 +255,11 @@ async fn forward_http(
 
     let in_scope = cfg.scope.contains(&host_only, port, &path, false);
     if !in_scope {
-        // Forward transparently but do not retain. Counted so the UI can show it is happening.
-        // Interception is deliberately downstream of this test: out-of-scope traffic is not the
-        // engagement's business, and holding it would freeze whatever else the browser is doing.
+        // Forward transparently but do not retain. Interception is deliberately downstream of
+        // this test: out-of-scope traffic is not the engagement's business, and holding it would
+        // freeze whatever else the browser is doing. Not recorded at all — this is the ordinary,
+        // expected case for everything outside scope, and a marker row per unrelated request
+        // would make history noisier than the traffic anyone asked to see.
         return forward_only(client, upstream_req, &host_only, port).await;
     }
 
@@ -295,7 +297,11 @@ async fn forward_http(
     // governs retention, not egress (see `ProxyConfig::scope`), so a request edited onto an
     // excluded path must not be stored or passively scanned — preventing exactly that retention is
     // what the exclusion is for. The request still goes out, as out-of-scope traffic always does.
+    // Unlike the ordinary out-of-scope case above, this one *is* recorded: the request was already
+    // shown to the operator as in-scope, so their own edit is what moved it out — silence here
+    // would let them edit a request out of history and never know it happened.
     if !cfg.scope.contains(&host_only, port, &path, false) {
+        record_scope_skip(&store, &host_only, port, false, &method, &path);
         return forward_only(client, upstream_req.to_vec(), &host_only, port).await;
     }
 
@@ -653,6 +659,11 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         };
 
         let (method, path) = start_line_parts(&req);
+        // Scope was never tested for this loop at all before this line — unlike `forward_http`,
+        // which gates once before the hold and once after. Test it now, against the pre-hold
+        // path, so ordinary out-of-scope MITM traffic (never edited, never held) is forwarded
+        // without being stored, exactly as `forward_http`'s line-256 gate does for plain HTTP.
+        let in_scope_before = cfg.scope.contains(&host, port, &path, true);
         let req = match hold_for_review(&cfg, &host, port, true, &method, &path, Bytes::from(req))
             .await
         {
@@ -673,26 +684,42 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         // As on the plain path: index the bytes that go out, not the ones that came in.
         let (method, path) = start_line_parts(&req);
 
-        let req_id = store.put(req.clone(), Direction::Request);
-        let ex_id = store.add_exchange(Exchange {
-            related: Vec::new(),
-            // The protocol this connection actually negotiated. `Http1` here is a measurement, not a
-            // default: the h2 arm returned above, so reaching this line means ALPN settled on
-            // http/1.1 or the target sent no ALPN extension at all.
-            protocol,
-            id: 0,
-            request: req_id,
-            response: None,
-            host: host.clone(),
-            port,
-            tls: true,
-            method,
-            path,
-            status: None,
-            response_len: 0,
-            started_ms: now_ms(),
-            duration_ms: 0,
-            notes: Some("intercepted".into()),
+        // Scope was tested against the PRE-edit path above; the operator may have rewritten it
+        // since. Scope governs retention, not egress (see `ProxyConfig::scope`), so a request
+        // edited onto an excluded path must not be stored or passively scanned, but it still goes
+        // out — this is the identical rule `forward_http` applies at its own post-edit check.
+        let in_scope_after = cfg.scope.contains(&host, port, &path, true);
+        let retain = in_scope_before && in_scope_after;
+        // Only a request that WAS in scope and got edited out of it is worth a history row: the
+        // operator saw it as in-scope before touching it. Ordinary out-of-scope MITM traffic that
+        // was never held (see `hold_for_review`'s internal scope test) gets none, matching
+        // `forward_http`'s line-256 gate, which also stays silent for traffic nobody asked to see.
+        if in_scope_before && !in_scope_after {
+            record_scope_skip(&store, &host, port, true, &method, &path);
+        }
+
+        let ex_id = retain.then(|| {
+            let req_id = store.put(req.clone(), Direction::Request);
+            store.add_exchange(Exchange {
+                related: Vec::new(),
+                // The protocol this connection actually negotiated. `Http1` here is a measurement,
+                // not a default: the h2 arm returned above, so reaching this line means ALPN
+                // settled on http/1.1 or the target sent no ALPN extension at all.
+                protocol,
+                id: 0,
+                request: req_id,
+                response: None,
+                host: host.clone(),
+                port,
+                tls: true,
+                method,
+                path,
+                status: None,
+                response_len: 0,
+                started_ms: now_ms(),
+                duration_ms: 0,
+                notes: Some("intercepted".into()),
+            })
         });
 
         let started = Instant::now();
@@ -724,17 +751,21 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         }
         let _ = tls_client.flush().await;
 
-        let status = parse_status(&resp);
-        let len = resp.len();
-        let resp_id = store.put(Bytes::from(resp), Direction::Response);
-        store.set_response(
-            ex_id,
-            resp_id,
-            status.unwrap_or(0),
-            len,
-            started.elapsed().as_millis() as u64,
-        );
-        spawn_scan(&cfg, ex_id, resp_id);
+        // Out-of-scope traffic (before or after the edit) is relayed above like any other request;
+        // it is simply never given an exchange to attach a response to.
+        if let Some(ex_id) = ex_id {
+            let status = parse_status(&resp);
+            let len = resp.len();
+            let resp_id = store.put(Bytes::from(resp), Direction::Response);
+            store.set_response(
+                ex_id,
+                resp_id,
+                status.unwrap_or(0),
+                len,
+                started.elapsed().as_millis() as u64,
+            );
+            spawn_scan(&cfg, ex_id, resp_id);
+        }
 
         if client_gone {
             break;
@@ -895,9 +926,11 @@ enum Reviewed {
 
 /// Park a request for operator review, if interception is on and the target is in scope.
 ///
-/// The scope test is repeated here even though `forward_http` already made it: the MITM path has no
-/// equivalent gate, and "out-of-scope traffic passes through untouched" is a property that must hold
-/// for every caller, not just the one that happens to check first.
+/// The scope test is repeated here even though `forward_http` and `mitm` each make it again after
+/// this call, at the post-edit point: this one decides whether to hold at all, theirs decide
+/// whether to retain what was actually sent. "Out-of-scope traffic passes through untouched" has
+/// to hold for every caller and at every point an edit could move something out of scope, not just
+/// the one that happens to check first.
 async fn hold_for_review(
     cfg: &ProxyConfig,
     host: &str,
@@ -978,6 +1011,42 @@ fn record_drop(
     let len = response.len();
     let resp_id = store.put(response, Direction::Response);
     store.set_response(ex_id, resp_id, 403, len, 0);
+}
+
+/// Record that an operator's own edit moved an already-shown request onto an excluded path.
+///
+/// Scope governs retention, not egress (see `ProxyConfig::scope`): the request still reaches its
+/// origin exactly as ordinary out-of-scope traffic does, so this is called right before the
+/// transparent forward, never instead of it. What it must not do is store the edited bytes — that
+/// is the whole point of the exclusion — so a synthetic marker stands in for them, the same trade
+/// `tunnel` makes for a passed-through `CONNECT`: the *fact* that scope stopped retention belongs
+/// in history, the excluded content does not. Called for both plain HTTP and MITM; unlike ordinary
+/// out-of-scope traffic, this is worth a row because the operator saw the request as in-scope
+/// before editing it — their own edit is what moved it out, and silence here would hide that.
+fn record_scope_skip(store: &TrafficStore, host: &str, port: u16, tls: bool, method: &str, path: &str) {
+    let marker = Bytes::from(format!(
+        "{method} {path} — edited onto an excluded path; forwarded to the origin, not retained\r\n\r\n"
+    ));
+    let req_id = store.put(marker, Direction::Request);
+    store.add_exchange(Exchange {
+        related: Vec::new(),
+        protocol: Protocol::Http1,
+        id: 0,
+        request: req_id,
+        response: None,
+        host: host.to_string(),
+        port,
+        tls,
+        method: method.to_string(),
+        path: path.to_string(),
+        status: None,
+        response_len: 0,
+        started_ms: now_ms(),
+        duration_ms: 0,
+        notes: Some(
+            "edited onto an excluded path: forwarded to the origin, not retained".to_string(),
+        ),
+    });
 }
 
 /// Record a `CONNECT` that never became a tunnel.

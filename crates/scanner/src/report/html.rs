@@ -444,6 +444,8 @@ fn unit_word(u: Unit, n: usize) -> &'static str {
         (Unit::Responses, _) => "responses",
         (Unit::Items, 1) => "item",
         (Unit::Items, _) => "items",
+        (Unit::InsertionPoints, 1) => "insertion point",
+        (Unit::InsertionPoints, _) => "insertion points",
     }
 }
 

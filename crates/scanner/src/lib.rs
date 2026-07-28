@@ -586,6 +586,13 @@ impl PassiveScanner {
                     Ok(found) => {
                         o.ran += 1;
                         breaker.check_succeeded();
+                        // A check that ran real points can still have declined others alongside
+                        // them (a body the enumerator could not splice into, most often). That is
+                        // partial coverage, not a clean result and not a skip — the check did run,
+                        // so it stays `Ran`, but the decline must still reach the report. Overlaid
+                        // rather than counted as its own disposition so `considered()` and
+                        // `dispositions()` keep partitioning dispatched work exactly once.
+                        o.declined.extend(ctx.declined());
                         for f in found {
                             self.record(
                                 f,
@@ -600,6 +607,16 @@ impl PassiveScanner {
                     Err(burpsy_bcheck::eval::EvalError::SendFailed(_)) => {
                         o.send_failures += 1;
                         abandoned = breaker.check_failed();
+                    }
+                    // An insertion-point check declined in full: every place it could have
+                    // injected into was refused, so nothing ran. The reasons are carried on the
+                    // error rather than an overlay — unlike the mixed case above, there is no
+                    // `Ran` dispatch to overlay them onto.
+                    Err(burpsy_bcheck::eval::EvalError::Unsupported(
+                        burpsy_bcheck::eval::Unsupported::InsertionDeclined(reasons),
+                    )) => {
+                        o.skipped += 1;
+                        o.declined.extend(reasons);
                     }
                     // The evaluator declining a construct says nothing about the target's health,
                     // so it neither trips the breaker nor clears a failure streak.
@@ -820,6 +837,17 @@ pub struct AuditOutcome {
     /// True when the time budget stopped the run. Reported so "found nothing" is distinguishable
     /// from "never finished looking".
     pub timed_out: bool,
+    /// Insertion places declined by the enumerator (a body it could not splice into, most often),
+    /// as `"what: reason"` lines.
+    ///
+    /// Deliberately not a disposition and not counted in [`AuditOutcome::considered`] or
+    /// [`AuditOutcome::dispositions`]: a check with header points that ran and a body that was
+    /// declined is still `Ran` exactly once, and adding a tenth partition here would either
+    /// double-count that dispatch or force a choice between "ran" and "declined" for a check that
+    /// is legitimately both. This overlays the disposition histogram instead of joining it — one
+    /// entry per declined place, independent of whether the check that hit it ended up `Ran` (a
+    /// mixed request) or `Unsupported` (a request whose only insertion point was declined).
+    pub declined: Vec<String>,
     pub error: Option<String>,
 }
 

@@ -182,6 +182,12 @@ pub struct Ctx<'a> {
     point: Option<InsertionPoint>,
     /// Paths a check referenced that this context could not supply.
     unresolved: RefCell<BTreeSet<String>>,
+    /// Insertion places [`run_active`] enumerated but could not splice a payload into, while real
+    /// points from the same request still ran. A non-partitioning overlay, not a `Disposition`:
+    /// the check that populates this still counts exactly once as `Ran`, because it did run —
+    /// just not against every place it could have. Empty on every context that is not the outer
+    /// one `run_active` hands the caller; per-point child contexts never write here.
+    declined: RefCell<Vec<String>>,
     /// `random_str` state, seeded from the message so probes are reproducible per target.
     rng: Cell<u64>,
 }
@@ -201,6 +207,7 @@ impl<'a> Ctx<'a> {
             vars: HashMap::new(),
             point: None,
             unresolved: RefCell::new(BTreeSet::new()),
+            declined: RefCell::new(Vec::new()),
             rng: Cell::new(seed | 1),
         }
     }
@@ -229,6 +236,7 @@ impl<'a> Ctx<'a> {
             vars,
             point: self.point.clone(),
             unresolved: RefCell::new(BTreeSet::new()),
+            declined: RefCell::new(Vec::new()),
             rng: Cell::new(self.rng.get()),
         }
     }
@@ -251,6 +259,7 @@ impl<'a> Ctx<'a> {
             vars,
             point: Some(point),
             unresolved: RefCell::new(BTreeSet::new()),
+            declined: RefCell::new(Vec::new()),
             rng: Cell::new(self.rng.get()),
         }
     }
@@ -259,6 +268,12 @@ impl<'a> Ctx<'a> {
     /// written against data the engine does not expose, which is a bug to fix, not a finding.
     pub fn unresolved(&self) -> Vec<String> {
         self.unresolved.borrow().iter().cloned().collect()
+    }
+
+    /// Insertion places declined alongside real points that still ran. See the field doc for why
+    /// this is not a `Disposition`.
+    pub fn declined(&self) -> Vec<String> {
+        self.declined.borrow().clone()
     }
 
     fn record_send(
@@ -505,13 +520,20 @@ pub enum Unsupported {
     /// An insertion-point check whose enumeration was *declined* in full: the request had a place
     /// to inject (a body) that the enumerator refuses to splice into — multipart, XML, a non-UTF-8
     /// body — and no other point of the requested kinds existed. Carries the enumerator's own
-    /// reasons, one per declined place.
+    /// [`crate::insertion::Declined::describe`] lines, one per declined place.
     ///
     /// Surfaced as skipped rather than clean. Returning `Ok(vec![])` here was the silent false
     /// negative: a `given body insertion point` check against a multipart form reported "tested,
     /// found nothing" while testing nothing at all, which is exactly the lie REPORT-04 and DASH-03
-    /// exist to prevent. A check that still has real points to test is NOT declined — it runs them
-    /// and the declined place is merely not among them.
+    /// exist to prevent.
+    ///
+    /// A check that still has real points to test is NOT declined in this sense — it runs them,
+    /// and [`Ctx::declined`] on the caller's context carries the declined place instead. The split
+    /// matters because it is the common case, not the rare one: `want()` treats `IpType::Any` as
+    /// wanting every kind, and the header loop emits a point for every non-reserved header, so a
+    /// plain `given insertion point` check against a `multipart/form-data` or
+    /// `application/x-protobuf` POST almost always has header points regardless of the body. Only
+    /// `given body insertion point` with nothing else to test ever reaches this variant.
     InsertionDeclined(Vec<String>),
 }
 
@@ -586,13 +608,26 @@ pub fn run_active(
     // multipart or non-UTF-8 body, say. When that is the *only* place the check asked for, the
     // enumeration comes back empty but not clean: surfacing the decline as `Unsupported` makes the
     // scanner count it as skipped rather than "tested, found nothing", which was the silent false
-    // negative. When real points exist alongside a decline, the check runs them and the declined
-    // place is merely not among them — no error.
+    // negative.
     if points.is_empty() && !declined.is_empty() {
         return Err(Unsupported::InsertionDeclined(
-            declined.iter().map(|d| d.reason.clone()).collect(),
+            declined.iter().map(|d| d.describe()).collect(),
         )
         .into());
+    }
+    // When real points exist alongside a decline, the check runs them — a mixed request is not
+    // fully declined — but the decline itself must not vanish. This is the common case, not the
+    // rare one: `want()` treats `IpType::Any` as wanting every kind, and the header loop emits a
+    // point for every non-reserved header, so a plain `given insertion point` check against a
+    // multipart or protobuf POST almost always has header points regardless of the body. Losing
+    // the decline here silently turned "3 header points ran, the body was untestable" into
+    // "ran, found nothing" — the same lie `InsertionDeclined` exists to prevent, on the path that
+    // actually gets hit. Recorded on the caller's context rather than returned, because the check
+    // still produces `Ok` — see [`Ctx::declined`].
+    if !declined.is_empty() {
+        ctx.declined
+            .borrow_mut()
+            .extend(declined.iter().map(|d| d.describe()));
     }
     // An empty point list with no declines is not an error: a bare `GET /` has nowhere to inject,
     // and the check simply has nothing to do against this request.
@@ -1997,6 +2032,102 @@ given response then
             EvalError::SendFailed(_)
         ));
         assert_eq!(m.count(), 0);
+    }
+
+    // ---- C-1 fix, and the QA finding on it: a decline must never be dropped -----------------
+    //
+    // `insertion::enumerate` can decline a place to inject (a multipart or non-UTF-8 body) while
+    // still handing back real points elsewhere. The check runs those points — that part was
+    // already right — but the decline itself must reach the caller, because "3 header points ran,
+    // the body was untestable" is not the same claim as "ran, found nothing".
+
+    /// A request whose body the enumerator refuses to splice into, with a query parameter and a
+    /// non-reserved header alongside it — the common shape a multipart or protobuf POST takes.
+    fn multipart_req_with_other_points() -> RequestEdit {
+        RequestEdit::from_raw(
+            b"POST /upload?csrf=abc HTTP/1.1\r\n\
+              Host: x.test\r\n\
+              X-Requested-With: burpsy\r\n\
+              Content-Type: multipart/form-data; boundary=B\r\n\
+              Content-Length: 40\r\n\
+              \r\n\
+              --B\r\nContent-Disposition: form-data\r\n\r\nv\r\n",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_mixed_request_runs_its_real_points_and_still_surfaces_the_declined_body() {
+        // This is the finding: `points.is_empty()` is false here (query and header points exist),
+        // so the old code fell straight through the guard and returned `Ok` with the decline
+        // dropped on the floor. A check reported as having run must still say it declined the
+        // body — this assertion fails without that fix.
+        let check = parse_check("given insertion point then\n send payload:\n  appending: \"'\"");
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(8);
+        let ctx = ctx_with(&base, multipart_req_with_other_points());
+        let f = run_active(&check, &ctx, &m, &tgt()).unwrap();
+        assert_eq!(f, vec![], "no report statement in this check, no findings expected");
+        assert!(
+            m.count() > 0,
+            "the query and header points must still run, not be swallowed by the body decline"
+        );
+        let declined = ctx.declined();
+        assert!(
+            !declined.is_empty(),
+            "the declined body must be surfaced even though other points ran"
+        );
+        assert!(
+            declined.iter().any(|d| d.starts_with("request body: ")),
+            "the identity must name what was declined (Declined::what), not just why: {declined:?}"
+        );
+        assert!(
+            declined.iter().any(|d| d.contains("multipart")),
+            "the reason must explain why, got {declined:?}"
+        );
+    }
+
+    #[test]
+    fn a_request_declined_in_full_still_returns_an_error() {
+        // No query, no non-reserved header — `given body insertion point` restricts enumeration to
+        // the one place this request has to offer, and that place is declined. Unlike the mixed
+        // case above, there is nothing left to run: this must still be `Err`.
+        let check =
+            parse_check("given body insertion point then\n send payload:\n  appending: \"'\"");
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let req = RequestEdit::from_raw(
+            b"POST /u HTTP/1.1\r\n\
+              Host: x.test\r\n\
+              Content-Type: multipart/form-data; boundary=B\r\n\
+              Content-Length: 40\r\n\
+              \r\n\
+              --B\r\nContent-Disposition: form-data\r\n\r\nv\r\n",
+        )
+        .unwrap();
+        let m = MockSender::new(vec![]);
+        let err = run_active(&check, &ctx_with(&base, req), &m, &tgt()).unwrap_err();
+        match err {
+            EvalError::Unsupported(Unsupported::InsertionDeclined(reasons)) => {
+                assert!(!reasons.is_empty());
+                assert!(reasons.iter().any(|r| r.starts_with("request body: ")));
+                assert!(reasons.iter().any(|r| r.contains("multipart")));
+            }
+            other => panic!("expected InsertionDeclined, got {other:?}"),
+        }
+        assert_eq!(m.count(), 0, "a fully declined check must send nothing");
+    }
+
+    #[test]
+    fn a_clean_request_with_no_declines_leaves_the_overlay_empty() {
+        // `given insertion point` (not `given query …`) so `body_points` actually runs against
+        // `wide_req`'s form body and has the chance to decline it. It does not — a form body is a
+        // modelled container — so the overlay must stay empty rather than inventing a phantom row.
+        let check = parse_check("given insertion point then\n send payload:\n  appending: \"'\"");
+        let base = resp(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let m = ok_replies(20);
+        let ctx = ctx_with(&base, wide_req());
+        run_active(&check, &ctx, &m, &tgt()).unwrap();
+        assert_eq!(ctx.declined(), Vec::<String>::new());
     }
 
     // ---- absent bindings must never read as evidence -------------------------------------

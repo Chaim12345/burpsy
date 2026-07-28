@@ -117,6 +117,16 @@ pub struct Declined {
     pub reason: String,
 }
 
+impl Declined {
+    /// One line naming both what was declined and why, for a report row or an `Unsupported`
+    /// payload. Neither field alone is enough: `reason` without `what` reads as an unattributed
+    /// error, and a check with several `given … insertion point` clauses can decline more than
+    /// one kind of place.
+    pub fn describe(&self) -> String {
+        format!("{}: {}", self.what, self.reason)
+    }
+}
+
 /// Headers a payload must not be placed in.
 ///
 /// `Host` selects the virtual host, so a payload there tests a different application and the finding

@@ -412,6 +412,8 @@ fn not_checked_sentence(row: &NotChecked) -> String {
         (Unit::Responses, _) => "captured responses",
         (Unit::Items, 1) => "audit item",
         (Unit::Items, _) => "audit items",
+        (Unit::InsertionPoints, 1) => "insertion point",
+        (Unit::InsertionPoints, _) => "insertion points",
     };
     let mut s = format!(
         "Not checked: {} {unit} — {} [{}]",

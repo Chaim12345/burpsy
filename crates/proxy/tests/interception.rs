@@ -6,7 +6,7 @@
 //! the interceptor directly.
 
 use burpsy_core::{Scope, ScopeRule, TrafficStore};
-use burpsy_proxy::{Interceptor, ProxyConfig};
+use burpsy_proxy::{Interceptor, ProxyConfig, TlsEngine, tls};
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 /// An origin that echoes what it was asked for and counts how many requests actually arrived.
 struct Origin {
@@ -88,7 +89,10 @@ async fn through_proxy(proxy: SocketAddr, origin: SocketAddr, path: &str) -> Str
 }
 
 /// Read headers, then exactly the declared body. Falls back to EOF when unframed.
-async fn read_response(s: &mut TcpStream) -> String {
+///
+/// Generic over the stream so both a plain `TcpStream` (HTTP) and a `TlsStream` (MITM) share one
+/// completion rule — a duplicated copy for TLS is exactly how the two paths would drift apart.
+async fn read_response<S: AsyncReadExt + Unpin>(s: &mut S) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     while let Ok(n) = s.read(&mut chunk).await {
@@ -130,6 +134,110 @@ fn config(store: Arc<TrafficStore>, ic: Arc<Interceptor>, scope: Scope) -> Proxy
     ProxyConfig::new(store)
         .with_scope(scope)
         .with_interceptor(ic)
+}
+
+fn tls_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+}
+
+/// A fresh CA-backed engine, one per test — MITM needs a real leaf-signing engine, and each test
+/// gets its own so none can interfere with another's certificate cache.
+fn tls_engine() -> Arc<TlsEngine> {
+    let (ca, _, _) = tls::generate_ca("burpsy interception test").unwrap();
+    Arc::new(TlsEngine::new(ca))
+}
+
+/// A TLS origin that echoes the request line, exactly like `spawn_origin` but over a real TLS
+/// socket and offering only `http/1.1` — the MITM scope test needs ciphertext the proxy actually
+/// has to decrypt, not a plaintext stand-in.
+async fn spawn_tls_origin() -> SocketAddr {
+    let eng = tls_engine();
+    let mut server_cfg = rustls::ServerConfig::builder_with_provider(tls_provider())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_cert_resolver(eng.resolver_for("localhost"));
+    server_cfg.alpn_protocols = vec![tls::ALPN_HTTP11.to_vec()];
+    let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        // Keep the engine alive for the life of the origin: the resolver holds the only CA.
+        let _eng = eng;
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                break;
+            };
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let Ok(mut tls) = acceptor.accept(sock).await else {
+                    return;
+                };
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let Ok(n) = tls.read(&mut chunk).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let line = String::from_utf8_lossy(&buf);
+                let start = line.lines().next().unwrap_or_default();
+                let mut it = start.split_whitespace();
+                let body = format!(
+                    "ORIGIN {} {}",
+                    it.next().unwrap_or_default(),
+                    it.next().unwrap_or_default()
+                );
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = tls.write_all(resp.as_bytes()).await;
+                let _ = tls.flush().await;
+            });
+        }
+    });
+    addr
+}
+
+/// `CONNECT localhost:<port>` through the proxy, then a client TLS handshake speaking `http/1.1`.
+///
+/// `localhost`, not `127.0.0.1`: `TlsPolicy` sends IP-literal `CONNECT`s down the blind-tunnel
+/// path — there is no SNI hostname to sign a leaf for — and a blind tunnel never reaches `mitm`.
+async fn connect_tls_through(
+    proxy: SocketAddr,
+    origin_port: u16,
+) -> tokio_rustls::client::TlsStream<TcpStream> {
+    let mut s = TcpStream::connect(proxy).await.unwrap();
+    let req =
+        format!("CONNECT localhost:{origin_port} HTTP/1.1\r\nHost: localhost:{origin_port}\r\n\r\n");
+    s.write_all(req.as_bytes()).await.unwrap();
+    s.flush().await.unwrap();
+
+    // Read the `200 Connection Established` reply one octet at a time: a larger read would
+    // swallow the first TLS records behind it.
+    let mut head = Vec::new();
+    let mut one = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        let n = s.read(&mut one).await.unwrap();
+        assert_eq!(n, 1, "proxy closed before answering CONNECT");
+        head.push(one[0]);
+    }
+    let head = String::from_utf8_lossy(&head).into_owned();
+    assert!(head.starts_with("HTTP/1.1 200"), "CONNECT got {head:?}");
+
+    let connector = TlsConnector::from(tls::upstream_client_config(&[tls::ALPN_HTTP11.to_vec()]));
+    let dns = rustls_pki_types::ServerName::try_from("localhost").unwrap();
+    connector.connect(dns, s).await.unwrap()
 }
 
 /// The property most likely to break, and the reason for a oneshot per request rather than a gate.
@@ -323,6 +431,131 @@ async fn out_of_scope_traffic_passes_through_untouched_while_interception_is_on(
         store.exchanges(0, 10).len(),
         0,
         "out-of-scope traffic is forwarded but not retained"
+    );
+}
+
+#[tokio::test]
+async fn an_edit_that_moves_a_request_onto_an_excluded_path_is_forwarded_but_not_retained() {
+    // A-4 re-tested scope after the hold for the plain path; this is the sibling that re-test
+    // must actually protect against: an operator's own edit moving a request onto a path the
+    // scope excludes, after it was already shown to them as in-scope.
+    let origin = spawn_origin().await;
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    ic.set_enabled(true);
+    let mut scope = Scope::new();
+    scope.add(ScopeRule::include("127.0.0.1"));
+    scope.add(ScopeRule::exclude("127.0.0.1").with_path_prefix("/excluded"));
+    let proxy = spawn_proxy(config(store.clone(), ic.clone(), scope)).await;
+
+    let client = {
+        let oa = origin.addr;
+        tokio::spawn(async move { through_proxy(proxy, oa, "/original").await })
+    };
+    wait_for_pending(&ic, 1).await;
+
+    let held = ic.list().remove(0);
+    let edited = held.raw.replace("/original", "/excluded/secret");
+    assert!(ic.forward(held.id, Some(Bytes::from(edited))));
+
+    // The origin still receives the edit — scope governs retention, not egress.
+    let body = client.await.unwrap();
+    assert!(
+        body.contains("ORIGIN GET /excluded/secret"),
+        "origin echoed {body:?}"
+    );
+    assert_eq!(
+        origin.hits.load(Ordering::SeqCst),
+        1,
+        "the edited request must reach the origin exactly once"
+    );
+
+    // History gets one explanatory row, not the excluded request itself: silence here would let
+    // an operator edit a request out of scope and out of history in the same keystroke.
+    let exchanges = store.exchanges(0, 10);
+    assert_eq!(
+        exchanges.len(),
+        1,
+        "the edit must leave a marker, not the retained request: {exchanges:?}"
+    );
+    assert!(!exchanges[0].tls);
+    assert!(
+        exchanges[0]
+            .notes
+            .as_deref()
+            .unwrap_or_default()
+            .contains("excluded"),
+        "notes were {:?}",
+        exchanges[0].notes
+    );
+    let stored = store.get(exchanges[0].request).unwrap();
+    let text = String::from_utf8_lossy(&stored.raw);
+    assert!(
+        !text.starts_with("GET /excluded/secret HTTP/1.1") && !text.contains("Accept: */*"),
+        "the excluded request's real headers must not be retained, only the marker: {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_edit_that_moves_a_mitm_request_onto_an_excluded_path_is_forwarded_but_not_retained() {
+    // The MITM sibling of the test above. A-4's re-test lived only in `forward_http`; `mitm` had
+    // no scope test in its loop at all, so this must fail without the fix in `mitm`.
+    let origin_port = spawn_tls_origin().await.port();
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    ic.set_enabled(true);
+    let mut scope = Scope::new();
+    scope.add(ScopeRule::include("localhost"));
+    scope.add(ScopeRule::exclude("localhost").with_path_prefix("/excluded"));
+    let cfg = ProxyConfig::new(store.clone())
+        .with_scope(scope)
+        .with_interceptor(ic.clone())
+        .with_tls_engine(tls_engine());
+    let proxy = spawn_proxy(cfg).await;
+
+    let mut tls_client = connect_tls_through(proxy, origin_port).await;
+    tls_client
+        .write_all(b"GET /original HTTP/1.1\r\nHost: localhost\r\nAccept: */*\r\n\r\n")
+        .await
+        .unwrap();
+    tls_client.flush().await.unwrap();
+
+    wait_for_pending(&ic, 1).await;
+    let held = ic.list().remove(0);
+    assert!(held.tls, "the held request must be marked tls: {held:?}");
+    let edited = held.raw.replace("/original", "/excluded/secret");
+    assert!(ic.forward(held.id, Some(Bytes::from(edited))));
+
+    let reply = read_response(&mut tls_client).await;
+    assert!(
+        reply.contains("ORIGIN GET /excluded/secret"),
+        "the origin must still receive the edited request over TLS: {reply:?}"
+    );
+
+    let exchanges = store.exchanges(0, 10);
+    assert_eq!(
+        exchanges.len(),
+        1,
+        "the MITM edit must leave a marker, not the retained request: {exchanges:?}"
+    );
+    assert!(
+        exchanges[0].tls,
+        "the marker must still record this as a TLS exchange"
+    );
+    assert!(
+        exchanges[0]
+            .notes
+            .as_deref()
+            .unwrap_or_default()
+            .contains("excluded"),
+        "notes were {:?}",
+        exchanges[0].notes
+    );
+    let stored = store.get(exchanges[0].request).unwrap();
+    let text = String::from_utf8_lossy(&stored.raw);
+    assert!(
+        !text.starts_with("GET /excluded/secret HTTP/1.1") && !text.contains("Accept: */*"),
+        "the excluded MITM request's real headers must not be retained, only the marker: {text:?}"
     );
 }
 

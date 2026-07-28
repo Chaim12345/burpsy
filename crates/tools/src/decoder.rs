@@ -49,6 +49,7 @@
 //!   one; this module emits UTF-8, so `&#x1F600;` works.
 
 use burpsy_core::Span;
+use flate2::{Decompress, FlushDecompress, Status};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
@@ -167,7 +168,16 @@ pub fn decode(layer: Layer, input: &[u8]) -> Result<(Vec<u8>, bool), DecodeError
         // `Content-Encoding: deflate` is specified as zlib-wrapped, and that is what nearly every
         // server sends — but a minority emit a raw deflate stream, and Burp users hit both. Try the
         // spec-compliant framing first and fall back, rather than making the operator pick.
-        Layer::Deflate => match inflate(flate2::read::ZlibDecoder::new(input)) {
+        //
+        // Both framings go through `inflate_zlib`, not `inflate`. `inflate` trusts `Read::Err` to
+        // mean "broke mid-stream", which is true for gzip (a missing/short trailer fails with
+        // `UnexpectedEof`, flate2 1.1.9 `gz/bufread.rs:302-304`) but false for zlib/raw deflate:
+        // `zio::read` folds miniz_oxide's "out of input, cannot progress" into a plain `Ok(0)`
+        // (`zio.rs:151-152`, `ffi/miniz_oxide.rs:94`), so `read_to_end` on a truncated zlib/deflate
+        // body completes `Ok` and reports a partial decode as whole. `inflate_zlib` drives
+        // `Decompress::decompress_vec` itself so it can see `Status::BufError` — the signal
+        // `Read` throws away — and tell it apart from a clean `Status::StreamEnd`.
+        Layer::Deflate => match inflate_zlib(input, true) {
             // Including the empty case. A valid zlib stream that decodes to zero bytes is an empty
             // body, not a failure; sending it down the raw-deflate fallback ran that decoder over
             // zlib-framed bytes and reported a decompression error for a body that was simply empty.
@@ -175,7 +185,7 @@ pub fn decode(layer: Layer, input: &[u8]) -> Result<(Vec<u8>, bool), DecodeError
             // Both framings failing is reported with the *zlib* error, because zlib is what the
             // header specifies and what nearly every server sends. Handing back the raw-deflate
             // error instead points the operator at the framing they almost certainly do not have.
-            Err(zlib_err) => inflate(flate2::read::DeflateDecoder::new(input)).map_err(|_| zlib_err),
+            Err(zlib_err) => inflate_zlib(input, false).map_err(|_| zlib_err),
         },
         Layer::Jwt => jwt_decode(input).map(|v| (v, false)),
     }
@@ -225,6 +235,87 @@ fn inflate<R: Read>(r: R) -> Result<(Vec<u8>, bool), DecodeError> {
         // Bytes arrived and then the stream broke: the output is real but incomplete, and saying so
         // is the entire point of the flag.
         Err(_) => Ok((out, true)),
+    }
+}
+
+/// Inflate a zlib (`zlib_header: true`) or raw-deflate (`false`) stream held entirely in memory,
+/// reporting whether the result is complete or merely a prefix.
+///
+/// This exists because [`inflate`]'s "an `Err` from `Read` means the stream broke" rule is false
+/// for zlib/deflate. `ZlibDecoder`/`DeflateDecoder`'s `Read` impl goes through `zio::read`, which
+/// treats miniz_oxide's "ran out of input and cannot make progress" the same as ordinary EOF —
+/// `Ok(0)` (flate2 1.1.9 `zio.rs:151-152`; the `MZError::Buf` that causes it is mapped straight to
+/// `Ok(Status::BufError)` in `ffi/miniz_oxide.rs:94`, never surfaced as an `io::Error`). So
+/// `read_to_end` on a truncated zlib/deflate body returns `Ok`, and the caller cannot tell a
+/// genuinely complete decode from one that stopped mid-frame. (Gzip does not have this problem:
+/// its trailer read fails with a real `UnexpectedEof`, `gz/bufread.rs:302-304`.)
+///
+/// The fix is to stop going through `Read` and drive [`Decompress`] directly, so the loop can see
+/// `Status::StreamEnd` (genuinely done) versus `Status::BufError` (stuck, more input needed) —
+/// exactly the distinction `Read` discards. Every call uses [`FlushDecompress::None`], never
+/// `Finish`: miniz_oxide's `Finish` path is one-shot (miniz_oxide 0.8.9 `inflate/stream.rs:226-250`)
+/// — if the first `Finish` call doesn't reach `Done` because the output buffer ran out, it poisons
+/// the decompressor state (`last_status = Failed`) and every later call errors out, which would
+/// misreport a perfectly valid stream that merely needed more than one output chunk. `None` is
+/// documented as returning `StreamEnd` all the same once the stream finishes
+/// (`inflate/stream.rs:168-171`), so it costs nothing and stays safe across multiple calls.
+///
+/// The cap semantics match [`inflate`]: growing the output past [`MAX_INFLATE`] by one byte proves
+/// there was more to give, so that byte is kept just long enough to set `capped` and then dropped.
+fn inflate_zlib(input: &[u8], zlib_header: bool) -> Result<(Vec<u8>, bool), DecodeError> {
+    /// How much spare output capacity to offer the decompressor per call. Small enough that a
+    /// multi-call path is exercised by ordinary test-sized bodies, large enough that real payloads
+    /// finish in a handful of iterations.
+    const CHUNK: u64 = 8 * 1024;
+    let cap = MAX_INFLATE + 1;
+
+    let mut decompress = Decompress::new(zlib_header);
+    let mut out = Vec::new();
+    loop {
+        let consumed = (decompress.total_in() as usize).min(input.len());
+        let target = (out.len() as u64 + CHUNK).min(cap) as usize;
+        out.reserve(target.saturating_sub(out.len()));
+
+        let before_in = decompress.total_in();
+        let before_out = out.len();
+        let status = match decompress.decompress_vec(&input[consumed..], &mut out, FlushDecompress::None) {
+            Ok(status) => status,
+            // A corrupted stream that already produced real output still hands that output back,
+            // matching `inflate`: the bytes decoded so far are genuine and worth keeping, only the
+            // "whole thing decoded" claim is false. Nothing decoded at all is a hard error, same as
+            // before — `when_both_deflate_framings_fail_the_zlib_error_is_the_one_reported` relies
+            // on exactly that for its `78 9c` + garbage input.
+            Err(e) => {
+                return if out.is_empty() {
+                    Err(DecodeError::Compression(e.to_string()))
+                } else {
+                    out.truncate((out.len() as u64).min(MAX_INFLATE) as usize);
+                    Ok((out, true))
+                };
+            }
+        };
+
+        if out.len() as u64 > MAX_INFLATE {
+            out.truncate(MAX_INFLATE as usize);
+            return Ok((out, true));
+        }
+        if status == Status::StreamEnd {
+            return Ok((out, false));
+        }
+        // Neither more compressed input was consumed nor more output produced: nothing further
+        // can happen without bytes that never arrive. A stream that ends cleanly always reaches
+        // `Status::StreamEnd` above before this can trip, so reaching it here means the input ran
+        // out mid-frame — a truncated capture, not a whole one (unless nothing decoded at all,
+        // which is corrupt input rather than a recoverable prefix).
+        if decompress.total_in() == before_in && out.len() == before_out {
+            return if out.is_empty() {
+                Err(DecodeError::Compression(
+                    "deflate stream ended before producing any output".to_string(),
+                ))
+            } else {
+                Ok((out, true))
+            };
+        }
     }
 }
 
@@ -1115,9 +1206,98 @@ mod tests {
         // the raw-deflate fallback then fails too. The operator must see the zlib diagnostic —
         // zlib is what `Content-Encoding: deflate` specifies and what nearly every server sends.
         let bad = b"\x78\x9c not actually deflate data at all";
-        let zlib_only = inflate(flate2::read::ZlibDecoder::new(&bad[..])).unwrap_err();
+        let zlib_only = inflate_zlib(bad, true).unwrap_err();
         let got = decode(Layer::Deflate, bad).unwrap_err();
         assert_eq!(got, zlib_only, "the zlib diagnostic is the one worth keeping");
+    }
+
+    #[test]
+    fn a_truncated_gzip_stream_reports_truncated_and_keeps_the_real_prefix() {
+        // The `Err(_) => Ok((out, true))` arm in `inflate` is what this exercises: gzip's trailer
+        // read fails with a genuine `UnexpectedEof` once bytes are missing from the end, so the
+        // flag this whole signature exists for actually fires here already — this test is the
+        // regression guard, not the bug report. The cut is deep (a third of the compressed bytes),
+        // not just the trailer, so this actually exercises a mid-stream break rather than a merely
+        // missing checksum.
+        let body = b"the quick brown fox jumps over the lazy dog, repeatedly, for good measure. "
+            .repeat(200);
+        let full = encode(Layer::Gzip, &body).unwrap();
+        let cut = full.len() * 2 / 3;
+        let (out, truncated) = decode(Layer::Gzip, &full[..cut]).unwrap();
+        assert!(truncated, "a stream broken mid-way must be reported as a prefix");
+        assert!(!out.is_empty(), "some bytes must have decoded before the break");
+        assert!(
+            out.len() < body.len(),
+            "the prefix must be strictly shorter than the whole body"
+        );
+        assert!(
+            body.starts_with(&out),
+            "the recovered bytes must be the real prefix, not garbage"
+        );
+    }
+
+    #[test]
+    fn a_truncated_zlib_stream_reports_truncated_and_keeps_the_real_prefix() {
+        // This is QA finding 4: `inflate`'s "an `Err` from `Read` means the stream broke" rule is
+        // false for zlib/deflate, because `zio::read` folds miniz_oxide's "out of input, cannot
+        // progress" into a plain `Ok(0)` rather than an `io::Error` (flate2 1.1.9 `zio.rs:151-152`,
+        // `ffi/miniz_oxide.rs:94`). Before the fix this asserted `truncated == false` on a body that
+        // was demonstrably cut short — see the report for the captured pre-fix failure. The cut is
+        // deep, not just the Adler-32 trailer, so a real mid-stream break is what gets exercised.
+        let body = b"the quick brown fox jumps over the lazy dog, repeatedly, for good measure. "
+            .repeat(200);
+        let full = encode(Layer::Deflate, &body).unwrap();
+        let cut = full.len() * 2 / 3;
+        let (out, truncated) = decode(Layer::Deflate, &full[..cut]).unwrap();
+        assert!(truncated, "a zlib stream broken mid-way must be reported as a prefix");
+        assert!(!out.is_empty(), "some bytes must have decoded before the break");
+        assert!(
+            out.len() < body.len(),
+            "the prefix must be strictly shorter than the whole body"
+        );
+        assert!(
+            body.starts_with(&out),
+            "the recovered bytes must be the real prefix, not garbage"
+        );
+    }
+
+    #[test]
+    fn a_truncated_raw_deflate_stream_reports_truncated_and_keeps_the_real_prefix() {
+        // Same defect, on the raw-deflate fallback path rather than the zlib-wrapped one — raw
+        // deflate has no trailer at all, so the only signal that a stream is incomplete is that its
+        // final block never arrives, which is exactly what `Status::BufError` vs `Status::StreamEnd`
+        // distinguishes. The cut is deep so the break lands mid-stream, not just past the last block.
+        let body = b"the quick brown fox jumps over the lazy dog, repeatedly, for good measure. "
+            .repeat(200);
+        let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(&body).unwrap();
+        let full = e.finish().unwrap();
+        let cut = full.len() * 2 / 3;
+        let (out, truncated) = decode(Layer::Deflate, &full[..cut]).unwrap();
+        assert!(truncated, "a raw deflate stream broken mid-way must be reported as a prefix");
+        assert!(!out.is_empty(), "some bytes must have decoded before the break");
+        assert!(
+            out.len() < body.len(),
+            "the prefix must be strictly shorter than the whole body"
+        );
+        assert!(
+            body.starts_with(&out),
+            "the recovered bytes must be the real prefix, not garbage"
+        );
+    }
+
+    #[test]
+    fn a_deflate_body_larger_than_one_inflate_chunk_still_decodes_whole() {
+        // `inflate_zlib` grows its output buffer one `CHUNK` at a time; a body that needs several
+        // calls to `decompress_vec` is what actually exercises the loop rather than just its first
+        // iteration, and is the case the `FlushDecompress::Finish` approach silently mishandled.
+        let body = b"0123456789abcdef".repeat(4096); // 64 KiB, several chunks at the 8 KiB size used
+        for layer in [Layer::Gzip, Layer::Deflate] {
+            let enc = encode(layer, &body).unwrap();
+            let (out, truncated) = decode(layer, &enc).unwrap();
+            assert_eq!(out, body, "{layer:?} must decode a multi-chunk body whole");
+            assert!(!truncated, "{layer:?}: a complete stream is not a prefix");
+        }
     }
 
     const TOKEN: &[u8] =

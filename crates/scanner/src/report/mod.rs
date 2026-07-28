@@ -214,6 +214,12 @@ pub enum Unit {
     Items,
     /// Captured responses handed to the passive path.
     Responses,
+    /// Individual places in a request the insertion-point enumerator declined to build a point
+    /// for. Its own unit rather than folded into [`Unit::Dispatches`]: a check with three header
+    /// points and one declined body dispatches once — that dispatch is `Ran` — but declines one
+    /// place, and summing the two together would conflate "the check ran" with "everything the
+    /// check asked to test was covered".
+    InsertionPoints,
 }
 
 impl Unit {
@@ -223,6 +229,7 @@ impl Unit {
             Unit::Dispatches => "dispatches",
             Unit::Items => "audit_items",
             Unit::Responses => "responses",
+            Unit::InsertionPoints => "insertion_points",
         }
     }
 
@@ -342,6 +349,16 @@ pub enum NotCheckedReason {
     /// says `audit_requested: true`, every counter reads zero, and nothing anywhere states that the
     /// audit the operator triggered examined nothing.
     ItemRefused(ItemState),
+    /// A place in a request the insertion-point enumerator refused to build a point for — a body
+    /// it cannot splice into (multipart, XML, non-UTF-8), most often.
+    ///
+    /// Distinct from `NotDispatched(Disposition::Unsupported)`: that row counts whole checks the
+    /// engine declined outright, where no point of the requested kinds survived at all. This one
+    /// counts individual declined places regardless of whether the check they belong to still ran
+    /// its other points — a check with 3 header points and a declined body is `Ran` once *and*
+    /// contributes one entry here. Both rows can be true of the same dispatch at once; that is
+    /// the point.
+    InsertionDeclined,
 }
 
 impl NotCheckedReason {
@@ -354,6 +371,7 @@ impl NotCheckedReason {
             NotCheckedReason::NeverRun(r) => r.id(),
             NotCheckedReason::ScanSkipped(s) => scan_skip_id(*s),
             NotCheckedReason::ItemRefused(s) => item_refused_id(*s),
+            NotCheckedReason::InsertionDeclined => "partial_coverage/insertion_declined",
         }
     }
 
@@ -366,6 +384,10 @@ impl NotCheckedReason {
             NotCheckedReason::NeverRun(r) => r.explanation(),
             NotCheckedReason::ScanSkipped(s) => s.explanation(),
             NotCheckedReason::ItemRefused(s) => item_refused_explanation(*s),
+            NotCheckedReason::InsertionDeclined => {
+                "the insertion-point enumerator found a place to inject but refused to build a \
+                 point there — see the identities for what and why"
+            }
         }
     }
 
@@ -375,6 +397,7 @@ impl NotCheckedReason {
             NotCheckedReason::NotDispatched(_) => Unit::Dispatches,
             NotCheckedReason::ScanSkipped(_) => Unit::Responses,
             NotCheckedReason::ItemRefused(_) => Unit::Items,
+            NotCheckedReason::InsertionDeclined => Unit::InsertionPoints,
         }
     }
 }
@@ -578,6 +601,15 @@ pub struct ActiveCoverage {
     /// their outcome is zero, so without this they would leave no trace in the not-checked statement
     /// and an audit of one out-of-scope exchange would report as an audit that found nothing.
     pub refused_items: Vec<(ItemState, usize)>,
+    /// Individual insertion points the enumerator declined, summed over every dispatch — the real
+    /// count of places not tested, whether the check that hit them ended up `Ran` (a mixed
+    /// request) or `Unsupported` (nothing else to test). Drives the `NotChecked` row's count.
+    pub declined_points: usize,
+    /// The distinct `"what: reason"` lines behind `declined_points`, deduplicated. A run auditing
+    /// many identical multipart POSTs declines the same body shape every time; the count says how
+    /// often, this says what kinds — printing every repetition would bury the one that matters
+    /// under duplicates of itself.
+    pub declined_reasons: Vec<String>,
 }
 
 impl ActiveCoverage {
@@ -682,7 +714,8 @@ impl RunCoverage {
     }
 
     /// Every "not checked" row, in a fixed order: corpus buckets, the never-run set, the engine's
-    /// per-dispatch refusals, whole audit items refused before any check, then whole-response skips.
+    /// per-dispatch refusals, declined insertion points, whole audit items refused before any
+    /// check, then whole-response skips.
     ///
     /// Rows with a zero count are omitted, because a table of zeroes buries the non-zero row that
     /// matters. Rows are never omitted for being *inconvenient*: this is the only place any format
@@ -757,6 +790,12 @@ impl RunCoverage {
                 push(NotCheckedReason::NotDispatched(*d), *n, Vec::new());
             }
         }
+
+        push(
+            NotCheckedReason::InsertionDeclined,
+            self.active.declined_points,
+            self.active.declined_reasons.clone(),
+        );
 
         for (st, n) in &self.active.refused_items {
             push(NotCheckedReason::ItemRefused(*st), *n, Vec::new());
@@ -847,6 +886,8 @@ fn compose_active(loaded: usize, audits: &[crate::SessionOutcome]) -> ActiveCove
     let mut items: Vec<(ItemState, usize)> = Vec::new();
     let mut refused_items: Vec<(ItemState, usize)> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
+    let mut declined_points = 0usize;
+    let mut declined_reasons: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut requests_sent = 0u32;
     let mut requests_refused = 0u32;
     let (mut timed_out, mut paused) = (false, false);
@@ -880,6 +921,11 @@ fn compose_active(loaded: usize, audits: &[crate::SessionOutcome]) -> ActiveCove
             {
                 errors.push(e.clone());
             }
+            // `o.declined` overlays `Ran` and `Unsupported`; it never partitions the disposition
+            // histogram above, so it is accumulated on the side. The count is the real number of
+            // places not tested; the reason set is deduplicated for display — see the field doc.
+            declined_points += o.declined.len();
+            declined_reasons.extend(o.declined.iter().cloned());
         }
     }
 
@@ -894,6 +940,8 @@ fn compose_active(loaded: usize, audits: &[crate::SessionOutcome]) -> ActiveCove
         paused,
         errors,
         refused_items,
+        declined_points,
+        declined_reasons: declined_reasons.into_iter().collect(),
     }
 }
 
@@ -1359,6 +1407,52 @@ mod tests {
         assert_eq!(
             rfc3339_utc_millis(1_753_660_800_123),
             "2025-07-28T00:00:00.123Z"
+        );
+    }
+
+    #[test]
+    fn a_check_that_ran_and_declined_a_place_reports_both_without_stealing_from_ran() {
+        // The QA finding: a check with real points that ran alongside a declined body must count
+        // as `Ran` exactly once — `declined` is a non-partitioning overlay, not a tenth
+        // disposition — and the reason must still reach every rendered format.
+        let o = AuditOutcome {
+            state: ItemState::Audited,
+            ran: 1,
+            requests_sent: 3,
+            declined: vec!["request body: multipart body: framing not modelled".to_owned()],
+            ..Default::default()
+        };
+        assert_eq!(o.considered(), 1, "the overlay must not inflate considered()");
+        assert_eq!(o.dispositions()[0], (Disposition::Ran, 1));
+
+        let r = report(&[single_audit(1, o)]);
+        let row = r
+            .coverage
+            .not_checked()
+            .into_iter()
+            .find(|row| row.reason == NotCheckedReason::InsertionDeclined)
+            .expect("the declined insertion point must appear as its own not-checked row");
+        assert_eq!(row.count, 1);
+        assert_eq!(row.reason.unit(), Unit::InsertionPoints);
+        assert_eq!(
+            row.identities,
+            vec!["request body: multipart body: framing not modelled".to_owned()]
+        );
+        assert!(
+            matches!(r.verdict(), Verdict::PartiallyChecked { .. }),
+            "a declined place is unfinished coverage, not a clean run: {:?}",
+            r.verdict()
+        );
+
+        let json = super::json::to_json(&r);
+        assert!(
+            json.contains("multipart body: framing not modelled"),
+            "the decline reason must reach the JSON export"
+        );
+        let html = super::html::to_html(&r);
+        assert!(
+            html.contains("multipart body: framing not modelled"),
+            "the decline reason must reach the HTML report"
         );
     }
 
