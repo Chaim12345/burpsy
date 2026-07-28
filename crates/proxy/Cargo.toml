@@ -34,4 +34,7 @@ burpsy-core = { path = "../core" }
 # The example drives the blocking transport directly to measure connection pooling, which is a
 # transport concern rather than an authorisation one.
 burpsy-sender = { path = "../sender" }
-tracing-subscriber = { workspace = true }
+# `env-filter` explicitly, not inherited. The example calls `with_env_filter`, and until now that
+# only compiled because `burpsy-cli` enables the feature and cargo unified it across the workspace —
+# so `cargo test -p burpsy-proxy` alone failed to build. Depend on what you use.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
