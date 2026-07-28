@@ -27,7 +27,7 @@ satisfiable without waiting for the last five feature phases.
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 1: Store & Scope Chokepoint** - Race-free segmented store with an O(1) index, plus the one authorising sender every later surface must route through
+- [x] **Phase 1: Store & Scope Chokepoint** - Race-free segmented store with an O(1) index, plus the one authorising sender every later surface must route through
 - [ ] **Phase 2: HTTP/2** - h2 traffic captured, viewed, resent and honestly negotiated, moved ahead of WebSockets and the plugin API
 - [ ] **Phase 3: Query DSL & Tool Parity** - One typed query grammar plus Intruder/Repeater's remaining parity gaps
 - [ ] **Phase 4: Reporting & Scanner Data** - HTML/JSON/SARIF export and the scanner's remaining data-driven checks, both decoupled from platform work
@@ -46,6 +46,7 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: Captured traffic is stored durably and addressed in constant time under concurrent capture, and every future request-originating surface has exactly one place to be authorised.
 **Depends on**: Nothing (first phase)
 **Requirements**: STORE-01, STORE-02, STORE-03, STORE-04, STORE-05, HARD-03
+**Status**: Complete
 **Success Criteria** (what must be TRUE):
   1. A multi-GB capture stays bounded by disk rather than RAM, because traffic seals into fixed-size segments as it is captured
   2. Any message's bytes resolve via one direct lookup instead of a scan, and message ids resolve correctly under concurrent capture from many connections at once — the id-assignment race is closed, not narrowed

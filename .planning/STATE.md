@@ -3,10 +3,10 @@ gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 12
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 1
+  completed_plans: 1
+  percent: 8
 ---
 
 # Project State
@@ -16,16 +16,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-27)
 
 **Core value:** Run PortSwigger's published BCheck corpus, unmodified and honestly counted, against real traffic without the memory cost that forces Burp to discard scan work.
-**Current focus:** Phase 1 — Store & Scope Chokepoint
+**Current focus:** Phase 2 — HTTP/2
 
 ## Current Position
 
-Phase: 1 of 12 (Store & Scope Chokepoint)
+Phase: 2 of 12 (HTTP/2) — Phase 1 complete
 Plan: 0 of TBD in current phase
 Status: Ready to plan
-Last activity: 2026-07-27 — ROADMAP.md and STATE.md created from REQUIREMENTS.md + research/SUMMARY.md, with four operator scope decisions applied
+Last activity: 2026-07-28 — Phase 1 delivered: segmented mmap-backed store (STORE-01), two-mechanism verification plus `burpsy store verify` (STORE-05), and the `AuthorisedSender` chokepoint with a source-scan backstop (HARD-03). STORE-02/03/04 had landed earlier in the session. 438 workspace tests passing, 0 warnings.
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 8%
 
 ## Performance Metrics
 
@@ -68,6 +68,10 @@ None yet.
 ### Blockers/Concerns
 
 None currently open.
+
+**Corrected during Phase 1 execution (2026-07-28):**
+- Phase 1's CONTEXT.md and RESEARCH.md both claimed that narrowing a crate's `tokio` features closes the async egress path *structurally*, leaving only `std::net` to be covered by a backstop test. Measured and false in this workspace: narrowing does fail an isolated `cargo build -p burpsy-intruder`, but cargo unifies features across the dependency graph, and `web`/`sender`/`cli` all enable tokio's `full` — so one tokio rlib is built with `net` present and any crate linking it can name `tokio::net` again. Verified by planting a `tokio::net::TcpStream::connect` in `intruder` and watching the workspace build succeed. Consequence: exactly one egress route is closed by the type system (the sender crate's `pub(crate)` transports), and `crates/sender/tests/no_alternate_egress.rs` is the *primary* mechanism for both `std::net` and `tokio::net`. Corrected in CONTEXT.md, the crate docs, and the test's own header.
+- `01-RESEARCH.md` was written before commit `d8fe387` and describes the id-assignment race and the `related` slot as unbuilt. CONTEXT.md's "Already landed" note is authoritative where they disagree; Phase 1 treated STORE-02/03/04 as carry-forward verification rather than rebuilding them.
 
 **Resolved during roadmap creation (2026-07-27):**
 - REQUIREMENTS.md's summary line said "52 total v1 requirements" against an itemized list of 56 (the miscount traced to a regex that silently drops alphanumeric category prefixes like `H2-01` — reproduced independently before trusting the correction). Fixed; coverage re-verified at 56/56, 0 orphans, 0 duplicates.

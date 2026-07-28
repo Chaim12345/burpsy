@@ -10,11 +10,11 @@ operator-observable capabilities, not implementation tasks.
 
 ### Store (STORE)
 
-- [ ] **STORE-01**: Captured traffic persists to disk in fixed-size sealed segments, so a multi-GB capture is bounded by disk rather than RAM
-- [ ] **STORE-02**: Any message resolves to its bytes in constant time, replacing every linear scan over the message list
-- [ ] **STORE-03**: A message id always resolves to the message stored under it, including when many connections capture concurrently
-- [ ] **STORE-04**: A record carries references to related records, so one exchange can own many child records
-- [ ] **STORE-05**: Operator can verify a migrated capture is byte-identical to what the previous store held, rather than inferring it from the absence of a crash
+- [x] **STORE-01**: Captured traffic persists to disk in fixed-size sealed segments, so a multi-GB capture is bounded by disk rather than RAM
+- [x] **STORE-02**: Any message resolves to its bytes in constant time, replacing every linear scan over the message list
+- [x] **STORE-03**: A message id always resolves to the message stored under it, including when many connections capture concurrently
+- [x] **STORE-04**: A record carries references to related records, so one exchange can own many child records
+- [x] **STORE-05**: Operator can verify a migrated capture is byte-identical to what the previous store held, rather than inferring it from the absence of a crash
 
 ### Query language (DSL)
 
@@ -104,7 +104,9 @@ operator-observable capabilities, not implementation tasks.
 
 - [ ] **HARD-01**: The three agent-written branches merged without line-by-line review have been reviewed
 - [ ] **HARD-02**: The corpus partition invariant is verified on machines without the corpus fixture, and a skipped check reports as skipped rather than as a pass
-- [ ] **HARD-03**: Every request-originating surface — crawler, session macros, plugins, MCP, browser — is authorised through one shared chokepoint, verified by a test per surface
+- [~] **HARD-03**: Every request-originating surface — crawler, session macros, plugins, MCP, browser — is authorised through one shared chokepoint, verified by a test per surface
+  - Phase 1 built the chokepoint (`burpsy_sender::AuthorisedSender`) and routed every sender that exists today through it: the proxy's blocking transport, the scanner's audit path, and the former `repeater::send` used by Repeater and Intruder. A workspace source scan fails the build if a new egress site appears.
+  - Still open by design: the crawler (Phase 6), session macros (Phase 5), plugins (Phase 8), WebSockets (Phase 9), MCP (Phase 10) and the browser (Phase 12) do not exist yet. Each proves its own surface routes through the chokepoint in its own phase, per Phase 1 success criterion 5.
 
 ## v2 Requirements
 
@@ -141,12 +143,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STORE-01 | Phase 1 | Pending |
-| STORE-02 | Phase 1 | Pending |
-| STORE-03 | Phase 1 | Pending |
-| STORE-04 | Phase 1 | Pending |
-| STORE-05 | Phase 1 | Pending |
-| HARD-03 | Phase 1 | Pending |
+| STORE-01 | Phase 1 | Complete |
+| STORE-02 | Phase 1 | Complete |
+| STORE-03 | Phase 1 | Complete |
+| STORE-04 | Phase 1 | Complete |
+| STORE-05 | Phase 1 | Complete |
+| HARD-03 | Phase 1 | Partial — chokepoint built; per-surface tests land with each surface |
 | H2-01 | Phase 2 | Pending |
 | H2-02 | Phase 2 | Pending |
 | H2-03 | Phase 2 | Pending |
