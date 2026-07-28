@@ -41,8 +41,10 @@
 //! are a pure function of the program.
 
 pub mod frame;
+pub mod hpack;
 
 pub use frame::{
     CONNECTION_PREFACE, FRAME_HEADER_LEN, FrameHeader, FrameSpec, H2FrameProgram,
     MAX_FRAME_PAYLOAD, RawFrame, STREAM_ID_RESERVED_BIT, Tail, read_frames, strip_preface,
 };
+pub use hpack::{Decoder, HpackError};
