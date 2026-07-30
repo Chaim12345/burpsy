@@ -15,3 +15,11 @@ regex = "1"
 # cosmetic one. `rust_backend` is flate2's default and resolves to miniz_oxide — pure Rust, no C
 # toolchain, no libz. Pinned explicitly so a future default change cannot pull in a `cc` build.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The Decoder's "Hash..." action (`src/hash.rs`). RustCrypto, all three on the same `digest` 0.10
+# trait, which is what lets `hash()` be a four-arm match instead of four code paths. Pinned
+# per-crate rather than promoted to `[workspace.dependencies]` the way `burpsy-scanner` pins its own
+# `sha2` for HMAC: two crates needing a digest is not a workspace concern, and hoisting it would
+# make every crate rebuild when one of them wants a different minor.
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"

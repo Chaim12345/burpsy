@@ -15,6 +15,7 @@ directly in tests and reused by the proxy, the UI and a future MCP server alike.
 |------|-------------|
 | `src/lib.rs` | Crate root; the "free of I/O" discipline and what it costs callers |
 | `src/decoder.rs` | Encode/decode chains — the largest module here (1.2k lines) |
+| `src/hash.rs` | The Decoder's "Hash..." action: MD5/SHA-1/SHA-256/SHA-512, one-way, not a `Layer` |
 | `src/matchreplace.rs` | Match-and-replace rules over requests and responses |
 | `src/comparer.rs` | Diffing two messages |
 | `src/logger.rs` | Request/response logging views |
@@ -34,7 +35,7 @@ responsibility belongs to a caller. Thread the value in.
 ### Testing Requirements
 
 ```bash
-cargo test -p burpsy-tools      # 77 tests
+cargo test -p burpsy-tools      # 89 tests
 ```
 
 Because there is no I/O, every test is a pure function call — there should be no fixtures, no temp
@@ -62,6 +63,13 @@ directories, and no sleeps in this crate's tests.
   change cannot pull in a `cc` build.
   This is also how `crc32fast` is already in the workspace lockfile transitively, which is why
   `burpsy-core` depending on it directly added no new supply-chain surface.
+- `md-5`, `sha1`, `sha2` (all `0.10`) — RustCrypto, for `src/hash.rs`. All three sit on the same
+  `digest` 0.10 trait, which is what lets `hash()` be a four-arm `match` rather than four code paths.
+  Pinned per-crate rather than promoted to `[workspace.dependencies]`, the way `burpsy-scanner` pins
+  its own `sha2` for HMAC: two crates needing a digest is not a workspace concern. They earn their
+  place for the same reason `flate2` does — a hash is specified bit twiddling where a subtle error
+  yields a plausible wrong answer instead of a failure, and a wrong digest reads as *proof* that two
+  things differ.
 - `regex` — pattern matching in match-and-replace
 - `bytes`, `serde`, `serde_json`, `parking_lot`
 

@@ -23,6 +23,7 @@
 
 pub mod comparer;
 pub mod decoder;
+pub mod hash;
 pub mod logger;
 pub mod matchreplace;
 pub mod organizer;
@@ -32,6 +33,7 @@ pub use decoder::{
     Confidence, DecodeError, Layer, Pass, Run, Smart, SmartOptions, decode, encode, smart_decode,
     smart_pass,
 };
+pub use hash::{HashAlgorithm, hash};
 pub use logger::{Entry, Started, Tool, ToolLog};
 pub use matchreplace::{Category, Ctx, Rule, RuleError, RuleSet, RuleSetSpec, RuleSpec, Target};
 pub use organizer::{Highlight, Item, Organizer};
