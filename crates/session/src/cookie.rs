@@ -85,17 +85,11 @@ fn parse_name_value(raw: &str) -> Option<(String, String)> {
 /// needed to find where the authority ends. A macro step's URL is operator-recorded, not
 /// attacker-controlled, so the failure mode of a too-simple parser here is a wrongly-scoped test
 /// cookie, not a security hole.
+///
+/// Delegated to [`crate::target::target_of`] so the jar's key and a rule's scope decision cannot
+/// disagree about where the host ends: the authority here is exactly the substring that parser found.
 pub(crate) fn host_of(url: &str) -> Option<&str> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let end = after_scheme
-        .find(['/', '?', '#'])
-        .unwrap_or(after_scheme.len());
-    let authority = &after_scheme[..end];
-    if authority.is_empty() {
-        None
-    } else {
-        Some(authority)
-    }
+    crate::target::target_of(url).map(|t| t.authority)
 }
 
 #[cfg(test)]

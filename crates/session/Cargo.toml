@@ -5,5 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+burpsy-core = { path = "../core" }
 bytes = { workspace = true }
 parking_lot = { workspace = true }
+# `regex` is pinned per-crate the way `tools` and `scanner` pin it rather than promoted to the
+# workspace: only the crates that need a regex engine carry one.
+regex = "1"
+# Read-only, for `ExtractHow::JsonPath` over a response body. This crate still derives no serde
+# traits on its own public types — the wire format stays `burpsy-web`'s business.
+serde_json = { workspace = true }
