@@ -5,14 +5,16 @@
 //! The site map is where a naive implementation quietly doubles memory: a node that keeps "the
 //! request that created me" keeps a body alive, and Burp's tree is exactly the structure that is
 //! held for the whole session. Nothing here holds bytes. A node holds a segment string, child
-//! indices, three counters and three small sorted sets; the only link back to traffic is a `u64`
-//! exchange id, so opening a node's traffic goes through [`TrafficStore`] exactly as the history
-//! table does. Building and serving the entire tree never calls `TrafficStore::get`, so no response
-//! body is ever touched.
+//! indices, three counters, three small sorted sets and a capped list of `u64` exchange ids; every
+//! link back to traffic is such an id, so opening a node's traffic goes through [`TrafficStore`]
+//! exactly as the history table does. Building and serving the entire tree never calls
+//! `TrafficStore::get`, so no response body is ever touched.
 //!
 //! What the tree does grow with is **distinct paths**, not requests and not bytes: 100k requests to
 //! `/login` are one node. That is the one axis on which growth is unavoidable, because it is the
-//! information the tree exists to show.
+//! information the tree exists to show. The id list is the one field whose natural bound would have
+//! been request volume instead, which is why it is the one field with an explicit cap — see
+//! [`RECENT_EXCHANGES`], which states what keeping it costs and what capping it costs.
 //!
 //! # Why incremental rather than rebuilt per request
 //!
@@ -74,7 +76,7 @@
 //! is a set, so re-reading is idempotent, while the exchange count is folded exactly once.
 
 use crate::{Exchange, TrafficStore};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Sentinel parent for the host roots. Real parents are indices into `nodes`.
 const NO_PARENT: u32 = u32::MAX;
@@ -87,6 +89,23 @@ const NO_PARENT: u32 = u32::MAX;
 /// for many seconds while hundreds of others complete — a hung request, which the history table
 /// shows correctly either way.
 pub const RESOLVE_WINDOW: usize = 512;
+
+/// Exchange ids retained per node in [`SiteNode::recent_exchanges`], newest kept.
+///
+/// This is the one per-node list whose natural bound is request volume rather than a small set of
+/// distinct values, so it is the one that needs an explicit cap: `methods`, `statuses` and `params`
+/// are sets of names and codes, and 100k requests to `/login` add nothing to them after the first
+/// few. An uncapped id list would put the tree's growth back on the traffic axis the whole module
+/// is built to keep it off.
+///
+/// The cost of keeping it: 200 × 8 bytes = 1.6 KB per *requested* node, so ~6.5 MB across the 4k
+/// leaves of the 100k-exchange session measured above — and flat from then on, however long the
+/// session runs. Still no bodies, still nothing proportional to request count.
+///
+/// The cost of the cap: older evidence, never the count. [`SiteNode::exchanges`] keeps counting
+/// every request, which is the same trade [`crate::findings::MAX_OCCURRENCES`] makes against
+/// `times_seen`.
+pub const RECENT_EXCHANGES: usize = 200;
 
 /// One node: a host root, or a single path segment beneath one.
 ///
@@ -114,6 +133,18 @@ pub struct SiteNode {
     pub params: Vec<String>,
     /// Newest exchange seen here, so a UI can open one without searching history.
     pub last_exchange: Option<u64>,
+    /// The exchanges that landed on this exact node, oldest retained first, capped at
+    /// [`RECENT_EXCHANGES`].
+    ///
+    /// `last_exchange` alone answers "open something here"; selecting a node in a tree asks
+    /// "show me what happened here", and one id cannot. Ids only — dereferencing one still goes
+    /// through [`TrafficStore`], so this holds no bytes and the "never call `TrafficStore::get`"
+    /// property of building and serving the tree is unchanged.
+    ///
+    /// Ordered by ingestion, which [`SiteMap::sync`] performs in ascending id order, so in the
+    /// production path this is oldest-to-newest by id and the back is the newest request seen.
+    /// [`SiteMap::from_exchanges`] preserves whatever order it is handed.
+    pub recent_exchanges: VecDeque<u64>,
 }
 
 impl SiteNode {
@@ -130,6 +161,7 @@ impl SiteNode {
             statuses: Vec::new(),
             params: Vec::new(),
             last_exchange: None,
+            recent_exchanges: VecDeque::new(),
         }
     }
 
@@ -199,6 +231,7 @@ impl SiteMap {
             Some(prev) => prev.max(ex.id),
             None => ex.id,
         });
+        push_recent(&mut n.recent_exchanges, ex.id);
         match ex.status {
             Some(s) => insert_status(&mut n.statuses, s),
             // Recorded, not dropped: the response is probably still in flight.
@@ -380,6 +413,19 @@ fn insert_sorted(v: &mut Vec<String>, item: &str) {
     }
 }
 
+/// Retain the newest [`RECENT_EXCHANGES`] ids, dropping the oldest.
+///
+/// A deque rather than a `Vec`, because this runs once per folded exchange: shifting a 200-element
+/// list down by one on every request past the cap would put an O(cap) memmove on the fold's hot
+/// path, where a pop is O(1). No duplicate check is needed — [`SiteMap::sync`] advances `next_id`
+/// over a contiguous run, so `ingest` sees each exchange id exactly once.
+fn push_recent(v: &mut VecDeque<u64>, id: u64) {
+    if v.len() == RECENT_EXCHANGES {
+        v.pop_front();
+    }
+    v.push_back(id);
+}
+
 fn insert_status(v: &mut Vec<u16>, s: u16) {
     if let Err(at) = v.binary_search(&s) {
         v.insert(at, s);
@@ -513,6 +559,57 @@ mod tests {
         assert_eq!(n.statuses, vec![200, 302, 500]);
         assert_eq!(n.params, vec!["page", "q", "sort"]);
         assert_eq!(n.last_exchange, Some(3));
+        assert_eq!(
+            n.recent_exchanges, [0, 1, 2, 3],
+            "and the ids themselves, so selecting the node can show its four requests"
+        );
+    }
+
+    #[test]
+    fn a_nodes_id_list_keeps_the_newest_and_never_grows_with_traffic() {
+        // The memory claim for the one field that would otherwise grow per request. `exchanges`
+        // must still count every request, or capping would cost the count and not just the older
+        // evidence.
+        let rows: Vec<Exchange> = (0..RECENT_EXCHANGES as u64 + 50)
+            .map(|i| ex(i, "a.test", false, "GET", "/busy", Some(200)))
+            .collect();
+        let m = SiteMap::from_exchanges(&rows);
+        let n = m
+            .node(m.find("http://a.test:80", "/busy").unwrap())
+            .unwrap();
+
+        assert_eq!(n.exchanges, RECENT_EXCHANGES as u32 + 50);
+        assert_eq!(n.recent_exchanges.len(), RECENT_EXCHANGES);
+        assert_eq!(
+            n.recent_exchanges.front().copied(),
+            Some(50),
+            "the oldest 50 fell off the front"
+        );
+        assert_eq!(
+            n.recent_exchanges.back().copied(),
+            n.last_exchange,
+            "the newest id is retained, and agrees with last_exchange"
+        );
+    }
+
+    #[test]
+    fn the_id_list_belongs_to_the_exact_node_that_was_requested() {
+        // A directory that only has traffic beneath it must not claim that traffic as its own: the
+        // ids follow `exchanges`, not `subtree_exchanges`.
+        let rows = [
+            ex(0, "a.test", false, "GET", "/admin/login", Some(200)),
+            ex(1, "a.test", false, "GET", "/admin", Some(403)),
+        ];
+        let m = SiteMap::from_exchanges(&rows);
+
+        let admin = m
+            .node(m.find("http://a.test:80", "/admin").unwrap())
+            .unwrap();
+        assert_eq!(admin.recent_exchanges, [1], "only the request to /admin");
+        let login = m
+            .node(m.find("http://a.test:80", "/admin/login").unwrap())
+            .unwrap();
+        assert_eq!(login.recent_exchanges, [0]);
     }
 
     #[test]
