@@ -6,8 +6,18 @@ license.workspace = true
 
 [dependencies]
 burpsy-core = { path = "../core" }
+# Payload *processing* needs URL/HTML/base64/hex codecs, and `tools` already owns correct ones —
+# reimplementing them here would be a second place for `%2` at the end of a string to be wrong.
+# The edge is new but goes the allowed direction: the root AGENTS.md graph has `intruder` and `tools`
+# as siblings under `core`, `tools` depends on nothing but `core`, and nothing in `tools` reaches for
+# `intruder`, so `intruder → tools` adds no cycle and keeps `core` at the root untouched. It also
+# stays clear of the two edges `crates/AGENTS.md` names as forbidden.
+burpsy-tools = { path = "../tools" }
 bytes = { workspace = true }
 serde = { workspace = true }
+# Payload processing (match/replace, skip-if-matches) and result grepping. `regex::bytes`, because a
+# payload and a response body are both bytes and neither is guaranteed UTF-8.
+regex = "1"
 # Narrowed deliberately: this crate builds requests but must never send one. Production gets no
 # `net` feature; tests restore it below for their own listeners and helpers.
 tokio = { version = "1", default-features = false, features = ["rt", "sync", "time"] }

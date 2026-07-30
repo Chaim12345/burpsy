@@ -22,19 +22,41 @@
 //!
 //! * this module — insertion-point discovery and payload splicing;
 //! * [`mod@plan`] — the four attack shapes, generated lazily from an ordinal;
+//! * [`payload`] — payload *generators*, which resolve to the same `Vec<Bytes>` a literal list is;
+//! * [`process`] — the per-payload rule chain applied between generation and the attack;
+//! * [`hash`] — MD5/SHA-256 for the chain's hash step, and scheduled for deletion;
 //! * [`limit`] — the rate limiter and in-flight cap every send passes through;
 //! * [`engine`] — the driver, and the bucketed result summary it produces.
+//!
+//! # Where a payload comes from, end to end
+//!
+//! ```text
+//! PayloadSource ──resolve(max_count)──► PayloadSet ──Chain::run──► Vec<Bytes> ──► Attack
+//! ```
+//!
+//! Every step before `Attack` happens once, before anything is sent. The engine's payload type never
+//! changed: a generator and a rule chain are two ways of *producing* the `&[Vec<Bytes>]`
+//! [`Attack::new`] already took, which is why neither appears in the send loop.
 
 pub mod engine;
+pub mod hash;
 pub mod limit;
+pub mod payload;
 pub mod plan;
+pub mod process;
 
 pub use engine::{
-    Attack, AttackReport, Attempt, ErrorBucket, Guard, RecordFn, ResultBucket, SendFn, SendFuture,
-    Sent, run,
+    Attack, AttackReport, Attempt, ErrorBucket, Grep, Guard, RecordFn, ResultBucket, SendFn,
+    SendFuture, Sent, run,
 };
-pub use limit::{RateLimit, RateLimiter};
+pub use hash::HashAlg;
+pub use limit::{AutoThrottle, RateLimit, RateLimiter};
+pub use payload::{
+    BruteForce, CustomIterator, Dates, NumberBase, NumberOrder, Numbers, PayloadError, PayloadSet,
+    PayloadSource,
+};
 pub use plan::{Assignment, AttackKind, AttackPlan, Slot, plan};
+pub use process::{Chain, DropReason, Processed, RuleError, RuleSpec};
 
 use burpsy_core::{Direction, Span, StoredMessage, parse};
 use serde::{Deserialize, Serialize};

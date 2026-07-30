@@ -21,9 +21,12 @@ The taxonomy mirrors Burp's, recovered from its own method names.
 | File | Description |
 |------|-------------|
 | `src/lib.rs` | `find_points`, `InsertionPoint`, `PointConfig`, `Attack`, `Assignment`, `AttackReport`, `SendFn`, `RecordFn`, `Sent` |
-| `src/engine.rs` | Running an attack: bounded concurrency via `JoinSet`, and a summary instead of a pile of bodies |
+| `src/engine.rs` | Running an attack: bounded concurrency via `JoinSet`, and a summary instead of a pile of bodies. `Grep` |
 | `src/plan.rs` | `AttackPlan`, `AttackKind` — attack shapes, generated lazily |
-| `src/limit.rs` | `RateLimit` — rate limiting and in-flight bounds, over `tokio::sync::Semaphore` |
+| `src/payload.rs` | `PayloadSource` — payload generators (numbers, dates, brute forcer, custom iterator, null) that resolve to a `PayloadSet` |
+| `src/process.rs` | `RuleSpec`, `Chain` — the per-payload processing rule chain, applied at resolve time |
+| `src/hash.rs` | MD5/SHA-256 for the chain's hash step. **Duplicated on purpose and scheduled for deletion** — see below |
+| `src/limit.rs` | `RateLimit`, `AutoThrottle` — rate limiting, in-flight bounds and per-status back-off, over `tokio::sync::Semaphore` |
 
 ## For AI Agents
 
@@ -61,10 +64,67 @@ narrowing records intent and catches the mistake in an isolated build; the real 
 that is the memory failure this whole project exists to avoid. Responses are recorded into the store via
 `RecordFn` (returning a `MsgId`) and referenced, never held.
 
+### Payload generators and processing rules resolve *before* the attack, never inside it
+
+`PayloadSource::resolve` hands back a `Vec<Bytes>` and `Chain::run` rewrites that `Vec` in place. The
+engine's payload type never changed and `Attack::new` still takes `&[Vec<Bytes>]` — a generator is
+another way to *produce* the set, not another kind of set.
+
+That is load-bearing, not incidental:
+
+- **A result row holds an ordinal and nothing else** because the payload behind ordinal `i` is still
+  there to look up after the attack. A generator driven mid-flight would break that.
+- **`skip-if-matches` drops a payload from the set**, so `plan.len()` is still the number of requests.
+  Applying the skip in the engine would leave gaps in the ordinal space and every count in
+  `AttackReport` would need a "plus N ordinals that were never requests" caveat.
+
+The cost is stated in `payload.rs`'s module note: **Burp's Recursive grep cannot be a `PayloadSource`**
+and is deliberately absent, because its next payload does not exist until the previous response has
+come back. If it is wanted it is a new *attack shape* next to `AttackKind`, not a generator.
+
+### Generators are bounded twice, and the two bounds behave differently
+
+`max_count` (itself capped at `payload::MAX_PAYLOADS`) **truncates the list** and says so via
+`PayloadSet::truncated` next to `total`. `MAX_ITEM_LEN` **refuses** — a shortened list is an honest
+subset of the attack, a shortened payload is a different payload. Do not "fix" the refusal into a
+truncation.
+
+### `hash.rs` is knowing duplication
+
+MD5/SHA-256 belong in `burpsy_tools::decoder` with every other codec, and that is where the Decoder's
+own hashing landed. This copy exists because both were built in the same batch. **When consolidating:
+delete `hash.rs` and point `process.rs` at the tools function** — the crate already depends on
+`burpsy-tools`, so nothing else changes. Both implementations are checked against RFC 1321 and
+FIPS 180-4 vectors, so the swap is verifiable.
+
+### The auto-throttle is opt-in, and that is a safety property not a convenience
+
+`RateLimit::auto_throttle` is `None` by default and every path in `limit.rs` short-circuits on it:
+`charge_throttle` returns the rate untouched without taking a lock, and `RateLimiter::observe` returns
+on one `Option` check. This is the one code path every request of every attack passes through, so
+`with_no_auto_throttle_configured_nothing_observes_and_nothing_changes` asserts the *absence* of an
+effect and should be treated as a regression gate.
+
+`RateLimit` is no longer `Copy` (it owns a pool name), so `RateLimiter::new` takes it by reference.
+
+`RateLimit::name` is an identifier the caller passes and gets back in `AttackReport::pool`. It does
+**not** make two attacks share a bucket, and this crate keeps no registry of pools — cross-attack pool
+state belongs to whoever owns the attacks, not to the thing that bounds one.
+
+### Grep results are reported but are not part of the bucket key
+
+`engine.rs`'s header says arbitrary grep patterns are "a separate feature, not part of the key", and
+adding `Grep` did not change that. Keying on a grep result would silently double the bucket count for
+any attack that turned a pattern on, and the same responses would collapse differently depending on
+what was being searched for. So a bucket carries `grep_matches: usize` — how many of its responses
+matched — which makes unanimity and a mixture distinguishable without splitting the bucket.
+`ResultBucket::grep_extract` is the *exemplar's* value and its doc says so; the per-attempt rows carry
+the rest.
+
 ### Testing Requirements
 
 ```bash
-cargo test -p burpsy-intruder      # 34 tests
+cargo test -p burpsy-intruder      # 86 tests
 ```
 
 Tests use real `tokio::net` listeners (available via dev-dependencies). Rate-limit tests are timing
@@ -82,9 +142,14 @@ sensitive — they use short sleeps and assert bounds rather than exact timings.
 ### Internal
 
 - `burpsy-core` — `Span`, `StoredMessage`, the bytes attacks splice into
+- `burpsy-tools` — `decoder`'s codecs, for the payload-processing encode/decode rules. A sibling edge
+  under `core`: `tools` reaches for nothing but `core`, so this adds no cycle and is clear of the two
+  edges `crates/AGENTS.md` forbids
 
 ### External
 
-- `tokio` (narrowed: `rt`, `sync`, `time`), `bytes`, `serde`, `parking_lot`
+- `tokio` (narrowed: `rt`, `sync`, `time`), `bytes`, `serde`, `parking_lot`, `regex` (payload
+  match/replace and skip rules, and result grepping — `regex::bytes`, because a payload and a response
+  body are both bytes)
 
 <!-- MANUAL: -->
