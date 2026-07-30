@@ -1,0 +1,81 @@
+name: Release
+
+# Builds the `burpsy` binary for Linux, macOS, and Windows and attaches each archive to a GitHub
+# Release. Fires on any `v*` tag push; `workflow_dispatch` exists for a manual dry run (build only,
+# no release) so the matrix can be exercised without cutting a tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Build-time only (crates/web/build.rs bundles the TypeScript UI with it) — never a runtime
+      # dependency of the built binary.
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked -p burpsy-cli --target ${{ matrix.target }}
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/burpsy dist/
+          tar -C dist -czf burpsy-${{ github.ref_name }}-${{ matrix.target }}.tar.gz burpsy
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/burpsy.exe dist/
+          Compress-Archive -Path dist/burpsy.exe -DestinationPath burpsy-${{ github.ref_name }}-${{ matrix.target }}.zip
+
+      - name: Upload build artifact (workflow_dispatch dry run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: burpsy-${{ matrix.target }}
+          path: burpsy-${{ github.ref_name }}-${{ matrix.target }}.*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: burpsy-${{ github.ref_name }}-${{ matrix.target }}.*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
