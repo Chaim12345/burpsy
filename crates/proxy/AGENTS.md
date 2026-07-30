@@ -74,18 +74,20 @@ A plain HTTP session must not write key material to disk it does not need. `load
 called from the CLI only under `--intercept-tls`. `/ca/`, `*.pem` and `*.key` are gitignored — never
 commit generated CA material.
 
-### HTTP/2 is negotiated and recorded, but not forwarded
+### HTTP/2 is negotiated and relayed
 
 ALPN is decided from the **client's own offer**, peeked out of the ClientHello with
 `LazyConfigAcceptor` before anything is dialled. The target chooses from that list, and the
 client-facing config then offers exactly the one protocol the target picked — so the two legs never
 carry different protocols. `Exchange.protocol` records what was actually negotiated.
 
-A connection that lands on `h2` is recorded (`Protocol::Http2`, plus a note) and closed, because
-relaying it needs an h2 driver on both legs and a frame tap between them. The cost, which belongs in
-operator-facing text and not just here: **while interception is switched off, an h2-capable origin
-cannot be browsed through this proxy.** Switching interception on makes the offer `http/1.1` only,
-which restores browsing and capture at the price of a downgrade the operator caused.
+A connection that lands on `h2` is **relayed** by `h2_relay::relay_h2`: the `h2` crate drives both
+legs, every stream is forwarded to the origin and back, and each round trip is recorded as an
+`Exchange` with `protocol: Protocol::Http2`. The stored bytes are a re-rendering in HTTP/1 shape
+(start line + headers + body), not the wire octets — HPACK makes byte-exact replay impossible.
+Interception (the hold queue) is not wired for h2 yet; streams are forwarded and recorded, not held.
+Switching interception on makes the offer `http/1.1` only, which restores interception at the price
+of a downgrade the operator caused and can see.
 
 Three things that are easy to get wrong here:
 

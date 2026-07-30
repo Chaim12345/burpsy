@@ -43,21 +43,24 @@
 //! any request exists for a condition to match. Conditions narrow what is *held*, never what is
 //! *offered*, so an operator whose rules name one host still pays the downgrade on every host.
 //!
-//! The corollary, since the h2 arm below closes the connection before the request loop starts: no
-//! condition of either list ever sees h2 traffic. Consistent, but worth knowing before writing a
-//! `status_code` rule and wondering why an h2-capable origin never trips it.
+//! The corollary: no condition of either list ever sees h2 traffic, because the hold queue is an
+//! HTTP/1 parser and h2 streams are relayed at the frame level, not held for review. Consistent,
+//! but worth knowing before writing a `status_code` rule and wondering why an h2-capable origin
+//! never trips it.
 //!
-//! What is **not** implemented is forwarding h2. A connection that negotiates `h2` is recorded — with
-//! `protocol: Protocol::Http2` and a note saying so — and then closed, because relaying it needs an
-//! h2 driver on both legs plus a frame tap between them. The practical cost is worth stating plainly:
-//! **while interception is switched off, an h2-capable origin cannot be browsed through this proxy.**
-//! Switching interception on makes the proxy offer only `http/1.1`, which restores browsing and
-//! capture at the price of a downgrade the operator caused and can see.
+//! **HTTP/2 is relayed, not refused.** A connection that negotiates `h2` is driven by the `h2`
+//! crate on both legs — every stream is forwarded to the origin and back, and each round trip is
+//! recorded as an `Exchange` with `protocol: Protocol::Http2`. The relay renders each stream in
+//! HTTP/1 shape for the store (start line + headers + body), so every existing tool keeps working.
+//! The limit, stated rather than hidden: the stored bytes are a re-rendering, not the wire octets
+//! — HPACK makes byte-exact replay of a captured header block impossible. Interception (the hold
+//! queue) is not wired for h2 yet; streams are forwarded and recorded, not held for editing.
 //!
-//! Two other halves of "the tool uses HTTP/2 when the target supports it" are outside this crate and
-//! not done: the scanner's audit egress and Intruder still speak HTTP/1.1 to every target, because
+//! Two other halves of "the tool uses HTTP/2 when the target supports it" remain outside this crate:
+//! the scanner's audit egress and Intruder still speak HTTP/1.1 to every target, because
 //! `burpsy_sender::AuthorisedSender` is not protocol-aware. Against an h2-only origin they fail
-//! rather than downgrade. `.planning/ROADMAP.md` records H2-04 as Partial for these reasons.
+//! rather than downgrade. `.planning/ROADMAP.md` records H2-04 as Partial for these reasons — the
+//! proxy relay is done, the sender egress is not.
 //!
 //! # Memory
 //!
@@ -77,6 +80,7 @@ use tokio::net::{TcpListener, TcpStream};
 /// while it grows.
 const MAX_BUFFERED_RESPONSE: usize = 64 * 1024 * 1024;
 
+mod h2_relay;
 pub mod intercept;
 
 pub mod tls;
@@ -627,13 +631,14 @@ async fn tunnel(mut client: TcpStream, target: &str, cfg: ProxyConfig) -> Result
 /// aborts the handshake, which is the normal outcome until the burpsy CA is installed, costing zero
 /// upstream connections: peeking is cheap and needs no socket.
 ///
-/// # HTTP/2 is negotiated, recorded, and not forwarded
+/// # HTTP/2 is negotiated and relayed
 ///
-/// An h2-negotiated connection is recorded as an exchange whose `protocol` is `Protocol::Http2` and
-/// then closed. Forwarding it needs an h2 driver on both legs and a frame tap between them, which is
-/// a later slice. Downgrading it to HTTP/1.1 instead would be the one thing H2-04 forbids, and
-/// pretending to forward it would be worse. The route to an h2-capable origin *through* this proxy
-/// today is the hold queue, which downgrades the offer deliberately and visibly.
+/// An h2-negotiated connection is driven by `h2_relay::relay_h2`: the `h2` crate owns both legs,
+/// every stream is forwarded to the origin and back, and each round trip is recorded as an exchange
+/// with `protocol: Protocol::Http2`. The hold queue does not apply to h2 streams — they are
+/// forwarded and recorded, not held for editing. Downgrading to HTTP/1.1 would be the one thing
+/// H2-04 forbids; the route to interception on an h2-capable origin is the hold queue's deliberate,
+/// visible downgrade (switching interception on makes the offer `http/1.1` only).
 async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) -> Result<()> {
     use tokio_rustls::{LazyConfigAcceptor, TlsConnector};
 
@@ -766,13 +771,13 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
     };
 
     if protocol == Protocol::Http2 {
-        record_unforwarded_h2(&store, &host, port, connect_started);
-        tracing::info!(
-            "{host}:{port} negotiated h2; recorded and closed (h2 forwarding is a later slice — \
-             enable the interception hold queue to reach it over http/1.1)"
-        );
-        let _ = tls_client.shutdown().await;
-        return Ok(());
+        // Relay the connection: drive h2 on both legs and record every stream as its own
+        // exchange. This replaces the old record-and-close behaviour that made h2-capable
+        // origins unbrowsable through the proxy. The HTTP/1 hold queue is not applied to h2
+        // streams yet — they are forwarded and recorded, not held (see `h2_relay`).
+        let authority = format!("{host}:{port}");
+        return h2_relay::relay_h2(tls_client, tls_upstream, &cfg, &host, port, &authority)
+            .await;
     }
 
     // Now it is just HTTP over two streams.
@@ -1548,61 +1553,12 @@ fn record_failed_connect(
     ex_id
 }
 
-/// Record a connection that negotiated HTTP/2 and was therefore not forwarded.
-///
-/// The row exists because the alternative to it is a lie in one direction or the other. Downgrading
-/// the connection to HTTP/1.1 would record an exchange whose `protocol` said `Http1` about a target
-/// that asked for h2 — the silent downgrade H2-04 names. Closing the socket without a row would put
-/// this in the same undistinguishable bucket as "never visited". So the exchange is written with
-/// `Protocol::Http2`, which is true, and the note says what happened, which the operator needs
-/// because their browser is showing them a failed page.
-fn record_unforwarded_h2(store: &TrafficStore, host: &str, port: u16, started: Instant) -> u64 {
-    let marker = Bytes::from(format!(
-        "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
-    ));
-    let req_id = store.put(marker, Direction::Request);
-    let ex_id = store.add_exchange(Exchange {
-        related: Vec::new(),
-        protocol: Protocol::Http2,
-        id: 0,
-        request: req_id,
-        response: None,
-        host: host.to_string(),
-        port,
-        tls: true,
-        method: "CONNECT".into(),
-        path: String::new(),
-        status: None,
-        response_len: 0,
-        started_ms: now_ms(),
-        duration_ms: 0,
-        notes: Some("h2 negotiated on both legs; not forwarded (h2 forwarding is a later slice)".into()),
-    });
-    let body = "burpsy: this connection negotiated HTTP/2, which this build does not forward. \
-                Enabling the interception hold queue makes the proxy offer http/1.1 instead.";
-    let synthetic = Bytes::from(format!(
-        "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    ));
-    let len = synthetic.len();
-    let resp_id = store.put(synthetic, Direction::Response);
-    store.set_response(
-        ex_id,
-        resp_id,
-        502,
-        len,
-        started.elapsed().as_millis() as u64,
-    );
-    ex_id
-}
-
 /// Queue a passive scan without blocking the response path.
 ///
 /// Deliberately fire-and-forget on a separate task: a proxy that slows down as its check set grows
 /// is a proxy people switch off, and Burp's own engine shows where coupling scan cost to request
 /// handling leads (it sheds work via LIMIT_EXCEEDED).
-fn spawn_scan(cfg: &ProxyConfig, exchange_id: u64, response_id: burpsy_core::MsgId) {
+pub(crate) fn spawn_scan(cfg: &ProxyConfig, exchange_id: u64, response_id: burpsy_core::MsgId) {
     let Some(sc) = cfg.scanner.clone() else {
         return;
     };
@@ -1615,7 +1571,7 @@ fn spawn_scan(cfg: &ProxyConfig, exchange_id: u64, response_id: burpsy_core::Msg
     });
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
