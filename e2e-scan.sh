@@ -12,7 +12,7 @@ WORK=$(mktemp -d /tmp/burpsy-scan-XXXXXX)
 PASS=0; FAIL=0
 ok(){ echo "  PASS  $1"; PASS=$((PASS+1)); }
 no(){ echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
-cleanup(){ pkill -x burpsy 2>/dev/null; kill ${ORIGIN_PID:-0} 2>/dev/null; rm -rf "$WORK"; }
+cleanup(){ pkill -x burpsy 2>/dev/null; [ -n "${ORIGIN_PID:-}" ] && kill "$ORIGIN_PID" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 [ -d "$CORPUS" ] || { echo "corpus missing at $CORPUS"; exit 0; }

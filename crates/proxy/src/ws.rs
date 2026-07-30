@@ -36,11 +36,14 @@
 //! scheme — a connection has exactly one of each, so the *subject* of the decision is fixed even
 //! though the *policy* is not.
 //!
-//! Being exact about what that buys today, because overstating it would be the kind of claim this
-//! project rejects: `Scope` is immutable behind an `Arc` everywhere in burpsy right now, so nothing
-//! can narrow scope mid-connection and the per-message answer never differs from a cached one. The
-//! placement is what matters. It is the difference between a property that holds the day scope
-//! becomes editable and a hoisted-out-of-the-loop optimisation that silently stops holding.
+//! `Scope` is runtime-editable (`SharedScope` is an `Arc<RwLock<Scope>>` handle, shared rather than
+//! cloned-and-frozen), so this is not hypothetical: narrowing or widening scope while a connection
+//! is open takes effect on the very next message, without the socket being torn down and reopened.
+//! `scope_narrowed_on_an_open_connection_stops_retention_on_the_very_next_message` and
+//! `scope_widened_on_an_open_connection_starts_retention_on_the_very_next_message` below mutate the
+//! same `SharedScope` handle an open connection is already holding, rather than constructing a new
+//! one — that is what makes the check-per-message placement observable rather than merely correct
+//! in principle.
 //!
 //! What it governs is retention, never egress — the identical rule `ProxyConfig::scope` states for
 //! HTTP. An out-of-scope message is relayed and not stored, and gets no marker row, for the same
@@ -525,13 +528,10 @@ mod tests {
 
     /// WS-03: a connection scope excludes has every message relayed, counted, and stored nowhere.
     ///
-    /// The exclusion is asked for **each** message rather than cached per connection. What this test
-    /// can and cannot show is worth being exact about: because `Scope` is immutable behind an `Arc`
-    /// everywhere in burpsy today, a cached answer and a per-message answer are observationally
-    /// identical here, so this asserts the rule (relay, count, do not retain) and the *placement* of
-    /// the check is a structural guarantee rather than something a test can currently distinguish.
-    /// It becomes distinguishable the moment scope is editable at runtime, which is exactly why the
-    /// check is where it is instead of hoisted out of the loop as an optimisation.
+    /// The exclusion is asked for **each** message rather than cached per connection. This fixture
+    /// builds the excluding `SharedScope` before the connection opens, so it covers the "always was
+    /// out of scope" case; see the two tests below for scope changing *while the connection is open*,
+    /// which is the case this rule exists for.
     #[tokio::test]
     async fn an_excluded_connection_is_relayed_counted_and_retained_nowhere() {
         let (store, ex) = store_with_exchange();
@@ -572,6 +572,103 @@ mod tests {
             "both exclusions counted — one per message, not one per connection"
         );
         assert_eq!(store.ws_count(), before, "the index did not grow");
+    }
+
+    /// WS-03: narrowing scope on an *already-open* connection stops retention on the very next
+    /// message — no new connection, no reconstructed `WsCapture`, just a write through the same
+    /// `SharedScope` handle the running relay task is already holding a clone of.
+    #[tokio::test]
+    async fn scope_narrowed_on_an_open_connection_stops_retention_on_the_very_next_message() {
+        let (store, ex) = store_with_exchange();
+        let (client, mut client_peer) = duplex(4096);
+        let (upstream, mut upstream_peer) = duplex(4096);
+
+        let mut starting = burpsy_core::Scope::new();
+        let rule_id = starting.add_rule(burpsy_core::ScopeRule::include("t.test"));
+        let shared = burpsy_core::SharedScope::new(starting);
+        let mut cap = capture(store.clone(), ex);
+        cap.scope = shared.clone();
+        assert!(
+            cap.retains(),
+            "the fixture must start in scope, or narrowing it proves nothing"
+        );
+
+        let relay_task = tokio::spawn(relay(client, upstream, &[], Some(cap)));
+
+        let before = frame(true, 0x1, None, b"while in scope");
+        client_peer.write_all(&before).await.unwrap();
+        let mut buf = vec![0u8; 128];
+        let n = upstream_peer.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], &before[..]);
+
+        // The operator narrows scope through the same handle the open connection is holding —
+        // exactly what the running web UI does, not a new `SharedScope` built for the test.
+        shared.remove_rule(rule_id);
+
+        let after = frame(true, 0x1, None, b"after narrowing");
+        client_peer.write_all(&after).await.unwrap();
+        let n = upstream_peer.read(&mut buf).await.unwrap();
+        assert_eq!(
+            &buf[..n],
+            &after[..],
+            "narrowed scope still relays — it only governs retention"
+        );
+
+        drop(client_peer);
+        drop(upstream_peer);
+        let stats = relay_task.await.unwrap();
+        assert_eq!(
+            stats.messages, 1,
+            "only the message sent before narrowing was retained: {stats:?}"
+        );
+        assert_eq!(
+            stats.skipped_out_of_scope, 1,
+            "the post-narrowing message was counted, not silently dropped"
+        );
+        assert_eq!(store.ws_count(), 1);
+    }
+
+    /// WS-03: the reverse direction — widening scope on an *already-open* connection starts
+    /// retention on the very next message, with no reconnect needed.
+    #[tokio::test]
+    async fn scope_widened_on_an_open_connection_starts_retention_on_the_very_next_message() {
+        let (store, ex) = store_with_exchange();
+        let (client, mut client_peer) = duplex(4096);
+        let (upstream, mut upstream_peer) = duplex(4096);
+
+        let shared = burpsy_core::SharedScope::new(burpsy_core::Scope::new());
+        let mut cap = capture(store.clone(), ex);
+        cap.scope = shared.clone();
+        assert!(
+            !cap.retains(),
+            "the fixture must start out of scope, or widening it proves nothing"
+        );
+
+        let relay_task = tokio::spawn(relay(client, upstream, &[], Some(cap)));
+
+        let before = frame(true, 0x1, None, b"while excluded");
+        client_peer.write_all(&before).await.unwrap();
+        let mut buf = vec![0u8; 128];
+        let n = upstream_peer.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], &before[..], "still relayed while excluded");
+
+        // Widen scope through the same handle — the operator adding an include rule mid-engagement.
+        shared.add_rule(burpsy_core::ScopeRule::include("t.test"));
+
+        let after = frame(true, 0x1, None, b"after widening");
+        client_peer.write_all(&after).await.unwrap();
+        let n = upstream_peer.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], &after[..]);
+
+        drop(client_peer);
+        drop(upstream_peer);
+        let stats = relay_task.await.unwrap();
+        assert_eq!(
+            stats.messages, 1,
+            "only the message sent after widening was retained: {stats:?}"
+        );
+        assert_eq!(stats.skipped_out_of_scope, 1, "the pre-widening message was counted");
+        assert_eq!(store.ws_count(), 1);
     }
 
     #[test]

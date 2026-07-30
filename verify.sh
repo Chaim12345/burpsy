@@ -116,6 +116,14 @@ else
   # Sequential: each script does `pkill -x burpsy` on cleanup and would kill its siblings.
   for s in e2e*.sh; do
     [ -x "$s" ] || continue
+    # e2e-scan.sh needs the same corpus the standalone conformance check above does, and refuses
+    # the same way: no PASS/FAIL line at all, just a one-line reason and a clean exit. Without this,
+    # the absence would fall through to "no result line" and print as a FAIL — the exact "a skipped
+    # check reports as a failure" bug this script exists to rule out, just for a different check.
+    if [ "$s" = "e2e-scan.sh" ] && [ ! -d /tmp/BChecks ]; then
+      skip "$s did not run: /tmp/BChecks absent (same corpus as the BCheck conformance check above)"
+      continue
+    fi
     R=$(./"$s" 2>&1 | tail -3 | grep -oE '[0-9]+ passed, [0-9]+ failed')
     case "$R" in
       *" 0 failed") ok "$s — $R" ;;

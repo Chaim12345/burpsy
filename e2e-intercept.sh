@@ -23,7 +23,7 @@ no(){ echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 
 cleanup(){
   pkill -x intercept_e2e 2>/dev/null
-  kill ${ORIGIN_PID:-0} 2>/dev/null
+  [ -n "${ORIGIN_PID:-}" ] && kill "$ORIGIN_PID" 2>/dev/null
   wait 2>/dev/null
   rm -rf "$WORK"
 }

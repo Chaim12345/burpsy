@@ -799,7 +799,7 @@ mod tests {
         }
         assert_eq!(finished["ended"], "stopped", "{finished}");
         let captured = finished["captured"].as_u64().unwrap();
-        assert!(captured >= 2 && captured < 5_000, "kept {captured} tokens");
+        assert!((2..5_000).contains(&captured), "kept {captured} tokens");
         assert_eq!(
             finished["report"]["tokens"], captured,
             "the partial sample is still analysed rather than discarded"

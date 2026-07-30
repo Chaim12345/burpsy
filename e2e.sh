@@ -14,7 +14,11 @@ PASS=0; FAIL=0
 ok(){ echo "  PASS  $1"; PASS=$((PASS+1)); }
 no(){ echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 
-cleanup(){ kill ${TARGET_PID:-0} ${BURPSY_PID:-0} 2>/dev/null; wait 2>/dev/null; }
+cleanup(){
+  [ -n "${TARGET_PID:-}" ] && kill "$TARGET_PID" 2>/dev/null
+  [ -n "${BURPSY_PID:-}" ] && kill "$BURPSY_PID" 2>/dev/null
+  wait 2>/dev/null
+}
 trap cleanup EXIT
 
 # ---- target server: echoes method+path+query so we can assert on it -----------------------

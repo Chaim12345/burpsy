@@ -313,10 +313,7 @@ async fn an_upgrade_the_origin_refuses_falls_back_to_the_ordinary_response_path(
         while let Ok((mut sock, _)) = listener.accept().await {
             let mut chunk = [0u8; 4096];
             let mut buf = Vec::new();
-            loop {
-                let Ok(n) = sock.read(&mut chunk).await else {
-                    break;
-                };
+            while let Ok(n) = sock.read(&mut chunk).await {
                 if n == 0 {
                     break;
                 }

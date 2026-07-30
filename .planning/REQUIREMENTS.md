@@ -16,6 +16,11 @@ operator-observable capabilities, not implementation tasks.
 - [x] **STORE-04**: A record carries references to related records, so one exchange can own many child records
 - [x] **STORE-05**: Operator can verify a migrated capture is byte-identical to what the previous store held, rather than inferring it from the absence of a crash
 
+### Proxy (PROXY)
+
+- [x] **PROXY-01**: Operator can define conditional interception rules — matched on host, path, extension, method, URL, status code (responses only) or content-type — that decide whether a specific request or response is held, instead of one blanket intercept switch *(2026-07-30, via the Burp-parity backlog rather than a roadmap phase — see STATE.md)*
+- [x] **PROXY-02**: Operator can edit scope while the tool is running, and every surface that authorises against it re-checks the current rules per message or request rather than a decision cached when the connection or attack started *(2026-07-30, via the Burp-parity backlog. WebSocket retention re-checking a scope edit made mid-connection — the one case flagged as untested when Scope and WebSockets landed the same session via independent agents — is covered by `scope_narrowed_on_an_open_connection_stops_retention_on_the_very_next_message` and `scope_widened_on_an_open_connection_starts_retention_on_the_very_next_message` in crates/proxy/src/ws.rs)*
+
 ### Query language (DSL)
 
 - [ ] **DSL-01**: Operator can filter proxy history with a typed query over host, status, method, MIME type and body content
@@ -149,6 +154,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STORE-03 | Phase 1 | Complete |
 | STORE-04 | Phase 1 | Complete |
 | STORE-05 | Phase 1 | Complete |
+| PROXY-01 | Burp-parity backlog (not a roadmap phase) | Complete (2026-07-30) |
+| PROXY-02 | Burp-parity backlog (not a roadmap phase) | Complete (2026-07-30) |
 | HARD-03 | Phase 1 | Partial — chokepoint built; per-surface tests land with each surface |
 | H2-01 | Phase 2 | Pending |
 | H2-02 | Phase 2 | Pending |
@@ -202,6 +209,6 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOM-05 | Phase 12 | Pending |
 
 **Coverage:**
-- v1 requirements: 56 total (corrected from the 52 stated above — the itemized list was always 56; the summary count was stale). All 56 mapped to exactly one of 12 phases, 0 orphans.
+- v1 requirements: 58 total (56 mapped to exactly one of the 12 roadmap phases, 0 orphans among those; PROXY-01/02 added 2026-07-30 for capability that shipped via the ad-hoc Burp-parity backlog rather than a numbered phase — see Traceability above, and STATE.md for why that backlog exists alongside the roadmap).
 - v2 requirements: 2 deferred
 - Out of scope: 10 explicit exclusions

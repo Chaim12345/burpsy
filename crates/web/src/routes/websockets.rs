@@ -227,7 +227,7 @@ async fn connections(State(s): State<AppState>) -> impl IntoResponse {
             }
         }
     }
-    out.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
+    out.sort_by_key(|c| std::cmp::Reverse(c.last_ms));
     Json(out)
 }
 

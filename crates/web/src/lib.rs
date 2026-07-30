@@ -131,6 +131,7 @@ pub fn router_session(
     router_intercept(store, ca_pem, scope, findings, audit, export, session, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn router_intercept(
     store: Arc<TrafficStore>,
     ca_pem: Option<String>,
