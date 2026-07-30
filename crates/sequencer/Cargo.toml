@@ -1,0 +1,21 @@
+[package]
+name = "burpsy-sequencer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+# Live capture sends a constructed request, so it goes through the one authorising path. See
+# `capture.rs` — there is deliberately no other way into a socket from this crate.
+burpsy-sender = { path = "../sender" }
+bytes = { workspace = true }
+serde = { workspace = true }
+regex = "1"
+# Narrowed deliberately, the same statement `intruder` makes: the only thing this crate wants from
+# the runtime is `sleep` between captures. It has no listener, no client and no `net` feature; the
+# socket belongs to `burpsy-sender`. Tests restore `macros`/`net` below for their own stub servers.
+tokio = { version = "1", default-features = false, features = ["time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros", "net", "io-util"] }

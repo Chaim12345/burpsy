@@ -20,6 +20,7 @@ request. A crate boundary here is a statement about what a component is *not* al
 | `sender/` | The one authorising path from a constructed request to a socket (see `sender/AGENTS.md`) |
 | `proxy/` | Intercepting HTTP/HTTPS proxy, CA, TLS policy (see `proxy/AGENTS.md`) |
 | `intruder/` | Insertion-point discovery and payload attacks (see `intruder/AGENTS.md`) |
+| `sequencer/` | Token randomness analysis: character entropy and the FIPS 140-2 suite (see `sequencer/AGENTS.md`) |
 | `tools/` | Decoder, Comparer, Logger, Organizer, match-and-replace (see `tools/AGENTS.md`) |
 | `web/` | JSON API and single-page UI (see `web/AGENTS.md`) |
 | `cli/` | The `burpsy` binary that wires everything together (see `cli/AGENTS.md`) |

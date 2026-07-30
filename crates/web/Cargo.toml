@@ -3,6 +3,7 @@ name = "burpsy-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [dependencies]
 burpsy-core = { path = "../core" }
@@ -11,6 +12,7 @@ burpsy-intruder = { path = "../intruder" }
 burpsy-tools = { path = "../tools" }
 burpsy-proxy = { path = "../proxy" }
 burpsy-session = { path = "../session" }
+burpsy-sequencer = { path = "../sequencer" }
 axum = "0.8"
 tokio = { workspace = true }
 bytes = { workspace = true }
@@ -19,3 +21,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
+# Operator-supplied grep patterns arrive as strings over HTTP and are compiled here, at the edge, so
+# a bad pattern is one 400 rather than a per-response failure inside an attack.
+regex = "1"

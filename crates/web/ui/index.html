@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>burpsy</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>burpsy</h1>
+      <nav>
+        <button class="on" data-t="dashboard">Dashboard</button>
+        <button data-t="history">History</button>
+        <button data-t="sitemap">Site map</button>
+        <button data-t="repeater">Repeater</button>
+        <button data-t="intruder">Intruder</button>
+        <button data-t="intercept">Intercept</button>
+        <button data-t="scanner">Scanner</button>
+        <button data-t="decoder">Decoder</button>
+        <button data-t="comparer">Comparer</button>
+        <button data-t="logger">Logger</button>
+        <button data-t="organizer">Organizer</button>
+        <button data-t="matchreplace">Match/Replace</button>
+        <button data-t="session">Session</button>
+        <button data-t="sequencer">Sequencer</button>
+      </nav>
+      <a id="ca-link" href="/ca.crt" download style="display: none">CA cert</a>
+      <span id="scope-badge" class="badge" title=""></span>
+      <div id="stats"></div>
+    </header>
+    <main>
+      <section id="dashboard" class="on"></section>
+      <section id="history"></section>
+      <section id="sitemap"></section>
+      <section id="repeater"></section>
+      <section id="intruder"></section>
+      <section id="intercept"></section>
+      <section id="scanner"></section>
+      <section id="decoder"></section>
+      <section id="comparer"></section>
+      <section id="logger"></section>
+      <section id="organizer"></section>
+      <section id="matchreplace"></section>
+      <section id="session"></section>
+      <section id="sequencer"></section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

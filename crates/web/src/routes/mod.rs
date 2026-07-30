@@ -9,19 +9,30 @@
 
 use crate::AppState;
 use axum::Router;
+use std::sync::Arc;
 
 pub mod intercept;
+pub mod liveaudit;
 pub mod report;
+pub mod sequencer;
 pub mod session;
 pub mod sitemap;
 pub mod tools;
+pub mod websockets;
 
 /// Every feature router, merged.
-pub fn all() -> Router<AppState> {
+///
+/// `tool_state` is threaded in rather than defaulted here, unlike every other area's routes, so
+/// the binary can hold the same `ToolState` (and so the same `ToolLog`) that `AppState::tool_log`
+/// points at — see `tools::ToolState`'s own docs on why the log has to be shared.
+pub fn all(tool_state: Arc<tools::ToolState>) -> Router<AppState> {
     Router::new()
         .merge(sitemap::routes())
         .merge(intercept::routes())
-        .merge(tools::routes())
+        .merge(tools::routes_with(tool_state))
         .merge(report::routes())
         .merge(session::routes())
+        .merge(liveaudit::routes())
+        .merge(sequencer::routes())
+        .merge(websockets::routes())
 }
