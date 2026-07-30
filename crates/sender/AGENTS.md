@@ -72,6 +72,17 @@ the decision is made — not one wire implementation.
 Calling the wrong one returns an error and **does not touch the counters**: they describe traffic
 decisions, and a request that was never eligible to go anywhere is neither sent nor refused.
 
+### The scope handle is fixed; the rules behind it are not
+
+`AuthorisedSender` holds a `burpsy_core::SharedScope`, so an operator adding or removing a rule mid-session
+changes what an *already-built* sender will send — at its next request, with no rebuild. That is required,
+not incidental: a long-running Intruder attack must stop hitting a host the operator has just excluded.
+It is also why `authorise` must keep reading the handle per send. Caching a verdict, or copying the rules
+into the sender at construction, reintroduces exactly the lag this replaced.
+
+`blocking`/`asynchronous` take `impl Into<SharedScope>`. A test may pass an owned `Scope`; a subsystem in
+a running process must pass a clone of the process-wide handle.
+
 ### `check_scope` is a query, not the gate
 
 It exists for the one caller that needs the answer before it acts — the web repeater records to history

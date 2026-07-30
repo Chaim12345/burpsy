@@ -24,9 +24,11 @@ pub mod findings;
 pub mod scope;
 pub mod segment;
 pub mod sitemap;
+pub mod ws;
 pub use findings::{Confidence, Finding, FindingStore, Inserted, NewFinding, Occurrence, Severity};
-pub use scope::{RuleKind, Scope, ScopeRule};
+pub use scope::{RuleKind, Scope, ScopeRule, SharedScope};
 pub use segment::{DEFAULT_SEGMENT_TARGET_BYTES, Location, SegmentLog};
+pub use ws::{Reassembler, WsEvent, WsMessage, WsOpcode};
 
 use bytes::Bytes;
 use parking_lot::RwLock;
@@ -266,9 +268,19 @@ fn split3(raw: &[u8], start: usize, end: usize) -> Option<(Span, Span, Span)> {
 /// HTTP/2 exchange is a stream of frames, and a WebSocket connection carries frames indefinitely
 /// in both directions. Rather than widen `Exchange` once per protocol, a record carries a list of
 /// children and the variant says what kind each one is.
+///
+/// # Where the limit of that idea turned out to be
+///
+/// "Indefinitely" is the operative word, and it is what [`ws::WsMessage`] exists for. This list
+/// lives *on* the `Exchange` row, and [`TrafficStore::exchanges`] clones those rows on every history
+/// poll — so one child per WebSocket message would make listing history copy a growing `Vec` for a
+/// field the history UI never reads, at a size the socket's peer chooses. So a `Vec` of children is
+/// right for a *bounded* set and WebSocket capture uses its own append-only index instead, with the
+/// back-reference pointing from the message to its handshake. `WsFrame` stays for the bounded case:
+/// a specific frame an operator or a check wants hung off the connection it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChildRef {
-    /// A WebSocket frame carried by this connection.
+    /// A WebSocket frame carried by this connection. Not used for bulk capture — see the type note.
     WsFrame(MsgId),
     /// An HTTP/2 frame belonging to this stream.
     H2Frame(MsgId),
@@ -401,6 +413,10 @@ struct StoreInner {
     messages: Vec<MessageSlot>,
     /// Position is the id: `exchanges[i].id == i`.
     exchanges: Vec<Exchange>,
+    /// Position is the id: `ws[i].id == i`. Index rows only — every payload is in `messages`, and
+    /// therefore in the segment log when one is open. See [`ws::WsMessage`] for why WebSocket
+    /// messages get their own index instead of riding on `Exchange::related`.
+    ws: Vec<ws::WsMessage>,
     /// Running total of stored bytes, so `counts()` does not walk the log.
     bytes: usize,
     /// `Some` when this store is disk-backed. Lives inside the lock because appending is part of
@@ -645,6 +661,54 @@ impl TrafficStore {
             .unwrap_or_default()
     }
 
+    /// Append a captured WebSocket message. The returned id is its position, as everywhere else.
+    ///
+    /// `m.id` is ignored and overwritten, exactly as [`Self::add_exchange`] does with `Exchange::id`
+    /// — the store hands out ids, so a caller cannot invent one that disagrees with its position.
+    pub fn add_ws_message(&self, mut m: ws::WsMessage) -> u64 {
+        let mut g = self.inner.write();
+        let id = g.ws.len() as u64;
+        m.id = id;
+        g.ws.push(m);
+        id
+    }
+
+    /// Newest-first page of WebSocket messages. Index rows, so no payload is touched.
+    pub fn ws_messages(&self, offset: usize, limit: usize) -> Vec<ws::WsMessage> {
+        let g = self.inner.read();
+        g.ws.iter().rev().skip(offset).take(limit).cloned().collect()
+    }
+
+    /// Newest-first page of the messages belonging to one connection.
+    ///
+    /// A scan rather than a per-exchange index. The alternative — a map from exchange to a `Vec` of
+    /// message ids — is the shape whose memory the socket's peer gets to choose, and a scan over
+    /// fixed-size index rows is cheap and, unlike that map, cannot grow a second copy of the truth
+    /// that could disagree with the first.
+    pub fn ws_messages_for(&self, exchange: u64, offset: usize, limit: usize) -> Vec<ws::WsMessage> {
+        let g = self.inner.read();
+        g.ws.iter()
+            .rev()
+            .filter(|m| m.exchange == exchange)
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    /// Resolve a WebSocket message id. O(1): the id *is* the position.
+    pub fn ws_message(&self, id: u64) -> Option<ws::WsMessage> {
+        let g = self.inner.read();
+        let m = g.ws.get(id as usize)?;
+        debug_assert_eq!(m.id, id, "ws index desynchronised from id");
+        Some(m.clone())
+    }
+
+    /// How many WebSocket messages have been captured.
+    pub fn ws_count(&self) -> usize {
+        self.inner.read().ws.len()
+    }
+
     /// `(exchanges, messages, stored bytes)`. O(1) — `bytes` is maintained on write.
     pub fn counts(&self) -> (usize, usize, usize) {
         let g = self.inner.read();
@@ -690,6 +754,26 @@ impl TrafficStore {
                 return Err(format!(
                     "exchange {i} references response message {} which does not exist",
                     r.0
+                ));
+            }
+        }
+        for (i, m) in g.ws.iter().enumerate() {
+            if m.id != i as u64 {
+                return Err(format!(
+                    "ws message at position {i} carries id {} — position is not the id",
+                    m.id
+                ));
+            }
+            if m.payload.0 as usize >= g.messages.len() {
+                return Err(format!(
+                    "ws message {i} references payload {} which does not exist",
+                    m.payload.0
+                ));
+            }
+            if m.exchange as usize >= g.exchanges.len() {
+                return Err(format!(
+                    "ws message {i} belongs to exchange {} which does not exist",
+                    m.exchange
                 ));
             }
         }

@@ -14,6 +14,7 @@ burpsy-proxy = { path = "../proxy" }
 burpsy-web = { path = "../web" }
 burpsy-scanner = { path = "../scanner" }
 burpsy-sender = { path = "../sender" }
+burpsy-tools = { path = "../tools" }
 
 tokio = { workspace = true }
 anyhow = { workspace = true }

@@ -17,13 +17,12 @@ use axum::Router;
 use axum::extract::{Query, State};
 use axum::routing::get;
 use burpsy_bcheck::eval::{Sender, Target};
-use burpsy_core::{Scope, ScopeRule, TrafficStore};
+use burpsy_core::{Scope, ScopeRule, SharedScope, TrafficStore};
 use burpsy_proxy::{Interceptor, ProxyConfig};
 use burpsy_sender::NetSender;
 use burpsy_web::AppState;
 use burpsy_web::routes::intercept::InterceptState;
 use serde::Deserialize;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,11 +53,13 @@ async fn main() -> anyhow::Result<()> {
             other => anyhow::bail!("unknown argument {other:?}"),
         }
     }
-    let scope = if scope_set {
+    // One shared scope for both halves. Two copies would let the API report rules the proxy was
+    // not capturing by — see `SharedScope`'s docs.
+    let scope = SharedScope::new(if scope_set {
         scope
     } else {
         Scope::allow_everything()
-    };
+    });
 
     let store = TrafficStore::new();
     let interceptor = Interceptor::new();
@@ -71,12 +72,14 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         store: store.clone(),
         ca_pem: None,
-        scope: Arc::new(scope),
+        scope,
         findings: None,
         audit: None,
         export: None,
         intercept: Some(InterceptState::new(interceptor)),
         session: None,
+        tool_log: None,
+        live_audit: None,
     };
 
     let app = Router::new()

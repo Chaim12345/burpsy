@@ -261,10 +261,7 @@ mod tests {
     fn refuses_a_macro_step_whose_url_is_out_of_scope_and_sends_nothing() {
         let mut scope = Scope::new();
         scope.add(ScopeRule::include("in-scope.test"));
-        let sender = Arc::new(AuthorisedSender::blocking(
-            Arc::new(scope),
-            NetSender::default(),
-        ));
+        let sender = Arc::new(AuthorisedSender::blocking(scope, NetSender::default()));
         let macro_sender = AuthorisedMacroSender::new(Arc::clone(&sender));
 
         let err = macro_sender
@@ -312,10 +309,7 @@ mod tests {
 
         let mut scope = Scope::new();
         scope.add(ScopeRule::include("127.0.0.1"));
-        let sender = Arc::new(AuthorisedSender::blocking(
-            Arc::new(scope),
-            NetSender::default(),
-        ));
+        let sender = Arc::new(AuthorisedSender::blocking(scope, NetSender::default()));
         let response = AuthorisedMacroSender::new(Arc::clone(&sender))
             .send(&step(
                 "POST",

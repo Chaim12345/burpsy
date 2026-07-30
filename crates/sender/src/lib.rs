@@ -56,8 +56,7 @@
 
 mod transport;
 
-use burpsy_core::Scope;
-use std::sync::Arc;
+use burpsy_core::SharedScope;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -146,10 +145,17 @@ enum Transport {
 
 /// The only authorising path from a constructed request to a socket.
 ///
-/// `scope` is bound at construction and never swapped out. Every send asks it first; a refusal is
-/// counted and returned, and the transport is never reached.
+/// The scope *handle* is bound at construction and never swapped out, but the rules behind it can be
+/// edited by the operator while this sender is alive — that is what [`SharedScope`] is for. Every send
+/// asks it first and reads whatever the rules say at that moment; a refusal is counted and returned,
+/// and the transport is never reached.
+///
+/// The consequence worth stating: a long-running attack loop holding one of these will start honouring
+/// a rule the operator adds mid-run, at the next request. That is the intended behaviour — a newly
+/// excluded host must stop receiving traffic without waiting for the attack to finish — and it is why
+/// the check reads the shared handle per send rather than caching a verdict.
 pub struct AuthorisedSender {
-    scope: Arc<Scope>,
+    scope: SharedScope,
     transport: Transport,
     // Atomics, not `Cell`. The wrapper this generalises used `Cell<u32>`, which compiled only
     // because it was built fresh per audit item and never shared. This type is meant to be held
@@ -162,9 +168,12 @@ pub struct AuthorisedSender {
 
 impl AuthorisedSender {
     /// A blocking sender over the given transport, for the synchronous BCheck evaluator.
-    pub fn blocking(scope: Arc<Scope>, net: NetSender) -> Self {
+    ///
+    /// Takes `impl Into<SharedScope>` so a caller that already holds the process-wide handle clones it
+    /// — and a test that just wants a scope of its own can pass an owned [`burpsy_core::Scope`].
+    pub fn blocking(scope: impl Into<SharedScope>, net: NetSender) -> Self {
         Self {
-            scope,
+            scope: scope.into(),
             transport: Transport::Blocking(net),
             sent: AtomicU32::new(0),
             refused: AtomicU32::new(0),
@@ -172,9 +181,9 @@ impl AuthorisedSender {
     }
 
     /// An async sender, for Repeater and Intruder.
-    pub fn asynchronous(scope: Arc<Scope>, timeout: Duration) -> Self {
+    pub fn asynchronous(scope: impl Into<SharedScope>, timeout: Duration) -> Self {
         Self {
-            scope,
+            scope: scope.into(),
             transport: Transport::Async { timeout },
             sent: AtomicU32::new(0),
             refused: AtomicU32::new(0),
@@ -191,8 +200,9 @@ impl AuthorisedSender {
         self.refused.load(Ordering::Relaxed)
     }
 
-    /// The scope this sender authorises against.
-    pub fn scope(&self) -> &Scope {
+    /// The scope this sender authorises against. A handle, so a caller can read the *current* rules
+    /// rather than the ones this sender was built with.
+    pub fn scope(&self) -> &SharedScope {
         &self.scope
     }
 
@@ -291,12 +301,13 @@ impl std::fmt::Debug for AuthorisedSender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burpsy_core::ScopeRule;
+    use burpsy_core::{Scope, ScopeRule};
+    use std::sync::Arc;
 
-    fn scope_of(host: &str) -> Arc<Scope> {
+    fn scope_of(host: &str) -> SharedScope {
         let mut s = Scope::new();
         s.add(ScopeRule::include(host));
-        Arc::new(s)
+        SharedScope::new(s)
     }
 
     fn target(host: &str) -> Target {
@@ -336,7 +347,7 @@ mod tests {
         let mut scope = Scope::new();
         scope.add(ScopeRule::include("shop.test"));
         scope.add(ScopeRule::exclude("shop.test").with_path_prefix("/admin"));
-        let s = AuthorisedSender::blocking(Arc::new(scope), NetSender::default());
+        let s = AuthorisedSender::blocking(scope, NetSender::default());
 
         // Same named target both times; only the bytes differ. The in-scope case is checked without
         // sending, so this test never touches DNS or a socket.
@@ -522,6 +533,35 @@ mod tests {
             .await
             .expect_err("must time out");
         assert!(e.to_string().contains("timeout"), "got: {e}");
+    }
+
+    /// The gate reads the *current* rules, not the ones the sender was built with.
+    ///
+    /// This is the authorisation-relevant half of making scope runtime-editable. A sender that cached
+    /// its verdict — or that held its own `Arc<Scope>` copy, as this one used to — would keep sending
+    /// to a host the operator has just excluded, for as long as the attack ran. The narrowing
+    /// direction is the one that must not be able to lag.
+    #[test]
+    fn excluding_a_host_stops_an_already_built_sender_from_sending_to_it() {
+        let scope = SharedScope::empty();
+        let include = scope.add_rule(ScopeRule::include("shop.test"));
+        let s = AuthorisedSender::blocking(scope.clone(), NetSender::default());
+        let raw = b"GET / HTTP/1.1\r\nHost: shop.test\r\n\r\n";
+        assert!(s.check_scope(&target("shop.test"), raw).is_ok());
+
+        // Operator removes the include mid-session. Nothing re-created the sender.
+        scope.remove_rule(include);
+        let err = s
+            .send(&target("shop.test"), raw)
+            .expect_err("the sender must honour the narrowed scope immediately");
+        assert!(err.contains("shop.test"), "got: {err}");
+        assert_eq!(s.refused(), 1);
+        assert_eq!(s.sent(), 0);
+
+        // And widening reaches it too, through the same handle.
+        scope.add_rule(ScopeRule::include("shop.test"));
+        assert!(s.check_scope(&target("shop.test"), raw).is_ok());
+        assert!(s.scope().contains("shop.test", 443, "/", true));
     }
 
     #[test]

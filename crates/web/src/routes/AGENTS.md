@@ -20,6 +20,7 @@ adding a file, not editing a shared one.**
 | `tools.rs` | Decoder / Comparer / Logger / Organizer / match-and-replace endpoints (the largest area) |
 | `intercept.rs` | Held-request endpoints: view, edit, forward, drop |
 | `sitemap.rs` | The host → path tree the UI navigates |
+| `websockets.rs` | `/api/ws/history`, `/api/ws/message/{id}`, `/api/ws/connections` — a parallel history for upgraded connections, keyed by the handshake exchange |
 
 ## For AI Agents
 

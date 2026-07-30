@@ -26,6 +26,7 @@ use axum::{Extension, Json, Router};
 use burpsy_core::{Direction, MsgId};
 use burpsy_tools::comparer::{self, Granularity, Op};
 use burpsy_tools::decoder::{self, Layer, SmartOptions};
+use burpsy_tools::hash::{self, HashAlgorithm};
 use burpsy_tools::logger::{Started, Tool, ToolLog};
 use burpsy_tools::matchreplace::{Ctx, RuleSet, RuleSetSpec};
 use burpsy_tools::organizer::{Highlight, Organizer};
@@ -36,7 +37,10 @@ use std::sync::Arc;
 /// Everything the tool endpoints own.
 #[derive(Debug, Default)]
 pub struct ToolState {
-    pub log: ToolLog,
+    /// `Arc` rather than a bare `ToolLog` so the binary can hand the same log to
+    /// `AppState::tool_log` — that is how `repeater_send`/`intruder_run` in `lib.rs` and this
+    /// module's own handlers end up writing to and reading from one shared log instead of two.
+    pub log: Arc<ToolLog>,
     pub organizer: Organizer,
     /// Swapped wholesale on `PUT /api/tools/rules`, so the proxy's read side never sees a
     /// half-applied rule list.
@@ -52,6 +56,7 @@ pub fn routes_with(state: Arc<ToolState>) -> Router<AppState> {
     Router::new()
         .route("/api/tools/decode", post(decode))
         .route("/api/tools/encode", post(encode))
+        .route("/api/tools/hash", post(hash_digest))
         .route("/api/tools/compare", post(compare))
         .route(
             "/api/tools/log",
@@ -253,6 +258,49 @@ async fn encode(State(s): State<AppState>, Json(req): Json<EncodeReq>) -> impl I
     }
 }
 
+// ---- hash ------------------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct HashReq {
+    #[serde(default)]
+    input: String,
+    #[serde(default)]
+    msg_id: Option<u64>,
+    /// An algorithm name — `md5`, `sha1`, `sha256`, `sha512`. Required, and not defaulted: a
+    /// digest whose algorithm the caller did not name is a number nobody can compare against.
+    algorithm: String,
+}
+
+/// Burp's third Decoder action. Named `hash_digest` rather than `hash` only because
+/// `burpsy_tools::hash` is in scope as a module and `hash::hash` inside `async fn hash` resolves
+/// correctly but reads like a bug.
+///
+/// The response hex-encodes the digest. Raw digest bytes are mostly not UTF-8, so shipping them
+/// through [`BytesView`] would hand the browser a string full of replacement characters and a
+/// `utf8: false` flag — technically honest, useless in practice, and not what an operator wants to
+/// copy. Hex is what every other tool prints. Because it is ASCII and complete by construction,
+/// `utf8` is always `true` and `truncated` always `false` here; both are still computed by
+/// [`BytesView::new`] rather than hardcoded, so the shape stays identical to every other endpoint's.
+async fn hash_digest(State(s): State<AppState>, Json(req): Json<HashReq>) -> impl IntoResponse {
+    let input = match source(&s, req.msg_id, Some(&req.input)) {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let Some(algorithm) = HashAlgorithm::parse(&req.algorithm) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("unknown algorithm {:?}", req.algorithm),
+        )
+            .into_response();
+    };
+    let digest = hash::hash(algorithm, &input);
+    Json(serde_json::json!({
+        "algorithm": algorithm.as_str(),
+        "output": BytesView::new(&decoder::hex_encode(&digest)),
+    }))
+    .into_response()
+}
+
 // ---- comparer --------------------------------------------------------------------------------
 
 #[derive(Deserialize, Default)]
@@ -373,6 +421,9 @@ async fn compare(State(s): State<AppState>, Json(req): Json<CompareReq>) -> impl
 struct LogQuery {
     #[serde(default)]
     tool: Option<String>,
+    /// Free-text substring match against host, path, or method (case-insensitive).
+    #[serde(default)]
+    q: Option<String>,
     #[serde(default)]
     offset: usize,
     #[serde(default = "default_limit")]
@@ -387,10 +438,10 @@ async fn log_list(
     Query(q): Query<LogQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.min(2000);
-    let entries = match q.tool.as_deref() {
-        None | Some("") | Some("all") => t.log.entries(q.offset, limit),
+    let tool = match q.tool.as_deref() {
+        None | Some("") | Some("all") => None,
         Some(name) => match Tool::parse(name) {
-            Some(tool) => t.log.by_tool(tool, q.offset, limit),
+            Some(tool) => Some(tool),
             None => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -400,6 +451,8 @@ async fn log_list(
             }
         },
     };
+    let query = q.q.as_deref().filter(|s| !s.is_empty());
+    let entries = t.log.search(tool, query, q.offset, limit);
     let counts = t.log.counts();
     Json(serde_json::json!({
         "total": t.log.len(),
@@ -617,6 +670,11 @@ struct RuleTestReq {
     path: String,
     #[serde(default)]
     tls: bool,
+    /// Test against this ad-hoc rule set instead of the persisted one. This is what lets the UI
+    /// preview an in-progress edit (or a brand new rule) as the operator types, without writing
+    /// the draft to the live config first — nothing here touches `t.rules`.
+    #[serde(default)]
+    draft_rules: Option<RuleSetSpec>,
 }
 fn localhost() -> String {
     "localhost".into()
@@ -657,7 +715,15 @@ async fn rules_test(
         path: &req.path,
         tls: req.tls,
     };
-    let out = t.rules.read().apply(direction, &ctx, &raw);
+    let out = match req.draft_rules {
+        // An ad-hoc set is compiled fresh for this one call and never touches `t.rules` — the
+        // persisted config is unaffected regardless of what the draft contains.
+        Some(draft) => match RuleSet::compile(draft) {
+            Ok(set) => set.apply(direction, &ctx, &raw),
+            Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        },
+        None => t.rules.read().apply(direction, &ctx, &raw),
+    };
     Json(serde_json::json!({
         "changed": out.is_some(),
         "output": BytesView::new(out.as_deref().unwrap_or(&raw)),
@@ -668,7 +734,7 @@ async fn rules_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burpsy_core::{Exchange, Scope, TrafficStore};
+    use burpsy_core::{Exchange, SharedScope, TrafficStore};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// Stand the real router up on a real socket. Anything less would not prove the `Extension`
@@ -679,14 +745,18 @@ mod tests {
         let state = AppState {
             store: store.clone(),
             ca_pem: None,
-            scope: Arc::new(Scope::allow_everything()),
+            scope: SharedScope::allow_everything(),
             findings: None,
             audit: None,
             export: None,
             intercept: None,
             session: None,
+            tool_log: None,
+            live_audit: None,
         };
-        let app = Router::new().merge(crate::routes::all()).with_state(state);
+        let app = Router::new()
+            .merge(crate::routes::all(Arc::new(ToolState::default())))
+            .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -818,6 +888,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_hash_endpoint_returns_hex_digests_and_refuses_to_guess_an_algorithm() {
+        let (addr, store) = serve().await;
+
+        // The empty-input MD5, quotable from RFC 1321. Asserting a *published* vector rather than a
+        // round trip is the whole value of this test: hashing has no inverse, so a self-consistent
+        // wrong answer is indistinguishable from a right one without an external reference.
+        let (code, body) = post(
+            &addr,
+            "/api/tools/hash",
+            r#"{"input":"","algorithm":"md5"}"#,
+        )
+        .await;
+        assert_eq!(code, 200, "{body}");
+        assert!(body.contains(r#""algorithm":"md5""#), "{body}");
+        assert!(body.contains("d41d8cd98f00b204e9800998ecf8427e"), "{body}");
+        // Hex is ASCII and whole, so the `BytesView` flags are pinned rather than merely absent, and
+        // `len` is the hex length — 32 characters for a 16-byte digest, not 16.
+        assert!(body.contains(r#""len":32"#), "{body}");
+        assert!(body.contains(r#""utf8":true"#), "{body}");
+        assert!(body.contains(r#""truncated":false"#), "{body}");
+
+        let (code, body) = post(
+            &addr,
+            "/api/tools/hash",
+            r#"{"input":"abc","algorithm":"sha256"}"#,
+        )
+        .await;
+        assert_eq!(code, 200, "{body}");
+        assert!(
+            body.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            "{body}"
+        );
+        assert!(body.contains(r#""len":64"#), "{body}");
+
+        // SHA-512 of "abc", to prove the widest digest is not silently truncated on the way out.
+        let (_, body) = post(
+            &addr,
+            "/api/tools/hash",
+            r#"{"input":"abc","algorithm":"sha512"}"#,
+        )
+        .await;
+        assert!(
+            body.contains(
+                "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\
+                 2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+            ),
+            "{body}"
+        );
+        assert!(body.contains(r#""len":128"#), "{body}");
+
+        // `msg_id` hashes the stored message's raw bytes — headers, CRLFs and all. That is the
+        // reason this endpoint takes a message id at all: fingerprinting a captured response
+        // without round-tripping it through the browser's idea of text.
+        let msg = store.put(
+            bytes::Bytes::from_static(b"HTTP/1.1 200 OK\r\n\r\nabc"),
+            Direction::Response,
+        );
+        let (code, body) = post(
+            &addr,
+            "/api/tools/hash",
+            &format!(r#"{{"msg_id":{},"algorithm":"sha1"}}"#, msg.0),
+        )
+        .await;
+        assert_eq!(code, 200, "{body}");
+        assert!(
+            body.contains("3c14d3e9a6ce839d7d419804928e7bfd23944c99"),
+            "raw bytes, not the body alone: {body}"
+        );
+
+        // Case and hyphens are tolerated; a family name is not, because picking a member would
+        // return the wrong digest length under the name the caller asked for.
+        let (code, body) = post(
+            &addr,
+            "/api/tools/hash",
+            r#"{"input":"abc","algorithm":"SHA-256"}"#,
+        )
+        .await;
+        assert_eq!(code, 200, "{body}");
+        assert!(body.contains(r#""algorithm":"sha256""#), "{body}");
+        for bad in [r#""sha2""#, r#""sha384""#, r#""crc32""#, r#""base64""#] {
+            let (code, body) = post(
+                &addr,
+                "/api/tools/hash",
+                &format!(r#"{{"algorithm":{bad}}}"#),
+            )
+            .await;
+            assert_eq!(code, 400, "{bad} must not be guessed: {body}");
+        }
+
+        let (code, body) = post(
+            &addr,
+            "/api/tools/hash",
+            r#"{"msg_id":999,"algorithm":"md5"}"#,
+        )
+        .await;
+        assert_eq!(code, 404, "{body}");
+    }
+
+    #[tokio::test]
     async fn the_comparer_endpoint_reports_a_single_word_change() {
         let (addr, _) = serve().await;
         let (code, body) = post(
@@ -898,6 +1067,48 @@ mod tests {
         assert_eq!(code, 200);
         let (_, body) = call(&addr, "GET", "/api/tools/log", None).await;
         assert!(body.contains(r#""total":0"#), "{body}");
+    }
+
+    #[tokio::test]
+    async fn the_tool_log_q_param_filters_by_host_path_or_method_case_insensitively() {
+        let (addr, _) = serve().await;
+        post(
+            &addr,
+            "/api/tools/log",
+            r#"{"tool":"repeater","host":"api.target.test","port":443,"tls":true,"method":"POST",
+                "path":"/login","request_msg_id":1}"#,
+        )
+        .await;
+        post(
+            &addr,
+            "/api/tools/log",
+            r#"{"tool":"intruder","host":"other.test","port":80,"tls":false,"method":"GET",
+                "path":"/search","request_msg_id":2}"#,
+        )
+        .await;
+
+        // Matches the path substring, case-insensitively.
+        let (code, body) = call(&addr, "GET", "/api/tools/log?q=LOGIN", None).await;
+        assert_eq!(code, 200, "{body}");
+        assert!(body.contains(r#""path":"/login""#), "{body}");
+        assert!(!body.contains(r#""path":"/search""#), "{body}");
+
+        // Matches the host substring.
+        let (_, body) = call(&addr, "GET", "/api/tools/log?q=other.test", None).await;
+        assert!(body.contains(r#""path":"/search""#), "{body}");
+        assert!(!body.contains(r#""path":"/login""#), "{body}");
+
+        // Matches the method.
+        let (_, body) = call(&addr, "GET", "/api/tools/log?q=get", None).await;
+        assert!(body.contains(r#""path":"/search""#), "{body}");
+
+        // The tool filter and the text filter both apply: q matches an entry of the wrong tool.
+        let (_, body) = call(&addr, "GET", "/api/tools/log?tool=repeater&q=search", None).await;
+        assert!(body.contains(r#""entries":[]"#), "{body}");
+
+        // No match at all.
+        let (_, body) = call(&addr, "GET", "/api/tools/log?q=zzz-nope", None).await;
+        assert!(body.contains(r#""entries":[]"#), "{body}");
     }
 
     #[tokio::test]
@@ -1021,6 +1232,58 @@ mod tests {
             r#"{"text":"HTTP/1.1 200 OK\r\nServer: nginx\r\n\r\n","direction":"response"}"#,
         )
         .await;
+        assert!(body.contains(r#""changed":false"#), "{body}");
+    }
+
+    #[tokio::test]
+    async fn rules_test_can_dry_run_an_ad_hoc_rule_set_without_persisting_it() {
+        let (addr, _) = serve().await;
+
+        // A known, explicit baseline: the persisted rule set is empty.
+        let (code, _) = call(&addr, "PUT", "/api/tools/rules", Some(r#"{"rules":[]}"#)).await;
+        assert_eq!(code, 200);
+
+        // `draft_rules` is tested even though it was never PUT anywhere.
+        let (code, body) = post(
+            &addr,
+            "/api/tools/rules/test",
+            r#"{"text":"GET / HTTP/1.1\r\nHost: t\r\nUser-Agent: curl/8\r\n\r\n",
+                "draft_rules":{"rules":[
+                    {"rule_type":"request_header","string_match":"^User-Agent.*$",
+                     "string_replace":"User-Agent: burpsy"}
+                ]}}"#,
+        )
+        .await;
+        assert_eq!(code, 200, "{body}");
+        assert!(body.contains(r#""changed":true"#), "{body}");
+        assert!(body.contains("User-Agent: burpsy"), "{body}");
+
+        // The persisted rule set was never touched: still the empty set from above.
+        let (code, body) = call(&addr, "GET", "/api/tools/rules", None).await;
+        assert_eq!(code, 200, "{body}");
+        assert!(body.contains(r#""affects_requests":false"#), "{body}");
+        assert!(body.contains(r#""rules":[]"#), "{body}");
+
+        // An invalid ad-hoc rule set is refused with a 400, exactly like a bad pattern is refused
+        // at PUT time — it just never gets the chance to reach the hot path either way.
+        let (code, body) = post(
+            &addr,
+            "/api/tools/rules/test",
+            r#"{"text":"x","draft_rules":{"rules":[
+                {"rule_type":"request_header","string_match":"([bad"}
+            ]}}"#,
+        )
+        .await;
+        assert_eq!(code, 400, "{body}");
+
+        // Omitting `draft_rules` falls back to the persisted (still empty) rule set.
+        let (code, body) = post(
+            &addr,
+            "/api/tools/rules/test",
+            r#"{"text":"GET / HTTP/1.1\r\nHost: t\r\nUser-Agent: curl/8\r\n\r\n"}"#,
+        )
+        .await;
+        assert_eq!(code, 200, "{body}");
         assert!(body.contains(r#""changed":false"#), "{body}");
     }
 }

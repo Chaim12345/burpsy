@@ -162,7 +162,10 @@ async fn main() -> Result<()> {
                      SCOPE:\n  \
                      --scope-include HOST / --scope-exclude HOST   (repeatable)\n  \
                      Gates what is stored AND refuses out-of-scope repeater/intruder targets.\n  \
-                     With no --scope-* flags everything is in scope.\n\n\
+                     With no --scope-* flags everything is in scope. These set the STARTING rules;\n  \
+                     the UI's Scope tab (and POST/DELETE /api/scope/rules) edits them while burpsy\n  \
+                     runs, so no restart is needed to add or drop a host. Widening only affects\n  \
+                     traffic from that point on — it never retroactively captures anything.\n\n\
                      CAPTURE TO DISK:\n  \
                      --capture-dir DIR       append traffic to sealed segments under DIR\n  \
                      --segment-bytes N       segment rotation target (default 64 MiB)\n  \
@@ -211,18 +214,30 @@ async fn main() -> Result<()> {
     // session never writes key material to disk it does not need.
     // No --scope-* flags means allow everything: narrowing capture must be a deliberate act,
     // not a surprise on first run.
-    let scope = if scope_set {
+    // ONE scope, shared by handle. Every holder below clones this handle rather than the value, so
+    // `POST /api/scope/rules` reaches the proxy's capture gate, the scanner and both senders at once.
+    // The previous wiring gave each of them `Arc::new(scope.clone())` — six scopes that happened to
+    // agree, which was fine while nothing could edit them and would now mean an operator's edit moved
+    // the UI while attacks kept using the startup rules.
+    let scope = burpsy_core::SharedScope::new(if scope_set {
         tracing::info!(
-            "scope: {} rule(s) — capture and attacks limited to them",
+            "scope: {} rule(s) — capture and attacks limited to them (editable at runtime from the \
+             UI's Scope tab)",
             scope.rules.len()
         );
         scope
     } else {
         burpsy_core::Scope::allow_everything()
-    };
+    });
+    // The request-hold queue (Proxy > Intercept in Burp terms) is always wired, unlike --bchecks:
+    // it needs no operator flag to exist, only `POST /api/intercept/enable` to switch it on, and an
+    // attached-but-disabled `Interceptor` is a no-op on the proxy's hot path — see
+    // `burpsy_proxy::intercept`'s own "attached-but-off is not intercepting" invariant.
+    let interceptor = burpsy_proxy::Interceptor::new();
     let mut cfg = burpsy_proxy::ProxyConfig::new(store.clone())
         .with_tls_policy(policy)
-        .with_scope(scope.clone());
+        .with_scope(scope.clone())
+        .with_interceptor(interceptor.clone());
 
     // Passive scanning is opt-in via --bchecks. Load once at startup and REPORT the split, so
     // coverage is a stated number rather than an implied one.
@@ -235,11 +250,12 @@ async fn main() -> Result<()> {
     // exchanges — a coverage claim that is wrong in the safe direction, but still wrong.
     let audits: Arc<std::sync::Mutex<Vec<burpsy_scanner::SessionOutcome>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
+    // "Live active audit": an opt-in, off-by-default background sweep — only meaningful with a
+    // loaded check set, so it exists only inside the `--bchecks` branch below. See
+    // `burpsy_web::routes::liveaudit` for why it defaults to off rather than sweeping automatically.
+    let mut live_audit: Option<Arc<burpsy_web::routes::liveaudit::LiveAuditState>> = None;
     if let Some(dir) = &bchecks_dir {
-        let sc = std::sync::Arc::new(burpsy_scanner::PassiveScanner::load_dir(
-            dir,
-            std::sync::Arc::new(scope.clone()),
-        ));
+        let sc = std::sync::Arc::new(burpsy_scanner::PassiveScanner::load_dir(dir, scope.clone()));
         tracing::info!("bchecks from {}: {}", dir.display(), sc.report().summary());
         for (f, e) in sc.report().errors.iter().take(5) {
             tracing::warn!("unparsable bcheck {f}: {e}");
@@ -251,7 +267,7 @@ async fn main() -> Result<()> {
         audit_hook = Some({
             let sc = sc.clone();
             let store = store.clone();
-            let scope = std::sync::Arc::new(scope.clone());
+            let scope = scope.clone();
             let audits = audits.clone();
             std::sync::Arc::new(move |id: u64| {
                 // The chokepoint, not a bare transport: an active audit constructs requests, so it
@@ -276,7 +292,7 @@ async fn main() -> Result<()> {
         });
         export_hook = Some({
             let sc = sc.clone();
-            let scope = std::sync::Arc::new(scope.clone());
+            let scope = scope.clone();
             let audits = audits.clone();
             std::sync::Arc::new(move |fmt: burpsy_web::routes::report::ExportFormat| {
                 use burpsy_scanner::report;
@@ -289,8 +305,13 @@ async fn main() -> Result<()> {
                     .map_err(|_| "the retained audit log is poisoned; restart to report".to_owned())?
                     .clone();
                 let passive = sc.coverage();
+                // A snapshot, not a held read guard: the writers run over the whole document, and
+                // pinning the scope lock for that long would block an operator's edit behind a report
+                // render. The report states the scope as it stood when the export was asked for, which
+                // is the honest claim for a document carrying a generation timestamp.
+                let scope_at_export = scope.snapshot();
                 let r = report::Report::from_facts(report::RunFacts {
-                    scope: &scope,
+                    scope: &scope_at_export,
                     load: sc.report(),
                     passive: &passive,
                     audits: &retained,
@@ -309,20 +330,93 @@ async fn main() -> Result<()> {
                 })
             }) as burpsy_web::routes::report::ExportHook
         });
+        // The sweep itself: every few seconds, while enabled, walk newly-completed in-scope
+        // exchanges in id order (append-only store, so "position is the id" — same invariant
+        // `SiteMap::sync` relies on) and hand a batch to `audit_session`, which re-checks scope
+        // per exchange and shares one ledger/budget/breaker set across the batch. Sequential and
+        // bounded rather than exhaustive: an exchange whose response has not landed yet simply
+        // waits for a later tick, and everything after it waits with it — the same trade-off a
+        // hung request already causes for reporting via `run_audit`.
+        let la = burpsy_web::routes::liveaudit::LiveAuditState::new();
+        live_audit = Some(la.clone());
+        {
+            let la = la.clone();
+            let sc = sc.clone();
+            let store = store.clone();
+            let scope = scope.clone();
+            let audits = audits.clone();
+            tokio::spawn(async move {
+                let mut high_water: u64 = 0;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    if !la.is_enabled() {
+                        continue;
+                    }
+                    let (total, _, _) = store.counts();
+                    let total = total as u64;
+                    let mut ids = Vec::new();
+                    let mut next = high_water;
+                    while next < total && ids.len() < 200 {
+                        let Some(ex) = store.exchange(next) else {
+                            break;
+                        };
+                        if ex.response.is_none() {
+                            break;
+                        }
+                        if scope.may_contain_host(&ex.host, ex.port, ex.tls) {
+                            ids.push(next);
+                        }
+                        next += 1;
+                    }
+                    if next == high_water {
+                        continue;
+                    }
+                    high_water = next;
+                    if ids.is_empty() {
+                        continue;
+                    }
+                    let sc = sc.clone();
+                    let store2 = store.clone();
+                    let scope2 = scope.clone();
+                    let audit_cfg = burpsy_scanner::AuditConfig::default();
+                    let outcome = tokio::task::spawn_blocking(move || {
+                        let sender = burpsy_sender::AuthorisedSender::blocking(
+                            scope2,
+                            burpsy_sender::NetSender::default(),
+                        );
+                        sc.audit_session(&store2, &ids, &sender, &audit_cfg)
+                    })
+                    .await;
+                    if let Ok(outcome) = outcome {
+                        la.record(outcome.items.len() as u64, outcome.findings as u64);
+                        if let Ok(mut log) = audits.lock() {
+                            log.push(outcome);
+                        }
+                    }
+                }
+            });
+        }
+
         cfg = cfg.with_scanner(sc);
     }
 
-    // The login-macro re-login feature (SESSION-01..04) is always wired, unlike --bchecks: it
-    // needs no operator flag to exist, only `PUT /api/session/macro` to configure. The sender is
-    // an `AuthorisedSender`, so a macro step or probe aimed outside scope is refused at the
-    // chokepoint (HARD-03) — there is no separate scope check to add here.
+    // The session-handling feature (SESSION-01..04) is always wired, unlike --bchecks: it needs no
+    // operator flag to exist, only `POST /api/session/rules` to add a rule. The sender is an
+    // `AuthorisedSender`, so a macro step or probe aimed outside scope is refused at the chokepoint
+    // (HARD-03) — a rule's own scope selects which login applies and authorises nothing, so there is
+    // no separate scope check to add here.
     let session_sender = Arc::new(burpsy_sender::AuthorisedSender::blocking(
-        Arc::new(scope.clone()),
+        scope.clone(),
         burpsy_sender::NetSender::default(),
     ));
     let session_state = burpsy_web::routes::session::SessionState::new(
         burpsy_web::session_sender::AuthorisedMacroSender::new(session_sender),
     );
+    let intercept_state = burpsy_web::routes::intercept::InterceptState::new(interceptor);
+    // The unified Repeater/Intruder/Scanner/BCheck activity log: always wired, like the session
+    // and intercept state above, so `GET /api/tools/log` and a future Dashboard have something
+    // real to show even before any of those tools have been used.
+    let tool_log = Arc::new(burpsy_tools::logger::ToolLog::new());
     let mut ca_pem: Option<String> = None;
     if intercept {
         let ca = burpsy_proxy::load_or_generate_ca(&ca_dir)
@@ -348,7 +442,7 @@ async fn main() -> Result<()> {
         let store = store.clone();
         let bind = web_bind.clone();
         tokio::spawn(async move {
-            burpsy_web::serve_session(
+            burpsy_web::serve_activity(
                 &bind,
                 store,
                 ca_pem,
@@ -357,6 +451,9 @@ async fn main() -> Result<()> {
                 audit_hook,
                 export_hook,
                 Some(session_state),
+                Some(intercept_state),
+                Some(tool_log),
+                live_audit,
             )
             .await
         })

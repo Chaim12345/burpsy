@@ -38,7 +38,7 @@ than being something a human has to read. Preserve that.
 | `--tls-passthrough PATTERN`, `--tls-passthrough-port PORT`, `--tls-defaults` | TLS passthrough policy |
 | `--intercept-tls` | Enable TLS interception; **only then** is CA material loaded or generated |
 | `--bchecks DIR` | Load the BCheck corpus and passively scan responses |
-| `--scope-include HOST`, `--scope-exclude HOST` | Engagement scope (repeatable) |
+| `--scope-include HOST`, `--scope-exclude HOST` | Engagement scope, the **starting** rules (repeatable); the UI's Scope tab edits them at runtime |
 | `--ca-dir DIR` | Where CA material lives |
 | `--capture-dir DIR`, `--segment-bytes N` | Capture to disk in sealed segments instead of RAM |
 
@@ -55,6 +55,15 @@ depth rather than adding a bare one-liner.
   will have removed the scope check from active scanning.
 - **No `--scope-*` flag means allow everything.** Narrowing capture must be a deliberate act, not a
   default that silently drops traffic.
+- **There is exactly ONE `SharedScope`, and every subsystem gets a clone of the handle.** This file used
+  to hand out six `Arc::new(scope.clone())` — proxy config, scanner, audit hook, export hook, session
+  sender, web — which was harmless while scope was immutable and is a correctness bug now that
+  `POST /api/scope/rules` can edit it: five of those copies would keep authorising by the startup rules
+  while the UI showed the edited ones. If you add a subsystem that needs scope, clone the handle. Never
+  `SharedScope::new(scope.snapshot())`, and never pass an owned `Scope` — `with_scope`/`blocking` accept
+  one via `From<Scope>`, which builds a *new independent* handle.
+- **The report export takes `scope.snapshot()`, not `scope.read()`.** The writers run over the whole
+  document; pinning the scope lock for that long would block an operator's edit behind a report render.
 - **CA material is written only under `--intercept-tls`.** A plain HTTP session must not leave key
   material on disk it never needed.
 - **`--capture-dir` refuses a non-empty capture directory.** There is no startup-recovery path yet, so

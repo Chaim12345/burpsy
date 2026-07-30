@@ -41,7 +41,9 @@
 //! advice in front of an operator.
 
 use burpsy_bcheck::{Check, Confidence as BConf, Severity as BSev};
-use burpsy_core::{Confidence, MsgId, NewFinding, Scope, Severity, StoredMessage, TrafficStore};
+use burpsy_core::{
+    Confidence, MsgId, NewFinding, Severity, SharedScope, StoredMessage, TrafficStore,
+};
 use parking_lot::RwLock;
 use std::path::Path;
 use std::sync::Arc;
@@ -112,7 +114,7 @@ pub struct PassiveScanner {
     /// Kept parallel to `active` by only ever appending to both together.
     scopes: Vec<Option<DispatchScope>>,
     findings: Arc<RwLock<burpsy_core::FindingStore>>,
-    scope: Arc<Scope>,
+    scope: SharedScope,
     report: LoadReport,
     /// Which passive checks actually ran, and why the ones that did not. See `coverage`'s module
     /// docs for why this exists alongside `report`: `LoadReport` is a load-time classification, this
@@ -131,7 +133,7 @@ type DispatchPlan = (Vec<(DispatchScope, String)>, Vec<(usize, usize)>, usize);
 
 impl PassiveScanner {
     /// Load every `.bcheck` under `dir`, keeping the passive ones.
-    pub fn load_dir(dir: &Path, scope: Arc<Scope>) -> Self {
+    pub fn load_dir(dir: &Path, scope: impl Into<SharedScope>) -> Self {
         let mut files = Vec::new();
         walk(dir, &mut files);
         files.sort();
@@ -154,7 +156,7 @@ impl PassiveScanner {
     }
 
     /// Build from already-parsed checks, for tests.
-    pub fn from_checks(checks: Vec<Check>, scope: Arc<Scope>) -> Self {
+    pub fn from_checks(checks: Vec<Check>, scope: impl Into<SharedScope>) -> Self {
         let report = LoadReport {
             files: checks.len(),
             ..Default::default()
@@ -162,7 +164,7 @@ impl PassiveScanner {
         Self::build(checks, scope, report)
     }
 
-    fn build(checks: Vec<Check>, scope: Arc<Scope>, mut report: LoadReport) -> Self {
+    fn build(checks: Vec<Check>, scope: impl Into<SharedScope>, mut report: LoadReport) -> Self {
         let (mut passive, mut active, mut scopes) = (Vec::new(), Vec::new(), Vec::new());
         for c in checks {
             if c.needs_collaborator() {
@@ -184,7 +186,7 @@ impl PassiveScanner {
             active,
             scopes,
             findings: Arc::new(RwLock::new(burpsy_core::FindingStore::new())),
-            scope,
+            scope: scope.into(),
             report,
             coverage,
             native: native::NativeChecks::none(),
@@ -753,13 +755,13 @@ impl<'a> Run<'a> {
 /// estimate of it.
 struct Metered<'a> {
     inner: &'a dyn burpsy_bcheck::eval::Sender,
-    scope: &'a Scope,
+    scope: &'a SharedScope,
     sent: std::cell::Cell<u32>,
     refused: std::cell::Cell<u32>,
 }
 
 impl<'a> Metered<'a> {
-    fn new(inner: &'a dyn burpsy_bcheck::eval::Sender, scope: &'a Scope) -> Self {
+    fn new(inner: &'a dyn burpsy_bcheck::eval::Sender, scope: &'a SharedScope) -> Self {
         Self {
             inner,
             scope,
@@ -971,7 +973,7 @@ fn walk(p: &Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burpsy_core::{Direction, Exchange, Protocol, ScopeRule};
+    use burpsy_core::{Direction, Exchange, Protocol, Scope, ScopeRule};
     use bytes::Bytes;
 
     const LEAK: &str = r#"
@@ -1075,7 +1077,7 @@ given response then
             burpsy_bcheck::parse(ACTIVE).unwrap(),
             burpsy_bcheck::parse(OOB).unwrap(),
         ];
-        let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(checks, Scope::allow_everything());
         let r = s.report();
         assert_eq!((r.passive, r.active, r.collaborator), (1, 1, 1));
         assert_eq!(s.loaded(), 1);
@@ -1088,7 +1090,7 @@ given response then
         let (store, ex, resp) = setup("secret is tok_abcd1234 ok", "a.test");
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         assert_eq!(s.scan(&store, ex, resp), 1);
         let f = s.findings();
@@ -1105,7 +1107,7 @@ given response then
         let (store, ex, resp) = setup("nothing to see", "a.test");
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         assert_eq!(s.scan(&store, ex, resp), 0);
         assert!(s.findings().read().is_empty());
@@ -1116,8 +1118,7 @@ given response then
         let (store, ex, resp) = setup("secret is tok_abcd1234", "outside.test");
         let mut sc = Scope::new();
         sc.add(ScopeRule::include("inside.test"));
-        let s =
-            PassiveScanner::from_checks(vec![burpsy_bcheck::parse(LEAK).unwrap()], Arc::new(sc));
+        let s = PassiveScanner::from_checks(vec![burpsy_bcheck::parse(LEAK).unwrap()], sc);
         assert_eq!(s.scan(&store, ex, resp), 0, "must not scan out of scope");
         assert!(s.findings().read().is_empty());
     }
@@ -1126,7 +1127,7 @@ given response then
     fn repeat_hits_on_one_host_dedup_to_a_single_finding() {
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         // Same host, three different paths — the case that would otherwise flood the UI.
         for i in 0..3u64 {
@@ -1147,7 +1148,7 @@ given response then
             burpsy_bcheck::parse(BAD).unwrap(),
             burpsy_bcheck::parse(LEAK).unwrap(),
         ];
-        let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(checks, Scope::allow_everything());
         let (store, ex, resp) = setup("tok_abcd1234", "a.test");
         assert_eq!(
             s.scan(&store, ex, resp),
@@ -1169,7 +1170,7 @@ given response then
     fn a_check_that_always_errors_is_recorded_as_errored_and_never_as_having_run_cleanly() {
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(BAD).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         let (store, ex, resp) = setup("tok_abcd1234", "a.test");
         // Three responses, so the count on the error must be three, not one.
@@ -1203,7 +1204,7 @@ given response then
             burpsy_bcheck::parse(BAD).unwrap(),
             burpsy_bcheck::parse(LEAK).unwrap(),
         ];
-        let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(checks, Scope::allow_everything());
         let (store, ex, resp) = setup("nothing to see here", "a.test");
         assert_eq!(
             s.scan(&store, ex, resp),
@@ -1231,7 +1232,7 @@ given response then
     fn a_check_never_scanned_reads_as_never_dispatched_rather_than_clean() {
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         // scan() is never called at all: nothing exercises this check.
         let cov = s.coverage();
@@ -1247,7 +1248,7 @@ given response then
 
     #[test]
     fn scanning_with_no_passive_checks_loaded_records_that_reason_not_a_clean_scan() {
-        let s = PassiveScanner::from_checks(Vec::new(), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(Vec::new(), Scope::allow_everything());
         let store = TrafficStore::new();
         // No exchange or response exists at all — the empty check set must be why this returns 0,
         // not a coincidence of an also-missing exchange.
@@ -1268,7 +1269,7 @@ given response then
     fn scanning_a_missing_exchange_records_that_reason_not_a_clean_scan() {
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         let store = TrafficStore::new();
         assert_eq!(s.scan(&store, 12345, MsgId(0)), 0);
@@ -1293,8 +1294,7 @@ given response then
         let (store, ex, resp) = setup("secret is tok_abcd1234", "outside.test");
         let mut sc = Scope::new();
         sc.add(ScopeRule::include("inside.test"));
-        let s =
-            PassiveScanner::from_checks(vec![burpsy_bcheck::parse(LEAK).unwrap()], Arc::new(sc));
+        let s = PassiveScanner::from_checks(vec![burpsy_bcheck::parse(LEAK).unwrap()], sc);
         assert_eq!(s.scan(&store, ex, resp), 0);
         let cov = s.coverage();
         assert_eq!(
@@ -1312,7 +1312,7 @@ given response then
      {
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         let store = TrafficStore::new();
         let req = store.put(
@@ -1361,9 +1361,9 @@ given response then
         ];
         let never_scanned = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
-        let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(checks, Scope::allow_everything());
         let (store, ex, resp) = setup("tok_abcd1234", "a.test");
         s.scan(&store, ex, resp);
 
@@ -1421,7 +1421,7 @@ given response then
         // Without a budget, an unresponsive host costs one read timeout per check. With the full
         // corpus that is over half an hour on one blocking thread, and "found nothing" would be
         // indistinguishable from "never finished looking".
-        let s = PassiveScanner::from_checks(host_checks(4), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(4), Scope::allow_everything());
         assert_eq!(s.active_loaded(), 4);
 
         let store = TrafficStore::new();
@@ -1453,7 +1453,7 @@ given response then
 
     #[test]
     fn every_check_is_accounted_for_exactly_once_on_a_healthy_audit() {
-        let s = PassiveScanner::from_checks(host_checks(5), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(5), Scope::allow_everything());
         let store = TrafficStore::new();
         let ex = auditable(&store, "h.test", "/");
         let o = s.audit(&store, ex, &RecordingSender::default());
@@ -1476,7 +1476,7 @@ given response then
     fn a_repeat_audit_of_one_exchange_really_re_audits_it() {
         // Scope collapse belongs to a session. An operator who triggers an audit twice means it,
         // and must not silently get "already covered".
-        let s = PassiveScanner::from_checks(host_checks(3), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(3), Scope::allow_everything());
         let store = TrafficStore::new();
         let ex = auditable(&store, "h.test", "/");
         let sender = RecordingSender::default();
@@ -1495,7 +1495,7 @@ given response then
         // The saving that makes bounding worthwhile: 3 host-scoped checks over 20 exchanges on one
         // host is 3 dispatches, not 60. The 57 refusals are reported, so the drop in `ran` cannot
         // be mistaken for checks that quietly stopped firing.
-        let s = PassiveScanner::from_checks(host_checks(3), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(3), Scope::allow_everything());
         let store = TrafficStore::new();
         let ids: Vec<u64> = (0..20)
             .map(|i| auditable(&store, "h.test", &format!("/p{i}")))
@@ -1536,7 +1536,7 @@ given response then
             "metadata:\n  language: v2-beta\n  name: \"p\"\n\ngiven path then\n  send request:\n    path: \"/probe\"",
         )
         .unwrap();
-        let s = PassiveScanner::from_checks(vec![path_check], Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(vec![path_check], Scope::allow_everything());
         assert_eq!(s.active_scopes(), [Some(DispatchScope::PerPath)]);
 
         let store = TrafficStore::new();
@@ -1562,7 +1562,7 @@ given response then
 
     #[test]
     fn a_session_across_two_hosts_dispatches_host_checks_once_per_host() {
-        let s = PassiveScanner::from_checks(host_checks(2), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(2), Scope::allow_everything());
         let store = TrafficStore::new();
         let ids = vec![
             auditable(&store, "a.test", "/"),
@@ -1584,7 +1584,7 @@ given response then
         // in-scope neighbour.
         let mut sc = Scope::new();
         sc.add(ScopeRule::include("inside.test"));
-        let s = PassiveScanner::from_checks(host_checks(2), Arc::new(sc));
+        let s = PassiveScanner::from_checks(host_checks(2), sc);
         let store = TrafficStore::new();
         let ids = vec![
             auditable(&store, "outside.test", "/"),
@@ -1621,7 +1621,7 @@ given response then
     fn the_request_budget_refuses_new_checks_instead_of_discarding_finished_ones() {
         // Burp's LIMIT_EXCEEDED throws away work already done. Here the ceiling stops the *next*
         // check from starting, so every probe sent bought a completed result.
-        let s = PassiveScanner::from_checks(host_checks(10), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(10), Scope::allow_everything());
         let store = TrafficStore::new();
         let ex = auditable(&store, "h.test", "/");
         let cfg = AuditConfig {
@@ -1651,7 +1651,7 @@ given response then
         // A per-item ceiling would not be a session bound at all: N items would each spend the
         // full allowance. Three different hosts, so the ledger collapses nothing and every
         // request is a real one.
-        let s = PassiveScanner::from_checks(host_checks(4), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(4), Scope::allow_everything());
         let store = TrafficStore::new();
         let ids: Vec<u64> = (0..3)
             .map(|i| auditable(&store, &format!("h{i}.test"), "/"))
@@ -1690,7 +1690,7 @@ given response then
 
     #[test]
     fn a_spent_time_budget_stops_the_session_rather_than_re_deciding_it_per_exchange() {
-        let s = PassiveScanner::from_checks(host_checks(2), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(2), Scope::allow_everything());
         let store = TrafficStore::new();
         let ids: Vec<u64> = (0..4)
             .map(|i| auditable(&store, &format!("h{i}.test"), "/"))
@@ -1726,7 +1726,7 @@ given response then
 
     #[test]
     fn two_consecutive_send_failures_abandon_the_rest_of_the_dispatch_unit() {
-        let s = PassiveScanner::from_checks(host_checks(6), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(6), Scope::allow_everything());
         let store = TrafficStore::new();
         let ex = auditable(&store, "dead.test", "/");
         let o = s.audit(&store, ex, &FailingSender);
@@ -1759,7 +1759,7 @@ given response then
                 .unwrap(),
             );
         }
-        let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(checks, Scope::allow_everything());
         assert_eq!(s.active_loaded(), 4);
 
         let store = TrafficStore::new();
@@ -1797,7 +1797,7 @@ given response then
     #[test]
     fn disabling_the_breakers_keeps_every_check_dispatched_against_a_dead_host() {
         // Burp's "Never stop audit due to application errors" preset, taken to its conclusion.
-        let s = PassiveScanner::from_checks(host_checks(6), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(6), Scope::allow_everything());
         let store = TrafficStore::new();
         let ex = auditable(&store, "dead.test", "/");
         let out = s.audit_session(
@@ -1826,7 +1826,7 @@ given response then
         .unwrap();
         let mut checks = host_checks(2);
         checks.push(orphan);
-        let s = PassiveScanner::from_checks(checks, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(checks, Scope::allow_everything());
         assert_eq!(s.active_loaded(), 3);
         assert_eq!(
             s.active_scopes().iter().filter(|s| s.is_none()).count(),
@@ -1849,7 +1849,7 @@ given response then
 
     #[test]
     fn the_disposition_histogram_partitions_the_check_set() {
-        let s = PassiveScanner::from_checks(host_checks(6), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(6), Scope::allow_everything());
         let store = TrafficStore::new();
         let ex = auditable(&store, "dead.test", "/");
         let o = s.audit(&store, ex, &FailingSender);
@@ -1878,7 +1878,7 @@ given response then
 
     #[test]
     fn an_exchange_with_no_response_is_unauditable_rather_than_clean() {
-        let s = PassiveScanner::from_checks(host_checks(2), Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::from_checks(host_checks(2), Scope::allow_everything());
         let store = TrafficStore::new();
         let req = store.put(
             Bytes::from_static(b"GET / HTTP/1.1\r\n\r\n"),
@@ -1924,7 +1924,7 @@ given response then
 "#;
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(src).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         let (store, ex, resp) = setup("a syntax error occurred", "a.test");
         assert_eq!(s.scan(&store, ex, resp), 1);
@@ -1966,7 +1966,7 @@ given response then
 "#;
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(src).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         let (store, ex, resp) = setup("a syntax error occurred", "a.test");
         s.scan(&store, ex, resp);
@@ -1983,7 +1983,7 @@ given response then
     fn a_finding_with_no_catalogued_name_gains_nothing_rather_than_something_approximate() {
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         let (store, ex, resp) = setup("tok_abcd1234", "a.test");
         s.scan(&store, ex, resp);
@@ -2007,7 +2007,7 @@ given response then
         scope.add(ScopeRule::exclude("t.test").with_path_prefix("/x"));
 
         let checks = vec![burpsy_bcheck::parse(ACTIVE).unwrap()];
-        let s = PassiveScanner::from_checks(checks, Arc::new(scope));
+        let s = PassiveScanner::from_checks(checks, scope);
         assert_eq!(s.active_loaded(), 1);
 
         let store = TrafficStore::new();
@@ -2040,7 +2040,7 @@ given response then
         scope.add(ScopeRule::exclude("t.test").with_path_prefix("/nowhere-near"));
 
         let checks = vec![burpsy_bcheck::parse(ACTIVE).unwrap()];
-        let s = PassiveScanner::from_checks(checks, Arc::new(scope));
+        let s = PassiveScanner::from_checks(checks, scope);
         let store = TrafficStore::new();
         let ex = auditable(&store, "t.test", "/p");
         let sender = RecordingSender::default();
@@ -2056,7 +2056,7 @@ given response then
         if !dir.is_dir() {
             return; // corpus not available in this environment
         }
-        let s = PassiveScanner::load_dir(dir, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::load_dir(dir, Scope::allow_everything());
         let r = s.report();
         assert_eq!(r.files, 264, "corpus size");
         assert!(r.errors.is_empty(), "all 264 must parse: {:?}", r.errors);
@@ -2082,7 +2082,7 @@ given response then
         if !dir.is_dir() {
             return; // corpus not available in this environment
         }
-        let s = PassiveScanner::load_dir(dir, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::load_dir(dir, Scope::allow_everything());
         assert_eq!(s.active_scopes().len(), 127);
         let count = |want: DispatchScope| {
             s.active_scopes()
@@ -2146,7 +2146,7 @@ given response then
         // overlap at all, so enrichment fires on nothing in this corpus. Pinned so that if a future
         // check *is* named after a catalogued issue, someone has to decide that deliberately rather
         // than discover it through a surprise block of remediation text.
-        let s = PassiveScanner::load_dir(dir, Arc::new(Scope::allow_everything()));
+        let s = PassiveScanner::load_dir(dir, Scope::allow_everything());
         let matched = s
             .passive
             .iter()
@@ -2199,7 +2199,7 @@ given response then
 
     #[test]
     fn the_native_checks_record_through_the_same_path_as_a_bcheck_finding() {
-        let s = PassiveScanner::from_checks(Vec::new(), Arc::new(Scope::allow_everything()))
+        let s = PassiveScanner::from_checks(Vec::new(), Scope::allow_everything())
             .with_native(NativeChecks::vendored());
         let (store, ex, _resp) = native_setup();
         assert_eq!(s.native_loaded(), 2);
@@ -2226,7 +2226,7 @@ given response then
 
     #[test]
     fn native_coverage_travels_with_the_passive_coverage_report() {
-        let s = PassiveScanner::from_checks(Vec::new(), Arc::new(Scope::allow_everything()))
+        let s = PassiveScanner::from_checks(Vec::new(), Scope::allow_everything())
             .with_native(NativeChecks::vendored());
         let (store, ex, _) = native_setup();
         let resp_id = store.exchange(ex).unwrap().response.unwrap();
@@ -2249,7 +2249,7 @@ given response then
     fn a_scanner_with_only_native_checks_does_not_report_itself_as_having_no_checks() {
         // `scan` used to return early on an empty BCheck set, which would have skipped the native
         // checks entirely and blamed it on there being nothing loaded.
-        let s = PassiveScanner::from_checks(Vec::new(), Arc::new(Scope::allow_everything()))
+        let s = PassiveScanner::from_checks(Vec::new(), Scope::allow_everything())
             .with_native(NativeChecks::vendored());
         let (store, ex, _) = native_setup();
         let resp_id = store.exchange(ex).unwrap().response.unwrap();
@@ -2268,7 +2268,7 @@ given response then
     fn the_native_checks_are_off_unless_a_caller_asks_for_them() {
         let s = PassiveScanner::from_checks(
             vec![burpsy_bcheck::parse(LEAK).unwrap()],
-            Arc::new(Scope::allow_everything()),
+            Scope::allow_everything(),
         );
         assert_eq!(s.native_loaded(), 0);
         let cov = s.coverage();

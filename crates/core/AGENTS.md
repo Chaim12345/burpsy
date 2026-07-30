@@ -20,18 +20,51 @@ pointers.
 |------|-------------|
 | `lib.rs` | `MsgId`, `Span`, `Direction`, `MessageShape`, `StoredMessage`, `parse`, `Exchange`, `ChildRef`, and `TrafficStore` itself. Also `SegmentVerdict` and `verify_capture_dir` |
 | `segment.rs` | Sealed, mmap-backed segment storage: `SegmentLog`, `RecordHeader`, `CorruptRecord`, `scan_segment_file`. The disk half of the store |
-| `scope.rs` | `Scope` / `ScopeRule` — which hosts and paths the engagement may touch. `authorise_request` is the one decision function |
+| `scope.rs` | `Scope` / `ScopeRule` / `SharedScope` — which hosts and paths the engagement may touch. `authorise_request` is the one decision function; `SharedScope` is the handle every subsystem holds so an operator's edit reaches all of them |
 | `sitemap.rs` | The host → path tree the UI navigates, folded from the traffic index. A view over the store, never a second copy |
 | `findings.rs` | Finding storage and deduplication (dedup belongs to storage, not display) |
 | `edit.rs` | `RequestEdit` — editable requests layered over immutable stored bytes |
+| `ws.rs` | WebSocket framing (RFC 6455): `WsOpcode`, `FrameHeader`, `parse_frame_header`, `unmask`, `Reassembler`, plus `is_upgrade_request`/`is_upgrade_response` and the `WsMessage` index row |
 
 ## For AI Agents
 
+### Scope is shared by handle — never clone the value into a subsystem
+
+`SharedScope` is `Arc<RwLock<Scope>>`. It exists because scope is editable at runtime
+(`POST /api/scope/rules`), and a subsystem holding its own `Scope` copy would keep authorising by the
+startup rules while the UI showed the edited ones — a scope display that lies about what is authorised.
+So a holder clones the **handle**:
+
+```rust
+let scope = SharedScope::new(startup_rules);   // once, in the binary
+cfg.with_scope(scope.clone());                 // proxy capture gate
+AuthorisedSender::blocking(scope.clone(), ..); // authorisation gate
+PassiveScanner::load_dir(dir, scope.clone());  // scanner
+```
+
+`impl From<Scope> for SharedScope` exists so `with_scope(Scope::allow_everything())` still reads the way
+it always did, but note what it does: it builds a **new, independent** handle. That is right for a test
+and wrong for a subsystem in a running process.
+
+Read through the forwarded methods (`contains`, `may_contain_host`, `authorise_request`, `explain`), not
+`read()`. They take and drop the lock inside the call; a guard handed to a proxy connection task or an
+attack loop can be held across an `.await`, where one operator edit waiting on the write lock stalls
+every in-flight request. `read()` is for report generation; `snapshot()` is the allocating alternative.
+
+Rules carry a monotonic `id` and are removed by it, never by list position. Order is load-bearing (last
+match wins) so positions shift on every edit, and an index from a stale view deletes the neighbouring
+rule — which is how a caller aiming at an `include` deletes the `exclude` beside it and silently
+authorises everything it was refusing.
+
+`matchreplace`'s `RuleSpec.scope: Option<Scope>` is deliberately **not** this. It is a per-rule filter
+("rewrite this header, but only on staging") that is serialised as part of the rule's own config and has
+nothing to do with engagement authorisation. Leave it an owned `Scope`.
+
 ### The one invariant — read this before touching `TrafficStore`
 
-**Position is the id.** `messages[i].id == MsgId(i)` and `exchanges[i].id == i`, always. Every lookup
-is a bounds-checked index, not a scan, and that is *only* sound because ids are handed out by the same
-lock acquisition that appends the record.
+**Position is the id.** `messages[i].id == MsgId(i)`, `exchanges[i].id == i` and `ws[i].id == i`,
+always. Every lookup is a bounds-checked index, not a scan, and that is *only* sound because ids are
+handed out by the same lock acquisition that appends the record.
 
 This used to be false in a way nothing caught: `put` took its id from an `AtomicU64::fetch_add`, then
 parsed (unlocked), then took the write lock to push — so two threads could reserve 7 and 8 and push in
@@ -41,6 +74,23 @@ the lock on purpose — it needs nothing from the store and is the expensive par
 
 `verify_index()` is what makes the invariant checkable rather than merely asserted. Run it in any test
 that exercises the store concurrently.
+
+### WebSocket messages are a third index, not a fourth store
+
+`ws.rs` adds `TrafficStore::add_ws_message` and a `ws` vec beside `messages` and `exchanges`, under
+the same position-is-the-id rule. Payloads still go through `put`, so a disk-backed capture bounds
+WebSocket traffic with no separate treatment — that is the whole reason this is an index rather than
+its own store with its own segment log.
+
+Two things here are decisions, not accidents:
+
+- **It is not `Exchange::related`,** even though `ChildRef::WsFrame` was designed for it. That `Vec`
+  lives on the `Exchange` row, and `exchanges()` clones those rows on every history poll, so one
+  child per message would make listing history copy a `Vec` whose size the socket's peer chooses.
+  `ChildRef` stays right for a *bounded* child set. See the type's doc comment.
+- **`Direction` is reused** — `Request` is client→server, `Response` is server→client — rather than a
+  second two-valued enum. One vocabulary for "which way was this going", and it is the same
+  distinction `put` already records per stored message.
 
 ### Two store modes, one API
 

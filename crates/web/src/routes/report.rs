@@ -182,7 +182,7 @@ async fn export(State(s): State<AppState>, Path(format): Path<String>) -> impl I
 mod tests {
     use super::*;
     use crate::AppState;
-    use burpsy_core::{Scope, TrafficStore};
+    use burpsy_core::{SharedScope, TrafficStore};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// A real listener and a hand-written HTTP/1.1 client, matching the convention in `tools.rs` and
@@ -192,12 +192,14 @@ mod tests {
         let app = routes().with_state(AppState {
             store: TrafficStore::new(),
             ca_pem: None,
-            scope: Arc::new(Scope::allow_everything()),
+            scope: SharedScope::allow_everything(),
             findings: None,
             audit: None,
             export,
             intercept: None,
             session: None,
+            tool_log: None,
+            live_audit: None,
         });
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = l.local_addr().unwrap();
