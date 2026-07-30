@@ -218,6 +218,39 @@ impl ToolLog {
             .collect()
     }
 
+    /// Newest first, optionally restricted to one tool and/or a free-text substring match
+    /// against host, path, or method (case-insensitive). `tool: None` and `q: None` behave like
+    /// [`ToolLog::entries`].
+    pub fn search(
+        &self,
+        tool: Option<Tool>,
+        q: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Vec<Entry> {
+        let needle = q.map(|s| s.to_ascii_lowercase());
+        self.inner
+            .read()
+            .iter()
+            .rev()
+            .filter(|e| match tool {
+                Some(t) => e.tool == t,
+                None => true,
+            })
+            .filter(|e| match &needle {
+                Some(n) => {
+                    e.host.to_ascii_lowercase().contains(n.as_str())
+                        || e.path.to_ascii_lowercase().contains(n.as_str())
+                        || e.method.to_ascii_lowercase().contains(n.as_str())
+                }
+                None => true,
+            })
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
     /// How many entries each tool currently holds, in [`Tool::ALL`] order.
     pub fn counts(&self) -> [usize; 4] {
         let g = self.inner.read();
@@ -310,6 +343,52 @@ mod tests {
             vec!["/c", "/a"]
         );
         assert_eq!(log.counts(), [2, 1, 0, 0]);
+    }
+
+    #[test]
+    fn search_filters_by_free_text_across_host_path_and_method_case_insensitively() {
+        let log = ToolLog::new();
+        let mut a = started(Tool::Repeater, "/login");
+        a.host = "Api.Target.test".into();
+        a.method = "POST".into();
+        log.started(a);
+        log.started(started(Tool::Intruder, "/search"));
+        log.started(started(Tool::Repeater, "/health"));
+
+        // No filters: everything, same as `entries`.
+        assert_eq!(log.search(None, None, 0, 10).len(), 3);
+
+        // Matches the path, case-insensitively.
+        let by_path = log.search(None, Some("LOGIN"), 0, 10);
+        assert_eq!(
+            by_path.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["/login"]
+        );
+
+        // Matches the host.
+        let by_host = log.search(None, Some("api.target"), 0, 10);
+        assert_eq!(
+            by_host.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["/login"]
+        );
+
+        // Matches the method.
+        let by_method = log.search(None, Some("post"), 0, 10);
+        assert_eq!(
+            by_method.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["/login"]
+        );
+
+        // The tool filter and the text filter both apply.
+        let combined = log.search(Some(Tool::Repeater), Some("health"), 0, 10);
+        assert_eq!(
+            combined.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["/health"]
+        );
+        assert!(log.search(Some(Tool::Intruder), Some("health"), 0, 10).is_empty());
+
+        // No match at all.
+        assert!(log.search(None, Some("zzz-nope"), 0, 10).is_empty());
     }
 
     #[test]
