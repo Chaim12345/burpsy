@@ -28,6 +28,10 @@ interface RuleSpec {
   comment: string;
   /** Not editable from this UI; preserved verbatim when a rule that has one is edited. */
   scope?: unknown;
+  /** DSL-02: burpsy-query grammar (host/status/method/mime/body) gating whether this rule applies,
+   * alongside (not instead of) `scope`. Absent means "every message `scope`, if any, already lets
+   * through." */
+  query?: string;
 }
 
 interface RuleSetSpec {
@@ -95,6 +99,7 @@ export function initMatchReplace(): void {
       <input id="mr-host" placeholder="host" value="localhost" style="width:140px" />
       <input id="mr-port" placeholder="port" value="80" style="width:80px" />
       <input id="mr-path" placeholder="path" value="/" style="width:140px" />
+      <input id="mr-method" placeholder="method" value="GET" style="width:90px" />
       <label><input type="checkbox" id="mr-tls" /> tls</label>
     </div>
     <textarea id="mr-test-text" placeholder="raw request/response text to test against" style="min-height:120px"></textarea>
@@ -110,7 +115,7 @@ export function initMatchReplace(): void {
     void toggleUpdateContentLength((e.target as HTMLInputElement).checked),
   );
   $("#mr-test")!.addEventListener("click", () => void testRules());
-  ["mr-direction", "mr-host", "mr-port", "mr-path", "mr-tls", "mr-test-text"].forEach((id) => {
+  ["mr-direction", "mr-host", "mr-port", "mr-path", "mr-method", "mr-tls", "mr-test-text"].forEach((id) => {
     const field = $(`#${id}`)!;
     field.addEventListener(changeEventFor(field), () => schedulePreview());
   });
@@ -216,12 +221,16 @@ function ruleRowHtml(r: RuleSpec, i: number): string {
     r.scope !== undefined
       ? ` <span class="hint" title="has a scope condition; not editable from this UI">scoped</span>`
       : "";
+  const queriedNote =
+    r.query !== undefined
+      ? ` <span class="hint" title="${esc(r.query)}">query: ${esc(r.query)}</span>`
+      : "";
   return `<tr data-idx="${i}">
     <td><input type="checkbox" class="mr-row-enabled" ${r.enabled ? "checked" : ""} /></td>
     <td>${esc(TYPE_LABEL[r.rule_type])}</td>
     <td>${r.string_match ? esc(r.string_match) : '<span class="hint">(empty)</span>'}</td>
     <td>${r.string_replace ? esc(r.string_replace) : '<span class="hint">(empty)</span>'}</td>
-    <td>${esc(r.comment)}${scopedNote}</td>
+    <td>${esc(r.comment)}${scopedNote}${queriedNote}</td>
     <td><div class="actions">
       <button class="ghost small mr-row-edit">Edit</button>
       <button class="ghost small mr-row-delete">Delete</button>
@@ -271,6 +280,9 @@ function ruleFormHtml(rule: RuleSpec, isNew: boolean): string {
       <input id="mrf-comment" placeholder="comment" style="width:100%" value="${esc(rule.comment)}" />
     </div>
     <div class="row">
+      <input id="mrf-query" placeholder='query (DSL-02): status == 200 and method == "POST"' style="width:100%" value="${esc(rule.query ?? "")}" />
+    </div>
+    <div class="row">
       <button class="go" id="mrf-save">Save rule</button>
       <button class="ghost" id="mrf-cancel">Cancel</button>
       <span id="mrf-meta" class="hint"></span>
@@ -314,6 +326,7 @@ function wireForm(): void {
   $("#mrf-category")!.addEventListener("change", () => schedulePreview());
   $("#mrf-match")!.addEventListener("input", () => schedulePreview());
   $("#mrf-replace")!.addEventListener("input", () => schedulePreview());
+  $("#mrf-query")!.addEventListener("input", () => schedulePreview());
   $("#mrf-enabled")!.addEventListener("change", () => schedulePreview());
   $("#mrf-save")!.addEventListener("click", () => void saveForm());
   $("#mrf-cancel")!.addEventListener("click", () => cancelForm());
@@ -330,6 +343,8 @@ function readFormRule(): RuleSpec {
     comment: $<HTMLInputElement>("#mrf-comment")!.value,
   };
   if (base?.scope !== undefined) rule.scope = base.scope;
+  const query = $<HTMLInputElement>("#mrf-query")!.value.trim();
+  if (query) rule.query = query;
   return rule;
 }
 
@@ -368,6 +383,7 @@ async function runPreview(): Promise<void> {
       host: $<HTMLInputElement>("#mr-host")!.value,
       port: Number($<HTMLInputElement>("#mr-port")!.value) || 80,
       path: $<HTMLInputElement>("#mr-path")!.value,
+      method: $<HTMLInputElement>("#mr-method")!.value || "GET",
       tls: $<HTMLInputElement>("#mr-tls")!.checked,
       draft_rules: draftRules,
     });
@@ -412,6 +428,7 @@ async function testRules(): Promise<void> {
       host: $<HTMLInputElement>("#mr-host")!.value,
       port: Number($<HTMLInputElement>("#mr-port")!.value) || 80,
       path: $<HTMLInputElement>("#mr-path")!.value,
+      method: $<HTMLInputElement>("#mr-method")!.value || "GET",
       tls: $<HTMLInputElement>("#mr-tls")!.checked,
     });
     meta.textContent = resp.changed ? "changed" : "no change";

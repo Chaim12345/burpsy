@@ -234,10 +234,18 @@ async fn main() -> Result<()> {
     // attached-but-disabled `Interceptor` is a no-op on the proxy's hot path — see
     // `burpsy_proxy::intercept`'s own "attached-but-off is not intercepting" invariant.
     let interceptor = burpsy_proxy::Interceptor::new();
+    // One shared lock, handed to both the proxy and the web UI's `PUT /api/tools/rules` endpoint —
+    // the same relationship `scope` above has. Anything else (two independently-constructed rule
+    // sets that happen to start out equal) would mean an operator's edit changes what the API
+    // reports while the proxy keeps rewriting traffic by the startup rules.
+    let matchreplace = Arc::new(parking_lot::RwLock::new(
+        burpsy_tools::matchreplace::RuleSet::default(),
+    ));
     let mut cfg = burpsy_proxy::ProxyConfig::new(store.clone())
         .with_tls_policy(policy)
         .with_scope(scope.clone())
-        .with_interceptor(interceptor.clone());
+        .with_interceptor(interceptor.clone())
+        .with_matchreplace(matchreplace.clone());
 
     // Passive scanning is opt-in via --bchecks. Load once at startup and REPORT the split, so
     // coverage is a stated number rather than an implied one.
@@ -454,6 +462,7 @@ async fn main() -> Result<()> {
                 Some(intercept_state),
                 Some(tool_log),
                 live_audit,
+                Some(matchreplace),
             )
             .await
         })

@@ -639,6 +639,63 @@ impl TrafficStore {
         Some(e.clone())
     }
 
+    /// Whether an exchange matches a parsed [`burpsy_query::Query`] — DSL-01.
+    ///
+    /// Resolves the request/response messages fresh on every call rather than keeping a second,
+    /// query-shaped index in sync with the message log: `get` is O(1), so there is nothing to cache
+    /// that is not already cheap, and a cache here is one more place capture and query could drift
+    /// apart.
+    pub fn matches_query(&self, ex: &Exchange, q: &burpsy_query::Query) -> bool {
+        struct Row<'a> {
+            ex: &'a Exchange,
+            request: Option<StoredMessage>,
+            response: Option<StoredMessage>,
+            /// Resolved once at construction — `StoredMessage::header` returns an owned `Bytes`, not
+            /// something `Queryable::mime`'s `&str` could borrow from, so the lossy-UTF8 string has
+            /// to live somewhere with `Row`'s own lifetime.
+            mime: Option<String>,
+        }
+        impl burpsy_query::Queryable for Row<'_> {
+            fn host(&self) -> &str {
+                &self.ex.host
+            }
+            fn status(&self) -> Option<u16> {
+                self.ex.status
+            }
+            fn method(&self) -> &str {
+                &self.ex.method
+            }
+            fn mime(&self) -> Option<&str> {
+                self.mime.as_deref()
+            }
+            fn body_contains(&self, needle: &[u8]) -> bool {
+                // "body contains X" means either side of the exchange — an operator filtering
+                // history is asking about the traffic, not specifically the response.
+                let has = |m: &Option<StoredMessage>| {
+                    m.as_ref().is_some_and(|m| {
+                        let body = m.body();
+                        needle.is_empty() || body.windows(needle.len()).any(|w| w == needle)
+                    })
+                };
+                has(&self.request) || has(&self.response)
+            }
+        }
+
+        let request = self.get(ex.request);
+        let response = ex.response.and_then(|id| self.get(id));
+        let mime = response
+            .as_ref()
+            .and_then(|m| m.header("content-type"))
+            .map(|b| String::from_utf8_lossy(&b).into_owned());
+        let row = Row {
+            ex,
+            request,
+            response,
+            mime,
+        };
+        q.matches(&row)
+    }
+
     /// Attach a child record to an exchange. `false` if the exchange id is unknown.
     pub fn add_related(&self, exchange_id: u64, child: ChildRef) -> bool {
         let mut g = self.inner.write();
@@ -1016,6 +1073,65 @@ mod tests {
         assert!(!store.add_related(ex + 99, ChildRef::WsFrame(f1)));
 
         store.verify_index().expect("index must be coherent");
+    }
+
+    /// DSL-01: every field the grammar exposes is reachable off a real `Exchange` — host/status/
+    /// method straight from the index, mime derived from the response's own `Content-Type` header,
+    /// body reaching either side of the exchange.
+    #[test]
+    fn matches_query_reaches_every_field_including_derived_mime_and_either_body() {
+        let store = TrafficStore::new();
+        let req = store.put(
+            Bytes::from_static(b"POST /login HTTP/1.1\r\nHost: x.test\r\n\r\nuser=admin"),
+            Direction::Request,
+        );
+        let resp = store.put(
+            Bytes::from_static(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/JSON\r\n\r\n{\"ok\":true}",
+            ),
+            Direction::Response,
+        );
+        let mut ex = Exchange {
+            request: req,
+            response: Some(resp),
+            host: "X.test".into(),
+            port: 443,
+            tls: true,
+            method: "POST".into(),
+            path: "/login".into(),
+            status: Some(200),
+            ..Default::default()
+        };
+        store.add_exchange(ex.clone());
+
+        let q = |s: &str| burpsy_query::parse(s).unwrap_or_else(|e| panic!("{s:?}: {e}"));
+        assert!(store.matches_query(&ex, &q(r#"host == "x.test""#)), "host, case-insensitive");
+        assert!(store.matches_query(&ex, &q("status == 200")));
+        assert!(store.matches_query(&ex, &q(r#"method == "POST""#)));
+        assert!(
+            store.matches_query(&ex, &q(r#"mime == "application/json""#)),
+            "mime derived from the response Content-Type header, case-insensitive"
+        );
+        assert!(
+            store.matches_query(&ex, &q(r#"body ~ "admin""#)),
+            "body_contains must reach the REQUEST body"
+        );
+        assert!(
+            store.matches_query(&ex, &q(r#"body ~ "\"ok\":true""#)),
+            "body_contains must also reach the RESPONSE body"
+        );
+        assert!(!store.matches_query(&ex, &q(r#"body ~ "nowhere to be found""#)));
+
+        // No response yet: status/mime read as absent, matching the crate's own None semantics —
+        // not an error, just "this row doesn't have that field yet".
+        ex.response = None;
+        ex.status = None;
+        assert!(!store.matches_query(&ex, &q("status == 200")));
+        assert!(!store.matches_query(&ex, &q(r#"mime == "application/json""#)));
+        assert!(
+            store.matches_query(&ex, &q(r#"body ~ "admin""#)),
+            "the request body is still reachable with no response at all"
+        );
     }
 
     /// STORE-02. `counts` reports the byte total from a running tally, so it does not walk the log.

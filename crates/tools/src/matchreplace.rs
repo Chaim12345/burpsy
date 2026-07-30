@@ -58,6 +58,7 @@
 //! carry chunk framing, and rewriting inside it corrupts the stream rather than the content.
 
 use burpsy_core::{Direction, Scope};
+use burpsy_query::{Query, Queryable};
 use regex::bytes::{NoExpand, Regex};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -144,6 +145,13 @@ pub struct RuleSpec {
     /// whole list, which cannot express "spoof this header, but only on the staging host".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
+    /// Apply only to messages the DSL-02 query language matches — burpsy-query's `host`/`status`/
+    /// `method`/`mime`/`body` grammar, the same one History filters with. `None` applies to every
+    /// message `scope` (if any) already lets through. Independent of `scope`: `scope` is a
+    /// host/port/path/tls gate, `query` reaches into method/status/mime/body — a rule can carry
+    /// either, both (both must agree), or neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 }
 
 impl RuleSpec {
@@ -157,6 +165,7 @@ impl RuleSpec {
             category: Category::Regex,
             comment: String::new(),
             scope: None,
+            query: None,
         }
     }
 
@@ -170,6 +179,7 @@ impl RuleSpec {
             category: Category::Literal,
             comment: String::new(),
             scope: None,
+            query: None,
         }
     }
 
@@ -180,6 +190,11 @@ impl RuleSpec {
 
     pub fn with_scope(mut self, s: Scope) -> Self {
         self.scope = Some(s);
+        self
+    }
+
+    pub fn with_query(mut self, q: impl Into<String>) -> Self {
+        self.query = Some(q.into());
         self
     }
 
@@ -217,6 +232,10 @@ enum Action {
 pub struct Rule {
     spec: RuleSpec,
     action: Action,
+    /// Compiled from `spec.query`, once, here — the same discipline `action`'s regex already
+    /// gets. `None` when the spec carries no query, which is a different fact from a query that
+    /// legitimately matches nothing.
+    query: Option<Query>,
 }
 
 impl Rule {
@@ -265,7 +284,18 @@ impl Rule {
             Action::Replace(Regex::new(&pattern).map_err(|e| err(&e.to_string()))?)
         };
 
-        Ok(Self { spec, action })
+        let query = spec
+            .query
+            .as_deref()
+            .map(burpsy_query::parse)
+            .transpose()
+            .map_err(|e| err(&e.to_string()))?;
+
+        Ok(Self {
+            spec,
+            action,
+            query,
+        })
     }
 
     pub fn spec(&self) -> &RuleSpec {
@@ -289,6 +319,11 @@ impl Rule {
             .scope
             .as_ref()
             .is_none_or(|s| s.contains(ctx.host, ctx.port, ctx.path, ctx.tls))
+    }
+
+    /// DSL-02: does this rule's query (if it has one) match the message being processed?
+    fn matches_query(&self, mq: &MessageQuery<'_>) -> bool {
+        self.query.as_ref().is_none_or(|q| q.matches(mq))
     }
 
     /// Rewrite one region. Returns true when it changed.
@@ -355,6 +390,66 @@ pub struct Ctx<'a> {
     pub port: u16,
     pub path: &'a str,
     pub tls: bool,
+    /// The request's method — known even while processing a response, since a response belongs to
+    /// the request that produced it. Needed for DSL-02's `method` field.
+    pub method: &'a str,
+}
+
+/// A [`Queryable`] view over the message [`RuleSet::apply`] is currently processing: `host`/
+/// `method` come from [`Ctx`] (the same on both directions — see `Ctx::method`'s own doc), and
+/// `status`/`mime`/`body` are read from the parsed message itself.
+///
+/// `status` is `None` on the request direction (no response exists yet) and `mime` is `None` when
+/// the message carries no `Content-Type` — both the same "absent, not false" rule
+/// [`burpsy_query::Queryable`] documents for every other consumer.
+struct MessageQuery<'a> {
+    ctx: &'a Ctx<'a>,
+    /// The status line's code, when this message is a response (`HTTP/1.1 200 OK` → `200`).
+    status: Option<u16>,
+    mime: Option<&'a str>,
+    body: &'a [u8],
+}
+
+impl Queryable for MessageQuery<'_> {
+    fn host(&self) -> &str {
+        self.ctx.host
+    }
+    fn status(&self) -> Option<u16> {
+        self.status
+    }
+    fn method(&self) -> &str {
+        self.ctx.method
+    }
+    fn mime(&self) -> Option<&str> {
+        self.mime
+    }
+    fn body_contains(&self, needle: &[u8]) -> bool {
+        self.body.windows(needle.len().max(1)).any(|w| w == needle) || needle.is_empty()
+    }
+}
+
+/// The `HTTP/x.y NNN reason` status line's code, or `None` if the line does not start that way —
+/// used only to answer `MessageQuery::status` for a response direction.
+fn status_of(first_line: &[u8]) -> Option<u16> {
+    let s = std::str::from_utf8(first_line).ok()?;
+    let code = s.split_whitespace().nth(1)?;
+    code.parse().ok()
+}
+
+/// The `Content-Type` header's value, whichever direction the message is — used only to answer
+/// `MessageQuery::mime`.
+fn content_type_of<'a>(lines: &[Line<'a>], direction: Direction) -> Option<&'a str> {
+    // Responses' header block is every line (`line_range`'s own `ResponseHeader => 0..n`); a
+    // request's start line is not a header and must be skipped, or a path containing a colon could
+    // masquerade as one.
+    let start = if direction == Direction::Request { 1 } else { 0 };
+    lines.get(start..)?.iter().find_map(|l| {
+        if !header_name(l.text)?.eq_ignore_ascii_case(b"content-type") {
+            return None;
+        }
+        let i = l.text.iter().position(|&c| c == b':')?;
+        std::str::from_utf8(&l.text[i + 1..]).ok().map(str::trim)
+    })
 }
 
 /// The serialisable form of a rule set.
@@ -432,13 +527,14 @@ impl RuleSet {
         if !self.affects(direction) || raw.is_empty() {
             return None;
         }
-        // Cheapest possible early exit: no rule for this direction is even in scope.
-        let applicable: Vec<&Rule> = self
+        // Cheapest possible early exit: no rule for this direction is even in scope. A query check
+        // needs the message parsed first (see below), so it is not part of this pass.
+        let scope_ok: Vec<&Rule> = self
             .rules
             .iter()
             .filter(|r| r.enabled() && r.target().direction() == direction && r.in_scope(ctx))
             .collect();
-        if applicable.is_empty() {
+        if scope_ok.is_empty() {
             return None;
         }
 
@@ -447,6 +543,26 @@ impl RuleSet {
             header_name(l.text).is_some_and(|n| n.eq_ignore_ascii_case(b"transfer-encoding"))
                 && contains_ignore_ascii_case(l.text, b"chunked")
         });
+
+        // Built once per message, not per rule: DSL-02's query reaches into the parsed message, so
+        // this is the point where a rule's `scope` (host/port/path/tls, checked above) and its
+        // `query` (method/status/mime/body) finally converge into one applicability test.
+        let mq = MessageQuery {
+            ctx,
+            status: (direction == Direction::Response)
+                .then(|| parsed.lines.first())
+                .flatten()
+                .and_then(|l| status_of(l.text)),
+            mime: content_type_of(&parsed.lines, direction),
+            body: parsed.body,
+        };
+        let applicable: Vec<&Rule> = scope_ok
+            .into_iter()
+            .filter(|r| r.matches_query(&mq))
+            .collect();
+        if applicable.is_empty() {
+            return None;
+        }
 
         let mut lines: Vec<Option<Cow<'_, [u8]>>> = parsed
             .lines
@@ -637,6 +753,7 @@ mod tests {
             port: 443,
             path: "/login",
             tls: true,
+            method: "POST",
         }
     }
 
@@ -909,6 +1026,115 @@ mod tests {
         let e = Rule::new(RuleSpec::new(Target::RequestHeader, "a", "b").with_scope(Scope::new()))
             .unwrap_err();
         assert!(e.message.contains("authorises nothing"), "{e}");
+    }
+
+    // ---- DSL-02: the same query language targets which messages a rule applies to --------------
+
+    #[test]
+    fn a_query_on_method_gates_the_rule_the_same_as_scope_does() {
+        let rs = set(vec![
+            RuleSpec::new(Target::RequestHeader, "^Host: .*$", "Host: rewritten")
+                .with_query(r#"method == "GET""#),
+        ]);
+        assert!(
+            rs.apply(Direction::Request, &ctx(), REQ).is_none(),
+            "REQ is a POST; a method==GET query must not match it"
+        );
+        let get_ctx = Ctx {
+            method: "GET",
+            ..ctx()
+        };
+        let out = s(rs.apply(Direction::Request, &get_ctx, REQ).unwrap());
+        assert!(out.contains("Host: rewritten"), "{out}");
+    }
+
+    #[test]
+    fn a_query_on_body_reaches_the_actual_payload_bytes() {
+        let rs = set(vec![
+            RuleSpec::new(Target::RequestBody, "b=2", "b=99").with_query(r#"body ~ "a=1""#),
+        ]);
+        let out = s(rs.apply(Direction::Request, &ctx(), REQ).unwrap());
+        assert!(out.ends_with("a=1&b=99"), "{out:?}");
+
+        let rs_no_match = set(vec![
+            RuleSpec::new(Target::RequestBody, "b=2", "b=99").with_query(r#"body ~ "nope""#),
+        ]);
+        assert!(rs_no_match.apply(Direction::Request, &ctx(), REQ).is_none());
+    }
+
+    #[test]
+    fn a_query_on_status_only_matches_the_response_direction() {
+        let resp = b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nnope";
+        let rs = set(vec![
+            RuleSpec::new(Target::ResponseHeader, "^HTTP/1.1 403 Forbidden$", "HTTP/1.1 200 OK")
+                .with_query("status == 403"),
+        ]);
+        let out = s(rs.apply(Direction::Response, &ctx(), resp).unwrap());
+        assert!(out.starts_with("HTTP/1.1 200 OK"), "{out:?}");
+
+        // The identical query on the REQUEST direction can never match: there is no status yet,
+        // which is the crate's own "absent, not false" rule for a missing field.
+        let rs_wrong_direction = set(vec![
+            RuleSpec::new(Target::RequestHeader, "^Host: .*$", "Host: rewritten")
+                .with_query("status == 403"),
+        ]);
+        assert!(rs_wrong_direction.apply(Direction::Request, &ctx(), REQ).is_none());
+    }
+
+    #[test]
+    fn a_query_on_mime_reads_the_content_type_header_of_either_direction() {
+        let resp = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{}";
+        let rs = set(vec![
+            RuleSpec::add_header(Target::ResponseHeader, "X-Tagged: json")
+                .with_query(r#"mime == "application/json""#),
+        ]);
+        let out = s(rs.apply(Direction::Response, &ctx(), resp).unwrap());
+        assert!(out.contains("X-Tagged: json"), "{out:?}");
+
+        let plain = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhi";
+        assert!(rs.apply(Direction::Response, &ctx(), plain).is_none());
+    }
+
+    #[test]
+    fn scope_and_query_must_both_agree_when_a_rule_carries_both() {
+        let mut scope = Scope::new();
+        scope.add(ScopeRule::include("staging.test"));
+        let rs = set(vec![
+            RuleSpec::new(Target::RequestHeader, "^Host: .*$", "Host: rewritten")
+                .with_scope(scope)
+                .with_query(r#"method == "POST""#),
+        ]);
+        // In scope, but the query would need a GET.
+        let staging_get = Ctx {
+            host: "staging.test",
+            method: "GET",
+            ..ctx()
+        };
+        assert!(
+            rs.apply(Direction::Request, &staging_get, REQ).is_none(),
+            "in scope is not enough on its own once a query is also attached"
+        );
+        // Query matches, but out of scope.
+        assert!(
+            rs.apply(Direction::Request, &ctx(), REQ).is_none(),
+            "matching the query is not enough on its own once a scope is also attached"
+        );
+        // Both agree.
+        let staging_post = Ctx {
+            host: "staging.test",
+            ..ctx()
+        };
+        let out = s(rs.apply(Direction::Request, &staging_post, REQ).unwrap());
+        assert!(out.contains("Host: rewritten"), "{out}");
+    }
+
+    #[test]
+    fn a_bad_query_is_rejected_at_construction_not_at_request_time() {
+        let e = Rule::new(
+            RuleSpec::new(Target::RequestHeader, "a", "b").with_query(r#"status > "abc""#),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("number") || e.message.contains("status"), "{e}");
     }
 
     #[test]

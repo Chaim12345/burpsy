@@ -417,8 +417,11 @@ function renderSourceBlock(idx: number, labelHtml: string): string {
 function sourceBodyHtml(idx: number, s: SourceState): string {
   switch (s.kind) {
     case "list":
-      return `<textarea class="int-src-list" data-idx="${idx}" placeholder="payloads, comma separated"
-                style="width:400px;min-height:60px">${esc(s.list)}</textarea>`;
+      return `<div class="row">
+        <textarea class="int-src-list" data-idx="${idx}" placeholder="payloads, comma separated"
+                  style="width:400px;min-height:60px">${esc(s.list)}</textarea>
+        <label class="hint">load from file <input type="file" class="int-src-file" data-idx="${idx}" /></label>
+      </div>`;
     case "numbers":
       return `<div class="row">
         <label>from <input class="int-src-f" data-f="from" data-idx="${idx}" style="width:80px" value="${s.numbers.from}" /></label>
@@ -473,6 +476,26 @@ function wireSourceControls(): void {
       const idx = Number(sel.dataset["idx"]);
       sourceFor(idx).kind = sel.value as SourceKind;
       renderPayloadArea();
+    });
+  });
+  $all<HTMLInputElement>(".int-src-file").forEach((input) => {
+    input.addEventListener("change", () => {
+      const idx = Number(input.dataset["idx"]);
+      const file = input.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = typeof reader.result === "string" ? reader.result : "";
+        // TOOLS-02: Burp's own `.pay` list format is just newline-delimited strings, no binary
+        // format to parse. Comma-joined to match this textarea's existing convention — a payload
+        // containing a literal comma already has this same limitation typed in by hand (since
+        // task #14); loading a file just surfaces it rather than introducing it new.
+        const lines = text.split("\n").map((l) => l.replace(/\r$/, ""));
+        if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+        sourceFor(idx).list = lines.join(",");
+        renderPayloadArea();
+      };
+      reader.readAsText(file);
     });
   });
 }

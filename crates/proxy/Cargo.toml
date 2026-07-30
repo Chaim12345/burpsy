@@ -8,6 +8,7 @@ license.workspace = true
 burpsy-core = { path = "../core" }
 burpsy-bcheck = { path = "../bcheck" }
 burpsy-scanner = { path = "../scanner" }
+burpsy-tools = { path = "../tools" }
 tokio = { workspace = true }
 bytes = { workspace = true }
 anyhow = { workspace = true }
@@ -23,6 +24,11 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-
 rustls-pemfile = "2.2.0"
 rustls-pki-types = "1.15.1"
 time = "0.3"
+# HTTP/2 relay (H2-01/H2-04). `h2` drives both legs of an intercepted, ALPN-negotiated h2
+# connection; `http` is the typed request/response vocabulary it speaks. The scope check and TLS
+# handshake have already happened upstream of this crate's MITM path before `h2` sees a stream.
+h2 = "0.4"
+http = "1"
 
 [dev-dependencies]
 # Integration tests and the `intercept_e2e` example drive the real HTTP API, which lives in the web

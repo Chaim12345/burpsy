@@ -44,7 +44,12 @@ pub struct ToolState {
     pub organizer: Organizer,
     /// Swapped wholesale on `PUT /api/tools/rules`, so the proxy's read side never sees a
     /// half-applied rule list.
-    pub rules: RwLock<RuleSet>,
+    ///
+    /// `Arc<RwLock<..>>` rather than a bare `RwLock<..>`, for the same reason `log` is `Arc`: the
+    /// binary hands the same lock to `burpsy_proxy::ProxyConfig::with_matchreplace`, so a `PUT`
+    /// here takes effect on live traffic from the next request onward, not on a second, unrelated
+    /// copy of the rule set the proxy happens to be reading.
+    pub rules: Arc<RwLock<RuleSet>>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -670,6 +675,8 @@ struct RuleTestReq {
     path: String,
     #[serde(default)]
     tls: bool,
+    #[serde(default = "get_method")]
+    method: String,
     /// Test against this ad-hoc rule set instead of the persisted one. This is what lets the UI
     /// preview an in-progress edit (or a brand new rule) as the operator types, without writing
     /// the draft to the live config first — nothing here touches `t.rules`.
@@ -684,6 +691,9 @@ fn port80() -> u16 {
 }
 fn root_path() -> String {
     "/".into()
+}
+fn get_method() -> String {
+    "GET".into()
 }
 
 /// Dry-run the rule set against one message. Burp's rule dialog has the same button, and for the
@@ -714,6 +724,7 @@ async fn rules_test(
         port: req.port,
         path: &req.path,
         tls: req.tls,
+        method: &req.method,
     };
     let out = match req.draft_rules {
         // An ad-hoc set is compiled fresh for this one call and never touches `t.rules` — the

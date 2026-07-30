@@ -11,6 +11,10 @@ anyhow = { workspace = true }
 parking_lot = { workspace = true }
 memmap2 = "0.9.11"
 crc32fast = "1.5.0"
+# DSL-01: the query grammar that filters history. `burpsy-query` deliberately has zero dependencies
+# (see its own crate docs on why it does not depend on `core`), so this is a one-way edge — `core`
+# is the "later slice" that crate's docs say gets the `Queryable` impl.
+burpsy-query = { path = "../query" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

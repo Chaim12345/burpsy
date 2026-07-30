@@ -21,3 +21,4 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = { workspace = true }

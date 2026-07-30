@@ -23,16 +23,16 @@ operator-observable capabilities, not implementation tasks.
 
 ### Query language (DSL)
 
-- [ ] **DSL-01**: Operator can filter proxy history with a typed query over host, status, method, MIME type and body content
-- [ ] **DSL-02**: The same query language selects which traffic match-and-replace rules apply to
+- [x] **DSL-01**: Operator can filter proxy history with a typed query over host, status, method, MIME type and body content *(2026-07-30: `burpsy-query` — a complete, previously-unwired grammar/parser/evaluator crate — wired into `GET /api/history?q=`, filtering server-side before pagination, plus a query box in the History tab's UI)*
+- [x] **DSL-02**: The same query language selects which traffic match-and-replace rules apply to *(2026-07-30: `RuleSpec.query` added, compiled once like `scope`, with a per-rule query field in the Match & Replace UI; also discovered and fixed that Match & Replace was never wired into live proxy traffic at all — only a persisted rule set and a dry-run preview endpoint existed. `RuleSet::apply` now runs on every request/response in `forward_http` and `mitm`, before interception, with a widened buffering gate so a response rewrite reaches the client rather than racing a live stream)*
 - [ ] **DSL-03**: The same query language selects which traffic is in scope for crawling and live audit
-- [ ] **DSL-04**: A query that cannot be parsed reports where and why, rather than silently matching nothing
+- [x] **DSL-04**: A query that cannot be parsed reports where and why, rather than silently matching nothing *(2026-07-30: `QueryError::render`'s caret-style message reaches `GET /api/history`'s 400 body, rendered with the caret intact in the History UI, and a bad Match & Replace `query` string's construction error)*
 
 ### Tool parity (TOOLS)
 
-- [x] **TOOLS-01**: Operator can transform Intruder payloads before they are sent — prefix, suffix, case change, encode, hash, and match-and-replace — chained in a stated order *(2026-07-30, backend + endpoint; reachable via hand-built JSON today, see TOOLS-03 note)*
-- [ ] **TOOLS-02**: Operator can load Burp's own `.pay` payload lists
-- [~] **TOOLS-03**: Operator can flag attack responses containing a pattern, and extract a pattern into a result column *(2026-07-30, backend grep-match/grep-extract landed and tested; UI wiring is a tracked follow-up, not yet built — not operator-observable until then)*
+- [x] **TOOLS-01**: Operator can transform Intruder payloads before they are sent — prefix, suffix, case change, encode, hash, and match-and-replace — chained in a stated order *(2026-07-30, backend + endpoint + UI, see TOOLS-03)*
+- [x] **TOOLS-02**: Operator can load Burp's own `.pay` payload lists *(2026-07-30: this project's own research (.planning/research/FEATURES.md) established the format is just newline-delimited strings; a "load from file" control in the Intruder List generator reads one client-side via the File API)*
+- [x] **TOOLS-03**: Operator can flag attack responses containing a pattern, and extract a pattern into a result column *(complete as of task #20 this session — grep-match/grep-extract UI wiring landed; this checkbox was simply never updated afterward)*
 - [x] **TOOLS-04**: Operator can work in multiple named Repeater tabs, each keeping its own request history *(2026-07-30)*
 
 ### Session handling (SESSION)
@@ -161,12 +161,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | H2-02 | Phase 2 | Pending |
 | H2-03 | Phase 2 | Partial — the frame layer emits deliberate spec violations byte-for-byte and `burpsy_http2::malformed::audit` names every rule a program breaks, with the RFC section. There is no authorised route from a frame program to a socket yet: `send_h2_program` and the whole-host authorisation classifier are a later slice, so an operator can build and inspect a malformed program but cannot send one |
 | H2-04 | Phase 2 | Partial — the proxy peeks the ClientHello, offers the target the client's own ALPN list, offers the client back exactly what the target chose, and records the result on every `Exchange.protocol`. An h2-capable target is not downgraded; an h2-negotiated connection is recorded and closed rather than forwarded (h2 relay needs a driver on both legs plus the frame tap). Consequence stated in `crates/proxy/src/lib.rs`: with interception off, an h2-capable origin cannot be browsed through the proxy. Scanner and Intruder egress remain HTTP/1.1-only; protocol-aware audit egress is not in Phase 2 |
-| DSL-01 | Phase 3 | Pending |
-| DSL-02 | Phase 3 | Pending |
-| DSL-04 | Phase 3 | Pending |
+| DSL-01 | Phase 3 | Complete (2026-07-30) |
+| DSL-02 | Phase 3 | Complete (2026-07-30) — includes fixing Match & Replace's live-wiring gap |
+| DSL-04 | Phase 3 | Complete (2026-07-30) |
 | TOOLS-01 | Phase 3 | Complete (2026-07-30) |
-| TOOLS-02 | Phase 3 | Pending |
-| TOOLS-03 | Phase 3 | Partial (2026-07-30) — backend done, UI wiring not yet built (tracked follow-up) |
+| TOOLS-02 | Phase 3 | Complete (2026-07-30) |
+| TOOLS-03 | Phase 3 | Complete (status corrected 2026-07-30; feature landed earlier this session as task #20) |
 | TOOLS-04 | Phase 3 | Complete (2026-07-30) |
 | REPORT-01 | Phase 4 | Pending |
 | REPORT-02 | Phase 4 | Pending |

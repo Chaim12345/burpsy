@@ -13,6 +13,7 @@ burpsy-tools = { path = "../tools" }
 burpsy-proxy = { path = "../proxy" }
 burpsy-session = { path = "../session" }
 burpsy-sequencer = { path = "../sequencer" }
+burpsy-query = { path = "../query" }
 axum = "0.8"
 tokio = { workspace = true }
 bytes = { workspace = true }

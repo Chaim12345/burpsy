@@ -13,6 +13,8 @@ import { EVT_SEND_TO_REPEATER, EVT_SEND_TO_INTRUDER, EVT_SEND_TO_COMPARER, EVT_S
 let allRows: Exchange[] = [];
 /** Fetched lazily the first time "in scope only" is checked, then reused for the session. */
 let cachedScope: ScopeInfo | null = null;
+/** Debounces the query box: unlike the other filters, a query change means a server round-trip. */
+let queryTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function initHistory(): void {
   const section = $("#history");
@@ -31,6 +33,9 @@ export function initHistory(): void {
       <input id="hist-search" placeholder="filter method/host/path" style="width:220px" />
       <label><input type="checkbox" id="hist-regex" /> regex</label>
     </div>
+    <div class="row">
+      <input id="hist-query" placeholder='query: status == 200 and host ~ "api." and not method == "OPTIONS"' style="width:100%" />
+    </div>
     <table>
       <thead>
         <tr><th>#</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th>
@@ -47,6 +52,10 @@ export function initHistory(): void {
   $all<HTMLInputElement>(".hist-status").forEach((c) => c.addEventListener("change", () => applyFilter()));
   $("#hist-search")!.addEventListener("input", () => applyFilter());
   $("#hist-regex")!.addEventListener("change", () => applyFilter());
+  $("#hist-query")!.addEventListener("input", () => {
+    if (queryTimer) clearTimeout(queryTimer);
+    queryTimer = setTimeout(() => void load(), 300);
+  });
   const scopeOnly = $<HTMLInputElement>("#hist-scope-only")!;
   scopeOnly.addEventListener("change", () => {
     if (scopeOnly.checked) {
@@ -73,10 +82,16 @@ async function loadExchangeById(id: number): Promise<void> {
 
 async function load(): Promise<void> {
   const body = $("#hist-body")!;
+  const q = $<HTMLInputElement>("#hist-query")!.value.trim();
+  const qs = q ? `?limit=300&q=${encodeURIComponent(q)}` : "?limit=300";
   try {
-    allRows = await getJSON<Exchange[]>("/api/history?limit=300");
+    allRows = await getJSON<Exchange[]>(`/api/history${qs}`);
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="9" class="err">${esc((e as Error).message)}</td></tr>`;
+    // A malformed query's body is the backend's own rendered message — description line, source
+    // line, then a `^` caret under the offending byte. `white-space:pre` keeps the caret aligned;
+    // a plain innerHTML drop would collapse that spacing into one line.
+    allRows = [];
+    body.innerHTML = `<tr><td colspan="9" class="err"><pre style="white-space:pre;margin:0">${esc((e as Error).message)}</pre></td></tr>`;
     return;
   }
   applyFilter();
@@ -99,7 +114,10 @@ function applyFilter(): void {
 
   if (allRows.length === 0) {
     body.innerHTML = "";
-    note.textContent = "no traffic yet — set your browser proxy to this host:8080";
+    const activeQuery = $<HTMLInputElement>("#hist-query")?.value.trim();
+    note.textContent = activeQuery
+      ? "no history rows match the query"
+      : "no traffic yet — set your browser proxy to this host:8080";
     return;
   }
 

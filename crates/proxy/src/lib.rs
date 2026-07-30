@@ -110,6 +110,12 @@ pub struct ProxyConfig {
     /// Hold queue for operator review. `None` means the feature is not wired up at all, which is
     /// cheaper than a wired-but-disabled queue and impossible to switch on by accident.
     pub intercept: Option<Arc<intercept::Interceptor>>,
+    /// Match & Replace, applied to every request and response this connection handles. Shared with
+    /// the web API's `PUT /api/tools/rules`, the same relationship `scope` has with its own API —
+    /// an operator's edit takes effect on the next message, not on a second copy of the rules this
+    /// proxy happened to start with. `None` means the feature is not wired up at all, matching
+    /// `intercept`'s own "absent costs nothing" reasoning.
+    pub matchreplace: Option<Arc<parking_lot::RwLock<burpsy_tools::matchreplace::RuleSet>>>,
 }
 
 impl ProxyConfig {
@@ -123,6 +129,7 @@ impl ProxyConfig {
             scope: burpsy_core::SharedScope::allow_everything(),
             scanner: None,
             intercept: None,
+            matchreplace: None,
         }
     }
 
@@ -154,6 +161,17 @@ impl ProxyConfig {
     /// the operator's decisions and the connection tasks waiting on them.
     pub fn with_interceptor(mut self, i: Arc<intercept::Interceptor>) -> Self {
         self.intercept = Some(i);
+        self
+    }
+
+    /// Attach Match & Replace. Share the same lock with `routes::tools::ToolState::rules` — the
+    /// binary does this, not a private clone, or an operator's edit would change what the API
+    /// reports without changing what the proxy rewrites.
+    pub fn with_matchreplace(
+        mut self,
+        mr: Arc<parking_lot::RwLock<burpsy_tools::matchreplace::RuleSet>>,
+    ) -> Self {
+        self.matchreplace = Some(mr);
         self
     }
 }
@@ -291,6 +309,21 @@ async fn forward_http(
     // Rewrite only the request target; every other byte is preserved.
     let upstream_req = rewrite_target(&head, &path);
 
+    // Match & Replace runs on everything this connection sends, in scope or not — a rule's own
+    // `scope` field is what would exclude it (see `matchreplace`'s module docs on why burpsy's
+    // rules carry their own scope instead of following the proxy's global one), and before
+    // interception, so an operator reviewing a held request sees it already rewritten.
+    let upstream_req = apply_matchreplace(
+        &cfg,
+        Direction::Request,
+        &host_only,
+        port,
+        false,
+        method,
+        &path,
+        &upstream_req,
+    );
+
     let in_scope = cfg.scope.contains(&host_only, port, &path, false);
     if !in_scope {
         // Forward transparently but do not retain. Interception is deliberately downstream of
@@ -372,7 +405,16 @@ async fn forward_http(
         method: method.clone(),
         path: path.clone(),
     };
-    let offer_response = will_offer_response(&cfg, &meta);
+    // Two different questions: `will_hold_response` is "does an operator review this?" (gates
+    // `hold_response_for_review`, below); `must_buffer` is the broader "can this response be
+    // streamed live at all?" — also true when Match & Replace has a response-direction rule, since
+    // a rewrite needs the whole body before anything reaches the client, exactly the same
+    // constraint interception already has. Conflating the two would mean either buffering (and
+    // paying the latency for) every response whenever a rule merely exists, or — the one this must
+    // not do — routing an un-reviewed, matchreplace-only response through the operator's hold
+    // queue it was never meant for.
+    let will_hold_response = will_offer_response(&cfg, &meta);
+    let must_buffer = will_hold_response || matchreplace_affects(&cfg, Direction::Response);
 
     let started = Instant::now();
     let mut upstream = match TcpStream::connect((host_only.as_str(), port)).await {
@@ -424,27 +466,29 @@ async fn forward_http(
         prefix.extend_from_slice(&rest);
     }
 
-    // Stream to the client while accumulating for the store — unless the response is going to be
-    // offered for review, in which case nothing may reach the client until the verdict is in.
+    // Stream to the client while accumulating for the store — unless the response must be
+    // buffered whole first, in which case nothing may reach the client until it has been rewritten
+    // and (if applicable) reviewed.
     let mut resp = prefix;
-    if !resp.is_empty() && !offer_response {
+    if !resp.is_empty() && !must_buffer {
         let _ = client.write_all(&resp).await;
     }
     let mut chunk = vec![0u8; 16 * 1024];
     loop {
         // Checked before reading, so a response already complete in the refused-upgrade prefix does
         // not wait on a read that will never return.
-        if offer_response && response_is_complete(&resp, &meta.method) {
+        if must_buffer && response_is_complete(&resp, &meta.method) {
             break;
         }
         // Same cap, and for the same reason, as `read_head` and `read_message`. It matters more here:
         // a response whose framing never completes — SSE, a long poll, a chunked stream with no
         // terminator — has no EOF to stop on, and the client is receiving nothing while we wait. At
         // the cap we stop and offer what we have, exactly as those two do for a message this size.
-        if offer_response && resp.len() > MAX_BUFFERED_RESPONSE {
+        if must_buffer && resp.len() > MAX_BUFFERED_RESPONSE {
             tracing::warn!(
-                "{}:{port} response exceeded {MAX_BUFFERED_RESPONSE} bytes while being held for \
-                 review; offering it truncated rather than buffering without limit",
+                "{}:{port} response exceeded {MAX_BUFFERED_RESPONSE} bytes while being buffered \
+                 (for review and/or a match-and-replace rewrite); offering it truncated rather \
+                 than buffering without limit",
                 meta.host
             );
             break;
@@ -454,16 +498,27 @@ async fn forward_http(
             break;
         }
         resp.extend_from_slice(&chunk[..n]);
-        if !offer_response && client.write_all(&chunk[..n]).await.is_err() {
+        if !must_buffer && client.write_all(&chunk[..n]).await.is_err() {
             break;
         }
     }
 
     // What the client actually receives is what history records, the same rule the request side
     // follows: an operator who rewrites a response must not find the origin's original in history,
-    // because every later replay and every passive scan would work from bytes nobody saw.
-    let mut resp = Bytes::from(resp);
-    if offer_response {
+    // because every later replay and every passive scan would work from bytes nobody saw. Match &
+    // Replace runs first — same reasoning as the request side — then interception, which is the
+    // only one of the two an operator actually watches.
+    let mut resp = Bytes::from(apply_matchreplace(
+        &cfg,
+        Direction::Response,
+        &host_only,
+        port,
+        false,
+        &meta.method,
+        &meta.path,
+        &resp,
+    ));
+    if will_hold_response {
         resp = match hold_response_for_review(&cfg, &meta, resp).await {
             Reviewed::Send(b) => b,
             // The exchange already exists, and the store has no "amend this message" operation, so
@@ -471,6 +526,8 @@ async fn forward_http(
             // rather than by a note. It is the bytes the client got either way.
             Reviewed::Dropped { reason, .. } => dropped_response("response", &reason),
         };
+    }
+    if must_buffer {
         let _ = client.write_all(&resp).await;
     }
     let _ = client.flush().await;
@@ -783,8 +840,11 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         };
 
         let (method, path) = start_line_parts(&req);
+        // Match & Replace runs on everything, in scope or not, and before interception — see the
+        // identical comment on the plain-HTTP path in `forward_http`.
+        let req = apply_matchreplace(&cfg, Direction::Request, &host, port, true, &method, &path, &req);
         // Scope was never tested for this loop at all before this line — unlike `forward_http`,
-        // which gates once before the hold and once after. Test it now, against the pre-hold
+        // which gates once before the hold and once after. Test it now, against the pre-edit
         // path, so ordinary out-of-scope MITM traffic (never edited, never held) is forwarded
         // without being stored, exactly as `forward_http`'s line-256 gate does for plain HTTP.
         let in_scope_before = cfg.scope.contains(&host, port, &path, true);
@@ -837,7 +897,9 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
             method: method.clone(),
             path: path.clone(),
         };
-        let offer_response = will_offer_response(&cfg, &meta);
+        // See the identical pair of booleans and comment in `forward_http`.
+        let will_hold_response = will_offer_response(&cfg, &meta);
+        let must_buffer = will_hold_response || matchreplace_affects(&cfg, Direction::Response);
 
         let ex_id = retain.then(|| {
             let req_id = store.put(req.clone(), Direction::Request);
@@ -899,20 +961,24 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         let mut resp = prefix;
         let mut chunk = vec![0u8; 16 * 1024];
         let mut client_gone = false;
-        // Nothing reaches the client before the verdict when the response is being offered.
-        if !resp.is_empty() && !offer_response && tls_client.write_all(&resp).await.is_err() {
+        // Nothing reaches the client before it has been rewritten and (if applicable) reviewed.
+        if !resp.is_empty() && !must_buffer && tls_client.write_all(&resp).await.is_err() {
             client_gone = true;
         }
         while !client_gone {
             // Checked before reading rather than after writing, so a response already complete in
-            // the refused-upgrade prefix does not wait on a read that will never return.
+            // the refused-upgrade prefix does not wait on a read that will never return. Unlike the
+            // two checks below, this one runs regardless of `must_buffer`: this loop also has to
+            // stop reading in time for the NEXT pipelined request on this same TLS connection, not
+            // only when buffering for a rewrite or a review.
             if response_is_complete(&resp, &meta.method) {
                 break;
             }
-            if offer_response && resp.len() > MAX_BUFFERED_RESPONSE {
+            if must_buffer && resp.len() > MAX_BUFFERED_RESPONSE {
                 tracing::warn!(
-                    "{host}:{port} response exceeded {MAX_BUFFERED_RESPONSE} bytes while being held \
-                     for review; offering it truncated rather than buffering without limit"
+                    "{host}:{port} response exceeded {MAX_BUFFERED_RESPONSE} bytes while being \
+                     buffered (for review and/or a match-and-replace rewrite); offering it \
+                     truncated rather than buffering without limit"
                 );
                 break;
             }
@@ -923,24 +989,34 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
                 break;
             }
             resp.extend_from_slice(&chunk[..n]);
-            // Nothing reaches the client before the verdict when the response is being offered.
-            if !offer_response && tls_client.write_all(&chunk[..n]).await.is_err() {
+            // Nothing reaches the client before it has been rewritten and (if applicable) reviewed.
+            if !must_buffer && tls_client.write_all(&chunk[..n]).await.is_err() {
                 client_gone = true;
                 break;
             }
         }
 
         // Same rule as the request half and as the plain-HTTP path: history records the bytes the
-        // client actually received, not the ones the origin sent.
-        let mut resp = Bytes::from(resp);
-        if offer_response {
+        // client actually received, not the ones the origin sent. Match & Replace runs first, then
+        // interception — the only one of the two an operator actually watches.
+        let mut resp = Bytes::from(apply_matchreplace(
+            &cfg,
+            Direction::Response,
+            &host,
+            port,
+            true,
+            &meta.method,
+            &meta.path,
+            &resp,
+        ));
+        if will_hold_response {
             resp = match hold_response_for_review(&cfg, &meta, resp).await {
                 Reviewed::Send(b) => b,
                 Reviewed::Dropped { reason, .. } => dropped_response("response", &reason),
             };
-            if tls_client.write_all(&resp).await.is_err() {
-                client_gone = true;
-            }
+        }
+        if must_buffer && tls_client.write_all(&resp).await.is_err() {
+            client_gone = true;
         }
         let _ = tls_client.flush().await;
 
@@ -1401,6 +1477,53 @@ fn will_offer_response(cfg: &ProxyConfig, meta: &intercept::HeldMeta) -> bool {
         .as_ref()
         .is_some_and(|ic| ic.may_hold_response(meta))
         && cfg.scope.contains(&meta.host, meta.port, &meta.path, meta.tls)
+}
+
+/// Whether ANY enabled Match & Replace rule targets this direction — cheap, and deliberately not
+/// precise about which host or query it names. That precision belongs to `RuleSet::apply` itself,
+/// which is given the real message and decides for real; this only feeds a buffering decision (see
+/// `apply_matchreplace`'s callers), where erring towards "yes, buffer" costs a response that gets
+/// buffered instead of streamed even though no rule would actually have matched it — a latency cost,
+/// never a correctness one. Getting it wrong the other way — streaming a response live that a rule
+/// then can't rewrite because it already reached the client — is not recoverable, so this is the
+/// side to err on.
+fn matchreplace_affects(cfg: &ProxyConfig, direction: Direction) -> bool {
+    cfg.matchreplace
+        .as_ref()
+        .is_some_and(|mr| mr.read().affects(direction))
+}
+
+/// Run Match & Replace over one message in one direction. `None` config or no matching rule leaves
+/// `raw` untouched — this is meant to be called unconditionally on the hot path, not gated behind a
+/// check of its own, the same way `hold_for_review` already is for interception.
+///
+/// Match & Replace runs before interception, mirroring Burp's own pipeline order: an operator
+/// reviewing a held request or response in Intercept sees it already rewritten, and rewrites what
+/// history records — the same "store what was actually sent" rule intercept edits already follow.
+#[allow(clippy::too_many_arguments)]
+fn apply_matchreplace(
+    cfg: &ProxyConfig,
+    direction: Direction,
+    host: &str,
+    port: u16,
+    tls: bool,
+    method: &str,
+    path: &str,
+    raw: &[u8],
+) -> Vec<u8> {
+    let Some(mr) = &cfg.matchreplace else {
+        return raw.to_vec();
+    };
+    let ctx = burpsy_tools::matchreplace::Ctx {
+        host,
+        port,
+        path,
+        tls,
+        method,
+    };
+    mr.read()
+        .apply(direction, &ctx, raw)
+        .unwrap_or_else(|| raw.to_vec())
 }
 
 /// The answer a client gets when the operator drops half of an exchange — `what` names which.

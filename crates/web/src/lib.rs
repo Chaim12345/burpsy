@@ -143,7 +143,7 @@ pub fn router_intercept(
     intercept: Option<Arc<routes::intercept::InterceptState>>,
 ) -> Router {
     router_activity(
-        store, ca_pem, scope, findings, audit, export, session, intercept, None, None,
+        store, ca_pem, scope, findings, audit, export, session, intercept, None, None, None,
     )
 }
 
@@ -160,6 +160,11 @@ pub fn router_activity(
     intercept: Option<Arc<routes::intercept::InterceptState>>,
     tool_log: Option<Arc<burpsy_tools::logger::ToolLog>>,
     live_audit: Option<Arc<routes::liveaudit::LiveAuditState>>,
+    // Shared with `burpsy_proxy::ProxyConfig::with_matchreplace` by the binary — the same lock, not
+    // a second copy — so `PUT /api/tools/rules` takes effect on live traffic. `unwrap_or_default`
+    // only matters to the shorter constructors above, which pass `None`: an unshared rule set that
+    // never sees proxy traffic, rather than a router that fails to build.
+    matchreplace: Option<Arc<parking_lot::RwLock<burpsy_tools::matchreplace::RuleSet>>>,
 ) -> Router {
     // The same log this crate's own repeater/intruder handlers write to, handed to `routes::tools`
     // so `GET /api/tools/log` reads it back — one log, not two. `unwrap_or_default` only matters to
@@ -167,6 +172,7 @@ pub fn router_activity(
     // that fails to build.
     let tool_state = Arc::new(routes::tools::ToolState {
         log: tool_log.clone().unwrap_or_default(),
+        rules: matchreplace.unwrap_or_default(),
         ..Default::default()
     });
     Router::new()
@@ -280,7 +286,7 @@ pub async fn serve_intercept(
     intercept: Option<Arc<routes::intercept::InterceptState>>,
 ) -> Result<()> {
     serve_activity(
-        bind, store, ca_pem, scope, findings, audit, export, session, intercept, None, None,
+        bind, store, ca_pem, scope, findings, audit, export, session, intercept, None, None, None,
     )
     .await
 }
@@ -298,6 +304,7 @@ pub async fn serve_activity(
     intercept: Option<Arc<routes::intercept::InterceptState>>,
     tool_log: Option<Arc<burpsy_tools::logger::ToolLog>>,
     live_audit: Option<Arc<routes::liveaudit::LiveAuditState>>,
+    matchreplace: Option<Arc<parking_lot::RwLock<burpsy_tools::matchreplace::RuleSet>>>,
 ) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -307,7 +314,7 @@ pub async fn serve_activity(
         listener,
         router_activity(
             store, ca_pem, scope, findings, audit, export, session, intercept, tool_log,
-            live_audit,
+            live_audit, matchreplace,
         ),
     )
     .await
@@ -536,13 +543,42 @@ struct Page {
     offset: usize,
     #[serde(default = "default_limit")]
     limit: usize,
+    /// DSL-01: a burpsy-query filter over host/status/method/mime/body. Applied over the WHOLE
+    /// index before `offset`/`limit`, not after — filtering only the current page would make the
+    /// query's usefulness shrink as history grows, which is the opposite of DSL-01's point.
+    #[serde(default)]
+    q: Option<String>,
 }
 fn default_limit() -> usize {
     200
 }
 
-async fn history(State(s): State<AppState>, Query(p): Query<Page>) -> Json<Vec<Exchange>> {
-    Json(s.store.exchanges(p.offset, p.limit.min(2000)))
+/// Ceiling on history filtered through a query. Matches the endpoint's own existing page-size
+/// ceiling below: whatever the browser can already be asked to hold is the bound `exchanges(0,
+/// usize::MAX)` — the "give me everything, then filter" idiom `routes::websockets::connections`
+/// already uses for the same reason — is also safe to allocate.
+const MAX_HISTORY_ROWS: usize = 2000;
+
+async fn history(State(s): State<AppState>, Query(p): Query<Page>) -> impl IntoResponse {
+    let limit = p.limit.min(MAX_HISTORY_ROWS);
+    let Some(raw_q) = p.q.as_deref().filter(|q| !q.is_empty()) else {
+        return Json(s.store.exchanges(p.offset, limit)).into_response();
+    };
+    // DSL-04: a query that fails to parse says where and why, rather than silently matching
+    // nothing — the two must never be confused, so a parse failure is a 400, never an empty page.
+    let query = match burpsy_query::parse(raw_q) {
+        Ok(q) => q,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.render(raw_q)).into_response(),
+    };
+    let filtered: Vec<Exchange> = s
+        .store
+        .exchanges(0, usize::MAX)
+        .into_iter()
+        .filter(|ex| s.store.matches_query(ex, &query))
+        .skip(p.offset)
+        .take(limit)
+        .collect();
+    Json(filtered).into_response()
 }
 
 async fn exchange(State(s): State<AppState>, Path(id): Path<u64>) -> impl IntoResponse {
@@ -1275,6 +1311,56 @@ mod tests {
         assert!(body.contains("GET /x HTTP/1.1"), "{body}");
     }
 
+    /// DSL-01/04: `?q=` filters the whole index before paging, and a malformed query is a 400
+    /// carrying DSL-04's caret rendering — never a page that silently has zero rows.
+    #[tokio::test]
+    async fn history_q_param_filters_before_paging_and_a_bad_query_is_a_400_with_a_caret() {
+        let store = TrafficStore::new();
+        let app = router(store.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let base = format!("http://{addr}");
+
+        for (host, status) in [("a.test", 200u16), ("b.test", 404u16), ("a.test", 500u16)] {
+            let req = store.put(
+                bytes::Bytes::from(format!("GET / HTTP/1.1\r\nHost: {host}\r\n\r\n")),
+                Direction::Request,
+            );
+            let resp = store.put(
+                bytes::Bytes::from(format!("HTTP/1.1 {status} X\r\n\r\n")),
+                Direction::Response,
+            );
+            store.add_exchange(Exchange {
+                request: req,
+                response: Some(resp),
+                host: host.into(),
+                port: 80,
+                method: "GET".into(),
+                path: "/".into(),
+                status: Some(status),
+                ..Default::default()
+            });
+        }
+
+        let body = reqwest_get(&format!("{base}/api/history?q=host%20%3D%3D%20%22a.test%22")).await;
+        assert!(body.contains("200 OK"), "a matching query still returns 200: {body}");
+        assert!(body.contains("\"host\":\"a.test\""), "{body}");
+        assert!(!body.contains("\"host\":\"b.test\""), "b.test must be filtered out: {body}");
+        assert_eq!(
+            body.matches("\"host\":\"a.test\"").count(),
+            2,
+            "both a.test exchanges must survive the filter, not just the newest: {body}"
+        );
+
+        let body = reqwest_get(&format!("{base}/api/history?q=status%20%3E%20%22abc%22")).await;
+        assert!(body.contains("400"), "a type-mismatched query must be rejected: {body}");
+        assert!(
+            body.contains('^'),
+            "DSL-04: the error must carry the caret rendering, not just a message: {body}"
+        );
+    }
+
     #[tokio::test]
     async fn repeater_send_writes_into_the_shared_tool_log() {
         let tgt = echo_target().await;
@@ -1290,6 +1376,7 @@ mod tests {
             None,
             None,
             Some(tool_log.clone()),
+            None,
             None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
