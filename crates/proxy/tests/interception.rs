@@ -6,7 +6,10 @@
 //! the interceptor directly.
 
 use burpsy_core::{Scope, ScopeRule, TrafficStore};
-use burpsy_proxy::{Interceptor, ProxyConfig, TlsEngine, tls};
+use burpsy_proxy::{
+    InterceptRuleSpec, InterceptRules, InterceptRulesSpec, Interceptor, MatchField, ProxyConfig,
+    TlsEngine, tls,
+};
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -68,6 +71,78 @@ async fn spawn_origin() -> Origin {
         }
     });
     Origin { addr, hits }
+}
+
+/// An origin that answers and then **stays open**.
+///
+/// `spawn_origin` closes its socket after one response, so every test using it leaves the proxy's read
+/// loop on an EOF — which means those tests pass whether or not the loop understands framing at all.
+/// Holding a response makes framing load-bearing: there is no EOF coming, so a loop that waits for a
+/// body the origin will never send never offers the response, and the operator has nothing to release.
+/// This origin exists to make that failure reachable, and it answers the three shapes that cause it.
+async fn spawn_keepalive_origin() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let Ok(n) = sock.read(&mut chunk).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let head = String::from_utf8_lossy(&buf).to_string();
+                let resp: &str = if head.starts_with("HEAD ") {
+                    // A HEAD answer names the length a GET would have returned, and sends no body.
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 42\r\n\r\n"
+                } else if head.contains("/interim") {
+                    // What a CDN does: early hints, then the real answer, on one connection.
+                    "HTTP/1.1 103 Early Hints\r\nLink: </s.css>; rel=preload\r\n\r\n\
+                     HTTP/1.1 500 Server Error\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nboom!"
+                } else {
+                    // A 304 legitimately echoes a length it will not send. This is the shape a browser
+                    // with a warm cache produces continuously.
+                    "HTTP/1.1 304 Not Modified\r\nContent-Type: text/html\r\nContent-Length: 99\r\n\r\n"
+                };
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.flush().await;
+                // Deliberately never closed: the whole point is that no EOF arrives.
+                std::future::pending::<()>().await;
+            });
+        }
+    });
+    addr
+}
+
+/// Send one request through the proxy and read whatever comes back within `ms`.
+///
+/// Deliberately *not* framing-aware, unlike `read_response`: a framing-aware reader here would have to
+/// reimplement the logic under test, and would then hang on exactly the responses these tests are
+/// about. The deadline is the assertion — the proxy either answers promptly or it does not.
+async fn probe(proxy: SocketAddr, origin: SocketAddr, method: &str, path: &str, ms: u64) -> String {
+    let mut s = TcpStream::connect(proxy).await.unwrap();
+    let req = format!("{method} http://{origin}{path} HTTP/1.1\r\nHost: {origin}\r\n\r\n");
+    s.write_all(req.as_bytes()).await.unwrap();
+    s.flush().await.unwrap();
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
+    while let Ok(Ok(n)) = tokio::time::timeout_at(deadline, s.read(&mut chunk)).await {
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 /// Bring up a proxy on an ephemeral port and hand back where to reach it.
@@ -403,6 +478,300 @@ async fn a_dropped_request_gets_a_synthetic_response_and_never_reaches_the_origi
 }
 
 #[tokio::test]
+async fn an_edited_response_is_what_the_client_reads_and_what_history_records() {
+    // The response hold point in one test: the client sees nothing until the verdict, the edit is
+    // what it eventually reads, and history agrees with the client rather than with the origin.
+    let origin = spawn_origin().await;
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    ic.set_enabled(true);
+    // Requests stay blanket-held (the default); responses have to be switched on.
+    ic.set_response_rules(InterceptRules::unconditional());
+    let proxy = spawn_proxy(config(store.clone(), ic.clone(), Scope::allow_everything())).await;
+
+    let client = {
+        let oa = origin.addr;
+        tokio::spawn(async move { through_proxy(proxy, oa, "/two-halves").await })
+    };
+
+    // Half one: the request.
+    wait_for_pending(&ic, 1).await;
+    let req = ic.list().remove(0);
+    assert_eq!(req.direction, "request");
+    assert_eq!(req.status, None);
+    assert!(ic.forward(req.id, None));
+
+    // Half two: the response the origin sent back, held on the same connection task.
+    wait_for_pending(&ic, 1).await;
+    let resp = ic.list().remove(0);
+    assert_eq!(resp.direction, "response");
+    assert_eq!(resp.status, Some(200));
+    assert_eq!(
+        resp.path, "/two-halves",
+        "a held response carries the route of the request that provoked it"
+    );
+    assert!(
+        resp.raw.contains("ORIGIN GET /two-halves"),
+        "held response was {:?}",
+        resp.raw
+    );
+    assert!(
+        !client.is_finished(),
+        "the client must have read nothing while the response is held — if it has finished, the \
+         relay streamed past the hold point"
+    );
+
+    let edited = resp.raw.replace("ORIGIN", "REWRITTEN");
+    assert!(ic.forward(resp.id, Some(Bytes::from(edited))));
+
+    let body = tokio::time::timeout(Duration::from_secs(5), client)
+        .await
+        .expect("forwarding the response must release the client")
+        .unwrap();
+    assert!(body.contains("REWRITTEN GET /two-halves"), "client read {body:?}");
+    assert!(!body.contains("ORIGIN GET"), "client read {body:?}");
+
+    let exchanges = store.exchanges(0, 10);
+    assert_eq!(exchanges.len(), 1);
+    let stored = store.get(exchanges[0].response.expect("a response was stored")).unwrap();
+    let text = String::from_utf8_lossy(&stored.raw);
+    assert!(
+        text.contains("REWRITTEN GET /two-halves"),
+        "history must record what the client actually read: {text:?}"
+    );
+    assert!(
+        !text.contains("ORIGIN GET"),
+        "the origin's original bytes must not survive the edit: {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_dropped_response_reaches_the_client_as_a_synthetic_answer_not_a_dead_socket() {
+    let origin = spawn_origin().await;
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    ic.set_enabled(true);
+    ic.set_response_rules(InterceptRules::unconditional());
+    let proxy = spawn_proxy(config(store.clone(), ic.clone(), Scope::allow_everything())).await;
+
+    let client = {
+        let oa = origin.addr;
+        tokio::spawn(async move { through_proxy(proxy, oa, "/suppressed").await })
+    };
+    wait_for_pending(&ic, 1).await;
+    assert!(ic.forward(ic.list()[0].id, None));
+    wait_for_pending(&ic, 1).await;
+    assert!(ic.drop_request(ic.list()[0].id, "not for this client"));
+
+    let body = tokio::time::timeout(Duration::from_secs(5), client)
+        .await
+        .expect("a dropped response must still answer the client")
+        .unwrap();
+    assert!(body.starts_with("HTTP/1.1 403"), "client read {body:?}");
+    assert!(body.contains("response dropped by operator"), "client read {body:?}");
+    assert!(body.contains("not for this client"), "client read {body:?}");
+    assert!(
+        !body.contains("ORIGIN GET"),
+        "the origin's answer must not leak past the drop: {body:?}"
+    );
+    assert_eq!(
+        origin.hits.load(Ordering::SeqCst),
+        1,
+        "dropping a response happens after the origin has already answered"
+    );
+}
+
+#[tokio::test]
+async fn a_response_condition_that_cannot_match_the_route_leaves_the_relay_streaming() {
+    // The pre-response prefilter, observed from outside: a host condition naming somewhere else must
+    // not buffer, must not hold, and must not delay the client.
+    let origin = spawn_origin().await;
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    ic.set_enabled(true);
+    ic.set_request_rules(InterceptRules::off());
+    ic.set_response_rules(
+        InterceptRules::compile(InterceptRulesSpec {
+            active: true,
+            rules: vec![InterceptRuleSpec::new(MatchField::Host, "^nowhere\\.test$")],
+        })
+        .unwrap(),
+    );
+    let proxy = spawn_proxy(config(store.clone(), ic.clone(), Scope::allow_everything())).await;
+
+    let body = tokio::time::timeout(
+        Duration::from_secs(5),
+        through_proxy(proxy, origin.addr, "/streamed"),
+    )
+    .await
+    .expect("a condition that cannot match must not hold anything")
+    .to_string();
+
+    assert!(body.contains("ORIGIN GET /streamed"), "got {body:?}");
+    assert_eq!(ic.pending(), 0, "nothing should have entered the queue");
+    assert_eq!(
+        store.exchanges(0, 10).len(),
+        1,
+        "capture is unaffected by conditions; only holding is"
+    );
+}
+
+#[tokio::test]
+async fn a_status_code_condition_holds_the_response_it_names_and_relays_the_others() {
+    let origin = spawn_origin().await;
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    ic.set_enabled(true);
+    ic.set_request_rules(InterceptRules::off());
+    // The origin only ever answers 200, so `^5..$` can never match — but it is a *response* fact,
+    // so the prefilter has to buffer to find that out, and then release without holding.
+    ic.set_response_rules(
+        InterceptRules::compile(InterceptRulesSpec {
+            active: true,
+            rules: vec![InterceptRuleSpec::new(MatchField::StatusCode, "^5..$")],
+        })
+        .unwrap(),
+    );
+    let proxy = spawn_proxy(config(store.clone(), ic.clone(), Scope::allow_everything())).await;
+
+    let body = tokio::time::timeout(
+        Duration::from_secs(5),
+        through_proxy(proxy, origin.addr, "/a-200"),
+    )
+    .await
+    .expect("a 200 does not match ^5..$, so it must be released unheld")
+    .to_string();
+    assert!(body.contains("ORIGIN GET /a-200"), "got {body:?}");
+    assert_eq!(ic.pending(), 0);
+
+    // Now a condition the same response does satisfy: same route, same origin, held this time.
+    ic.set_response_rules(
+        InterceptRules::compile(InterceptRulesSpec {
+            active: true,
+            rules: vec![InterceptRuleSpec::new(MatchField::StatusCode, "^200$")],
+        })
+        .unwrap(),
+    );
+    let client = {
+        let oa = origin.addr;
+        tokio::spawn(async move { through_proxy(proxy, oa, "/a-200-again").await })
+    };
+    wait_for_pending(&ic, 1).await;
+    let held = ic.list().remove(0);
+    assert_eq!(held.direction, "response");
+    assert_eq!(held.status, Some(200));
+    assert!(ic.forward(held.id, None));
+    let body = tokio::time::timeout(Duration::from_secs(5), client)
+        .await
+        .expect("forwarding must release the client")
+        .unwrap();
+    assert!(body.contains("ORIGIN GET /a-200-again"), "got {body:?}");
+}
+
+/// Interception on, requests untouched, every response offered — the configuration each of the three
+/// framing tests below needs.
+fn responses_only(store: Arc<TrafficStore>, ic: Arc<Interceptor>) -> ProxyConfig {
+    ic.set_enabled(true);
+    ic.set_request_rules(InterceptRules::off());
+    ic.set_response_rules(InterceptRules::unconditional());
+    config(store, ic, Scope::allow_everything())
+}
+
+#[tokio::test]
+async fn a_bodiless_response_completes_by_framing_not_by_the_origin_hanging_up() {
+    // The regression: `response_complete_len` read `Content-Length` before noticing that a 304 has no
+    // body, so the buffering branch waited for 99 bytes that never come. With no EOF to rescue it the
+    // client got nothing *and* the response never reached the queue — so the operator could not even
+    // release it. `wait_for_pending` below is what fails if that comes back.
+    let origin = spawn_keepalive_origin().await;
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    let proxy = spawn_proxy(responses_only(store.clone(), ic.clone())).await;
+
+    let client = tokio::spawn(async move { probe(proxy, origin, "GET", "/cached", 3000).await });
+    wait_for_pending(&ic, 1).await;
+    let held = ic.list().remove(0);
+    assert_eq!(held.direction, "response");
+    assert_eq!(held.status, Some(304));
+    assert!(ic.forward(held.id, None));
+
+    let body = client.await.unwrap();
+    assert!(body.starts_with("HTTP/1.1 304"), "client read {body:?}");
+}
+
+#[tokio::test]
+async fn a_head_response_is_complete_at_its_head_whatever_length_it_advertises() {
+    // Nothing in a response says the request was a HEAD, so the method has to be carried to the
+    // framing check. Without it this waits for 42 bytes the origin is correct never to send.
+    let origin = spawn_keepalive_origin().await;
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    let proxy = spawn_proxy(responses_only(store.clone(), ic.clone())).await;
+
+    let client = tokio::spawn(async move { probe(proxy, origin, "HEAD", "/thing", 3000).await });
+    wait_for_pending(&ic, 1).await;
+    let held = ic.list().remove(0);
+    assert_eq!(held.method, "HEAD");
+    assert_eq!(held.status, Some(200));
+    assert!(
+        held.raw.ends_with("\r\n\r\n"),
+        "the head is the whole message: {:?}",
+        held.raw
+    );
+    assert!(ic.forward(held.id, None));
+
+    let body = client.await.unwrap();
+    assert!(body.starts_with("HTTP/1.1 200"), "client read {body:?}");
+}
+
+#[tokio::test]
+async fn an_interim_1xx_is_not_the_status_that_conditions_or_history_see() {
+    // A 103 is complete at the end of its own head, so anchoring on the first `\r\n\r\n` framed the
+    // exchange as unterminated *and* made every response condition test `103`. A rule naming 5xx
+    // would silently never fire on a 500 that arrived behind early hints, and history would say 103.
+    let origin = spawn_keepalive_origin().await;
+    let store = TrafficStore::new();
+    let ic = Interceptor::new();
+    ic.set_enabled(true);
+    ic.set_request_rules(InterceptRules::off());
+    ic.set_response_rules(
+        InterceptRules::compile(InterceptRulesSpec {
+            active: true,
+            rules: vec![InterceptRuleSpec::new(MatchField::StatusCode, "^5..$")],
+        })
+        .unwrap(),
+    );
+    let proxy = spawn_proxy(config(store.clone(), ic.clone(), Scope::allow_everything())).await;
+
+    let client = tokio::spawn(async move { probe(proxy, origin, "GET", "/interim", 3000).await });
+    wait_for_pending(&ic, 1).await;
+    let held = ic.list().remove(0);
+    assert_eq!(
+        held.status,
+        Some(500),
+        "the answer is the 500, not the 103 in front of it"
+    );
+    assert!(
+        held.raw.contains("103 Early Hints"),
+        "the interim head still goes to the client, so it is still in the held bytes: {:?}",
+        held.raw
+    );
+    assert!(ic.forward(held.id, None));
+
+    let body = client.await.unwrap();
+    assert!(body.contains("103 Early Hints"), "client read {body:?}");
+    assert!(body.contains("boom!"), "client read {body:?}");
+
+    let exchanges = store.exchanges(0, 10);
+    assert_eq!(exchanges.len(), 1);
+    assert_eq!(
+        exchanges[0].status,
+        Some(500),
+        "history must record the answer, not the hint"
+    );
+}
+
+#[tokio::test]
 async fn out_of_scope_traffic_passes_through_untouched_while_interception_is_on() {
     let origin = spawn_origin().await;
     let store = TrafficStore::new();
@@ -431,6 +800,56 @@ async fn out_of_scope_traffic_passes_through_untouched_while_interception_is_on(
         store.exchanges(0, 10).len(),
         0,
         "out-of-scope traffic is forwarded but not retained"
+    );
+}
+
+/// The capture side of runtime-editable scope, which is what the UI's confirmation dialog warns about.
+///
+/// Scope used to be fixed at startup and every subsystem held its own `Arc<Scope>` copy, so this could
+/// not have passed: the proxy task would keep testing the rules it was spawned with. The dialog makes
+/// two promises and both are asserted here — traffic after the edit is captured, and traffic from
+/// before it is *not* retroactively captured, because the proxy never had those bytes to keep.
+#[tokio::test]
+async fn a_rule_added_while_the_proxy_runs_changes_what_it_captures_from_then_on() {
+    let origin = spawn_origin().await;
+    let store = TrafficStore::new();
+    // One handle. The proxy gets a clone of it, not a clone of the rules.
+    let scope = burpsy_core::SharedScope::empty();
+    let proxy = spawn_proxy(ProxyConfig::new(store.clone()).with_scope(scope.clone())).await;
+
+    let body = tokio::time::timeout(
+        Duration::from_secs(5),
+        through_proxy(proxy, origin.addr, "/before"),
+    )
+    .await
+    .expect("out-of-scope traffic is still forwarded");
+    assert!(body.contains("ORIGIN GET /before"), "got {body:?}");
+    assert_eq!(
+        store.exchanges(0, 10).len(),
+        0,
+        "nothing is in scope yet, so nothing is retained"
+    );
+
+    // The operator adds the host. Same process, same proxy task, no restart.
+    scope.add_rule(ScopeRule::include("127.0.0.1"));
+
+    let body = tokio::time::timeout(
+        Duration::from_secs(5),
+        through_proxy(proxy, origin.addr, "/after"),
+    )
+    .await
+    .expect("in-scope traffic must still be forwarded");
+    assert!(body.contains("ORIGIN GET /after"), "got {body:?}");
+
+    let exchanges = store.exchanges(0, 10);
+    assert_eq!(
+        exchanges.len(),
+        1,
+        "exactly the request made after the edit should be in history"
+    );
+    assert_eq!(
+        exchanges[0].path, "/after",
+        "the pre-edit request must not be captured retroactively"
     );
 }
 

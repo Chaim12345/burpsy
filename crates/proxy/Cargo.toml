@@ -14,6 +14,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 parking_lot = { workspace = true }
+# Intercept conditions. Pinned per-crate the way `bcheck` and `scanner` pin it rather than promoted
+# to the workspace — and both of those are already dependencies here, so this compiles nothing new.
+regex = "1"
 rcgen = { version = "0.14.8", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
 rustls = { version = "0.23.42", default-features = false, features = ["std", "aws-lc-rs", "tls12", "logging"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12", "logging"] }

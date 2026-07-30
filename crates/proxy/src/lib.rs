@@ -13,12 +13,23 @@
 //! never reaches its origin is recorded too, with the reason, because "unreachable" and "never
 //! visited" must not both look like an empty history.
 //!
-//! # Request interception
+//! # Interception
 //!
 //! Optional and off by default. When a hold queue is attached (see [`ProxyConfig::with_interceptor`]
 //! and the [`intercept`] module), an in-scope request is parked before it is forwarded so an
 //! operator can rewrite or refuse it. Out-of-scope traffic is never held, and holding one request
 //! parks only its own connection task.
+//!
+//! Responses have their own hold point and their own condition list, and it is **inactive by
+//! default**: switching the master switch on holds requests, exactly as it always has, and starts
+//! holding responses only once the operator says so. See [`intercept`] for why the two lists differ.
+//!
+//! One consequence is structural and cannot be designed away. Streaming a response to the client and
+//! holding it are mutually exclusive — a byte on the socket cannot be recalled — so the choice is
+//! made *before* the response arrives, by [`Interceptor::may_hold_response`]. When it says yes the
+//! response is buffered whole, and when it says no the bytes are relayed chunk by chunk exactly as
+//! before. So a response condition costs latency on the routes it could match, and nothing anywhere
+//! else.
 //!
 //! # HTTP/2, and exactly how far it goes
 //!
@@ -26,6 +37,15 @@
 //! the target picks is what the client is then offered, and the answer is recorded on every
 //! [`Exchange`] as [`Protocol`]. An h2-capable target is therefore **not** downgraded to HTTP/1.1
 //! behind the operator's back, and the two legs of a connection always carry the same protocol.
+//!
+//! The switch that drives that offer is the master one, [`Interceptor::is_enabled`], and it stays
+//! that way now that interception has condition lists: ALPN is settled from the ClientHello, before
+//! any request exists for a condition to match. Conditions narrow what is *held*, never what is
+//! *offered*, so an operator whose rules name one host still pays the downgrade on every host.
+//!
+//! The corollary, since the h2 arm below closes the connection before the request loop starts: no
+//! condition of either list ever sees h2 traffic. Consistent, but worth knowing before writing a
+//! `status_code` rule and wondering why an h2-capable origin never trips it.
 //!
 //! What is **not** implemented is forwarding h2. A connection that negotiates `h2` is recorded — with
 //! `protocol: Protocol::Http2` and a note saying so — and then closed, because relaying it needs an
@@ -52,13 +72,23 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+/// Ceiling on a response buffered for operator review. The same 64 MiB `read_head` and `read_message`
+/// stop at, because a response held for review has no EOF to rely on and the client is getting nothing
+/// while it grows.
+const MAX_BUFFERED_RESPONSE: usize = 64 * 1024 * 1024;
+
 pub mod intercept;
 
 pub mod tls;
 pub mod tls_policy;
-pub use intercept::{HeldMeta, HeldView, Interceptor, Verdict};
+pub mod ws;
+pub use intercept::{
+    Facts, HeldMeta, HeldView, InterceptRule, InterceptRuleSpec, InterceptRules, InterceptRulesSpec,
+    Interceptor, MatchCategory, MatchField, Verdict,
+};
 pub use tls::{CertAuthority, TlsEngine, default_ca_dir, load_or_generate_ca};
 pub use tls_policy::{TlsAction, TlsPolicy};
+pub use ws::{WsCapture, WsStats};
 
 /// Everything a connection handler needs.
 #[derive(Clone)]
@@ -69,7 +99,12 @@ pub struct ProxyConfig {
     pub engine: Option<Arc<TlsEngine>>,
     /// Gates what gets STORED. Out-of-scope traffic is still forwarded — otherwise pointing a
     /// browser at the proxy would break every site outside the engagement — it just is not kept.
-    pub scope: Arc<burpsy_core::Scope>,
+    ///
+    /// A [`burpsy_core::SharedScope`] rather than an `Arc<Scope>`, so an operator adding a host to
+    /// scope from the UI changes what this proxy captures from the next request onwards. That is the
+    /// widening the confirmation dialog in front of the API warns about: it does not retroactively
+    /// capture anything, but everything after it lands in history.
+    pub scope: burpsy_core::SharedScope,
     /// Passive scanner. Runs on a spawned task so scan cost never adds proxy latency.
     pub scanner: Option<Arc<burpsy_scanner::PassiveScanner>>,
     /// Hold queue for operator review. `None` means the feature is not wired up at all, which is
@@ -85,7 +120,7 @@ impl ProxyConfig {
             engine: None,
             // Default: allow everything. Scope narrows capture; it must not silently swallow
             // traffic on a fresh run before the operator has configured anything.
-            scope: Arc::new(burpsy_core::Scope::allow_everything()),
+            scope: burpsy_core::SharedScope::allow_everything(),
             scanner: None,
             intercept: None,
         }
@@ -96,8 +131,11 @@ impl ProxyConfig {
         self
     }
 
-    pub fn with_scope(mut self, sc: burpsy_core::Scope) -> Self {
-        self.scope = Arc::new(sc);
+    /// Pass an owned `Scope` to start a fresh one, or a cloned [`burpsy_core::SharedScope`] to join
+    /// the one the rest of the process is reading. The binary does the latter — a proxy on its own
+    /// private copy would keep capturing by the startup rules after an operator edited them.
+    pub fn with_scope(mut self, sc: impl Into<burpsy_core::SharedScope>) -> Self {
+        self.scope = sc.into();
         self
     }
 
@@ -277,7 +315,7 @@ async fn forward_http(
     {
         Reviewed::Send(b) => b,
         Reviewed::Dropped { raw, reason } => {
-            let resp = dropped_response(&reason);
+            let resp = dropped_response("request", &reason);
             let _ = client.write_all(&resp).await;
             let _ = client.flush().await;
             record_drop(
@@ -324,6 +362,18 @@ async fn forward_http(
         notes: None,
     });
 
+    // Decided before the response exists, because streaming and holding are exclusive. Built from
+    // the POST-edit method and path, so a response condition is judged against the request that
+    // actually went out rather than the one that arrived.
+    let meta = intercept::HeldMeta {
+        host: host_only.clone(),
+        port,
+        tls: false,
+        method: method.clone(),
+        path: path.clone(),
+    };
+    let offer_response = will_offer_response(&cfg, &meta);
+
     let started = Instant::now();
     let mut upstream = match TcpStream::connect((host_only.as_str(), port)).await {
         Ok(s) => s,
@@ -345,24 +395,89 @@ async fn forward_http(
         .context("write upstream")?;
     upstream.flush().await.ok();
 
-    // Stream to the client while accumulating for the store.
-    let mut resp = Vec::with_capacity(16 * 1024);
+    // A `101 Switching Protocols` turns everything after it into WebSocket frames rather than more
+    // HTTP, so an upgrade request has its response *head* read on its own before the streaming loop
+    // below could mistake frames for a response body. Entered only when the client actually asked
+    // for an upgrade, so every other request takes the identical path it always took.
+    let mut prefix = Vec::new();
+    if burpsy_core::ws::is_upgrade_request(&upstream_req) {
+        let (head, rest) = read_response_head(&mut upstream).await;
+        if burpsy_core::ws::is_upgrade_response(&head) {
+            return relay_websocket(
+                client,
+                upstream,
+                head,
+                rest,
+                &cfg,
+                Some(ex_id),
+                started,
+                &host_only,
+                port,
+                false,
+                &path,
+            )
+            .await;
+        }
+        // The origin refused the upgrade. What it sent is an ordinary response, and the bytes
+        // already read are its beginning — hand them to the loop rather than losing them.
+        prefix = head;
+        prefix.extend_from_slice(&rest);
+    }
+
+    // Stream to the client while accumulating for the store — unless the response is going to be
+    // offered for review, in which case nothing may reach the client until the verdict is in.
+    let mut resp = prefix;
+    if !resp.is_empty() && !offer_response {
+        let _ = client.write_all(&resp).await;
+    }
     let mut chunk = vec![0u8; 16 * 1024];
     loop {
+        // Checked before reading, so a response already complete in the refused-upgrade prefix does
+        // not wait on a read that will never return.
+        if offer_response && response_is_complete(&resp, &meta.method) {
+            break;
+        }
+        // Same cap, and for the same reason, as `read_head` and `read_message`. It matters more here:
+        // a response whose framing never completes — SSE, a long poll, a chunked stream with no
+        // terminator — has no EOF to stop on, and the client is receiving nothing while we wait. At
+        // the cap we stop and offer what we have, exactly as those two do for a message this size.
+        if offer_response && resp.len() > MAX_BUFFERED_RESPONSE {
+            tracing::warn!(
+                "{}:{port} response exceeded {MAX_BUFFERED_RESPONSE} bytes while being held for \
+                 review; offering it truncated rather than buffering without limit",
+                meta.host
+            );
+            break;
+        }
         let n = upstream.read(&mut chunk).await.unwrap_or(0);
         if n == 0 {
             break;
         }
         resp.extend_from_slice(&chunk[..n]);
-        if client.write_all(&chunk[..n]).await.is_err() {
+        if !offer_response && client.write_all(&chunk[..n]).await.is_err() {
             break;
         }
+    }
+
+    // What the client actually receives is what history records, the same rule the request side
+    // follows: an operator who rewrites a response must not find the origin's original in history,
+    // because every later replay and every passive scan would work from bytes nobody saw.
+    let mut resp = Bytes::from(resp);
+    if offer_response {
+        resp = match hold_response_for_review(&cfg, &meta, resp).await {
+            Reviewed::Send(b) => b,
+            // The exchange already exists, and the store has no "amend this message" operation, so
+            // the refusal is recorded by the synthetic answer's own `X-Burpsy-Intercept` header
+            // rather than by a note. It is the bytes the client got either way.
+            Reviewed::Dropped { reason, .. } => dropped_response("response", &reason),
+        };
+        let _ = client.write_all(&resp).await;
     }
     let _ = client.flush().await;
 
     let status = parse_status(&resp);
     let len = resp.len();
-    let resp_id = store.put(Bytes::from(resp), Direction::Response);
+    let resp_id = store.put(resp, Direction::Response);
     store.set_response(
         ex_id,
         resp_id,
@@ -385,6 +500,15 @@ async fn forward_only(mut client: TcpStream, req: Vec<u8>, host: &str, port: u16
     up.set_nodelay(true).ok();
     up.write_all(&req).await.ok();
     up.flush().await.ok();
+    // An upgrade request needs both directions for the life of the connection, because after a `101`
+    // the client keeps talking and a one-way copy would leave it able to receive and unable to send.
+    // Gated on the request rather than applied unconditionally: an ordinary response ends at upstream
+    // EOF, and additionally waiting for the client to close would hold a task per idle browser
+    // connection. Nothing is recorded either way — out-of-scope traffic is forwarded, not retained.
+    if burpsy_core::ws::is_upgrade_request(&req) {
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
+        return Ok(());
+    }
     let _ = tokio::io::copy(&mut up, &mut client).await;
     Ok(())
 }
@@ -669,7 +793,7 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         {
             Reviewed::Send(b) => b,
             Reviewed::Dropped { raw, reason } => {
-                let resp = dropped_response(&reason);
+                let resp = dropped_response("request", &reason);
                 let _ = tls_client.write_all(&resp).await;
                 let _ = tls_client.flush().await;
                 record_drop(
@@ -683,6 +807,11 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         };
         // As on the plain path: index the bytes that go out, not the ones that came in.
         let (method, path) = start_line_parts(&req);
+        // Answered before `path` is moved into the exchange below, and cloned only for a request
+        // that actually asked to upgrade — a per-request allocation on the keep-alive loop would be
+        // paid by every ordinary request to buy nothing.
+        let upgrade_requested = burpsy_core::ws::is_upgrade_request(&req);
+        let ws_path = upgrade_requested.then(|| path.clone());
 
         // Scope was tested against the PRE-edit path above; the operator may have rewritten it
         // since. Scope governs retention, not egress (see `ProxyConfig::scope`), so a request
@@ -697,6 +826,18 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         if in_scope_before && !in_scope_after {
             record_scope_skip(&store, &host, port, true, &method, &path);
         }
+
+        // As on the plain path, decided before the response exists and from the post-edit facts.
+        // Built here rather than beside the read loop because the exchange below moves `method` and
+        // `path` into the row it stores.
+        let meta = intercept::HeldMeta {
+            host: host.clone(),
+            port,
+            tls: true,
+            method: method.clone(),
+            path: path.clone(),
+        };
+        let offer_response = will_offer_response(&cfg, &meta);
 
         let ex_id = retain.then(|| {
             let req_id = store.put(req.clone(), Direction::Request);
@@ -728,10 +869,53 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         }
         tls_upstream.flush().await.ok();
 
-        let mut resp = Vec::with_capacity(16 * 1024);
+        // Same reasoning as the plain path: a `101` means the rest of this connection is frames, so
+        // an upgrade request's response head is read on its own before the loop below could take
+        // frames for a body. Note this also ends the keep-alive loop — after an upgrade there are no
+        // more HTTP requests on this connection, by definition.
+        let mut prefix = Vec::new();
+        if upgrade_requested {
+            let (head, rest) = read_response_head(&mut tls_upstream).await;
+            if burpsy_core::ws::is_upgrade_response(&head) {
+                return relay_websocket(
+                    tls_client,
+                    tls_upstream,
+                    head,
+                    rest,
+                    &cfg,
+                    ex_id,
+                    started,
+                    &host,
+                    port,
+                    true,
+                    ws_path.as_deref().unwrap_or_default(),
+                )
+                .await;
+            }
+            prefix = head;
+            prefix.extend_from_slice(&rest);
+        }
+
+        let mut resp = prefix;
         let mut chunk = vec![0u8; 16 * 1024];
         let mut client_gone = false;
-        loop {
+        // Nothing reaches the client before the verdict when the response is being offered.
+        if !resp.is_empty() && !offer_response && tls_client.write_all(&resp).await.is_err() {
+            client_gone = true;
+        }
+        while !client_gone {
+            // Checked before reading rather than after writing, so a response already complete in
+            // the refused-upgrade prefix does not wait on a read that will never return.
+            if response_is_complete(&resp, &meta.method) {
+                break;
+            }
+            if offer_response && resp.len() > MAX_BUFFERED_RESPONSE {
+                tracing::warn!(
+                    "{host}:{port} response exceeded {MAX_BUFFERED_RESPONSE} bytes while being held \
+                     for review; offering it truncated rather than buffering without limit"
+                );
+                break;
+            }
             // A read error is treated as end of stream: we already have whatever the server
             // managed to send, and surfacing the error would discard a usable partial response.
             let n = tls_upstream.read(&mut chunk).await.unwrap_or(0);
@@ -739,14 +923,23 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
                 break;
             }
             resp.extend_from_slice(&chunk[..n]);
-            if tls_client.write_all(&chunk[..n]).await.is_err() {
+            // Nothing reaches the client before the verdict when the response is being offered.
+            if !offer_response && tls_client.write_all(&chunk[..n]).await.is_err() {
                 client_gone = true;
                 break;
             }
-            if let Some(total) = response_complete_len(&resp)
-                && resp.len() >= total
-            {
-                break;
+        }
+
+        // Same rule as the request half and as the plain-HTTP path: history records the bytes the
+        // client actually received, not the ones the origin sent.
+        let mut resp = Bytes::from(resp);
+        if offer_response {
+            resp = match hold_response_for_review(&cfg, &meta, resp).await {
+                Reviewed::Send(b) => b,
+                Reviewed::Dropped { reason, .. } => dropped_response("response", &reason),
+            };
+            if tls_client.write_all(&resp).await.is_err() {
+                client_gone = true;
             }
         }
         let _ = tls_client.flush().await;
@@ -756,7 +949,7 @@ async fn mitm(mut client: TcpStream, host: String, port: u16, cfg: ProxyConfig) 
         if let Some(ex_id) = ex_id {
             let status = parse_status(&resp);
             let len = resp.len();
-            let resp_id = store.put(Bytes::from(resp), Direction::Response);
+            let resp_id = store.put(resp, Direction::Response);
             store.set_response(
                 ex_id,
                 resp_id,
@@ -809,10 +1002,172 @@ where
     Ok(buf)
 }
 
+/// Read only as far as the end of the response headers, returning `(head, bytes read past it)`.
+///
+/// Separate from [`read_message`] because that one reads a *whole* message, which for a `101` is a
+/// contradiction: there is no body, the connection does not close, and the next bytes are frames. So
+/// the leftover is returned rather than swallowed — a server is free to put its first frames in the
+/// same segment as the handshake response, and dropping them would lose the opening of every
+/// conversation.
+///
+/// Never fails: a read error or EOF yields whatever arrived, and the caller's `is_upgrade_response`
+/// test then simply says no.
+async fn read_response_head<S>(s: &mut S) -> (Vec<u8>, Vec<u8>)
+where
+    S: AsyncReadExt + Unpin,
+{
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = vec![0u8; 4096];
+    // Same incremental terminator search, with the same 3-byte resume overlap, as `read_head`.
+    let mut searched = 0usize;
+    loop {
+        let from = searched.saturating_sub(3);
+        if let Some(i) = find(&buf[from..], b"\r\n\r\n") {
+            let rest = buf.split_off(from + i + 4);
+            return (buf, rest);
+        }
+        searched = buf.len();
+        // A handshake answer is a few hundred bytes. This bound exists so a peer that never sends a
+        // terminator cannot make us buffer without limit.
+        if buf.len() > 256 * 1024 {
+            return (buf, Vec::new());
+        }
+        match s.read(&mut chunk).await {
+            Ok(0) | Err(_) => return (buf, Vec::new()),
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    }
+}
+
+/// Record the `101`, then relay frames until the connection closes.
+///
+/// The handshake response is stored **before** the relay starts, not after it ends. A WebSocket can
+/// stay open for hours, and an exchange whose response only appears when the socket finally closes
+/// would leave history showing a request that never got an answer for the entire session.
+#[allow(clippy::too_many_arguments)]
+async fn relay_websocket<C, U>(
+    mut client: C,
+    upstream: U,
+    head: Vec<u8>,
+    rest: Vec<u8>,
+    cfg: &ProxyConfig,
+    exchange: Option<u64>,
+    started: Instant,
+    host: &str,
+    port: u16,
+    tls: bool,
+    path: &str,
+) -> Result<()>
+where
+    C: tokio::io::AsyncRead + AsyncWriteExt + Unpin,
+    U: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    if client.write_all(&head).await.is_err() {
+        return Ok(());
+    }
+    let _ = client.flush().await;
+
+    if let Some(ex_id) = exchange {
+        let len = head.len();
+        let resp_id = cfg.store.put(Bytes::from(head), Direction::Response);
+        // 101 by construction: the caller reached here only because `is_upgrade_response` said so.
+        cfg.store
+            .set_response(ex_id, resp_id, 101, len, started.elapsed().as_millis() as u64);
+    }
+
+    let capture = exchange.map(|ex| {
+        ws::WsCapture::new(
+            cfg.store.clone(),
+            ex,
+            cfg.scope.clone(),
+            host,
+            port,
+            tls,
+            path,
+        )
+    });
+    let stats = ws::relay(client, upstream, &rest, capture).await;
+    // The skipped count is named unconditionally, including when it is zero: "0 excluded" and a
+    // sentence that simply omits the subject are not the same statement to someone checking coverage.
+    tracing::info!(
+        "websocket {host}:{port}{path} closed: {} message(s) captured, {} excluded by scope, \
+         {} up / {} down",
+        stats.messages,
+        stats.skipped_out_of_scope,
+        stats.up,
+        stats.down
+    );
+    if let Some(reason) = stats.capture_stopped {
+        record_ws_capture_stopped(&cfg.store, host, port, tls, path, &reason);
+    }
+    Ok(())
+}
+
+/// Record that a WebSocket connection's message index stopped short, and why.
+///
+/// A marker exchange rather than silence, for the same reason [`record_failed_connect`] writes one: a
+/// history that shows 40 messages on a socket that carried 4000 is worse than one that says it lost
+/// track. This is written when the connection ends, so it sits after the messages it is qualifying.
+/// The frames themselves were relayed unmodified throughout — the note says so, because an operator
+/// reading "capture stopped" will otherwise reasonably wonder whether their app broke.
+fn record_ws_capture_stopped(
+    store: &TrafficStore,
+    host: &str,
+    port: u16,
+    tls: bool,
+    path: &str,
+    reason: &str,
+) -> u64 {
+    let marker = Bytes::from(format!(
+        "WEBSOCKET {path} — capture stopped\r\nHost: {host}:{port}\r\n\r\n"
+    ));
+    let req_id = store.put(marker, Direction::Request);
+    let ex_id = store.add_exchange(Exchange {
+        related: Vec::new(),
+        protocol: Protocol::Http1,
+        id: 0,
+        request: req_id,
+        response: None,
+        host: host.to_string(),
+        port,
+        tls,
+        method: "WEBSOCKET".into(),
+        path: path.to_string(),
+        status: None,
+        response_len: 0,
+        started_ms: now_ms(),
+        duration_ms: 0,
+        notes: Some(format!("websocket capture stopped — {reason}")),
+    });
+    let synthetic = ws::capture_stopped_marker(reason);
+    let len = synthetic.len();
+    let resp_id = store.put(synthetic, Direction::Response);
+    store.set_response(ex_id, resp_id, 0, len, 0);
+    ex_id
+}
+
 /// Total expected response length if framing is known, so keep-alive does not stall us.
-fn response_complete_len(buf: &[u8]) -> Option<usize> {
+///
+/// `head_only` must be true when the request was a `HEAD`: nothing in a response reveals that, and a
+/// `HEAD` answer carries the `Content-Length` a `GET` would have returned without the body to match.
+///
+/// **Bodiless statuses are checked BEFORE the framing headers.** A `204` and a `304` legitimately echo
+/// a length they will not send, so reading `Content-Length` first is what stalls a read loop waiting
+/// for bytes the origin never sends. That was survivable while this only trimmed a streamed relay —
+/// the client already had the bytes — but it is not survivable now that it is the exit condition for
+/// *buffering a response for review*: the stall happens before the response is offered, so it is not
+/// in the hold queue and the operator has nothing to release. A browser with a warm cache emits `304`s
+/// continuously, so one active response rule was enough to wedge it.
+///
+/// This is the same conclusion `complete_len` in `crates/sender/src/transport/net.rs` reached for the
+/// sender's own read path. The two are deliberately separate copies: framing sits on each crate's hot
+/// path and neither crate depends on the other. A third caller should push it into `burpsy-core`.
+fn response_complete_len(buf: &[u8], head_only: bool) -> Option<usize> {
     let head_end = find(buf, b"\r\n\r\n").map(|i| i + 4)?;
     let lower = buf[..head_end].to_ascii_lowercase();
+    if head_only || parse_status_at(&lower).is_some_and(|c| c == 204 || c == 304) {
+        return Some(head_end);
+    }
     if find(&lower, b"transfer-encoding: chunked").is_some() {
         return if find(&buf[head_end..], b"0\r\n\r\n").is_some() {
             Some(buf.len())
@@ -822,6 +1177,44 @@ fn response_complete_len(buf: &[u8]) -> Option<usize> {
     }
     let n = content_length(&buf[..head_end])?;
     Some(head_end + n)
+}
+
+/// Has the origin said everything it is going to say?
+///
+/// The one place the three framing rules meet: step over interim `1xx` heads, then ask whether the
+/// final response is complete, given whether the request was a `HEAD`. Both response loops call this
+/// rather than `response_complete_len` directly, so neither can forget one of the three.
+fn response_is_complete(resp: &[u8], method: &str) -> bool {
+    let start = final_response_start(resp);
+    let head_only = method.eq_ignore_ascii_case("HEAD");
+    response_complete_len(&resp[start..], head_only)
+        .is_some_and(|total| resp.len() - start >= total)
+}
+
+/// Where the *final* response begins: the offset past any interim `1xx` heads in front of it.
+///
+/// A `100 Continue` or a `103 Early Hints` (which CDNs send routinely) is complete at the end of its
+/// own head and carries no body, but it is not an answer — the real response follows on the same
+/// connection. Four separate things have to measure from the final head or they all read the interim
+/// one instead: framing (a `500` behind a `103` frames as unterminated and hangs the hold), condition
+/// matching (a `status_code` rule tests `103` and never fires), the recorded status (history says
+/// `103`), and re-deriving `Content-Length` on an edited response (the length lands in the `103`'s
+/// headers and describes the real response as its body). Loops, because both interim statuses can
+/// arrive before the final one.
+///
+/// `pub` for that fourth caller: the API layer's response editor is in `burpsy-web` and needs the same
+/// answer. A local copy there would be a second definition of where a response starts, which is how
+/// two halves of one feature end up disagreeing about the same bytes.
+pub fn final_response_start(buf: &[u8]) -> usize {
+    let mut start = 0usize;
+    while let Some(rel) = find(&buf[start..], b"\r\n\r\n").map(|i| i + 4) {
+        if parse_status_at(&buf[start..start + rel]).is_some_and(|c| (100..200).contains(&c)) {
+            start += rel;
+        } else {
+            break;
+        }
+    }
+    start
 }
 
 fn start_line_parts(req: &[u8]) -> (String, String) {
@@ -885,7 +1278,10 @@ fn rewrite_target(head: &[u8], path: &str) -> Vec<u8> {
     out
 }
 
-fn header_value(head: &[u8], name: &[u8]) -> Option<String> {
+/// `pub(crate)` for `intercept`: a condition on a message's content type has to read the same header
+/// the rest of the proxy reads, and two parsers that disagree would make a rule fire here and not
+/// there.
+pub(crate) fn header_value(head: &[u8], name: &[u8]) -> Option<String> {
     let lower = head.to_ascii_lowercase();
     let mut pat = Vec::with_capacity(name.len() + 2);
     pat.push(b'\n');
@@ -900,7 +1296,17 @@ fn header_value(head: &[u8], name: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(&rest[..end]).trim().to_string())
 }
 
-fn parse_status(buf: &[u8]) -> Option<u16> {
+/// The status of the response in `buf`, skipping any interim `1xx` heads in front of it.
+///
+/// `pub(crate)` for `intercept`, which shows the operator a held response's status and matches
+/// conditions against it. Both want the answer, not the `103` that preceded it.
+pub(crate) fn parse_status(buf: &[u8]) -> Option<u16> {
+    parse_status_at(&buf[final_response_start(buf)..])
+}
+
+/// The status on the start line at `buf[0]`, whatever it is. The interim-skipping wrapper above is
+/// what callers want; this is the primitive it and the framing check are both built from.
+fn parse_status_at(buf: &[u8]) -> Option<u16> {
     let line_end = buf.iter().position(|&b| b == b'\r' || b == b'\n')?;
     let line = &buf[..line_end];
     let sp = line.iter().position(|&b| b == b' ')?;
@@ -959,13 +1365,53 @@ async fn hold_for_review(
     }
 }
 
-/// The answer a dropped request's client gets.
+/// Park a complete response for operator review, if a response condition wants it held.
+///
+/// Mirrors [`hold_for_review`], including the repeated scope test, for the same reason: "out-of-scope
+/// traffic passes through untouched" has to hold at every point something could be held, not only at
+/// the one that happens to check first. The interceptor tests its own condition list, so a response
+/// this reaches can still be released untouched — [`will_offer_response`] only decides whether the
+/// question is worth asking, and the two answers differ precisely when a condition needed the
+/// response's own status or content type to settle.
+async fn hold_response_for_review(
+    cfg: &ProxyConfig,
+    meta: &intercept::HeldMeta,
+    raw: Bytes,
+) -> Reviewed {
+    let Some(ic) = cfg.intercept.as_ref() else {
+        return Reviewed::Send(raw);
+    };
+    if !cfg.scope.contains(&meta.host, meta.port, &meta.path, meta.tls) {
+        return Reviewed::Send(raw);
+    }
+    match ic.hold_response(meta.clone(), raw.clone()).await {
+        intercept::Verdict::Forward(b) => Reviewed::Send(b),
+        intercept::Verdict::Drop(reason) => Reviewed::Dropped { raw, reason },
+    }
+}
+
+/// Whether this exchange's response must be buffered whole before the client sees any of it.
+///
+/// The pre-response half of the decision above, and the only one that can be made in time: bytes
+/// already written to the client cannot be recalled, so the choice between relaying and holding has
+/// to be taken before the first of them arrives. `false` leaves the streaming relay byte-for-byte as
+/// it was, which is what every request on a route no response condition names gets.
+fn will_offer_response(cfg: &ProxyConfig, meta: &intercept::HeldMeta) -> bool {
+    cfg.intercept
+        .as_ref()
+        .is_some_and(|ic| ic.may_hold_response(meta))
+        && cfg.scope.contains(&meta.host, meta.port, &meta.path, meta.tls)
+}
+
+/// The answer a client gets when the operator drops half of an exchange — `what` names which.
 ///
 /// A real status rather than a closed socket: a client that sees the connection die cannot tell an
 /// operator's decision from a network fault, and browsers retry the latter. 403 is what a refusing
-/// proxy is supposed to say, and the header makes the origin of the refusal unambiguous.
-fn dropped_response(reason: &str) -> Bytes {
-    let body = format!("burpsy: request dropped by operator ({reason})");
+/// proxy is supposed to say, and the header makes the origin of the refusal unambiguous. A suppressed
+/// *response* gets the same treatment and the same status — the origin answered, and the operator is
+/// the one forbidding the client that answer.
+fn dropped_response(what: &str, reason: &str) -> Bytes {
+    let body = format!("burpsy: {what} dropped by operator ({reason})");
     Bytes::from(format!(
         "HTTP/1.1 403 Forbidden\r\n\
          Content-Type: text/plain\r\n\
