@@ -75,7 +75,12 @@ impl H2Request {
     }
 
     /// The HTTP/1-shaped rendering the authoriser reads, and the same bytes history would store.
-    pub(crate) fn render(&self) -> Bytes {
+    ///
+    /// `pub`, not `pub(crate)`: a caller recording its own history entry for an h2 send (the web
+    /// crate's Repeater route, so an h2 resend sits in history in the same shape `h2_relay`
+    /// produces for captured traffic) needs the exact bytes this authorises, not a second
+    /// rendering that could drift from it.
+    pub fn render(&self) -> Bytes {
         normalise::render_request(
             &self.method,
             &self.path,

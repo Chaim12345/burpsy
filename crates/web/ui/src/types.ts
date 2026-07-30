@@ -47,6 +47,7 @@ export const EVT_SHOW_EXCHANGE = "show-exchange";
 export interface SendToRepeaterDetail {
   target: string;
   raw: string;
+  protocol: "Http1" | "Http2";
 }
 
 export interface SendToIntruderDetail {

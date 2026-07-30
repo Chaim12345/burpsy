@@ -115,7 +115,7 @@ fn method_expects_a_body(method: &str) -> bool {
 /// application reads: `example.test` and `example.test:443` are equivalent to a well-behaved server
 /// and are two different values to anything that routes, signs, or compares on it — including the
 /// login form we are trying to reach.
-fn host_header(target: &Target) -> String {
+pub(crate) fn host_header(target: &Target) -> String {
     let default_port = if target.tls { 443 } else { 80 };
     if target.port == default_port {
         target.host.clone()

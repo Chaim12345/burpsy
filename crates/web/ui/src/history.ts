@@ -248,7 +248,7 @@ async function handleAction(act: string, ex: Exchange): Promise<void> {
     case "repeater": {
       try {
         const req = await getJSON<MessageView>(`/api/message/${ex.request}`);
-        emit(EVT_SEND_TO_REPEATER, { target: targetOf(ex), raw: req.text });
+        emit(EVT_SEND_TO_REPEATER, { target: targetOf(ex), raw: req.text, protocol: ex.protocol });
         switchTab("repeater");
       } catch (e) {
         toast((e as Error).message, "error");

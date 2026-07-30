@@ -13,13 +13,16 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use burpsy_core::{Direction, Exchange, MsgId, RuleKind, ScopeRule, SharedScope, TrafficStore};
+use burpsy_core::{
+    Direction, Exchange, MsgId, Protocol, RuleKind, ScopeRule, SharedScope, TrafficStore,
+};
 use burpsy_intruder::{
     Assignment, Attack, AttackKind, AttackPlan, AttackReport, AutoThrottle, Chain, DropReason, Grep,
     InsertionPoint, PayloadSet, PayloadSource, PointConfig, RateLimit, RecordFn, RuleSpec, SendFn,
     Sent, find_points,
 };
-use burpsy_sender::{AuthorisedSender, parse_target};
+use burpsy_sender::{AuthorisedSender, H2Request, Target, parse_target};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -613,6 +616,10 @@ struct SendReq {
     raw: String,
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
+    /// `Http1` unless the caller asks for `Http2` — matching [`Exchange::protocol`]'s own default,
+    /// so a client that never heard of this field still gets today's behaviour (H2-01/H2-04).
+    #[serde(default)]
+    protocol: Protocol,
 }
 fn default_timeout_ms() -> u64 {
     15_000
@@ -628,6 +635,47 @@ struct SendResp {
     exchange_id: u64,
 }
 
+/// Parse a Repeater tab's HTTP/1-shaped text into the [`H2Request`] value `AuthorisedSender::send_h2`
+/// needs, for the H2-01 resend path.
+///
+/// `host`/`content-length` are dropped from the ordinary field list rather than passed through:
+/// `host` becomes `:authority` (an h2 pseudo-header, not an ordinary field — [`H2Request::field_list`]
+/// prepends it once, from `authority`, so keeping the parsed `host` field too would send it twice),
+/// and forwarding the operator's original `content-length` would let it disagree with a body the
+/// operator has since edited — [`burpsy_http2::normalise::render_request`] already recomputes it for
+/// the history record, so leaving the stale field in the wire encode would let the sent bytes and the
+/// recorded bytes disagree about their own length, which is precisely the defect this crate's h2
+/// rendering exists to rule out.
+fn h2_request_from_raw(raw: &[u8], target: &Target) -> Result<H2Request, String> {
+    let shape = burpsy_core::parse(raw, Direction::Request).map_err(|e| e.to_string())?;
+    let text = |s: burpsy_core::Span| String::from_utf8_lossy(&raw[s.offset..s.end()]).into_owned();
+    let method = text(shape.first_token);
+    let path = text(shape.second_token);
+    let mut authority = None;
+    let mut headers = Vec::with_capacity(shape.headers.len());
+    for h in &shape.headers {
+        let name = &raw[h.name.offset..h.name.end()];
+        if name.eq_ignore_ascii_case(b"host") {
+            authority = Some(text(h.value));
+            continue;
+        }
+        if name.eq_ignore_ascii_case(b"content-length") {
+            continue;
+        }
+        headers.push((
+            Bytes::copy_from_slice(name),
+            Bytes::copy_from_slice(&raw[h.value.offset..h.value.end()]),
+        ));
+    }
+    Ok(H2Request {
+        method,
+        path,
+        authority: authority.unwrap_or_else(|| session_sender::host_header(target)),
+        headers,
+        body: Bytes::copy_from_slice(&raw[shape.body.offset..shape.body.end()]),
+    })
+}
+
 async fn repeater_send(State(s): State<AppState>, Json(req): Json<SendReq>) -> impl IntoResponse {
     let target = match parse_target(&req.target) {
         Ok(t) => t,
@@ -639,16 +687,38 @@ async fn repeater_send(State(s): State<AppState>, Json(req): Json<SendReq>) -> i
     // Asked up front only so an out-of-scope request never reaches history. The binding check is
     // inside the send below and runs whether or not this one did — it judges the bytes themselves
     // rather than the target line, because the operator types the request here and a host-level test
-    // would happily pass a request aimed at an excluded path.
+    // would happily pass a request aimed at an excluded path. Checked against the same operator-typed
+    // text regardless of protocol: the h2 rendering's path/host can only repeat what this text already
+    // said, so a pre-check against it is not weaker than one against the h2 rendering would be.
     if let Err(why) = sender.check_scope(&target, raw.as_bytes()) {
         return (StatusCode::FORBIDDEN, why).into_response();
     }
-    let req_id = s
-        .store
-        .put(raw.clone().into_bytes().into(), Direction::Request);
+
+    // H2-01: resend over h2 when asked, rather than always downgrading to HTTP/1.1. Built before
+    // anything is written to history so a malformed request never creates an orphaned exchange.
+    let h2_request = if req.protocol == Protocol::Http2 {
+        match h2_request_from_raw(raw.as_bytes(), &target) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, format!("cannot send as h2: {e}")).into_response();
+            }
+        }
+    } else {
+        None
+    };
+    // The bytes stored for the request: the h2 rendering (`{method} {path} HTTP/2\r\n...`, the same
+    // shape `h2_relay` records for captured traffic — H2-02) when sending as h2, the operator's own
+    // text otherwise. Recording anything else would make a repeater-originated h2 exchange look like
+    // HTTP/1.1 in history despite having gone out over h2.
+    let request_bytes = match &h2_request {
+        Some(r) => r.render(),
+        None => raw.clone().into_bytes().into(),
+    };
+
+    let req_id = s.store.put(request_bytes, Direction::Request);
     let ex_id = s.store.add_exchange(Exchange {
         related: Vec::new(),
-        protocol: burpsy_core::Protocol::Http1,
+        protocol: req.protocol,
         id: 0,
         request: req_id,
         response: None,
@@ -678,7 +748,12 @@ async fn repeater_send(State(s): State<AppState>, Json(req): Json<SendReq>) -> i
         })
     });
 
-    match sender.send_async(&target, raw.as_bytes()).await {
+    let send_result = match &h2_request {
+        Some(r) => sender.send_h2(&target, r).await,
+        None => sender.send_async(&target, raw.as_bytes()).await,
+    };
+
+    match send_result {
         Ok(r) => {
             let len = r.raw_response.len();
             let dur = r.duration.as_millis() as u64;
@@ -1394,6 +1469,144 @@ mod tests {
         let log_body = reqwest_get(&format!("{base}/api/tools/log")).await;
         assert!(log_body.contains("\"repeater\":1"), "{log_body}");
         assert!(log_body.contains("/probe"), "{log_body}");
+    }
+
+    // ---- H2-01: resend over h2 through Repeater ----------------------------------------------
+
+    fn h2_target() -> Target {
+        Target {
+            host: "orig.test".to_string(),
+            port: 443,
+            tls: true,
+        }
+    }
+
+    #[test]
+    fn h2_request_from_raw_moves_the_host_header_into_authority_and_drops_it_from_fields() {
+        let raw = b"POST /a?x=1 HTTP/1.1\r\nHost: api.test\r\nX-Test: v\r\n\r\nbody";
+        let r = h2_request_from_raw(raw, &h2_target()).expect("parses");
+        assert_eq!(r.method, "POST");
+        assert_eq!(r.path, "/a?x=1");
+        assert_eq!(r.authority, "api.test", "the Host header becomes :authority");
+        assert_eq!(&r.body[..], b"body");
+        assert!(
+            !r.headers
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case(b"host")),
+            "host must not also survive as an ordinary field: {:?}",
+            r.headers
+        );
+        assert!(
+            r.headers.iter().any(|(n, v)| n.eq_ignore_ascii_case(b"x-test") && &v[..] == b"v"),
+            "every other field is kept: {:?}",
+            r.headers
+        );
+    }
+
+    #[test]
+    fn h2_request_from_raw_drops_a_stale_content_length_rather_than_forwarding_it() {
+        // The operator can edit the body without updating a hand-typed Content-Length; forwarding
+        // the stale value as an ordinary h2 field would let the sent bytes disagree with themselves.
+        let raw = b"POST /a HTTP/1.1\r\nHost: api.test\r\nContent-Length: 999\r\n\r\nreal-body";
+        let r = h2_request_from_raw(raw, &h2_target()).expect("parses");
+        assert!(
+            !r.headers
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case(b"content-length")),
+            "a stale content-length must not ride along as an ordinary field: {:?}",
+            r.headers
+        );
+        assert_eq!(&r.body[..], b"real-body");
+    }
+
+    #[test]
+    fn h2_request_from_raw_falls_back_to_the_target_when_no_host_header_is_present() {
+        let raw = b"GET / HTTP/1.1\r\n\r\n";
+        let r = h2_request_from_raw(raw, &h2_target()).expect("parses");
+        assert_eq!(r.authority, "orig.test", "443 is https's default port, so it is omitted");
+    }
+
+    #[test]
+    fn h2_request_from_raw_refuses_an_empty_start_line() {
+        // burpsy_core::parse is deliberately tolerant of odd request lines (see its own doc
+        // comment) — an empty buffer is the one input it still refuses outright.
+        assert!(h2_request_from_raw(b"", &h2_target()).is_err());
+    }
+
+    /// A TCP port on `127.0.0.1` guaranteed to be refusing connections: bind, read the ephemeral
+    /// port back, then drop the listener before anything can connect to it.
+    fn closed_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        listener.local_addr().expect("local_addr").port()
+    }
+
+    #[tokio::test]
+    async fn sending_as_h2_with_no_readable_request_line_is_refused_before_touching_history() {
+        // Empty text fails `Scope::authorise_request`'s own request-line read (`request_path`)
+        // before `h2_request_from_raw` ever runs — the scope pre-check is unconditional and gates
+        // on the same "no readable request line" condition, so it refuses first regardless of
+        // protocol. That is the one input protocol=Http2 shares with protocol=Http1: it never
+        // reaches history either way.
+        let store = TrafficStore::new();
+        let app = router(store.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let body = r#"{"target":"https://orig.test","raw":"","protocol":"Http2"}"#;
+        let (status, resp) =
+            post_json(&format!("http://{addr}/api/repeater/send"), body).await;
+        assert_eq!(status, 403, "{resp}");
+        assert!(
+            store.exchanges(0, 10).is_empty(),
+            "a request refused by scope must not leave an exchange behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn sending_as_h2_against_a_closed_port_fails_without_panicking_and_still_records_the_attempt()
+     {
+        let store = TrafficStore::new();
+        let app = router(store.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let port = closed_port();
+        let body = format!(
+            r#"{{"target":"https://127.0.0.1:{port}","raw":"GET / HTTP/1.1\r\nHost: t\r\n\r\n","protocol":"Http2"}}"#
+        );
+        let (status, resp) =
+            post_json(&format!("http://{addr}/api/repeater/send"), &body).await;
+        assert_eq!(status, 502, "a refused TCP connect must surface as an error: {resp}");
+
+        let exchanges = store.exchanges(0, 10);
+        assert_eq!(exchanges.len(), 1, "the attempt is still recorded, same as the HTTP/1 path");
+        assert_eq!(exchanges[0].protocol, Protocol::Http2);
+        assert_eq!(exchanges[0].response, None);
+    }
+
+    #[tokio::test]
+    async fn omitting_protocol_still_records_the_exchange_as_http1() {
+        let store = TrafficStore::new();
+        let tgt = echo_target().await;
+        let app = router(store.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let body =
+            format!(r#"{{"target":"http://127.0.0.1:{tgt}","raw":"GET / HTTP/1.1\r\nHost: t\r\n\r\n"}}"#);
+        let (status, resp) = post_json(&format!("http://{addr}/api/repeater/send"), &body).await;
+        assert_eq!(status, 200, "{resp}");
+
+        let exchanges = store.exchanges(0, 10);
+        assert_eq!(exchanges.len(), 1);
+        assert_eq!(
+            exchanges[0].protocol,
+            Protocol::Http1,
+            "a client that never sent `protocol` must get today's behaviour, unchanged"
+        );
     }
 
     // ---- intruder API -----------------------------------------------------------------------
