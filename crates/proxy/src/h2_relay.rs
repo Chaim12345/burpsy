@@ -35,11 +35,12 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use h2::server::SendResponse;
-use http::header::{CONTENT_LENGTH, HOST};
+use http::header::CONTENT_LENGTH;
 use http::{Request, Response, Uri, Version};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use burpsy_core::{Direction, Exchange, Protocol, TrafficStore};
+use burpsy_http2::normalise::{render_request, render_response};
 
 use crate::ProxyConfig;
 
@@ -158,7 +159,7 @@ async fn relay_stream(
     // so a stream that fails mid-flight still leaves a request row in history.
     let ex_id = if cfg.scope.contains(host, port, &path, true) {
         let req_id = store.put(
-            render_request_bytes(&method, &path, host, &parts.headers, &req_body_bytes),
+            render_request(method.as_str(), &path, host, &header_list(&parts.headers), &req_body_bytes),
             Direction::Request,
         );
         Some(store.add_exchange(Exchange {
@@ -220,7 +221,7 @@ async fn relay_stream(
 
     if let Some(ex_id) = ex_id {
         let resp_id = store.put(
-            render_response_bytes(status, &resp_parts.headers, &resp_body_bytes),
+            render_response(status.as_u16(), &header_list(&resp_parts.headers), &resp_body_bytes),
             Direction::Response,
         );
         store.set_response(
@@ -276,59 +277,34 @@ async fn send_body(stream: &mut h2::SendStream<Bytes>, body: Bytes) -> Result<()
     Ok(())
 }
 
-/// Render a request in HTTP/1 shape for the store: a start line, the header list, a
-/// `Content-Length` reconstructed from the buffered body (h2 strips it on the way in), and the
-/// body. This is the shape [`burpsy_core::parse`] understands, so the exchange's spans and every
-/// downstream tool work unchanged.
-fn render_request_bytes(
-    method: &http::Method,
-    path: &str,
-    host: &str,
-    headers: &http::HeaderMap,
-    body: &[u8],
-) -> Bytes {
-    let mut out = Vec::new();
-    out.extend_from_slice(format!("{method} {path} HTTP/2\r\n").as_bytes());
-    let mut saw_host = false;
-    for (name, value) in headers.iter() {
-        if name == CONTENT_LENGTH {
-            continue; // reconstructed from the buffered body below
-        }
-        if let Ok(v) = value.to_str() {
-            out.extend_from_slice(format!("{}: {v}\r\n", name.as_str()).as_bytes());
-            if name == HOST {
-                saw_host = true;
-            }
-        }
-    }
-    if !saw_host {
-        out.extend_from_slice(format!("Host: {host}\r\n").as_bytes());
-    }
-    out.extend_from_slice(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes());
-    out.extend_from_slice(body);
-    Bytes::from(out)
-}
-
-/// Render a response in HTTP/1 shape for the store, reconstructing `Content-Length` the same way
-/// the request renderer does.
-fn render_response_bytes(
-    status: http::StatusCode,
-    headers: &http::HeaderMap,
-    body: &[u8],
-) -> Bytes {
-    let mut out = Vec::new();
-    out.extend_from_slice(format!("HTTP/2 {}\r\n", status.as_u16()).as_bytes());
-    for (name, value) in headers.iter() {
-        if name == CONTENT_LENGTH {
-            continue; // reconstructed from the buffered body below
-        }
-        if let Ok(v) = value.to_str() {
-            out.extend_from_slice(format!("{}: {v}\r\n", name.as_str()).as_bytes());
-        }
-    }
-    out.extend_from_slice(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes());
-    out.extend_from_slice(body);
-    Bytes::from(out)
+/// Convert a typed header map into the verbatim-bytes field list `burpsy_http2::normalise`
+/// renders — the same list the egress authoriser will extract a path from in a later slice, so
+/// history and authorisation cannot render the same stream two different ways.
+///
+/// **This is where header-list-exactness's order guarantee already has a hole, and it predates
+/// this function.** `http::HeaderMap`'s own docs say its iteration order is "arbitrary, but
+/// consistent across platforms for the same crate version" [`http` 1.4.2,
+/// `src/header/map.rs:36-41`] — not wire order. By the time a stream reaches this module the true
+/// order the peer sent is already gone; this function is exact from here on (every field the map
+/// holds is carried through, byte for byte, in whatever order the map gives them), but "from
+/// here on" is doing real work in that sentence. The design's §5 names the fix: build the field
+/// list from the tap's own decode instead of `h2`'s typed view, which is not yet wired (that is
+/// slice 5/6's job).
+///
+/// One thing this function does improve on the renderer it replaces: a header value that fails
+/// `HeaderValue::to_str` is no longer silently dropped. `as_bytes` hands back the raw octets
+/// regardless, and header-list-exactness is `burpsy-http2`'s stated guarantee, not "exact unless
+/// it's not UTF-8".
+fn header_list(headers: &http::HeaderMap) -> Vec<(Bytes, Bytes)> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                Bytes::copy_from_slice(name.as_str().as_bytes()),
+                Bytes::copy_from_slice(value.as_bytes()),
+            )
+        })
+        .collect()
 }
 
 /// Build the typed request handed to the origin leg: pseudo-headers derived from the method, path
@@ -391,4 +367,111 @@ fn record_failed_response(store: &TrafficStore, ex_id: u64, reason: &str, starte
         0,
         started.elapsed().as_millis() as u64,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burpsy_core::parse;
+
+    fn b(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    /// The design's slice 3 requires this exact property, and it is why the renderer lives in
+    /// `burpsy-http2` rather than here: `render_request`'s output must be the same shape
+    /// `burpsy_core::parse` already understands, or an h2 exchange would sit in history as
+    /// something every other tool mis-reads. `burpsy-http2` cannot assert this itself — it must
+    /// not depend on `burpsy-core` — so the round trip is proved here, where the proxy already
+    /// depends on both.
+    #[test]
+    fn render_request_output_parses_back_into_the_same_ordered_field_list() {
+        let headers = [
+            (b("Host"), b("example.com")),
+            (b("X-Foo"), b("1")),
+            (b("x-foo"), b("2")),
+            (b("Accept"), b("*/*")),
+        ];
+        let body = b"hello world";
+        let rendered = render_request("POST", "/x?y=1", "example.com", &headers, body);
+
+        let shape = parse(&rendered, Direction::Request)
+            .expect("a renderer whose own crate's tests already assert this shape must parse");
+
+        assert_eq!(
+            &rendered[shape.first_token.offset..shape.first_token.end()],
+            b"POST",
+            "the method must survive as the parser's first start-line token"
+        );
+        assert_eq!(
+            &rendered[shape.second_token.offset..shape.second_token.end()],
+            b"/x?y=1",
+            "the path, including its query, must survive as the second start-line token"
+        );
+        assert_eq!(
+            &rendered[shape.third_token.offset..shape.third_token.end()],
+            b"HTTP/2",
+            "the version token must be the h2 label, not a downgraded HTTP/1.1"
+        );
+
+        // The renderer appends a reconstructed `Content-Length` after the given fields (no
+        // `Host` synthesis here, since one is already present) — so the parsed list is the
+        // input list plus exactly that one trailing field, in the order the renderer writes it.
+        let mut want: Vec<(Vec<u8>, Vec<u8>)> =
+            headers.iter().map(|(n, v)| (n.to_vec(), v.to_vec())).collect();
+        want.push((b"Content-Length".to_vec(), body.len().to_string().into_bytes()));
+
+        let got: Vec<(Vec<u8>, Vec<u8>)> = shape
+            .headers
+            .iter()
+            .map(|hs| {
+                (
+                    rendered[hs.name.offset..hs.name.end()].to_vec(),
+                    rendered[hs.value.offset..hs.value.end()].to_vec(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            got, want,
+            "duplicate names, unusual casing and field order must all survive the round trip \
+             through burpsy_core::parse, with only the reconstructed Content-Length added"
+        );
+
+        assert_eq!(
+            &rendered[shape.body.offset..shape.body.end()],
+            body,
+            "the body must be recovered byte-for-byte at the offset the parser reports"
+        );
+    }
+
+    /// `header_list` — the actual conversion the relay calls — must preserve duplicate values
+    /// under one `HeaderName`, not just duplicate *entries* in a hand-built list. `HeaderMap`
+    /// stores every `Set-Cookie` value under a single key and `iter()` yields the key once per
+    /// associated value [`http` 1.4.2 `HeaderMap::iter` docs], so this is the property the unit
+    /// tests on `Vec<(Bytes, Bytes)>` above cannot exercise on their own.
+    #[test]
+    fn header_list_and_render_request_together_preserve_duplicate_header_map_values() {
+        let mut map = http::HeaderMap::new();
+        map.append("set-cookie", http::HeaderValue::from_static("a=1"));
+        map.append("set-cookie", http::HeaderValue::from_static("b=2"));
+
+        let rendered = render_request("GET", "/", "example.com", &header_list(&map), b"");
+        let shape = parse(&rendered, Direction::Request).expect("must parse");
+
+        let cookies: Vec<&[u8]> = shape
+            .headers
+            .iter()
+            .filter(|hs| rendered[hs.name.offset..hs.name.end()].eq_ignore_ascii_case(b"set-cookie"))
+            .map(|hs| &rendered[hs.value.offset..hs.value.end()])
+            .collect();
+
+        assert_eq!(
+            cookies,
+            vec![b"a=1".as_slice(), b"b=2".as_slice()],
+            "both Set-Cookie values from the HeaderMap must reach the parsed record, in order: \
+             {:?}",
+            String::from_utf8_lossy(&rendered)
+        );
+    }
 }

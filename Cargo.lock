@@ -248,6 +248,7 @@ dependencies = [
  "axum",
  "burpsy-bcheck",
  "burpsy-core",
+ "burpsy-http2",
  "burpsy-scanner",
  "burpsy-sender",
  "burpsy-web",

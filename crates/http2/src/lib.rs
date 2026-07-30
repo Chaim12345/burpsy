@@ -46,11 +46,13 @@
 pub mod frame;
 pub mod hpack;
 pub mod malformed;
+pub mod normalise;
 
 pub use frame::{
     CONNECTION_PREFACE, FRAME_HEADER_LEN, FrameHeader, FrameSpec, H2FrameProgram,
     MAX_FRAME_PAYLOAD, RawFrame, STREAM_ID_RESERVED_BIT, Tail, flags, read_frames, strip_preface,
     types,
 };
-pub use hpack::{Decoder, HpackError};
+pub use hpack::{Decoder, Encoder, HpackError};
 pub use malformed::{Malformation, Violation, audit};
+pub use normalise::{render_request, render_response};

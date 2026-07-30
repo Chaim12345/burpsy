@@ -8,6 +8,7 @@ license.workspace = true
 burpsy-core = { path = "../core" }
 burpsy-bcheck = { path = "../bcheck" }
 burpsy-scanner = { path = "../scanner" }
+burpsy-http2 = { path = "../http2" }
 tokio = { workspace = true }
 bytes = { workspace = true }
 anyhow = { workspace = true }

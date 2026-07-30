@@ -29,6 +29,20 @@
 //! tables in the real protocol, and merging them produces indices that resolve to whichever
 //! direction happened to insert more recently. Both mistakes are worse than a crash, because
 //! they do not look wrong — they produce a fully-formed, plausible, wrong header list.
+//!
+//! # The encoder's representation strategy is a choice, not a fact
+//!
+//! RFC 7541 lets an encoder pick, for each field, among an indexed reference (§6.1), a literal
+//! with an indexed name (§6.2.1), or a literal with everything spelled out (§6.2.1 again, index
+//! 0). [`Encoder`] resolves that choice deterministically: exact name+value match anywhere in the
+//! combined static/dynamic address space wins (cheapest on the wire, no insertion); otherwise a
+//! name-only match reuses the name and inserts the pair; otherwise both strings are literal and
+//! the pair is inserted. It never emits "without indexing" (§6.2.2) or "never indexed" (§6.2.3) —
+//! those exist for a sender who wants a field to skip the table, which is not a distinction this
+//! encoder's callers currently need to express — and it never emits Huffman-coded strings, for the
+//! same reason [`decode_string`] never decodes them: see "Huffman is slice 2b" above. Every string
+//! this encoder writes sets H=0, which is spec-legal (Huffman is always optional) and costs bytes
+//! on the wire versus a real encoder, not a bug.
 
 use bytes::Bytes;
 use std::collections::VecDeque;
@@ -290,6 +304,34 @@ fn decode_string(block: &[u8], at: usize) -> Result<(Bytes, usize), HpackError> 
     Ok((bytes, int_len + declared))
 }
 
+/// Encode a prefix integer (§5.1), the exact inverse of [`decode_int`]: `pattern` already carries
+/// the representation's high bits shifted into position (e.g. `0x80` for an indexed field's
+/// leading `1`), and `value`'s low `prefix_bits` bits share that same first octet, spilling into
+/// as many continuation octets as `value` needs once it does not fit.
+fn encode_int(out: &mut Vec<u8>, value: u64, prefix_bits: u32, pattern: u8) {
+    debug_assert!((1..=8).contains(&prefix_bits));
+    let prefix_max: u64 = (1u64 << prefix_bits) - 1;
+    if value < prefix_max {
+        out.push(pattern | value as u8);
+        return;
+    }
+    out.push(pattern | prefix_max as u8);
+    let mut remaining = value - prefix_max;
+    while remaining >= 0x80 {
+        out.push(((remaining & 0x7f) as u8) | 0x80);
+        remaining >>= 7;
+    }
+    out.push(remaining as u8);
+}
+
+/// Encode a length-prefixed string (§5.2). Always `H=0` — see the module doc's note on why this
+/// encoder never Huffman-codes — so the length prefix's top bit, which [`decode_string`] reads as
+/// the Huffman flag, is always clear.
+fn encode_string(out: &mut Vec<u8>, data: &Bytes) {
+    encode_int(out, data.len() as u64, 7, 0x00);
+    out.extend_from_slice(data);
+}
+
 /// A stateful HPACK decoder: the dynamic table for one direction of one connection, plus the size
 /// limits that bound it. See the module doc for why one instance must not span two directions or
 /// be dropped between header blocks on the same one.
@@ -478,6 +520,152 @@ impl Decoder {
     /// A snapshot of the dynamic table's entries, newest first — the same order §2.3.2 indexes
     /// them in. Beyond the two summary accessors above, tests need this to assert against the
     /// RFC's own "Dynamic Table (after decoding)" listings, which name entries, not just counts.
+    pub fn dynamic_table_entries(&self) -> Vec<(Bytes, Bytes)> {
+        self.dynamic.iter().cloned().collect()
+    }
+}
+
+/// Where a field's name and/or value already live in the combined static+dynamic address space
+/// (RFC 7541 §2.3.3), found by [`Encoder::find`]. Drives the §6.1 vs §6.2.1 choice documented in
+/// the module doc.
+enum TableMatch {
+    /// Both name and value match this 1-based combined index — cheapest: an indexed field, no
+    /// insertion.
+    NameAndValue(usize),
+    /// Only the name matches this 1-based combined index — the value is still literal, but the
+    /// name need not be spelled out.
+    NameOnly(usize),
+    /// Neither matches: both strings must be literal.
+    Neither,
+}
+
+/// A stateful HPACK encoder: the mirror image of [`Decoder`], carrying the dynamic table for one
+/// direction of one connection. The same one-decoder-per-direction argument in the module doc
+/// applies here identically — an encoder inserts into its table exactly when the peer's decoder
+/// would insert into its own from the octets produced, so the two must evolve in lockstep, which
+/// means one long-lived `Encoder` per direction, never a fresh one per header block.
+#[derive(Debug)]
+pub struct Encoder {
+    /// Newest entry at the front (index 62), oldest at the back — same layout and index order as
+    /// [`Decoder::dynamic`], so the two stay directly comparable.
+    dynamic: VecDeque<(Bytes, Bytes)>,
+    /// Sum of `entry_cost` over `dynamic`, maintained incrementally like the decoder's.
+    dynamic_size: usize,
+    /// The table-size budget this encoder respects (RFC 7541 §4.2) — the peer's advertised
+    /// `SETTINGS_HEADER_TABLE_SIZE`. Unlike [`Decoder`], there is no separate "currently active"
+    /// limit: this encoder never receives a §6.3 size-update instruction from anyone (it is the
+    /// one who would *emit* one, which no caller currently asks for), so `max_table_size` is the
+    /// limit, full stop.
+    max_table_size: usize,
+}
+
+impl Encoder {
+    /// A fresh encoder with an empty dynamic table, bounded by `max_table_size` — the peer's
+    /// advertised `SETTINGS_HEADER_TABLE_SIZE` for this direction.
+    pub fn new(max_table_size: usize) -> Self {
+        Self {
+            dynamic: VecDeque::new(),
+            dynamic_size: 0,
+            max_table_size,
+        }
+    }
+
+    /// Encode one header block: every field in `fields`, in order, against this encoder's
+    /// dynamic table — mutating it exactly as a peer decoding the output would mutate its own.
+    ///
+    /// `fields` is encoded verbatim: duplicate names, unusual casing, and pseudo-headers
+    /// (`:`-prefixed names) are ordinary fields here, never reordered or treated specially — the
+    /// crate's header-list-exactness guarantee (see the crate root) starts with this function not
+    /// disturbing what it was given.
+    pub fn encode(&mut self, fields: &[(Bytes, Bytes)]) -> Bytes {
+        let mut out = Vec::new();
+        for (name, value) in fields {
+            self.encode_field(&mut out, name, value);
+        }
+        Bytes::from(out)
+    }
+
+    /// Choose and emit one field's representation, per the strategy in the module doc.
+    fn encode_field(&mut self, out: &mut Vec<u8>, name: &Bytes, value: &Bytes) {
+        match self.find(name, value) {
+            TableMatch::NameAndValue(index) => {
+                // §6.1 Indexed Header Field: the whole field is one integer, no insertion.
+                encode_int(out, index as u64, 7, 0x80);
+            }
+            TableMatch::NameOnly(index) => {
+                // §6.2.1 Literal Header Field with Incremental Indexing, indexed name.
+                encode_int(out, index as u64, 6, 0x40);
+                encode_string(out, value);
+                self.insert(name.clone(), value.clone());
+            }
+            TableMatch::Neither => {
+                // §6.2.1 Literal Header Field with Incremental Indexing, new name (index 0 in a
+                // 6-bit prefix is always a single `0x40` octet — it never needs continuation).
+                out.push(0x40);
+                encode_string(out, name);
+                encode_string(out, value);
+                self.insert(name.clone(), value.clone());
+            }
+        }
+    }
+
+    /// Search the static table, then the dynamic table (newest first), for `name`/`value`. An
+    /// exact match anywhere returns immediately; a name-only match is remembered but the search
+    /// continues, since an exact match found later is strictly better and must win.
+    fn find(&self, name: &Bytes, value: &Bytes) -> TableMatch {
+        let mut name_only: Option<usize> = None;
+        for (i, (n, v)) in STATIC_TABLE.iter().enumerate() {
+            if n.as_bytes() == name.as_ref() {
+                if v.as_bytes() == value.as_ref() {
+                    return TableMatch::NameAndValue(i + 1);
+                }
+                name_only.get_or_insert(i + 1);
+            }
+        }
+        for (i, (n, v)) in self.dynamic.iter().enumerate() {
+            if n == name {
+                if v == value {
+                    return TableMatch::NameAndValue(STATIC_TABLE.len() + i + 1);
+                }
+                name_only.get_or_insert(STATIC_TABLE.len() + i + 1);
+            }
+        }
+        match name_only {
+            Some(index) => TableMatch::NameOnly(index),
+            None => TableMatch::Neither,
+        }
+    }
+
+    /// Insert a new entry at the front, evicting from the back (§4.4) until it fits — identical
+    /// accounting to [`Decoder::insert`], including the same "too big to ever fit" outcome: the
+    /// eviction loop can empty the table and the entry still does not get pushed.
+    fn insert(&mut self, name: Bytes, value: Bytes) {
+        let cost = entry_cost(&name, &value);
+        while self.dynamic_size + cost > self.max_table_size && !self.dynamic.is_empty() {
+            let (n, v) = self
+                .dynamic
+                .pop_back()
+                .expect("checked non-empty in the loop condition");
+            self.dynamic_size -= entry_cost(&n, &v);
+        }
+        if cost <= self.max_table_size {
+            self.dynamic.push_front((name, value));
+            self.dynamic_size += cost;
+        }
+    }
+
+    /// Number of entries currently in the dynamic table.
+    pub fn dynamic_table_len(&self) -> usize {
+        self.dynamic.len()
+    }
+
+    /// Sum of `entry_cost` over the dynamic table — what RFC 7541 calls the table's size.
+    pub fn dynamic_table_bytes(&self) -> usize {
+        self.dynamic_size
+    }
+
+    /// A snapshot of the dynamic table's entries, newest first, matching
+    /// [`Decoder::dynamic_table_entries`]'s order exactly.
     pub fn dynamic_table_entries(&self) -> Vec<(Bytes, Bytes)> {
         self.dynamic.iter().cloned().collect()
     }
@@ -931,5 +1119,191 @@ mod tests {
             .expect("a size update to zero must be accepted");
         assert_eq!(d.dynamic_table_len(), 0);
         assert_eq!(d.dynamic_table_bytes(), 0);
+    }
+
+    // ---- Encoder: RFC 7541 Appendix C round trips ----
+
+    /// Defends: RFC 7541 Appendix C.2.1 — a novel field, encoded then decoded, is the same field
+    /// and lands in the dynamic table exactly as a literal-with-incremental-indexing would.
+    #[test]
+    fn c_2_1_round_trip_a_novel_field_survives_encode_then_decode_and_is_indexed() {
+        let fields = vec![h("custom-key", "custom-header")];
+        let mut enc = Encoder::new(4096);
+        let block = enc.encode(&fields);
+        let mut dec = Decoder::new(4096);
+        let out = dec.decode(&block).expect("encoder output must decode");
+        assert_eq!(out, fields, "round trip must reproduce the original field");
+        assert_eq!(
+            enc.dynamic_table_len(),
+            1,
+            "a field with no existing table match must be inserted, mirroring the decoder"
+        );
+        assert_eq!(
+            enc.dynamic_table_bytes(),
+            55,
+            "10 + 13 + 32, per RFC 7541 §4.1"
+        );
+        assert_eq!(enc.dynamic_table_entries(), dec.dynamic_table_entries());
+    }
+
+    /// Defends: RFC 7541 Appendix C.2.4 — a field with both name and value in the static table
+    /// must round-trip AND take the one-byte indexed representation (§6.1), not a literal one;
+    /// the byte length pins that the "prefer an exact match" rule in the module doc actually
+    /// fires rather than merely happening to decode correctly.
+    #[test]
+    fn c_2_4_round_trip_a_static_table_exact_match_encodes_as_one_indexed_byte() {
+        let fields = vec![h(":method", "GET")];
+        let mut enc = Encoder::new(4096);
+        let block = enc.encode(&fields);
+        assert_eq!(
+            block.as_ref(),
+            &[0x82],
+            "an exact static-table match must be a single indexed-field octet, not a literal"
+        );
+        let mut dec = Decoder::new(4096);
+        let out = dec.decode(&block).expect("encoder output must decode");
+        assert_eq!(out, fields);
+        assert_eq!(
+            enc.dynamic_table_len(),
+            0,
+            "an indexed field must never be inserted into the dynamic table"
+        );
+    }
+
+    /// Defends: RFC 7541 Appendix C.3 — three requests on ONE encoder/decoder pair must round
+    /// trip every field list, and the dynamic table must evolve on both sides exactly as the RFC
+    /// states after each call: this is the "one instance per direction, not one per header
+    /// block" invariant from the module doc, exercised across calls rather than within one.
+    #[test]
+    fn c_3_round_trip_three_requests_on_one_encoder_decoder_pair_evolve_the_table_together() {
+        let mut enc = Encoder::new(4096);
+        let mut dec = Decoder::new(4096);
+
+        let req1 = vec![
+            h(":method", "GET"),
+            h(":scheme", "http"),
+            h(":path", "/"),
+            h(":authority", "www.example.com"),
+        ];
+        let block1 = enc.encode(&req1);
+        let out1 = dec.decode(&block1).expect("req1 must decode");
+        assert_eq!(out1, req1);
+        assert_eq!(enc.dynamic_table_bytes(), 57, "table size after req1");
+        assert_eq!(enc.dynamic_table_entries(), dec.dynamic_table_entries());
+
+        let req2 = vec![
+            h(":method", "GET"),
+            h(":scheme", "http"),
+            h(":path", "/"),
+            h(":authority", "www.example.com"),
+            h("cache-control", "no-cache"),
+        ];
+        let block2 = enc.encode(&req2);
+        let out2 = dec.decode(&block2).expect("req2 must decode");
+        assert_eq!(out2, req2);
+        assert_eq!(enc.dynamic_table_bytes(), 110, "table size after req2");
+        assert_eq!(enc.dynamic_table_entries(), dec.dynamic_table_entries());
+
+        let req3 = vec![
+            h(":method", "GET"),
+            h(":scheme", "https"),
+            h(":path", "/index.html"),
+            h(":authority", "www.example.com"),
+            h("custom-key", "custom-value"),
+        ];
+        let block3 = enc.encode(&req3);
+        let out3 = dec.decode(&block3).expect("req3 must decode");
+        assert_eq!(out3, req3);
+        assert_eq!(enc.dynamic_table_bytes(), 164, "table size after req3");
+        assert_eq!(
+            enc.dynamic_table_entries(),
+            dec.dynamic_table_entries(),
+            "encoder and decoder must agree on dynamic table contents after every call"
+        );
+    }
+
+    // ---- Encoder: properties beyond the RFC vectors ----
+
+    /// Defends: the crate's stated header-list-exactness guarantee (crate root doc) — duplicate
+    /// names and unusual casing are not something an encoder is allowed to normalise away, so
+    /// they must survive encode → decode as the same ordered list.
+    #[test]
+    fn duplicate_names_and_unusual_casing_survive_encode_then_decode_in_order() {
+        let fields = vec![
+            h("foo", "bar1"),
+            h("foo", "bar2"),
+            h("X-Test", "value"),
+            (Bytes::from_static(b"foo"), Bytes::from_static(b"bar1")),
+        ];
+        let mut enc = Encoder::new(4096);
+        let block = enc.encode(&fields);
+        let mut dec = Decoder::new(4096);
+        let out = dec
+            .decode(&block)
+            .expect("duplicate names and mixed casing must still decode");
+        assert_eq!(
+            out, fields,
+            "an encoder must not deduplicate, merge, or lowercase fields"
+        );
+    }
+
+    /// Defends: RFC 7541 §4.4 — an entry whose cost exceeds the table's entire budget must clear
+    /// the table rather than being rejected or truncated, and must still be part of the emitted
+    /// header list (only the *indexing* is refused, not the field itself). Mirrors the decoder's
+    /// `an_entry_larger_than_the_whole_dynamic_table_empties_it_and_is_not_inserted` test, but
+    /// pins the same property from the encoder's side of the wire, and confirms a decoder fed the
+    /// same two blocks agrees the table ends up empty too.
+    #[test]
+    fn an_oversized_entry_clears_the_encoders_dynamic_table_but_still_reaches_the_decoded_output() {
+        let mut enc = Encoder::new(50);
+        let mut dec = Decoder::new(50);
+
+        // "a" -> "b" costs 1 + 1 + 32 = 34, fits in a 50-byte table.
+        let small = vec![h("a", "b")];
+        let block1 = enc.encode(&small);
+        dec.decode(&block1).expect("the small entry must decode");
+        assert_eq!(enc.dynamic_table_len(), 1);
+        assert_eq!(enc.dynamic_table_bytes(), 34);
+
+        // A 10-byte name and a 10-byte value cost 10 + 10 + 32 = 52, over the 50-byte budget.
+        let big = vec![h("nnnnnnnnnn", "vvvvvvvvvv")];
+        let block2 = enc.encode(&big);
+        assert_eq!(
+            enc.dynamic_table_len(),
+            0,
+            "an entry larger than the whole table must empty the encoder's table"
+        );
+        assert_eq!(enc.dynamic_table_bytes(), 0);
+
+        let out2 = dec
+            .decode(&block2)
+            .expect("the oversized field must still decode");
+        assert_eq!(
+            out2, big,
+            "an oversized entry is still part of the decoded header list, only unindexed"
+        );
+        assert_eq!(
+            dec.dynamic_table_len(),
+            0,
+            "the decoder's table must end up empty too, in lockstep with the encoder's"
+        );
+    }
+
+    /// Defends: encoding must be deterministic — the representation strategy in the module doc
+    /// has no hidden randomness or ordering dependency, so a fresh encoder given the same field
+    /// list twice must produce byte-identical output both times.
+    #[test]
+    fn encoding_the_same_list_twice_on_a_fresh_encoder_is_deterministic() {
+        let fields = vec![
+            h(":method", "GET"),
+            h(":path", "/"),
+            h("x-custom", "value"),
+        ];
+        let block_a = Encoder::new(4096).encode(&fields);
+        let block_b = Encoder::new(4096).encode(&fields);
+        assert_eq!(
+            block_a, block_b,
+            "the same input on a fresh encoder must produce identical bytes every time"
+        );
     }
 }

@@ -46,10 +46,19 @@ const EGRESS: &[&str] = &[
 /// the build; adding to this list should require the same argument the existing entry makes.
 const ALLOWED: &[(&str, &str)] = &[(
     "crates/proxy/src/lib.rs",
-    "MITM upstream forwarding. The proxy relays the client's *own* bytes for ordinary browsing — not \
-     a constructed request — and Scope there governs whether an exchange is paused for operator \
-     review, never whether it is forwarded. Putting browsing traffic behind an authorisation gate \
-     would turn the proxy into a blocklist, which is not what it is for.",
+    "MITM upstream forwarding. Scope here governs whether an exchange is paused for operator review \
+     and whether it is retained, never whether it is forwarded: putting browsing traffic behind an \
+     authorisation gate would turn the proxy into a blocklist, which is not what it is for. \
+     Precision about *why* this is not a constructed request, because half of the original argument \
+     stopped being true when the h2 relay landed: on the HTTP/1 path the proxy forwards the client's \
+     own bytes, so byte-identity carried the argument by itself. On the h2 path it cannot — HPACK \
+     indices are meaningless off the connection that built them, so `h2_relay` decodes each stream \
+     and re-lowers it onto a new leg, and the octets the origin sees are reconstructed rather than \
+     the client's. What survives, and what the exemption actually rests on, is provenance: every \
+     field and body byte originates from a request the browser chose to make, and the operator \
+     authored none of it. A constructed request in the sense HARD-03 means is one an operator built \
+     in Repeater, Intruder, or a scan check, and those have no path here — they go through \
+     `AuthorisedSender`.",
 )];
 
 #[test]
