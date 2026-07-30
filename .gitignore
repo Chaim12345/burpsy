@@ -5,10 +5,13 @@
 *.pem
 *.key
 # OMC operational artifacts
-/.omc/
+# Unanchored: agents have been observed running with cwd set to a subdirectory (e.g.
+# crates/web/ui/), which writes this state at that depth instead of the repo root.
+.omc/
 
 # Agent worktrees live inside the repo; they are checkouts, not content.
 .claude/worktrees/
+.swarm/
 
 # Researcher web-fetch cache — machine-generated, churns, not planning content.
 .planning/research/.cache/
