@@ -54,8 +54,8 @@ operator-observable capabilities, not implementation tasks.
 
 ### HTTP/2 (H2)
 
-- [ ] **H2-01**: Operator can proxy, view and resend HTTP/2 traffic
-- [ ] **H2-02**: HTTP/2 exchanges appear in history in the same shape as HTTP/1, so every existing tool works on them unchanged
+- [x] **H2-01**: Operator can proxy, view and resend HTTP/2 traffic
+- [x] **H2-02**: HTTP/2 exchanges appear in history in the same shape as HTTP/1, so every existing tool works on them unchanged
 - [ ] **H2-03**: Operator can send deliberately malformed HTTP/2 frames for request-smuggling research
 - [ ] **H2-04**: When a target supports HTTP/2, the tool uses it rather than silently downgrading to HTTP/1.1
 
@@ -75,8 +75,8 @@ operator-observable capabilities, not implementation tasks.
 
 ### Scanner data (SCAN)
 
-- [ ] **SCAN-01**: Scanner flags known-vulnerable JavaScript libraries by version
-- [ ] **SCAN-02**: Scanner detects JWTs signed with a weak secret from a wordlist
+- [x] **SCAN-01**: Scanner flags known-vulnerable JavaScript libraries by version
+- [x] **SCAN-02**: Scanner detects JWTs signed with a weak secret from a wordlist
 - [ ] **SCAN-03**: Operator can load Burp's built-in scan configurations unchanged
 
 ### DOM analysis (DOM)
@@ -89,10 +89,10 @@ operator-observable capabilities, not implementation tasks.
 
 ### Reporting (REPORT)
 
-- [ ] **REPORT-01**: Operator can export findings as HTML for a human reader
-- [ ] **REPORT-02**: Operator can export findings as JSON for a machine reader
-- [ ] **REPORT-03**: Operator can export findings as SARIF that GitHub Code Scanning ingests
-- [ ] **REPORT-04**: Every report states what was not checked and why, so a clean report cannot be mistaken for full coverage
+- [x] **REPORT-01**: Operator can export findings as HTML for a human reader
+- [x] **REPORT-02**: Operator can export findings as JSON for a machine reader
+- [x] **REPORT-03**: Operator can export findings as SARIF that GitHub Code Scanning ingests
+- [x] **REPORT-04**: Every report states what was not checked and why, so a clean report cannot be mistaken for full coverage
 
 ### Dashboard (DASH)
 
@@ -157,10 +157,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROXY-01 | Burp-parity backlog (not a roadmap phase) | Complete (2026-07-30) |
 | PROXY-02 | Burp-parity backlog (not a roadmap phase) | Complete (2026-07-30) |
 | HARD-03 | Phase 1 | Partial — chokepoint built; per-surface tests land with each surface |
-| H2-01 | Phase 2 | Pending |
-| H2-02 | Phase 2 | Pending |
+| H2-01 | Phase 2 | Complete (2026-07-30) — the proxy relays and records h2 traffic (`crates/proxy/src/h2_relay.rs`), the same `Exchange` history every tool reads, and `POST /api/repeater/send` accepts `protocol: "Http2"` to resend it: `AuthorisedSender::send_h2` sends it, the Repeater UI's "Send to Repeater" hand-off defaults a tab's protocol to the originating exchange's, and an explicit HTTP/1.1 / HTTP/2 selector lets the operator override it either way |
+| H2-02 | Phase 2 | Complete (2026-07-30) — `h2_relay.rs` and the new Repeater h2 path both call `TrafficStore::add_exchange` with the same `Exchange` struct HTTP/1 uses (`protocol: Protocol::Http2` is a label on that one type, not a second one), so history, the Phase 3 query DSL, and every filter already work on h2 exchanges unchanged; no protocol-conditional branch exists anywhere on the read path |
 | H2-03 | Phase 2 | Partial (sender leg completed 2026-07-30) — the frame layer emits deliberate spec violations byte-for-byte and `burpsy_http2::malformed::audit` names every rule a program breaks, with the RFC section. There is now an authorised route from a frame program to a socket: `AuthorisedSender::send_h2_program` classifies each program's decoded/opaque/absent header blocks via `h2req::program_paths` and gates opaque or pathless programs on `Scope::authorises_whole_host` rather than letting them through on a technicality. What remains is exposure: nothing in `crates/web` or `crates/intruder` calls `send_h2_program` yet, so an operator can build and inspect a malformed program, and the library can send one, but there is no UI/API surface to do it from |
-| H2-04 | Phase 2 | Partial (proxy leg completed 2026-07-30; sender leg completed 2026-07-30) — the proxy peeks the ClientHello, offers the target the client's own ALPN list, offers the client back exactly what the target chose, and records the result on every `Exchange.protocol`. An h2-capable target is not downgraded, and an h2-negotiated connection is now **relayed**: `crates/proxy/src/h2_relay.rs` drives `h2` on both legs, forwards every stream to the origin and back, and records each round trip as an `Exchange` with `protocol: Protocol::Http2`. An h2-capable origin is therefore browsable through the proxy, which it previously was not. `AuthorisedSender::send_h2` also gives the sender crate authorised h2 egress, rendered through the same `normalise::render_request` the proxy uses for history so the scope check reads the exact bytes reaching the wire. Two limits remain, stated rather than hidden: the hold queue is an HTTP/1 parser, so h2 streams are forwarded and recorded but not held for editing (switching interception on offers `http/1.1` only — an operator-caused, operator-visible downgrade); and Scanner and Intruder do not call `send_h2` yet, so "the tool uses it" off the proxy path is a library capability, not an operator-visible one |
+| H2-04 | Phase 2 | Partial (proxy leg completed 2026-07-30; sender leg completed 2026-07-30) — the proxy peeks the ClientHello, offers the target the client's own ALPN list, offers the client back exactly what the target chose, and records the result on every `Exchange.protocol`. An h2-capable target is not downgraded, and an h2-negotiated connection is now **relayed**: `crates/proxy/src/h2_relay.rs` drives `h2` on both legs, forwards every stream to the origin and back, and records each round trip as an `Exchange` with `protocol: Protocol::Http2`. An h2-capable origin is therefore browsable through the proxy, which it previously was not. `AuthorisedSender::send_h2` also gives the sender crate authorised h2 egress, rendered through the same `normalise::render_request` the proxy uses for history so the scope check reads the exact bytes reaching the wire, and Repeater (`POST /api/repeater/send`, `protocol: "Http2"`) is now a real operator-facing caller of it — see H2-01. Two limits remain, stated rather than hidden: the hold queue is an HTTP/1 parser, so h2 streams are forwarded and recorded but not held for editing (switching interception on offers `http/1.1` only — an operator-caused, operator-visible downgrade); and Scanner and Intruder still do not call `send_h2`, so "the tool uses it" is true for the proxy and Repeater paths but not yet for active scanning or Intruder attacks |
 | DSL-01 | Phase 3 | Complete (2026-07-30) |
 | DSL-02 | Phase 3 | Complete (2026-07-30) — includes fixing Match & Replace's live-wiring gap |
 | DSL-04 | Phase 3 | Complete (2026-07-30) |
@@ -168,13 +168,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TOOLS-02 | Phase 3 | Complete (2026-07-30) |
 | TOOLS-03 | Phase 3 | Complete (status corrected 2026-07-30; feature landed earlier this session as task #20) |
 | TOOLS-04 | Phase 3 | Complete (2026-07-30) |
-| REPORT-01 | Phase 4 | Pending |
-| REPORT-02 | Phase 4 | Pending |
-| REPORT-03 | Phase 4 | Pending |
-| REPORT-04 | Phase 4 | Pending |
-| SCAN-01 | Phase 4 | Pending |
-| SCAN-02 | Phase 4 | Pending |
-| SCAN-03 | Phase 4 | Pending |
+| REPORT-01 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `GET /api/report/html` (`crates/web/src/routes/report.rs`) renders `crates/scanner/src/report/html.rs`'s output; 10 tests |
+| REPORT-02 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `GET /api/report/json`; `crates/scanner/src/report/json.rs`; 7 tests |
+| REPORT-03 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `GET /api/report/sarif`; `crates/scanner/src/report/sarif.rs` produces SARIF 2.1.0; 11 tests |
+| REPORT-04 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `crates/scanner/src/report/mod.rs`'s `RunCoverage`/`NotCheckedReason` model classifies every population (not loaded, not dispatched, never run, scan-skipped, item-refused) as checked/declined/unknown and feeds all three writers from one source, so a zero-finding report still enumerates what did not run; 12 tests. No hook configured returns `501`, never a zero-filled report — see the route's own module doc |
+| SCAN-01 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `crates/scanner/src/js_vulns.rs`, real version-range arithmetic (not a string-prefix test) over the vendored Retire.js corpus shipped inside Burp Suite 2026.7.1 (`crates/scanner/data/retirejs_repository.json`, sha256-pinned) |
+| SCAN-02 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `crates/scanner/src/jwt_weak.rs` proves weakness by recomputing the HMAC signature against a wordlist, HS256/384/512 only, with RS*/ES*/PS*/`alg:none` counted as out-of-scope rather than silently skipped |
+| SCAN-03 | Phase 4 | Partial (status corrected 2026-07-30) — `crates/scanner/src/audit.rs`'s `BuiltInConfig`/`BUILT_IN_CONFIGS` transcribes the 6 of Burp's 29 shipped scan configurations that set a key this engine implements (the other 23 configure crawling/insertion-point/JS-analysis features this crate does not have, and are honestly omitted rather than represented by knobs that do nothing) and `BuiltInConfig::apply` overlays one onto an `AuditConfig`, tested. The gap: nothing operator-facing selects one — `crates/cli/src/main.rs` only ever constructs `AuditConfig::default()`, so a named config cannot be loaded today without a new CLI flag or API route |
 | SESSION-01 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
 | SESSION-02 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
 | SESSION-03 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |

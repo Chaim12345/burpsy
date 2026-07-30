@@ -28,9 +28,9 @@ satisfiable without waiting for the last five feature phases.
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Store & Scope Chokepoint** - Race-free segmented store with an O(1) index, plus the one authorising sender every later surface must route through
-- [ ] **Phase 2: HTTP/2** - h2 traffic captured, viewed, resent and honestly negotiated, moved ahead of WebSockets and the plugin API
-- [ ] **Phase 3: Query DSL & Tool Parity** - One typed query grammar plus Intruder/Repeater's remaining parity gaps *(Partial as of 2026-07-30: TOOLS-01/03/04 landed, DSL-01/02/03/04 and TOOLS-02 not started — see REQUIREMENTS.md)*
-- [ ] **Phase 4: Reporting & Scanner Data** - HTML/JSON/SARIF export and the scanner's remaining data-driven checks, both decoupled from platform work
+- [ ] **Phase 2: HTTP/2** - h2 traffic captured, viewed, resent and honestly negotiated, moved ahead of WebSockets and the plugin API *(Partial as of 2026-07-30: H2-01/H2-02 complete — relay, history parity, and an authorised Repeater resend path all land; H2-03/H2-04 partial — malformed-frame authoring and h2 egress exist, but frame-program sending has no UI, and Scanner/Intruder egress is still HTTP/1.1-only — see REQUIREMENTS.md)*
+- [x] **Phase 3: Query DSL & Tool Parity** - One typed query grammar plus Intruder/Repeater's remaining parity gaps *(Complete 2026-07-30: all of DSL-01/02/04, TOOLS-01/02/03/04 — see REQUIREMENTS.md)*
+- [ ] **Phase 4: Reporting & Scanner Data** - HTML/JSON/SARIF export and the scanner's remaining data-driven checks, both decoupled from platform work *(Substantially complete as of 2026-07-30: REPORT-01/02/03/04 and SCAN-01/02 all complete; SCAN-03's built-in scan-config data and overlay logic are built and tested but have no operator-facing selector yet — see REQUIREMENTS.md)*
 - [x] **Phase 5: Session Handling** - Recorded login survives session loss on the operator's own terms, without looping
 - [ ] **Phase 6: Crawler & Dashboard** - Authenticated crawling fed by and feeding proxy traffic, with an honest view of what was and wasn't reached
 - [x] **Phase 7: Hardening Pass** - Engagement-readiness gate: the three unreviewed branches and the fixture-independent corpus invariant
@@ -59,6 +59,7 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: HTTP/2 traffic is a first-class citizen of the existing pipeline — captured, resendable, and negotiated honestly — sequenced ahead of WebSockets and the plugin API rather than after them.
 **Depends on**: Phase 1 (the `related` slot the store's design reserved for this)
 **Requirements**: H2-01, H2-02, H2-03, H2-04
+**Status**: Partial (2026-07-30) — H2-01/H2-02 complete; H2-03/H2-04 partial, see REQUIREMENTS.md
 **Success Criteria** (what must be TRUE):
   1. Operator can proxy an HTTP/2 exchange end to end and resend it through Repeater
   2. An HTTP/2 exchange sits in history in the same shape as HTTP/1, so filters, Repeater, and the scanner already built keep working on it unchanged
@@ -70,6 +71,7 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: A single typed query grammar reaches its first two consumers, and Intruder/Repeater close out their remaining parity gaps.
 **Depends on**: Phase 1 (the O(1) index makes filtering large history practical)
 **Requirements**: DSL-01, DSL-02, DSL-04, TOOLS-01, TOOLS-02, TOOLS-03, TOOLS-04
+**Status**: Complete (2026-07-30)
 **Success Criteria** (what must be TRUE):
   1. Operator can filter proxy history with a typed query over host, status, method, MIME type, and body content
   2. The same query language selects which history entries a match-and-replace rule applies to
@@ -83,6 +85,7 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: Findings leave the tool in formats other software and humans can consume, honestly scoped to what was actually checked; the scanner's remaining data-driven checks are complete.
 **Depends on**: Nothing new — parallelizable with Phases 1-3 (built on the existing issue catalog and audit engine)
 **Requirements**: REPORT-01, REPORT-02, REPORT-03, REPORT-04, SCAN-01, SCAN-02, SCAN-03
+**Status**: Substantially complete (2026-07-30) — REPORT-01..04 and SCAN-01/02 done; SCAN-03 partial, see REQUIREMENTS.md
 **Success Criteria** (what must be TRUE):
   1. Operator can export findings as a single HTML page for a human reader
   2. Operator can export the same findings as JSON, and as SARIF that GitHub Code Scanning ingests without modification
@@ -186,9 +189,9 @@ are carried forward unchanged since nothing this session touched or re-verified 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Store & Scope Chokepoint | 0/TBD | Complete | prior to 2026-07-28 |
-| 2. HTTP/2 | 0/TBD | Partial | - |
-| 3. Query DSL & Tool Parity | 0/TBD | Partial (TOOLS-01/03/04) | - |
-| 4. Reporting & Scanner Data | 0/TBD | Substantially delivered | - |
+| 2. HTTP/2 | 0/TBD | Partial (H2-01/02 complete) | - |
+| 3. Query DSL & Tool Parity | 0/TBD | Complete | 2026-07-30 |
+| 4. Reporting & Scanner Data | 0/TBD | Substantially delivered (SCAN-03 partial) | - |
 | 5. Session Handling | 0/TBD | Complete | prior to 2026-07-28 |
 | 6. Crawler & Dashboard | 0/TBD | Not started | - |
 | 7. Hardening Pass | 0/TBD | Complete | prior to 2026-07-28 |
