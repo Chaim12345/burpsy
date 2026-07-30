@@ -29,13 +29,13 @@ satisfiable without waiting for the last five feature phases.
 
 - [x] **Phase 1: Store & Scope Chokepoint** - Race-free segmented store with an O(1) index, plus the one authorising sender every later surface must route through
 - [ ] **Phase 2: HTTP/2** - h2 traffic captured, viewed, resent and honestly negotiated, moved ahead of WebSockets and the plugin API
-- [ ] **Phase 3: Query DSL & Tool Parity** - One typed query grammar plus Intruder/Repeater's remaining parity gaps
+- [ ] **Phase 3: Query DSL & Tool Parity** - One typed query grammar plus Intruder/Repeater's remaining parity gaps *(Partial as of 2026-07-30: TOOLS-01/03/04 landed, DSL-01/02/03/04 and TOOLS-02 not started — see REQUIREMENTS.md)*
 - [ ] **Phase 4: Reporting & Scanner Data** - HTML/JSON/SARIF export and the scanner's remaining data-driven checks, both decoupled from platform work
-- [ ] **Phase 5: Session Handling** - Recorded login survives session loss on the operator's own terms, without looping
+- [x] **Phase 5: Session Handling** - Recorded login survives session loss on the operator's own terms, without looping
 - [ ] **Phase 6: Crawler & Dashboard** - Authenticated crawling fed by and feeding proxy traffic, with an honest view of what was and wasn't reached
-- [ ] **Phase 7: Hardening Pass** - Engagement-readiness gate: the three unreviewed branches and the fixture-independent corpus invariant
+- [x] **Phase 7: Hardening Pass** - Engagement-readiness gate: the three unreviewed branches and the fixture-independent corpus invariant
 - [ ] **Phase 8: Plugin API** - Capability-scoped plugin hooks, metadata by default, scope re-checked before send
-- [ ] **Phase 9: WebSockets** - Captured, editable, scope-authorised WS frames, reusing the connection state machine HTTP/2 generalised
+- [ ] **Phase 9: WebSockets** - Captured, editable, scope-authorised WS frames, reusing the connection state machine HTTP/2 generalised *(Partial as of 2026-07-30: WS-01/03 landed — capture, history, per-message scope authorisation; WS-02 edit-and-resend needs interception, deliberately deferred, see `crates/proxy/AGENTS.md`)*
 - [ ] **Phase 10: MCP Server** - Agent-drivable JSON API over MCP, with server-side per-call confirmation on the risky calls
 - [ ] **Phase 11: DOM Static Analysis** - Source-to-sink taint over the catalogued DOM issue types, bounded and honest about its limits
 - [ ] **Phase 12: DOM Dynamic Confirmation** - Real-browser confirmation of static candidates — confirmed or honestly UNCONFIRMED, never dropped
@@ -178,17 +178,22 @@ satisfiable without waiting for the last five feature phases.
 **Execution Order:**
 Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12
 
+This table was stale for the whole milestone — every row said "Not started" regardless of actual
+status, including Phase 1, which the checklist above and STATE.md both already called Complete. Rows
+below are corrected against STATE.md and this session's own verified work; Phases 2, 4, 6, 8, 10–12
+are carried forward unchanged since nothing this session touched or re-verified them.
+
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Store & Scope Chokepoint | 0/TBD | Not started | - |
-| 2. HTTP/2 | 0/TBD | Not started | - |
-| 3. Query DSL & Tool Parity | 0/TBD | Not started | - |
-| 4. Reporting & Scanner Data | 0/TBD | Not started | - |
-| 5. Session Handling | 0/TBD | Not started | - |
+| 1. Store & Scope Chokepoint | 0/TBD | Complete | prior to 2026-07-28 |
+| 2. HTTP/2 | 0/TBD | Partial | - |
+| 3. Query DSL & Tool Parity | 0/TBD | Partial (TOOLS-01/03/04) | - |
+| 4. Reporting & Scanner Data | 0/TBD | Substantially delivered | - |
+| 5. Session Handling | 0/TBD | Complete | prior to 2026-07-28 |
 | 6. Crawler & Dashboard | 0/TBD | Not started | - |
-| 7. Hardening Pass | 0/TBD | Not started | - |
+| 7. Hardening Pass | 0/TBD | Complete | prior to 2026-07-28 |
 | 8. Plugin API | 0/TBD | Not started | - |
-| 9. WebSockets | 0/TBD | Not started | - |
+| 9. WebSockets | 0/TBD | Partial (WS-01/03) | - |
 | 10. MCP Server | 0/TBD | Not started | - |
 | 11. DOM Static Analysis | 0/TBD | Not started | - |
 | 12. DOM Dynamic Confirmation | 0/TBD | Not started | - |

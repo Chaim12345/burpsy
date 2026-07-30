@@ -25,17 +25,17 @@ operator-observable capabilities, not implementation tasks.
 
 ### Tool parity (TOOLS)
 
-- [ ] **TOOLS-01**: Operator can transform Intruder payloads before they are sent — prefix, suffix, case change, encode, hash, and match-and-replace — chained in a stated order
+- [x] **TOOLS-01**: Operator can transform Intruder payloads before they are sent — prefix, suffix, case change, encode, hash, and match-and-replace — chained in a stated order *(2026-07-30, backend + endpoint; reachable via hand-built JSON today, see TOOLS-03 note)*
 - [ ] **TOOLS-02**: Operator can load Burp's own `.pay` payload lists
-- [ ] **TOOLS-03**: Operator can flag attack responses containing a pattern, and extract a pattern into a result column
-- [ ] **TOOLS-04**: Operator can work in multiple named Repeater tabs, each keeping its own request history
+- [~] **TOOLS-03**: Operator can flag attack responses containing a pattern, and extract a pattern into a result column *(2026-07-30, backend grep-match/grep-extract landed and tested; UI wiring is a tracked follow-up, not yet built — not operator-observable until then)*
+- [x] **TOOLS-04**: Operator can work in multiple named Repeater tabs, each keeping its own request history *(2026-07-30)*
 
 ### Session handling (SESSION)
 
-- [ ] **SESSION-01**: Operator can record a login sequence and have it replayed automatically when the session drops
-- [ ] **SESSION-02**: Operator states how a valid session is recognised, and the tool detects loss of session from that
-- [ ] **SESSION-03**: Cookies are held per-host in a jar shared across tools
-- [ ] **SESSION-04**: Re-authentication stops after a stated attempt limit instead of looping
+- [x] **SESSION-01**: Operator can record a login sequence and have it replayed automatically when the session drops *(complete since the prior session; checkbox here was simply never updated — see STATE.md 2026-07-30. Generalised to a scoped rule list this session)*
+- [x] **SESSION-02**: Operator states how a valid session is recognised, and the tool detects loss of session from that *(same as above)*
+- [x] **SESSION-03**: Cookies are held per-host in a jar shared across tools *(same as above)*
+- [x] **SESSION-04**: Re-authentication stops after a stated attempt limit instead of looping *(same as above)*
 
 ### Crawler (CRAWL)
 
@@ -64,9 +64,9 @@ operator-observable capabilities, not implementation tasks.
 
 ### WebSockets (WS)
 
-- [ ] **WS-01**: WebSocket frames are captured and shown in history against the connection that carried them
-- [ ] **WS-02**: Operator can edit and resend a WebSocket frame
-- [ ] **WS-03**: WebSocket traffic is authorised against scope, with the decision point stated explicitly
+- [x] **WS-01**: WebSocket frames are captured and shown in history against the connection that carried them *(2026-07-30)*
+- [ ] **WS-02**: Operator can edit and resend a WebSocket frame *(needs interception, deliberately deferred — see `crates/proxy/AGENTS.md` for the documented entry point)*
+- [x] **WS-03**: WebSocket traffic is authorised against scope, with the decision point stated explicitly *(2026-07-30 — re-tested per message, not just at Upgrade. Not yet specifically tested against a scope edit arriving on an already-open socket, since Scope became runtime-editable the same session; see STATE.md)*
 
 ### Scanner data (SCAN)
 
@@ -116,6 +116,7 @@ Deferred. Tracked but not in this roadmap.
 
 - **SEQ-01**: Operator can capture session tokens and analyse their entropy
   *Deferred: neither Caido nor ZAP ships this in core — both are add-ons. Becomes the first real dogfood of the plugin API once PLUGIN-01 lands.*
+  **Built 2026-07-30** as a standalone `burpsy-sequencer` crate (FIPS 140-2 statistical suite + character entropy, paste and live-capture modes), via a separate Burp feature-parity backlog rather than through the plugin API — PLUGIN-01 has not landed. The original deferral reasoning (dogfooding the plugin API) did not end up applying; noted here rather than silently implied. See STATE.md, 2026-07-30.
 
 ### Scanner
 
@@ -156,10 +157,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DSL-01 | Phase 3 | Pending |
 | DSL-02 | Phase 3 | Pending |
 | DSL-04 | Phase 3 | Pending |
-| TOOLS-01 | Phase 3 | Pending |
+| TOOLS-01 | Phase 3 | Complete (2026-07-30) |
 | TOOLS-02 | Phase 3 | Pending |
-| TOOLS-03 | Phase 3 | Pending |
-| TOOLS-04 | Phase 3 | Pending |
+| TOOLS-03 | Phase 3 | Partial (2026-07-30) — backend done, UI wiring not yet built (tracked follow-up) |
+| TOOLS-04 | Phase 3 | Complete (2026-07-30) |
 | REPORT-01 | Phase 4 | Pending |
 | REPORT-02 | Phase 4 | Pending |
 | REPORT-03 | Phase 4 | Pending |
@@ -167,10 +168,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SCAN-01 | Phase 4 | Pending |
 | SCAN-02 | Phase 4 | Pending |
 | SCAN-03 | Phase 4 | Pending |
-| SESSION-01 | Phase 5 | Pending |
-| SESSION-02 | Phase 5 | Pending |
-| SESSION-03 | Phase 5 | Pending |
-| SESSION-04 | Phase 5 | Pending |
+| SESSION-01 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
+| SESSION-02 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
+| SESSION-03 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
+| SESSION-04 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
 | CRAWL-01 | Phase 6 | Pending |
 | CRAWL-02 | Phase 6 | Pending |
 | CRAWL-03 | Phase 6 | Pending |
@@ -182,16 +183,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-01 | Phase 6 | Pending |
 | DASH-02 | Phase 6 | Pending |
 | DASH-03 | Phase 6 | Pending |
-| HARD-01 | Phase 7 | Pending |
-| HARD-02 | Phase 7 | Pending |
+| HARD-01 | Phase 7 | Complete (status corrected 2026-07-30; feature landed earlier) |
+| HARD-02 | Phase 7 | Complete (status corrected 2026-07-30; feature landed earlier) |
 | PLUGIN-01 | Phase 8 | Pending |
 | PLUGIN-02 | Phase 8 | Pending |
 | PLUGIN-03 | Phase 8 | Pending |
 | PLUGIN-04 | Phase 8 | Pending |
 | PLUGIN-05 | Phase 8 | Pending |
-| WS-01 | Phase 9 | Pending |
-| WS-02 | Phase 9 | Pending |
-| WS-03 | Phase 9 | Pending |
+| WS-01 | Phase 9 | Complete (2026-07-30) |
+| WS-02 | Phase 9 | Pending — deferred within Phase 9, entry point documented in `crates/proxy/AGENTS.md` |
+| WS-03 | Phase 9 | Complete (2026-07-30) — see caveat in the requirement's own note above |
 | MCP-01 | Phase 10 | Pending |
 | MCP-02 | Phase 10 | Pending |
 | DOM-01 | Phase 11 | Pending |
