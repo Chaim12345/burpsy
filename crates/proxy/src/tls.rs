@@ -94,13 +94,12 @@ impl std::error::Error for UnknownAlpn {}
 /// keeps interception working, and the downgrade is caused by an operator switch rather than by the
 /// target, which is the difference H2-04 turns on: it forbids *silently* downgrading.
 ///
-/// # What this does not do
+/// # What this does
 ///
-/// It does not forward HTTP/2. With no hold queue and an h2-capable target, `h2` is genuinely
-/// negotiated on both legs and the connection is then **recorded and closed**, because the frame
-/// tap and the two-leg h2 driver are later slices. That is a stated gap, visible in history as an
-/// exchange whose `protocol` is `Http2` and whose notes say so — not a silent downgrade, and not a
-/// silent success either.
+/// With no hold queue and an h2-capable target, `h2` is genuinely negotiated on both legs and the
+/// connection is **relayed** — every stream forwarded and recorded as an `Http2` exchange. With the
+/// hold queue on, only `http/1.1` is offered, because interception parses HTTP/1 messages and has no
+/// h2 equivalent yet. That downgrade is operator-caused and operator-visible, not silent.
 ///
 /// Unrecognised identifiers are dropped from the offer rather than mirrored: offering the target a
 /// protocol this proxy cannot classify invites it to select one, and there is nothing honest to do

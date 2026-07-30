@@ -9,6 +9,7 @@ burpsy-core = { path = "../core" }
 burpsy-bcheck = { path = "../bcheck" }
 burpsy-scanner = { path = "../scanner" }
 burpsy-tools = { path = "../tools" }
+burpsy-http2 = { path = "../http2" }
 tokio = { workspace = true }
 bytes = { workspace = true }
 anyhow = { workspace = true }
@@ -53,3 +54,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rustls = { version = "0.23.42", default-features = false, features = ["std", "aws-lc-rs", "tls12", "logging"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12", "logging"] }
 rustls-pki-types = "1.15.1"
+# The h2 relay test drives a real h2 origin and a real h2 client through the proxy, because
+# ALPN + stream forwarding cannot be observed from a unit test. Same version as the main dep.
+h2 = "0.4"

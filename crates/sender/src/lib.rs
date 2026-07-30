@@ -55,6 +55,7 @@
 //! sealed-trait one.
 
 mod transport;
+mod h2req;
 
 use burpsy_core::SharedScope;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -67,6 +68,8 @@ pub use burpsy_bcheck::eval::Sender;
 pub use burpsy_bcheck::eval::Target;
 pub use transport::blocking::NetSender;
 pub use transport::net::SendResult;
+pub use h2req::H2Request;
+pub use transport::h2::H2ProgramResult;
 
 /// Default per-send ceiling for the async path.
 pub const DEFAULT_SEND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -256,6 +259,97 @@ impl AuthorisedSender {
         };
         self.authorise(target, raw).map_err(SendError::Refused)?;
         transport::net::send(target, raw, timeout)
+            .await
+            .map_err(SendError::Transport)
+    }
+
+    /// Send an h2 request, authorising the exact octets that will go on the wire.
+    ///
+    /// The request is rendered through [`burpsy_http2::normalise::render_request`] — the same
+    /// function the proxy uses for its history record — and those bytes are what
+    /// [`burpsy_core::scope::authorise_request`] reads. The writer then encodes the very same
+    /// field list the rendering describes, so the path scope is checked against is the path that
+    /// reaches the target; `h2req::tests::the_authorised_path_is_the_path_the_writer_encodes`
+    /// pins that rather than asserting it. A refusal increments `refused` and never touches the
+    /// transport, exactly like [`Self::send_async`].
+    ///
+    /// Errors if this sender was built for the blocking transport — h2 egress is async-only, for
+    /// the same reason [`Self::send_async`] is.
+    pub async fn send_h2(
+        &self,
+        target: &Target,
+        req: &H2Request,
+    ) -> Result<SendResult, SendError> {
+        let timeout = match &self.transport {
+            Transport::Async { timeout } => *timeout,
+            Transport::Blocking(_) => {
+                return Err(SendError::Transport(anyhow::anyhow!(
+                    "this AuthorisedSender was built for the blocking transport; send_h2 is \
+                     async-only"
+                )));
+            }
+        };
+        self.authorise(target, &req.render())
+            .map_err(SendError::Refused)?;
+        transport::h2::send_fields(target, &req.field_list(target.tls), &req.body, timeout)
+            .await
+            .map_err(SendError::Transport)
+    }
+
+    /// Send a raw h2 frame program, for request-smuggling and desync research (H2-03).
+    ///
+    /// A program is bytes the operator assembled, so it goes through the authorisation gate like
+    /// any constructed request — but the gate cannot read a path off arbitrary frames the way it
+    /// reads one off a request line. [`h2req::program_paths`] classifies what the program's
+    /// header blocks say, and the gate follows the refuse-by-default rule the classifier's three
+    /// cases make possible:
+    ///
+    /// * **Decoded paths** — every `:path` the program will send must be in scope. Authorising
+    ///   only the first would let a second stream reach an unauthorised target.
+    /// * **Opaque** — a header block is present but unreadable (a deliberate malformation, a
+    ///   Huffman string this decoder refuses, a framing lie). The path cannot be checked, so the
+    ///   program is allowed only when the whole host is authorised via
+    ///   [`burpsy_core::scope::Scope::authorises_whole_host`].
+    /// * **None** — no header block at all. There is still no path to check, so this too needs
+    ///   whole-host authorisation rather than sailing through because nothing named a path.
+    ///
+    /// A refusal increments `refused` and never touches the transport. Errors if this sender was
+    /// built for the blocking transport.
+    pub async fn send_h2_program(
+        &self,
+        target: &Target,
+        program: &burpsy_http2::H2FrameProgram,
+    ) -> Result<H2ProgramResult, SendError> {
+        let timeout = match &self.transport {
+            Transport::Async { timeout } => *timeout,
+            Transport::Blocking(_) => {
+                return Err(SendError::Transport(anyhow::anyhow!(
+                    "this AuthorisedSender was built for the blocking transport; send_h2_program \
+                     is async-only"
+                )));
+            }
+        };
+        let allowed = match h2req::program_paths(program) {
+            h2req::ProgramPaths::Paths(paths) => paths
+                .iter()
+                .all(|p| self.scope.contains(&target.host, target.port, p, target.tls)),
+            h2req::ProgramPaths::Opaque | h2req::ProgramPaths::None => {
+                self.scope
+                    .authorises_whole_host(&target.host, target.port, target.tls)
+            }
+        };
+        if allowed {
+            self.sent.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.refused.fetch_add(1, Ordering::Relaxed);
+            return Err(SendError::Refused(format!(
+                "scope refused the h2 frame program for {}:{} — every path a program sends must \
+                 be in scope, and an unreadable or absent header block needs the whole host \
+                 authorised",
+                target.host, target.port
+            )));
+        }
+        transport::h2::send_program(target, program, timeout)
             .await
             .map_err(SendError::Transport)
     }

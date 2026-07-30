@@ -89,6 +89,62 @@ async fn spawn_tls_origin(alpn: Vec<Vec<u8>>) -> SocketAddr {
     addr
 }
 
+/// A TLS origin that speaks real HTTP/2: accepts the h2 handshake, answers one GET with a 200.
+///
+/// Unlike `spawn_tls_origin` (which negotiates h2 then reads to EOF), this drives the server side
+/// of the `h2` crate so the relay has something to talk to. It exists because the relay test needs
+/// to prove a stream is forwarded AND recorded, not just that ALPN settled on h2.
+async fn spawn_h2_origin() -> SocketAddr {
+    let eng = engine();
+    let mut cfg = rustls::ServerConfig::builder_with_provider(provider())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_cert_resolver(eng.resolver_for("localhost"));
+    cfg.alpn_protocols = vec![owned(tls::ALPN_H2)];
+    let acceptor = TlsAcceptor::from(Arc::new(cfg));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _eng = eng; // keep the CA alive
+        loop {
+            let (sock, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let tls = match acceptor.accept(sock).await {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                // Drive the h2 server handshake and answer one request.
+                let mut conn = match h2::server::handshake(tls).await {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+                if let Some(Ok((req, mut respond))) = conn.accept().await {
+                    let _ = req; // we don't inspect the request; any GET gets a 200
+                    let resp = http::Response::builder()
+                        .status(200)
+                        .body(())
+                        .unwrap();
+                    if let Ok(mut send) = respond.send_response(resp, false) {
+                        let _ = send.send_data(bytes::Bytes::from("h2 ok"), true);
+                    }
+                    // Keep driving the connection so the queued HEADERS + DATA frames
+                    // are flushed to the socket. Without this poll, `drop(conn)` closes
+                    // the TCP connection before the relay receives the response.
+                    let _ = conn.accept().await;
+                }
+            });
+        }
+    });
+    addr
+}
+
+
 async fn spawn_proxy(cfg: ProxyConfig) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -154,8 +210,15 @@ fn owned(v: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn an_h2_capable_target_is_negotiated_as_h2_and_never_downgraded_behind_the_operator() {
-    let origin = spawn_tls_origin(vec![owned(tls::ALPN_H2), owned(tls::ALPN_HTTP11)]).await;
+async fn an_h2_capable_target_is_negotiated_as_h2_and_forwarded_not_downgraded() {
+    // The property H2-04 turns on, now exercised end to end rather than asserted about a closed
+    // socket. The target offers h2, the client offers h2, and the proxy in between negotiates h2
+    // on both legs AND relays a real stream — a request goes out, an answer comes back, and the
+    // round trip lands in history as an `Http2` exchange. The old behaviour recorded such a
+    // connection and closed it, which left an h2-capable origin unbrowsable through the proxy;
+    // this test fails if that regression returns, and fails if the relay forwards bytes but
+    // forgets to record them.
+    let origin = spawn_h2_origin().await;
     let store = TrafficStore::new();
     let proxy = spawn_proxy(ProxyConfig::new(store.clone()).with_tls_engine(engine())).await;
 
@@ -167,24 +230,45 @@ async fn an_h2_capable_target_is_negotiated_as_h2_and_never_downgraded_behind_th
     .await
     .expect("the client handshake must complete");
 
-    // The property H2-04 turns on. The target offered h2 first, the client offered h2 first, and the
-    // proxy in between neither hid the offer from the target nor hid the answer from the client.
+    // The target offered h2 first, the client offered h2 first, and the proxy neither hid the
+    // offer from the target nor downgraded the answer to the client.
     assert_eq!(
         tls_client.get_ref().1.alpn_protocol(),
         Some(tls::ALPN_H2),
         "an h2-capable target must not be served to the client as http/1.1"
     );
 
-    // And the protocol is recorded as what was used, not as a default.
+    // Drive one real request through the relay. The client `Connection` future does no work
+    // until polled, so it runs on its own task for the life of the exchange — exactly the shape
+    // the relay itself uses on its origin leg.
+    let (mut send_request, client_conn) =
+        h2::client::handshake(tls_client).await.expect("client h2 handshake");
+    tokio::spawn(async move {
+        let _ = client_conn.await;
+    });
+
+    let req = http::Request::builder()
+        .method("GET")
+        .uri("https://localhost/")
+        .body(())
+        .unwrap();
+    let (resp_fut, _) = send_request.send_request(req, true).expect("send the request");
+    let resp = tokio::time::timeout(Duration::from_secs(5), resp_fut)
+        .await
+        .expect("the relay must forward the origin's answer, not stall on it")
+        .expect("the origin's response must arrive");
+    assert_eq!(
+        resp.status(),
+        http::StatusCode::OK,
+        "the relayed answer must be the origin's, unmodified in status"
+    );
+
+    // And the round trip is recorded as what it was — not as a default, and not dropped.
     let ex = wait_for_exchange(&store).await;
     assert_eq!(ex.protocol, Protocol::Http2);
     assert_eq!(ex.host, "localhost");
     assert_eq!(ex.port, origin.port());
-    let note = ex.notes.clone().unwrap_or_default();
-    assert!(
-        note.contains("not forwarded"),
-        "the gap must be stated on the row, not implied; notes were {note:?}"
-    );
+    assert_eq!(ex.status, Some(200), "the relayed response must be recorded with its status");
 }
 
 #[tokio::test]

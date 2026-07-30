@@ -291,6 +291,49 @@ impl Scope {
         possible
     }
 
+    /// Is *every* path on this host:port authorised? Stricter than [`Scope::may_contain_host`], for
+    /// callers that cannot see the path at all.
+    ///
+    /// This exists for the h2 egress path: a request built from raw HPACK-encoded header fields may
+    /// carry a `:path` the sender never decoded, so there is no path string to hand to [`Scope::contains`].
+    /// The only sound question left to ask is whether the *whole* host:port is authorised, i.e. every
+    /// path on it — not `contains(host, port, "/", tls)`, which answers a question about one specific
+    /// path (`/`) and says nothing about the rest. Reusing that shortcut here would repeat the exact
+    /// bug [`Scope::may_contain_host`]'s doc comment describes: an `include(h)` + path-scoped
+    /// `exclude(h, "/admin")` pair makes `contains(h, p, "/", tls)` true, and a caller treating that as
+    /// "the whole host is fine" would send an opaque request straight at `/admin`.
+    ///
+    /// So this is deliberately the conservative twin of `may_contain_host`, not its synonym:
+    ///
+    /// * `true` only when `allow_all` is set, or some include rule matches this host/port/tls with no
+    ///   `path_prefix` of its own (so it really does cover every path) **and** no exclude rule matches
+    ///   this host/port/tls at all — including a path-scoped exclude, which `may_contain_host` ignores
+    ///   on purpose but which this method cannot: it has no path to test the exclude's prefix against.
+    /// * `false` for an empty scope, for a path-scoped include with no unscoped include backing it up,
+    ///   and for any rule naming a different host or a different port.
+    ///
+    /// The asymmetry is deliberate: a wrong `true` here sends unauthorised traffic outside the
+    /// engagement, while a wrong `false` only refuses a request the operator can re-authorise by
+    /// widening scope. When in doubt, refuse.
+    pub fn authorises_whole_host(&self, host: &str, port: u16, tls: bool) -> bool {
+        if self.allow_all {
+            return true;
+        }
+        let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        let mut host_wide_include = false;
+        for r in &self.rules {
+            if !r.matches_host(&h, port, tls) {
+                continue;
+            }
+            match r.kind {
+                RuleKind::Exclude => return false,
+                RuleKind::Include if r.path_prefix.is_none() => host_wide_include = true,
+                RuleKind::Include => {}
+            }
+        }
+        host_wide_include
+    }
+
     /// Authorise the request that is about to be sent, from its own bytes.
     ///
     /// This is the decision that matters. Every earlier check is against the target the operator
@@ -423,6 +466,11 @@ impl SharedScope {
     /// See [`Scope::may_contain_host`].
     pub fn may_contain_host(&self, host: &str, port: u16, tls: bool) -> bool {
         self.0.read().may_contain_host(host, port, tls)
+    }
+
+    /// See [`Scope::authorises_whole_host`].
+    pub fn authorises_whole_host(&self, host: &str, port: u16, tls: bool) -> bool {
+        self.0.read().authorises_whole_host(host, port, tls)
     }
 
     /// See [`Scope::authorise_request`].
@@ -587,6 +635,62 @@ mod tests {
                 .is_err(),
             "/v2/ is outside the included prefix"
         );
+    }
+
+    // ---- authorises_whole_host: the conservative predicate for opaque-path (h2) egress ------
+
+    #[test]
+    fn an_empty_scope_does_not_authorise_a_whole_host() {
+        let sc = Scope::new();
+        assert!(!sc.authorises_whole_host("anything.test", 443, true));
+    }
+
+    #[test]
+    fn allow_all_authorises_a_whole_host() {
+        let sc = Scope::allow_everything();
+        assert!(sc.authorises_whole_host("anything.test", 443, true));
+    }
+
+    #[test]
+    fn a_host_wide_include_authorises_the_whole_host() {
+        let mut sc = Scope::new();
+        sc.add(ScopeRule::include("api.test"));
+        assert!(sc.authorises_whole_host("api.test", 443, true));
+    }
+
+    #[test]
+    fn a_path_scoped_include_does_not_authorise_the_whole_host_even_though_contains_matches_its_path()
+     {
+        let mut sc = Scope::new();
+        sc.add(ScopeRule::include("api.test").with_path_prefix("/v1/"));
+        // contains() is happy about the one path it was asked about...
+        assert!(sc.contains("api.test", 443, "/v1/orders", true));
+        // ...but that says nothing about paths the caller can't name, which is exactly the gap
+        // authorises_whole_host exists to close.
+        assert!(!sc.authorises_whole_host("api.test", 443, true));
+    }
+
+    #[test]
+    fn a_host_wide_include_plus_any_exclude_on_that_host_does_not_authorise_the_whole_host() {
+        // Even a path-scoped exclude disqualifies the host here: unlike may_contain_host, this
+        // predicate has no path to test the exclude's prefix against, so it must refuse.
+        let mut sc = Scope::new();
+        sc.add(ScopeRule::include("api.test"));
+        sc.add(ScopeRule::exclude("api.test").with_path_prefix("/admin"));
+        assert!(!sc.authorises_whole_host("api.test", 443, true));
+
+        let mut sc_whole = Scope::new();
+        sc_whole.add(ScopeRule::include("api.test"));
+        sc_whole.add(ScopeRule::exclude("api.test"));
+        assert!(!sc_whole.authorises_whole_host("api.test", 443, true));
+    }
+
+    #[test]
+    fn a_rule_for_a_different_host_or_port_does_not_authorise_this_one() {
+        let mut sc = Scope::new();
+        sc.add(ScopeRule::include("api.test").with_port(443));
+        assert!(!sc.authorises_whole_host("other.test", 443, true));
+        assert!(!sc.authorises_whole_host("api.test", 8443, true));
     }
 
     #[test]

@@ -9,5 +9,6 @@
 //! way out to the network; it does not ask for one wire implementation underneath that.
 
 pub(crate) mod blocking;
+pub(crate) mod h2;
 pub(crate) mod net;
 pub(crate) mod tls;
