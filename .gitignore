@@ -1,24 +1,47 @@
-/target
-**/*.rs.bk
-# Runtime state and generated CA material — never commit private keys.
-/ca/
-*.pem
-*.key
-# OMC operational artifacts
-# Unanchored: agents have been observed running with cwd set to a subdirectory (e.g.
-# crates/web/ui/), which writes this state at that depth instead of the repo root.
-.omc/
+```
+# Go build artifacts
+burpsy-go/burpsy
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
 
-# Agent worktrees live inside the repo; they are checkouts, not content.
-.claude/worktrees/
-.swarm/
+# Go cache directories
+burpsy-go/vendor/
+burpsy-go/bin/
 
-# Researcher web-fetch cache — machine-generated, churns, not planning content.
-.planning/research/.cache/
+# Logs
+*.log
 
-# GSD operational artifacts (runtime state, notifications) — not planning content.
-# Unanchored: agents run with cwd set to a crate, so these appear at any depth.
-.gsd/
+# Temporary files
+*.tmp
+*.swp
+*.swo
 
-# Background-shell scratch from agent runs.
-.bg-shell/
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Build directories (if any)
+build/
+dist/
+target/
+```
