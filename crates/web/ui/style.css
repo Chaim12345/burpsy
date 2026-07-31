@@ -213,6 +213,11 @@ label {
 button {
   font: inherit;
 }
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+}
 button.go {
   background: var(--acc);
   border: none;
@@ -611,9 +616,13 @@ button.ghost:disabled:hover {
   border-bottom-color: var(--acc);
 }
 .tab-close {
+  background: none;
+  border: none;
   color: var(--dim);
   padding: 0 2px;
   border-radius: var(--radius);
+  cursor: pointer;
+  font: inherit;
 }
 .tab-close:hover {
   color: var(--http-5xx);

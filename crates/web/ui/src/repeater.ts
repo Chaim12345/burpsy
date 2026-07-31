@@ -86,9 +86,9 @@ function renderTabs(): void {
       .map(
         (t) =>
           `<div class="tab-item${t.id === activeId ? " on" : ""}" data-id="${t.id}">${t.id}` +
-          `<span class="tab-close" data-close="${t.id}" title="close tab">&times;</span></div>`,
+          `<button class="tab-close" data-close="${t.id}" title="close tab" aria-label="Close tab ${t.id}">&times;</button></div>`,
       )
-      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab">+</button>`;
+      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab" aria-label="New tab">+</button>`;
 }
 
 function saveEditorIntoActiveTab(): void {
