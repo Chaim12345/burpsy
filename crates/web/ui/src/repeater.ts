@@ -46,7 +46,7 @@ export function initRepeater(): void {
         <option value="Http1">HTTP/1.1</option>
         <option value="Http2">HTTP/2</option>
       </select>
-      <button class="go" id="rep-send">Send</button>
+      <button class="go" id="rep-send" title="Send request (Ctrl+Enter / Cmd+Enter)">Send</button>
       <span id="rep-meta" class="hint"></span>
     </div>
     <div class="two">
@@ -55,6 +55,12 @@ export function initRepeater(): void {
     </div>
   `;
   $("#rep-send")!.addEventListener("click", () => void send());
+  $("#rep-raw")!.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      void send();
+    }
+  });
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {

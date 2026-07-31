@@ -69,7 +69,7 @@ export function initDecoder(): void {
             ${LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
           <label><input type="checkbox" id="dec-guess" /> guess base64/hex</label>
-          <button class="go" id="dec-run">Decode</button>
+          <button class="go" id="dec-run" title="Decode input (Ctrl+Enter / Cmd+Enter)">Decode</button>
         </div>
         <div class="row">
           <span class="hint">view decoded output as</span>
@@ -94,6 +94,12 @@ export function initDecoder(): void {
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());
+  $("#dec-input")!.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      void runDecode();
+    }
+  });
   $("#enc-run")!.addEventListener("click", () => void runEncode());
   $("#hash-run")!.addEventListener("click", () => void runHash());
   $all<HTMLInputElement>('input[name="dec-view"]').forEach((r) => {
