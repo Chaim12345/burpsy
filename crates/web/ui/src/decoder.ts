@@ -62,9 +62,10 @@ export function initDecoder(): void {
   el.innerHTML = `
     <div class="two">
       <div class="stack">
-        <textarea id="dec-input" placeholder="paste text to decode / encode / hash"></textarea>
+        <textarea id="dec-input" placeholder="paste text to decode / encode / hash" aria-label="Input text to decode, encode, or hash"></textarea>
         <div class="row">
-          <select id="dec-encoding">
+          <label for="dec-encoding" class="hint">decode as</label>
+          <select id="dec-encoding" aria-label="Decoding format">
             <option value="smart">smart</option>
             ${LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
@@ -77,20 +78,22 @@ export function initDecoder(): void {
           <label><input type="radio" name="dec-view" value="hex" /> Hex</label>
         </div>
         <div class="row">
-          <select id="enc-encoding">
+          <label for="enc-encoding" class="hint">encode as</label>
+          <select id="enc-encoding" aria-label="Encoding format">
             ${ENCODABLE_LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
           <button class="go" id="enc-run">Encode</button>
         </div>
         <div class="row">
-          <select id="hash-algorithm">
+          <label for="hash-algorithm" class="hint">hash with</label>
+          <select id="hash-algorithm" aria-label="Hash algorithm">
             ${HASH_ALGORITHMS.map((a) => `<option value="${a}">${a}</option>`).join("")}
           </select>
           <button class="go" id="hash-run">Hash</button>
           <span class="hint">one-way — there is no decode back</span>
         </div>
       </div>
-      <div><pre id="dec-output"></pre></div>
+      <div><pre id="dec-output" aria-label="Decoder output" aria-live="polite"></pre></div>
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());
@@ -180,6 +183,12 @@ function renderDecodeResp(resp: SmartResp | ExplicitResp): string {
 }
 
 async function runDecode(): Promise<void> {
+  const btn = $<HTMLButtonElement>("#dec-run");
+  const origText = btn ? btn.textContent : "Decode";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Decoding...";
+  }
   const input = $<HTMLTextAreaElement>("#dec-input")!.value;
   const encoding = $<HTMLSelectElement>("#dec-encoding")!.value;
   const guess = $<HTMLInputElement>("#dec-guess")!.checked;
@@ -197,10 +206,21 @@ async function runDecode(): Promise<void> {
   } catch (e) {
     paneShowsDecode = false;
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
   }
 }
 
 async function runEncode(): Promise<void> {
+  const btn = $<HTMLButtonElement>("#enc-run");
+  const origText = btn ? btn.textContent : "Encode";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Encoding...";
+  }
   const input = $<HTMLTextAreaElement>("#dec-input")!.value;
   const encoding = $<HTMLSelectElement>("#enc-encoding")!.value;
   const out = $("#dec-output")!;
@@ -211,10 +231,21 @@ async function runEncode(): Promise<void> {
     out.innerHTML = `<b>${esc(resp.encoding)}:</b>\n${bytesLine(resp.output)}`;
   } catch (e) {
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
   }
 }
 
 async function runHash(): Promise<void> {
+  const btn = $<HTMLButtonElement>("#hash-run");
+  const origText = btn ? btn.textContent : "Hash";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Hashing...";
+  }
   const input = $<HTMLTextAreaElement>("#dec-input")!.value;
   const algorithm = $<HTMLSelectElement>("#hash-algorithm")!.value;
   const out = $("#dec-output")!;
@@ -228,5 +259,10 @@ async function runHash(): Promise<void> {
     out.innerHTML = `<b>${esc(resp.algorithm)}:</b>\n${esc(resp.output.text)}\n<span class="hint">(${bytes} bytes, hex)</span>`;
   } catch (e) {
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
   }
 }

@@ -1,0 +1,3 @@
+## 2026-07-28 - [Accessible Live Output Regions in Security Tools]
+**Learning:** For interactive utility components (like Decoders, Encoders, Comparers) that process input on user command, updating output text boxes or preformatted blocks without triggering a full page reload leaves screen readers unaware of the results. Standard assistive technology requires explicit announcement setups.
+**Action:** Always pair dynamic, command-driven text output areas (like `<pre>`) with `aria-live="polite"` and a clear `aria-label` describing the role of the block, allowing assistive technologies to automatically announce updates when a processing command completes.
