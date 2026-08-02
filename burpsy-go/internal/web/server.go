@@ -10,8 +10,12 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/sitemap"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 	"go.uber.org/zap"
 )
 
@@ -25,6 +29,10 @@ type Server struct {
 	intruder *intruder.Intruder
 	scanner  *scanner.ActiveScanner
 	findings *core.FindingStore
+	sitemap  *sitemap.SiteMap
+	sessionCoordinator *session.Coordinator
+	matchReplace *matchreplace.RuleSet
+	toolLog     *toollog.ToolLog
 }
 
 // NewServer creates a new web server.
@@ -36,6 +44,10 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		mux:      http.NewServeMux(),
 		sender:   sender.NewSender(sender.DefaultSenderConfig()),
 		findings: core.NewFindingStore(),
+		sitemap:  sitemap.New(),
+		sessionCoordinator: session.NewCoordinator(zap.NewNop()),
+		matchReplace:       matchreplace.NewRuleSet(),
+		toolLog:            toollog.New(),
 	}
 	s.setupRoutes()
 	return s
@@ -71,6 +83,30 @@ func (s *Server) WithFindings(fs *core.FindingStore) *Server {
 	return s
 }
 
+// WithSitemap sets the sitemap.
+func (s *Server) WithSitemap(sm *sitemap.SiteMap) *Server {
+	s.sitemap = sm
+	return s
+}
+
+// WithSessionCoordinator sets the session coordinator.
+func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
+	s.sessionCoordinator = sc
+	return s
+}
+
+// WithMatchReplace sets the match/replace rule set.
+func (s *Server) WithMatchReplace(mr *matchreplace.RuleSet) *Server {
+	s.matchReplace = mr
+	return s
+}
+
+// WithToolLog sets the tool log.
+func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
+	s.toolLog = tl
+	return s
+}
+
 func (s *Server) setupRoutes() {
 	// API routes
 	s.mux.HandleFunc("/api/history", s.handleHistory)
@@ -82,6 +118,23 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit)
 
+	// Session routes
+	s.mux.HandleFunc("/api/session/rules", s.handleSessionRules)
+	s.mux.HandleFunc("/api/session/rules/", s.handleSessionRuleDetail)
+	s.mux.HandleFunc("/api/session/cookies", s.handleSessionCookies)
+	
+	// Sitemap routes
+	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
+	
+	// Match/Replace routes
+	s.mux.HandleFunc("/api/tools/rules", s.handleMatchReplaceRules)
+	
+	// Tool log routes
+	s.mux.HandleFunc("/api/tools/log", s.handleToolLog)
+	
+	// Scanner report export
+	s.mux.HandleFunc("/api/scanner/report", s.handleScannerReport)
+	
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)
 }
@@ -496,4 +549,135 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 	// Serve the static web UI, embedded at build time.
 	uiHandler(w, r)
+}
+
+// handleSessionRules handles GET / POST /api/session/rules
+func (s *Server) handleSessionRules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		rules := s.sessionCoordinator.AllRules()
+		json.NewEncoder(w).Encode(rules)
+	case http.MethodPost:
+		var rule session.SessionRule
+		if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		id := s.sessionCoordinator.AddRule(&rule)
+		json.NewEncoder(w).Encode(map[string]interface{}{"id": id})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleSessionRuleDetail handles PUT / DELETE /api/session/rules/{id}
+func (s *Server) handleSessionRuleDetail(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/session/rules/")
+	if path == "" {
+		http.Error(w, "Missing rule ID", http.StatusBadRequest)
+		return
+	}
+	// Parse ID
+	var id session.RuleID
+	if _, err := fmt.Sscanf(path, "%d", &id); err != nil {
+		http.Error(w, "Invalid rule ID", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodDelete:
+		s.sessionCoordinator.RemoveRule(id)
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodPut:
+		var rule session.SessionRule
+		if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		id = s.sessionCoordinator.AddRule(&rule)
+		json.NewEncoder(w).Encode(map[string]interface{}{"id": id})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleSessionCookies handles GET /api/session/cookies
+func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// For now return empty - would need host/port/tls params
+	json.NewEncoder(w).Encode(map[string]string{})
+}
+
+// handleSitemap handles GET /api/sitemap
+func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.sitemap.Sync(s.store)
+	hosts := s.sitemap.Hosts()
+	json.NewEncoder(w).Encode(hosts)
+}
+
+// handleMatchReplaceRules handles GET / PUT /api/tools/rules
+func (s *Server) handleMatchReplaceRules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		rules := s.matchReplace.Rules()
+		json.NewEncoder(w).Encode(rules)
+	case http.MethodPut:
+		var rules []*matchreplace.Rule
+		if err := json.NewDecoder(r.Body).Decode(&rules); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		s.matchReplace.SetRules(rules)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleToolLog handles GET /api/tools/log
+func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	entries := s.toolLog.All()
+	json.NewEncoder(w).Encode(entries)
+}
+
+// handleScannerReport handles GET /api/scanner/report
+func (s *Server) handleScannerReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	format := r.URL.Query().Get("format")
+	var fmt scanner.ExportFormat
+	switch strings.ToLower(format) {
+	case "json":
+		fmt = scanner.FormatJSON
+	case "sarif":
+		fmt = scanner.FormatSARIF
+	case "html":
+		fmt = scanner.FormatHTML
+	default:
+		fmt = scanner.FormatJSON
+	}
+	result := s.scanner.Export(fmt, s.scope)
+	if result.Error != nil {
+		http.Error(w, result.Error.Error(), http.StatusInternalServerError)
+		return
+	}
+	switch result.Format {
+	case scanner.FormatHTML:
+		w.Header().Set("Content-Type", "text/html")
+	default:
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.Write(result.Bytes)
 }

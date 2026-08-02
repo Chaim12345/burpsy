@@ -25,6 +25,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"go.uber.org/zap"
 )
 
@@ -75,8 +76,30 @@ func (p *TlsPolicy) AddPassthrough(pattern string) {
 // WithEngine sets the TLS engine for interception.
 func (p *TlsPolicy) WithEngine(engine *TlsEngine) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.Unlock()
 	p.engine = engine
+}
+
+// AddPassthroughPort adds a port to passthrough.
+func (p *TlsPolicy) AddPassthroughPort(port uint16) {
+	p.mu.Lock()
+	p.mu.Unlock()
+	p.passthroughPorts = append(p.passthroughPorts, port)
+}
+
+// WithCommonDefaults returns a TLS policy with common pinned hosts.
+func (p *TlsPolicy) WithCommonDefaults() *TlsPolicy {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	common := []string{
+		"*.apple.com", "*.google.com", "*.microsoft.com", "*.amazon.com",
+		"*.github.com", "*.gitlab.com", "*.bitbucket.org",
+		"*.cloudflare.com", "*.akamai.com", "*.fastly.com",
+}
+	for _, h := range common {
+		p.passthrough = append(p.passthrough, h)
+}
+	return p
 }
 
 // ShouldPassthrough checks if a host should be passed through without interception.
@@ -313,8 +336,7 @@ type ProxyConfig struct {
 	store        *core.TrafficStore
 	tls          *TlsPolicy
 	scope        *core.Scope
-	interceptor  *Interceptor
-	matchReplace *MatchReplaceRules
+	matchReplace *matchreplace.RuleSet
 	scanner      *scanner.PassiveScanner
 	findings     *core.FindingStore
 	logger       *zap.Logger
@@ -521,8 +543,8 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			reqID, err = s.config.store.Put(requestData, core.DirectionRequest)
 			if err != nil {
 				s.config.logger.Error("failed to store request", zap.Error(err))
+				}
 			}
-		}
 
 		// Forward over the persistent upstream connection.
 		if _, err := upstream.Write(requestData); err != nil {
@@ -554,12 +576,17 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			}
 			s.config.store.AddExchange(exchange)
 			s.runPassiveScan(exchange)
-		}
+			}
+
+		// Apply Match & Replace on response
+		if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
+				responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
+			}
 
 		// Return the response to the client.
 		if _, err := tlsClient.Write(responseData); err != nil {
 			return
-		}
+			}
 	}
 }
 
@@ -658,6 +685,11 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	respID, err := s.config.store.Put(responseData, core.DirectionResponse)
 	if err != nil {
 		s.config.logger.Error("failed to store response", zap.Error(err))
+	}
+
+	// Apply Match & Replace on response
+	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
+		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
 	}
 
 	// Send to client
@@ -830,56 +862,4 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16) ([
 // (which never comes on a keep-alive connection).
 func readHTTPResponse(conn net.Conn) ([]byte, error) {
 	return httputil.ReadHTTPResponse(conn)
-}
-
-
-// Interceptor handles request/response interception.
-type Interceptor struct {
-	mu       sync.RWMutex
-	enabled  bool
-	rules    *InterceptRules
-	heldReqs chan *HeldRequest
-}
-
-// InterceptRules holds interception rules.
-type InterceptRules struct {
-	requestRules  []InterceptRule
-	responseRules []InterceptRule
-}
-
-// InterceptRule defines when to intercept.
-type InterceptRule struct {
-	Field     string
-	Operator  string
-	Value     string
-	Enabled   bool
-}
-
-// HeldRequest represents a held request waiting for review.
-type HeldRequest struct {
-	ID      uint64
-	Data    []byte
-	Reason  string
-	Respond chan HeldResponse
-}
-
-// HeldResponse is the response to a held request.
-type HeldResponse struct {
-	Action string // "send", "drop", "modify"
-	Data   []byte
-}
-
-// MatchReplaceRules holds match and replace rules.
-type MatchReplaceRules struct {
-	mu    sync.RWMutex
-	rules []MatchReplaceRule
-}
-
-// MatchReplaceRule defines a match and replace operation.
-type MatchReplaceRule struct {
-	Match     string
-	Replace   string
-	Category  string
-	Target    string
-	Enabled   bool
 }

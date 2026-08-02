@@ -34,6 +34,8 @@ type ScanConfig struct {
 	CheckPathTraversal bool
 	CheckSSRF       bool
 	CheckXXE        bool
+	CheckJwtWeak    bool
+	CheckJSVulns    bool
 	CustomPayloads  []string
 }
 
@@ -109,6 +111,18 @@ func (s *ActiveScanner) Audit(ctx context.Context, exchangeID uint64) ([]*Findin
 	if s.config.CheckPathTraversal {
 		ptFindings := s.checkPathTraversal(ctx, exchange)
 		findings = append(findings, ptFindings...)
+	}
+
+	// Run JWT weak secret checks
+	if s.config.CheckJwtWeak {
+		jwtFindings := s.checkJWTWeak(ctx, exchange)
+		findings = append(findings, jwtFindings...)
+	}
+
+	// Run JS vulnerability checks
+	if s.config.CheckJSVulns {
+		jsFindings := s.checkJSVulns(ctx, exchange)
+		findings = append(findings, jsFindings...)
 	}
 
 	// Store findings

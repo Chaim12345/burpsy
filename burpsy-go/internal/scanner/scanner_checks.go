@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"context"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 )
