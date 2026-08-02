@@ -1,0 +1,3 @@
+## 2026-08-02 - Added Clipboard Copy to Decoder Tab
+**Learning:** Adding subtle clipboard actions directly within tool output views (like the Decoder) dramatically reduces user cognitive friction and manual text selection effort. The copy button is only made visible when a successful operation (decode/encode/hash) occurs, avoiding screen clutter when the tool is empty or in an error state.
+**Action:** Always provide discrete "Copy" elements for raw technical output fields when those outputs are commonly transported elsewhere. Use temporary overlay toast notifications to confirm the interaction.

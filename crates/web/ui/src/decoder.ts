@@ -1,6 +1,6 @@
 // Decoder tab: smart multi-layer decode, explicit "decode as", encode, and hash.
 
-import { $, $all, esc, postJSON } from "./common";
+import { $, $all, esc, postJSON, toast } from "./common";
 
 interface BytesView {
   text: string;
@@ -56,6 +56,9 @@ let lastDecode: SmartResp | ExplicitResp | null = null;
  */
 let paneShowsDecode = false;
 
+/** The raw result string from the last successful decode, encode, or hash. */
+let lastResultText = "";
+
 export function initDecoder(): void {
   const el = $("#decoder");
   if (!el) return;
@@ -90,12 +93,25 @@ export function initDecoder(): void {
           <span class="hint">one-way — there is no decode back</span>
         </div>
       </div>
-      <div><pre id="dec-output"></pre></div>
+      <div>
+        <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <b>Decoded Output</b>
+          <button class="ghost small" id="dec-copy" style="display: none;" aria-label="Copy output text to clipboard">Copy</button>
+        </div>
+        <pre id="dec-output"></pre>
+      </div>
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());
   $("#enc-run")!.addEventListener("click", () => void runEncode());
   $("#hash-run")!.addEventListener("click", () => void runHash());
+  $("#dec-copy")!.addEventListener("click", () => {
+    if (lastResultText) {
+      void navigator.clipboard.writeText(lastResultText).then(() => {
+        toast("Copied output to clipboard!");
+      });
+    }
+  });
   $all<HTMLInputElement>('input[name="dec-view"]').forEach((r) => {
     r.addEventListener("change", () => {
       if (paneShowsDecode && lastDecode) $("#dec-output")!.innerHTML = renderDecodeResp(lastDecode);
@@ -184,7 +200,10 @@ async function runDecode(): Promise<void> {
   const encoding = $<HTMLSelectElement>("#dec-encoding")!.value;
   const guess = $<HTMLInputElement>("#dec-guess")!.checked;
   const out = $("#dec-output")!;
+  const btn = $<HTMLButtonElement>("#dec-copy")!;
   out.textContent = "decoding…";
+  btn.style.display = "none";
+  lastResultText = "";
   try {
     const resp = await postJSON<SmartResp | ExplicitResp>("/api/tools/decode", {
       input,
@@ -194,6 +213,8 @@ async function runDecode(): Promise<void> {
     lastDecode = resp;
     paneShowsDecode = true;
     out.innerHTML = renderDecodeResp(resp);
+    lastResultText = resp.output.text;
+    btn.style.display = "";
   } catch (e) {
     paneShowsDecode = false;
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
@@ -204,11 +225,16 @@ async function runEncode(): Promise<void> {
   const input = $<HTMLTextAreaElement>("#dec-input")!.value;
   const encoding = $<HTMLSelectElement>("#enc-encoding")!.value;
   const out = $("#dec-output")!;
+  const btn = $<HTMLButtonElement>("#dec-copy")!;
   paneShowsDecode = false;
   out.textContent = "encoding…";
+  btn.style.display = "none";
+  lastResultText = "";
   try {
     const resp = await postJSON<EncodeResp>("/api/tools/encode", { input, encoding });
     out.innerHTML = `<b>${esc(resp.encoding)}:</b>\n${bytesLine(resp.output)}`;
+    lastResultText = resp.output.text;
+    btn.style.display = "";
   } catch (e) {
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
   }
@@ -218,14 +244,19 @@ async function runHash(): Promise<void> {
   const input = $<HTMLTextAreaElement>("#dec-input")!.value;
   const algorithm = $<HTMLSelectElement>("#hash-algorithm")!.value;
   const out = $("#dec-output")!;
+  const btn = $<HTMLButtonElement>("#dec-copy")!;
   // A digest has no layers to unwind and no Text/Hex choice worth making — hex is the only form
   // worth printing — so the view radio deliberately does not apply here.
   paneShowsDecode = false;
   out.textContent = "hashing…";
+  btn.style.display = "none";
+  lastResultText = "";
   try {
     const resp = await postJSON<HashResp>("/api/tools/hash", { input, algorithm });
     const bytes = resp.output.len / 2;
     out.innerHTML = `<b>${esc(resp.algorithm)}:</b>\n${esc(resp.output.text)}\n<span class="hint">(${bytes} bytes, hex)</span>`;
+    lastResultText = resp.output.text;
+    btn.style.display = "";
   } catch (e) {
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
   }
