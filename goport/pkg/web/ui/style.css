@@ -1,0 +1,763 @@
+:root {
+  --bg: #12141a;
+  --fg: #e5e7eb;
+  --dim: #8a8f98;
+  --acc: #ff7a45;
+  --pan: #1a1d25;
+  --brd: #262b35;
+  --input-bg: #0e1015;
+
+  /* Severity (Scanner) and HTTP status colours — shared across every screen that renders either. */
+  --sev-high: #f87171;
+  --sev-medium: #fb923c;
+  --sev-low: #fbbf24;
+  --sev-info: #60a5fa;
+  --http-2xx: #4ade80;
+  --http-3xx: #60a5fa;
+  --http-4xx: #fbbf24;
+  --http-5xx: #f87171;
+
+  --radius: 2px;
+  --radius-lg: 4px;
+
+  /* UI chrome (labels, buttons, nav) in a humanist sans; technical/data content stays monospace.
+     Named webfonts are listed first so an operator who happens to have them installed gets an
+     exact match, but nothing is fetched over the network — this tool must work fully offline. */
+  --font-sans: "Public Sans", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font: 13px/1.5 var(--font-sans);
+  background: var(--bg);
+  color: var(--fg);
+}
+header {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--brd);
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+h1 {
+  font: 700 14px var(--font-mono);
+  margin: 0;
+  color: var(--acc);
+  letter-spacing: 0.5px;
+}
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+nav button {
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  color: var(--dim);
+  padding: 4px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+nav button.on {
+  color: var(--fg);
+  border-bottom-color: var(--acc);
+}
+#ca-link {
+  color: var(--dim);
+  text-decoration: none;
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  padding: 3px 10px;
+  font-family: var(--font-mono);
+}
+#ca-link:hover {
+  color: var(--fg);
+  border-color: var(--acc);
+}
+.badge {
+  color: var(--fg);
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  padding: 3px 10px;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+#stats {
+  margin-left: auto;
+  color: var(--dim);
+  font: 12px var(--font-mono);
+  white-space: nowrap;
+}
+main {
+  padding: 12px 14px;
+}
+section {
+  display: none;
+}
+section.on {
+  display: block;
+}
+
+/* ---- layout helpers ------------------------------------------------------------------- */
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.three {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+.four {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.grow {
+  flex: 1;
+}
+.muted,
+.hint {
+  color: var(--dim);
+}
+.hint {
+  font-size: 12px;
+}
+
+/* ---- form controls -------------------------------------------------------------------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+}
+th,
+td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--brd);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 380px;
+}
+th {
+  color: var(--dim);
+  font: 400 12px var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+tr:hover td {
+  background: #1e222c;
+}
+tr.clickable {
+  cursor: pointer;
+}
+textarea {
+  width: 100%;
+  background: var(--input-bg);
+  color: var(--fg);
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  font: inherit;
+  font-family: var(--font-mono);
+  padding: 8px;
+  min-height: 220px;
+  resize: vertical;
+}
+input,
+select {
+  background: var(--input-bg);
+  color: var(--fg);
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  font: inherit;
+  font-family: var(--font-mono);
+  padding: 5px 8px;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--acc);
+}
+input[type="checkbox"] {
+  padding: 0;
+}
+label {
+  color: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+button {
+  font: inherit;
+}
+button.go {
+  background: var(--acc);
+  border: none;
+  border-radius: var(--radius);
+  color: #12141a;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-weight: 700;
+}
+button.go:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.ghost {
+  background: none;
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  color: var(--dim);
+  padding: 5px 12px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+button.ghost:hover {
+  color: var(--fg);
+  border-color: var(--acc);
+}
+button.dashed {
+  background: none;
+  border: 1px dashed var(--brd);
+  border-radius: var(--radius);
+  color: var(--dim);
+  padding: 8px 12px;
+  cursor: pointer;
+  width: 100%;
+}
+button.dashed:hover {
+  color: var(--fg);
+  border-color: var(--acc);
+}
+button.small {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+pre {
+  background: var(--input-bg);
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  padding: 8px;
+  overflow: auto;
+  max-height: 60vh;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+}
+
+/* ---- pills: HTTP status, severity, source tags, small state indicators ----------------- */
+
+.pill {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  font: 700 11px var(--font-mono);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.pill-outline {
+  background: none;
+  border: 1px solid var(--brd);
+  color: var(--fg);
+  font-weight: 400;
+}
+
+.s2,
+.s3,
+.s4,
+.s5 {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  font: 700 11px var(--font-mono);
+}
+.s2 {
+  background: color-mix(in srgb, var(--http-2xx) 22%, transparent);
+  color: var(--http-2xx);
+}
+.s3 {
+  background: color-mix(in srgb, var(--http-3xx) 22%, transparent);
+  color: var(--http-3xx);
+}
+.s4 {
+  background: color-mix(in srgb, var(--http-4xx) 22%, transparent);
+  color: var(--http-4xx);
+}
+.s5 {
+  background: color-mix(in srgb, var(--http-5xx) 22%, transparent);
+  color: var(--http-5xx);
+}
+.err {
+  color: var(--http-5xx);
+}
+.ok {
+  color: var(--http-2xx);
+}
+
+/* ---- severity / confidence (Scanner) ---------------------------------------------------- */
+
+.sev-high {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  font: 700 11px var(--font-mono);
+  background: var(--sev-high);
+  color: #2a0d0d;
+}
+.sev-medium {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  font: 700 11px var(--font-mono);
+  background: var(--sev-medium);
+  color: #2a1705;
+}
+.sev-low {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  font: 700 11px var(--font-mono);
+  background: var(--sev-low);
+  color: #2a2205;
+}
+.sev-info {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius);
+  font: 700 11px var(--font-mono);
+  background: none;
+  border: 1px solid var(--brd);
+  color: var(--dim);
+}
+
+/* ---- source tags (Logger / Dashboard activity feed) -------------------------------------- */
+
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  font: 400 11px var(--font-mono);
+  color: var(--dim);
+}
+.tag-repeater {
+  border-color: var(--acc);
+  color: var(--acc);
+}
+.tag-intruder {
+  border-color: var(--http-5xx);
+  color: var(--http-5xx);
+}
+.tag-scanner {
+  border-color: var(--sev-medium);
+  color: var(--sev-medium);
+}
+.tag-intercept {
+  border-color: var(--http-3xx);
+  color: var(--http-3xx);
+}
+.tag-bcheck {
+  border-color: var(--dim);
+  color: var(--dim);
+}
+
+/* ---- status pills (e.g. Session's "recovered", live-audit "on/off") ---------------------- */
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: var(--radius);
+  font: 700 11px var(--font-mono);
+}
+.status-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status-pill.good {
+  background: color-mix(in srgb, var(--http-2xx) 18%, transparent);
+  color: var(--http-2xx);
+}
+.status-pill.bad {
+  background: color-mix(in srgb, var(--http-5xx) 18%, transparent);
+  color: var(--http-5xx);
+}
+.status-pill.off {
+  background: var(--brd);
+  color: var(--dim);
+}
+
+/* ---- toggle switch (Intercept on/off, live-audit on/off) ---------------------------------- */
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch .slider {
+  position: absolute;
+  inset: 0;
+  background: var(--brd);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.switch .slider::before {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  left: 3px;
+  top: 3px;
+  background: var(--dim);
+  border-radius: 50%;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.switch input:checked + .slider {
+  background: color-mix(in srgb, var(--acc) 35%, var(--pan));
+}
+.switch input:checked + .slider::before {
+  transform: translateX(16px);
+  background: var(--acc);
+}
+
+/* ---- organizer highlight colours (Burp's HighlightColor set) --------------------------- */
+
+.hl-red {
+  border-left: 3px solid #c0504d;
+}
+.hl-orange {
+  border-left: 3px solid #d38a3f;
+}
+.hl-yellow {
+  border-left: 3px solid #d3c23f;
+}
+.hl-green {
+  border-left: 3px solid #6ba34d;
+}
+.hl-cyan {
+  border-left: 3px solid #4dbfb0;
+}
+.hl-blue {
+  border-left: 3px solid #4d78b0;
+}
+.hl-pink {
+  border-left: 3px solid #c96fae;
+}
+.hl-magenta {
+  border-left: 3px solid #a35ac0;
+}
+.hl-gray {
+  border-left: 3px solid #808080;
+}
+.hl-none {
+  border-left: 3px solid transparent;
+}
+
+/* ---- diff (Comparer) --------------------------------------------------------------------- */
+
+.diff-equal {
+  color: var(--dim);
+}
+.diff-delete {
+  background: #4a2323;
+  color: #f0a8a8;
+  text-decoration: line-through;
+}
+.diff-insert {
+  background: #1f4a2b;
+  color: #a8f0b8;
+}
+.diff-hunk-current {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
+  filter: brightness(1.5);
+}
+button.ghost:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+button.ghost:disabled:hover {
+  color: var(--dim);
+  border-color: var(--brd);
+}
+
+/* ---- tree (Site map) ---------------------------------------------------------------------- */
+
+.tree {
+  font-family: var(--font-mono);
+}
+.tree ul {
+  list-style: none;
+  margin: 0;
+  padding-left: 18px;
+}
+.tree > ul {
+  padding-left: 0;
+}
+.tree li {
+  padding: 2px 0;
+}
+.tree .node {
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 4px;
+  border-radius: var(--radius);
+}
+.tree .node:hover {
+  background: #1e222c;
+  color: var(--acc);
+}
+.tree .seg {
+  color: var(--fg);
+}
+.tree .unrequested .seg {
+  color: var(--dim);
+  font-style: italic;
+}
+.tree .count {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+/* ---- sub-tabs within a tab (Tools) --------------------------------------------------------- */
+
+.subnav {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--brd);
+}
+.subnav button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--dim);
+  padding: 6px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+.subnav button.on {
+  color: var(--fg);
+  border-bottom-color: var(--acc);
+}
+.subsection {
+  display: none;
+}
+.subsection.on {
+  display: block;
+}
+
+/* ---- tab strip (Repeater: one numbered tab per sent request) --------------------------------- */
+
+.tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--brd);
+  flex-wrap: wrap;
+}
+.tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 2px solid transparent;
+  color: var(--dim);
+  padding: 6px 8px 6px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-mono);
+}
+.tab-item.on {
+  color: var(--fg);
+  border-bottom-color: var(--acc);
+}
+.tab-close {
+  color: var(--dim);
+  padding: 0 2px;
+  border-radius: var(--radius);
+}
+.tab-close:hover {
+  color: var(--http-5xx);
+}
+.tab-add {
+  background: none;
+  border: none;
+  color: var(--dim);
+  padding: 6px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+.tab-add:hover {
+  color: var(--acc);
+}
+
+/* ---- toast ---------------------------------------------------------------------------------- */
+
+#toast {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  background: var(--pan);
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  max-width: 360px;
+  z-index: 100;
+  font-family: var(--font-mono);
+}
+#toast.show {
+  opacity: 1;
+}
+#toast.error {
+  border-color: var(--http-5xx);
+  color: #f0a8a8;
+}
+
+/* ---- cards, stat tiles ------------------------------------------------------------------------ */
+
+.card {
+  border: 1px solid var(--brd);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  margin-bottom: 10px;
+  background: var(--pan);
+}
+.card-title {
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+.stat-tile {
+  border: 1px solid var(--brd);
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
+}
+.stat-tile .label {
+  color: var(--dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.stat-tile .value {
+  font: 700 24px var(--font-mono);
+  margin-top: 4px;
+}
+.actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.detail-text {
+  white-space: pre-wrap;
+  margin-top: 2px;
+}
+
+/* ---- Sequencer character-distribution bars ----------------------------------------------------
+
+   Deliberately plain divs with a percentage width rather than a charting library: this project has
+   no frontend dependencies beyond bun and typescript, and a distribution of at most 256 values per
+   position does not need one. */
+
+.seq-positions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.seq-position {
+  border: 1px solid var(--brd);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  background: var(--input-bg);
+}
+/* A position that never varies is the finding, so it is outlined rather than left to blend in. */
+.seq-position.dead {
+  border-color: var(--sev-medium);
+}
+.seq-position-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+.seq-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+.seq-bar-row {
+  display: grid;
+  grid-template-columns: 2.6em 1fr 3.2em;
+  gap: 5px;
+  align-items: center;
+  font: 11px var(--font-mono);
+}
+.seq-bar-label {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.seq-bar-track {
+  background: var(--bg);
+  border-radius: var(--radius);
+  height: 9px;
+  overflow: hidden;
+}
+.seq-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--acc);
+  /* Guarantees a visible sliver for a character that appeared once in a large sample, so a rare
+     value reads as rare rather than as absent. */
+  min-width: 1px;
+}
+.seq-bar-count {
+  color: var(--dim);
+  text-align: right;
+}
