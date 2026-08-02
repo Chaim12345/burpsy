@@ -3,10 +3,10 @@ gsd_state_version: '1.0'
 status: executing
 progress:
   total_phases: 12
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 1
   completed_plans: 1
-  percent: 25
+  percent: 33
 ---
 
 # Project State
@@ -16,194 +16,182 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-27)
 
 **Core value:** Run PortSwigger's published BCheck corpus, unmodified and honestly counted, against real traffic without the memory cost that forces Burp to discard scan work.
-**Current focus:** Phases 1, 5, 7 complete. Phases 3 and 9 gained substantial partial coverage this
-session via a Burp feature-parity pass that ran outside the phase-by-phase roadmap (see "What this
-session actually was" below) — **nothing from it is committed yet.**
+**Current focus:** Phases 1, 3, 5, 7 complete. Phases 2, 4, 9 partial. Phases 6, 8, 10–12 not started.
+Phase 4 is "substantially delivered" (SCAN-03 lacks only an operator-facing selector). The Burp
+feature-parity backlog described in the previous state file is fully merged, committed, and pushed;
+what remains open is listed in "Next steps".
 
 ## Read this first
 
-**Nothing from this session is committed.** HEAD is still `ac1ce4a`, the same commit the previous
-session ended on. 61 files are modified/untracked in the working tree, all verified by a full
-`cargo test --workspace` (green, 0 failures, every crate) and `bunx tsc --noEmit` (clean) run just
-before this update — but not reviewed line-by-line by a human and not committed. Treat this session's
-work as "built and passing its own tests," not as "merged."
+**The previous "Read this first" — "Nothing from this session is committed. HEAD is still `ac1ce4a`"
+— is obsolete.** Every item it described as uncommitted working-tree state has since been committed
+(29 commits, `be69143`..`b647a34`), pushed, and is in sync with `origin/master`. The planning docs
+that drifted (REQUIREMENTS.md checkboxes, ROADMAP.md's progress table) were reconciled against the
+code in `90933a7`, `18a1fdb`, and `64046a5`; this file's own claims are refreshed in this revision.
 
-The ROADMAP progress table and REQUIREMENTS.md checkboxes were stale coming into this session (flagged
-by the previous session, never fixed). This update corrects the specific rows this session has direct
-evidence for — Phase 1/5/7 completion the previous session already claimed but never reflected in
-ROADMAP.md's table, plus Phase 3 and 9's new partial coverage. It does **not** attempt a full audit of
-Phases 2, 4, 6, 8, 10–12 — no work touched them this session and re-verifying old claims from scratch
-was out of scope.
+The one gate gap that matters is external, not code: **`/tmp/BChecks` (the 264-check PortSwigger
+corpus) is absent from this machine**, so the BCheck conformance suite and `e2e-scan.sh` report
+SKIP rather than PASS (correctly, per HARD-02). Everything that can run on this machine does pass —
+see "Gate" below.
 
-## What this session actually was
+## Gate
 
-Not roadmap-phase execution. A separate initiative: an audit comparing burpsy against real Burp Suite
-produced a 19-item gap-fix backlog (tracked as tasks #5–#21 in this session's task list, not as GSD
-plans), fanned out to parallel agents (7 direct small UI tasks, 8 larger tasks in isolated git
-worktrees), then merged back into the main tree one at a time with full-suite verification between
-each merge. Several items map onto existing v1 requirements (below); several others — runtime-editable
-Scope, conditional proxy intercept rules, the Sequencer's full FIPS-140-2 analysis — don't correspond
-to any single REQUIREMENTS.md line and were built as direct Burp-parity items, not derived from a
-phase's success criteria. Worth an operator decision at some point: fold these into REQUIREMENTS.md as
-first-class entries, or keep tracking Burp-parity work as a separate backlog alongside the roadmap.
+Full `./verify.sh` run fresh on 2026-08-02:
 
-One of these ships ahead of its stated dependency: SEQ-01 (Sequencer) was deferred in REQUIREMENTS.md
-v2 pending PLUGIN-01 ("becomes the first dogfood of the plugin API"). It landed this session as a
-standalone crate with no plugin API involved, because the Burp-parity audit scoped it directly. Noted
-in REQUIREMENTS.md rather than silently treated as satisfying the original deferral reasoning.
+| Check | Result |
+|---|---|
+| Build (warnings count as failure) | **PASS** — clean, zero warnings |
+| Clippy | **PASS** — clean |
+| Unit tests | **PASS** — 1032 passing (up from 438 when the root AGENTS.md was written) |
+| BCheck corpus conformance | **SKIP** — `/tmp/BChecks` absent (partition invariant UNVERIFIED here) |
+| e2e-audit.sh | **PASS** — 15 passed, 0 failed |
+| e2e-intercept.sh | **PASS** — 24 passed, 0 failed |
+| e2e.sh | **PASS** — 12 passed, 0 failed |
+| e2e-tls.sh | **PASS** — 15 passed, 0 failed |
+| e2e-scan.sh | **SKIP** — needs the same corpus |
 
-## Current Position
+Verdict: **VERIFIED WITH GAPS (2 skipped)** — the two skips are both the missing corpus, and both
+report as skips, not passes. Placing the corpus at `/tmp/BChecks` closes the only open gate items.
 
-Phase: Phases 1, 5, 7 complete. Phase 3 and Phase 9 now Partial (were "Not started"). Phases 2, 4, 6
-unchanged (Partial/Partial/Not started per last session — not re-verified this session). Phases 8,
-10–12 not started.
-Status: Executing
-Last activity: 2026-07-30
+## What the previous session actually was (2026-07-30, now committed)
 
-Progress: [██▌░░░░░░░] 25% by whole phases; more by requirement — see REQUIREMENTS.md's traceability
-table for the per-requirement picture, which now has real movement in Phase 3 and Phase 9.
+Not roadmap-phase execution. An audit comparing burpsy against real Burp Suite produced a 19-item
+gap-fix backlog (tasks #5–#21), fanned out to parallel agents (some in isolated git worktrees), then
+merged back into the main tree one at a time with full-suite verification between each merge. Several
+items map onto v1 requirements; several — runtime-editable Scope, conditional proxy intercept rules,
+the Sequencer's FIPS 140-2 analysis — map onto nothing in REQUIREMENTS.md and were built as direct
+Burp-parity items. Operator decision still open: fold them into REQUIREMENTS.md as first-class
+entries, or keep the Burp-parity backlog alongside the roadmap.
 
-**Gate:** `cargo test --workspace` → **green, 0 failures**, every crate, run fresh after every merge
-step this session (not just at the end). `bunx tsc --noEmit` → clean. Full `./verify.sh` (the
-project's own gate script, which also runs clippy and e2e) was **not run this session** — only its
-cargo-test and tsc components were, run directly rather than through the script. This is the one gate
-carried forward unexercised, same as last session's e2e gap.
+SEQ-01 (Sequencer) shipped ahead of its stated dependency (PLUGIN-01) because the audit scoped it
+directly; that is noted in REQUIREMENTS.md rather than silently treated as satisfying the original
+deferral reasoning.
 
-## What landed this session
+## What committed since the last state file (be69143..b647a34)
 
-Nothing is committed, so there is no commit log to show — this is a description of working-tree state,
-verified by test runs, not a set of reviewed commits. In roughly the order it was merged:
-
-| Area | What changed | Verification |
+| Area | What changed | Commit |
 |---|---|---|
-| Repeater (TOOLS-04) | Numbered tab strip, independent state per tab | tsc clean |
-| Scanner | Per-finding advisory detail panel, cross-tab jump to History | tsc clean |
-| Site map | Filter bar (`q`/`in_scope_only`), capped per-node recent-exchange list (`SiteNode::recent_exchanges`, cap 200), per-node viewer + findings join | `cargo test -p burpsy-core -p burpsy-web` green |
-| Match & Replace | Rule table + live preview; live preview initially mutated the **persisted, live-proxy-active** rule set on every keystroke — caught in review, fixed to a non-mutating `draft_rules` param on the test endpoint before merge | `cargo test -p burpsy-web` green, dedicated regression test added |
-| History / Logger | Client-side filter bar; backend `q` free-text filter | green |
-| Decoder | MD5/SHA1/SHA256/SHA512 hashing + hex/text view toggle | green, digest vectors checked against `python3 hashlib` before hardcoding |
-| Comparer | Prev/next hunk navigation (sync-scroll skipped — the current layout is one flat diff, no second pane to sync) | green |
-| Intruder (TOOLS-01, TOOLS-03 partial) | All 4 attack modes wired to the UI; backend payload generators (Numbers/Dates/BruteForce/CustomIterator), a processing rule chain (prefix/suffix/case/encode/hash/skip-if-matches), grep-match/grep-extract, resource-pool auto-throttle | `cargo test -p burpsy-intruder -p burpsy-web` green (86+ new tests). **UI wiring for the new generator/rule/grep/pool fields is task #20, not done** — the backend is reachable only by hand-built JSON today |
-| Session handling (SESSION-01..04) | Single always-on macro → a rule list: independently scoped, custom parameter extraction (`{{name}}` substitution across steps), update-macro retest. `GET/PUT /api/session/macro` replaced by `/api/session/rules` CRUD | `cargo test -p burpsy-session -p burpsy-web` green (78 session tests, up from 28) |
-| WebSockets (WS-01, WS-03) | RFC 6455 capture/history end-to-end: frame reassembly, `TrafficStore`'s third position-is-the-id index, per-message scope re-check on retention. **Interception (WS-02) and match-and-replace deliberately not started** — entry point and a specific trap (`Reassembler` truncates; don't build interception on top of it) documented in `crates/proxy/AGENTS.md` for whoever picks it up next. UI for what did land is task #21 | `cargo test --workspace` green (32 new tests at merge time) |
-| Sequencer (SEQ-01, v2/deferred — see above) | New crate: FIPS 140-2 statistical suite (monobit/poker/runs/long-runs) plus character-distribution entropy, paste and live-capture modes | Reference vectors computed independently in Python before being asserted in Rust; 45 sequencer tests |
-| Scope (not in REQUIREMENTS.md) | `Arc<Scope>` → `SharedScope` (`Arc<RwLock<Scope>>`-shaped) across the whole workspace — six independently-cloned scopes in `cli/src/main.rs` collapsed to one shared handle. `POST/DELETE /api/scope/rules` lets an operator add/remove rules while the process runs, no restart | Live end-to-end check against the running binary (not just unit tests): added a host to scope, watched the *same running proxy* start capturing it and the repeater accept it, without a restart |
-| Proxy intercept rules (not in REQUIREMENTS.md, extends HARD-03's hold queue) | Conditional request/response holding by field (host/path/extension/method/url/status_code/content_type), regex or literal match. Response holding is a **new** capability: buffer-or-stream is decided before the response exists (streaming stays byte-identical when no rule applies) | `cargo test --workspace` green; **3 real pre-existing bugs found and fixed along the way**: a bodiless-response (204/304) framing hang that would have wedged a hold behind a warm browser cache, a `103`/interim-response status misparse that would show `103` instead of the real status, an unbounded response buffer with no cap |
+| Web UI foundation | Bun+TypeScript UI serving (was an inline HTML/JS string) | `491dae5` |
+| Repeater (TOOLS-04) | Numbered tab strip, independent state per tab | `be69143` |
+| Scanner | Per-finding advisory detail panel, cross-tab jump to History | `b9b68ae` |
+| History / Logger | Client-side filter bar; backend `q` free-text filter | `0b662f8`, `32cd295` |
+| Site map | Filter bar, capped per-node exchange list (cap 200), per-node findings | `e6434ef` |
+| Match & Replace | Rule table + live preview; later **wired into live proxy traffic** (was dry-run only) | `fc0b2db`, `220daa9` |
+| Decoder | Hash actions (MD5/SHA1/SHA256/SHA512) + hex view toggle | `ce771c5` |
+| Comparer | Next/prev hunk navigation | `0ab9a49` |
+| Intruder (TOOLS-01/02/03) | All 4 attack modes in the UI; payload generators, processing rule chain, grep-match/grep-extract, resource-pool auto-throttle; `.pay` load | `4c25e2b`, `d31c70f`, `d9dd16b` |
+| Session (SESSION-01..04) | Macro → scoped rule list, `{{name}}` extraction, update-macro retest, production coordinator | `4822fad`, `141262a`, `6e7ab42` |
+| WebSockets (WS-01, WS-03) | RFC 6455 capture/history, per-message scope re-check; UI History tab | `4e4a6ca`, `d9dd16b` |
+| Sequencer (SEQ-01) | New crate: FIPS 140-2 suite + character entropy | `6777f95` |
+| Scope (not in REQUIREMENTS.md) | `Arc<Scope>` → runtime-editable `SharedScope` across the workspace | `32053ea` |
+| Proxy intercept rules (not in REQUIREMENTS.md) | Conditional request/response holding; response-hold is a new capability | `921ee8f` |
+| Query DSL (DSL-01/02/04) | Typed grammar crate wired into history filters + match-and-replace | earlier, reconciled in `90933a7` |
+| HTTP/2 (H2-01/02, H2-03/04 partial) | Relay h2 instead of record-and-close; Repeater h2 resend; honest ALPN; literal HPACK encoder; shared renderer; authorised h2 egress | `c5d00eb`, `5f5b2ab`, `c57a052`, `5f136e3`, `9f10e13`, `18a1fdb` |
+| E2E | Fix scripts killing their own process group; verify a live scope edit on an open WS connection | `a5fd498` |
+| CI | Release workflow: 3-OS matrix, builds + attaches binaries to GitHub Releases on `v*` tags | `b647a34` |
+| Planning | Reconcile STATE/REQUIREMENTS/ROADMAP with the merges | `90933a7`, `18a1fdb`, `64046a5` |
 
-Two merges required manual reconciliation rather than a clean patch apply: `crates/web/src/lib.rs`
-(three tasks independently touched `AppState`/the router ladder) and `crates/proxy/src/lib.rs` (the
-WebSocket relay and the response-hold logic both modify `forward_http`/`mitm`, and had to be combined
-by hand — verified by a full green test run afterward, including the ALPN/interception/websocket
-integration suites together in one binary for the first time).
+Two merges needed manual reconciliation rather than a clean patch apply: `crates/web/src/lib.rs`
+(three tasks touched `AppState`/the router ladder) and `crates/proxy/src/lib.rs` (the WebSocket
+relay and the response-hold logic both modify `forward_http`/`mitm`). Both were verified by a full
+green test run afterward.
 
 ## Where each phase actually stands
 
-- **Phase 1 — Store & Scope: COMPLETE.** Unchanged this session, except `Scope` itself gained runtime
-  mutation (see above) — the chokepoint property HARD-03 cares about (one path to a socket) is
-  untouched; what changed is that the *scope value* behind that chokepoint can now be edited live.
-- **Phase 2 — HTTP/2: PARTIAL.** Unchanged, not re-verified this session.
-- **Phase 3 — Query DSL & Tool Parity: PARTIAL** (was "Not started" in ROADMAP.md's table, which was
-  simply wrong even before this session — TOOLS-04 was reachable, if clunky, and is now properly
-  multi-tab). TOOLS-01, TOOLS-03 (partial — see UI note above), TOOLS-04 landed this session. DSL-01/
-  02/03/04 and TOOLS-02 (`.pay` lists) still not started.
-- **Phase 4 — Reporting & Scanner Data: SUBSTANTIALLY DELIVERED.** Unchanged, not re-verified.
-- **Phase 5 — Session: COMPLETE**, and ROADMAP.md's top-level checkbox and progress-table row are
-  fixed to say so — they still said "Not started" despite the previous session's STATE.md claiming
-  completion. This session's rule-list rewrite is a large implementation change under an
-  already-satisfied requirement, not a new requirement landing.
-- **Phase 6 — Crawler & Dashboard:** not started, unchanged.
-- **Phase 7 — Hardening: COMPLETE**, same fix as Phase 5 — ROADMAP.md said "Not started," STATE.md
-  said complete since last session. ROADMAP.md now matches.
+- **Phase 1 — Store & Scope: COMPLETE.** `Scope` itself gained runtime mutation; the chokepoint
+  property (one path to a socket) is untouched.
+- **Phase 2 — HTTP/2: PARTIAL.** H2-01/H2-02 complete (relay, history parity, authorised Repeater
+  resend). H2-03/H2-04 partial: the malformed-frame program path exists and can be sent via the
+  library, but nothing in `web`/`intruder` calls `send_h2_program` yet; and Scanner/Intruder egress
+  is still HTTP/1.1-only — the proxy negotiates h2 and Repeater sends h2, but "the tool uses it"
+  is not yet true for active scanning or Intruder attacks.
+- **Phase 3 — Query DSL & Tool Parity: COMPLETE.** DSL-01/02/04, TOOLS-01/02/03/04 all done.
+- **Phase 4 — Reporting & Scanner Data: SUBSTANTIALLY DELIVERED.** REPORT-01..04, SCAN-01/02 done.
+  SCAN-03 partial: `BuiltInConfig` transcribes the 6 of Burp's 29 shipped scan configs that set a
+  key this engine implements, but nothing operator-facing selects one (`cli` only ever constructs
+  `AuditConfig::default()`).
+- **Phase 5 — Session: COMPLETE**, with the rule-list rewrite under an already-satisfied
+  requirement.
+- **Phase 6 — Crawler & Dashboard:** not started. Two salvageable skeleton crates
+  (`crates/crawler/` 230 LOC, `crates/browser/` 233 LOC) exist stranded in the abandoned
+  `.swarm/worktrees/browser-crawler` worktree — not merged, not on master.
+- **Phase 7 — Hardening: COMPLETE.**
 - **Phase 8 — Plugin API:** not started.
-- **Phase 9 — WebSockets: PARTIAL** (was "Not started"). WS-01 and WS-03 landed; WS-02 (edit and
-  resend a frame) needs Phase 2 of the WS work (interception), not started. WS-03's "authorised
-  against scope, decision point stated explicitly" is satisfied per-message, but the interaction with
-  *live* scope edits on an *already-open* socket has not been specifically tested end-to-end — Scope
-  becoming runtime-mutable this session is new since WS-03 was implemented, and the two were built by
-  agents that didn't know about each other's work mid-flight. Worth a dedicated test before calling
-  this fully closed.
-- **Phases 10–12:** not started, unchanged.
+- **Phase 9 — WebSockets: PARTIAL.** WS-01/03 done; WS-02 (edit and resend a frame) needs
+  interception, deliberately deferred with the entry point and a documented trap
+  (`Reassembler` truncates — build a `FrameSplitter` first) in `crates/proxy/AGENTS.md`.
+- **Phases 10–12 (MCP, DOM static, DOM dynamic):** not started.
 
 ## Next steps, in the order I would take them
 
-1. **Review and commit.** 61 files, verified by tests, never reviewed line-by-line by a human or
-   committed. This is the single biggest gap this session leaves — everything else is downstream of
-   getting this into a real commit history.
-2. **Run the full `./verify.sh`**, including clippy and e2e. Only cargo test + tsc ran this session.
-3. **Task #20**: wire the new Intruder payload-generator/rule/grep/pool fields into `intruder.ts`. Pure
-   frontend, backend already tested.
-4. **Task #21**: WS History tab in the TypeScript UI. Same shape — backend already tested and exposed.
-5. **Verify WS-03 against a live scope edit** on an open WebSocket connection specifically (see the
-   Phase 9 note above) before treating that requirement as unconditionally closed.
-6. **Decide** whether Scope-runtime-editing and the proxy's conditional intercept rules get their own
-   REQUIREMENTS.md entries, given they're real, tested capabilities with no requirement ID today.
-7. Longer-term, unchanged from last session: finish H2-04, start Phase 6 (crawler), reconcile the
-   remaining phases' ROADMAP/REQUIREMENTS staleness if anyone finds evidence for or against them.
+1. **Place the BCheck corpus at `/tmp/BChecks`.** It is the only thing between this tree and a
+   fully green `verify.sh`; without it the conformance suite and `e2e-scan.sh` stay SKIPped.
+2. **SCAN-03 selector** — a CLI flag or API route that names one of the transcribed `BuiltInConfig`s.
+   Backend and data are done and tested; only the operator-facing pick is missing.
+3. **H2-03 exposure** — a UI/API surface that calls `AuthorisedSender::send_h2_program`. The library
+   can send malformed programs; nothing lets an operator.
+4. **H2-04's remaining leg** — make Scanner and Intruder egress call `send_h2` so active scanning
+   and attacks honour an h2-capable target.
+5. **Recover or prune the crawler skeletons** in `.swarm/worktrees/browser-crawler` — they are
+   Phase 6's seed and are currently stranded off-master.
+6. **Phase 6** (crawler + dashboard) is the largest not-started phase and the next one the roadmap
+   ordering wants; it also closes CRAWL-01..07, DASH-01..03, and DSL-03.
+7. **Clean up merged worktrees and branches** — see Blockers/Concerns.
+8. **Decide** whether Scope-runtime-editing and conditional intercept rules get REQUIREMENTS.md
+   entries (real, tested capabilities with no requirement ID today).
 
 ## Blockers/Concerns
 
 **Open, and deliberately not hidden:**
-- **Nothing this session is committed.** Repeated here because it is the most consequential fact in
-  this file, not because the rest of the file forgot to say it once.
-- Full `./verify.sh` (clippy + e2e) unrun this session — only cargo test + tsc ran.
-- Phases 2, 4, 6, 8, 10–12 not re-verified; their status lines are carried forward from last session
-  unchanged, not re-checked against current code.
-- WS-03 vs. live scope mutation on an open socket: plausible but not specifically tested (see Phase 9
-  above).
-- Task #20 (Intruder UI) and #21 (WS History UI) are scoped but not started.
-- `crates/proxy` WebSocket interception (WS-02) and match-and-replace: deliberately not started, with
-  a documented trap for whoever picks it up (`crates/proxy/AGENTS.md`: build a `FrameSplitter` first,
-  do not try to hold messages with `Reassembler` — it truncates).
-- `.codebase-memory/` (~3 MB binary, rewritten on every re-index) is committed. Carried forward,
-  unresolved, from last session.
+- **`/tmp/BChecks` absent.** BCheck conformance + `e2e-scan.sh` skip on this machine. The two skips
+  are the only non-green gate items.
+- **Leftover worktree/branch clutter.** Merged worktrees still registered: `.worktrees/h2-egress`,
+  `.worktrees/h2-mitm`, and 6 `.claude/worktrees/agent-*`. `worktree-agent-a18e24e6…` is unmerged but
+  contains only a baseline snapshot (safe to delete). `.worktrees/` is untracked (gitignored).
+- **Stranded crawler work.** `.swarm/worktrees/browser-crawler` (detached at `ac1ce4a`) holds the
+  only copies of `crates/crawler/` and `crates/browser/` plus their `Cargo.toml` member entries.
+- **`.codebase-memory/` (~3 MB binary) committed to git.** Rewritten on every re-index; the working
+  tree shows it modified right after each index. Carried forward, unresolved.
+- **`target/` is ~38 GB.** Build artifact bloat, not a correctness issue.
+- **Three newer crates (`http2`, `query`, `session`) shipped without AGENTS.md files.** Fixed in the
+  same revision as this file — each crate now has its own doc, restoring the documented
+  one-per-meaningful-unit invariant.
+- **CodeGraph is not initialized** in this project (codebase-memory index exists; `.codegraph/`
+  does not). `codegraph init -i` would give structural querying alongside it.
 
-**Resolved this session** (beyond the backlog items in the table above):
-- This machine (12 cores / 11GB RAM) was running 6+ concurrent worktree `cargo` builds at once mid-
-  session and thrashed — swap filled completely, load average hit 40+. Fixed with two durable,
-  machine-level changes, not just a one-time wait-it-out: `sccache` installed as the global
-  `rustc-wrapper` (`~/.cargo/config.toml`), and a `/usr/local/bin/cargo` wrapper that caps concurrent
-  heavy `cargo build`/`test`/`check` invocations at 3 via `flock`, queuing the rest instead of piling
-  on. Both persist for future sessions on this machine.
+**Resolved since the last state file:**
+- Nothing — the previous session's list is now committed, so its "nothing committed" blocker is gone
+  by definition.
+- The full `./verify.sh` (clippy + e2e) gap from the last session is closed: it ran, with the
+  corpus-dependent skips above.
 
 **Carried forward from Phase 1 (still true, unchanged):**
-- Narrowing a crate's `tokio` features does NOT structurally close async egress — see previous
-  session's note; unaffected by this session's `SharedScope` change, which touched *who holds* Scope,
-  not the egress-closure mechanism itself.
+- Narrowing a crate's `tokio` features does NOT structurally close async egress — unaffected by
+  later changes, which touched *who holds* Scope, not the egress-closure mechanism.
 
 ## Running instance (for manual testing)
 
-Restarted this session on different ports than last session's note describes (that instance is gone):
+No instance is running as of this revision. The previous session's instance
+(`--web 127.0.0.1:8081 --proxy 127.0.0.1:8090`) was backgrounded, not supervised, and is gone.
 
-```
-Web UI    http://127.0.0.1:8081
-Proxy     127.0.0.1:8090          NOT 8080 — socat pid 376 (unrelated to burpsy) owns 8080 on
-                                  this machine, same conflict the previous session's note warned about
-Corpus    not loaded this session (--bchecks not passed) — passive scanning is off on this instance
-```
-
-Started via `cargo run -p burpsy-cli -- --web 127.0.0.1:8081 --proxy 127.0.0.1:8090`, backgrounded,
-not under any supervisor — it will not survive this session ending unless something else takes it over.
-
-Worth exercising given what changed: the Scope tab's add/remove-rule flow (watch a proxied request
-change from 403 to captured without restarting), the Match & Replace live preview (confirm it no
-longer PUTs to the persisted rule set while typing), and `GET /api/ws/history` after proxying an actual
-WebSocket connection through 127.0.0.1:8090.
+To start one: `cargo run -p burpsy-cli -- --web 127.0.0.1:8081 --proxy 127.0.0.1:8090 --bchecks /tmp/BChecks`.
+Note: `socat` pid may own port 8080 on this machine (same conflict the previous session's note
+warned about); use 8081. Passive scanning is off unless `--bchecks` is given.
 
 ## Deferred Items
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Sequencer | SEQ-01 — token capture and entropy analysis | **Built this session** (see "What this session actually was" above) — no longer deferred, but built outside its originally-stated dependency (PLUGIN-01) | Roadmap creation, 2026-07-27; delivered 2026-07-30 |
+| Sequencer | SEQ-01 — token capture and entropy analysis | **Built** — no longer deferred, but built outside its originally-stated dependency (PLUGIN-01) | Roadmap creation, 2026-07-27; delivered 2026-07-30 |
 | Scanner | SCAN-04 — hand-written active checks beyond the BCheck corpus | Deferred to v2 | Roadmap creation, 2026-07-27 |
 | DSL | DSL-03 — crawl/audit scoping | Deferred to Phase 6 | Roadmap creation, 2026-07-27 |
-| WebSockets | WS-02 (interception/resend), WS match-and-replace | Deferred within Phase 9 — see `crates/proxy/AGENTS.md` for the documented entry point and trap | This session, 2026-07-30 |
+| WebSockets | WS-02 (interception/resend), WS match-and-replace | Deferred within Phase 9 — see `crates/proxy/AGENTS.md` for the documented entry point and trap | 2026-07-30 |
+| H2-03 / H2-04 remainder | Frame-program UI/API surface; Scanner + Intruder h2 egress | Open within Phase 2 | 2026-07-30 |
 
 ## Session Continuity
 
-Last session: 2026-07-28 (commit `ac1ce4a`)
-This session: 2026-07-30. Large amount of work built and test-verified, **nothing committed**. Stopped
-mid-flow at the user's request to update this file — no agents running, working tree has 61
-modified/untracked paths, `cargo test --workspace` and `bunx tsc --noEmit` both green as of the last
-full run.
-Resume file: None — start from "Next steps" above, and read "Read this first" before touching ROADMAP
-or REQUIREMENTS further.
+Last session: 2026-07-30 (committed 2026-07-30, HEAD was `b647a34` after the release-workflow merge)
+This session: 2026-08-02. Documentation refresh: corrected this file's stale "nothing committed"
+claim, refreshed the AGENTS.md hierarchy (13 crates, 1032 tests, updated dependency graph, restored
+the missing per-crate docs), ran the full gate. No code changed.
+Resume file: None — start from "Next steps" above.

@@ -1,11 +1,11 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-07-28 | Updated: 2026-07-28 -->
+<!-- Generated: 2026-07-28 | Updated: 2026-08-02 -->
 
 # crates
 
 ## Purpose
 
-The nine workspace crates. The split is not cosmetic — it enforces the dependency direction that
+The thirteen workspace crates. The split is not cosmetic — it enforces the dependency direction that
 keeps the memory model intact. `core` owns the store and knows nothing about networks; `bcheck` is a
 pure interpreter with no transport; `sender` is the only crate that opens a socket for a constructed
 request. A crate boundary here is a statement about what a component is *not* allowed to reach.
@@ -24,6 +24,9 @@ request. A crate boundary here is a statement about what a component is *not* al
 | `tools/` | Decoder, Comparer, Logger, Organizer, match-and-replace (see `tools/AGENTS.md`) |
 | `web/` | JSON API and single-page UI (see `web/AGENTS.md`) |
 | `cli/` | The `burpsy` binary that wires everything together (see `cli/AGENTS.md`) |
+| `http2/` | HTTP/2 framing, HPACK, malformed-frame authoring, HTTP/1 normalisation. No sockets (see `http2/AGENTS.md`) |
+| `query/` | Typed filter grammar evaluated against a trait, not a concrete type (see `query/AGENTS.md`) |
+| `session/` | Recorded-login re-authentication policy as a trait (`MacroSender`); wiring lives in `cli`/`web` (see `session/AGENTS.md`) |
 
 ## For AI Agents
 

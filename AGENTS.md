@@ -1,4 +1,4 @@
-<!-- Generated: 2026-07-28 | Updated: 2026-07-28 -->
+<!-- Generated: 2026-07-28 | Updated: 2026-08-02 -->
 
 # burpsy
 
@@ -19,7 +19,7 @@ rather than dropped findings.
 
 | File | Description |
 |------|-------------|
-| `Cargo.toml` | Workspace manifest. Edition 2024, resolver 3, nine member crates |
+| `Cargo.toml` | Workspace manifest. Edition 2024, resolver 3, thirteen member crates |
 | `verify.sh` | **The gate.** Build with zero warnings, clippy, unit tests, BCheck corpus conformance, e2e suites. `QUICK=1` skips e2e |
 | `ROADMAP.md` | Top-level feature roadmap (the working plan lives in `.planning/`) |
 | `serve.sh` | Launch the proxy + web UI locally |
@@ -30,15 +30,15 @@ rather than dropped findings.
 
 | Directory | Purpose |
 |-----------|---------|
-| `crates/` | All nine workspace crates (see `crates/AGENTS.md`) |
+| `crates/` | All thirteen workspace crates (see `crates/AGENTS.md`) |
 | `docs/` | Reverse-engineering and protocol research notes (see `docs/AGENTS.md`) |
 | `.planning/` | GSD planning state — roadmap, requirements, per-phase context/plans/research. Not code; read it to understand *why* something is being built |
 | `.omc/` | Operational agent state. Gitignored, never edit by hand |
 
 ### Where AGENTS.md files live, and where they deliberately do not
 
-There are 14, one per meaningful unit: this root, `crates/`, each of the nine crates, `docs/`, and two
-nested directories that carry their own rules (`crates/web/src/routes/`,
+There are 18, one per meaningful unit: this root, `crates/`, each of the thirteen crates, `docs/`, and
+two nested directories that carry their own rules (`crates/web/src/routes/`,
 `crates/sender/src/transport/`).
 
 There is deliberately **no** `AGENTS.md` in `crates/*/src/` — a crate's `src/` *is* the crate, and a file
@@ -64,7 +64,7 @@ files that carry real content.
 ### Testing Requirements
 
 ```bash
-cargo test --workspace          # 438 tests at time of writing
+cargo test --workspace          # 1032 tests at time of writing
 cargo build --workspace         # must produce ZERO warnings
 QUICK=1 ./verify.sh             # full gate minus e2e
 ./verify.sh                     # everything
@@ -99,6 +99,8 @@ rustup feature and `/usr/bin/cargo` ignores it. Use `verify.sh`, not bare `cargo
 
 ### Internal — crate order (depend only downward)
 
+The spine has not changed — every edge drawn here is real and current:
+
 ```
 core  ──►  bcheck  ──►  scanner  ──►  proxy  ──►  web  ──►  cli
   │           │                          ▲         ▲         ▲
@@ -106,6 +108,18 @@ core  ──►  bcheck  ──►  scanner  ──►  proxy  ──►  web  �
   ├──►  intruder  ───────────────────────────────► │         │
   └──►  tools  ──────────────────────────────────► │         │
 ```
+
+Crates added since this diagram was drawn (all real edges, `path = "../<crate>"` in the manifests):
+
+- **`http2`** — a leaf with no burpsy dependencies; `sender` and `proxy` depend on it. Pure
+  framing/HPACK/normalisation over bytes, no sockets.
+- **`query`** — a leaf; `core`, `tools`, and `web` depend on it. Typed filter grammar.
+- **`session`** — depends on `core`; consumed by `web`. Re-login policy as a trait (`MacroSender`),
+  not a call into `sender` — the HARD-03 chokepoint wiring lives in `cli`/`web`, not here.
+- **`sequencer`** — depends on `core` and `sender`; consumed by `web`.
+- Edge additions to the spine: `intruder` also depends on `tools`; `tools` also depends on `query`;
+  `web` also depends on `session`, `sequencer`, and `query`; `sender` and `proxy` also depend on
+  `http2`; `cli` also depends on `scanner`.
 
 `proxy` additionally dev-depends on `web` — cargo permits that cycle because it is dev-only, and it
 exists so the proxy's integration tests can drive the real HTTP API.
