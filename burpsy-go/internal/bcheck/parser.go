@@ -82,8 +82,13 @@ func lex(src string) ([]token, *ParseError) {
 			col++
 			var sb strings.Builder
 			for i < n && src[i] != '"' {
-				if src[i] == '\\' && i+1 < n {
-					sb.WriteByte(src[i+1])
+				if src[i] == '\\' && i+1 < n && src[i+1] == '"' {
+					// ONLY `\"` is an escape. `\\` is NOT — the corpus contains
+					// JSON-in-JSON payloads like `\\"alert('x')\\"` where treating
+					// `\\` as an escape would end the string at the next quote
+					// and leave the rest to be lexed as code. Mirrors the Rust
+					// lexer in crates/bcheck.
+					sb.WriteByte('"')
 					i += 2
 					col += 2
 					continue
@@ -132,26 +137,89 @@ func lex(src string) ([]token, *ParseError) {
 			col++
 			emit(tokTemplate, sb.String())
 		case c == '{':
-			start := i
+			// A variable reference may nest braces inside a builtin call
+			// (`{regex_replace({base.request.body}, "(\w+)=", `$1{poc}=`)}`), so the
+			// closing brace is tracked by depth, and quoted strings inside the
+			// reference are skipped whole — a `}` inside a string argument must not
+			// close the reference early. Mirrors the Rust lexer in crates/bcheck.
+			// The previous scan-to-first-`}` left a stray `}` on the token stream,
+			// which the bare-word case emitted as an empty token forever: an
+			// infinite loop that hung the whole process on five corpus files.
 			i++
 			col++
-			for i < n && src[i] != '}' {
-				i++
-				col++
+			var sb strings.Builder
+			depth := 1
+			closed := false
+			for i < n && !closed {
+				switch src[i] {
+				case '"', '`':
+					q := src[i]
+					sb.WriteByte(q)
+					i++
+					col++
+					for i < n && src[i] != q {
+						if src[i] == '\\' && i+1 < n {
+							sb.WriteByte(src[i])
+							sb.WriteByte(src[i+1])
+							i += 2
+							col += 2
+							continue
+						}
+						if src[i] == '\n' {
+							line++
+							col = 1
+						} else {
+							col++
+						}
+						sb.WriteByte(src[i])
+						i++
+					}
+					if i < n {
+						sb.WriteByte(q)
+						i++
+						col++
+					}
+				case '{':
+					depth++
+					sb.WriteByte('{')
+					i++
+					col++
+				case '}':
+					depth--
+					i++
+					col++
+					if depth == 0 {
+						closed = true
+					} else {
+						sb.WriteByte('}')
+					}
+				default:
+					if src[i] == '\n' {
+						line++
+						col = 1
+					} else {
+						col++
+					}
+					sb.WriteByte(src[i])
+					i++
+				}
 			}
-			if i >= n {
+			if !closed {
 				return nil, &ParseError{Message: "unterminated variable reference", Line: line, Column: col}
 			}
-			name := src[start+1 : i]
-			i++
-			col++
-			emit(tokVarRef, name)
+			emit(tokVarRef, strings.TrimSpace(sb.String()))
 		default:
 			// Bare word: letters, digits, and a few punctuation chars.
 			start := i
 			for i < n && !strings.ContainsRune(" \t\r\n:,=(){}`\"#", rune(src[i])) {
 				i++
 				col++
+			}
+			if start == i {
+				// A terminator (e.g. a stray `}` with no matching `{`) must not
+				// produce an empty token and spin: that was a hard hang. Erroring
+				// here is honest — the input is malformed.
+				return nil, &ParseError{Message: fmt.Sprintf("unexpected character %q", string(src[i])), Line: line, Column: col}
 			}
 			emit(tokWord, src[start:i])
 		}
@@ -283,11 +351,12 @@ func (p *parser) check() (*Check, error) {
 	if err := p.expectWord("given"); err != nil {
 		return nil, err
 	}
-	given, err := p.frequency()
+	given, kinds, err := p.frequency()
 	if err != nil {
 		return nil, err
 	}
 	c.Given = given
+	c.InsertionKinds = kinds
 	if err := p.expectWord("then"); err != nil {
 		return nil, err
 	}
@@ -405,10 +474,11 @@ func (p *parser) forEachBlock(forEach *[]RunForEachStatement) error {
 }
 
 // frequency parses `response | host | request | path | insertion point | <type> or <type> insertion point`.
-func (p *parser) frequency() (string, error) {
+// kinds holds the insertion-point types when given is "insertion point" ("any" when unqualified).
+func (p *parser) frequency() (given string, kinds []string, err error) {
 	t := p.peek()
 	if t.kind != tokWord {
-		return "", p.errf("expected host|path|request|response|insertion point, found %q", t.text)
+		return "", nil, p.errf("expected host|path|request|response|insertion point, found %q", t.text)
 	}
 	// Consume one or more insertion point types joined by "or".
 	var types []string
@@ -426,26 +496,26 @@ func (p *parser) frequency() (string, error) {
 	}
 	if len(types) > 0 {
 		if !p.eatPhrase("insertion", "point") {
-			return "", p.errf("expected 'insertion point'")
+			return "", nil, p.errf("expected 'insertion point'")
 		}
-		return "insertion point", nil
+		return "insertion point", types, nil
 	}
 	if p.eatPhrase("insertion", "point") {
-		return "insertion point", nil
+		return "insertion point", []string{"any"}, nil
 	}
 	if p.eatWord("response") {
-		return "response", nil
+		return "response", nil, nil
 	}
 	if p.eatWord("host") {
-		return "host", nil
+		return "host", nil, nil
 	}
 	if p.eatWord("request") {
-		return "request", nil
+		return "request", nil, nil
 	}
 	if p.eatWord("path") {
-		return "path", nil
+		return "path", nil, nil
 	}
-	return "", p.errf("expected host|path|request|response|insertion point, found %q", t.text)
+	return "", nil, p.errf("expected host|path|request|response|insertion point, found %q", t.text)
 }
 
 // statements parses statements until a block terminator.
@@ -473,6 +543,9 @@ func (p *parser) statement() (Statement, error) {
 	}
 	if p.isPhrase("send", "request") {
 		return p.sendRequest()
+	}
+	if p.isPhrase("send", "payload") {
+		return p.sendPayload()
 	}
 	return nil, p.errf("unexpected statement start %q", p.peek().text)
 }
@@ -581,7 +654,7 @@ func (p *parser) reportIssue() (Statement, error) {
 		}
 		switch strings.ToLower(t.text) {
 		case "name":
-			stmt.IssueName = val.StringVal
+			stmt.IssueName = val
 		case "severity":
 			sev, err := normalizeSeverity(val.StringVal)
 			if err != nil {
@@ -595,9 +668,9 @@ func (p *parser) reportIssue() (Statement, error) {
 			}
 			stmt.Confidence = conf
 		case "detail":
-			stmt.Description = val.StringVal
+			stmt.Description = val
 		case "remediation":
-			stmt.Remediation = val.StringVal
+			stmt.Remediation = val
 		default:
 			return nil, p.errf("unknown report issue field %q", t.text)
 		}
@@ -652,25 +725,97 @@ func (p *parser) sendRequest() (Statement, error) {
 	if err := p.expectColon(); err != nil {
 		return nil, err
 	}
-	// Raw request string, or modifier clauses — consumed loosely.
+	// Raw request string, or modifier clauses — consumed structurally so active
+	// checks parse and can be counted. Mirror the reference grammar: an optional
+	// `replacing`/`appending` prefix, a target word, a colon, then a value
+	// (optionally a comma-separated list for headers/queries). A statement
+	// keyword where the target would sit ends the block.
 	if p.peek().kind == tokLitStr || p.peek().kind == tokTemplate {
 		stmt.Template = p.bump().text
 	} else {
 		for {
-			if p.peek().kind != tokWord || p.at(1).kind != tokColon {
+			opOff := 0
+			if p.peek().kind == tokWord {
+				lw := strings.ToLower(p.peek().text)
+				if (lw == "replacing" || lw == "appending") && p.at(1).kind == tokWord {
+					opOff = 1
+				}
+			}
+			if p.at(opOff).kind != tokWord || p.at(opOff+1).kind != tokColon {
 				break
 			}
-			// A request modifier clause: target ":" value.
-			p.bump()
-			p.bump()
+			target := strings.ToLower(p.at(opOff).text)
+			if target == "if" || target == "end" || target == "else" || target == "report" || target == "send" {
+				break
+			}
+			for i := 0; i <= opOff+1; i++ {
+				p.bump()
+			}
 			if p.peek().kind == tokEquals {
 				p.bump()
 			}
-			if _, err := p.value(); err != nil {
-				return nil, err
+			if target == "headers" || target == "header" {
+				// `"Name": value` pairs, comma-separated.
+				for {
+					if _, err := p.value(); err != nil {
+						return nil, err
+					}
+					if p.peek().kind != tokColon {
+						break
+					}
+					p.bump()
+					if _, err := p.value(); err != nil {
+						return nil, err
+					}
+					if p.peek().kind != tokComma {
+						break
+					}
+					p.bump()
+				}
+			} else {
+				if _, err := p.value(); err != nil {
+					return nil, err
+				}
+				for p.peek().kind == tokComma {
+					p.bump()
+					if _, err := p.value(); err != nil {
+						return nil, err
+					}
+				}
 			}
 		}
 	}
+	return stmt, nil
+}
+
+// sendPayload parses `send payload [called name]: appending|replacing: <value>`.
+// Parsed structurally so the insertion-point checks parse and can be counted;
+// sending is never performed by the passive evaluator.
+func (p *parser) sendPayload() (Statement, error) {
+	p.bump() // send
+	p.bump() // payload
+	stmt := &SendPayloadStatement{}
+	if p.eatWord("called") {
+		t := p.bump()
+		stmt.StoreAs = t.text
+	}
+	if err := p.expectColon(); err != nil {
+		return nil, err
+	}
+	// Only `appending:` / `replacing:` exist — there is no `inserting:`.
+	if p.eatWord("appending") {
+		stmt.Appending = true
+	} else if !p.eatWord("replacing") {
+		return nil, p.errf("expected 'appending' or 'replacing', found %q", p.peek().text)
+	}
+	if err := p.expectColon(); err != nil {
+		return nil, err
+	}
+	v, err := p.value()
+	if err != nil {
+		return nil, err
+	}
+	stmt.Value = v
 	return stmt, nil
 }
 
@@ -736,6 +881,16 @@ func (p *parser) boolTerm() (BoolExpr, error) {
 		return e, nil
 	}
 
+	// `<type> interactions` — Collaborator poll, as in the reference grammar.
+	if p.peek().kind == tokWord {
+		lw := strings.ToLower(p.peek().text)
+		if (lw == "any" || lw == "dns" || lw == "http" || lw == "smtp") && p.isWord(1, "interactions") {
+			p.bump()
+			p.bump()
+			return BoolExpr{Operator: "interactions", Left: Value{Type: "str", StringVal: lw}}, nil
+		}
+	}
+
 	lhs, err := p.value()
 	if err != nil {
 		return BoolExpr{}, err
@@ -773,7 +928,10 @@ func (p *parser) value() (Value, error) {
 	case tokLitStr:
 		return Value{Type: "str", StringVal: t.text}, nil
 	case tokTemplate:
-		return Value{Type: "str", StringVal: t.text}, nil
+		// Distinct from a literal so the evaluator can interpolate `{…}` at
+		// resolve time. Collapsing templates into literals corrupts the report
+		// text of the corpus checks that build detail lines in a backtick string.
+		return Value{Type: "tpl", StringVal: t.text}, nil
 	case tokVarRef:
 		return Value{Type: "var", StringVal: t.text}, nil
 	case tokWord:

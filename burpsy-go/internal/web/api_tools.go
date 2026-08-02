@@ -282,39 +282,32 @@ type scannerFinding struct {
 	Evidence    string `json:"evidence"`
 }
 
-type scannerLiveResp struct {
-	Scanning bool             `json:"scanning"`
-	Started  bool             `json:"started"`
-	Findings []scannerFinding `json:"findings"`
-	Total    int              `json:"total"`
+// liveAuditEnableReq mirrors dashboard.ts's setAudit body.
+type liveAuditEnableReq struct {
+	Enabled bool `json:"enabled"`
 }
 
-// handleScannerLive is the modern /api/scanner/live endpoint. It reports whether a scan is active
-// and any findings the engine produced since the last poll, matching scanner.ts's shape.
+// handleScannerLive is the /api/scanner/live endpoint: GET reports the sweep state,
+// POST flips the enabled switch. The body shape mirrors dashboard.ts's LiveAuditResp.
 func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.liveAuditStatus())
+	case http.MethodPost:
+		var req liveAuditEnableReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if s.liveAudit != nil {
+			s.liveAudit.SetEnabled(req.Enabled)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.liveAuditStatus())
+	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	progress := s.intruder.GetProgress()
-	findings := s.findings.All()
-	var views []scannerFinding
-	for _, f := range findings {
-		views = append(views, scannerFinding{
-			Name:        f.Name,
-			Severity:    f.Severity.String(),
-			Confidence:  f.Confidence.String(),
-			Description: f.Description,
-		})
-	}
-	resp := scannerLiveResp{
-		Scanning: progress.Total > progress.Completed,
-		Started:  progress.Total > 0,
-		Findings: views,
-		Total:    len(views),
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
 }
 
 // handleScannerAudit is the legacy /api/scanner/audit alias for /api/audit/{id}.

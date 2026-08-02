@@ -342,6 +342,9 @@ type ProxyConfig struct {
 	findings     *core.FindingStore
 	intercept    *intercept.Engine
 	logger       *zap.Logger
+	// stripWsExtensions removes the client's Sec-WebSocket-Extensions offer
+	// from a handshake before forwarding it. See WithStripWsExtensions.
+	stripWsExtensions bool
 }
 
 // NewProxyConfig creates a new proxy configuration.
@@ -351,6 +354,10 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 		tls:    NewTlsPolicy(),
 		scope:  core.NewScopeAllowEverything(),
 		logger: zap.NewNop(), // Default to nop logger
+		// On, matching Burp's default. A proxy that let permessage-deflate be
+		// negotiated would record DEFLATE blocks and call them messages, so the
+		// safe setting is the one that keeps the capture readable.
+		stripWsExtensions: true,
 	}
 }
 
@@ -382,6 +389,22 @@ func (c *ProxyConfig) WithFindings(fs *core.FindingStore) *ProxyConfig {
 // requests and responses are held for the operator instead of forwarded.
 func (c *ProxyConfig) WithIntercept(engine *intercept.Engine) *ProxyConfig {
 	c.intercept = engine
+	return c
+}
+
+// WithStripWsExtensions controls whether a WebSocket handshake's
+// Sec-WebSocket-Extensions offer is removed before the request is forwarded.
+//
+// On by default, and deliberately a switch rather than an unconditional
+// rewrite. Stripping keeps captures readable — see
+// core.StripWsExtensionsHeader for why a negotiated permessage-deflate turns
+// every recorded payload into an opaque DEFLATE block — but an origin is free
+// to require the extension, and a tester who needs to reach such an origin must
+// not be locked out by a capture-quality decision. With stripping off, frames
+// that arrive compressed are recorded with a note saying so; they are never
+// passed off as plaintext.
+func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
+	c.stripWsExtensions = strip
 	return c
 }
 
@@ -525,6 +548,12 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 
 	// Serve HTTP over the decrypted channel, recording exchanges.
 	br := bufio.NewReader(tlsClient)
+	// The upstream side reads through one persistent buffered reader for the
+	// life of the connection. A fresh bufio per response would discard whatever
+	// it had buffered beyond the response body — which, on a keep-alive
+	// connection, is the beginning of the next response — and it is what lets
+	// the WebSocket handoff below keep the frame bytes that arrived with a 101.
+	upstreamBR := bufio.NewReader(upstream)
 	for {
 		requestLine, err := br.ReadString('\n')
 		if err != nil {
@@ -559,6 +588,14 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			}
 		}
 
+		// Rewritten before the scope check and before the store, for the same
+		// reasons as the plain path above: the wire bytes and the recorded
+		// bytes must be the same bytes.
+		var wsStripped []string
+		if core.IsWsUpgradeRequest(requestData) {
+			requestData, wsStripped = s.stripWsHandshake(requestData)
+		}
+
 		inScope := s.config.scope.Contains(reqHost, reqPort, path, true)
 		var reqID core.MsgId
 		if inScope {
@@ -572,58 +609,135 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		if _, err := upstream.Write(requestData); err != nil {
 			return
 		}
-		responseData, err := readHTTPResponse(upstream)
+
+		// A request that asked to upgrade hands the connection off when the
+		// origin answers 101. The response head must be read on its own,
+		// because the bytes after it are WebSocket frames, not a response body.
+		// This also ends the keep-alive loop — after an upgrade there are no
+		// more HTTP requests on this connection, by definition.
+		if core.IsWsUpgradeRequest(requestData) {
+			head, err := httputil.ReadResponseHead(upstreamBR)
+			if err != nil {
+				return
+			}
+			if !core.IsWsUpgradeResponse(head) {
+				body, err := httputil.ReadResponseBody(upstreamBR, head)
+				if err != nil {
+					return
+				}
+				responseData := append(head, body...)
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, reqID, inScope, responseData, startTime) {
+					return
+				}
+				continue
+			}
+
+			exchangeID := uint64(0)
+			if inScope {
+				respID, err := s.config.store.Put(head, core.DirectionResponse)
+				if err != nil {
+					s.config.logger.Error("failed to store response", zap.Error(err))
+				}
+				exchange := &core.Exchange{
+					Request:     reqID,
+					Response:    &respID,
+					Host:        reqHost,
+					Port:        reqPort,
+					TLS:         true,
+					Method:      method,
+					Path:        path,
+					Status:      parseStatusCode(head),
+					DurationMs:  uint64(time.Since(startTime).Milliseconds()),
+					StartedMs:   uint64(startTime.UnixMilli()),
+					Protocol:    core.ProtocolHTTP1,
+					ResponseLen: len(head),
+					// A handshake this proxy rewrote must not look pristine.
+					Notes: wsStripNote(wsStripped),
+				}
+				s.config.store.AddExchange(exchange)
+				exchangeID = exchange.ID
+			}
+
+			if _, err := tlsClient.Write(head); err != nil {
+				return
+			}
+			var capture *wsCapture
+			if exchangeID != 0 {
+				capture = &wsCapture{scope: s.config.scope, host: reqHost, port: reqPort, tls: true, path: path}
+			}
+			s.relayWebsocket(exchangeID, tlsClient, br, upstream, upstreamBR, reqHost, reqPort, true, path, capture)
+			return
+		}
+
+		head, err := httputil.ReadResponseHead(upstreamBR)
 		if err != nil {
 			return
 		}
-
-		if inScope {
-			respID, err := s.config.store.Put(responseData, core.DirectionResponse)
-			if err != nil {
-				s.config.logger.Error("failed to store response", zap.Error(err))
-			}
-
-			exchange := &core.Exchange{
-				Request:     reqID,
-				Response:    &respID,
-				Host:        reqHost,
-				Port:        reqPort,
-				TLS:         true,
-				Method:      method,
-				Path:        path,
-				Status:      parseStatusCode(responseData),
-				DurationMs:  uint64(time.Since(startTime).Milliseconds()),
-				StartedMs:   uint64(startTime.UnixMilli()),
-				Protocol:    core.ProtocolHTTP1,
-				ResponseLen: len(responseData),
-			}
-			s.config.store.AddExchange(exchange)
-			s.runPassiveScan(exchange)
+		body, err := httputil.ReadResponseBody(upstreamBR, head)
+		if err != nil {
+			return
 		}
+		responseData := append(head, body...)
 
-		// Apply Match & Replace on response
-		if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
-			responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
-		}
-
-		// Intercept: hold the response before it reaches the client.
-		if s.config.intercept != nil {
-			if held := s.config.intercept.Hold(intercept.ParseMessage(
-				intercept.DirectionResponse, reqHost, reqPort, true, method, path, responseData,
-			)); held != nil {
-				action, raw := held.Wait()
-				if action == intercept.ActionDrop {
-					return
-				}
-				responseData = raw
-			}
-		}
-
-		// Return the response to the client.
-		if _, err := tlsClient.Write(responseData); err != nil {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, reqID, inScope, responseData, startTime) {
 			return
 		}
 	}
+}
+
+// handleTLSResponse completes one response in the TLS intercept loop: records
+// it and its exchange when the exchange is in scope, applies Match & Replace,
+// offers it to the intercept hold queue, and writes it to the client. It
+// reports whether the connection should keep serving — an intercept drop ends
+// the connection, exactly as the original path did.
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, reqID core.MsgId, inScope bool, responseData []byte, startTime time.Time) bool {
+	if inScope {
+		respID, err := s.config.store.Put(responseData, core.DirectionResponse)
+		if err != nil {
+			s.config.logger.Error("failed to store response", zap.Error(err))
+		}
+
+		exchange := &core.Exchange{
+			Request:     reqID,
+			Response:    &respID,
+			Host:        host,
+			Port:        port,
+			TLS:         true,
+			Method:      method,
+			Path:        path,
+			Status:      parseStatusCode(responseData),
+			DurationMs:  uint64(time.Since(startTime).Milliseconds()),
+			StartedMs:   uint64(startTime.UnixMilli()),
+			Protocol:    core.ProtocolHTTP1,
+			ResponseLen: len(responseData),
+		}
+		s.config.store.AddExchange(exchange)
+		s.runPassiveScan(exchange)
+	}
+
+	// Apply Match & Replace on response
+	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
+		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
+	}
+
+	// Intercept: hold the response before it reaches the client.
+	if s.config.intercept != nil {
+		if held := s.config.intercept.Hold(intercept.ParseMessage(
+			intercept.DirectionResponse, host, port, true, method, path, responseData,
+		)); held != nil {
+			action, raw := held.Wait()
+			if action == intercept.ActionDrop {
+				return false
+			}
+			responseData = raw
+		}
+	}
+
+	// Return the response to the client.
+	if _, err := clientConn.Write(responseData); err != nil {
+		return false
+	}
+	return true
 }
 
 func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
@@ -711,12 +825,23 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		}
 	}
 
+	// The extension offer is removed here — after intercept, before the scope
+	// check and before anything is stored. Before the scope check because the
+	// rewrite decides what goes on the wire and retention is a separate
+	// question, so the out-of-scope forward below sends exactly the same bytes
+	// as the recorded path. Before the store because what history shows for
+	// this request must be what upstream received.
+	var wsStripped []string
+	if core.IsWsUpgradeRequest(requestData) {
+		requestData, wsStripped = s.stripWsHandshake(requestData)
+	}
+
 	// Check scope
 	inScope := s.config.scope.Contains(host, port, path, false)
 
 	if !inScope {
 		// Forward without storing
-		s.forwardOnly(clientConn, requestData, host, port)
+		s.forwardOnly(clientConn, reader, requestData, host, port)
 		return
 	}
 
@@ -726,6 +851,15 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		s.config.logger.Error("failed to store request", zap.Error(err))
 	}
 
+	// A request that asked to upgrade hands the connection off when the origin
+	// answers 101: the response head must be read on its own, because the bytes
+	// after it are WebSocket frames, not a response body. Gated on the request,
+	// so every other request takes the identical path it always took.
+	if core.IsWsUpgradeRequest(requestData) {
+		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, reqID, startTime, wsStripped)
+		return
+	}
+
 	// Forward to upstream
 	responseData, err := s.forwardRequest(requestData, host, port)
 	if err != nil {
@@ -733,6 +867,14 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		return
 	}
 
+	s.completeResponse(clientConn, method, host, port, false, path, requestData, reqID, responseData, startTime)
+}
+
+// completeResponse stores a response, applies Match & Replace, offers it to the
+// intercept hold queue, writes it to the client, and records the exchange.
+// Shared by the ordinary path and by a refused WebSocket upgrade, so a 4xx
+// refusal is handled exactly like any other response.
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqID core.MsgId, responseData []byte, startTime time.Time) {
 	// Store response
 	respID, err := s.config.store.Put(responseData, core.DirectionResponse)
 	if err != nil {
@@ -747,7 +889,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// Intercept: hold the response for the operator before it reaches the client.
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
-			intercept.DirectionResponse, host, port, false, method, path, responseData,
+			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		)); held != nil {
 			action, raw := held.Wait()
 			if action == intercept.ActionDrop {
@@ -767,7 +909,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		Response:    &respID,
 		Host:        host,
 		Port:        port,
-		TLS:         false,
+		TLS:         tls,
 		Method:      method,
 		Path:        path,
 		Status:      parseStatusCode(responseData),
@@ -892,7 +1034,7 @@ func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	return buf.Bytes()
 }
 
-func (s *Server) forwardOnly(clientConn net.Conn, requestData []byte, host string, port uint16) {
+func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16) {
 	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
 	upstreamConn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -901,6 +1043,33 @@ func (s *Server) forwardOnly(clientConn net.Conn, requestData []byte, host strin
 	defer upstreamConn.Close()
 
 	upstreamConn.Write(requestData)
+
+	// An upgrade request needs both directions for the life of the connection:
+	// after a 101 the client keeps talking, and a one-way copy would leave it
+	// able to receive but unable to send. Gated on the request rather than
+	// applied unconditionally: an ordinary response ends at upstream EOF, and
+	// additionally waiting for the client to close would hold a goroutine per
+	// idle browser connection. Nothing is recorded either way — out-of-scope
+	// traffic is forwarded, not retained.
+	if core.IsWsUpgradeRequest(requestData) {
+		br := bufio.NewReader(upstreamConn)
+		head, err := httputil.ReadResponseHead(br)
+		if err != nil {
+			return
+		}
+		if core.IsWsUpgradeResponse(head) {
+			clientConn.Write(head)
+			s.relayWebsocket(0, clientConn, clientReader, upstreamConn, br,
+				host, port, false, "", nil)
+			return
+		}
+		body, err := httputil.ReadResponseBody(br, head)
+		if err != nil {
+			return
+		}
+		clientConn.Write(append(head, body...))
+		return
+	}
 
 	// Copy exactly one response back; keep-alive connections never EOF.
 	if resp, err := readHTTPResponse(upstreamConn); err == nil {

@@ -203,6 +203,10 @@ func main() {
 		// tool log) and mirror their tool activity.
 		webServer.WithPersist(persistStore)
 	}
+	// Live active audit: the sweep loop owns the context; cancelling ctx (on
+	// shutdown) stops it at the next tick. It creates and wires the state if
+	// none was attached, so the /api/scanner/live surface is always present.
+	webServer.StartLiveAuditSweep(ctx)
 	go func() {
 		logger.Info("Starting web UI", zap.String("bind", *webBind))
 		if err := webServer.ListenAndServe(ctx, *webBind); err != nil && err != context.Canceled {

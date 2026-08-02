@@ -16,10 +16,38 @@ import (
 // ReadHTTPResponse reads one complete HTTP response from conn, respecting
 // Content-Length and chunked transfer encoding instead of waiting for EOF
 // (which never arrives on a keep-alive connection).
+//
+// The response is read through a private buffered reader that is discarded on
+// return. Callers that must keep reading after the response — a 101 upgrade is
+// the one that matters, where the bytes after the head are WebSocket frames —
+// must use ReadResponseHead + ReadResponseBody on their own *bufio.Reader so
+// the leftover buffered bytes survive.
 func ReadHTTPResponse(conn net.Conn) ([]byte, error) {
 	br := bufio.NewReader(conn)
+	head, err := ReadResponseHead(br)
+	if err != nil {
+		return nil, err
+	}
+	body, err := ReadResponseBody(br, head)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]byte, 0, len(head)+len(body))
+	result = append(result, head...)
+	result = append(result, body...)
+	return result, nil
+}
 
-	// Read the head: status line + headers, up to the blank line.
+// MaxResponseHeadBytes bounds a response head. A handshake answer is a few
+// hundred bytes; the bound exists so a peer that never sends a terminator
+// cannot make a caller buffer without limit.
+const MaxResponseHeadBytes = 256 * 1024
+
+// ReadResponseHead reads one HTTP response head — status line and headers,
+// through the terminating blank line — from br. It reads nothing past the
+// blank line, so on a 101 response the frame bytes that follow remain in br
+// for the caller. The head bytes are returned exactly as they arrived.
+func ReadResponseHead(br *bufio.Reader) ([]byte, error) {
 	var head bytes.Buffer
 	for {
 		line, err := br.ReadString('\n')
@@ -30,17 +58,26 @@ func ReadHTTPResponse(conn net.Conn) ([]byte, error) {
 		if head.Len() >= 4 && bytes.HasSuffix(head.Bytes(), []byte("\r\n\r\n")) {
 			break
 		}
+		if head.Len() > MaxResponseHeadBytes {
+			return nil, fmt.Errorf("response head exceeds %d bytes without a terminator", MaxResponseHeadBytes)
+		}
 	}
-	headBytes := head.Bytes()
+	return head.Bytes(), nil
+}
 
-	statusLine := string(bytes.SplitN(headBytes, []byte("\r\n"), 2)[0])
+// ReadResponseBody reads the body that follows a response head, per the
+// head's framing. head must be exactly what ReadResponseHead returned. A head
+// that never carries a body — 1xx including the 101 upgrade, 204, 304 — reads
+// nothing and returns an empty body, leaving whatever follows in br.
+func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
+	statusLine := string(bytes.SplitN(head, []byte("\r\n"), 2)[0])
 	// Status codes that never carry a body: 1xx, 204, 304.
 	noBody := len(statusLine) >= 12 && (statusLine[9] == '1' || statusLine[9:12] == "204" || statusLine[9:12] == "304")
 
 	var body bytes.Buffer
 	if !noBody {
 		// Skip the status line; ReadMIMEHeader expects headers only.
-		headerBlock := headBytes
+		headerBlock := head
 		if idx := bytes.Index(headerBlock, []byte("\r\n")); idx != -1 {
 			headerBlock = headerBlock[idx+2:]
 		}
@@ -105,8 +142,5 @@ func ReadHTTPResponse(conn net.Conn) ([]byte, error) {
 		}
 	}
 
-	result := make([]byte, 0, head.Len()+body.Len())
-	result = append(result, headBytes...)
-	result = append(result, body.Bytes()...)
-	return result, nil
+	return body.Bytes(), nil
 }

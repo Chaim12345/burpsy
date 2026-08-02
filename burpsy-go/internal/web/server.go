@@ -36,6 +36,7 @@ type Server struct {
 	loginRuns          *sessionLoginRuns
 	intercept          *intercept.Engine
 	persist            *persist.Store
+	liveAudit          *LiveAuditState
 }
 
 // NewServer creates a new web server.
@@ -94,6 +95,12 @@ func (s *Server) WithFindings(fs *core.FindingStore) *Server {
 // must hold the same instance, or edits here would not affect the hold queue.
 func (s *Server) WithIntercept(engine *intercept.Engine) *Server {
 	s.intercept = engine
+	return s
+}
+
+// WithLiveAudit attaches the live audit state, or nil to report the feature unwired.
+func (s *Server) WithLiveAudit(la *LiveAuditState) *Server {
+	s.liveAudit = la
 	return s
 }
 

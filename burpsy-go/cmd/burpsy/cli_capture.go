@@ -223,12 +223,13 @@ func cmdExchange(ctx *cliContext, args []string) error {
 
 func cmdStats(ctx *cliContext, args []string) error {
 	msgs, exchanges := ctx.store.Count()
+	wsConns := len(ctx.store.WsConnections())
 	v := map[string]interface{}{
 		"messages":    msgs,
 		"exchanges":   exchanges,
 		"bytes":       ctx.store.Bytes(),
-		"ws_conns":    0,
-		"ws_messages": 0,
+		"ws_conns":    wsConns,
+		"ws_messages": ctx.store.WsCount(),
 		"segments":    segmentCount(ctx),
 		"organizer":   len(ctx.organizer.List()),
 	}
