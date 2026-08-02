@@ -1,0 +1,278 @@
+package intercept
+
+import (
+	"testing"
+	"time"
+)
+
+func reqMessage(host, method, path string) *Message {
+	return &Message{
+		Direction: DirectionRequest,
+		Host:      host,
+		Port:      80,
+		Method:    method,
+		Path:      path,
+		Raw:       []byte(method + " " + path + " HTTP/1.1\r\nHost: " + host + "\r\n\r\n"),
+	}
+}
+
+func respMessage(host, method, path string, status int, raw []byte) *Message {
+	if raw == nil {
+		raw = []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 0\r\n\r\n")
+	}
+	return &Message{
+		Direction:   DirectionResponse,
+		Host:        host,
+		Port:        80,
+		Method:      method,
+		Path:        path,
+		Status:      &status,
+		ContentType: "text/html",
+		Raw:         raw,
+	}
+}
+
+func TestEngine_OffByDefaultHoldsNothing(t *testing.T) {
+	e := NewEngine()
+	if e.Hold(reqMessage("a.test", "GET", "/")) != nil {
+		t.Fatalf("engine with both lists off held a message")
+	}
+}
+
+func TestEngine_UnconditionalListHoldsEverything(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	if err := e.SetRules(DirectionRequest, true, nil); err != nil {
+		t.Fatalf("SetRules: %v", err)
+	}
+	h := e.Hold(reqMessage("a.test", "GET", "/"))
+	if h == nil {
+		t.Fatalf("unconditional request list did not hold")
+	}
+	if h.Direction != DirectionRequest || h.Host != "a.test" || h.Path != "/" {
+		t.Fatalf("held = %+v", h)
+	}
+	// Resolve it so the map has no dangling entry.
+	if err := e.Forward(h.ID, "", false); err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+}
+
+func TestEngine_SelectiveRuleHoldsOnlyMatches(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", true, "")
+	if err != nil {
+		t.Fatalf("NewRule: %v", err)
+	}
+	if err := e.SetRules(DirectionRequest, true, []Rule{*rule}); err != nil {
+		t.Fatalf("SetRules: %v", err)
+	}
+	if e.Hold(reqMessage("api.internal.test", "GET", "/")) == nil {
+		t.Fatalf("matching host was not held")
+	}
+	if e.Hold(reqMessage("public.test", "GET", "/")) != nil {
+		t.Fatalf("non-matching host was held")
+	}
+}
+
+func TestEngine_DisabledRuleHoldsNothing(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", false, "")
+	if err != nil {
+		t.Fatalf("NewRule: %v", err)
+	}
+	if err := e.SetRules(DirectionRequest, true, []Rule{*rule}); err != nil {
+		t.Fatalf("SetRules: %v", err)
+	}
+	if e.Hold(reqMessage("api.internal.test", "GET", "/")) != nil {
+		t.Fatalf("disabled rule held a message")
+	}
+}
+
+func TestEngine_RegexRuleMatchesPath(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	rule, err := NewRule(FieldPath, CategoryRegex, `^/admin/.*`, true, "")
+	if err != nil {
+		t.Fatalf("NewRule: %v", err)
+	}
+	if err := e.SetRules(DirectionRequest, true, []Rule{*rule}); err != nil {
+		t.Fatalf("SetRules: %v", err)
+	}
+	if e.Hold(reqMessage("a.test", "GET", "/admin/users")) == nil {
+		t.Fatalf("matching path not held")
+	}
+	if e.Hold(reqMessage("a.test", "GET", "/public")) != nil {
+		t.Fatalf("non-matching path held")
+	}
+}
+
+func TestEngine_SetRulesRefusesBadRegex(t *testing.T) {
+	e := NewEngine()
+	bad := Rule{Field: FieldPath, Category: CategoryRegex, StringMatch: "[", Enabled: true}
+	if err := e.SetRules(DirectionRequest, true, []Rule{bad}); err == nil {
+		t.Fatalf("SetRules accepted a malformed regex")
+	}
+	// The list must be unchanged.
+	l := e.Rules(DirectionRequest)
+	if l.Active {
+		t.Fatalf("bad regex changed the list")
+	}
+}
+
+func TestEngine_HeldForwardCarriesEditedBytes(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	e.SetRules(DirectionRequest, true, nil)
+	m := reqMessage("a.test", "GET", "/")
+	h := e.Hold(m)
+	if h == nil {
+		t.Fatalf("not held")
+	}
+	edited := "GET /changed HTTP/1.1\r\nHost: a.test\r\n\r\n"
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		if err := e.Forward(h.ID, edited, false); err != nil {
+			t.Errorf("Forward: %v", err)
+		}
+	}()
+	action, raw := h.Wait()
+	if action != ActionForward {
+		t.Fatalf("action = %v, want forward", action)
+	}
+	if string(raw) != edited {
+		t.Fatalf("raw = %q, want edited %q", raw, edited)
+	}
+}
+
+func TestEngine_DropResolvesToNilBytes(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	e.SetRules(DirectionResponse, true, nil)
+	m := respMessage("a.test", "GET", "/", 200, nil)
+	h := e.Hold(m)
+	if h == nil {
+		t.Fatalf("not held")
+	}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		if err := e.Drop(h.ID, "not interesting"); err != nil {
+			t.Errorf("Drop: %v", err)
+		}
+	}()
+	action, raw := h.Wait()
+	if action != ActionDrop {
+		t.Fatalf("action = %v, want drop", action)
+	}
+	if raw != nil {
+		t.Fatalf("dropped raw = %q, want nil", raw)
+	}
+}
+
+func TestEngine_SecondResolveIsIgnored(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	e.SetRules(DirectionRequest, true, nil)
+	h := e.Hold(reqMessage("a.test", "GET", "/"))
+	if err := e.Forward(h.ID, "", false); err != nil {
+		t.Fatalf("first Forward: %v", err)
+	}
+	if err := e.Forward(h.ID, "GET /again HTTP/1.1\r\n\r\n", false); err == nil {
+		t.Fatalf("second Forward succeeded, want error")
+	}
+	if err := e.Drop(h.ID, ""); err == nil {
+		t.Fatalf("Drop after Forward succeeded, want error")
+	}
+}
+
+func TestEngine_ForwardUnknownIDFails(t *testing.T) {
+	e := NewEngine()
+	if err := e.Forward(99, "", false); err == nil {
+		t.Fatalf("Forward on unknown id succeeded")
+	}
+}
+
+func TestEngine_ResponseFields(t *testing.T) {
+	// status and content type come from the raw response bytes.
+	raw := []byte("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+	m := ParseMessage(DirectionResponse, "a.test", 80, false, "GET", "/x", raw)
+	if m.Status == nil || *m.Status != 404 {
+		t.Fatalf("status = %v, want 404", m.Status)
+	}
+	if m.ContentType != "application/json" {
+		t.Fatalf("content type = %q", m.ContentType)
+	}
+	rule, err := NewRule(FieldStatusCode, CategoryLiteral, "404", true, "")
+	if err != nil {
+		t.Fatalf("NewRule: %v", err)
+	}
+	if !rule.Match(m) {
+		t.Fatalf("status rule did not match")
+	}
+}
+
+func TestRewriteContentLength(t *testing.T) {
+	in := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 100\r\n\r\nhi")
+	out := rewriteContentLength(in)
+	want := "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi"
+	if string(out) != want {
+		t.Fatalf("got %q, want %q", out, want)
+	}
+}
+
+func TestRewriteContentLength_ChunkedUntouched(t *testing.T) {
+	in := []byte("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")
+	out := rewriteContentLength(in)
+	if string(out) != string(in) {
+		t.Fatalf("chunked message changed: %q", out)
+	}
+}
+
+func TestExtensionOf(t *testing.T) {
+	cases := map[string]string{
+		"/img/logo.png":         "png",
+		"/":                     "",
+		"/search":               "",
+		"/a.b/c":                "",
+		"/download/file.tar.gz": "gz",
+	}
+	for in, want := range cases {
+		if got := extensionOf(in); got != want {
+			t.Errorf("extensionOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMessageURL(t *testing.T) {
+	m := &Message{Direction: DirectionRequest, Host: "a.test", Port: 8080, TLS: false, Path: "/x"}
+	if got := m.URL(); got != "http://a.test:8080/x" {
+		t.Fatalf("url = %q", got)
+	}
+	m.TLS = true
+	if got := m.URL(); got != "https://a.test:8080/x" {
+		t.Fatalf("tls url = %q", got)
+	}
+	m.Port = 443
+	if got := m.URL(); got != "https://a.test/x" {
+		t.Fatalf("default-port url = %q", got)
+	}
+	m.Host = "2001:db8::1"
+	m.Port = 443
+	if got := m.URL(); got != "https://[2001:db8::1]/x" {
+		t.Fatalf("ipv6 url = %q", got)
+	}
+}
+
+func TestHeld_StatusField(t *testing.T) {
+	m := reqMessage("a.test", "GET", "/")
+	if m.FieldValue(FieldStatusCode) != "" {
+		t.Fatalf("request status_code should be empty")
+	}
+	code := 500
+	m.Status = &code
+	if got := m.FieldValue(FieldStatusCode); got != "500" {
+		t.Fatalf("status_code = %q", got)
+	}
+}

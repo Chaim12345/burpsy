@@ -1,0 +1,247 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/organizer"
+	"github.com/burpsy-go/burpsy/internal/persist"
+	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/sequencer"
+	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/toollog"
+	"go.uber.org/zap"
+)
+
+// The CLI is a direct engine driver: every subcommand below exercises the same
+// packages the web UI routes to, without going through HTTP. This is the
+// answer to "should the CLI talk to the web API" — it should not, because the
+// engines are the source of truth and the HTTP layer is only one consumer.
+//
+// Invocation: `burpsy <command> [flags]`. Global server flags still parse
+// first, so `burpsy -capture-dir DIR history` works; the subcommand is the
+// first positional argument.
+
+// cliCommand is one CLI subcommand.
+type cliCommand struct {
+	name  string
+	usage string
+	run   func(ctx *cliContext, args []string) error
+}
+
+// cliContext carries the engines every command shares. It is built once per
+// invocation, mirroring the wiring in main()'s server mode.
+type cliContext struct {
+	store     *core.TrafficStore
+	scope     *core.Scope
+	logger    *zap.Logger
+	findings  *core.FindingStore
+	sess      *session.Coordinator
+	intruder  *intruder.Intruder
+	scanner   *scanner.ActiveScanner
+	mr        *matchreplace.RuleSet
+	toolLog   *toollog.ToolLog
+	organizer *organizer.Store
+	sequencer *sequencer.TokenList
+	sender    *sender.Sender
+	out       io.Writer
+
+	// dbPath is the -db SQLite file backing every store; empty means the CLI
+	// behaves like the web UI without persistence (in-memory only). persist is
+	// the open handle, nil when dbPath is empty.
+	dbPath  string
+	persist *persist.Store
+}
+
+// cliCommands is the dispatch table. main() routes here when the first
+// positional argument names one of these.
+var cliCommands = map[string]*cliCommand{}
+
+func registerCLI(cmds ...*cliCommand) {
+	for _, c := range cmds {
+		cliCommands[c.name] = c
+	}
+}
+
+// newCLIContext wires the engines a subcommand can touch. captureDir drives
+// the store the same way the proxy's -capture-dir flag does; scope starts from
+// any -scope-include/-scope-exclude given at launch.
+func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile string) (*cliContext, error) {
+	logger := zap.NewNop()
+	var store *core.TrafficStore
+	var err error
+	if captureDir != "" {
+		store, err = core.NewTrafficStoreWithCaptureDir(captureDir, segmentBytes)
+	} else {
+		store = core.NewTrafficStore()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open capture store: %w", err)
+	}
+	scope := core.NewScope()
+	if scopeInclude != "" {
+		scope.AddInclude(scopeInclude)
+	}
+	if scopeExclude != "" {
+		scope.AddExclude(scopeExclude)
+	}
+	senderCfg := sender.DefaultSenderConfig()
+	ctx := &cliContext{
+		store:     store,
+		scope:     scope,
+		logger:    logger,
+		findings:  core.NewFindingStore(),
+		sess:      session.NewCoordinator(logger),
+		intruder:  intruder.NewIntruder(logger),
+		scanner:   scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(senderCfg)),
+		mr:        matchreplace.NewRuleSet(),
+		toolLog:   toollog.New(),
+		organizer: organizer.New(),
+		sequencer: sequencer.NewTokenList(),
+		sender:    sender.NewSender(senderCfg),
+		out:       os.Stdout,
+		dbPath:    dbFile,
+	}
+	if err := ctx.loadState(); err != nil {
+		return nil, err
+	}
+	return ctx, nil
+}
+
+// runCLI dispatches to a subcommand and exits. Returns the process exit code.
+func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile string) int {
+	if name == "help" || name == "-h" || name == "--help" {
+		printCLIHelp()
+		return 0
+	}
+	cmd, ok := cliCommands[name]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "burpsy: unknown command %q (see \"burpsy help\")\n", name)
+		return 2
+	}
+	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "burpsy: %v\n", err)
+		return 1
+	}
+	if err := cmd.run(ctx, args); err != nil {
+		fmt.Fprintf(os.Stderr, "burpsy %s: %v\n", name, err)
+		return 1
+	}
+	return 0
+}
+
+func printCLIHelp() {
+	fmt.Println("usage: burpsy [server flags] <command> [command flags]")
+	fmt.Println()
+	fmt.Println("Server mode (default, no command): run the proxy and web UI.")
+	fmt.Println("Server flags: -proxy -web -capture-dir -scope-include -scope-exclude",
+		"-intercept-tls -ca-dir -segment-bytes -tls-passthrough -tls-passthrough-port",
+		"-tls-defaults -store-verify")
+	fmt.Println()
+	fmt.Println("Commands (drive engines directly, no HTTP):")
+	fmt.Println()
+	for _, name := range sortedCLINames() {
+		fmt.Printf("  %-22s %s\n", name, cliCommands[name].usage)
+	}
+}
+
+func sortedCLINames() []string {
+	names := make([]string, 0, len(cliCommands))
+	for n := range cliCommands {
+		names = append(names, n)
+	}
+	for i := 1; i < len(names); i++ {
+		for j := i; j > 0 && names[j] < names[j-1]; j-- {
+			names[j], names[j-1] = names[j-1], names[j]
+		}
+	}
+	return names
+}
+
+// newFlagSet is a tiny wrapper so commands can parse their own flags.
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	return fs
+}
+
+// printJSON writes v as indented JSON to the context's writer.
+func printJSON(w io.Writer, v interface{}) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// printText writes a plain line (single trailing newline) to the writer.
+func printText(w io.Writer, format string, a ...interface{}) {
+	fmt.Fprintf(w, format+"\n", a...)
+}
+
+// readInput loads a value that may be a literal, "@path" (read file), or "-"
+// (read stdin). It is the shared convention for -raw / -request flags.
+func readInput(v string) ([]byte, error) {
+	switch {
+	case v == "-":
+		return io.ReadAll(os.Stdin)
+	case strings.HasPrefix(v, "@"):
+		data, err := os.ReadFile(strings.TrimPrefix(v, "@"))
+		if err != nil {
+			return nil, fmt.Errorf("read %q: %w", strings.TrimPrefix(v, "@"), err)
+		}
+		return data, nil
+	default:
+		return []byte(v), nil
+	}
+}
+
+// resolveHostPort splits a host:port target, defaulting the port to 80 (or 443
+// when tls is set). The sender and intruder both need explicit host+port.
+func resolveHostPort(target string, tls bool) (string, uint16, error) {
+	host := target
+	port := uint16(80)
+	if tls {
+		port = 443
+	}
+	if i := strings.LastIndex(target, ":"); i >= 0 {
+		host = target[:i]
+		p, err := parseIntPort(target[i+1:])
+		if err != nil {
+			return "", 0, fmt.Errorf("invalid port in %q", target)
+		}
+		port = p
+	}
+	if host == "" {
+		return "", 0, fmt.Errorf("empty host in target %q", target)
+	}
+	return host, port, nil
+}
+
+func parseIntPort(s string) (uint16, error) {
+	var p uint16
+	if _, err := fmt.Sscanf(s, "%d", &p); err != nil || p == 0 {
+		return 0, fmt.Errorf("not a port: %q", s)
+	}
+	return p, nil
+}
+
+// runWithTimeout wraps ctx with a timeout for network-bound commands.
+func runWithTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, d)
+}
+
+// hostOf returns the host portion of a host:port exchange field (already
+// host-only in core.Exchange), for display padding.
+func hostOf(h string) string {
+	return h
+}

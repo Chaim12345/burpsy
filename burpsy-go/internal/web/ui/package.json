@@ -1,0 +1,9 @@
+{
+  "name": "burpsy-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/app.ts --outdir dist",
+    "check": "tsc --noEmit"
+  }
+}

@@ -1,0 +1,4 @@
+# Compiled binaries — never commit build output.
+/burpsy
+/cmd/demo-target/demo-target
+/cmd/live-test/live-test
