@@ -1,47 +1,38 @@
 ```
-# Go build artifacts
-burpsy-go/burpsy
-*.o
-*.a
-*.so
-*.dylib
-*.dll
+# Compiled binaries
 *.exe
+*.dll
+*.so
+*.a
+*.o
+*.obj
+*.out
 
-# Go cache directories
-burpsy-go/vendor/
-burpsy-go/bin/
+# Go-specific
+*.mod
+*.sum
+cmd/*/demo-target
+cmd/*/live-test
 
-# Logs
+# Dependencies
+vendor/
+
+# Logs and temp files
 *.log
-
-# Temporary files
 *.tmp
-*.swp
-*.swo
 
-# Environment files
+# Environment
 .env
 .env.local
-*.env.*
+.env.*
 
-# Editor/IDE files
+# Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# Build directories (if any)
-build/
-dist/
-target/
 ```

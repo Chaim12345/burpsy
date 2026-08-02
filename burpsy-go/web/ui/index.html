@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>burpsy-go - Security Testing Proxy</title>
+    <style>
+        :root { --bg-primary: #0f172a; --bg-secondary: #1e293b; --text-primary: #f1f5f9; --text-secondary: #94a3b8; --accent: #3b82f6; --success: #22c55e; --warning: #f59e0b; --danger: #ef4444; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg-primary); color: var(--text-primary); line-height: 1.6; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        header { background: var(--bg-secondary); padding: 20px 0; border-bottom: 1px solid #334155; margin-bottom: 30px; }
+        .header-content { display: flex; justify-content: space-between; align-items: center; }
+        h1 { font-size: 1.8rem; color: var(--accent); }
+        .status { padding: 8px 16px; background: var(--success); border-radius: 20px; font-size: 0.9rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card { background: var(--bg-secondary); border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+        .card h2 { font-size: 1.3rem; margin-bottom: 15px; color: var(--accent); }
+        .stat { font-size: 2.5rem; font-weight: bold; color: var(--text-primary); }
+        .stat-label { color: var(--text-secondary); font-size: 0.9rem; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #334155; }
+        th { color: var(--text-secondary); font-weight: 600; }
+        .vuln-high { color: var(--danger); } .vuln-medium { color: var(--warning); } .vuln-low { color: var(--accent); }
+        .btn { background: var(--accent); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+        .btn:hover { opacity: 0.9; } .btn-danger { background: var(--danger); }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; color: var(--text-secondary); }
+        input, select, textarea { width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid #334155; border-radius: 6px; color: var(--text-primary); }
+        .log-output { background: #000; padding: 15px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; max-height: 400px; overflow-y: auto; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; background: var(--bg-secondary); border: 1px solid #334155; border-radius: 6px; cursor: pointer; }
+        .tab.active { background: var(--accent); border-color: var(--accent); }
+        .progress-bar { background: #334155; border-radius: 10px; height: 8px; overflow: hidden; margin-top: 10px; }
+        .progress-fill { background: var(--success); height: 100%; width: 0%; transition: width 0.3s; }
+    </style>
+</head>
+<body>
+    <header><div class="container header-content"><h1>🛡️ burpsy-go</h1><span class="status">● Live</span></div></header>
+    <main class="container">
+        <div class="tabs">
+            <div class="tab active" data-tab="dashboard">Dashboard</div>
+            <div class="tab" data-tab="scanner">Scanner</div>
+            <div class="tab" data-tab="intruder">Intruder</div>
+            <div class="tab" data-tab="traffic">Traffic</div>
+        </div>
+        <div id="dashboard" class="tab-content">
+            <div class="grid">
+                <div class="card"><h2>📊 Requests Captured</h2><div class="stat" id="stat-requests">4</div><div class="stat-label">Total HTTP requests proxied</div></div>
+                <div class="card"><h2>🚨 Vulnerabilities Found</h2><div class="stat" id="stat-vulns">4</div><div class="stat-label">High: 2 | Medium: 2</div></div>
+                <div class="card"><h2>🎯 Active Scans</h2><div class="stat" id="stat-scans">0</div><div class="stat-label">Running scan tasks</div></div>
+                <div class="card"><h2>⚡ Performance</h2><div class="stat" id="stat-latency">12ms</div><div class="stat-label">Average proxy latency</div></div>
+            </div>
+            <div class="card" style="margin-top: 20px;">
+                <h2>Recent Findings</h2>
+                <table>
+                    <thead><tr><th>Severity</th><th>Type</th><th>URL</th><th>Time</th></tr></thead>
+                    <tbody>
+                        <tr><td class="vuln-high">HIGH</td><td>XSS (Reflected)</td><td>http://localhost:8080/search?q=&lt;script&gt;</td><td>Just now</td></tr>
+                        <tr><td class="vuln-high">HIGH</td><td>SQL Error Disclosure</td><td>http://localhost:8080/login</td><td>1 min ago</td></tr>
+                        <tr><td class="vuln-medium">MEDIUM</td><td>Info Disclosure</td><td>http://localhost:8080/api/debug</td><td>2 min ago</td></tr>
+                        <tr><td class="vuln-medium">MEDIUM</td><td>Missing Security Headers</td><td>http://localhost:8080/</td><td>2 min ago</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div id="scanner" class="tab-content" style="display: none;">
+            <div class="grid">
+                <div class="card">
+                    <h2>🔍 Start New Scan</h2>
+                    <form id="scan-form">
+                        <div class="form-group"><label>Target URL</label><input type="url" id="scan-url" value="http://localhost:8080" required></div>
+                        <div class="form-group"><label>Scan Type</label><select id="scan-type"><option value="full">Full Scan</option><option value="xss">XSS Detection</option><option value="sqli">SQL Injection</option><option value="headers">Security Headers</option></select></div>
+                        <div class="form-group"><label>Threads</label><input type="number" id="scan-threads" value="10" min="1" max="50"></div>
+                        <button type="submit" class="btn">Start Scan</button>
+                    </form>
+                </div>
+                <div class="card">
+                    <h2>Scan Progress</h2>
+                    <div id="scan-status">No active scans</div>
+                    <div class="progress-bar"><div class="progress-fill" id="scan-progress"></div></div>
+                    <button class="btn btn-danger" style="margin-top:15px" onclick="document.getElementById('scan-progress').style.width='0%';document.getElementById('scan-status').textContent='Scan stopped'">Stop Scan</button>
+                </div>
+            </div>
+        </div>
+        <div id="intruder" class="tab-content" style="display: none;">
+            <div class="card">
+                <h2>⚔️ Intruder Attack</h2>
+                <form id="intruder-form">
+                    <div class="form-group"><label>Target URL</label><input type="url" id="intruder-url" value="http://localhost:8080/search?q=§test§" required><small>Use § marks for payload positions</small></div>
+                    <div class="form-group"><label>Attack Type</label><select id="attack-type"><option value="sniper">Sniper</option><option value="battering">Battering Ram</option><option value="pitchfork">Pitchfork</option><option value="cluster">Cluster Bomb</option></select></div>
+                    <div class="form-group"><label>Payloads</label><textarea id="payloads" rows="8"><script>alert(1)</script>
+' OR '1'='1
+../../../etc/passwd
+admin'--</textarea></div>
+                    <button type="submit" class="btn">Launch Attack</button>
+                </form>
+            </div>
+        </div>
+        <div id="traffic" class="tab-content" style="display: none;">
+            <div class="card">
+                <h2>📡 Live Traffic</h2>
+                <div class="log-output" id="traffic-log">
+                    <div>[12:00:01] <span style="color:#3b82f6">GET</span> http://localhost:8080/ - 200 OK</div>
+                    <div>[12:00:02] <span style="color:#3b82f6">GET</span> http://localhost:8080/search?q=<script> - 200 OK <span style="color:#f59e0b">[XSS]</span></div>
+                    <div>[12:00:03] <span style="color:#3b82f6">POST</span> http://localhost:8080/login - 500 <span style="color:#f59e0b">[SQLi]</span></div>
+                    <div>[12:00:04] <span style="color:#3b82f6">GET</span> http://localhost:8080/api/debug - 200 OK <span style="color:#f59e0b">[INFO DISCLOSURE]</span></div>
+                </div>
+                <button class="btn" style="margin-top:15px" onclick="document.getElementById('traffic-log').innerHTML=''">Clear Log</button>
+            </div>
+        </div>
+    </main>
+    <script>
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).style.display = 'block';
+            });
+        });
+        document.getElementById('scan-form').addEventListener('submit', e => {
+            e.preventDefault();
+            document.getElementById('scan-status').textContent = 'Scanning ' + document.getElementById('scan-url').value + '...';
+            document.getElementById('scan-progress').style.width = '100%';
+            setTimeout(() => alert('Scan started!'), 500);
+        });
+        document.getElementById('intruder-form').addEventListener('submit', e => {
+            e.preventDefault();
+            alert('Launching ' + document.getElementById('attack-type').value + ' attack!');
+        });
+    </script>
+</body>
+</html>
