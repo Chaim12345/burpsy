@@ -1,10 +1,14 @@
 package tools
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -236,22 +240,22 @@ func NewHasher() *Hasher {
 	return &Hasher{}
 }
 
-// MD5 computes MD5 hash (placeholder - would use crypto/md5).
+// MD5 computes MD5 hash.
 func (h *Hasher) MD5(input string) string {
-	// Would implement with crypto/md5 in production
-	return fmt.Sprintf("md5:%s", input[:min(len(input), 8)])
+	hash := md5.Sum([]byte(input))
+	return fmt.Sprintf("%x", hash)
 }
 
-// SHA1 computes SHA1 hash (placeholder - would use crypto/sha1).
+// SHA1 computes SHA1 hash.
 func (h *Hasher) SHA1(input string) string {
-	// Would implement with crypto/sha1 in production
-	return fmt.Sprintf("sha1:%s", input[:min(len(input), 8)])
+	hash := sha1.Sum([]byte(input))
+	return fmt.Sprintf("%x", hash)
 }
 
-// SHA256 computes SHA256 hash (placeholder - would use crypto/sha256).
+// SHA256 computes SHA256 hash.
 func (h *Hasher) SHA256(input string) string {
-	// Would implement with crypto/sha256 in production
-	return fmt.Sprintf("sha256:%s", input[:min(len(input), 8)])
+	hash := sha256.Sum256([]byte(input))
+	return fmt.Sprintf("%x", hash)
 }
 
 func min(a, b int) int {
@@ -288,11 +292,9 @@ func Grep(text, pattern string, ignoreCase bool) []string {
 
 // ExtractRegex extracts all matches of a regex pattern.
 func ExtractRegex(text, pattern string) []string {
-	// Would use regexp package in production
-	// This is a simplified placeholder
-	var results []string
-	if strings.Contains(text, pattern) {
-		results = append(results, pattern)
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return []string{}
 	}
-	return results
+	return re.FindAllString(text, -1)
 }

@@ -4,10 +4,19 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,15 +107,190 @@ type TlsEngine struct {
 	mu       sync.Mutex
 	caCert   []byte
 	caKey    []byte
+	caPriv   *rsa.PrivateKey
 	certPool sync.Map // cache of generated certificates
+}
+
+// GetCertificate returns or generates a certificate for the given host.
+func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
+	// Check cache first
+	if cert, ok := e.certPool.Load(host); ok {
+		return cert.(*tls.Certificate), nil
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Parse CA certificate
+	caBlock, _ := pem.Decode(e.caCert)
+	if caBlock == nil {
+		return nil, fmt.Errorf("failed to decode CA certificate")
+	}
+	caCert, err := x509.ParseCertificate(caBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+
+	// Parse CA private key
+	keyBlock, _ := pem.Decode(e.caKey)
+	if keyBlock == nil {
+		return nil, fmt.Errorf("failed to decode CA key")
+	}
+	priv, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CA key: %w", err)
+	}
+	e.caPriv = priv.(*rsa.PrivateKey)
+
+	// Generate new key for this host
+	hostPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate host key: %w", err)
+	}
+
+	// Create certificate template
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate serial number: %w", err)
+	}
+
+	hostTemplate := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName: host,
+		},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().AddDate(0, 30, 0), // Valid for 30 days
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:    []string{host},
+	}
+
+	// Sign with CA
+	hostBytes, err := x509.CreateCertificate(rand.Reader, &hostTemplate, caCert, &hostPriv.PublicKey, e.caPriv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create host certificate: %w", err)
+	}
+
+	// Encode certificate
+	hostCertPEM := new(bytes.Buffer)
+	if err := pem.Encode(hostCertPEM, &pem.Block{Type: "CERTIFICATE", Bytes: hostBytes}); err != nil {
+		return nil, fmt.Errorf("failed to encode host certificate: %w", err)
+	}
+
+	// Encode private key
+	hostKeyPEM := new(bytes.Buffer)
+	hostPrivBytes, err := x509.MarshalPKCS8PrivateKey(hostPriv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal host key: %w", err)
+	}
+	if err := pem.Encode(hostKeyPEM, &pem.Block{Type: "PRIVATE KEY", Bytes: hostPrivBytes}); err != nil {
+		return nil, fmt.Errorf("failed to encode host key: %w", err)
+	}
+
+	// Create tls.Certificate
+	cert, err := tls.X509KeyPair(hostCertPEM.Bytes(), hostKeyPEM.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TLS certificate: %w", err)
+	}
+
+	// Cache it
+	e.certPool.Store(host, &cert)
+	return &cert, nil
 }
 
 // LoadOrGenerateCA loads or generates a CA certificate.
 func LoadOrGenerateCA(caDir string) (*TlsEngine, error) {
-	// Simplified - in real implementation would load/generate actual CA
+	// Expand tilde if present
+	if strings.HasPrefix(caDir, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			caDir = filepath.Join(homeDir, caDir[2:])
+		}
+	}
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(caDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create CA directory: %w", err)
+	}
+
+	caCertPath := filepath.Join(caDir, "ca.crt")
+	caKeyPath := filepath.Join(caDir, "ca.key")
+
+	var caCert []byte
+	var caKey []byte
+
+	// Try to load existing CA
+	certData, certErr := os.ReadFile(caCertPath)
+	keyData, keyErr := os.ReadFile(caKeyPath)
+
+	if certErr == nil && keyErr == nil {
+		// Load existing CA
+		caCert = certData
+		caKey = keyData
+	} else {
+		// Generate new CA
+		priv, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate RSA key: %w", err)
+		}
+
+		// Create CA certificate template
+		serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate serial number: %w", err)
+		}
+
+		caTemplate := x509.Certificate{
+			SerialNumber: serialNumber,
+			Subject: pkix.Name{
+				Organization: []string{"burpsy"},
+				CommonName:   "burpsy MITM Proxy",
+			},
+			NotBefore:             time.Now(),
+			NotAfter:              time.Now().AddDate(10, 0, 0), // Valid for 10 years
+			KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+			BasicConstraintsValid: true,
+			IsCA:                  true,
+			MaxPathLen:            1,
+		}
+
+		// Self-sign the CA certificate
+		caBytes, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &priv.PublicKey, priv)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CA certificate: %w", err)
+		}
+
+		// Encode certificate
+		caCertPEM := new(bytes.Buffer)
+		if err := pem.Encode(caCertPEM, &pem.Block{Type: "CERTIFICATE", Bytes: caBytes}); err != nil {
+			return nil, fmt.Errorf("failed to encode CA certificate: %w", err)
+		}
+		caCert = caCertPEM.Bytes()
+
+		// Encode private key
+		caKeyPEM := new(bytes.Buffer)
+		privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal private key: %w", err)
+		}
+		if err := pem.Encode(caKeyPEM, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
+			return nil, fmt.Errorf("failed to encode CA key: %w", err)
+		}
+		caKey = caKeyPEM.Bytes()
+
+		// Save to disk
+		if err := os.WriteFile(caCertPath, caCert, 0600); err != nil {
+			return nil, fmt.Errorf("failed to save CA certificate: %w", err)
+		}
+		if err := os.WriteFile(caKeyPath, caKey, 0600); err != nil {
+			return nil, fmt.Errorf("failed to save CA key: %w", err)
+		}
+	}
+
 	return &TlsEngine{
-		caCert: []byte("placeholder-ca-cert"),
-		caKey:  []byte("placeholder-ca-key"),
+		caCert: caCert,
+		caKey:  caKey,
 	}, nil
 }
 

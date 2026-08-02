@@ -1,38 +1,76 @@
 ```
-# Compiled binaries
+# Binaries
 *.exe
 *.dll
 *.so
-*.a
 *.o
 *.obj
-*.out
+*.a
+*.lib
+*.dylib
+*.jar
+*.war
+*.class
 
 # Go-specific
-*.mod
-*.sum
-cmd/*/demo-target
-cmd/*/live-test
+*.o
+*.a
+*.so
+*.test
+*.prof
+cover.out
+profile.out
 
 # Dependencies
 vendor/
+node_modules/
+bower_components/
+.gopath/
+ GOPATH/
+.Godeps/
 
-# Logs and temp files
-*.log
-*.tmp
+# Build directories
+bin/
+pkg/
+target/
+build/
+dist/
+out/
 
-# Environment
+# Environment specific
 .env
 .env.local
 .env.*
+!*.env.example
 
-# Editors
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+tmp/
+temp/
+
+# Editor files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
+*~
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+ehthumbs.db
 Thumbs.db
 ```
