@@ -9,7 +9,10 @@ import (
 	"syscall"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/proxy"
+	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/web"
 	"go.uber.org/zap"
 )
@@ -66,7 +69,8 @@ func main() {
 	// Create proxy config
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithScope(scope).
-		WithTlsPolicy(tlsPolicy)
+		WithTlsPolicy(tlsPolicy).
+		WithLogger(logger)
 
 	// Start proxy server
 	ctx, cancel := context.WithCancel(context.Background())
@@ -81,7 +85,10 @@ func main() {
 	}()
 
 	// Start web server
-	webServer := web.NewServer(store, scope)
+	webServer := web.NewServer(store, scope).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithIntruder(intruder.NewIntruder(logger)).
+		WithScanner(scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(sender.DefaultSenderConfig())))
 	go func() {
 		logger.Info("Starting web UI", zap.String("bind", *webBind))
 		if err := webServer.ListenAndServe(ctx, *webBind); err != nil && err != context.Canceled {

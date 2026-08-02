@@ -9,24 +9,33 @@ import (
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
 )
 
 // Server represents the web API server.
 type Server struct {
-	store   *core.TrafficStore
-	scope   *core.Scope
-	logger  *zap.Logger
-	mux     *http.ServeMux
+	store    *core.TrafficStore
+	scope    *core.Scope
+	logger   *zap.Logger
+	mux      *http.ServeMux
+	sender   *sender.Sender
+	intruder *intruder.Intruder
+	scanner  *scanner.ActiveScanner
+	findings *core.FindingStore
 }
 
 // NewServer creates a new web server.
 func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 	s := &Server{
-		store:  store,
-		scope:  scope,
-		logger: zap.NewNop(),
-		mux:    http.NewServeMux(),
+		store:    store,
+		scope:    scope,
+		logger:   zap.NewNop(),
+		mux:      http.NewServeMux(),
+		sender:   sender.NewSender(sender.DefaultSenderConfig()),
+		findings: core.NewFindingStore(),
 	}
 	s.setupRoutes()
 	return s
@@ -35,6 +44,30 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 // WithLogger sets the logger.
 func (s *Server) WithLogger(logger *zap.Logger) *Server {
 	s.logger = logger
+	return s
+}
+
+// WithSender sets the HTTP sender used by the repeater.
+func (s *Server) WithSender(snd *sender.Sender) *Server {
+	s.sender = snd
+	return s
+}
+
+// WithIntruder sets the intruder engine used by the intruder endpoint.
+func (s *Server) WithIntruder(intr *intruder.Intruder) *Server {
+	s.intruder = intr
+	return s
+}
+
+// WithScanner sets the active scanner used by the audit endpoint.
+func (s *Server) WithScanner(scan *scanner.ActiveScanner) *Server {
+	s.scanner = scan
+	return s
+}
+
+// WithFindings sets the findings store.
+func (s *Server) WithFindings(fs *core.FindingStore) *Server {
+	s.findings = fs
 	return s
 }
 
@@ -204,9 +237,22 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 	// Return current scope rules
+	rules := s.scope.Rules()
+	type ruleView struct {
+		Kind    string `json:"kind"`
+		Pattern string `json:"pattern"`
+	}
+	views := make([]ruleView, 0, len(rules))
+	for _, rule := range rules {
+		kind := "include"
+		if rule.Kind == core.ScopeExclude {
+			kind = "exclude"
+		}
+		views = append(views, ruleView{Kind: kind, Pattern: rule.Pattern})
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"scope": "configured",
+		"scope": views,
 	})
 }
 
@@ -238,13 +284,22 @@ type FindingView struct {
 }
 
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
-	// This would integrate with a findings store
-	findings := []FindingView{}
+	findings := s.findings.All()
+	views := make([]FindingView, 0, len(findings))
+	for _, f := range findings {
+		views = append(views, FindingView{
+			ID:          f.ID,
+			Name:        f.Name,
+			Severity:    f.Severity.String(),
+			Confidence:  f.Confidence.String(),
+			Description: f.Description,
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"findings": findings,
-		"total":    len(findings),
+		"findings": views,
+		"total":    len(views),
 	})
 }
 
@@ -268,15 +323,25 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send the request (simplified - would use sender package)
-	response := map[string]interface{}{
-		"status": "sent",
-		"host":   req.Host,
-		"port":   req.Port,
+	if req.Host == "" {
+		http.Error(w, "Host is required", http.StatusBadRequest)
+		return
+	}
+
+	// Send the raw request through the sender
+	resp, err := s.sender.SendRaw(r.Context(), req.Host, req.Port, req.TLS, []byte(req.Request))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Send failed: %v", err), http.StatusBadGateway)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "sent",
+		"host":     req.Host,
+		"port":     req.Port,
+		"response": string(resp),
+	})
 }
 
 // IntruderRequest represents an intruder attack request.
@@ -284,6 +349,7 @@ type IntruderRequest struct {
 	BaseRequest   string   `json:"base_request"`
 	Host          string   `json:"host"`
 	Port          uint16   `json:"port"`
+	TLS           bool     `json:"tls"`
 	Payloads      []string `json:"payloads"`
 	AttackType    string   `json:"attack_type"` // "sniper", "battering ram", "pitchfork", "cluster bomb"
 	Positions     []int    `json:"positions"`   // byte offsets for §markers
@@ -301,15 +367,54 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start attack (simplified - would use intruder package)
-	response := map[string]interface{}{
-		"status":      "started",
-		"attack_id":   1,
-		"payload_count": len(req.Payloads),
+	if req.Host == "" || len(req.Payloads) == 0 {
+		http.Error(w, "Host and payloads are required", http.StatusBadRequest)
+		return
+	}
+
+	var intr *intruder.Intruder
+	if s.intruder != nil {
+		intr = s.intruder
+	} else {
+		intr = intruder.NewIntruder(s.logger)
+	}
+
+	// Parse § marker positions from the base request.
+	var positions []int
+	for i, r := range req.BaseRequest {
+		if r == '§' {
+			positions = append(positions, i)
+		}
+	}
+
+	resultsCh, err := intr.Run(r.Context(), req.BaseRequest, req.Host, req.Port, req.TLS, req.Payloads, positions)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Attack failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Collect results (bounded: drain the channel).
+	type resultView struct {
+		Payload    string `json:"payload"`
+		StatusCode int    `json:"status_code"`
+		Length     int    `json:"length"`
+		Error      string `json:"error,omitempty"`
+	}
+	var results []resultView
+	for res := range resultsCh {
+		view := resultView{Payload: res.Payload, StatusCode: res.StatusCode, Length: res.Length}
+		if res.Error != nil {
+			view.Error = res.Error.Error()
+		}
+		results = append(results, view)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":       "completed",
+		"payload_count": len(req.Payloads),
+		"results":      results,
+	})
 }
 
 // AuditRequest represents a scanner audit request.
@@ -329,38 +434,85 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run audit (simplified - would use scanner package)
-	response := map[string]interface{}{
-		"status": "completed",
-		"findings": []interface{}{},
+	scan := s.scanner
+	if scan == nil {
+		scan = scanner.NewActiveScanner(s.store, s.logger).WithSender(s.sender)
+	}
+
+	// Run audit against the requested exchange.
+	findings, err := scan.Audit(r.Context(), req.ExchangeID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Audit failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Persist findings into the finding store so they surface in /api/findings.
+	for _, f := range findings {
+		s.findings.Add(core.NewFinding{
+			Name:        f.Name,
+			Severity:    severityFromString(f.Severity),
+			Confidence:  confidenceFromString(f.Confidence),
+			Description: f.Description,
+			Remediation: f.Solution,
+		})
+	}
+
+	type findingView struct {
+		Name        string `json:"name"`
+		Severity    string `json:"severity"`
+		Confidence  string `json:"confidence"`
+		Description string `json:"description"`
+		URL         string `json:"url"`
+		Evidence    string `json:"evidence"`
+	}
+	views := make([]findingView, 0, len(findings))
+	for _, f := range findings {
+		views = append(views, findingView{
+			Name:        f.Name,
+			Severity:    f.Severity,
+			Confidence:  f.Confidence,
+			Description: f.Description,
+			URL:         f.URL,
+			Evidence:    f.Evidence,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "completed",
+		"findings": views,
+	})
 }
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
-	// Serve the web UI (would serve static files in production)
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, `<!DOCTYPE html>
-<html>
-<head>
-    <title>burpsy - Security Testing Proxy</title>
-    <style>
-        body { font-family: system-ui, sans-serif; margin: 2rem; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: #333; }
-        .status { padding: 1rem; background: #f0f0f0; border-radius: 4px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>burpsy</h1>
-        <div class="status">
-            <p>Proxy and web UI are running.</p>
-            <p>API endpoints available at /api/*</p>
-        </div>
-    </div>
-</body>
-</html>`)
+	// Serve the static web UI, embedded at build time.
+	uiHandler(w, r)
+}
+
+// severityFromString maps a scanner severity string to the core enum.
+func severityFromString(v string) core.Severity {
+	switch strings.ToLower(v) {
+	case "critical":
+		return core.SeverityCritical
+	case "high":
+		return core.SeverityHigh
+	case "medium":
+		return core.SeverityMedium
+	case "low":
+		return core.SeverityLow
+	default:
+		return core.SeverityInformational
+	}
+}
+
+// confidenceFromString maps a scanner confidence string to the core enum.
+func confidenceFromString(v string) core.Confidence {
+	switch strings.ToLower(v) {
+	case "certain":
+		return core.ConfidenceCertain
+	case "firm":
+		return core.ConfidenceFirm
+	default:
+		return core.ConfidenceTentative
+	}
 }

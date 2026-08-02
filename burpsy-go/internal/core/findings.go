@@ -1,7 +1,9 @@
 package core
 
 import (
+	"fmt"
 	"sync"
+	"time"
 )
 
 // Severity represents the severity of a finding.
@@ -141,7 +143,7 @@ func (fs *FindingStore) Get(id uint64) (*Finding, error) {
 		}
 	}
 
-	return nil, nil // Not found
+	return nil, fmt.Errorf("finding not found: %d", id)
 }
 
 // All returns all findings.
@@ -184,8 +186,7 @@ func (fs *FindingStore) Clear() {
 	fs.nextID = 0
 }
 
-// Helper function for timestamp (would use time package in real impl)
+// getTimestamp returns the current Unix time in milliseconds.
 func getTimestamp() uint64 {
-	// Simplified - in real impl would use time.Now().UnixMilli()
-	return 0
+	return uint64(time.Now().UnixMilli())
 }

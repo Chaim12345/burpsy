@@ -23,13 +23,21 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"go.uber.org/zap"
 )
 
 // DefaultCADir returns the default CA directory path.
 func DefaultCADir() string {
-	// In real implementation, would use user config dir
-	return "~/.burpsy/ca"
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		// Fall back to the legacy home-directory location.
+		if home, homeErr := os.UserHomeDir(); homeErr == nil {
+			return filepath.Join(home, ".burpsy", "ca")
+		}
+		return "~/.burpsy/ca"
+	}
+	return filepath.Join(configDir, "burpsy", "ca")
 }
 
 // TlsAction represents a TLS policy action.
@@ -630,7 +638,8 @@ func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 }
 
 func (s *Server) forwardOnly(clientConn net.Conn, requestData []byte, host string, port uint16) {
-	upstreamConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, port))
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	upstreamConn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return
 	}
@@ -638,37 +647,34 @@ func (s *Server) forwardOnly(clientConn net.Conn, requestData []byte, host strin
 
 	upstreamConn.Write(requestData)
 
-	// Copy response back
-	io.Copy(clientConn, upstreamConn)
+	// Copy exactly one response back; keep-alive connections never EOF.
+	if resp, err := readHTTPResponse(upstreamConn); err == nil {
+		clientConn.Write(resp)
+	}
 }
 
 func (s *Server) forwardRequest(requestData []byte, host string, port uint16) ([]byte, error) {
-	upstreamConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, port))
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	upstreamConn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 	defer upstreamConn.Close()
 
-	upstreamConn.Write(requestData)
-
-	// Read response
-	var response bytes.Buffer
-	buf := make([]byte, 4096)
-	for {
-		n, err := upstreamConn.Read(buf)
-		if n > 0 {
-			response.Write(buf[:n])
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return response.Bytes(), err
-		}
+	if _, err := upstreamConn.Write(requestData); err != nil {
+		return nil, err
 	}
 
-	return response.Bytes(), nil
+	return readHTTPResponse(upstreamConn)
 }
+
+// readHTTPResponse reads one complete HTTP response from conn, respecting
+// Content-Length and chunked transfer encoding instead of waiting for EOF
+// (which never comes on a keep-alive connection).
+func readHTTPResponse(conn net.Conn) ([]byte, error) {
+	return httputil.ReadHTTPResponse(conn)
+}
+
 
 // Interceptor handles request/response interception.
 type Interceptor struct {

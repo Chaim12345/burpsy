@@ -2,12 +2,16 @@ package intruder
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"go.uber.org/zap"
 )
 
@@ -184,18 +188,23 @@ func (i *Intruder) injectPayload(baseRequest string, positions []int, payload st
 }
 
 // sendAttack sends a single attack request.
-func (i *Intruder) sendAttack(ctx context.Context, request string, host string, port uint16, tls bool) *AttackResult {
+func (i *Intruder) sendAttack(ctx context.Context, request string, host string, port uint16, useTLS bool) *AttackResult {
 	startTime := time.Now()
 	result := &AttackResult{}
 
 	// Connect to target
-	network := "tcp"
-	if tls {
-		network = "tcp" // Would use tls.Dial in real implementation
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	var conn net.Conn
+	var err error
+	if useTLS {
+		dialer := &net.Dialer{Timeout: i.config.Timeout}
+		conn, err = tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true, // proxy-style scanning of arbitrary targets
+		})
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, i.config.Timeout)
 	}
-
-	addr := fmt.Sprintf("%s:%d", host, port)
-	conn, err := net.DialTimeout(network, addr, i.config.Timeout)
 	if err != nil {
 		result.Error = err
 		result.Time = time.Since(startTime)
@@ -215,16 +224,15 @@ func (i *Intruder) sendAttack(ctx context.Context, request string, host string, 
 	}
 
 	// Read response
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err != nil && n == 0 {
+	resp, err := httputil.ReadHTTPResponse(conn)
+	if err != nil {
 		result.Error = err
 		result.Time = time.Since(startTime)
 		return result
 	}
 
-	// Parse status code (simplified)
-	response := string(buf[:n])
+	// Parse status code
+	response := string(resp)
 	lines := strings.Split(response, "\n")
 	if len(lines) > 0 {
 		parts := strings.Fields(lines[0])
@@ -233,7 +241,7 @@ func (i *Intruder) sendAttack(ctx context.Context, request string, host string, 
 		}
 	}
 
-	result.Length = n
+	result.Length = len(resp)
 	result.Lines = strings.Count(response, "\n")
 	result.Words = len(strings.Fields(response))
 	result.Time = time.Since(startTime)
@@ -302,10 +310,22 @@ func (pg *PayloadGenerator) GenerateNumbers(start, end int) []string {
 	return payloads
 }
 
-// GenerateFromFile loads payloads from a file.
+// GenerateFromFile loads payloads from a file, one payload per line.
+// Blank lines are skipped; surrounding whitespace is trimmed.
 func (pg *PayloadGenerator) GenerateFromFile(filename string) ([]string, error) {
-	// Would read file in real implementation
-	return []string{}, nil
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	var payloads []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			payloads = append(payloads, line)
+		}
+	}
+	return payloads, nil
 }
 
 // GenerateCustom generates payloads from a custom list.

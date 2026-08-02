@@ -3,6 +3,8 @@ package bcheck
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 )
 
 // Check represents a parsed BCheck file.
@@ -11,6 +13,8 @@ type Check struct {
 	Version     string
 	Given       string
 	Metadata    Metadata
+	Defines     []DefineStatement
+	ForEach     []RunForEachStatement
 	Statements  []Statement
 }
 
@@ -66,23 +70,27 @@ func (SendRequestStatement) isStatement() {}
 
 // RunForEachStatement represents a run for each statement.
 type RunForEachStatement struct {
-	Collection string
-	Iterator   string
-	Body       []Statement
+	Iterator string
+	Values   []Value
+	Body     []Statement
 }
 
 func (RunForEachStatement) isStatement() {}
 
 // BoolExpr represents a boolean expression.
+// For a comparison, Left/Operator/Right are set. For logical composition
+// (Operator "and", "or", "not") the operands live in LHS/RHS instead.
 type BoolExpr struct {
 	Left     Value
 	Operator string
 	Right    Value
+	LHS      *BoolExpr
+	RHS      *BoolExpr
 }
 
 // Value represents a BCheck value.
 type Value struct {
-	Type      string
+	Type      string // "str", "var", "bool", "int"
 	StringVal string
 	BoolVal   bool
 	IntVal    int
@@ -167,6 +175,43 @@ func NewContext() *Context {
 	}
 }
 
+// resolveVar resolves a variable reference against the context.
+// Supports {name} definitions, {check.response}/{latest.response}/{base.response}
+// and request/response fields. Unknown references resolve to the empty string.
+func (ctx *Context) resolveVar(name string) string {
+	if v, ok := ctx.Variables[name]; ok {
+		return v.StringVal
+	}
+	switch name {
+	case "check.response", "latest.response", "base.response":
+		return string(ctx.Response)
+	case "check.request", "latest.request", "base.request":
+		return string(ctx.Request)
+	case "host":
+		return ctx.Host
+	case "path":
+		return ctx.Path
+	}
+	return ""
+}
+
+// resolveValue resolves a Value to its string form.
+func (ctx *Context) resolveValue(v Value) string {
+	switch v.Type {
+	case "var":
+		return ctx.resolveVar(v.StringVal)
+	case "bool":
+		if v.BoolVal {
+			return "true"
+		}
+		return "false"
+	case "int":
+		return strconv.Itoa(v.IntVal)
+	default:
+		return v.StringVal
+	}
+}
+
 // RunPassive runs passive checks on a response.
 func RunPassive(check *Check, ctx *Context) ([]Finding, error) {
 	var findings []Finding
@@ -175,8 +220,28 @@ func RunPassive(check *Check, ctx *Context) ([]Finding, error) {
 		return findings, nil
 	}
 
+	// Execute statements. If the check declares `run for each`, iterate the
+	// first iterable (one value per run, matching the corpus usage).
+	statements := prependDefines(check.Defines, check.Statements)
+	if len(check.ForEach) > 0 {
+		fe := check.ForEach[0]
+		for _, v := range fe.Values {
+			ctx.Variables[fe.Iterator] = v
+			for _, stmt := range statements {
+				result, err := executeStatement(stmt, ctx)
+				if err != nil {
+					return nil, err
+				}
+				if result != nil {
+					findings = append(findings, *result)
+				}
+			}
+		}
+		return findings, nil
+	}
+
 	// Execute statements
-	for _, stmt := range check.Statements {
+	for _, stmt := range statements {
 		result, err := executeStatement(stmt, ctx)
 		if err != nil {
 			return nil, err
@@ -187,6 +252,15 @@ func RunPassive(check *Check, ctx *Context) ([]Finding, error) {
 	}
 
 	return findings, nil
+}
+
+// prependDefines converts the defines slice to statements and prefixes the body.
+func prependDefines(defines []DefineStatement, body []Statement) []Statement {
+	out := make([]Statement, 0, len(defines)+len(body))
+	for i := range defines {
+		out = append(out, &defines[i])
+	}
+	return append(out, body...)
 }
 
 func executeStatement(stmt Statement, ctx *Context) (*Finding, error) {
@@ -206,7 +280,19 @@ func executeStatement(stmt Statement, ctx *Context) (*Finding, error) {
 	case *SendRequestStatement:
 		// Would send request in active checks
 	case *RunForEachStatement:
-		// Would iterate collection
+		// Iterate the collection, binding the iterator for each value.
+		for _, v := range s.Values {
+			ctx.Variables[s.Iterator] = v
+			for _, body := range s.Body {
+				result, err := executeStatement(body, ctx)
+				if err != nil {
+					return nil, err
+				}
+				if result != nil {
+					return result, nil
+				}
+			}
+		}
 	}
 	return nil, nil
 }
@@ -236,21 +322,45 @@ func executeIf(stmt *IfStatement, ctx *Context) (*Finding, error) {
 	return nil, nil
 }
 
+// evalBoolExpr evaluates a boolean expression against the context.
 func evalBoolExpr(expr BoolExpr, ctx *Context) bool {
-	// Simplified evaluation
-	left := expr.Left.StringVal
-	right := expr.Right.StringVal
+	switch expr.Operator {
+	case "and":
+		if expr.LHS == nil || expr.RHS == nil {
+			return false
+		}
+		return evalBoolExpr(*expr.LHS, ctx) && evalBoolExpr(*expr.RHS, ctx)
+	case "or":
+		if expr.LHS == nil || expr.RHS == nil {
+			return false
+		}
+		return evalBoolExpr(*expr.LHS, ctx) || evalBoolExpr(*expr.RHS, ctx)
+	case "not":
+		if expr.LHS == nil {
+			return false
+		}
+		return !evalBoolExpr(*expr.LHS, ctx)
+	}
+
+	left := ctx.resolveValue(expr.Left)
+	right := ctx.resolveValue(expr.Right)
 
 	switch expr.Operator {
-	case "eq":
+	case "eq", "is":
 		return left == right
 	case "ne":
 		return left != right
 	case "contains":
 		return contains(left, right)
+	case "in":
+		// `x in y` — containment with the needle on the LEFT.
+		return contains(right, left)
 	case "matches":
-		// Would use regex in full implementation
-		return contains(left, right)
+		re, err := regexp.Compile(right)
+		if err != nil {
+			return false
+		}
+		return re.MatchString(left)
 	}
 	return false
 }

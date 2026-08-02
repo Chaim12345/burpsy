@@ -2,14 +2,17 @@
 package sender
 
 import (
-"bytes"
-"context"
-"crypto/tls"
-"fmt"
-"io"
-"net"
-"net/http"
-"time"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // Sender handles HTTP request sending.
@@ -171,52 +174,41 @@ Duration:   duration,
 
 // SendRaw sends a raw HTTP request string and returns the response.
 func (s *Sender) SendRaw(ctx context.Context, host string, port uint16, useTLS bool, rawRequest []byte) ([]byte, error) {
-network := "tcp"
-addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
 
-var conn net.Conn
-var err error
+	var conn net.Conn
+	var err error
 
-dialer := &net.Dialer{Timeout: s.config.Timeout}
+	dialer := &net.Dialer{Timeout: s.config.Timeout}
 
-if useTLS {
-tlsConfig := &tls.Config{
-ServerName:         host,
-InsecureSkipVerify: !s.config.TLSVerify,
-}
-conn, err = tls.DialWithDialer(dialer, network, addr, tlsConfig)
-} else {
-conn, err = dialer.DialContext(ctx, network, addr)
-}
+	if useTLS {
+		tlsConfig := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: !s.config.TLSVerify,
+		}
+		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsConfig)
+	} else {
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
+	}
 
-if err != nil {
-return nil, fmt.Errorf("connection failed: %w", err)
-}
-defer conn.Close()
+	if err != nil {
+		return nil, fmt.Errorf("connection failed: %w", err)
+	}
+	defer conn.Close()
 
-conn.SetDeadline(time.Now().Add(s.config.Timeout))
+	conn.SetDeadline(time.Now().Add(s.config.Timeout))
 
-_, err = conn.Write(rawRequest)
-if err != nil {
-return nil, fmt.Errorf("write failed: %w", err)
-}
+	_, err = conn.Write(rawRequest)
+	if err != nil {
+		return nil, fmt.Errorf("write failed: %w", err)
+	}
 
-var response bytes.Buffer
-buf := make([]byte, 4096)
-for {
-n, err := conn.Read(buf)
-if n > 0 {
-response.Write(buf[:n])
-}
-if err != nil {
-if err == io.EOF {
-break
-}
-return response.Bytes(), fmt.Errorf("read failed: %w", err)
-}
-}
-
-return response.Bytes(), nil
+	// Read exactly one response; keep-alive connections never EOF.
+	response, err := httputil.ReadHTTPResponse(conn)
+	if err != nil {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+	return response, nil
 }
 
 // WithTimeout sets the timeout for the sender.

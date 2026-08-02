@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
 )
 
@@ -19,6 +20,7 @@ type ActiveScanner struct {
 	store      *core.TrafficStore
 	logger     *zap.Logger
 	config     *ScanConfig
+	sender     *sender.Sender
 	findings   []*Finding
 	findingsMu sync.RWMutex
 }
@@ -72,6 +74,13 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 // WithConfig sets the scan configuration.
 func (s *ActiveScanner) WithConfig(config *ScanConfig) *ActiveScanner {
 	s.config = config
+	return s
+}
+
+// WithSender sets the HTTP sender used to dispatch test requests.
+// Without a sender, checks fall back to inspecting the stored exchange response.
+func (s *ActiveScanner) WithSender(snd *sender.Sender) *ActiveScanner {
+	s.sender = snd
 	return s
 }
 
@@ -174,7 +183,7 @@ func (s *ActiveScanner) checkSQLi(ctx context.Context, exchange *core.Exchange) 
 
 	for _, payload := range payloads {
 		// Test in URL parameters
-		testURL := exchange.Path + "?test=" + url.QueryEscape(payload)
+		testURL := appendQueryParam(exchange.Path, "test", payload)
 		if s.testPayload(ctx, exchange, testURL, payload, errorPatterns, "SQL Injection", &findings) {
 			break // Found vulnerability, stop testing
 		}
@@ -198,7 +207,7 @@ func (s *ActiveScanner) checkXSS(ctx context.Context, exchange *core.Exchange) [
 
 	for _, payload := range payloads {
 		// Test in URL parameters
-		testURL := exchange.Path + "?xss=" + url.QueryEscape(payload)
+		testURL := appendQueryParam(exchange.Path, "xss", payload)
 		if s.testXSSPayload(ctx, exchange, testURL, payload, &findings) {
 			break // Found vulnerability, stop testing
 		}
@@ -227,7 +236,7 @@ func (s *ActiveScanner) checkPathTraversal(ctx context.Context, exchange *core.E
 	}
 
 	for _, payload := range payloads {
-		testURL := exchange.Path + "?file=" + url.QueryEscape(payload)
+		testURL := appendQueryParam(exchange.Path, "file", payload)
 		if s.testPathTraversal(ctx, exchange, testURL, payload, sensitivePatterns, &findings) {
 			break
 		}
@@ -238,10 +247,8 @@ func (s *ActiveScanner) checkPathTraversal(ctx context.Context, exchange *core.E
 
 // testPayload tests a payload and checks for error patterns.
 func (s *ActiveScanner) testPayload(ctx context.Context, exchange *core.Exchange, testURL, payload string, errorPatterns []string, vulnType string, findings *[]*Finding) bool {
-	// In a real implementation, this would send HTTP requests
-	// For now, we simulate based on stored response data from the store
-	respBody := s.getResponseBody(exchange)
-	
+	respBody := s.sendTestRequest(ctx, exchange, testURL)
+
 	for _, pattern := range errorPatterns {
 		re, err := regexp.Compile(pattern)
 		if err != nil {
@@ -267,8 +274,8 @@ func (s *ActiveScanner) testPayload(ctx context.Context, exchange *core.Exchange
 
 // testXSSPayload tests XSS payloads.
 func (s *ActiveScanner) testXSSPayload(ctx context.Context, exchange *core.Exchange, testURL, payload string, findings *[]*Finding) bool {
-	respBody := s.getResponseBody(exchange)
-	
+	respBody := s.sendTestRequest(ctx, exchange, testURL)
+
 	// Check if payload is reflected
 	if strings.Contains(respBody, payload) || strings.Contains(respBody, html.EscapeString(payload)) {
 		*findings = append(*findings, &Finding{
@@ -289,8 +296,8 @@ func (s *ActiveScanner) testXSSPayload(ctx context.Context, exchange *core.Excha
 
 // testPathTraversal tests path traversal payloads.
 func (s *ActiveScanner) testPathTraversal(ctx context.Context, exchange *core.Exchange, testURL, payload string, sensitivePatterns []string, findings *[]*Finding) bool {
-	respBody := s.getResponseBody(exchange)
-	
+	respBody := s.sendTestRequest(ctx, exchange, testURL)
+
 	for _, pattern := range sensitivePatterns {
 		if strings.Contains(respBody, pattern) {
 			*findings = append(*findings, &Finding{
@@ -308,6 +315,37 @@ func (s *ActiveScanner) testPathTraversal(ctx context.Context, exchange *core.Ex
 		}
 	}
 	return false
+}
+
+// sendTestRequest dispatches a crafted test request through the sender when
+// available, otherwise falls back to the stored response body of the original
+// exchange (offline audit).
+func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exchange, testURL string) string {
+	if s.sender != nil {
+		resp, err := s.sender.Send(ctx, &sender.Request{
+			Method: exchange.Method,
+			Host:   exchange.Host,
+			Path:   testURL,
+			TLS:    exchange.TLS,
+			Port:   exchange.Port,
+		})
+		if err == nil && resp != nil {
+			return string(resp.Body)
+		}
+		s.logger.Warn("test request failed, falling back to stored response",
+			zap.String("host", exchange.Host), zap.String("url", testURL), zap.Error(err))
+	}
+	return s.getResponseBody(exchange)
+}
+
+// appendQueryParam adds a query parameter to a path, preserving any existing
+// query string: /a?b=c -> /a?b=c&x=v.
+func appendQueryParam(path, key, value string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + key + "=" + url.QueryEscape(value)
 }
 
 // getResponseBody retrieves the response body from the store.

@@ -32,12 +32,14 @@ func NewScopeRule(kind ScopeRuleKind, pattern string) *ScopeRule {
 
 	// Convert wildcard pattern to regex
 	regexPattern := "^"
-	for i, c := range pattern {
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
 		switch c {
 		case '*':
 			if i == 0 && len(pattern) > 1 && pattern[1] == '.' {
-				// *.example.com matches any subdomain
+				// *.example.com matches any subdomain (zero or more labels).
 				regexPattern += "([a-zA-Z0-9-]+\\.)*"
+				i++ // the dot is included in the label group above
 			} else {
 				regexPattern += ".*"
 			}
@@ -100,6 +102,16 @@ func (s *Scope) Add(rule *ScopeRule) {
 // AddInclude adds an include rule.
 func (s *Scope) AddInclude(pattern string) {
 	s.Add(NewScopeRule(ScopeInclude, pattern))
+}
+
+// Rules returns a copy of all scope rules.
+func (s *Scope) Rules() []*ScopeRule {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]*ScopeRule, len(s.rules))
+	copy(result, s.rules)
+	return result
 }
 
 // AddExclude adds an exclude rule.
