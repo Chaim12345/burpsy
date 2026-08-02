@@ -24,6 +24,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
+	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
 )
 
@@ -171,7 +172,12 @@ func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 		NotAfter:    time.Now().AddDate(0, 30, 0), // Valid for 30 days
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{host},
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		// IP targets are validated against IP SANs, not DNS names.
+		hostTemplate.IPAddresses = []net.IP{ip}
+	} else {
+		hostTemplate.DNSNames = []string{host}
 	}
 
 	// Sign with CA
@@ -309,7 +315,8 @@ type ProxyConfig struct {
 	scope        *core.Scope
 	interceptor  *Interceptor
 	matchReplace *MatchReplaceRules
-	scanner      *PassiveScanner
+	scanner      *scanner.PassiveScanner
+	findings     *core.FindingStore
 	logger       *zap.Logger
 }
 
@@ -332,6 +339,18 @@ func (c *ProxyConfig) WithScope(scope *core.Scope) *ProxyConfig {
 // WithTlsPolicy sets the TLS policy.
 func (c *ProxyConfig) WithTlsPolicy(policy *TlsPolicy) *ProxyConfig {
 	c.tls = policy
+	return c
+}
+
+// WithScanner sets the passive scanner used to check captured traffic.
+func (c *ProxyConfig) WithScanner(scanner *scanner.PassiveScanner) *ProxyConfig {
+	c.scanner = scanner
+	return c
+}
+
+// WithFindings sets the finding store that passive scan results are written to.
+func (c *ProxyConfig) WithFindings(fs *core.FindingStore) *ProxyConfig {
+	c.findings = fs
 	return c
 }
 
@@ -423,16 +442,125 @@ func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target
 
 	port, _ := strconv.Atoi(portStr)
 
-	// Check TLS policy
-	if s.config.tls.ShouldPassthrough(host, uint16(port)) {
-		// Tunnel without interception
+	// Passthrough hosts (or no engine configured) are blind-tunnelled.
+	if s.config.tls.ShouldPassthrough(host, uint16(port)) || s.config.tls.engine == nil {
 		s.tunnelConnection(clientConn, target)
 		return
 	}
 
-	// For now, tunnel all CONNECT requests
-	// TLS interception would be implemented here
-	s.tunnelConnection(clientConn, target)
+	// Intercept: present a CA-signed leaf cert to the client, terminate TLS,
+	// and re-encrypt to the origin so traffic can be recorded and scanned.
+	s.interceptTLS(clientConn, host, uint16(port))
+}
+
+// interceptTLS decrypts a CONNECT tunnel: it answers with 200 Connection
+// Established, terminates the client's TLS session with a leaf certificate
+// signed by the configured CA, opens a second TLS session to the origin, and
+// forwards HTTP in the clear between them while recording exchanges.
+func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
+	// Signal the client that the tunnel is established.
+	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		return
+	}
+
+	// Sign a leaf certificate for this host.
+	leaf, err := s.config.tls.engine.GetCertificate(host)
+	if err != nil {
+		s.config.logger.Error("certificate signing failed", zap.String("host", host), zap.Error(err))
+		return
+	}
+
+	// TLS server side: terminate the client's TLS session.
+	tlsClient := tls.Server(clientConn, &tls.Config{
+		Certificates: []tls.Certificate{*leaf},
+	})
+	if err := tlsClient.Handshake(); err != nil {
+		// Handshake failures are common when clients reject the CA; drop quietly.
+		return
+	}
+	defer tlsClient.Close()
+
+	// TLS client side: connect to the origin.
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	upstream, err := tls.Dial("tcp", addr, &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: true, // standard testing-proxy behavior
+	})
+	if err != nil {
+		s.config.logger.Error("upstream TLS dial failed", zap.String("host", host), zap.Error(err))
+		return
+	}
+	defer upstream.Close()
+
+	// Serve HTTP over the decrypted channel, recording exchanges.
+	br := bufio.NewReader(tlsClient)
+	for {
+		requestLine, err := br.ReadString('\n')
+		if err != nil {
+			return
+		}
+		parts := strings.Fields(strings.TrimSpace(requestLine))
+		if len(parts) < 2 {
+			return
+		}
+		method := parts[0]
+		reqTarget := parts[1]
+
+		// Requests inside the tunnel are origin-form: GET /path HTTP/1.1.
+		reqHost, reqPort, path := parseTarget(reqTarget)
+		if reqHost == "" {
+			reqHost, reqPort = host, port
+		}
+
+		requestData := readFullRequest(requestLine, br)
+		startTime := time.Now()
+
+		inScope := s.config.scope.Contains(reqHost, reqPort, path, true)
+		var reqID core.MsgId
+		if inScope {
+			reqID, err = s.config.store.Put(requestData, core.DirectionRequest)
+			if err != nil {
+				s.config.logger.Error("failed to store request", zap.Error(err))
+			}
+		}
+
+		// Forward over the persistent upstream connection.
+		if _, err := upstream.Write(requestData); err != nil {
+			return
+		}
+		responseData, err := readHTTPResponse(upstream)
+		if err != nil {
+			return
+		}
+
+		if inScope {
+			respID, err := s.config.store.Put(responseData, core.DirectionResponse)
+			if err != nil {
+				s.config.logger.Error("failed to store response", zap.Error(err))
+			}
+
+			exchange := &core.Exchange{
+				Request:     reqID,
+				Response:    &respID,
+				Host:        reqHost,
+				Port:        reqPort,
+				TLS:         true,
+				Method:      method,
+				Path:        path,
+				DurationMs:  uint64(time.Since(startTime).Milliseconds()),
+				StartedMs:   uint64(startTime.UnixMilli()),
+				Protocol:    core.ProtocolHTTP1,
+				ResponseLen: len(responseData),
+			}
+			s.config.store.AddExchange(exchange)
+			s.runPassiveScan(exchange)
+		}
+
+		// Return the response to the client.
+		if _, err := tlsClient.Write(responseData); err != nil {
+			return
+		}
+	}
 }
 
 func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
@@ -447,14 +575,24 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 	// Send success response to client
 	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
-	// Record the tunnel in the store (simplified)
+	// Record the tunnel in the store (simplified: no decrypted request/response
+	// messages, just the CONNECT tunnel itself).
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		host = strings.Split(target, ":")[0]
+		portStr = "443"
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		port = 443
+	}
 	exchange := &core.Exchange{
-		Host:     strings.Split(target, ":")[0],
-		Port:     443,
-		TLS:      true,
-		Method:   "CONNECT",
-		Path:     target,
-		Protocol: core.ProtocolHTTP1,
+		Host:      host,
+		Port:      uint16(port),
+		TLS:       true,
+		Method:    "CONNECT",
+		Path:      target,
+		Protocol:  core.ProtocolHTTP1,
 		StartedMs: uint64(time.Now().UnixMilli()),
 	}
 	s.config.store.AddExchange(exchange)
@@ -541,6 +679,25 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		ResponseLen: len(responseData),
 	}
 	s.config.store.AddExchange(exchange)
+	s.runPassiveScan(exchange)
+}
+
+// runPassiveScan runs the configured passive scanner over an exchange and
+// persists any findings into the shared finding store.
+func (s *Server) runPassiveScan(exchange *core.Exchange) {
+	if s.config.scanner == nil || s.config.findings == nil {
+		return
+	}
+	findings := s.config.scanner.Scan(exchange)
+	for _, f := range findings {
+		s.config.findings.Add(core.NewFinding{
+			Name:        f.Name,
+			Severity:    core.ParseSeverity(f.Severity),
+			Confidence:  core.ParseConfidence(f.Confidence),
+			Description: f.Description,
+			Remediation: f.Solution,
+		})
+	}
 }
 
 func parseTarget(target string) (host string, port uint16, path string) {
@@ -722,20 +879,7 @@ type MatchReplaceRules struct {
 type MatchReplaceRule struct {
 	Match     string
 	Replace   string
-	Regex     bool
 	Category  string
 	Target    string
 	Enabled   bool
-}
-
-// PassiveScanner runs passive security scans.
-type PassiveScanner struct {
-	store *core.TrafficStore
-}
-
-// NewPassiveScanner creates a new passive scanner.
-func NewPassiveScanner(store *core.TrafficStore) *PassiveScanner {
-	return &PassiveScanner{
-		store: store,
-	}
 }

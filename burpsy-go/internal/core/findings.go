@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,6 +54,38 @@ func (c Confidence) String() string {
 		return "Tentative"
 	default:
 		return "Unknown"
+	}
+}
+
+// ParseSeverity maps a scanner-style severity string ("high", "medium",
+// "low", "info", "critical") to the Severity enum. Unknown values map to
+// SeverityInformational.
+func ParseSeverity(v string) Severity {
+	switch strings.ToLower(v) {
+	case "critical":
+		return SeverityCritical
+	case "high":
+		return SeverityHigh
+	case "medium":
+		return SeverityMedium
+	case "low":
+		return SeverityLow
+	default:
+		return SeverityInformational
+	}
+}
+
+// ParseConfidence maps a scanner-style confidence string ("certain",
+// "firm", "tentative") to the Confidence enum. Unknown values map to
+// ConfidenceTentative.
+func ParseConfidence(v string) Confidence {
+	switch strings.ToLower(v) {
+	case "certain":
+		return ConfidenceCertain
+	case "firm":
+		return ConfidenceFirm
+	default:
+		return ConfidenceTentative
 	}
 }
 

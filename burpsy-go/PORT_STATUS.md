@@ -1,5 +1,7 @@
 # burpsy-go Port Status
 
+> **UPDATED 2026-08-02:** All remaining gaps have been closed since the original review: TLS interception now performs real CONNECT MITM (CA + leaf cert signing, verified against an HTTPS target); the active scanner sends real crafted requests (XSS/SQLi/path-traversal detected over both plain HTTP and intercepted TLS); the web API endpoints (repeater, intruder, scanner audit, findings, scope) are wired to live services with a shared finding store; the web UI is embedded via `go:embed`; BCheck has a complete parser; the proxy respects HTTP framing (keep-alive no longer hangs); and unit/integration tests exist for bcheck, core, intruder, scanner, and sender, passing `go build`, `go vet`, `go test`, and `go test -race`.
+
 ## Complete Go Port of burpsy Security Testing Proxy - 100% COMPLETE
 
 This document tracks the porting status of burpsy from Rust to Go.

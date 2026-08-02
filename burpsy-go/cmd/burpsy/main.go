@@ -66,11 +66,16 @@ func main() {
 		tlsPolicy.WithEngine(engine)
 	}
 
+	// Shared finding store: passive scans (proxy) and active audits (web) both report here.
+	findingStore := core.NewFindingStore()
+
 	// Create proxy config
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
-		WithLogger(logger)
+		WithLogger(logger).
+		WithScanner(scanner.NewPassiveScanner(store, logger)).
+		WithFindings(findingStore)
 
 	// Start proxy server
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,9 +91,11 @@ func main() {
 
 	// Start web server
 	webServer := web.NewServer(store, scope).
+		WithLogger(logger).
 		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
 		WithIntruder(intruder.NewIntruder(logger)).
-		WithScanner(scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(sender.DefaultSenderConfig())))
+		WithScanner(scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(sender.DefaultSenderConfig()))).
+		WithFindings(findingStore)
 	go func() {
 		logger.Info("Starting web UI", zap.String("bind", *webBind))
 		if err := webServer.ListenAndServe(ctx, *webBind); err != nil && err != context.Canceled {

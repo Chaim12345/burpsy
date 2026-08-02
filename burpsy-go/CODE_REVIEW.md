@@ -1,10 +1,12 @@
 # Code Review & Missing Features Report
 
+> **RESOLUTION STATUS (updated 2026-08-02):** All 31 issues identified below have been addressed. TLS interception is fully implemented (real RSA-2048 CA, on-the-fly leaf cert signing, CONNECT MITM); crypto hashes (MD5/SHA1/SHA256), regex extraction, and JWT are real; the active scanner sends real crafted requests; repeater/intruder/scanner/findings/scope API endpoints are wired to real services; the web UI is embedded via `go:embed`; BCheck has a full parser with regex `matches`; findings timestamps are real Unix ms; the proxy honors HTTP framing (Content-Length/chunked) so keep-alive connections no longer hang; and unit/integration tests exist for bcheck, core, intruder, scanner, and sender (all pass under `-race`). This report is retained for historical record only.
+
 **Project**: burpsy-go (Rust to Go Port)  
 **Review Date**: 2024  
 **Total Source Files**: 17 Go files (3,966 lines)  
 **Build Status**: ✅ Compiles successfully  
-**Test Coverage**: ❌ No unit tests implemented  
+**Test Coverage**: ✅ Unit tests implemented (bcheck, core, intruder, scanner, sender)  
 
 ---
 

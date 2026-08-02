@@ -305,10 +305,11 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 
 // RepeaterRequest represents a repeater send request.
 type RepeaterRequest struct {
-	Request string `json:"request"`
-	Host    string `json:"host"`
-	Port    uint16 `json:"port"`
-	TLS     bool   `json:"tls"`
+	Request   string `json:"request"`
+	Host      string `json:"host"`
+	Port      uint16 `json:"port"`
+	TLS       bool   `json:"tls"`
+	TLSVerify bool   `json:"tls_verify"` // default false: skip certificate verification
 }
 
 func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
@@ -328,8 +329,16 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send the raw request through the sender
-	resp, err := s.sender.SendRaw(r.Context(), req.Host, req.Port, req.TLS, []byte(req.Request))
+	// Send the raw request through the sender.
+	snd := s.sender
+	if req.TLS && !req.TLSVerify {
+		// Per-request sender that skips certificate verification; the shared
+		// sender keeps its configured policy.
+		cfg := sender.DefaultSenderConfig()
+		cfg.TLSVerify = false
+		snd = sender.NewSender(cfg)
+	}
+	resp, err := snd.SendRaw(r.Context(), req.Host, req.Port, req.TLS, []byte(req.Request))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Send failed: %v", err), http.StatusBadGateway)
 		return
@@ -450,8 +459,8 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 	for _, f := range findings {
 		s.findings.Add(core.NewFinding{
 			Name:        f.Name,
-			Severity:    severityFromString(f.Severity),
-			Confidence:  confidenceFromString(f.Confidence),
+			Severity:    core.ParseSeverity(f.Severity),
+			Confidence:  core.ParseConfidence(f.Confidence),
 			Description: f.Description,
 			Remediation: f.Solution,
 		})
@@ -487,32 +496,4 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 	// Serve the static web UI, embedded at build time.
 	uiHandler(w, r)
-}
-
-// severityFromString maps a scanner severity string to the core enum.
-func severityFromString(v string) core.Severity {
-	switch strings.ToLower(v) {
-	case "critical":
-		return core.SeverityCritical
-	case "high":
-		return core.SeverityHigh
-	case "medium":
-		return core.SeverityMedium
-	case "low":
-		return core.SeverityLow
-	default:
-		return core.SeverityInformational
-	}
-}
-
-// confidenceFromString maps a scanner confidence string to the core enum.
-func confidenceFromString(v string) core.Confidence {
-	switch strings.ToLower(v) {
-	case "certain":
-		return core.ConfidenceCertain
-	case "firm":
-		return core.ConfidenceFirm
-	default:
-		return core.ConfidenceTentative
-	}
 }
