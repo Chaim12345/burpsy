@@ -76,20 +76,23 @@ func (d *Decoder) EncodeURL(input string) string {
 	return url.QueryEscape(input)
 }
 
-// DecodeHTML decodes HTML entities.
+// DecodeHTML decodes HTML entities. The replacements are applied in a fixed
+// order — &amp; first — rather than via a map, because map iteration order is
+// randomised and the order matters: decoding "&amp;lt;" yields "<" only when
+// "&amp;" is replaced before "&lt;". A deterministic order gives a deterministic
+// result across runs.
 func (d *Decoder) DecodeHTML(input string) string {
-	replacements := map[string]string{
-		"&lt;":   "<",
-		"&gt;":   ">",
-		"&amp;":  "&",
-		"&quot;": "\"",
-		"&#39;":  "'",
-		"&nbsp;": " ",
+	replacements := []struct{ from, to string }{
+		{"&amp;", "&"},
+		{"&lt;", "<"},
+		{"&gt;", ">"},
+		{"&quot;", "\""},
+		{"&#39;", "'"},
+		{"&nbsp;", " "},
 	}
-
 	result := input
-	for entity, char := range replacements {
-		result = strings.ReplaceAll(result, entity, char)
+	for _, r := range replacements {
+		result = strings.ReplaceAll(result, r.from, r.to)
 	}
 	return result
 }

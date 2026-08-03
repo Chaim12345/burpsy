@@ -7,8 +7,39 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
+
+// maxForEachDim bounds a single `run for each` list. A check loaded from an
+// untrusted source could otherwise declare an arbitrarily large list.
+const maxForEachDim = 10000
+
+// maxForEachProduct bounds the cartesian product of all `run for each` lists in
+// one check. Two 10k lists would be 100M iterations; this cap stops the product
+// before it becomes a denial-of-service via the evaluator.
+const maxForEachProduct = 100000
+
+// compiledRegexCache memoises regex compilations keyed by pattern, so the
+// `matches` operator and `regex_replace` builtin do not recompile the same
+// literal on every iteration of a `run for each` product. Go's regexp is RE2
+// (linear-time, no catastrophic backtracking), so this is a performance fix, not
+// a ReDoS fix.
+var compiledRegexCache sync.Map // map[string]*regexp.Regexp
+
+// compileRegex returns a cached *regexp.Regexp for pattern, sharing one
+// compilation across every call site that uses the same literal.
+func compileRegex(pattern string) (*regexp.Regexp, error) {
+	if v, ok := compiledRegexCache.Load(pattern); ok {
+		return v.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := compiledRegexCache.LoadOrStore(pattern, re)
+	return actual.(*regexp.Regexp), nil
+}
 
 // Check represents a parsed BCheck file.
 type Check struct {
@@ -387,7 +418,7 @@ func (ctx *Context) resolveRef(name string) string {
 		subject := ctx.resolveCallArg(args[0])
 		pattern := ctx.resolveCallArg(args[1])
 		repl := ctx.resolveCallArg(args[2])
-		re, err := regexp.Compile(pattern)
+		re, err := compileRegex(pattern)
 		if err != nil {
 			return ""
 		}
@@ -866,6 +897,17 @@ func runForEachProduct(check *Check, base *Context, statements []Statement) ([]F
 	total := 1
 	for i, fe := range check.ForEach {
 		dims[i] = len(fe.Values)
+		// Guard against integer overflow (a huge declared length would wrap total
+		// to a small number and the loop would run far more than intended) and
+		// against an unbounded cartesian product: a crafted .bcheck file with
+		// several large `run for each` lists could otherwise force millions of
+		// iterations, each forking a context and running the statement body.
+		if dims[i] > maxForEachDim {
+			return nil, fmt.Errorf("run for each list %d has %d values, more than the %d cap", i, dims[i], maxForEachDim)
+		}
+		if dims[i] > 0 && total > maxForEachProduct/dims[i] {
+			return nil, fmt.Errorf("run for each product %d exceeds the %d cap", total*dims[i], maxForEachProduct)
+		}
 		total *= dims[i]
 	}
 	// An empty iterable makes the whole product empty. Running the body once
@@ -1040,7 +1082,7 @@ func evalBoolExpr(expr BoolExpr, ctx *Context) bool {
 	case "matches":
 		// The pattern is taken raw, never interpolated — this is what lets a
 		// literal regex keep its braces (`"oy2[a-z0-9]{43}"`).
-		re, err := regexp.Compile(expr.Right.StringVal)
+		re, err := compileRegex(expr.Right.StringVal)
 		if err != nil {
 			return false
 		}
@@ -1050,10 +1092,7 @@ func evalBoolExpr(expr BoolExpr, ctx *Context) bool {
 }
 
 func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	// strings.Contains uses a tuned search (Rabin-Karp for long needles); the
+	// hand-rolled O(n*m) loop it replaced was the slow path for large bodies.
+	return strings.Contains(s, substr)
 }

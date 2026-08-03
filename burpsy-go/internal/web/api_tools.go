@@ -64,6 +64,15 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Empty request", http.StatusBadRequest)
 		return
 	}
+	// The repeater sends to whatever target the operator types, so it is gated
+	// by scope for the same reason the intruder is: a scope the operator set to
+	// constrain outbound traffic must not be bypassable by sending raw bytes
+	// here. The request line is not parsed (the operator owns it), so this is a
+	// host-level check, the same first layer the intruder applies.
+	if !s.scope.MayContainHost(host, port, tls) {
+		http.Error(w, "refused: "+s.scope.Explain(host, port, "/", tls), http.StatusForbidden)
+		return
+	}
 
 	// SendRaw handles a raw HTTP request (possibly HTTP/1.0-style with Host line) over the wire.
 	ctx := r.Context()
@@ -75,9 +84,18 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Persist both halves so history/decoder can reference them.
-	reqMsgID, _ := s.store.Put([]byte(req.Request), core.DirectionRequest)
-	respMsgID, _ := s.store.Put(rawResp, core.DirectionResponse)
+	// Persist both halves so history/decoder can reference them. A failed Put
+	// must not be silently swallowed: an exchange referencing a non-existent
+	// message ID would 404 in history lookups. Log and degrade rather than
+	// advertise a bad id.
+	reqMsgID, err := s.store.Put([]byte(req.Request), core.DirectionRequest)
+	if err != nil {
+		s.logger.Error("repeater: failed to store request", zap.Error(err))
+	}
+	respMsgID, err := s.store.Put(rawResp, core.DirectionResponse)
+	if err != nil {
+		s.logger.Error("repeater: failed to store response", zap.Error(err))
+	}
 
 	status := parseResponseStatus(rawResp)
 
@@ -414,7 +432,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		return uint64(id)
 	}
 
-	attack := intruder.NewAttack(msg.Raw, selected, resolved, plan).
+	attack := intruder.NewAttack(msg.Raw(), selected, resolved, plan).
 		WithLimits(limits).
 		WithGrep(grep)
 	report := intruder.Run(attack, send, record)

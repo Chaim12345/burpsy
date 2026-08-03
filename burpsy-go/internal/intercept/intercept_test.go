@@ -171,6 +171,43 @@ func TestEngine_DropResolvesToNilBytes(t *testing.T) {
 	}
 }
 
+func TestEngine_ResolvingHeldMessageRemovesItFromTheMap(t *testing.T) {
+	// Regression for the C1 memory leak: Forward/Drop previously resolved a held
+	// message but never deleted it from e.held, so a long-running proxy leaked
+	// one full raw message per intercepted exchange. After resolve+delete, the
+	// hold map must be empty again.
+	e := NewEngine()
+	e.SetEnabled(true)
+	if err := e.SetRules(DirectionRequest, true, nil); err != nil {
+		t.Fatalf("SetRules: %v", err)
+	}
+
+	for i := 0; i < 50; i++ {
+		h := e.Hold(reqMessage("a.test", "GET", "/"))
+		if h == nil {
+			t.Fatalf("iteration %d: message not held", i)
+		}
+		if err := e.Forward(h.ID, "", false); err != nil {
+			t.Fatalf("iteration %d: Forward: %v", i, err)
+		}
+	}
+	if n := len(e.held); n != 0 {
+		t.Fatalf("hold map has %d entries after forwarding 50 held messages, want 0 (memory leak)", n)
+	}
+
+	// Drop path deletes too.
+	h := e.Hold(reqMessage("a.test", "GET", "/"))
+	if h == nil {
+		t.Fatalf("message not held")
+	}
+	if err := e.Drop(h.ID, "test"); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+	if n := len(e.held); n != 0 {
+		t.Fatalf("hold map has %d entries after a drop, want 0", n)
+	}
+}
+
 func TestEngine_SecondResolveIsIgnored(t *testing.T) {
 	e := NewEngine()
 	e.SetEnabled(true)

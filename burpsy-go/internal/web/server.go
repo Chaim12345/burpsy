@@ -37,6 +37,12 @@ type Server struct {
 	liveAudit          *LiveAuditState
 }
 
+// maxRequestBodyBytes bounds any single API request body. Generous enough for
+// the repeater's raw requests and large payload sets, bounded enough that a
+// runaway upload cannot exhaust memory. 16 MiB covers the largest legitimate
+// operator paste the UI is expected to send.
+const maxRequestBodyBytes = 16 * 1024 * 1024
+
 // NewServer creates a new web server.
 func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 	s := &Server{
@@ -226,9 +232,16 @@ func (s *Server) setupRoutes() {
 
 // ListenAndServe starts the web server.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	// Cap every request body so a single oversized POST cannot exhaust memory.
+	// The API is operator-facing and loopback-bound, but a body limit is cheap
+	// insurance and the right default for any server that reads JSON into structs.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		s.mux.ServeHTTP(w, r)
+	})
 	server := &http.Server{
 		Addr:    addr,
-		Handler: s.mux,
+		Handler: handler,
 	}
 
 	go func() {

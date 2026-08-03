@@ -2,6 +2,7 @@ package matchreplace
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -81,5 +82,36 @@ func TestUpdateContentLengthFlagRoundTrip(t *testing.T) {
 	rs.SetUpdateContentLength(false)
 	if rs.UpdateContentLength() {
 		t.Error("flag should be false after SetUpdateContentLength(false)")
+	}
+}
+
+// Regression for the C2 buffer-overwrite: when Content-Length is the last header
+// and the recomputed length is longer than the original, the old
+// `append(line[:colon+1], " "+length)` wrote past the header into the shared
+// backing array, corrupting the separator and body. The rewritten rule builds a
+// fresh slice, so the body on the wire must survive byte-for-byte.
+func TestApplyContentLengthLastHeaderLongerValueNoCorruption(t *testing.T) {
+	big := strings.Repeat("x", 1_000_000) // original body "x" → 1,000,000 ⇒ new CL "1000000" is 4 digits longer
+	raw := []byte("POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 1\r\n\r\nx")
+	rs := NewRuleSet()
+	rs.SetRules([]*Rule{newBodyRule(t, "x", big)})
+	rs.SetUpdateContentLength(true)
+
+	out := rs.Apply(DirRequest, raw)
+
+	if !bytes.Contains(out, []byte("Content-Length: 1000000")) {
+		t.Fatalf("output does not fix Content-Length to 1000000: %q", out[:120])
+	}
+	sep := []byte("\r\n\r\n")
+	idx := bytes.Index(out, sep)
+	if idx < 0 {
+		t.Fatalf("output %q has no header/body separator", out[:120])
+	}
+	body := out[idx+len(sep):]
+	if string(body) != big {
+		t.Fatalf("body corrupted: got %d bytes, want %d intact; head=%q", len(body), len(big), body[:min(len(body), 20)])
+	}
+	if !bytes.HasSuffix(out, []byte("Content-Length: 1000000\r\n\r\n"+big)) {
+		t.Fatalf("output tail does not match expectation")
 	}
 }

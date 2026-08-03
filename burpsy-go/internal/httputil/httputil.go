@@ -43,6 +43,13 @@ func ReadHTTPResponse(conn net.Conn) ([]byte, error) {
 // cannot make a caller buffer without limit.
 const MaxResponseHeadBytes = 256 * 1024
 
+// MaxResponseBodyBytes bounds a response body. A malicious upstream can declare
+// an arbitrarily large Content-Length or chunk size; without a cap a single
+// response can exhaust the proxy's memory. Reads past the cap are dropped and
+// the body is returned truncated to the limit, exactly as the inflate path in
+// the codec does. 64 MiB matches that cap's order of magnitude.
+const MaxResponseBodyBytes = 64 * 1024 * 1024
+
 // ReadResponseHead reads one HTTP response head — status line and headers,
 // through the terminating blank line — from br. It reads nothing past the
 // blank line, so on a 101 response the frame bytes that follow remain in br
@@ -87,6 +94,11 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 			return nil, fmt.Errorf("parsing response headers: %w", err)
 		}
 
+		// remaining bounds the total body we will buffer, so a malicious upstream
+		// that declares a huge Content-Length or streams endless chunks cannot
+		// exhaust the proxy's memory. Reads past the cap are truncated.
+		remaining := MaxResponseBodyBytes
+
 		if te := mimeHead.Get("Transfer-Encoding"); strings.EqualFold(te, "chunked") {
 			// Read chunked body until the terminating zero chunk.
 			for {
@@ -114,8 +126,28 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 					}
 					break
 				}
-				if _, err := io.CopyN(&body, br, size); err != nil {
-					return nil, fmt.Errorf("reading chunk data: %w", err)
+				// Cap the chunk size before allocating: a malicious upstream can
+				// declare a multi-exabyte chunk to OOM the proxy. We read at most
+				// `remaining` of it and drop the rest of this chunk.
+				readSize := size
+				if readSize > int64(remaining) {
+					readSize = int64(remaining)
+				}
+				chunk := make([]byte, readSize)
+				if readSize > 0 {
+					if _, err := io.ReadFull(br, chunk); err != nil {
+						return nil, fmt.Errorf("reading chunk data: %w", err)
+					}
+					remaining -= int(readSize)
+				}
+				body.Write(chunk)
+				// Drain the chunk bytes we chose not to keep, plus the trailing
+				// CRLF, so the stream stays framed for any bytes after the cap.
+				drop := int64(size - readSize)
+				if drop > 0 {
+					if _, err := io.CopyN(io.Discard, br, drop); err != nil {
+						return nil, fmt.Errorf("discarding oversized chunk: %w", err)
+					}
 				}
 				// Chunk data is followed by CRLF.
 				crlf := make([]byte, 2)
@@ -123,6 +155,11 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 					return nil, fmt.Errorf("reading chunk terminator: %w", err)
 				}
 				body.Write(crlf)
+				if remaining <= 0 {
+					// At the cap: stop reading further chunks rather than looping
+					// forever on an endless stream.
+					break
+				}
 			}
 		} else if cl := mimeHead.Get("Content-Length"); cl != "" {
 			n, err := strconv.ParseInt(cl, 10, 64)
@@ -130,13 +167,22 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 				return nil, fmt.Errorf("bad Content-Length %q", cl)
 			}
 			if n > 0 {
-				if _, err := io.CopyN(&body, br, n); err != nil {
+				// Cap the allocation: a declared Content-Length in the exabytes
+				// must not allocate that much before we read a byte.
+				readN := n
+				if readN > int64(remaining) {
+					readN = int64(remaining)
+				}
+				buf := make([]byte, readN)
+				if _, err := io.ReadFull(br, buf); err != nil {
 					return nil, fmt.Errorf("reading body: %w", err)
 				}
+				remaining -= int(readN)
+				body.Write(buf)
 			}
 		} else {
-			// No framing: body runs until EOF (HTTP/1.0 style).
-			if _, err := io.Copy(&body, br); err != nil {
+			// No framing: body runs until EOF (HTTP/1.0 style), capped.
+			if _, err := io.CopyN(&body, br, int64(remaining)); err != nil && err != io.EOF {
 				return nil, fmt.Errorf("reading EOF-delimited body: %w", err)
 			}
 		}

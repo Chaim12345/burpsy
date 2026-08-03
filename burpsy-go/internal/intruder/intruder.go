@@ -62,6 +62,10 @@ type Intruder struct {
 	resultsMu  sync.RWMutex
 	progress   AttackProgress
 	progressMu sync.RWMutex
+	// runCancel cancels the context of the in-flight Run, so Stop() can halt
+	// an attack without depending on the caller to cancel the context it
+	// passed in. Guarded by progressMu (set/cleared alongside the Status).
+	runCancel context.CancelFunc
 }
 
 // NewIntruder creates a new intruder instance.
@@ -77,9 +81,12 @@ func NewIntruder(logger *zap.Logger) *Intruder {
 	}
 }
 
-// WithConfig sets the attack configuration.
+// WithConfig sets the attack configuration. A nil config is ignored so the
+// caller cannot nil-deref i.config on the next send.
 func (i *Intruder) WithConfig(config *AttackConfig) *Intruder {
-	i.config = config
+	if config != nil {
+		i.config = config
+	}
 	return i
 }
 
@@ -93,7 +100,12 @@ type AttackPayload struct {
 func (i *Intruder) Run(ctx context.Context, baseRequest string, host string, port uint16, tls bool, payloads []string, positions []int) (<-chan *AttackResult, error) {
 	resultsCh := make(chan *AttackResult, 100)
 
+	// Derive a cancellable context so Stop() can halt this run even when the
+	// caller does not cancel its own ctx (the CLI passes a timeout context it
+	// does not cancel on Stop). Stored on the struct under progressMu.
+	runCtx, runCancel := context.WithCancel(ctx)
 	i.progressMu.Lock()
+	i.runCancel = runCancel
 	i.progress = AttackProgress{
 		Total:     len(payloads),
 		Completed: 0,
@@ -105,35 +117,51 @@ func (i *Intruder) Run(ctx context.Context, baseRequest string, host string, por
 
 	go func() {
 		defer close(resultsCh)
+		// Clear the cancel handle on exit so a later Stop is a no-op rather
+		// than cancelling a dead context.
+		defer func() {
+			i.progressMu.Lock()
+			i.runCancel = nil
+			i.progressMu.Unlock()
+		}()
 
-		sem := make(chan struct{}, i.config.MaxConcurrency)
+		// Bound concurrency: one permit per in-flight worker, acquired in the
+		// driver loop *before* a worker is spawned. Spawning a goroutine per
+		// payload and acquiring the permit inside it would create N goroutines
+		// for N payloads (≈4–8 KB stack each → ~1 GB for 200k payloads), the
+		// exact memory failure this project's engine.go exists to avoid.
+		maxConc := i.config.MaxConcurrency
+		if maxConc <= 0 {
+			maxConc = 1
+		}
+		sem := make(chan struct{}, maxConc)
 		var wg sync.WaitGroup
 
 		for idx, payload := range payloads {
+			// Acquire the permit before spawning, honouring cancellation while
+			// we wait. A worker is never started without a slot reserved, so the
+			// live-goroutine count is bounded by maxConc.
 			select {
-			case <-ctx.Done():
+			case <-runCtx.Done():
 				i.setProgressStatus("stopped")
+				// Wait for in-flight workers before closing the channel: a worker
+				// that reaches `resultsCh <- result` after we return would panic
+				// with "send on closed channel". wg.Wait guarantees none remain.
+				wg.Wait()
 				return
-			default:
+			case sem <- struct{}{}:
 			}
 
 			wg.Add(1)
 			go func(index int, p string) {
 				defer wg.Done()
-
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-				case <-ctx.Done():
-					i.setProgressStatus("stopped")
-					return
-				}
+				defer func() { <-sem }()
 
 				// Build request with payload
 				modifiedRequest := i.injectPayload(baseRequest, positions, p)
 
 				// Send request
-				result := i.sendAttack(ctx, modifiedRequest, host, port, tls)
+				result := i.sendAttack(runCtx, modifiedRequest, host, port, tls)
 				result.Payload = p
 
 				// Store result
@@ -147,7 +175,7 @@ func (i *Intruder) Run(ctx context.Context, baseRequest string, host string, por
 				// Send to channel
 				select {
 				case resultsCh <- result:
-				case <-ctx.Done():
+				case <-runCtx.Done():
 				}
 			}(idx, payload)
 		}
@@ -212,8 +240,30 @@ func (i *Intruder) sendAttack(ctx context.Context, request string, host string, 
 	}
 	defer conn.Close()
 
-	// Set deadline
-	conn.SetDeadline(time.Now().Add(i.config.Timeout))
+	// If the caller's context already carries a deadline, honour it; otherwise
+	// fall back to the configured per-request timeout.
+	deadline := time.Now().Add(i.config.Timeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		result.Error = fmt.Errorf("set deadline: %w", err)
+		result.Time = time.Since(startTime)
+		return result
+	}
+
+	// Close the conn when ctx is cancelled, so a blocked Read/Write unblocks
+	// instead of waiting out the whole deadline. sendAttack previously ignored
+	// ctx entirely, so a Stop()/timeout could not interrupt an in-flight read.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-stop:
+		}
+	}()
 
 	// Send request
 	_, err = conn.Write([]byte(request))
@@ -288,9 +338,17 @@ func (i *Intruder) ClearResults() {
 	i.results = make([]*AttackResult, 0)
 }
 
-// Stop stops the current attack.
+// Stop stops the current attack. It cancels the in-flight run's context —
+// previously it only set the status string, which left the run blocked on a
+// timeout the caller owned and never cancelled. Now the driver's select on
+// runCtx.Done() fires, workers drain, and the channel closes cleanly.
 func (i *Intruder) Stop() {
-	i.setProgressStatus("stopped")
+	i.progressMu.Lock()
+	if i.runCancel != nil {
+		i.runCancel()
+	}
+	i.progress.Status = "stopped"
+	i.progressMu.Unlock()
 }
 
 // PayloadGenerator generates payloads for attacks.
@@ -301,8 +359,13 @@ func NewPayloadGenerator() *PayloadGenerator {
 	return &PayloadGenerator{}
 }
 
-// GenerateNumbers generates numeric payloads.
+// GenerateNumbers generates numeric payloads from start to end inclusive.
+// An inverted range (start > end) yields no payloads rather than panicking in
+// make with a negative length.
 func (pg *PayloadGenerator) GenerateNumbers(start, end int) []string {
+	if end < start {
+		return []string{}
+	}
 	payloads := make([]string, end-start+1)
 	for i := start; i <= end; i++ {
 		payloads[i-start] = fmt.Sprintf("%d", i)

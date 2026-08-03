@@ -55,8 +55,11 @@ package bcheck
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 // IpKind is an insertion-point family the DSL can name. `any` is a selector in
@@ -164,7 +167,7 @@ func (d Declined) Describe() string {
 // request had somewhere to inject that this enumerator refuses to splice into,
 // and the caller must report that as skipped rather than clean.
 func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
-	e, err := parseRequest(req)
+	e, err := core.ParseRequestEdit(req)
 	if err != nil {
 		// Go's raw-byte model lets an unparseable request reach the enumerator,
 		// which the Rust type system prevents. It has nowhere to inject, and the
@@ -184,11 +187,11 @@ func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
 	var declined []Declined
 
 	if want(IpQuery) {
-		for _, kv := range kvPairs(e.query, '&') {
+		for _, kv := range kvPairs(e.Query, '&') {
 			out = append(out, InsertionPoint{
 				Kind:      IpQuery,
-				Name:      e.query[kv.name[0]:kv.name[1]],
-				BaseValue: e.query[kv.value[0]:kv.value[1]],
+				Name:      e.Query[kv.name[0]:kv.name[1]],
+				BaseValue: e.Query[kv.value[0]:kv.value[1]],
 				loc:       loc{kind: locQuery, start: kv.value[0], end: kv.value[1]},
 				coding:    codingForm,
 			})
@@ -196,7 +199,7 @@ func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
 	}
 
 	if want(IpHeader) {
-		for i, h := range e.headers {
+		for i, h := range e.Headers {
 			if isReservedHeader(h[0]) {
 				continue
 			}
@@ -211,7 +214,7 @@ func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
 	}
 
 	if want(IpCookie) {
-		for i, h := range e.headers {
+		for i, h := range e.Headers {
 			if !strings.EqualFold(h[0], "cookie") {
 				continue
 			}
@@ -261,19 +264,19 @@ func isReservedHeader(name string) bool {
 // the code under test ever sees the payload, and a check whose probe is
 // rejected reports nothing while looking like it ran. The refusal is therefore
 // recorded, not swallowed.
-func bodyPoints(e *requestEdit, out *[]InsertionPoint, declined *[]Declined) {
-	if len(e.body) == 0 {
+func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined) {
+	if len(e.Body) == 0 {
 		return
 	}
-	if !utf8.Valid(e.body) {
+	if !utf8.Valid(e.Body) {
 		*declined = append(*declined, Declined{
 			What:   "request body",
 			Reason: "non-UTF-8 body: cannot splice without corrupting it",
 		})
 		return
 	}
-	body := string(e.body)
-	ctype := strings.ToLower(e.header("content-type"))
+	body := string(e.Body)
+	ctype := strings.ToLower(e.Header("content-type"))
 	trimmed := strings.TrimLeft(body, " \t\r\n")
 
 	if strings.Contains(ctype, "json") || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
@@ -320,7 +323,7 @@ func bodyPoints(e *requestEdit, out *[]InsertionPoint, declined *[]Declined) {
 // Everything else in the request is untouched, which is what makes a resulting
 // finding attributable to the point's name.
 func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]byte, error) {
-	e, err := parseRequest(req)
+	e, err := core.ParseRequestEdit(req)
 	if err != nil {
 		return nil, err
 	}
@@ -343,159 +346,36 @@ func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]by
 
 	switch p.loc.kind {
 	case locQuery:
-		e.query = spliceStr(e.query, p.loc.start, p.loc.end, newVal)
+		e.Query = spliceStr(e.Query, p.loc.start, p.loc.end, newVal)
 	case locHeader:
-		if p.loc.index < len(e.headers) {
-			e.headers[p.loc.index][1] = newVal
+		if p.loc.index < len(e.Headers) {
+			e.Headers[p.loc.index][1] = newVal
 		}
 	case locCookie:
-		if p.loc.index < len(e.headers) {
-			h := &e.headers[p.loc.index]
+		if p.loc.index < len(e.Headers) {
+			h := &e.Headers[p.loc.index]
 			h[1] = spliceStr(h[1], p.loc.start, p.loc.end, newVal)
 		}
 	case locBody:
 		start := p.loc.start
-		if start > len(e.body) {
-			start = len(e.body)
+		if start > len(e.Body) {
+			start = len(e.Body)
 		}
 		end := p.loc.end
-		if end > len(e.body) {
-			end = len(e.body)
+		if end > len(e.Body) {
+			end = len(e.Body)
 		}
 		if end < start {
 			end = start
 		}
-		b := make([]byte, 0, len(e.body)+len(newVal))
-		b = append(b, e.body[:start]...)
+		b := make([]byte, 0, len(e.Body)+len(newVal))
+		b = append(b, e.Body[:start]...)
 		b = append(b, newVal...)
-		b = append(b, e.body[end:]...)
-		e.body = b
+		b = append(b, e.Body[end:]...)
+		e.Body = b
 	}
 
-	return e.toRaw(), nil
-}
-
-// requestEdit is the parsed view of a request that insertion points address.
-// Splices mutate the components; toRaw rebuilds wire bytes with a correct
-// Content-Length.
-type requestEdit struct {
-	method  string
-	path    string
-	query   string
-	version string
-	headers [][2]string
-	body    []byte
-}
-
-// parseRequest splits raw request bytes into its components. It tolerates bare
-// LF line endings, as the store's parser does.
-func parseRequest(raw []byte) (*requestEdit, error) {
-	s := string(raw)
-	headEnd := strings.Index(s, "\r\n\r\n")
-	sep := "\r\n"
-	if headEnd < 0 {
-		headEnd = strings.Index(s, "\n\n")
-		sep = "\n"
-	}
-	if headEnd < 0 {
-		headEnd = len(s)
-	}
-	head := s[:headEnd]
-	// headEnd points at the start of the blank-line separator, which is the
-	// whole "\r\n\r\n" (4 bytes) or "\n\n" (2 bytes). Skipping only one
-	// "\r\n" leaves the second half of the blank line glued onto the body,
-	// so `{base.request.body}` came back with a leading "\r\n".
-	sepLen := 4
-	if sep == "\n" {
-		sepLen = 2
-	}
-	var body []byte
-	if headEnd+sepLen <= len(s) {
-		body = raw[headEnd+sepLen:]
-	}
-
-	lines := strings.Split(head, "\n")
-	if len(lines) == 0 {
-		return nil, fmt.Errorf("empty request")
-	}
-	parts := strings.Fields(strings.TrimSuffix(lines[0], "\r"))
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("request line needs a method and a target")
-	}
-	e := &requestEdit{
-		method:  parts[0],
-		version: "HTTP/1.1",
-		body:    body,
-	}
-	if len(parts) >= 3 {
-		e.version = parts[2]
-	}
-	e.path = parts[1]
-	if i := strings.IndexByte(e.path, '?'); i >= 0 {
-		e.query = e.path[i+1:]
-		e.path = e.path[:i]
-	}
-
-	for _, l := range lines[1:] {
-		l = strings.TrimSuffix(l, "\r")
-		if l == "" {
-			continue
-		}
-		if idx := strings.IndexByte(l, ':'); idx > 0 {
-			e.headers = append(e.headers, [2]string{
-				strings.TrimSpace(l[:idx]),
-				strings.TrimSpace(l[idx+1:]),
-			})
-		}
-	}
-	return e, nil
-}
-
-// header returns the first header value with the given name (case-insensitive),
-// or "".
-func (r *requestEdit) header(name string) string {
-	for _, h := range r.headers {
-		if strings.EqualFold(h[0], name) {
-			return h[1]
-		}
-	}
-	return ""
-}
-
-// toRaw serialises the request to origin-form wire bytes with a correct
-// Content-Length. Length and framing headers are rewritten, never echoed.
-func (r *requestEdit) toRaw() []byte {
-	var sb strings.Builder
-	sb.Grow(256 + len(r.body))
-	target := r.path
-	if r.query != "" {
-		target += "?" + r.query
-	}
-	sb.WriteString(r.method)
-	sb.WriteByte(' ')
-	sb.WriteString(target)
-	sb.WriteByte(' ')
-	sb.WriteString(r.version)
-	sb.WriteString("\r\n")
-
-	for _, h := range r.headers {
-		switch strings.ToLower(h[0]) {
-		case "content-length", "transfer-encoding":
-			continue
-		}
-		sb.WriteString(h[0])
-		sb.WriteString(": ")
-		sb.WriteString(h[1])
-		sb.WriteString("\r\n")
-	}
-	// A body always gets a length. An empty body gets one only for methods
-	// where its absence would be ambiguous.
-	if len(r.body) > 0 || r.method == "POST" || r.method == "PUT" || r.method == "PATCH" {
-		fmt.Fprintf(&sb, "Content-Length: %d\r\n", len(r.body))
-	}
-	sb.WriteString("\r\n")
-	sb.Write(r.body)
-	return []byte(sb.String())
+	return e.ToRaw(), nil
 }
 
 // spliceStr replaces the byte range [start,end) of s with newVal, flooring
@@ -617,7 +497,7 @@ func jsonStringValues(s string) []jsonValue {
 				if f.object {
 					label = f.key
 				} else {
-					label = fmt.Sprintf("%s[%d]", f.label, f.index)
+					label = f.label + "[" + strconv.Itoa(f.index) + "]"
 				}
 			}
 			stack = append(stack, frame{
@@ -673,7 +553,7 @@ func jsonStringValues(s string) []jsonValue {
 					if f.object {
 						name = f.key
 					} else {
-						name = fmt.Sprintf("%s[%d]", f.label, f.index)
+						name = f.label + "[" + strconv.Itoa(f.index) + "]"
 					}
 					out = append(out, jsonValue{name: name, value: [2]int{start, end}})
 				}

@@ -2,8 +2,11 @@ package intruder
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -142,4 +145,62 @@ func TestInjectPayloadMarkers(t *testing.T) {
 	if strings.Contains(got, "§") {
 		t.Errorf("markers left in request: %q", got)
 	}
+}
+
+func TestGenerateNumbersInvertedRangeReturnsEmpty(t *testing.T) {
+	// Regression for H5: GenerateNumbers(5, 1) used to panic in make with a
+	// negative length. It must return an empty slice instead.
+	pg := NewPayloadGenerator()
+	got := pg.GenerateNumbers(5, 1)
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0 for inverted range", len(got))
+	}
+}
+
+func TestIntruderStopCancelsRunningAttack(t *testing.T) {
+	// Regression for M9/H2/H3: Stop() used to only flip the status string, so a
+	// run blocked on the caller's never-cancelled context kept going, and the
+	// eventual cancel could hit a closed channel. Stop now cancels the derived
+	// runCtx, the driver drains workers via wg.Wait(), and the channel closes
+	// cleanly (no send-on-closed-channel panic).
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "ok")
+	}))
+	defer ts.Close()
+	u, _ := url.Parse(ts.URL)
+	host := u.Hostname()
+	port, _ := strconv.Atoi(u.Port())
+
+	payloads := make([]string, 0, 500)
+	for i := 0; i < 500; i++ {
+		payloads = append(payloads, fmt.Sprintf("p%d", i))
+	}
+	base := "GET / HTTP/1.1\r\nHost: " + host + "\r\n\r\n"
+
+	intr := NewIntruder(testLogger())
+	intr.WithConfig(&AttackConfig{MaxConcurrency: 8, Timeout: 2 * time.Second})
+
+	results, err := intr.Run(context.Background(), base, host, uint16(port), false, payloads, []int{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Stop after a short delay while workers are in flight.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		intr.Stop()
+	}()
+	// Drain. Any send-on-closed-channel would panic (crashing the test); this
+	// confirms the driver waited for all workers before closing.
+	got := 0
+	for range results {
+		got++
+	}
+	if got == 0 {
+		t.Fatalf("drained 0 results — run ended before doing any work")
+	}
+	if st := intr.GetProgress().Status; st != "stopped" {
+		t.Fatalf("status = %q, want stopped", st)
+	}
+	// A second Stop must be safe (no-op) once the run has finished.
+	intr.Stop()
 }

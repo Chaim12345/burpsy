@@ -7,6 +7,7 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 )
 
@@ -82,15 +83,19 @@ func SARIF(rows []Row) ([]byte, error) {
 	return json.MarshalIndent(doc, "", "  ")
 }
 
-// HTML renders a self-contained report page.
+// HTML renders a self-contained report page. Every operator/attacker-controllable
+// field (finding name, description, remediation) is escaped: a finding whose text
+// carries markup from a scanned response must not become a script in the report.
 func HTML(rows []Row) []byte {
 	var b strings.Builder
 	b.WriteString("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>burpsy scan report</title></head><body>\n")
 	b.WriteString(fmt.Sprintf("<h1>burpsy scan report</h1>\n<p>%d finding(s)</p>\n<ul>\n", len(rows)))
 	for _, f := range rows {
-		b.WriteString(fmt.Sprintf("<li><strong>%s</strong> (%s, %s) — %s", f.Name, f.Severity, f.Confidence, f.Description))
+		b.WriteString(fmt.Sprintf("<li><strong>%s</strong> (%s, %s) — %s",
+			html.EscapeString(f.Name), html.EscapeString(f.Severity),
+			html.EscapeString(f.Confidence), html.EscapeString(f.Description)))
 		if f.Remediation != "" {
-			b.WriteString(fmt.Sprintf("<br><em>Remediation:</em> %s", f.Remediation))
+			b.WriteString(fmt.Sprintf("<br><em>Remediation:</em> %s", html.EscapeString(f.Remediation)))
 		}
 		b.WriteString("</li>\n")
 	}

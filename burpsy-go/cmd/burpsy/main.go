@@ -78,12 +78,16 @@ func main() {
 		os.Exit(0)
 	}
 	// Initialize logger
-	logger, _ := zap.NewProduction()
+	logger, err := zap.NewProduction()
+	if err != nil {
+		// A logger is required for every subsystem below; fail fast rather than
+		// dereference a nil *zap.Logger later.
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
 	defer logger.Sync()
 
 	// Create traffic store
 	var store *core.TrafficStore
-	var err error
 	if *captureDir != "" {
 		store, err = core.NewTrafficStoreWithCaptureDir(*captureDir, *segmentBytes)
 	} else {
@@ -219,4 +223,9 @@ func main() {
 
 	logger.Info("Shutting down...")
 	cancel()
+	// Seal the capture's tail. Sync rather than Close: handlers may still be
+	// unwinding, and Close would unmap segments they are reading spans out of.
+	if err := store.Sync(); err != nil {
+		logger.Error("Failed to seal capture", zap.Error(err))
+	}
 }

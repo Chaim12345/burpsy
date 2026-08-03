@@ -196,7 +196,12 @@ func fixContentLength(raw []byte) []byte {
 			if colon < 0 {
 				continue
 			}
-			lines[i] = append(line[:colon+1], []byte(" "+length)...)
+			// bytes.Split returns subslices that share the backing array of raw,
+			// so append(line[:colon+1], ...) would overwrite adjacent header lines
+			// — and, when Content-Length is the last header, the separator and
+			// body — whenever the recomputed length string is longer than the
+			// original. Build a fresh slice instead.
+			lines[i] = []byte("Content-Length: " + length)
 			found = true
 		}
 	}

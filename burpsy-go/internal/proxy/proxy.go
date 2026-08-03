@@ -531,11 +531,24 @@ func (s *Server) handleConnection(clientConn net.Conn) {
 		tcpConn.SetKeepAlivePeriod(3 * time.Minute)
 	}
 
+	// Bound the initial request line read: without a deadline a client that
+	// opens many connections and never sends a newline pins one goroutine per
+	// connection with no limit (slowloris). 30 s is generous for a line and
+	// short enough to reclaim idle goroutines.
+	if tcpConn, ok := clientConn.(*net.TCPConn); ok {
+		_ = tcpConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	}
+
 	// Read initial request
 	reader := bufio.NewReader(clientConn)
 	requestLine, err := reader.ReadString('\n')
 	if err != nil {
 		return
+	}
+	// The request line is in; the rest of the exchange uses its own framing
+	// (Content-Length / chunked / EOF), so clear the line-read deadline.
+	if tcpConn, ok := clientConn.(*net.TCPConn); ok {
+		_ = tcpConn.SetReadDeadline(time.Time{})
 	}
 
 	parts := strings.Fields(strings.TrimSpace(requestLine))
@@ -563,7 +576,12 @@ func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target
 		portStr = "443"
 	}
 
-	port, _ := strconv.Atoi(portStr)
+	// A malformed port must not silently become 0 (which then fails a dial to
+	// :0). Fall back to the HTTPS default rather than guessing.
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		port = 443
+	}
 
 	// Passthrough hosts (or no engine configured) are blind-tunnelled.
 	if s.config.tls.ShouldPassthrough(host, uint16(port)) || s.config.tls.engine == nil {

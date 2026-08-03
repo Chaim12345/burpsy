@@ -495,6 +495,12 @@ func (e *Engine) Forward(id uint64, edited string, fixContentLength bool) error 
 	if !h.resolve(ActionForward, raw, "") {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
+	// Remove from the hold map so a long-running proxy does not leak one full
+	// raw message per intercepted exchange. resolve is the once-only gate: by
+	// the time we get here the message is resolved, so deleting is safe.
+	e.mu <- struct{}{}
+	delete(e.held, id)
+	<-e.mu
 	return nil
 }
 
@@ -510,6 +516,10 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	if !h.resolve(ActionDrop, nil, reason) {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
+	// Remove from the hold map; see Forward for why.
+	e.mu <- struct{}{}
+	delete(e.held, id)
+	<-e.mu
 	return nil
 }
 
@@ -557,10 +567,11 @@ func ContentTypeOf(raw []byte) string {
 	}
 	head := string(raw[:headEnd])
 	for _, line := range strings.Split(head, "\r\n") {
-		if len(line) > 12 && strings.EqualFold(line[:12], "Content-Type") {
-			if i := strings.IndexByte(line, ':'); i != -1 {
-				return strings.TrimSpace(line[i+1:])
-			}
+		// Require the header name to be exactly "Content-Type" followed by a
+		// colon, so "Content-Type-Options" (or any other prefix-extended header)
+		// is not misread as a content type.
+		if len(line) > 13 && strings.EqualFold(line[:12], "Content-Type") && line[12] == ':' {
+			return strings.TrimSpace(line[13:])
 		}
 	}
 	return ""
