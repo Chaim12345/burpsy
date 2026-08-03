@@ -6,7 +6,6 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intercept"
-	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/persist"
@@ -25,7 +24,6 @@ type Server struct {
 	logger             *zap.Logger
 	mux                *http.ServeMux
 	sender             *sender.Sender
-	intruder           *intruder.Intruder
 	scanner            *scanner.ActiveScanner
 	findings           *core.FindingStore
 	sitemap            *sitemap.SiteMap
@@ -47,7 +45,6 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		logger:             zap.NewNop(),
 		mux:                http.NewServeMux(),
 		sender:             sender.NewSender(sender.DefaultSenderConfig()),
-		intruder:           intruder.NewIntruder(zap.NewNop()),
 		findings:           core.NewFindingStore(),
 		sitemap:            sitemap.New(),
 		sessionCoordinator: session.NewCoordinator(zap.NewNop()),
@@ -70,12 +67,6 @@ func (s *Server) WithLogger(logger *zap.Logger) *Server {
 // WithSender sets the HTTP sender used by the repeater.
 func (s *Server) WithSender(snd *sender.Sender) *Server {
 	s.sender = snd
-	return s
-}
-
-// WithIntruder sets the intruder engine used by the intruder endpoint.
-func (s *Server) WithIntruder(intr *intruder.Intruder) *Server {
-	s.intruder = intr
 	return s
 }
 

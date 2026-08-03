@@ -3,13 +3,19 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"go.uber.org/zap"
@@ -106,113 +112,134 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 
 // ---- Intruder ----------------------------------------------------------------------------------
 
-// intruderPointsReq mirrors intruder.ts's position-inspection payload.
+// The wire contract here is the Rust web layer's (crates/web/src/lib.rs), consumed byte-for-byte
+// by the bundled UI's intruder.ts: PointsReq/PointView for inspection, and RunReq/RunView — or
+// the legacy flat AttemptView[] array — for an attack. Both shapes come off the same engine, so
+// there is one execution path, one rate limiter, and one place scope is enforced.
+
+const (
+	intruderDefaultRPS          = 20.0
+	intruderMinRPS              = 0.01
+	intruderMaxInFlightCeiling  = 999
+	intruderDefaultMaxPayloads  = 10_000
+	intruderMaxThrottleStatuses = 32
+	// The legacy form keeps its original 500-request cap so a fat paste cannot become an
+	// accidental DoS; the report form's bound is the operator's.
+	intruderLegacyBound  = 500
+	intruderDefaultBound = 5_000
+	intruderMaxBound     = 200_000
+	// Per-send timeout, matching burpsy-sender's default. The Go sender dials fresh per send, so
+	// the bound is applied per request rather than to the attack as a whole.
+	intruderDefaultTimeoutMS = 15_000
+)
+
+// intruderPointsReq mirrors the Rust PointsReq: which stored message, and whether to discover
+// every position family or the defaults.
 type intruderPointsReq struct {
-	Method      string `json:"method"`       // "positional" or "raw"
-	Target      string `json:"target"`       // scheme://host:port
-	PayloadType string `json:"payload_type"` // "simple" | "battering-ram" | "pitchfork" | "cluster-bomb"
-	Request     string `json:"request"`      // raw request text
+	MsgID uint64 `json:"msg_id"`
+	All   bool   `json:"all"`
 }
 
-// intruderPointsResp mirrors intruder.ts's insertion-point inspection result.
-type intruderPointsResp struct {
-	InsertionPoints []intruderPoint `json:"insertion_points"`
-	Payloads        []string        `json:"payloads"`
+// PointView is one discoverable insertion point. Index is the position in the returned slice —
+// that is the handle the UI echoes back in a run's `points`, not a byte offset.
+type PointView struct {
+	Index   int    `json:"index"`
+	Kind    string `json:"kind"`
+	Label   string `json:"label"`
+	Offset  int    `json:"offset"`
+	Len     int    `json:"len"`
+	Current string `json:"current"`
 }
 
-type intruderPoint struct {
-	Index  int    `json:"index"`
-	Marker string `json:"marker"`
-	Value  string `json:"value,omitempty"`
-}
-
-// handleIntruderPoints inspects a request for attack insertion points and previews the payloads.
-// Ported from intruder.ts's positional/payload logic into Go (the TS version computed these in the
-// browser; here the server answers with the same shape).
+// handleIntruderPoints inspects a stored request for attack insertion points. The UI sends the
+// message id it just captured; this answers with the Rust PointView shape.
 func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 	var req intruderPointsReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.Request) == "" {
-		http.Error(w, "Empty request", http.StatusBadRequest)
+	msg, err := s.store.Get(core.MsgId(req.MsgID))
+	if err != nil {
+		http.Error(w, "no such message", http.StatusNotFound)
 		return
 	}
-
-	points := findInsertionPoints(req.Request)
-	payloads := generatePayloadPreview(req.PayloadType)
-
+	cfg := intruder.DefaultPointConfig()
+	if req.All {
+		cfg = intruder.AllPointConfig()
+	}
+	found := intruder.FindPoints(msg, cfg)
+	out := make([]PointView, 0, len(found))
+	for i, p := range found {
+		out = append(out, PointView{
+			Index:   i,
+			Kind:    p.Kind.String(),
+			Label:   p.Label,
+			Offset:  p.Span.Offset,
+			Len:     p.Span.Len,
+			Current: msg.Text(p.Span),
+		})
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(intruderPointsResp{
-		InsertionPoints: points,
-		Payloads:        payloads,
-	})
+	json.NewEncoder(w).Encode(out)
 }
 
-// findInsertionPoints locates §...§ marked spans and, failing that, query/first-line positions.
-func findInsertionPoints(request string) []intruderPoint {
-	var points []intruderPoint
-	// § is the Burp position marker (U+00A7). The UI lets users mark positions with it.
-	lines := strings.Split(request, "\n")
-	for li, line := range lines {
-		for i := 0; i < len(line); i++ {
-			if line[i] == '\u00a7' {
-				start := i
-				// find closing marker
-				j := strings.IndexByte(line[start+1:], '\u00a7')
-				if j < 0 {
-					points = append(points, intruderPoint{Index: li, Marker: line[start:], Value: ""})
-					break
-				}
-				content := line[start+1 : start+1+j]
-				points = append(points, intruderPoint{Index: li, Marker: "§" + content + "§", Value: content})
-				i = start + 1 + j
-			}
-		}
-	}
-	return points
-}
-
-// generatePayloadPreview returns a small sample of payloads for the given payload type so the UI's
-// payload list is populated before an attack runs. Full generation happens in the engine.
-func generatePayloadPreview(payloadType string) []string {
-	switch payloadType {
-	case "simple", "battering-ram", "":
-		return []string{"admin", "test", "payload1", "0000"}
-	case "pitchfork":
-		return []string{"user1", "pass1"}
-	case "cluster-bomb":
-		return []string{"a", "b", "c"}
-	default:
-		return []string{"admin"}
-	}
-}
-
-// intruderRunReq mirrors intruder.ts's run payload.
+// intruderRunReq mirrors the Rust RunReq. Pointers distinguish "absent" from "zero", which the
+// request semantics depend on (a named empty mode list is a 400, an absent one is sniper).
 type intruderRunReq struct {
-	Method      string   `json:"method"`
-	Target      string   `json:"target"`
-	PayloadType string   `json:"payload_type"`
-	AttackType  string   `json:"attack_type"`
-	Positions   []int    `json:"positions"`
-	Payloads    []string `json:"payloads"`
-	Request     string   `json:"request"`
+	MsgID          uint64                    `json:"msg_id"`
+	Target         string                    `json:"target"`
+	All            bool                      `json:"all"`
+	PointIndex     *int                      `json:"point_index"`
+	Payloads       *[]string                 `json:"payloads"`
+	Mode           *string                   `json:"mode"`
+	Points         *[]int                    `json:"points"`
+	PayloadSets    *[][]string               `json:"payload_sets"`
+	PayloadSources *[]intruder.PayloadSource `json:"payload_sources"`
+	PayloadRules   *[]intruder.RuleSpec      `json:"payload_rules"`
+	MaxPayloads    *int                      `json:"max_payloads"`
+	GrepMatch      *string                   `json:"grep_match"`
+	GrepExtract    *string                   `json:"grep_extract"`
+	Pool           *string                   `json:"pool"`
+	AutoThrottle   *intruder.AutoThrottle    `json:"auto_throttle"`
+	RPS            *float64                  `json:"rps"`
+	MaxInFlight    *int                      `json:"max_in_flight"`
+	MaxRequests    *int                      `json:"max_requests"`
+	TimeoutMS      *uint64                   `json:"timeout_ms"`
 }
 
-type intruderResult struct {
-	Payload  string `json:"payload"`
-	Status   int    `json:"status"`
-	Length   int    `json:"length"`
-	Duration int64  `json:"duration_ms"`
+// AttemptView is the legacy one-position form's row.
+type AttemptView struct {
+	Payload     string  `json:"payload"`
+	Status      *int    `json:"status"`
+	Len         int     `json:"len"`
+	DurationMS  uint64  `json:"duration_ms"`
+	Error       *string `json:"error"`
+	GrepMatched *bool   `json:"grep_matched"`
+	GrepExtract *string `json:"grep_extract"`
 }
 
-type intruderRunResp struct {
-	Total   int              `json:"total"`
-	Results []intruderResult `json:"results"`
-	Errors  int              `json:"errors"`
+// BucketExample resolves one bucket's first ordinal back to the exact payload combination, so
+// the operator never has to reconstruct it by hand.
+type BucketExample struct {
+	FirstOrdinal int      `json:"first_ordinal"`
+	Payloads     []string `json:"payloads"`
 }
 
+// RunView is the full report shape: the bucketed summary, payloads behind each bucket, and the
+// honest per-set counting (what was capped, truncated, skipped or dropped).
+type RunView struct {
+	Report      intruder.AttackReport `json:"report"`
+	Examples    []BucketExample       `json:"examples"`
+	PayloadSets []intruder.PayloadSet `json:"payload_sets"`
+}
+
+// handleIntruderRun runs an attack: sniper, battering ram, pitchfork or cluster bomb.
+//
+// A request that names no mode, no payload_sets and no payload_sources is the single-position
+// sniper form the bundled UI posts, and gets back the flat array of per-attempt rows that UI
+// renders. Anything else gets the full RunView. Both shapes come off the same engine, so the
+// legacy array is a projection of the report.
 func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -223,43 +250,314 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	msg, err := s.store.Get(core.MsgId(req.MsgID))
+	if err != nil {
+		http.Error(w, "no such message", http.StatusNotFound)
+		return
+	}
 	host, port, tls, err := targetParts(req.Target)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad target: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	base := req.Request
-	if base == "" {
-		// fall back to a GET on the target
-		base = "GET / HTTP/1.1\r\nHost: " + host + "\r\n\r\n"
+	// Two layers, because one cannot do this job. Here we only know the host: the paths this
+	// attack will actually request do not exist yet, and a payload spliced into a path position
+	// invents them. So this refuses a host that is wholly out of scope, and every spliced request
+	// is judged again on its own bytes by the authorising sender below.
+	if !s.scope.MayContainHost(host, port, tls) {
+		http.Error(w, "refused: "+s.scope.Explain(host, port, "/", tls), http.StatusForbidden)
+		return
 	}
-	if len(req.Payloads) == 0 {
-		req.Payloads = []string{""}
+	// Naming a generator or a mode is as clear a statement that the operator wants the full
+	// report as anything else, so both select the report shape.
+	legacy := req.Mode == nil && req.PayloadSets == nil && req.PayloadSources == nil
+	kind := intruder.AttackKindSniper
+	if req.Mode != nil {
+		k, ok := intruder.ParseAttackKind(*req.Mode)
+		if !ok {
+			http.Error(w, fmt.Sprintf("unknown mode %q: expected sniper, battering_ram, pitchfork or cluster_bomb", *req.Mode), http.StatusBadRequest)
+			return
+		}
+		kind = k
 	}
 
-	ctx := r.Context()
-	results, err := s.intruder.Run(ctx, base, host, port, tls, req.Payloads, req.Positions)
+	cfg := intruder.DefaultPointConfig()
+	if req.All {
+		cfg = intruder.AllPointConfig()
+	}
+	discovered := intruder.FindPoints(msg, cfg)
+	wanted, err := selectPoints(req.Points, req.PointIndex, len(discovered))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	var out intruderRunResp
-	for res := range results {
-		out.Results = append(out.Results, intruderResult{
-			Payload:  res.Payload,
-			Status:   res.StatusCode,
-			Length:   res.Length,
-			Duration: res.Time.Milliseconds(),
-		})
-		if res.Error != nil {
-			out.Errors++
-		}
-		s.toolLog.Record(toollog.ToolIntruder, host, port, tls, "INTRUDER", "", res.StatusCode, uint64(res.Time.Milliseconds()), res.Payload)
+	// Burp's rule, and a sound one: one position makes the multi-set modes meaningless, and twenty
+	// is where a cluster bomb stops being an attack and becomes an outage.
+	if (kind == intruder.AttackKindPitchfork || kind == intruder.AttackKindClusterBomb) &&
+		(len(wanted) < 2 || len(wanted) > 20) {
+		http.Error(w, fmt.Sprintf("%s requires between 2 and 20 payload positions, got %d", kind, len(wanted)), http.StatusBadRequest)
+		return
 	}
-	out.Total = len(out.Results)
+	selected := make([]intruder.InsertionPoint, 0, len(wanted))
+	for _, i := range wanted {
+		selected = append(selected, discovered[i])
+	}
+
+	// A literal list is a PayloadSource variant, so the three request shapes collapse to one type
+	// here and everything downstream — count checks, resolution, processing — happens once.
+	sources, err := intruderSources(req.PayloadSources, req.PayloadSets, req.Payloads, kind, len(selected))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Compiled once, before any payload is generated: an unparseable pattern is one error here
+	// rather than N identical drops inside the attack.
+	rules := req.PayloadRules
+	if rules == nil {
+		rules = &[]intruder.RuleSpec{}
+	}
+	chain, err := intruder.NewChain(*rules)
+	if err != nil {
+		http.Error(w, "payload rule: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	payloadCap := intruderDefaultMaxPayloads
+	if req.MaxPayloads != nil {
+		payloadCap = *req.MaxPayloads
+	}
+	payloadCap = clampInt(payloadCap, 1, intruder.MaxPayloads)
+	// Generate, then process, then done — all of it before the plan is built, so plan.Len() is
+	// the number of requests and a payload a rule dropped never occupies an ordinal.
+	resolved := make([]intruder.PayloadSet, 0, len(sources))
+	for i, src := range sources {
+		ps, err := src.Resolve(payloadCap)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("payload set %d (%s): %s", i, src.AsStr(), err), http.StatusBadRequest)
+			return
+		}
+		ps.Kind = src.AsStr()
+		chain.Run(ps)
+		resolved = append(resolved, *ps)
+	}
+
+	grep, err := buildGrep(req.GrepMatch, req.GrepExtract)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if at := req.AutoThrottle; at != nil && len(at.Statuses) > intruderMaxThrottleStatuses {
+		http.Error(w, fmt.Sprintf("auto_throttle lists %d statuses, more than the %d allowed", len(at.Statuses), intruderMaxThrottleStatuses), http.StatusBadRequest)
+		return
+	}
+
+	// Bounded at BOTH ends: a rate below one request per two minutes is not a rate anyone means,
+	// and there is deliberately no way to turn the rate cap off over HTTP.
+	rps := intruderDefaultRPS
+	if req.RPS != nil {
+		if *req.RPS < intruderMinRPS {
+			http.Error(w, fmt.Sprintf("rps must be at least %v, got %v", intruderMinRPS, *req.RPS), http.StatusBadRequest)
+			return
+		}
+		rps = math.Min(*req.RPS, 1000.0)
+	}
+	maxInFlight := 10
+	if req.MaxInFlight != nil {
+		maxInFlight = *req.MaxInFlight
+	}
+	maxInFlight = clampInt(maxInFlight, 1, intruderMaxInFlightCeiling)
+	limits := intruder.NewRateLimit(&rps, 1, maxInFlight)
+	if req.Pool != nil {
+		limits = limits.Named(*req.Pool)
+	}
+	if at := req.AutoThrottle; at != nil {
+		limits = limits.WithAutoThrottle(at)
+	}
+	bound := intruderDefaultBound
+	if legacy {
+		bound = intruderLegacyBound
+	} else if req.MaxRequests != nil {
+		bound = clampInt(*req.MaxRequests, 1, intruderMaxBound)
+	}
+
+	setLens := make([]int, 0, len(resolved))
+	for _, set := range resolved {
+		setLens = append(setLens, len(set.Items))
+	}
+	plan := intruder.NewAttackPlan(kind, len(selected), setLens, bound)
+
+	timeout := time.Duration(intruderDefaultTimeoutMS) * time.Millisecond
+	if req.TimeoutMS != nil {
+		timeout = time.Duration(*req.TimeoutMS) * time.Millisecond
+	}
+
+	// One authorising sender for the whole attack. The scope decision still happens once per
+	// spliced request — which is what matters, because a payload landing in a path position
+	// rewrites the request line, so the request that goes out may address something a host-level
+	// check never saw.
+	auth := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
+	ctx := r.Context()
+	send := func(raw []byte) (intruder.Sent, error) {
+		sctx := ctx
+		var cancel context.CancelFunc
+		if timeout > 0 {
+			sctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+		res, err := auth.Send(sctx, raw)
+		if err != nil {
+			return intruder.Sent{}, err
+		}
+		return intruder.Sent{Raw: res.Raw, Duration: res.Duration, Status: res.Status}, nil
+	}
+	record := func(raw []byte) uint64 {
+		id, _ := s.store.Put(raw, core.DirectionResponse)
+		return uint64(id)
+	}
+
+	attack := intruder.NewAttack(msg.Raw, selected, resolved, plan).
+		WithLimits(limits).
+		WithGrep(grep)
+	report := intruder.Run(attack, send, record)
+
+	if legacy {
+		rows := make([]AttemptView, 0, len(report.Attempts))
+		for _, a := range report.Attempts {
+			payload := ""
+			if pl := payloadsAt(plan, resolved, a.Ordinal); len(pl) > 0 {
+				payload = pl[0]
+			}
+			rows = append(rows, AttemptView{
+				Payload:     payload,
+				Status:      a.Status,
+				Len:         a.ResponseLen,
+				DurationMS:  uint64(a.DurationMS),
+				Error:       a.Error,
+				GrepMatched: a.GrepMatched,
+				GrepExtract: a.GrepExtract,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rows)
+		return
+	}
+
+	examples := make([]BucketExample, 0, len(report.Buckets))
+	for _, b := range report.Buckets {
+		examples = append(examples, BucketExample{
+			FirstOrdinal: b.FirstOrdinal,
+			Payloads:     payloadsAt(plan, resolved, b.FirstOrdinal),
+		})
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	json.NewEncoder(w).Encode(RunView{
+		Report:      *report,
+		Examples:    examples,
+		PayloadSets: resolved,
+	})
+}
+
+// selectPoints resolves the `points` / `point_index` forms to a validated index list, refusing a
+// duplicate or an out-of-range position — a duplicate would overlap and the splice would silently
+// drop one of the payloads.
+func selectPoints(points *[]int, pointIndex *int, found int) ([]int, error) {
+	switch {
+	case points != nil:
+		seen := make(map[int]bool, len(*points))
+		for _, i := range *points {
+			if i < 0 || i >= found {
+				return nil, fmt.Errorf("point %d out of range: %d points found", i, found)
+			}
+			if seen[i] {
+				return nil, fmt.Errorf("insertion point %d selected twice", i)
+			}
+			seen[i] = true
+		}
+		return *points, nil
+	case pointIndex != nil:
+		if *pointIndex < 0 || *pointIndex >= found {
+			return nil, fmt.Errorf("point %d out of range: %d points found", *pointIndex, found)
+		}
+		return []int{*pointIndex}, nil
+	default:
+		return nil, errors.New("no insertion point selected: pass point_index or points")
+	}
+}
+
+// intruderSources collapses the three payload request shapes into one PayloadSource list and
+// enforces the per-mode set count.
+func intruderSources(sources *[]intruder.PayloadSource, sets *[][]string, payloads *[]string, kind intruder.AttackKind, positions int) ([]intruder.PayloadSource, error) {
+	var out []intruder.PayloadSource
+	switch {
+	case sources != nil:
+		out = *sources
+	case sets != nil:
+		for _, items := range *sets {
+			out = append(out, intruder.PayloadSource{Type: "list", List: &intruder.ListSource{Items: items}})
+		}
+	case payloads != nil:
+		out = []intruder.PayloadSource{{Type: "list", List: &intruder.ListSource{Items: *payloads}}}
+	default:
+		return nil, errors.New("no payloads: pass payloads, payload_sets or payload_sources")
+	}
+	need := 1
+	if kind == intruder.AttackKindPitchfork || kind == intruder.AttackKindClusterBomb {
+		need = positions
+	}
+	if len(out) != need {
+		return nil, fmt.Errorf("%s needs exactly %d payload set(s), got %d", kind, need, len(out))
+	}
+	return out, nil
+}
+
+// buildGrep compiles the operator's grep patterns, if any. Go's regexp is RE2, which bounds
+// matching memory by construction (lazy DFA), so the Rust GREP_SIZE_LIMIT has no knob to turn:
+// the safety property it guarded holds without one.
+func buildGrep(matchRe, extractRe *string) (intruder.Grep, error) {
+	var g intruder.Grep
+	var err error
+	if matchRe != nil && *matchRe != "" {
+		g.MatchRe, err = regexp.Compile(*matchRe)
+		if err != nil {
+			return g, fmt.Errorf("bad grep_match pattern: %v", err)
+		}
+	}
+	if extractRe != nil && *extractRe != "" {
+		g.ExtractRe, err = regexp.Compile(*extractRe)
+		if err != nil {
+			return g, fmt.Errorf("bad grep_extract pattern: %v", err)
+		}
+	}
+	return g, nil
+}
+
+// payloadsAt recovers the payload combination behind a plan ordinal. This is why results can hold
+// an ordinal and nothing else: the plan is a pure function of the index.
+func payloadsAt(plan *intruder.AttackPlan, sets []intruder.PayloadSet, ordinal int) []string {
+	var asg intruder.Assignment
+	if !plan.Fill(ordinal, &asg) {
+		return nil
+	}
+	var out []string
+	for _, slot := range asg.Slots {
+		if slot.Set < 0 || slot.Set >= len(sets) {
+			continue
+		}
+		items := sets[slot.Set].Items
+		if slot.Payload >= 0 && slot.Payload < len(items) {
+			out = append(out, items[slot.Payload])
+		}
+	}
+	return out
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // ---- Scanner -----------------------------------------------------------------------------------

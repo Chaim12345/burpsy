@@ -116,14 +116,14 @@ func DefaultRateLimit() RateLimit {
 // requests" is a bound the operator can reason about against the size of their attack.
 type AutoThrottle struct {
 	// Statuses are the statuses that mean "slow down".
-	Statuses []int
+	Statuses []int `json:"statuses"`
 	// After is how many consecutive listed responses precede a rate cut. Zero is treated as one.
-	After int
+	After int `json:"after"`
 	// Factor is what the rate is divided by while throttled. Values below 1 would raise the rate,
 	// which is never what an operator means here, so they are clamped to 1 (no change).
-	Factor float64
+	Factor float64 `json:"factor"`
 	// RecoverAfter is how many grants the reduced rate lasts for before it recovers.
-	RecoverAfter int
+	RecoverAfter int `json:"recover_after"`
 }
 
 // DefaultAutoThrottle: 429 is the status that exists to say this; 503 is what a target says when

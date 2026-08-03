@@ -218,6 +218,48 @@ func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bo
 	return s.Contains(host, port, path, isTLS)
 }
 
+// MayContainHost reports whether *any* path on this host could be in scope. A pre-filter, never an
+// authorisation decision, ported from burpsy-core::scope::may_contain_host.
+//
+// This exists because asking about one arbitrary path cannot answer a question about a host:
+// an `include(h).with_path_prefix("/v1/")` makes `Contains(h, p, "/", tls)` false even though the
+// /v1/ paths an attack may invent are authorised, while an `include(h)` + path-scoped
+// `exclude(h, "/admin")` pair makes `Contains(h, p, "/", tls)` true and a caller taking that as
+// permission for the whole host would send a payload right at /admin.
+//
+// So this answers only "is this host worth considering at all", deliberately permissively: a
+// path-scoped exclude removes paths, not the host. The real decision belongs to AuthoriseRaw, on
+// the bytes actually going on the wire. As with Contains, the Go port keeps its documented
+// default-allow divergence: an empty scope contains everything, so `possible` starts true and only
+// a whole-host exclude can flip it — where the Rust original is last-match-wins default-deny. The
+// asymmetry is safe because this is a pre-filter: a too-permissive answer here only means the
+// attack starts and its per-request gate reports the refusals, never that a refused request goes
+// out.
+func (s *Scope) MayContainHost(host string, port uint16, _ bool) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.allowAll {
+		return true
+	}
+	possible := true
+	for _, rule := range s.rules {
+		if !rule.Matches(host, port) {
+			continue
+		}
+		switch {
+		case rule.Kind == ScopeInclude:
+			// Any include that names this host/port keeps it possible, path prefix or not.
+			possible = true
+		case rule.PathPrefix != nil:
+			// A path-scoped exclude removes some paths and leaves the rest reachable.
+		default:
+			// Only a whole-host exclude puts the host beyond reach.
+			possible = false
+		}
+	}
+	return possible
+}
+
 // requestPath extracts the request target from a raw request line, the way burpsy-core::scope's
 // request_path does: both origin-form and absolute-form targets, query string dropped, a
 // proxied request with no path at all reading as "/". The second result is false when no path
@@ -369,6 +411,13 @@ func (ss *SharedScope) AuthoriseRaw(host string, port uint16, isTLS bool, raw []
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 	return ss.scope.AuthoriseRaw(host, port, isTLS, raw)
+}
+
+// MayContainHost delegates the host-level pre-filter to the underlying scope.
+func (ss *SharedScope) MayContainHost(host string, port uint16, tls bool) bool {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	return ss.scope.MayContainHost(host, port, tls)
 }
 
 // Set replaces the underlying scope.

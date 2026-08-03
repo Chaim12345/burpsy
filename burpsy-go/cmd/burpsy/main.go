@@ -13,7 +13,6 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intercept"
-	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
@@ -194,7 +193,6 @@ func main() {
 	webServer := web.NewServer(store, scope).
 		WithLogger(logger).
 		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
-		WithIntruder(intruder.NewIntruder(logger)).
 		WithScanner(scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(sender.DefaultSenderConfig()))).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine)

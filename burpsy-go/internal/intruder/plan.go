@@ -59,6 +59,12 @@ func (k AttackKind) String() string {
 	}
 }
 
+// MarshalJSON renders the attack kind as its wire string ("sniper", "cluster_bomb", …), matching
+// the Rust serde snake_case form the web UI consumes in AttackReport.kind.
+func (k AttackKind) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + k.String() + `"`), nil
+}
+
 // ParseAttackKind parses the wire form. It returns false for anything else — an
 // unrecognised mode must be an error at the edge, never a silent fallback to sniper.
 func ParseAttackKind(s string) (AttackKind, bool) {

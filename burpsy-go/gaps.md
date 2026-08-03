@@ -125,7 +125,7 @@ port.
 
 **Decline path:** named subset; not a silent full port.
 
-### 6. Intruder payload sets absent — PARTIAL
+### 6. Intruder payload sets absent — COMPLETE
 
 **Rust:** `crates/intruder/src/payload.rs` — `PayloadSet:115`, `Numbers:179`,
 `Dates:207`, `BruteForce:221`, `CustomIterator:232`, with hard ceilings —
@@ -168,15 +168,35 @@ payloads, which is what the whole test suite exercises, are identical. Covered b
 14 tests in `internal/intruder/process_test.go` plus 18 in
 `internal/tools/codec_test.go`.
 
-**Go (web still behind):** `internal/web/api_tools.go:179` `generatePayloadPreview`
-still returns hardcoded strings, and `handleIntruderRun` still accepts the legacy
-materialised `payloads []string` + `positions []int` shape. The UI
-(`internal/web/ui/src/intruder.ts`) posts the tagged `payload_sources` wire shape
-plus `mode`/`points`/`max_payloads` and expects a `RunReport`
-(`report`+`examples`+`payload_sets`) back; `handleIntruderPoints` likewise needs
-the `msg_id`/`all` → `PointView[]` contract. That wiring needs the plan/limit/engine
-machinery (`plan.rs`, `limit.rs`, `engine.rs` bucketing) to answer honestly, so it
-is a named remaining piece rather than a stub.
+**Go (web handlers now ported — Slice F):** `internal/web/api_tools.go`
+`handleIntruderPoints` now answers `PointsReq{msg_id, all}` →
+`PointView[]` (`index`/`kind`/`label`/`offset`/`len`/`current`, span text read
+from the stored message) and `handleIntruderRun` answers `RunReq`
+(`msg_id`/`target`/`all`/`point_index`/`payloads`/`mode`/`points`/`payload_sets`/
+`payload_sources`/`payload_rules`/`max_payloads`/`grep_match`/`grep_extract`/
+`pool`/`auto_throttle`/`rps`/`max_in_flight`/`max_requests`/`timeout_ms`) with the
+full `RunView` (`report` + `examples` resolving each bucket's first ordinal to its
+payload combination + `payload_sets` carrying honest `total`/`total_exact`/
+`truncated`/`max_count`/`skipped`/`dropped`), or the flat `AttemptView[]` array
+for the legacy one-position form. The legacy browser-side positional/§-marker
+handlers (`findInsertionPoints`, `generatePayloadPreview`, the materialised
+`payloads`+`positions` response) are deleted; the dead `s.intruder` web field and
+`WithIntruder` are removed. Validation mirrors the Rust edge: bad mode, duplicate
+or out-of-range point, wrong set count, bad payload rule, bad grep pattern,
+over-long auto_throttle status list, and `rps < 0.01` are all 400s; a missing
+message is 404; a host wholly out of scope is 403 via the new `MayContainHost`
+pre-filter (a path-scoped exclude never disqualifies the host). Every spliced
+request is judged per-send through the Slice E `AuthorisedSender` bound in the
+handler, so a payload that rewrites the path out of scope is refused and counted,
+never sent. The legacy flat form keeps its original 500-request cap; the report
+form reports the operator's `max_requests` bound. The plan, limiter (default 20
+rps / burst 1 / 10 in flight, `pool` echo, `auto_throttle`), and engine buckets
+all run on the Slice C machinery. Named divergences: Go's `regexp` is RE2, which
+bounds matching memory by construction, so the Rust `GREP_SIZE_LIMIT` has no knob
+to turn; the legacy flat array keeps the browser-side `payloads` as a `PayloadSource`
+list, which the report form already treats as one type. Covered by
+`internal/web/intruder_api_test.go` — eight HTTP-level tests pinning the wire
+shapes, including the per-attempt path-rewrite refusal end-to-end.
 
 **Go (scope/sender wiring now ported — Slice E):** `internal/core/scope.go` now
 carries the two-layer authorisation model of `crates/core/src/scope.rs`
@@ -201,8 +221,8 @@ out of scope sends nothing to the target and counts the refusal honestly).
 Named divergence (unchanged): the Go scope is excludes-first with default-allow,
 the Rust scope is last-match-wins with default-deny.
 
-**Decline path:** none; the engine half is ported and tested, the web half
-(handlers + `RunReport` wire contract) is the remaining named piece.
+**Decline path:** none; the engine half is ported and tested, and the web half
+(handlers + `RunReport` wire contract) is now ported with Slice F.
 
 ### 7. Sequencer FIPS 140-2 absent — PARTIAL
 
