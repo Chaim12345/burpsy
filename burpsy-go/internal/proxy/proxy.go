@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -135,16 +136,29 @@ func matchPattern(pattern, host string) bool {
 	return pattern == host
 }
 
+// leafValidityDays is the leaf lifetime in days. 397 matches the Rust port's
+// `MAX_LEAF_DAYS` (and Burp and mitmproxy): Chrome's 398-day cap applies only
+// to publicly-trusted CAs and could tighten, so 397 is the free, future-proof
+// choice. The NotBefore backdate absorbs a client clock a few minutes fast.
+const leafValidityDays = 397
+
 // TlsEngine handles TLS certificate generation and signing.
 type TlsEngine struct {
 	mu       sync.Mutex
-	caCert   []byte
-	caKey    []byte
+	caCert   *x509.Certificate
 	caPriv   *rsa.PrivateKey
 	certPool sync.Map // cache of generated certificates
 }
 
 // GetCertificate returns or generates a certificate for the given host.
+//
+// The CA is parsed once at load (see LoadOrGenerateCA), so a cache miss signs
+// and stores rather than re-decoding the CA PEMs. The leaf's NotBefore/NotAfter
+// window is clamped to the CA's own validity, so a CA near the end of its life
+// cannot mint a leaf that outlives it. The presented chain is leaf-then-CA —
+// Firefox imports only roots from the Windows store and expects the server to
+// supply the rest of the path, which is what lets a trust store holding just
+// the CA validate every leaf.
 func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 	// Check cache first
 	if cert, ok := e.certPool.Load(host); ok {
@@ -154,26 +168,11 @@ func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Parse CA certificate
-	caBlock, _ := pem.Decode(e.caCert)
-	if caBlock == nil {
-		return nil, fmt.Errorf("failed to decode CA certificate")
+	// Double-checked after taking the lock: two concurrent misses for the same
+	// host would otherwise mint two leaves, and only one would be kept.
+	if cert, ok := e.certPool.Load(host); ok {
+		return cert.(*tls.Certificate), nil
 	}
-	caCert, err := x509.ParseCertificate(caBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
-	}
-
-	// Parse CA private key
-	keyBlock, _ := pem.Decode(e.caKey)
-	if keyBlock == nil {
-		return nil, fmt.Errorf("failed to decode CA key")
-	}
-	priv, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse CA key: %w", err)
-	}
-	e.caPriv = priv.(*rsa.PrivateKey)
 
 	// Generate new key for this host
 	hostPriv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -187,15 +186,26 @@ func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("failed to generate serial number: %w", err)
 	}
 
+	now := time.Now()
+	notBefore := now.Add(-1 * time.Hour)
+	notAfter := now.AddDate(0, 0, leafValidityDays)
+	if notBefore.Before(e.caCert.NotBefore) {
+		notBefore = e.caCert.NotBefore
+	}
+	if notAfter.After(e.caCert.NotAfter) {
+		notAfter = e.caCert.NotAfter
+	}
+
 	hostTemplate := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			CommonName: host,
 		},
-		NotBefore:   time.Now(),
-		NotAfter:    time.Now().AddDate(0, 30, 0), // Valid for 30 days
-		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		// IP targets are validated against IP SANs, not DNS names.
@@ -205,36 +215,26 @@ func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 	}
 
 	// Sign with CA
-	hostBytes, err := x509.CreateCertificate(rand.Reader, &hostTemplate, caCert, &hostPriv.PublicKey, e.caPriv)
+	leafDER, err := x509.CreateCertificate(rand.Reader, &hostTemplate, e.caCert, &hostPriv.PublicKey, e.caPriv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create host certificate: %w", err)
 	}
-
-	// Encode certificate
-	hostCertPEM := new(bytes.Buffer)
-	if err := pem.Encode(hostCertPEM, &pem.Block{Type: "CERTIFICATE", Bytes: hostBytes}); err != nil {
-		return nil, fmt.Errorf("failed to encode host certificate: %w", err)
-	}
-
-	// Encode private key
-	hostKeyPEM := new(bytes.Buffer)
-	hostPrivBytes, err := x509.MarshalPKCS8PrivateKey(hostPriv)
+	leaf, err := x509.ParseCertificate(leafDER)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal host key: %w", err)
-	}
-	if err := pem.Encode(hostKeyPEM, &pem.Block{Type: "PRIVATE KEY", Bytes: hostPrivBytes}); err != nil {
-		return nil, fmt.Errorf("failed to encode host key: %w", err)
+		return nil, fmt.Errorf("failed to parse host certificate: %w", err)
 	}
 
-	// Create tls.Certificate
-	cert, err := tls.X509KeyPair(hostCertPEM.Bytes(), hostKeyPEM.Bytes())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create TLS certificate: %w", err)
+	// Leaf first, then the CA. Leaf is filled in so crypto/tls does not
+	// re-parse the DER on every handshake.
+	cert := &tls.Certificate{
+		Certificate: [][]byte{leafDER, e.caCert.Raw},
+		PrivateKey:  hostPriv,
+		Leaf:        leaf,
 	}
 
 	// Cache it
-	e.certPool.Store(host, &cert)
-	return &cert, nil
+	e.certPool.Store(host, cert)
+	return cert, nil
 }
 
 // LoadOrGenerateCA loads or generates a CA certificate.
@@ -255,81 +255,150 @@ func LoadOrGenerateCA(caDir string) (*TlsEngine, error) {
 	caCertPath := filepath.Join(caDir, "ca.crt")
 	caKeyPath := filepath.Join(caDir, "ca.key")
 
-	var caCert []byte
-	var caKey []byte
-
-	// Try to load existing CA
+	// Try to load existing CA. A regenerated CA would invalidate any trust-store
+	// install, so an existing pair is always preferred over minting a new one.
 	certData, certErr := os.ReadFile(caCertPath)
 	keyData, keyErr := os.ReadFile(caKeyPath)
-
 	if certErr == nil && keyErr == nil {
-		// Load existing CA
-		caCert = certData
-		caKey = keyData
-	} else {
-		// Generate new CA
-		priv, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate RSA key: %w", err)
-		}
+		return loadCA(certData, keyData)
+	}
 
-		// Create CA certificate template
-		serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate serial number: %w", err)
-		}
+	// Generate new CA
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate RSA key: %w", err)
+	}
 
-		caTemplate := x509.Certificate{
-			SerialNumber: serialNumber,
-			Subject: pkix.Name{
-				Organization: []string{"burpsy"},
-				CommonName:   "burpsy MITM Proxy",
-			},
-			NotBefore:             time.Now(),
-			NotAfter:              time.Now().AddDate(10, 0, 0), // Valid for 10 years
-			KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-			BasicConstraintsValid: true,
-			IsCA:                  true,
-			MaxPathLen:            1,
-		}
+	// Create CA certificate template
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate serial number: %w", err)
+	}
 
-		// Self-sign the CA certificate
-		caBytes, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &priv.PublicKey, priv)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create CA certificate: %w", err)
-		}
+	caTemplate := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"burpsy"},
+			CommonName:   "burpsy MITM Proxy",
+		},
+		// Backdated: a client clock a few minutes fast must not reject a
+		// freshly minted root.
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().AddDate(10, 0, 0), // Valid for 10 years
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            1,
+	}
 
-		// Encode certificate
-		caCertPEM := new(bytes.Buffer)
-		if err := pem.Encode(caCertPEM, &pem.Block{Type: "CERTIFICATE", Bytes: caBytes}); err != nil {
-			return nil, fmt.Errorf("failed to encode CA certificate: %w", err)
-		}
-		caCert = caCertPEM.Bytes()
+	// Self-sign the CA certificate
+	caBytes, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &priv.PublicKey, priv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CA certificate: %w", err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse generated CA: %w", err)
+	}
 
-		// Encode private key
-		caKeyPEM := new(bytes.Buffer)
-		privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal private key: %w", err)
-		}
-		if err := pem.Encode(caKeyPEM, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
-			return nil, fmt.Errorf("failed to encode CA key: %w", err)
-		}
-		caKey = caKeyPEM.Bytes()
+	// Encode certificate
+	caCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
 
-		// Save to disk
-		if err := os.WriteFile(caCertPath, caCert, 0600); err != nil {
-			return nil, fmt.Errorf("failed to save CA certificate: %w", err)
-		}
-		if err := os.WriteFile(caKeyPath, caKey, 0600); err != nil {
-			return nil, fmt.Errorf("failed to save CA key: %w", err)
-		}
+	// Encode private key
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal private key: %w", err)
+	}
+	caKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+
+	// The certificate is public; only the key is protected. The key is what
+	// re-signing from it would need, so it is 0600.
+	if err := os.WriteFile(caCertPath, caCertPEM, 0644); err != nil {
+		return nil, fmt.Errorf("failed to save CA certificate: %w", err)
+	}
+	if err := os.WriteFile(caKeyPath, caKeyPEM, 0600); err != nil {
+		return nil, fmt.Errorf("failed to save CA key: %w", err)
 	}
 
 	return &TlsEngine{
 		caCert: caCert,
-		caKey:  caKey,
+		caPriv: priv,
 	}, nil
+}
+
+// loadCA parses and validates a persisted CA pair, returning a ready engine.
+// Validation happens here rather than at the first handshake: a non-CA
+// certificate, a key that does not match the certificate, or an expired root
+// would otherwise surface as a confusing leaf-mint failure mid-session.
+func loadCA(certData, keyData []byte) (*TlsEngine, error) {
+	certBlock, _ := pem.Decode(certData)
+	if certBlock == nil {
+		return nil, errors.New("failed to decode CA certificate PEM")
+	}
+	caCert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+
+	keyBlock, _ := pem.Decode(keyData)
+	if keyBlock == nil {
+		return nil, errors.New("failed to decode CA key PEM")
+	}
+	caKey, err := parseCAKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := validateCA(caCert, caKey); err != nil {
+		return nil, err
+	}
+
+	return &TlsEngine{
+		caCert: caCert,
+		caPriv: caKey,
+	}, nil
+}
+
+// parseCAKey accepts both PKCS#1 and PKCS#8 encodings, so a CA persisted by any
+// Go version or external tool is loadable.
+func parseCAKey(der []byte) (*rsa.PrivateKey, error) {
+	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
+		return key, nil
+	}
+	any, err := x509.ParsePKCS8PrivateKey(der)
+	if err != nil {
+		return nil, errors.New("failed to parse CA key PEM")
+	}
+	key, ok := any.(*rsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("CA key is %T, want *rsa.PrivateKey", any)
+	}
+	return key, nil
+}
+
+// validateCA refuses a CA pair that would fail cryptically mid-handshake. The
+// checks mirror mitmproxy-go's load validation: the certificate must be a CA
+// with certificate-signing permission, the key must be the certificate's key,
+// and the certificate must be within its validity window.
+func validateCA(caCert *x509.Certificate, caKey *rsa.PrivateKey) error {
+	if !caCert.IsCA || !caCert.BasicConstraintsValid {
+		return errors.New("CA certificate is not a certificate authority")
+	}
+	if caCert.KeyUsage != 0 && caCert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return errors.New("CA certificate does not permit certificate signing")
+	}
+	if err := caKey.Validate(); err != nil {
+		return fmt.Errorf("invalid CA private key: %w", err)
+	}
+	pub, ok := caCert.PublicKey.(*rsa.PublicKey)
+	if !ok || !pub.Equal(&caKey.PublicKey) {
+		return errors.New("CA certificate and private key do not match")
+	}
+	now := time.Now()
+	if now.Before(caCert.NotBefore) || now.After(caCert.NotAfter) {
+		return errors.New("CA certificate is not currently valid")
+	}
+	return nil
 }
 
 // ProxyConfig holds all configuration for the proxy.
