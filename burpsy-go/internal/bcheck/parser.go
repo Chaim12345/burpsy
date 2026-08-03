@@ -612,6 +612,13 @@ func (p *parser) ifBlockNoEnd() (Statement, error) {
 				return nil, err
 			}
 			otherwise = []Statement{nested}
+			// `else if … then …` is nested and does NOT carry its own `end if`.
+			// Returning here (instead of falling through to eat one) lets the
+			// *innermost* if of the chain consume the single shared terminator.
+			// Without this return, every intermediate level ate an `end if`
+			// too, so a chain of three `else if` swallowed its parent's `end
+			// if` and the enclosing if failed to find its own.
+			return &IfStatement{Condition: cond, Then: then, Else: otherwise}, nil
 		} else {
 			if err := p.expectWord("then"); err != nil {
 				return nil, err

@@ -415,6 +415,75 @@ func TestResponseBodyHasNoLeadingBlankLine(t *testing.T) {
 	}
 }
 
+// A three-level `else if` chain shares ONE terminating `end if`, and the
+// enclosing if has its own. The parser used to let every level of the chain eat
+// an `end if`, so the middle levels swallowed the enclosing if's terminator and
+// parsing died at EOF — this is the exact shape of the one corpus file that
+// would not parse (other/uuid-detected-guid-versions.bcheck).
+func TestDeepElseIfChainSharesOneEndIf(t *testing.T) {
+	src := `
+given response then
+  if "outer" in {latest.response} then
+    if {latest.response} matches "a" then
+      report issue and continue:
+        severity: low
+        confidence: firm
+    else if {latest.response} matches "b" then
+      report issue and continue:
+        severity: low
+        confidence: firm
+    else if {latest.response} matches "c" then
+      report issue and continue:
+        severity: low
+        confidence: firm
+    else if {latest.response} matches "d" then
+      report issue and continue:
+        severity: low
+        confidence: firm
+    end if
+  end if
+`
+	c, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	// The body must be exactly one IfStatement (the outer), whose Then is one
+	// IfStatement (the chain head), whose Else is one IfStatement (the first
+	// else-if), and so on down.
+	outer, ok := c.Statements[0].(*IfStatement)
+	if !ok {
+		t.Fatalf("outer statement is %T, want *IfStatement", c.Statements[0])
+	}
+	inner, ok := outer.Then[0].(*IfStatement)
+	if !ok {
+		t.Fatalf("inner statement is %T, want *IfStatement", outer.Then[0])
+	}
+	// Walk the else-if spine: each level's Else holds exactly one nested if.
+	depth := 1
+	for cur := inner; len(cur.Else) == 1; {
+		next, ok := cur.Else[0].(*IfStatement)
+		if !ok {
+			t.Fatalf("else-if level %d is %T, want *IfStatement", depth, cur.Else[0])
+		}
+		cur = next
+		depth++
+	}
+	if depth != 4 {
+		t.Errorf("else-if chain depth = %d, want 4 (the four uuid branches)", depth)
+	}
+
+	// And it must still evaluate: "d" matches only the last branch.
+	ctx := NewContext()
+	ctx.Response = []byte("outer d")
+	findings, err := RunPassive(c, ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Errorf("findings = %d, want 1 from the last else-if branch", len(findings))
+	}
+}
+
 func TestRunPassiveIgnoresNonResponseChecks(t *testing.T) {
 	src := `given host then
   report issue:
