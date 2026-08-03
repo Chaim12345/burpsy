@@ -41,21 +41,45 @@ export function initRepeater(): void {
   section.innerHTML = `
     <div class="tabstrip" id="rep-tabs"></div>
     <div class="row">
-      <input id="rep-target" placeholder="http://host:port or https://host" style="width:340px" />
-      <select id="rep-protocol" title="protocol to send this request over (H2-01)">
+      <input id="rep-target" placeholder="http://host:port or https://host" style="width:340px" aria-label="Target URL" />
+      <select id="rep-protocol" title="protocol to send this request over (H2-01)" aria-label="Protocol">
         <option value="Http1">HTTP/1.1</option>
         <option value="Http2">HTTP/2</option>
       </select>
-      <button class="go" id="rep-send">Send</button>
+      <button class="go" id="rep-send" title="Send request (Ctrl+Enter)">Send</button>
       <span id="rep-meta" class="hint"></span>
     </div>
     <div class="two">
-      <textarea id="rep-raw" spellcheck="false"></textarea>
-      <pre id="rep-res"></pre>
+      <textarea id="rep-raw" spellcheck="false" aria-label="Raw HTTP Request"></textarea>
+      <pre id="rep-res" tabindex="0" aria-label="Response Output" title="Response container (scrollable with keyboard)"></pre>
     </div>
   `;
   $("#rep-send")!.addEventListener("click", () => void send());
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
+
+  const handleShortcut = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      void send();
+    }
+  };
+
+  const rawEl = $<HTMLTextAreaElement>("#rep-raw");
+  if (rawEl) {
+    rawEl.addEventListener("keydown", handleShortcut);
+  }
+
+  const targetEl = $<HTMLInputElement>("#rep-target");
+  if (targetEl) {
+    targetEl.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        void send();
+      } else {
+        handleShortcut(e);
+      }
+    });
+  }
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {
     addTab({ target: d.target, raw: d.raw, protocol: d.protocol });
