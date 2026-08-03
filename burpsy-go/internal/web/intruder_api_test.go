@@ -1,14 +1,20 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 )
@@ -107,6 +113,49 @@ func requestMessage(t *testing.T, store *core.TrafficStore, raw string) uint64 {
 	return uint64(id)
 }
 
+// echoServer answers every request with its request line echoed back, so a
+// payload spliced into the URL lands in the response at its own length. This is
+// the Rust web layer's own test trick (crates/web/src/lib.rs): the report
+// buckets responses by (status, length, reflected), and attacks run
+// concurrently up to max_in_flight, so two same-length payloads collapse into
+// one bucket whose `first_ordinal` is whichever send finished first — racy.
+// Distinct-length payloads against an echo target give each payload its own
+// bucket, which makes the examples' ordinal→payload resolution deterministic.
+func echoServer(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				c.SetDeadline(time.Now().Add(5 * time.Second))
+				br := bufio.NewReader(c)
+				line, err := br.ReadString('\n')
+				if err != nil {
+					return
+				}
+				for {
+					l, err := br.ReadString('\n')
+					if err != nil || l == "\r\n" || l == "\n" {
+						break
+					}
+				}
+				body := strings.TrimSuffix(line, "\r\n")
+				fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+			}(conn)
+		}
+	}()
+	return ln.Addr().String()
+}
+
 func TestIntruderPointsServesTheWireShape(t *testing.T) {
 	store := core.NewTrafficStore()
 	srv := NewServer(store, core.NewScope())
@@ -156,7 +205,10 @@ func TestIntruderPointsForAMissingMessageIs404(t *testing.T) {
 // the operator names a mode or a generator. That is the shape the UI renders for anything beyond
 // the one-position legacy form.
 func TestIntruderRunServesTheFullReport(t *testing.T) {
-	addr, _ := recordServer(t)
+	// The echo target + distinct-length payloads matter: two same-length
+	// payloads would collapse into one result bucket, and its `first_ordinal`
+	// (hence its example) is whichever concurrent send finished first — racy.
+	addr := echoServer(t)
 
 	scope := core.NewScope()
 	scope.AddInclude("127.0.0.1")
@@ -184,7 +236,7 @@ func TestIntruderRunServesTheFullReport(t *testing.T) {
 		"target":       "http://" + addr,
 		"mode":         "sniper",
 		"points":       []int{qIndex},
-		"payload_sets": [][]string{{"good", "nice"}},
+		"payload_sets": [][]string{{"good", "nicely"}},
 		"max_requests": 100,
 		"rps":          1000,
 	}, &out)
@@ -210,16 +262,17 @@ func TestIntruderRunServesTheFullReport(t *testing.T) {
 	if len(out.Examples) == 0 {
 		t.Fatalf("examples empty; every bucket must resolve to payloads")
 	}
-	found := false
+	// Each payload echoes back at its own length, so each gets its own bucket
+	// and the examples cover both — after sorting, order is not racy.
+	var got []string
 	for _, ex := range out.Examples {
-		for _, p := range ex.Payloads {
-			if p == "good" {
-				found = true
-			}
+		if len(ex.Payloads) > 0 {
+			got = append(got, ex.Payloads[0])
 		}
 	}
-	if !found {
-		t.Fatalf("no example resolves to the 'good' payload: %+v", out.Examples)
+	sort.Strings(got)
+	if want := []string{"good", "nicely"}; !slices.Equal(got, want) {
+		t.Fatalf("examples resolve to %v, want every payload %v", got, want)
 	}
 }
 
