@@ -50,7 +50,7 @@ with the reason named), **PARTIAL** (ported with a reduced scope, named), or
 | 7 | Sequencer FIPS 140-2 absent | PARTIAL | P2 |
 | 8 | `RequestEdit` absent as a type | OPEN | P2 |
 | 9 | Store `verify_index` partial | PARTIAL | P3 |
-| 10 | BCheck builtins partial | PARTIAL | P1 |
+| 10 | BCheck builtins partial | COMPLETE | P1 |
 | 11 | Comparer no granularity/budget | PARTIAL | P3 |
 | 12 | Session coordinator simplified | PARTIAL | P3 |
 
@@ -259,30 +259,44 @@ on-disk segments cross-check).
 
 **Decline path:** partial; capture-dir verification exists, index consistency does not.
 
-### 10. BCheck builtins partial — PARTIAL
+### 10. BCheck builtins partial — COMPLETE
 
 **Rust:** `crates/bcheck/src/funcs.rs` `java_backrefs:153` — rewrites Java
 replacement spelling (`$1`, `$1.php`) into Rust regex form (`${1}`) so the
 corpus's backrefs mean what Java means. Rust also has `random_str`.
 
-**Go:** `internal/bcheck/bcheck.go:361-393` `resolveRef` implements
-`to_lower`, `to_upper`, `base64_decode`, `regex_replace` — but not
-`java_backrefs` and not `random_str`. The `regex_replace` comment at
-`bcheck.go:388-390` claims "Go's replacement syntax is `$1`, which is also
-Java's spelling — the corpus's backrefs work as written." **That is wrong for
-`$1` immediately followed by an alphanumeric.** Verified: for
-`"$1eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"` with regex
-`^(Bearer )?[a-zA-Z0-9_\-]+` on input `"Bearer eyJ...rest"`,
-Go produces `".rest"` (reads `$1eyJ...` as named group `1eyJ…`, absent → empty)
-where Java/`java_backrefs` produces `"Bearer eyJ…rest"` (group 1 + literal).
-This is exactly the corpus case at
-`/root/.cache/BChecks/other/tokens/jwt-none-algorithm.bcheck:15` (the same file
-whose insertion-point family was the `any` evidence in `PORT_STATUS.md`).
-Conformance still reports 264/264 because the file *parses*; the runtime
-rendering is wrong.
+**Go (now ported):** `internal/bcheck/bcheck.go:509` `javaBackrefs` matches the
+Rust walk byte-for-byte: a `$` followed by a digit consumes the *whole* run of
+digits (Java `Matcher.replaceAll` semantics) and emits `${…}`, stepping over
+non-references by whole runes so multi-byte replacement text survives; `${1}`
+already in Go's form passes through untouched. `regex_replace` in `resolveRef`
+(`bcheck.go:382`) feeds its replacement through `javaBackrefs` before
+substituting, so the corpus's backrefs mean what Java means. `randomStr`
+(`bcheck.go:542`) is the Rust `random_str` exactly: xorshift64* with the same
+multiplier `0x2545F4914F6CDD1D`, same `(r >> 33) % len` alphabet selection, same
+alphabet `"abcdefghijklmnopqrstuvwxyz0123456789"`, same 4096 length cap; seeded
+lazily (`ensureRNG`) by FNV-1a over the first 512 bytes of the response, `| 1` to
+keep the state off the all-zero xorshift lane. The seed matches the Rust
+evaluator byte-for-byte (`crates/bcheck/src/eval.rs:198-211`: FNV-1a offset
+basis `0xcbf29ce484222325` over `response.raw.iter().take(512)`, `| 1`), so
+Go and Rust produce the *same* probe value for the same response — reproducible
+per target so a finding is re-checkable.
 
-**Decline path:** none. `java_backrefs` is a required builtin for corpus
-fidelity; P1.
+The verified failure that drove this gap — Go reading `$1eyJ…` as a named group
+`1eyJ…` and emptying the JWT header, the exact case at
+`other/tokens/jwt-none-algorithm.bcheck:15` — is pinned RED-then-GREEN by
+`TestJavaBackrefsMakesTheJwtHeaderSurviveReplacement` (the premise test proves
+Go eats the untranslated form, then asserts the translated substitution keeps
+group 1 + the literal). Covered by `bcheck_test.go`: `TestJavaBackrefsRewritesJavaGroupReferences`
+(digits+letters, `.php`, `${1}` passthrough, bare `$`, `$12abc` all-digits),
+`TestRegexReplaceAppliesJavaBackrefsToTheReplacement` (end-to-end through
+`resolveRef` with the corpus's brace-wrapped quoted shape),
+`TestRandomStrDrawsFromTheSafeAlphabet`, `TestRandomStrIsReproducibleForASeed`,
+`TestRandomStrResolvesThroughTheEvaluator`, and `TestRandomStrIsSeededFromTheResponse`
+(same body → same probe, different body → different probe).
+
+**Decline path:** none; both builtins are ported and tested. Gap closed
+(commit `060fc82`; this ledger entry was written up after the fact).
 
 ### 11. Comparer no granularity/budget — PARTIAL
 
