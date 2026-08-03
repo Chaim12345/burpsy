@@ -285,13 +285,31 @@ type Coordinator struct {
 	nextID int64
 	jarMgr *CookieJarManager
 	logger *zap.Logger
+
+	// runs holds the login currently in flight for a rule. If N requests notice
+	// session loss at once — realistic under any concurrency — reacting to each
+	// independently would fire N logins at the engagement target. The first
+	// caller runs the macro and every other caller for the same rule waits and
+	// shares its result. Per rule rather than globally, because two rules are two
+	// different logins: collapsing an admin login into a staging-host login would
+	// hand a caller a session for a target it never asked about.
+	runsMu sync.Mutex
+	runs   map[RuleID]*loginRun
+
+	// observed holds the steps the last *successful* login for a rule actually
+	// sent. UpdateMacro promotes only these, so a failed run can never overwrite
+	// a working macro with a broken one.
+	observedMu sync.Mutex
+	observed   map[RuleID][]MacroStep
 }
 
 func NewCoordinator(logger *zap.Logger) *Coordinator {
 	return &Coordinator{
-		rules:  make(map[RuleID]*SessionRule),
-		jarMgr: NewCookieJarManager(),
-		logger: logger,
+		rules:    make(map[RuleID]*SessionRule),
+		jarMgr:   NewCookieJarManager(),
+		logger:   logger,
+		runs:     make(map[RuleID]*loginRun),
+		observed: make(map[RuleID][]MacroStep),
 	}
 }
 
