@@ -149,6 +149,12 @@ type TrafficStore struct {
 	messages   []*StoredMessage
 	exchanges  []*Exchange
 	wsMessages []*WsMessage
+	// locations holds, per message, where its bytes were appended on disk for a
+	// disk-backed store — position-is-the-id exactly like messages. Zero for an
+	// in-memory store. This is the Go counterpart of the Rust store's
+	// `Body::OnDisk(loc)`: it is what lets VerifyIndex cross-check the index
+	// against the segment files rather than trusting the append path.
+	locations []Location
 	// wsPayloads is the byte store WebSocket payloads live in, one slice per
 	// message, position-is-the-id exactly like the other two indexes. It is
 	// separate from messages because a payload is not an HTTP message: Put
@@ -181,6 +187,7 @@ func NewTrafficStore() *TrafficStore {
 		exchanges:  make([]*Exchange, 0),
 		wsMessages: make([]*WsMessage, 0),
 		wsPayloads: make([][]byte, 0),
+		locations:  make([]Location, 0),
 	}
 }
 
@@ -196,6 +203,7 @@ func NewTrafficStoreWithCaptureDir(dir string, segmentSize uint64) (*TrafficStor
 		exchanges:   make([]*Exchange, 0),
 		wsMessages:  make([]*WsMessage, 0),
 		wsPayloads:  make([][]byte, 0),
+		locations:   make([]Location, 0),
 		captureDir:  dir,
 		segmentLog:  segmentLog,
 		segmentSize: segmentSize,
@@ -215,16 +223,18 @@ func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
 		return 0, fmt.Errorf("failed to parse message: %w", err)
 	}
 
+	var loc Location
 	var storedRaw []byte
 	if ts.segmentLog != nil {
-		// Write to segment file
-		loc, err := ts.segmentLog.Append(raw)
+		// Write to segment file; the returned location is kept so VerifyIndex
+		// can later prove the index and the log have not drifted apart.
+		var err error
+		loc, err = ts.segmentLog.Append(raw)
 		if err != nil {
 			return 0, fmt.Errorf("failed to write to segment: %w", err)
 		}
 		// For now, also keep in memory for simplicity
 		storedRaw = raw
-		_ = loc
 	} else {
 		storedRaw = make([]byte, len(raw))
 		copy(storedRaw, raw)
@@ -237,6 +247,7 @@ func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
 	}
 
 	ts.messages = append(ts.messages, msg)
+	ts.locations = append(ts.locations, loc)
 	atomic.AddInt64(&ts.bytes, int64(len(raw)))
 
 	if ts.onMessage != nil {
@@ -277,6 +288,12 @@ func (ts *TrafficStore) Restore(messages []*StoredMessage, exchanges []*Exchange
 	defer ts.mu.Unlock()
 	ts.messages = messages
 	ts.exchanges = exchanges
+	// A restored snapshot carries no segment locations (the durable mirror has
+	// no row for them), so the locations index is rebuilt in lockstep, all
+	// zero. VerifyIndex treats a zero location as a resident payload — the
+	// same fallback the Rust store uses when an append fails — rather than
+	// claiming a disk record it does not have.
+	ts.locations = make([]Location, len(messages))
 	// The WebSocket indexes are not restored by the durable mirror (ws payloads
 	// are not an HTTP message, so the SQLite write-through store has no row for
 	// them); a restore starts them clean rather than keeping rows that would
@@ -511,6 +528,95 @@ type SegmentVerdict struct {
 	Path    string
 	Checked int
 	Fault   *string
+}
+
+// VerifyIndex checks the position-is-the-id invariant every O(1) lookup in
+// this store depends on, the cross-references between the three indexes, and —
+// for a disk-backed store — that every message still resolves on disk to a
+// payload of the length the index believes it has. It returns the first
+// disagreement it finds, naming the id, so a failure is actionable rather than
+// a bare "mismatch". This is the port of the Rust store's `verify_index`.
+//
+// Like the Rust original, this proves the in-memory index is self-consistent
+// and deliberately does NOT re-read segment files for corruption — that is the
+// separate `VerifyCaptureDir` failure class. A byte flip that keeps a
+// payload's length still passes here; the two checks are never conflated.
+func (ts *TrafficStore) VerifyIndex() error {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+
+	for i, m := range ts.messages {
+		if uint64(m.ID) != uint64(i) {
+			return fmt.Errorf("message at position %d carries id %d — position is not the id", i, m.ID)
+		}
+	}
+	for i, e := range ts.exchanges {
+		if e.ID != uint64(i) {
+			return fmt.Errorf("exchange at position %d carries id %d — position is not the id", i, e.ID)
+		}
+		for _, child := range e.Related {
+			if uint64(child.ID) >= uint64(len(ts.messages)) {
+				return fmt.Errorf("exchange %d references child message %d which does not exist", i, child.ID)
+			}
+		}
+		if e.Response != nil && uint64(*e.Response) >= uint64(len(ts.messages)) {
+			return fmt.Errorf("exchange %d references response message %d which does not exist", i, *e.Response)
+		}
+	}
+	for i, m := range ts.wsMessages {
+		if uint64(m.ID) != uint64(i) {
+			return fmt.Errorf("ws message at position %d carries id %d — position is not the id", i, m.ID)
+		}
+		if uint64(m.Payload) >= uint64(len(ts.wsPayloads)) {
+			return fmt.Errorf("ws message %d references payload %d which does not exist", i, m.Payload)
+		}
+		if m.Exchange >= uint64(len(ts.exchanges)) {
+			return fmt.Errorf("ws message %d belongs to exchange %d which does not exist", i, m.Exchange)
+		}
+	}
+
+	// Every message must resolve to a payload of the length the index believes
+	// it has. In segment mode this is the check that the store and the log have
+	// not drifted apart: a Location that no longer resolves, or resolves to the
+	// wrong length, is exactly the silent mis-resolution position-is-the-id
+	// exists to rule out.
+	var summed int64
+	for i, m := range ts.messages {
+		var length int64
+		if i < len(ts.locations) && ts.locations[i].Segment != "" {
+			loc := ts.locations[i]
+			if ts.segmentLog == nil {
+				return fmt.Errorf("message %d is recorded on disk but this store has no segment log", i)
+			}
+			got, err := ts.segmentLog.Read(loc)
+			if err != nil {
+				return fmt.Errorf("message %d does not resolve: segment %s offset %d len %d is not a record: %v",
+					i, loc.Segment, loc.Offset, loc.Length, err)
+			}
+			if int64(len(got)) != loc.Length {
+				return fmt.Errorf("message %d resolves to %d bytes but its location says %d — the index and the log have drifted apart",
+					i, len(got), loc.Length)
+			}
+			if loc.Length != int64(len(m.Raw)) {
+				return fmt.Errorf("message %d is %d bytes resident but its location says %d — the index and the log have drifted apart",
+					i, len(m.Raw), loc.Length)
+			}
+			length = loc.Length
+		} else {
+			length = int64(len(m.Raw))
+		}
+		summed += length
+	}
+	// The Go store's byte counter tracks WebSocket payloads as well as messages
+	// (AddWsMessage bumps it), so unlike the Rust original — whose tally counts
+	// only messages — the tally here must include the ws-payload index.
+	for _, p := range ts.wsPayloads {
+		summed += int64(len(p))
+	}
+	if summed != atomic.LoadInt64(&ts.bytes) {
+		return fmt.Errorf("byte total drifted: counted %d, tracked %d", summed, atomic.LoadInt64(&ts.bytes))
+	}
+	return nil
 }
 
 // VerifyCaptureDir verifies all segments in a capture directory.
