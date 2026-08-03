@@ -23,3 +23,8 @@
 
 # Background-shell scratch from agent runs.
 .bg-shell/
+
+# Agent tool state — index/cursor artifacts, not source. Unanchored: tools run
+# from anywhere in the tree.
+.codegraph/
+.cursor/

@@ -2,3 +2,7 @@
 /burpsy
 /cmd/demo-target/demo-target
 /cmd/live-test/live-test
+
+# Agent tool state — index/cursor artifacts, not source.
+.codegraph/
+.cursor/

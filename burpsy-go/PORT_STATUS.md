@@ -5,6 +5,10 @@
 > that are partial. This status document is being kept honest by the sections
 > added above it. Read those first; the dated table below the line records what
 > has been verified recently rather than what was claimed when the port shipped.
+>
+> **Parity gaps live in [`gaps.md`](gaps.md)** — a graph-and-source-verified
+> ledger of the twelve known Rust↔Go differences, each with status, evidence,
+> and decline path. Read it before relying on the parity tables below.
 
 ## Recent Work — verified
 
