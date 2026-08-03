@@ -47,7 +47,7 @@ with the reason named), **PARTIAL** (ported with a reduced scope, named), or
 | 4 | JS vulnerability checks hand-rolled | PARTIAL | P2 |
 | 5 | JWT weak-signature checks simplified | PARTIAL | P3 |
 | 6 | Intruder payload sets absent | PARTIAL | P1 |
-| 7 | Sequencer FIPS 140-2 absent | PARTIAL | P2 |
+| 7 | Sequencer FIPS 140-2 absent | COMPLETE | P2 |
 | 8 | `RequestEdit` absent as a type | OPEN | P2 |
 | 9 | Store `verify_index` partial | PARTIAL | P3 |
 | 10 | BCheck builtins partial | COMPLETE | P1 |
@@ -224,15 +224,44 @@ the Rust scope is last-match-wins with default-deny.
 **Decline path:** none; the engine half is ported and tested, and the web half
 (handlers + `RunReport` wire contract) is now ported with Slice F.
 
-### 7. Sequencer FIPS 140-2 absent — PARTIAL
+### 7. Sequencer FIPS 140-2 absent — COMPLETE
 
-**Rust:** `crates/sequencer/src/fips.rs` — monobit, runs, long-run, poker tests.
+**Rust:** `crates/sequencer/src/fips.rs` — monobit, runs, long-run, poker tests;
+`crates/sequencer/src/chars.rs` — alphabet and per-position entropy;
+`crates/sequencer/src/lib.rs` — `SequencerReport` / `Grade` / `analyse_as`, the
+five warnings, and the three verdict sentences.
 
-**Go:** `internal/sequencer` has entropy / Chi-square / serial / Monte-Carlo only.
-The UI declares `FipsTest`/`FipsReport` interfaces at
-`internal/web/ui/src/sequencer.ts:55,66` that no backend implements.
+**Go (now ported):** the FIPS engine was already in `internal/sequencer/fips.go`
+(572 lines; `Encoding`, `BitStats`, `FipsTest`, `FipsReport`, `AnalyseFipsBits`,
+every threshold with its FIPS 140-2 section, `Tests` marshalling to JSON null
+when not one whole 20,000-bit block was supplied). What was missing — and is now
+in `internal/sequencer/report.go` — is the report assembly the UI consumes:
+`AnalyseChars` / `CharacterAnalysis` / `PositionStats` / `CharCount` (byte-level,
+shorter tokens excluded rather than padded, per-position Shannon entropy,
+`entropy_ceiling_bits` = log2(tokens), `max_possible_bits` = positions ×
+log2(alphabet_size)), `SequencerReport` / `Grade` / `AnalyseAs` / `AnalyseReport`
+/ `TokensFromText`, with the warnings and verdict sentences byte-for-byte the
+Rust ones. `handleSequencerAnalyse` (`internal/web/api_tools.go:704`) now
+mirrors the Rust `AnalyseReq` (text / pre-split tokens / optional forced
+encoding) and returns the full `SequencerReport`, matching the interface
+declared at `internal/web/ui/src/sequencer.ts:76`.
 
-**Decline path:** none for FIPS; UI contract is currently unfilled.
+Tests mirror the Rust suite: engine tests in `internal/sequencer/report_test.go`
+(pasted-block splitting, empty-sample report, healthy two-block pass with
+hex detected, a counter-as-session-id caught at both levels, insufficient vs
+fail, variable lengths, forced encoding) and handler tests in
+`internal/web/sequencer_api_test.go` (one-call paste with `fips.tests` null on
+12,800 bits, out-of-scope paste not gated, empty paste answered, neither
+text-nor-tokens refused, unknown encoding named, tokens-array path, forced
+encoding reported as chosen, whole-block pass).
+
+**Not covered by this gap:** the live-capture *loop* — Rust
+`crates/sequencer/src/capture.rs` (a background start/poll/stop job with a
+`CaptureView`) — is still a stub in Go (`handleSequencerCapture` returns static
+`{"capturing": false}` / `{"stopped": true}`), so the UI's "capture from a
+request" pane cannot drive it. That is a separate nameable difference, not part
+of the FIPS/report contract this gap existed to close, and it is not claimed
+complete here.
 
 ### 8. `RequestEdit` absent as a type — OPEN
 

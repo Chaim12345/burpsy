@@ -671,30 +671,36 @@ func (s *Server) runAudit(ctx context.Context, id uint64) {
 
 // ---- Sequencer ---------------------------------------------------------------------------------
 
+// sequencerAnalyseReq mirrors AnalyseReq in crates/web/src/routes/sequencer.rs:
+// text (one token per line), pre-split tokens, or neither — and an optional
+// forced encoding. The pointer on Tokens distinguishes "absent" from "empty",
+// which matters because an explicit empty array is a valid (empty) sample while
+// an absent one is a caller error.
 type sequencerAnalyseReq struct {
-	Tokens []string `json:"tokens"`
+	Text     *string   `json:"text"`
+	Tokens   *[]string `json:"tokens"`
+	Encoding *string   `json:"encoding"`
 }
 
-type sequencerAnalyseResp struct {
-	Total        int            `json:"total"`
-	Entropy      float64        `json:"entropy"`
-	CharacterSet int            `json:"character_set"`
-	Rating       string         `json:"rating"`
-	ChiSquare    float64        `json:"chi_square"`
-	SerialCorr   float64        `json:"serial_corr"`
-	MonteCarloPi float64        `json:"monte_carlo_pi"`
-	Repeated     int            `json:"repeated_tokens"`
-	Characters   []charStatView `json:"characters"`
+// parseEncoding maps the UI's "hex" | "base64" | "raw" onto the engine's
+// Encoding, naming anything else rather than silently ignoring it.
+func parseEncoding(name string) (sequencer.Encoding, error) {
+	switch name {
+	case "hex":
+		return sequencer.EncodingHex, nil
+	case "base64":
+		return sequencer.EncodingBase64, nil
+	case "raw":
+		return sequencer.EncodingRaw, nil
+	}
+	return 0, fmt.Errorf("unknown encoding %q: expected hex, base64 or raw", name)
 }
 
-type charStatView struct {
-	Char     string  `json:"char"`
-	Count    int     `json:"count"`
-	Freq     float64 `json:"freq"`
-	Expected float64 `json:"expected"`
-	Chi      float64 `json:"chi"`
-}
-
+// handleSequencerAnalyse answers a pasted token list in one synchronous call —
+// the Sequencer's paste mode. Takes no state at all, which is the point: pasted
+// text is not traffic, so there is no scope decision to make and nothing to
+// record. The response is the full SequencerReport (internal/web/ui/src/
+// sequencer.ts), not the legacy aggregate shape this endpoint used to return.
 func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -705,51 +711,34 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	tl := sequencer.NewTokenList()
-	tl.CollectAll(req.Tokens)
-	analysis := sequencer.Analyse(tl)
-
-	cs := sequencer.AnalyseCharacters(req.Tokens)
-	chars := make([]charStatView, 0, len(cs.Counts))
-	for ch, count := range cs.Counts {
-		var freq, expected, chi float64
-		if cs.Total > 0 {
-			freq = float64(count) / float64(cs.Total)
-			if len(cs.Counts) > 0 {
-				expected = float64(cs.Total) / float64(len(cs.Counts))
-				chi = chiOne(count, cs.Total, len(cs.Counts))
+	var tokens []string
+	switch {
+	case req.Tokens != nil:
+		for _, t := range *req.Tokens {
+			if t != "" {
+				tokens = append(tokens, t)
 			}
 		}
-		chars = append(chars, charStatView{
-			Char:     string(rune(ch)),
-			Count:    count,
-			Freq:     freq,
-			Expected: expected,
-			Chi:      chi,
-		})
+	case req.Text != nil:
+		tokens = sequencer.TokensFromText(*req.Text)
+	default:
+		http.Error(w, "no tokens: pass text (one per line) or tokens", http.StatusBadRequest)
+		return
 	}
-
+	var encoding *sequencer.Encoding
+	if req.Encoding != nil {
+		e, err := parseEncoding(*req.Encoding)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		encoding = &e
+	}
+	// An empty paste is answered rather than refused: the report says "no tokens
+	// were supplied", and that is more useful to whoever pasted the wrong buffer
+	// than a 400 with no analysis in it.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sequencerAnalyseResp{
-		Total:        analysis.SampleCount,
-		Entropy:      analysis.Entropy,
-		CharacterSet: analysis.CharsetSize,
-		Rating:       analysis.GoodnessRating.String(),
-		ChiSquare:    analysis.ChiSquare,
-		SerialCorr:   analysis.SerialCorr,
-		MonteCarloPi: analysis.MonteCarloPi,
-		Repeated:     analysis.RepeatedTokens,
-		Characters:   chars,
-	})
-}
-
-func chiOne(count, total, set int) float64 {
-	if set <= 0 {
-		return 0
-	}
-	exp := float64(total) / float64(set)
-	d := float64(count) - exp
-	return d * d / exp
+	json.NewEncoder(w).Encode(sequencer.AnalyseAs(tokens, encoding))
 }
 
 // handleSequencerCapture serves the token lists accumulated by the sequencer capture phase.
