@@ -56,6 +56,13 @@ type ReportIssueStatement struct {
 	Confidence  string
 	Description Value
 	Remediation Value
+	// Continue distinguishes `report issue and continue` from plain `report
+	// issue`, which ends the check. The parser used to consume the phrase and
+	// throw the answer away, so every report behaved as `and continue` — a
+	// check that should have stopped at its first hit went on to fire again for
+	// every later branch that matched. Only 11 of the 264 corpus files ask for
+	// `and continue`; the other 253 were getting the wrong control flow.
+	Continue bool
 }
 
 func (ReportIssueStatement) isStatement() {}
@@ -291,9 +298,18 @@ func parseMessage(raw []byte) *messageFields {
 		headEnd = len(s)
 	}
 	head := s[:headEnd]
+	// headEnd points at the start of the blank-line separator, which is the
+	// whole "\r\n\r\n" (4 bytes) or "\n\n" (2 bytes). Skipping only one
+	// "\r\n" left the second half of the blank line glued onto the body, so
+	// `{base.response.body}` and `{base.request.body}` carried a leading
+	// "\r\n" that no server would ever send.
+	sepLen := 4
+	if sep == "\n" {
+		sepLen = 2
+	}
 	f.body = ""
-	if headEnd+len(sep) < len(s) {
-		f.body = s[headEnd+len(sep):]
+	if headEnd+sepLen < len(s) {
+		f.body = s[headEnd+sepLen:]
 	}
 	lines := strings.Split(head, "\n")
 	if len(lines) > 0 {
@@ -586,29 +602,43 @@ func (ctx *Context) interpolate(s string) string {
 			}
 		case '{':
 			// Match the closing brace at depth zero so a nested call survives.
+			//
+			// The scan is written with if/else rather than a switch on purpose:
+			// a `break` inside a switch binds to the switch, not to this loop,
+			// so the earlier version never stopped at the closing brace. j then
+			// always reached len(s), the "did we close?" test (`j < len(s)`)
+			// was always false, and every reference in every backtick template
+			// was emitted literally as `{name}`. Report detail and remediation
+			// lines are the main consumers of templates, so the corpus checks
+			// that build them were filing findings with un-substituted text.
+			// `closed` now records termination explicitly instead of inferring
+			// it from the cursor.
 			j := i + 1
 			depth := 1
 			var name []byte
+			closed := false
 			for j < len(s) {
-				switch s[j] {
-				case '{':
+				c := s[j]
+				if c == '{' {
 					depth++
 					name = append(name, '{')
-				case '}':
+				} else if c == '}' {
 					depth--
 					if depth == 0 {
+						closed = true
 						break
 					}
 					name = append(name, '}')
-				default:
-					name = append(name, s[j])
+				} else {
+					name = append(name, c)
 				}
 				j++
 			}
-			if j < len(s) {
+			if closed {
 				out.WriteString(ctx.resolveRef(string(name)))
 				i = j
 			} else {
+				// An unterminated `{` is literal text, not a broken reference.
 				out.WriteByte('{')
 			}
 		default:
@@ -642,47 +672,132 @@ func (ctx *Context) resolveValue(v Value) string {
 	}
 }
 
+// execOutcome is what executing a statement or a block produced.
+//
+// The evaluator used to signal "stop" by returning a non-nil *Finding, which
+// conflated two independent things — that a finding exists, and that the check
+// is over — so `report issue and continue` could not be expressed at all and a
+// block could never report twice.
+type execOutcome struct {
+	findings []Finding
+	// halt is set by a plain `report issue`. It unwinds every enclosing block,
+	// including all remaining `run for each` iterations.
+	halt bool
+}
+
+// fork returns a copy of the context whose variable bindings are independent.
+//
+// Burp deep-copies the context per iteration (decompiled `Zpa0.ZI` calls `ZF`
+// to copy), so a binding made in one iteration is invisible to the next. The
+// previous implementation mutated one shared map, which meant a `define` or an
+// iterator bound inside iteration n was still visible in iteration n+1 — and a
+// check whose later iteration only matched because of a leaked binding reported
+// a finding that its own logic did not justify.
+//
+// The parsed-message caches are deliberately shared rather than copied: they
+// are derived purely from Request/Response, which no statement can modify, so
+// sharing them is both correct and what keeps a large cartesian product from
+// re-splitting the same response bytes on every combination.
+func (ctx *Context) fork() *Context {
+	c := *ctx
+	c.Variables = make(map[string]Value, len(ctx.Variables))
+	for k, v := range ctx.Variables {
+		c.Variables[k] = v
+	}
+	return &c
+}
+
 // RunPassive runs passive checks on a response.
 func RunPassive(check *Check, ctx *Context) ([]Finding, error) {
-	var findings []Finding
-
 	if check.Given != "response" {
-		return findings, nil
+		return nil, nil
 	}
 
-	// Execute statements. If the check declares `run for each`, iterate the
-	// first iterable (one value per run, matching the corpus usage).
 	statements := prependDefines(check.Defines, check.Statements)
 	if len(check.ForEach) > 0 {
-		fe := check.ForEach[0]
-		for _, v := range fe.Values {
-			// Resolve the value at bind time so a template iterator interpolates.
-			ctx.Variables[fe.Iterator] = Value{Type: "str", StringVal: ctx.resolveValue(v)}
-			for _, stmt := range statements {
-				result, err := executeStatement(stmt, ctx)
-				if err != nil {
-					return nil, err
-				}
-				if result != nil {
-					findings = append(findings, *result)
-				}
-			}
-		}
-		return findings, nil
+		return runForEachProduct(check, ctx, statements)
 	}
 
-	// Execute statements
-	for _, stmt := range statements {
-		result, err := executeStatement(stmt, ctx)
+	out, err := executeBlock(statements, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return out.findings, nil
+}
+
+// runForEachProduct executes the check once per combination of its `run for
+// each` iterables.
+//
+// With k iterables this is the cartesian product — ∏nᵢ executions — which is
+// what Burp does (`Zpa0.ZI` builds the product explicitly). The previous
+// implementation walked `check.ForEach[0]` and ignored the rest, so a check
+// declaring two lists ran n₁ times instead of n₁×n₂ and silently never tested
+// most of what it was asked to test. `run for each` appears in 30.7% of the
+// 264-file corpus, so this was not a corner.
+//
+// Iterators are bound in declaration order into the same forked context, so a
+// later iterable's values may reference an earlier iterator.
+func runForEachProduct(check *Check, base *Context, statements []Statement) ([]Finding, error) {
+	dims := make([]int, len(check.ForEach))
+	total := 1
+	for i, fe := range check.ForEach {
+		dims[i] = len(fe.Values)
+		total *= dims[i]
+	}
+	// An empty iterable makes the whole product empty. Running the body once
+	// with the iterator unbound would be the tempting alternative and is wrong:
+	// it would test a combination the check never declared.
+	if total == 0 {
+		return nil, nil
+	}
+
+	// Warm the message caches once on the shared parent so every fork inherits
+	// them instead of re-parsing the response per combination.
+	base.responseFields()
+	base.requestFields()
+
+	var findings []Finding
+	idx := make([]int, len(dims))
+	for n := 0; n < total; n++ {
+		iter := base.fork()
+		for i, fe := range check.ForEach {
+			iter.Variables[fe.Iterator] = Value{Type: "str", StringVal: iter.resolveValue(fe.Values[idx[i]])}
+		}
+		out, err := executeBlock(statements, iter)
 		if err != nil {
 			return nil, err
 		}
-		if result != nil {
-			findings = append(findings, *result)
+		findings = append(findings, out.findings...)
+		if out.halt {
+			return findings, nil
+		}
+		// Advance the odometer, least-significant iterable first.
+		for i := len(idx) - 1; i >= 0; i-- {
+			idx[i]++
+			if idx[i] < dims[i] {
+				break
+			}
+			idx[i] = 0
 		}
 	}
-
 	return findings, nil
+}
+
+// executeBlock runs statements in order, stopping at the first halt.
+func executeBlock(stmts []Statement, ctx *Context) (execOutcome, error) {
+	var out execOutcome
+	for _, stmt := range stmts {
+		o, err := executeStatement(stmt, ctx)
+		if err != nil {
+			return out, err
+		}
+		out.findings = append(out.findings, o.findings...)
+		if o.halt {
+			out.halt = true
+			return out, nil
+		}
+	}
+	return out, nil
 }
 
 // prependDefines converts the defines slice to statements and prefixes the body.
@@ -694,17 +809,32 @@ func prependDefines(defines []DefineStatement, body []Statement) []Statement {
 	return append(out, body...)
 }
 
-func executeStatement(stmt Statement, ctx *Context) (*Finding, error) {
+func executeStatement(stmt Statement, ctx *Context) (execOutcome, error) {
 	switch s := stmt.(type) {
 	case *IfStatement:
 		return executeIf(s, ctx)
 	case *ReportIssueStatement:
-		return &Finding{
-			IssueName:   ctx.resolveValue(s.IssueName),
-			Severity:    Severity(s.Severity),
-			Confidence:  Confidence(s.Confidence),
-			Description: ctx.resolveValue(s.Description),
-			Remediation: ctx.resolveValue(s.Remediation),
+		// Plain `report issue` ends the check; `report issue and continue` does
+		// not. The ambiguity BCHECK-M2-SEMANTICS.md records is what "ends the
+		// check" means inside `run for each`, and 77 corpus files hinge on it.
+		// Taken here as: the whole check, every remaining iteration included.
+		//
+		// The alternative — end only the current iteration and carry on with
+		// the next — is worse for the reason the corpus shows: an iterator is
+		// almost always a list of candidate paths or payloads probing for one
+		// condition, so continuing after a hit re-reports the same issue once
+		// per surviving value. That turns one finding into n and makes a report
+		// count meaningless, which is exactly the failure this project refuses.
+		// A check that genuinely wants a finding per value says `and continue`.
+		return execOutcome{
+			findings: []Finding{{
+				IssueName:   ctx.resolveValue(s.IssueName),
+				Severity:    Severity(s.Severity),
+				Confidence:  Confidence(s.Confidence),
+				Description: ctx.resolveValue(s.Description),
+				Remediation: ctx.resolveValue(s.Remediation),
+			}},
+			halt: !s.Continue,
 		}, nil
 	case *DefineStatement:
 		// Resolve at bind time so a template define is usable as a plain string
@@ -713,46 +843,41 @@ func executeStatement(stmt Statement, ctx *Context) (*Finding, error) {
 	case *SendRequestStatement, *SendPayloadStatement:
 		// Would send in active checks; the passive evaluator never sends.
 	case *RunForEachStatement:
-		// Iterate the collection, binding the iterator for each value.
-		for _, v := range s.Values {
-			ctx.Variables[s.Iterator] = Value{Type: "str", StringVal: ctx.resolveValue(v)}
-			for _, body := range s.Body {
-				result, err := executeStatement(body, ctx)
-				if err != nil {
-					return nil, err
-				}
-				if result != nil {
-					return result, nil
-				}
-			}
-		}
+		return executeForEach(s, ctx)
 	}
-	return nil, nil
+	return execOutcome{}, nil
 }
 
-func executeIf(stmt *IfStatement, ctx *Context) (*Finding, error) {
-	if evalBoolExpr(stmt.Condition, ctx) {
-		for _, s := range stmt.Then {
-			result, err := executeStatement(s, ctx)
-			if err != nil {
-				return nil, err
-			}
-			if result != nil {
-				return result, nil
-			}
+// executeForEach runs a `run for each` that appears as a statement in a body,
+// as opposed to the check-level block handled by runForEachProduct. Each value
+// gets its own forked context for the same reason: a binding made while testing
+// one value must not survive into the next.
+func executeForEach(s *RunForEachStatement, ctx *Context) (execOutcome, error) {
+	var out execOutcome
+	for _, v := range s.Values {
+		iter := ctx.fork()
+		iter.Variables[s.Iterator] = Value{Type: "str", StringVal: iter.resolveValue(v)}
+		o, err := executeBlock(s.Body, iter)
+		if err != nil {
+			return out, err
 		}
-	} else if stmt.Else != nil {
-		for _, s := range stmt.Else {
-			result, err := executeStatement(s, ctx)
-			if err != nil {
-				return nil, err
-			}
-			if result != nil {
-				return result, nil
-			}
+		out.findings = append(out.findings, o.findings...)
+		if o.halt {
+			out.halt = true
+			return out, nil
 		}
 	}
-	return nil, nil
+	return out, nil
+}
+
+func executeIf(stmt *IfStatement, ctx *Context) (execOutcome, error) {
+	if evalBoolExpr(stmt.Condition, ctx) {
+		return executeBlock(stmt.Then, ctx)
+	}
+	if stmt.Else != nil {
+		return executeBlock(stmt.Else, ctx)
+	}
+	return execOutcome{}, nil
 }
 
 // evalBoolExpr evaluates a boolean expression against the context.

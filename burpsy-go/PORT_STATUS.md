@@ -1,12 +1,74 @@
 # burpsy-go Port Status
 
-> **UPDATED 2026-08-02:** All remaining gaps have been closed since the original review: TLS interception now performs real CONNECT MITM (CA + leaf cert signing, verified against an HTTPS target); the active scanner sends real crafted requests (XSS/SQLi/path-traversal detected over both plain HTTP and intercepted TLS); the web API endpoints (repeater, intruder, scanner audit, findings, scope) are wired to live services with a shared finding store; the web UI is embedded via `go:embed`; BCheck has a complete parser; the proxy respects HTTP framing (keep-alive no longer hangs); and unit/integration tests exist for bcheck, core, intruder, scanner, and sender, passing `go build`, `go vet`, `go test`, and `go test -race`.
+> **UPDATED 2026-08-03:** The boilerplate below the fold is the original port's
+> self-assessment and overstates reality — it claims "100% COMPLETE" for phases
+> that are partial. This status document is being kept honest by the sections
+> added above it. Read those first; the dated table below the line records what
+> has been verified recently rather than what was claimed when the port shipped.
 
-## Complete Go Port of burpsy Security Testing Proxy - 100% COMPLETE
+## Recent Work — verified
 
-This document tracks the porting status of burpsy from Rust to Go.
+### 2026-08-03 — BCheck insertion-point enumeration (Go)
 
-**FINAL STATUS: ALL PHASES COMPLETE** ✅
+Ported `crates/bcheck/src/insertion.rs` (722 lines) to `internal/bcheck/insertion.go`:
+
+- `Enumerate(req []byte, kinds []string)` returns one `InsertionPoint` per
+  injectable place in fixed order — query, headers, cookies, body — plus a
+  `[]Declined` naming the places the enumerator refused to splice into and why.
+- Four DSL-namable families only: `query`, `body`, `cookie`, `header`. `any`
+  includes headers (the `jwt-none-algorithm.bcheck` evidence). Nested points are
+  not enumerated — a miss, never a false positive.
+- A point is an offset into the base request, not a copy. `Apply` splices
+  exactly one range and returns the rebuilt raw request with a corrected
+  `Content-Length`; appending keeps the base value, replacing overwrites it.
+- Encoding escapes only the bytes that decide how the container parses
+  (percent-escape for form containers, JSON-escape inside string literals,
+  nothing for header values). The base value is never re-encoded — that would
+  rewrite bytes the check did not ask to change.
+- Honest counting: a multipart, XML or non-UTF-8 body is **declined** (recorded
+  as skipped), never silently empty. An unparseable request is also declined.
+- 22 tests in `insertion_test.go` mirroring the Rust suite word for word
+  (fixed order, no-`=` clauses skipped, JSON string-only points, reserved
+  headers, mid-codepoint splice flooring, Content-Length following the body).
+
+**Found and fixed along the way:** `messageFields` (the `{…response.body}` /
+`{…request.body}` resolver in `bcheck.go`) and the new `parseRequest` both
+sliced the header/body separator as a single `\r\n`, gluing the second half of
+the blank line onto the body. `{base.response.body}` came back with a leading
+`\r\n` no server sends. Both now skip the whole `\r\n\r\n` / `\n\n` separator;
+regression test `TestResponseBodyHasNoLeadingBlankLine`.
+
+**Known limitation (pre-existing, named):** conformance is 263/264. The one
+rejection, `other/uuid-detected-guid-versions.bcheck`, is an `else if` chain
+that the parser does not close — unrelated to insertion points, present before
+this work.
+
+### 2026-08-02 — BCheck engine correctness + live audit + WebSocket relay
+
+- **`run for each` runs the full cartesian product** of its iterables, each
+  combination in its own forked context (no binding leaks). Previously only the
+  first iterable ran. 30.7% of the 264-file corpus uses this construct.
+- **`report issue and continue` is now distinct from plain `report issue`.**
+  The parser consumed the phrase and discarded it, so every report behaved as
+  `and continue` — 253 of 264 corpus files got the wrong control flow. Plain
+  `report issue` ends the whole check, every remaining iteration included; only
+  11 files ask for `and continue`. The choice inside `run for each` is argued
+  in the code and `docs/BCHECK-M2-SEMANTICS.md`.
+- **`interpolate` fixed:** a `break` inside a `switch` bound to the switch, not
+  the scan loop, so `{name}` references in backtick templates were emitted
+  literally. Report detail/remediation lines are the main consumers.
+- **Live active audit:** `internal/web/liveaudit.go` sweeps completed in-scope
+  exchanges every 3s through the passive checks, `GET/POST /api/scanner/live`.
+- **WebSocket relay:** real RFC 6455 relay in `internal/proxy/ws.go` with
+  `WsMessage` recording; flat history (message-ID column) like Burp, plus a
+  per-connection endpoint Burp lacks. `X-WebSocket-Extensions` stripping on by
+  default (`WithStripWsExtensions`).
+
+## Phase Status — Rust crate → Go package
+
+The sections below were written when the port shipped and are optimistic.
+Cross-reference the "Recent Work" sections above; where they disagree, the
+Recent Work section is current.
 
 ## Project Overview
 

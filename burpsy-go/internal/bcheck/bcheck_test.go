@@ -148,8 +148,158 @@ given response then
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
-	if len(findings) != 2 { // two iterations
-		t.Errorf("findings = %d, want 2 (one per iteration)", len(findings))
+	// Plain `report issue` ends the check, so the second iteration never runs.
+	// This check is the reason that is the right reading: its condition does not
+	// mention `path` at all, so reporting once per surviving value would file the
+	// same issue twice for one underlying defect.
+	if len(findings) != 1 {
+		t.Errorf("findings = %d, want 1: a plain `report issue` ends the check, "+
+			"so the second iteration must not run", len(findings))
+	}
+}
+
+// A plain report ends the check; only `and continue` keeps iterating. These two
+// are the observable difference between the forms, which the parser previously
+// discarded — before this, both spellings behaved as `and continue`.
+func TestReportIssueAndContinueRunsEveryIteration(t *testing.T) {
+	src := `
+metadata:
+  name: "iterated check"
+
+run for each:
+  path = "/login", "/admin"
+
+given response then
+  if "admin" in {latest.response} then
+      report issue and continue:
+          severity: medium
+          confidence: firm
+  end if
+`
+	c, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(c.Statements) == 0 {
+		t.Fatalf("no statements parsed")
+	}
+	ctx := NewContext()
+	ctx.Response = []byte("admin panel")
+	findings, err := RunPassive(c, ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if len(findings) != 2 {
+		t.Errorf("findings = %d, want 2: `and continue` must not end the check, "+
+			"so both iterations report", len(findings))
+	}
+}
+
+func TestMultipleIterablesRunTheFullCartesianProduct(t *testing.T) {
+	// Two iterables, 2x3, with `and continue` so nothing stops early. The old
+	// evaluator walked only the first iterable and produced 2.
+	src := `
+metadata:
+  name: "product check"
+
+run for each:
+  scheme = "http", "https"
+  path = "/a", "/b", "/c"
+
+given response then
+  if "admin" in {latest.response} then
+      report issue and continue:
+          severity: medium
+          confidence: firm
+          detail: ` + "`{scheme}{path}`" + `
+  end if
+`
+	c, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(c.ForEach) != 2 {
+		t.Fatalf("for_each = %d iterables, want 2", len(c.ForEach))
+	}
+	ctx := NewContext()
+	ctx.Response = []byte("admin panel")
+	findings, err := RunPassive(c, ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if len(findings) != 6 {
+		t.Fatalf("findings = %d, want 6: a check declaring 2x3 iterables must run "+
+			"every combination, not just the first iterable", len(findings))
+	}
+	// Every combination must appear exactly once, and each must carry its own
+	// bindings — a leaked binding would show up as a duplicate here.
+	seen := map[string]bool{}
+	for _, f := range findings {
+		if seen[f.Description] {
+			t.Errorf("combination %q reported twice: iteration bindings leaked "+
+				"between runs instead of each combination getting its own", f.Description)
+		}
+		seen[f.Description] = true
+	}
+	for _, want := range []string{"http/a", "http/b", "http/c", "https/a", "https/b", "https/c"} {
+		if !seen[want] {
+			t.Errorf("combination %q never ran; the product is missing it", want)
+		}
+	}
+}
+
+func TestForEachIterationsDoNotLeakBindings(t *testing.T) {
+	// `seen` is defined inside the body on the first iteration only. Under a
+	// shared context it would still be bound on the second, and the else branch
+	// would never run.
+	src := `
+metadata:
+  name: "leak check"
+
+run for each:
+  path = "/a", "/b"
+
+given response then
+  if {seen} is "" then
+      report issue and continue:
+          severity: low
+          confidence: firm
+          detail: ` + "`unbound at {path}`" + `
+  end if
+`
+	c, err := Parse(src)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	ctx := NewContext()
+	ctx.Response = []byte("body")
+	findings, err := RunPassive(c, ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if len(findings) != 2 {
+		t.Errorf("findings = %d, want 2: each iteration must start from the "+
+			"parent's bindings, not from what the previous iteration left behind", len(findings))
+	}
+}
+
+func TestEmptyIterableRunsNothing(t *testing.T) {
+	c := &Check{
+		Given:   "response",
+		ForEach: []RunForEachStatement{{Iterator: "p", Values: nil}},
+		Statements: []Statement{&ReportIssueStatement{
+			IssueName:  Value{Type: "str", StringVal: "x"},
+			Severity:   string(SeverityLow),
+			Confidence: string(ConfidenceFirm),
+		}},
+	}
+	findings, err := RunPassive(c, NewContext())
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("findings = %d, want 0: an empty iterable declares no combination "+
+			"to test, so the body must not run with the iterator unbound", len(findings))
 	}
 }
 
@@ -253,6 +403,18 @@ given response then
 	}
 }
 
+// The blank line between headers and body is a whole "\r\n\r\n", not a single
+// "\r\n". The body field used to carry the second half of the blank line, so
+// `{base.response.body}` came back with a leading "\r\n" no server would send.
+func TestResponseBodyHasNoLeadingBlankLine(t *testing.T) {
+	ctx := NewContext()
+	ctx.Response = []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello world")
+	got := ctx.resolvePath("base.response.body")
+	if got != "hello world" {
+		t.Errorf("body = %q, want %q (the header/body separator must be skipped whole)", got, "hello world")
+	}
+}
+
 func TestRunPassiveIgnoresNonResponseChecks(t *testing.T) {
 	src := `given host then
   report issue:
@@ -269,5 +431,31 @@ func TestRunPassiveIgnoresNonResponseChecks(t *testing.T) {
 	}
 	if len(findings) != 0 {
 		t.Errorf("findings = %d, want 0 for host-given check", len(findings))
+	}
+}
+
+// Templates are the only place report text can reference a binding, so a broken
+// brace scan does not fail loudly — it files findings whose detail line still
+// says `{name}`. This pins the substitution itself.
+func TestTemplateReferencesAreSubstitutedNotEmittedLiterally(t *testing.T) {
+	ctx := NewContext()
+	ctx.Variables["who"] = Value{Type: "str", StringVal: "admin"}
+	ctx.Variables["what"] = Value{Type: "str", StringVal: "panel"}
+
+	cases := []struct {
+		in, want, why string
+	}{
+		{"{who}", "admin", "a lone reference"},
+		{"{who}{what}", "adminpanel", "two adjacent references"},
+		{"saw {who} at {what}!", "saw admin at panel!", "references surrounded by text"},
+		{"{nosuch}", "", "an unknown reference resolves empty, matching Burp"},
+		{"no refs here", "no refs here", "text with no reference is untouched"},
+		{"a { b", "a { b", "an unterminated brace is literal text"},
+		{`\{who\}`, "{who}", "an escaped brace is not a reference"},
+	}
+	for _, c := range cases {
+		if got := ctx.interpolate(c.in); got != c.want {
+			t.Errorf("interpolate(%q) = %q, want %q — %s", c.in, got, c.want, c.why)
+		}
 	}
 }

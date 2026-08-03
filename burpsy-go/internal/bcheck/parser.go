@@ -630,11 +630,14 @@ func (p *parser) ifBlockNoEnd() (Statement, error) {
 func (p *parser) reportIssue() (Statement, error) {
 	p.bump() // report
 	p.bump() // issue
-	p.eatPhrase("and", "continue")
+	// The phrase is load-bearing, not decoration: it selects whether the check
+	// keeps running after this report. Discarding it (which this did) collapses
+	// both forms onto `and continue`.
+	keepGoing := p.eatPhrase("and", "continue")
 	if err := p.expectColon(); err != nil {
 		return nil, err
 	}
-	stmt := &ReportIssueStatement{}
+	stmt := &ReportIssueStatement{Continue: keepGoing}
 	for {
 		t := p.peek()
 		if t.kind != tokWord || p.at(1).kind != tokColon {
