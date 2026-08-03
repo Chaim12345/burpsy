@@ -46,7 +46,7 @@ with the reason named), **PARTIAL** (ported with a reduced scope, named), or
 | 3 | Scanner audit engine far thinner | PARTIAL | P2 |
 | 4 | JS vulnerability checks hand-rolled | PARTIAL | P2 |
 | 5 | JWT weak-signature checks simplified | PARTIAL | P3 |
-| 6 | Intruder payload sets absent | OPEN | P1 |
+| 6 | Intruder payload sets absent | PARTIAL | P1 |
 | 7 | Sequencer FIPS 140-2 absent | PARTIAL | P2 |
 | 8 | `RequestEdit` absent as a type | OPEN | P2 |
 | 9 | Store `verify_index` partial | PARTIAL | P3 |
@@ -125,23 +125,38 @@ port.
 
 **Decline path:** named subset; not a silent full port.
 
-### 6. Intruder payload sets absent — OPEN
+### 6. Intruder payload sets absent — PARTIAL
 
 **Rust:** `crates/intruder/src/payload.rs` — `PayloadSet:115`, `Numbers:179`,
 `Dates:207`, `BruteForce:221`, `CustomIterator:232`, with hard ceilings —
 plus `plan.rs`, `limit.rs`, `hash.rs`, `process.rs`, `engine.rs` (bounded,
 hashing-based attack plans).
 
-**Go:** `internal/intruder/intruder.go` `Run` (`:93`) takes a **materialised**
-`[]string` of payloads; `NewPayloadGenerator`/`GenerateNumbers`/`GenerateFromFile`/
-`GenerateCustom` (`:300-332`) exist but there is no bounded brute-force/dates
-iterator and no plan/limit machinery. The web preview is cosmetic:
-`internal/web/api_tools.go:179` `generatePayloadPreview` returns hardcoded
-`["admin","test","payload1","0000"]`, while the UI advertises `BruteForceConfig`
-at `internal/web/ui/src/intruder.ts:125`.
+**Go (engine now ported):** `internal/intruder/payload.go` now carries the
+generator engine — `PayloadSource` (tagged JSON: list/numbers/dates/brute_force/
+custom_iterator/null), `Numbers` (sequential/random, decimal/hex, sign-aware
+zero-padding), `Dates` (strict YYYY-MM-DD, civil-date arithmetic exact across
+the int64 range), `BruteForce` (character-based charset so a non-ASCII alphabet
+is never split into byte fragments, odometer order shortest-first), `CustomIterator`
+(2+ slots, last slot fastest), `Null`, and `Resolve(maxCount)` which caps at
+`MaxPayloads` (200 000) applied to the allocation, never to a generated list —
+honest `Total`/`TotalExact`/`Truncated`/`MaxCount`/`Skipped`/`Dropped` carried
+on every set, plus a `PayloadError` refusal path that names the kind (zero step,
+backwards range, empty charset/slot, bad length range, too few slots, item over
+64 KiB). Covered by 25+ tests in `internal/intruder/payload_test.go`.
 
-**Decline path:** none; a user-visible feature the UI promises but the engine
-cannot produce.
+**Go (web still behind):** `internal/web/api_tools.go:179` `generatePayloadPreview`
+still returns hardcoded strings, and `handleIntruderRun` still accepts the legacy
+materialised `payloads []string` + `positions []int` shape. The UI
+(`internal/web/ui/src/intruder.ts`) posts the tagged `payload_sources` wire shape
+plus `mode`/`points`/`max_payloads` and expects a `RunReport`
+(`report`+`examples`+`payload_sets`) back; `handleIntruderPoints` likewise needs
+the `msg_id`/`all` → `PointView[]` contract. That wiring needs the plan/limit/engine
+machinery (`plan.rs`, `limit.rs`, `engine.rs` bucketing) to answer honestly, so it
+is a named remaining piece rather than a stub.
+
+**Decline path:** none; the engine half is ported and tested, the web half is
+named above.
 
 ### 7. Sequencer FIPS 140-2 absent — PARTIAL
 
