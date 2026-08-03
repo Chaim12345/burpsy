@@ -145,6 +145,29 @@ on every set, plus a `PayloadError` refusal path that names the kind (zero step,
 backwards range, empty charset/slot, bad length range, too few slots, item over
 64 KiB). Covered by 25+ tests in `internal/intruder/payload_test.go`.
 
+**Go (processing chain + byte codecs now ported):** `internal/intruder/process.go`
+carries `RuleSpec` (tagged wire shape: add_prefix/add_suffix/replace/uppercase/
+lowercase/encode/decode/hash/skip_if_matches), `NewChain` which compiles every
+regex and resolves every layer/algorithm at construction (`RuleError` refuses an
+unclosed group, `rot13`, `sha3` once, as an operator typo rather than N drops),
+and `Chain.Apply`/`Chain.Run` run in rule order at resolve time — a skipped payload
+is a shorter set, not a hole in the plan, with `set.Skipped` + grouped `Dropped`
+accounting for every payload refused. Refuse-rather-than-mangle: a payload a rule
+cannot process (hex `zz`, a partial decode, a payload a chain grows past 64 KiB)
+is dropped with its reason, never passed through. The encode/decode rules reuse
+`internal/tools/codec.go`, the byte-level layer port of `burpsy_tools::decoder`
+(`Layer`/`ParseLayer` aliases, `Decode`/`Encode` returning the truncated flag and
+the 64 MiB inflate cap, uppercase percent-encoding with `+` untouched, tolerant
+base64, lowercase hex, gzip/raw-deflate fallback) so a payload encoded here is
+byte-identical to one encoded in the Decoder tool. The hash step goes straight to
+`crypto/md5`+`crypto/sha256` (lowercase hex), the stdlib being checked against
+the same vectors as the Rust `hash.rs` copy that is scheduled for deletion. Named
+subset: Go `regexp` is rune-oriented while Rust uses `regex::bytes`, so a
+match/replace pattern over non-UTF-8 payload bytes can disagree; ASCII/UTF-8
+payloads, which is what the whole test suite exercises, are identical. Covered by
+14 tests in `internal/intruder/process_test.go` plus 18 in
+`internal/tools/codec_test.go`.
+
 **Go (web still behind):** `internal/web/api_tools.go:179` `generatePayloadPreview`
 still returns hardcoded strings, and `handleIntruderRun` still accepts the legacy
 materialised `payloads []string` + `positions []int` shape. The UI
