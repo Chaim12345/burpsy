@@ -1,10 +1,13 @@
 package core
 
 import (
+	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // ScopeRuleKind indicates the kind of scope rule.
@@ -21,6 +24,9 @@ type ScopeRule struct {
 	Pattern string
 	Regex   *regexp.Regexp
 	Port    *uint16
+	// PathPrefix, when set, limits the rule to paths starting with it. Nil matches any path,
+	// which is what every host-only rule built before this field existed means.
+	PathPrefix *string
 }
 
 // NewScopeRule creates a new scope rule from a pattern.
@@ -62,12 +68,31 @@ func NewScopeRuleWithPort(kind ScopeRuleKind, pattern string, port uint16) *Scop
 	return rule
 }
 
+// NewScopeRuleWithPath creates a scope rule limited to a path prefix, so an operator can exclude
+// /admin on an otherwise authorised host without taking the whole host out of scope.
+func NewScopeRuleWithPath(kind ScopeRuleKind, pattern string, pathPrefix string) *ScopeRule {
+	rule := NewScopeRule(kind, pattern)
+	rule.PathPrefix = &pathPrefix
+	return rule
+}
+
 // Matches checks if a host matches this rule.
 func (r *ScopeRule) Matches(host string, port uint16) bool {
 	if r.Port != nil && *r.Port != port {
 		return false
 	}
 	return r.Regex.MatchString(host)
+}
+
+// MatchesRequest checks host, port and path prefix against one request.
+func (r *ScopeRule) MatchesRequest(host string, port uint16, path string) bool {
+	if !r.Matches(host, port) {
+		return false
+	}
+	if r.PathPrefix != nil && !strings.HasPrefix(path, *r.PathPrefix) {
+		return false
+	}
+	return true
 }
 
 // Scope represents the URL scope for capture and authorization.
@@ -155,7 +180,9 @@ func (s *Scope) Clear() {
 	s.rules = s.rules[:0]
 }
 
-// Contains checks if a URL is within scope.
+// Contains checks if a URL is within scope. Excludes always win; a matching exclude rule takes
+// the host out of scope regardless of any include rules. Rules with a path prefix only apply
+// when the request's path falls under that prefix.
 func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -167,7 +194,7 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 	// Excludes always win: a matching exclude rule takes the host out of scope
 	// regardless of any include rules.
 	for _, rule := range s.rules {
-		if rule.Kind == ScopeExclude && rule.Matches(host, port) {
+		if rule.Kind == ScopeExclude && rule.MatchesRequest(host, port, path) {
 			return false
 		}
 	}
@@ -177,7 +204,7 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 	for _, rule := range s.rules {
 		if rule.Kind == ScopeInclude {
 			hasIncludeRule = true
-			if rule.Matches(host, port) {
+			if rule.MatchesRequest(host, port, path) {
 				return true
 			}
 		}
@@ -189,6 +216,132 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 // AuthoriseRequest checks if a request is authorized to be sent.
 func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bool) bool {
 	return s.Contains(host, port, path, isTLS)
+}
+
+// requestPath extracts the request target from a raw request line, the way burpsy-core::scope's
+// request_path does: both origin-form and absolute-form targets, query string dropped, a
+// proxied request with no path at all reading as "/". The second result is false when no path
+// can be read — a refusal, never a wave-through, because an unreadable request line is exactly
+// what a smuggled payload looks like.
+func requestPath(raw []byte) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	lineEnd := len(raw)
+	if i := bytesIndexByte(raw, '\n'); i >= 0 {
+		lineEnd = i
+	}
+	line := raw[:lineEnd]
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+	sp1 := bytesIndexByte(line, ' ')
+	if sp1 < 0 {
+		return "", false
+	}
+	target := line[sp1+1:]
+	if len(target) == 0 {
+		return "", false
+	}
+	sp2 := bytesIndexByte(target, ' ')
+	if sp2 >= 0 {
+		target = target[:sp2]
+	}
+	if len(target) == 0 {
+		return "", false
+	}
+	if bytesHasPrefix(target, "http://") || bytesHasPrefix(target, "https://") {
+		// Absolute form: the path is everything after the authority. No slash at all means the
+		// request addresses the root, which matters for proxied requests.
+		rest := target[len("http://"):]
+		if bytesHasPrefix(target, "https://") {
+			rest = target[len("https://"):]
+		}
+		slash := bytesIndexByte(rest, '/')
+		if slash < 0 {
+			return "/", true
+		}
+		return dropQuery(rest[slash:])
+	}
+	return dropQuery(target)
+}
+
+func dropQuery(target []byte) (string, bool) {
+	q := bytesIndexByte(target, '?')
+	if q >= 0 {
+		target = target[:q]
+	}
+	if !utf8.Valid(target) {
+		return "", false
+	}
+	return string(target), true
+}
+
+func bytesIndexByte(b []byte, c byte) int {
+	for i, x := range b {
+		if x == c {
+			return i
+		}
+	}
+	return -1
+}
+
+func bytesHasPrefix(b []byte, prefix string) bool {
+	if len(b) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		if b[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Explain says why a request is or is not in scope, naming the path that decided it. The message
+// is what AuthoriseRaw refuses with, so an operator learns which path tripped the rule rather
+// than receiving a bare "refused".
+func (s *Scope) Explain(host string, port uint16, path string, isTLS bool) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	where := fmt.Sprintf("%s:%d%s", host, port, path)
+	if s.allowAll {
+		return "allowed: " + where + " (scope allows everything)"
+	}
+	for _, rule := range s.rules {
+		if rule.Kind == ScopeExclude && rule.MatchesRequest(host, port, path) {
+			return "refused: " + where + " is excluded by scope rule " + rule.Pattern
+		}
+	}
+	hasInclude := false
+	for _, rule := range s.rules {
+		if rule.Kind == ScopeInclude {
+			hasInclude = true
+			if rule.MatchesRequest(host, port, path) {
+				return "allowed: " + where + " matches include rule " + rule.Pattern
+			}
+		}
+	}
+	if !hasInclude {
+		return "allowed: " + where + " (no rules — default allow)"
+	}
+	return "refused: " + where + " matches no include rule"
+}
+
+// AuthoriseRaw checks the request actually going on the wire, not the target the operator named.
+// A payload spliced into a path position rewrites the request line, and only the bytes that will
+// be sent can be trusted. The path is read from raw; the host and port come from the bound
+// target. A request whose line cannot be read is refused, never waved through.
+func (s *Scope) AuthoriseRaw(host string, port uint16, isTLS bool, raw []byte) error {
+	path, ok := requestPath(raw)
+	if !ok {
+		return errors.New("refused: request has no readable request line, so no path could be checked")
+	}
+	if !s.Contains(host, port, path, isTLS) {
+		return errors.New(s.Explain(host, port, path, isTLS))
+	}
+	return nil
 }
 
 // SharedScope is a thread-safe shared scope handle.
@@ -209,6 +362,13 @@ func (ss *SharedScope) Contains(host string, port uint16, path string, isTLS boo
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 	return ss.scope.Contains(host, port, path, isTLS)
+}
+
+// AuthoriseRaw delegates the per-request raw-bytes check to the underlying scope.
+func (ss *SharedScope) AuthoriseRaw(host string, port uint16, isTLS bool, raw []byte) error {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	return ss.scope.AuthoriseRaw(host, port, isTLS, raw)
 }
 
 // Set replaces the underlying scope.

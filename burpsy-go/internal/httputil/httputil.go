@@ -144,3 +144,25 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 
 	return body.Bytes(), nil
 }
+
+// ResponseStatus parses the numeric status code from a raw response's first
+// line, or nil when the line cannot be read. It exists so senders that talk in
+// raw bytes can report a status without a second parse of the whole response.
+func ResponseStatus(raw []byte) *int {
+	first := raw
+	if i := bytes.IndexByte(raw, '\n'); i >= 0 {
+		first = raw[:i]
+	}
+	fields := bytes.Fields(first)
+	if len(fields) < 2 {
+		return nil
+	}
+	if !bytes.HasPrefix(fields[0], []byte("HTTP/")) {
+		return nil
+	}
+	n, err := strconv.Atoi(string(fields[1]))
+	if err != nil {
+		return nil
+	}
+	return &n
+}

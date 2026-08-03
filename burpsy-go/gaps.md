@@ -178,8 +178,31 @@ the `msg_id`/`all` → `PointView[]` contract. That wiring needs the plan/limit/
 machinery (`plan.rs`, `limit.rs`, `engine.rs` bucketing) to answer honestly, so it
 is a named remaining piece rather than a stub.
 
-**Decline path:** none; the engine half is ported and tested, the web half is
-named above.
+**Go (scope/sender wiring now ported — Slice E):** `internal/core/scope.go` now
+carries the two-layer authorisation model of `crates/core/src/scope.rs`
+(`request_path:160`, `authorise_request:346`, `explain:369`): `requestPath` reads
+both origin-form and absolute-form targets with the query dropped and a pathless
+proxied request reading as `/`; `ScopeRule.PathPrefix` + `NewScopeRuleWithPath`
+limit a rule to a path prefix; `MatchesRequest`, the path-aware `Contains`,
+`Explain` (names the rule that refused, including the path), and
+`AuthoriseRaw(host, port, tls, raw)` which checks the bytes actually going on the
+wire — a payload spliced into a path position rewrites the request line, so the
+named-target check is never enough. A request whose start line cannot be read is
+refused, never waved through. `internal/sender/authorised.go` ports
+`crates/sender`'s `AuthorisedSender`: scope gate bound at construction, per-send
+check before the dial, refusals counted (`atomic.Int64`) and returned as the
+send's error, transport never reached on refusal. `internal/httputil` gains
+`ResponseStatus` (status from raw response bytes). Covered by
+`scope_raw_test.go` (port of scope.rs:580-760), `authorised_test.go` (refusal
+before dial on a closed port, in-scope send, spliced-path refusal while the host
+stays in scope, race-checked concurrent counters), and
+`internal/web/intruder_scope_test.go` (an attack whose payload rewrites the path
+out of scope sends nothing to the target and counts the refusal honestly).
+Named divergence (unchanged): the Go scope is excludes-first with default-allow,
+the Rust scope is last-match-wins with default-deny.
+
+**Decline path:** none; the engine half is ported and tested, the web half
+(handlers + `RunReport` wire contract) is the remaining named piece.
 
 ### 7. Sequencer FIPS 140-2 absent — PARTIAL
 
