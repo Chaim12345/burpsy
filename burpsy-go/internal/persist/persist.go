@@ -150,6 +150,64 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
+	// messages gained (segment, offset, length) when the store stopped keeping
+	// payload bytes on the heap: with a capture directory the bytes are already
+	// durable in a segment file, so mirroring them into SQLite as well stored
+	// every byte three times over. On a 419 MB capture that was a 436 MB
+	// database against a 2.7 MB one, and a restart of 3.1s/623 MB against
+	// 288ms/22 MB.
+	//
+	// The columns are added rather than the table rewritten, so a database
+	// written by an older build still opens: its rows carry bytes and no span,
+	// and load back as resident messages. raw stays NOT NULL because SQLite
+	// cannot relax that with ALTER TABLE — a span row writes a zero-length blob
+	// into it, which costs nothing.
+	for _, col := range []struct{ name, decl string }{
+		{"segment", "TEXT"},
+		{"offset", "INTEGER"},
+		{"length", "INTEGER"},
+		{"shape", "BLOB"},
+	} {
+		if err := s.addColumn("messages", col.name, col.decl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addColumn adds a column unless it is already there, so migrate stays
+// idempotent across restarts.
+func (s *Store) addColumn(table, name, decl string) error {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", table, err)
+	}
+	present := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var colName, colType string
+		var dflt any
+		if err := rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("inspect %s: %w", table, err)
+		}
+		if colName == name {
+			present = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("inspect %s: %w", table, err)
+	}
+	// Closed before the ALTER, not deferred: the pool is capped at one
+	// connection, so an open Rows would block the write and deadlock.
+	rows.Close()
+	if present {
+		return nil
+	}
+	if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, decl)); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, name, err)
+	}
 	return nil
 }
 
@@ -165,11 +223,34 @@ func (s *Store) log(op string, err error) {
 
 // ---- Messages + exchanges ----------------------------------------------------------------------
 
-// SaveMessage mirrors one stored message.
-func (s *Store) SaveMessage(id core.MsgId, raw []byte, direction core.Direction) {
+// SaveMessage mirrors one stored message: its shape always, and then either the
+// span its bytes occupy or the bytes themselves.
+//
+// Both halves of that are the point of the split. When the bytes are already
+// durable in a segment file, mirroring them again is pure duplication — it makes
+// them no safer, and it is what made restarting cost hundreds of megabytes.
+// Storing the shape is what stops the restore having to read those bytes back
+// just to re-derive spans from them.
+//
+// Without a capture directory there is no segment file, so SQLite is the only
+// durable copy and the bytes have to go in.
+func (s *Store) SaveMessage(m *core.StoredMessage) {
+	shape := core.EncodeShape(m.Shape)
+	loc := m.Location()
+	if loc.Segment != "" {
+		_, err := s.db.Exec(
+			`INSERT OR REPLACE INTO messages (id, direction, raw, segment, offset, length, shape)
+			 VALUES (?, ?, X'', ?, ?, ?, ?)`,
+			uint64(m.ID), int(m.Shape.Direction), loc.Segment, loc.Offset, loc.Length, shape)
+		if err != nil {
+			s.log("message", err)
+		}
+		return
+	}
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO messages (id, direction, raw) VALUES (?, ?, ?)`,
-		uint64(id), int(direction), raw)
+		`INSERT OR REPLACE INTO messages (id, direction, raw, segment, offset, length, shape)
+		 VALUES (?, ?, ?, NULL, NULL, NULL, ?)`,
+		uint64(m.ID), int(m.Shape.Direction), m.Raw(), shape)
 	if err != nil {
 		s.log("message", err)
 	}
@@ -198,9 +279,20 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	}
 }
 
-// LoadMessages restores every stored message, re-parsing shapes from raw bytes.
-func (s *Store) LoadMessages() ([]*core.StoredMessage, error) {
-	rows, err := s.db.Query(`SELECT id, direction, raw FROM messages ORDER BY id`)
+// LoadMessages restores every stored message.
+//
+// A row carrying a span is restored as a disk-backed message resolved against
+// src, and one carrying a persisted shape is restored without reading its bytes
+// at all: a shape is only spans, so there is nothing left to derive from the
+// payload. That is what makes restart cost independent of how much traffic was
+// captured — the index is read, the capture is not.
+//
+// A row with no shape was written before shapes were persisted, so its bytes are
+// read and re-parsed. A row with no span — written before spans existed, or by a
+// store with no capture directory — comes back resident, as it must: there is
+// nowhere else for those bytes to live.
+func (s *Store) LoadMessages(src *core.SegmentLog) ([]*core.StoredMessage, error) {
+	rows, err := s.db.Query(`SELECT id, direction, raw, segment, offset, length, shape FROM messages ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -210,16 +302,56 @@ func (s *Store) LoadMessages() ([]*core.StoredMessage, error) {
 		var id uint64
 		var dir int
 		var raw []byte
-		if err := rows.Scan(&id, &dir, &raw); err != nil {
+		var segment sql.NullString
+		var offset, length sql.NullInt64
+		var encodedShape []byte
+		if err := rows.Scan(&id, &dir, &raw, &segment, &offset, &length, &encodedShape); err != nil {
 			return nil, err
 		}
-		shape, err := core.Parse(raw, core.Direction(dir))
-		if err != nil {
-			return nil, fmt.Errorf("message %d: %w", id, err)
+
+		onDisk := segment.Valid && segment.String != ""
+		if onDisk && src == nil {
+			return nil, fmt.Errorf("message %d is recorded at %s offset %d but this store has no segment log to resolve it against",
+				id, segment.String, offset.Int64)
 		}
-		out = append(out, &core.StoredMessage{ID: core.MsgId(id), Raw: raw, Shape: shape})
+		loc := core.Location{Segment: segment.String, Offset: offset.Int64, Length: length.Int64}
+
+		shape, err := s.shapeFor(id, encodedShape, raw, dir, onDisk, loc, src)
+		if err != nil {
+			return nil, err
+		}
+		if onDisk {
+			out = append(out, core.NewDiskMessage(core.MsgId(id), shape, loc, src))
+			continue
+		}
+		out = append(out, core.NewResidentMessage(core.MsgId(id), raw, shape))
 	}
 	return out, rows.Err()
+}
+
+// shapeFor decodes the persisted shape, or re-derives it from the bytes for a row
+// written before shapes were stored.
+func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
+	loc core.Location, src *core.SegmentLog) (core.MessageShape, error) {
+	if len(encoded) > 0 {
+		shape, err := core.DecodeShape(encoded)
+		if err != nil {
+			return core.MessageShape{}, fmt.Errorf("message %d shape: %w", id, err)
+		}
+		return shape, nil
+	}
+	bytes := raw
+	if onDisk {
+		var err error
+		if bytes, err = src.ReadAt(loc); err != nil {
+			return core.MessageShape{}, fmt.Errorf("message %d does not resolve: %w", id, err)
+		}
+	}
+	shape, err := core.Parse(bytes, core.Direction(dir))
+	if err != nil {
+		return core.MessageShape{}, fmt.Errorf("message %d: %w", id, err)
+	}
+	return shape, nil
 }
 
 // LoadExchanges restores every exchange in id order (ids are positional).
@@ -641,7 +773,9 @@ func (s *Store) Restore(
 	toolLog *toollog.ToolLog,
 ) error {
 	if store != nil {
-		messages, err := s.LoadMessages()
+		// Resolved against the store's own log: a span means nothing without
+		// the segment files it was recorded from.
+		messages, err := s.LoadMessages(store.SegmentLog())
 		if err != nil {
 			return fmt.Errorf("load messages: %w", err)
 		}

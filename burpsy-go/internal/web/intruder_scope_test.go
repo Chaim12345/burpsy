@@ -114,7 +114,7 @@ func TestAnAttackPayloadThatRewritesThePathOutOfScopeIsNeverSent(t *testing.T) {
 		Total: 2, TotalExact: true,
 	}}
 	plan := intruder.NewAttackPlan(intruder.AttackKindSniper, 1, []int{2}, 100)
-	a := intruder.NewAttack(msg.Raw, []intruder.InsertionPoint{*pathPoint}, payloads, plan).
+	a := intruder.NewAttack(msg.Raw(), []intruder.InsertionPoint{*pathPoint}, payloads, plan).
 		WithLimits(intruder.Unthrottled(1))
 
 	report := intruder.Run(a, send, nil)
@@ -182,7 +182,7 @@ func TestTheRefusedPayloadIsReportedAsAReasonNotSilence(t *testing.T) {
 		Kind: "list", Items: []string{"admin/delete-all"}, Count: 1, Total: 1, TotalExact: true,
 	}}
 	plan := intruder.NewAttackPlan(intruder.AttackKindSniper, 1, []int{1}, 100)
-	a := intruder.NewAttack(msg.Raw, []intruder.InsertionPoint{*pathPoint}, payloads, plan).
+	a := intruder.NewAttack(msg.Raw(), []intruder.InsertionPoint{*pathPoint}, payloads, plan).
 		WithLimits(intruder.Unthrottled(1))
 
 	report := intruder.Run(a, send, nil)

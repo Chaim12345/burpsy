@@ -173,7 +173,7 @@ func TestARewrittenHandshakeDoesNotLookPristineInHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stored request: %v", err)
 	}
-	if strings.Contains(strings.ToLower(string(req.Raw)), core.WsExtensionsHeader) {
+	if strings.Contains(strings.ToLower(string(req.Raw())), core.WsExtensionsHeader) {
 		t.Error("history shows the client's original request while a different one went upstream; the recorded bytes must be the bytes sent")
 	}
 }

@@ -72,7 +72,7 @@ func (q exchangeQueryable) Body() []byte { return q.body }
 func (q *exchangeQueryable) withBody(store *core.TrafficStore) *exchangeQueryable {
 	if q.ex.Response != nil {
 		if msg, err := store.Get(*q.ex.Response); err == nil {
-			q.body = msg.Raw
+			q.body = msg.Raw()
 		}
 	}
 	return q
@@ -193,7 +193,7 @@ func cmdMessage(ctx *cliContext, args []string) error {
 	if err != nil {
 		return fmt.Errorf("message not found: %w", err)
 	}
-	_, err = ctx.out.Write(msg.Raw)
+	_, err = ctx.out.Write(msg.Raw())
 	return err
 }
 

@@ -89,7 +89,7 @@ func TestApplySplicesAndFixesContentLength(t *testing.T) {
 	if p == nil {
 		t.Fatal("no param a")
 	}
-	out := Apply(m.Raw, p, []byte("XXXXXXXXXX"))
+	out := Apply(m.Raw(), p, []byte("XXXXXXXXXX"))
 	s := string(out)
 	if !bytes.Contains(out, []byte("a=XXXXXXXXXX&b=2")) {
 		t.Errorf("spliced: %s", s)
@@ -115,7 +115,7 @@ func TestApplyAllFillsSeveralPositionsInOneRequest(t *testing.T) {
 		t.Fatalf("need user and role points, got %+v", pts)
 	}
 	// Longest payload first, so a naive left-to-right splice would shift the second one.
-	out := ApplyAll(m.Raw, []ApplyPlace{
+	out := ApplyAll(m.Raw(), []ApplyPlace{
 		{Point: user, Payload: []byte("LONGPAYLOAD")},
 		{Point: role, Payload: []byte("x")},
 	})
@@ -142,12 +142,12 @@ func TestApplyAllIsOrderIndependent(t *testing.T) {
 			t.Fatalf("missing param %s", want)
 		}
 	}
-	forward := ApplyAll(m.Raw, []ApplyPlace{
+	forward := ApplyAll(m.Raw(), []ApplyPlace{
 		{Point: byLabel["a"], Payload: []byte("AA")},
 		{Point: byLabel["b"], Payload: []byte("BB")},
 		{Point: byLabel["c"], Payload: []byte("CC")},
 	})
-	reverse := ApplyAll(m.Raw, []ApplyPlace{
+	reverse := ApplyAll(m.Raw(), []ApplyPlace{
 		{Point: byLabel["c"], Payload: []byte("CC")},
 		{Point: byLabel["b"], Payload: []byte("BB")},
 		{Point: byLabel["a"], Payload: []byte("AA")},
@@ -176,7 +176,7 @@ func TestOverlappingPositionsYieldAValidRequestNotACorruptOne(t *testing.T) {
 	if body == nil || a == nil {
 		t.Fatalf("need entire-body and param-a points, got %+v", pts)
 	}
-	out := ApplyAll(m.Raw, []ApplyPlace{
+	out := ApplyAll(m.Raw(), []ApplyPlace{
 		{Point: body, Payload: []byte("WHOLE")},
 		{Point: a, Payload: []byte("IGNORED")},
 	})

@@ -91,8 +91,8 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 func messageView(msg *core.StoredMessage) *MessageView {
 	return &MessageView{
 		ID:   uint64(msg.ID),
-		Len:  len(msg.Raw),
-		Text: string(msg.Raw),
+		Len:  msg.Len(),
+		Text: string(msg.Raw()),
 	}
 }
 

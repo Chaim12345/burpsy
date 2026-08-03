@@ -20,7 +20,7 @@ func basePoints(t *testing.T, raw string) ([]byte, []InsertionPoint) {
 	t.Helper()
 	m := storeReq(t, raw)
 	pts := FindPoints(m, DefaultPointConfig())
-	return m.Raw, pts
+	return m.Raw(), pts
 }
 
 // sets builds payload sets from string lists.
@@ -131,7 +131,7 @@ func TestPayloadThatRewritesThePathOutOfScopeIsNeverSent(t *testing.T) {
 		return nil
 	}
 
-	a := NewAttack(m.Raw, sel, payloads, plan).
+	a := NewAttack(m.Raw(), sel, payloads, plan).
 		WithLimits(Unthrottled(4)).
 		WithGuard(guard)
 	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)

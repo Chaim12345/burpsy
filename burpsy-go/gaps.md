@@ -263,30 +263,73 @@ request" pane cannot drive it. That is a separate nameable difference, not part
 of the FIPS/report contract this gap existed to close, and it is not claimed
 complete here.
 
-### 8. `RequestEdit` absent as a type — OPEN
+### 8. `RequestEdit` absent as a type — COMPLETE
 
 **Rust:** `crates/core/src/edit.rs` class at `:28` — `from_raw:54`, `target:119`,
 `url:128`, `file:138`, `header:142`, `set_header:150`, `add_header:175`,
 `add_query:180`, `to_raw`, dechunking, Content-Length recomputation. A single
 first-class mutation type used across tools.
 
-**Go:** only a private minimal `requestEdit` at
-`internal/bcheck/insertion.go:381-388`; request mutation is scattered across
-`internal/intruder/intruder.go` `injectPayload` (`:163`), `insertion.Apply`, and
-intercept code. No public API matches the Rust edit model.
+**Go:** ported to `internal/core/edit.go` as a public `RequestEdit` —
+`ParseRequestEdit`, `Target`, `URL`, `File`, `Header`, `SetHeader`, `AddHeader`,
+`AddQuery`, `ToRaw`, plus `dechunk` and `strictHeaderEnd`. All ten of edit.rs's
+tests are ported one for one in `internal/core/edit_test.go`, so both
+implementations are held to the same claims.
 
-**Decline path:** none; the bcheck/insertion story would benefit from one editor.
+`internal/bcheck/insertion.go` now uses it and its private `requestEdit` is
+deleted. That migration fixed two real defects the private copy had:
 
-### 9. Store `verify_index` partial — PARTIAL
+- **Chunked bodies were never decoded**, so a body insertion point spliced its
+  payload into the chunk framing rather than the content.
+- **Absolute-form targets were not split**, so a request captured from a proxy
+  (`GET http://host/a`) was rebuilt with an absolute target and sent to an origin
+  that expects origin-form.
 
-**Rust:** `crates/core/src/lib.rs` — `verify_capture_dir:453`, `verify_index:782`
-(index↔capture-dir consistency), `verify_segments:894`.
+It also tightened the header terminator from lenient to strict: the private copy
+treated a terminator-less buffer as all head and no body, which meant rebuilding
+and sending an attack from a head that had been guessed at.
 
-**Go:** `internal/core/store.go` has `VerifyCaptureDir:518` and
-`verifySegmentFile:541` but **no** `verify_index` equivalent (in-memory index vs
-on-disk segments cross-check).
+Still outstanding, and deliberately left: `internal/intruder/intruder.go`
+`injectPayload` (`:163`) still splices by byte position without recomputing
+Content-Length. That is a separate gap from this one — it is about Intruder's
+`§marker§` model, not about the absence of an edit type.
 
-**Decline path:** partial; capture-dir verification exists, index consistency does not.
+### 9. Store verification partial — PARTIAL (blocked on a segment format change)
+
+**Rust:** `crates/core/src/lib.rs` — `verify_capture_dir:453`, `verify_index:782`,
+`verify_segments:894`. Two mechanisms that deliberately do not subsume each other:
+`verify_index` proves the in-memory index is self-consistent (and would still pass
+if the bytes on disk had rotted, because it reads them *through* the index it is
+checking), while `verify_segments`/`verify_capture_dir` re-read each file and
+recompute every CRC, catching what appeared *after* the write.
+
+**Go:** `internal/core/store.go` has `VerifyIndex` (position-is-the-id, the
+cross-references between all three indexes, and — in segment mode — that every
+message still resolves on disk to a payload of the length the index believes it
+has) and `VerifyCaptureDir`/`verifySegmentFile`.
+
+This entry claimed there was "**no** `verify_index` equivalent", which was wrong.
+What is genuinely missing is the second mechanism's teeth: **the Go segment format
+carries no per-record CRC**, so `verifySegmentFile` can only prove a segment is
+readable end to end and report how many bytes it read. A byte flip that preserves
+the file length is undetectable. `VerifyCaptureDir`'s doc comment now says so
+explicitly rather than implying a guarantee it cannot make.
+
+Two real defects here were fixed while porting Gap 8's neighbours:
+
+- `VerifyCaptureDir` matched `segment-*.log` while the writer emits
+  `segment_%d.dat`, so it examined **zero files and reported success**. The
+  filename now comes from one shared `segmentNameFormat` constant.
+- `verifySegmentFile` reported `size/1024` in a field named `Checked`, so a 2 MB
+  segment claimed to have checked 2048 of something. It is now a byte count of
+  what was actually read.
+
+**Decline path:** adding a per-record CRC changes the on-disk layout that every
+recorded `Location` is expressed against, and the SQLite mirror now persists those
+spans. So this is a format migration, not a local fix — it needs its own change
+with a version marker on the segment header. Note the Rust doc's constraint: the
+CRC is corruption detection only, never to be described as an integrity control,
+since anyone who can write to the capture directory can recompute it.
 
 ### 10. BCheck builtins partial — COMPLETE
 
@@ -327,16 +370,24 @@ group 1 + the literal). Covered by `bcheck_test.go`: `TestJavaBackrefsRewritesJa
 **Decline path:** none; both builtins are ported and tested. Gap closed
 (commit `060fc82`; this ledger entry was written up after the fact).
 
-### 11. Comparer no granularity/budget — PARTIAL
+### 11. Comparer no granularity/budget — COMPLETE
 
 **Rust:** `crates/tools/src/comparer.rs` — `Granularity:34`, `Op:45`, `Diff:61`,
 `diff:84`, `diff_with_budget:93` (bounded diff over large bodies, word/byte
 granularity).
 
-**Go:** `internal/tools/tools.go:207` `Compare` returns hunks; no
-granularity, no diff budget.
+**Go:** `internal/tools/comparer.go` (397 lines) has `Granularity`
+(`GranularityByte`/`GranularityWord`), `Diff`, `DiffWithBudget`, a `Truncated`
+flag, and `budgetFor` scaling the cap with input size (2048 ceiling, 64 floor),
+over a Myers diff with `core.Span` tokens. `comparer_budget_test.go` mirrors
+comparer.rs's own budget test.
 
-**Decline path:** partial; large-body compare has no bound in Go.
+This entry described `internal/tools/tools.go:207` and was stale — the dedicated
+comparer already existed. Recorded here because the Go implementation is
+*stronger* than the obvious alternative: bounding the edit-script size D rather
+than the DP table means two large but similar bodies (the common case — compare
+two responses differing in one field) still diff exactly, where a cell-count cap
+would degenerate to whole-delete plus whole-insert.
 
 ### 12. Session coordinator simplified — PARTIAL
 

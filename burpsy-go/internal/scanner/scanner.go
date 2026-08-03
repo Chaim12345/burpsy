@@ -621,7 +621,7 @@ func (s *PassiveScanner) getResponseHeaders(exchange *core.Exchange) string {
 		return ""
 	}
 	// Return full raw message for header parsing
-	return string(msg.Raw)
+	return string(msg.Raw())
 }
 
 // GetFindings returns all passive findings.

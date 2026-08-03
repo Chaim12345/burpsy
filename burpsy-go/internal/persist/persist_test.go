@@ -63,8 +63,8 @@ func TestRestore_RoundTripsMessagesAndExchanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(reqID): %v", err)
 	}
-	if string(msg.Raw) != "GET / HTTP/1.1\r\nHost: a\r\n\r\n" {
-		t.Fatalf("raw = %q", msg.Raw)
+	if string(msg.Raw()) != "GET / HTTP/1.1\r\nHost: a\r\n\r\n" {
+		t.Fatalf("raw = %q", msg.Raw())
 	}
 	// Append after restore: ids continue from the restored count.
 	next, err := restored.Put([]byte("POST /x HTTP/1.1\r\n\r\n"), core.DirectionRequest)

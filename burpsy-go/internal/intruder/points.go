@@ -115,7 +115,7 @@ var boringHeaders = map[string]bool{
 // Allocation is limited to the returned slice and small labels; no request bytes are copied.
 func FindPoints(msg *core.StoredMessage, cfg *PointConfig) []InsertionPoint {
 	var out []InsertionPoint
-	raw := msg.Raw
+	raw := msg.Raw()
 	target := msg.Shape.SecondToken
 	tend := min(target.End(), len(raw))
 	if target.Offset >= tend {
