@@ -1,6 +1,7 @@
 package bcheck
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -500,6 +501,116 @@ func TestRunPassiveIgnoresNonResponseChecks(t *testing.T) {
 	}
 	if len(findings) != 0 {
 		t.Errorf("findings = %d, want 0 for host-given check", len(findings))
+	}
+}
+
+func TestJavaBackrefsRewritesJavaGroupReferences(t *testing.T) {
+	// The corpus writes Java-style replacements; Go's regexp takes `$1eyJ…`
+	// to be a *named* group and drops the capture AND the literal — see
+	// other/tokens/jwt-none-algorithm.bcheck:15. java_backrefs must turn
+	// `$1eyJ…` into `${1}eyJ…` so group 1 and the literal both survive.
+	cases := []struct {
+		in, want, why string
+	}{
+		{"$1eyJhbGciOiJub25l", "${1}eyJhbGciOiJub25l", "digits followed by letters"},
+		{"$1.php", "${1}.php", "a dot cannot continue the group"},
+		{"${1}x", "${1}x", "already Go's spelling is left alone"},
+		{"cost $ and $x", "cost $ and $x", "not a group reference"},
+		{"$12abc", "${12}abc", "all the digits, as Java takes them"},
+		{"$", "$", "a lone dollar is not a reference"},
+	}
+	for _, c := range cases {
+		if got := javaBackrefs(c.in); got != c.want {
+			t.Errorf("javaBackrefs(%q) = %q, want %q — %s", c.in, got, c.want, c.why)
+		}
+	}
+}
+
+func TestJavaBackrefsMakesTheJwtHeaderSurviveReplacement(t *testing.T) {
+	// The exact corpus premise: without translation Go reads `1eyJ…` as a
+	// group *name*, finds none, and empties the whole payload header.
+	re := regexp.MustCompile(`^(Bearer )?[a-zA-Z0-9_\-]+`)
+	raw := "$1eyJhbGciOiJub25l"
+	if got := re.ReplaceAllString("Bearer eyJabc.rest", raw); got != ".rest" {
+		t.Fatalf("premise: Go eats it, got %q, want %q", got, ".rest")
+	}
+	got := re.ReplaceAllString("Bearer eyJabc.rest", javaBackrefs(raw))
+	want := "Bearer eyJhbGciOiJub25l.rest"
+	if got != want {
+		t.Errorf("translated = %q, want %q", got, want)
+	}
+}
+
+func TestRandomStrDrawsFromTheSafeAlphabet(t *testing.T) {
+	var st uint64 = 0x9e3779b97f4a7c15
+	s := randomStr(&st, 64)
+	if len(s) != 64 {
+		t.Fatalf("len = %d, want 64", len(s))
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') {
+			t.Errorf("randomStr produced %q — outside the path-safe alphabet", r)
+		}
+	}
+}
+
+func TestRandomStrIsReproducibleForASeed(t *testing.T) {
+	a, b := uint64(42), uint64(42)
+	if got, want := randomStr(&a, 12), randomStr(&b, 12); got != want {
+		t.Errorf("same seed produced %q and %q", got, want)
+	}
+	// Advancing the state yields a different value; this also exercises the
+	// xorshift path past the first draw.
+	next := uint64(42)
+	if first, second := randomStr(&next, 8), randomStr(&next, 8); first == second {
+		t.Error("two draws from one state must differ")
+	}
+}
+
+func TestRegexReplaceAppliesJavaBackrefsToTheReplacement(t *testing.T) {
+	// End-to-end through resolveRef, the way the evaluator calls it. The
+	// subject is brace-wrapped, the pattern and replacement are quoted — the
+	// exact corpus shape — and the replacement is Java's `$1…` spelling, which
+	// must mean group 1 + literal, not a named group.
+	ctx := NewContext()
+	ctx.Variables["base.request.url"] = Value{Type: "str", StringVal: "/jwt/eyJabc.rest"}
+	got := ctx.resolveRef(`regex_replace({base.request.url}, "^/jwt/", "$1eyJhbGciOiJub25l")`)
+	want := "eyJhbGciOiJub25leyJabc.rest"
+	if got != want {
+		t.Errorf("resolveRef = %q, want %q (quoted args + Java `$1` must both survive)", got, want)
+	}
+}
+
+func TestRandomStrResolvesThroughTheEvaluator(t *testing.T) {
+	// The corpus calls random_str with a bare numeric literal; the argument
+	// must resolve to that number, not to a path binding.
+	ctx := NewContext()
+	s := ctx.resolveRef("random_str(8)")
+	if len(s) != 8 {
+		t.Errorf("random_str(8) resolved to %q (len %d), want 8 chars", s, len(s))
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') {
+			t.Errorf("random_str(8) produced %q — outside the path-safe alphabet", s)
+			break
+		}
+	}
+}
+
+func TestRandomStrIsSeededFromTheResponse(t *testing.T) {
+	// Same response bytes, same probe value — a reported finding can be
+	// re-checked. Different bodies must not collide.
+	a := NewContext()
+	a.Response = []byte("HTTP/1.1 200 OK\r\n\r\nbody-one")
+	b := NewContext()
+	b.Response = []byte("HTTP/1.1 200 OK\r\n\r\nbody-one")
+	if x, y := a.resolveRef("random_str(12)"), b.resolveRef("random_str(12)"); x != y {
+		t.Errorf("same body produced %q and %q", x, y)
+	}
+	c := NewContext()
+	c.Response = []byte("HTTP/1.1 200 OK\r\n\r\nbody-two")
+	if x, y := a.resolveRef("random_str(12)"), c.resolveRef("random_str(12)"); x == y {
+		t.Error("different bodies produced the same probe value")
 	}
 }
 

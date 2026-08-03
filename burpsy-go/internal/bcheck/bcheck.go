@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Check represents a parsed BCheck file.
@@ -259,6 +260,11 @@ type Context struct {
 
 	respFields *messageFields
 	reqFields  *messageFields
+	// rng is the `random_str` state, seeded from the message so probes are
+	// reproducible per target. ensureRNG seeds it lazily on first use; the
+	// zero value means "not yet seeded", and FNV-1a is a bijection so a raw
+	// 0 seed is never produced (see ensureRNG).
+	rng uint64
 }
 
 // NewContext creates a new execution context.
@@ -378,16 +384,26 @@ func (ctx *Context) resolveRef(name string) string {
 		if len(args) != 3 {
 			return ""
 		}
-		subject := ctx.resolveRef(args[0])
-		pattern := ctx.resolveRef(args[1])
-		repl := ctx.resolveRef(args[2])
+		subject := ctx.resolveCallArg(args[0])
+		pattern := ctx.resolveCallArg(args[1])
+		repl := ctx.resolveCallArg(args[2])
 		re, err := regexp.Compile(pattern)
 		if err != nil {
 			return ""
 		}
-		// Go's replacement syntax is `$1`, which is also Java's spelling — the
-		// corpus's backrefs work as written.
-		return re.ReplaceAllString(subject, repl)
+		// `$1` is Java's spelling: it takes only the digits that follow it, so
+		// `$1eyJ…` means group 1 followed by literal text. Go's regexp takes
+		// the longest run of [0-9A-Za-z_] as a group *name* — untranslated,
+		// `other/tokens/jwt-none-algorithm.bcheck:15` sends a JWT header that
+		// is silently empty. Translate before substitution.
+		return re.ReplaceAllString(subject, javaBackrefs(repl))
+	case strings.HasPrefix(name, "random_str(") && strings.HasSuffix(name, ")"):
+		n, err := strconv.Atoi(ctx.resolveCallArg(innerCall(name, "random_str(")))
+		if err != nil {
+			return ""
+		}
+		ctx.ensureRNG()
+		return randomStr(&ctx.rng, n)
 	}
 	return ctx.resolvePath(name)
 }
@@ -395,6 +411,31 @@ func (ctx *Context) resolveRef(name string) string {
 // innerCall returns the argument text of a call of the form `name(arg)`.
 func innerCall(name, prefix string) string {
 	return name[len(prefix) : len(name)-1]
+}
+
+// resolveCallArg resolves one argument of a builtin call. The corpus quotes
+// string arguments (`"^.*?/"`), wraps references in braces (`{base.request.url}`)
+// and passes bare integers to `random_str(8)`. Quoted text is a literal, a
+// backtick is a template, braces unwrap to a nested reference, and anything else
+// resolves as a path — with a numeric fallback so a bare length reaches
+// `random_str` intact.
+func (ctx *Context) resolveCallArg(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 {
+		if s[0] == '"' && s[len(s)-1] == '"' {
+			return s[1 : len(s)-1]
+		}
+		if s[0] == '`' && s[len(s)-1] == '`' {
+			return ctx.interpolate(s[1 : len(s)-1])
+		}
+		if s[0] == '{' && s[len(s)-1] == '}' {
+			return ctx.resolveCallArg(s[1 : len(s)-1])
+		}
+	}
+	if _, err := strconv.Atoi(s); err == nil {
+		return s
+	}
+	return ctx.resolveRef(s)
 }
 
 // splitCallArgs splits a call's argument list on top-level commas, honouring
@@ -432,6 +473,89 @@ func splitCallArgs(s string) []string {
 	}
 	out = append(out, s[start:])
 	return out
+}
+
+// ensureRNG seeds the random_str state from the response bytes on first use.
+// The seed is FNV-1a over the first 512 bytes of the response: same target and
+// body give the same probe values, so a reported finding can be re-checked,
+// while different targets get different values. `| 1` keeps the xorshift state
+// away from the all-zero lane, which xorshift can never leave.
+func (ctx *Context) ensureRNG() {
+	if ctx.rng != 0 {
+		return
+	}
+	var seed uint64 = 0xcbf29ce484222325
+	limit := len(ctx.Response)
+	if limit > 512 {
+		limit = 512
+	}
+	for _, b := range ctx.Response[:limit] {
+		seed ^= uint64(b)
+		seed *= 0x100000001b3
+	}
+	ctx.rng = seed | 1
+}
+
+// javaBackrefs rewrites Java's `$N` group references into Go's `${N}`.
+//
+// `regex_replace` is Java `Matcher.replaceAll`, where `$` takes only the digits
+// that follow it, so `$1eyJhbGci…` means group 1 followed by literal text. Go's
+// replacement syntax takes the longest run of `[0-9A-Za-z_]` as a group *name*:
+// it looks for a group called `1eyJhbGci…`, finds none, and expands to nothing —
+// destroying both the capture and the literal that followed it. That is exactly
+// `other/tokens/jwt-none-algorithm.bcheck:15`; untranslated, the check sends a
+// token with an empty header and reports on the server's answer to a probe it
+// never actually made.
+func javaBackrefs(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] == '$' && i+1 < len(s) && s[i+1] >= '0' && s[i+1] <= '9' {
+			j := i + 1
+			for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+				j++
+			}
+			out.WriteString("${")
+			out.WriteString(s[i+1 : j])
+			out.WriteByte('}')
+			i = j
+		} else {
+			// Step by whole characters so a multi-byte replacement survives.
+			// `${1}` already in Go's form passes through untouched, because `{`
+			// is not a digit.
+			r, size := utf8.DecodeRuneInString(s[i:])
+			out.WriteRune(r)
+			i += size
+		}
+	}
+	return out.String()
+}
+
+// randomAlphabet is what randomStr draws from. Alphanumeric only, so a value is
+// safe in a path or a query without escaping.
+const randomAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+// randomStr draws len characters from randomAlphabet using xorshift64*, seeded
+// from the message. The scan is reproducible: re-running a check against the
+// same response yields the same probe value. Length is capped at 4096 so a
+// hostile `random_str(999999999)` cannot allocate without bound.
+func randomStr(state *uint64, n int) string {
+	if n > 4096 {
+		n = 4096
+	}
+	if n < 0 {
+		return ""
+	}
+	var out strings.Builder
+	out.Grow(n)
+	for i := 0; i < n; i++ {
+		*state ^= *state >> 12
+		*state ^= *state << 25
+		*state ^= *state >> 27
+		r := *state * 0x2545F4914F6CDD1D
+		out.WriteByte(randomAlphabet[(r>>33)%uint64(len(randomAlphabet))])
+	}
+	return out.String()
 }
 
 // resolvePath resolves a dotted path: a binding (`base`/`latest`/`check`), the
