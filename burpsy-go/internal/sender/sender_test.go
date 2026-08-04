@@ -93,6 +93,44 @@ func TestSendRawTLS(t *testing.T) {
 	}
 }
 
+// Sender.Send is the path the active scanner's probes take, so the no-follow guarantee is pinned here
+// too and not only on the authorised wrapper: a probe that followed a 30x would attribute the
+// redirect target's response to the URL the check asked about.
+func TestSendReturnsARedirectRatherThanFollowingIt(t *testing.T) {
+	followed := make(chan string, 1)
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		followed <- r.URL.Path
+		io.WriteString(w, "internal service")
+	}))
+	defer elsewhere.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", elsewhere.URL+"/internal")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	portU64, _ := strconv.ParseUint(portStr, 10, 16)
+
+	resp, err := NewSender(DefaultSenderConfig()).Send(context.Background(), &Request{
+		Method: "GET", Host: host, Port: uint16(portU64), Path: "/go",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+	if string(resp.Body) == "internal service" {
+		t.Fatal("the body came from the redirect target: the transport followed the 30x")
+	}
+	select {
+	case path := <-followed:
+		t.Fatalf("the redirect target was dialled at %q", path)
+	default:
+	}
+}
+
 // TestSendFallsBackToRaw verifies Send (the http.Client path) still works.
 func TestSendUsesHTTPClient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

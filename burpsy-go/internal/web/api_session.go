@@ -694,6 +694,14 @@ func stepDtoToMacroStep(step sessionStepDto) session.MacroStep {
 // the operator typed (which the old bespoke probe path did: it built a request carrying only `Host`)
 // would evaluate a *different* request than the macro replays, so the validity verdict driving
 // recovery would be about a request nobody asked to send.
+//
+// Every step leaves through an AuthorisedSender bound to that step's own authority, so the
+// engagement scope decides about each step's request line before the dial (HARD-03). It used to call
+// Sender.Send directly, which authorises nothing: a login macro pointed outside the engagement — by
+// a typo, a stale saved rule, or a {{placeholder}} interpolating into a path — sent credentials to
+// whatever it named. A fresh sender per step rather than one per macro because a macro's steps may
+// name different authorities, and a sender bound to the first one would be the wrong gate for the
+// rest; internal/crawler binds per hop for the same reason.
 func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 	return func(step session.MacroStep) (*session.StepResult, error) {
 		host, port, tls, err := targetParts(step.URL)
@@ -704,6 +712,11 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 			// Reported rather than dereferenced: a server assembled without a sender can still serve
 			// the rules list, and the honest answer here is that nothing can be sent.
 			return nil, fmt.Errorf("no HTTP sender is wired, so no session macro step can be sent")
+		}
+		if s.scope == nil {
+			// Fail closed: a step that cannot be authorised is not sent. The alternative — treating a
+			// missing scope as permission — is the whole defect this gate exists to prevent.
+			return nil, fmt.Errorf("no engagement scope is wired, so no session macro step can be authorised")
 		}
 		method := strings.ToUpper(step.Method)
 		if method == "" {
@@ -736,7 +749,7 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 				req.Headers["Cookie"] = cookie
 			}
 		}
-		resp, err := s.sender.Send(ctx, req)
+		resp, err := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls).SendRequest(ctx, req)
 		if err != nil {
 			s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, 0, err.Error())
 			return nil, err

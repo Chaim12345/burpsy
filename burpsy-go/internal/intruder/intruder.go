@@ -26,11 +26,18 @@ const (
 )
 
 // AttackConfig holds configuration for an intruder attack.
+//
+// There is deliberately no FollowRedirects knob. There used to be one, set to true at construction
+// and read by nothing — the attack sends through the sender's raw path, which does not follow
+// redirects at all. A config field that no code consults is worse than a missing feature: it reads as
+// a promise, and the next person to need redirect-following would have set it, observed no redirects
+// followed, and gone looking for the bug somewhere else entirely. If an attack ever needs to follow a
+// redirect it must do so per hop, re-authorising the new authority through the scope chokepoint,
+// because a 30x is exactly how a target steers an attack somewhere nobody authorised.
 type AttackConfig struct {
-	AttackType      AttackType
-	MaxConcurrency  int
-	Timeout         time.Duration
-	FollowRedirects bool
+	AttackType     AttackType
+	MaxConcurrency int
+	Timeout        time.Duration
 }
 
 // AttackResult represents the result of a single payload attempt.
@@ -73,9 +80,8 @@ func NewIntruder(logger *zap.Logger) *Intruder {
 	return &Intruder{
 		logger: logger,
 		config: &AttackConfig{
-			MaxConcurrency:  10,
-			Timeout:         10 * time.Second,
-			FollowRedirects: true,
+			MaxConcurrency: 10,
+			Timeout:        10 * time.Second,
 		},
 		results: make([]*AttackResult, 0),
 	}

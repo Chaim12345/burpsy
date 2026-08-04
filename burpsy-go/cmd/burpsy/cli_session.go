@@ -294,6 +294,11 @@ func sessionLogin(ctx *cliContext, args []string) error {
 // drives the same coordinator the web layer does. It carries the step's own headers and returns the
 // response's, which is what a HeaderPresent validity rule needs in order to mean anything from here —
 // the bespoke per-step sender this replaces sent only Host and discarded every response header.
+//
+// Like the web runner, each step leaves through an AuthorisedSender bound to that step's own
+// authority, so `burpsy session login` is gated by the engagement scope the same way the UI is
+// (HARD-03). One surface reachable two ways is still one surface: gating only the web path would
+// leave the CLI as the way around it.
 func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 	return func(step session.MacroStep) (*session.StepResult, error) {
 		host, port, tls, path, err := parseTargetURL(step.URL)
@@ -325,7 +330,7 @@ func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 		}
 		c, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 		defer cancel()
-		resp, err := ctx.sender.Send(c, req)
+		resp, err := sender.NewAuthorisedSender(ctx.scope, ctx.sender, host, port, tls).SendRequest(c, req)
 		if err != nil {
 			ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, 0, err.Error())
 			return nil, err
