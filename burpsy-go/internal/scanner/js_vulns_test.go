@@ -151,11 +151,15 @@ func TestRequiredLiteralOnlyAcceptsAnUnavoidableLiteral(t *testing.T) {
 		{`/\*[\s]+PDFObject v([0-9.]+)`, "PDFObject v"},
 		// Optional, so not required.
 		{`(?:@license)?abc`, "abc"},
-		{`(abc)?xy`, "xy"},
+		{`(abc)?xyz`, "xyz"},
 		{`(abc)*`, ""},
-		// Only one branch of an alternation has to match.
-		{`(?:Lo-Dash|lodash) v`, " v"},
+		// Only one branch of an alternation has to match, so the alternation itself yields nothing —
+		// and what remains here (" v") is too short to be worth a pass over the body.
+		{`(?:Lo-Dash|lodash) v`, ""},
 		{`Lo-Dash|lodash`, ""},
+		// Sound but useless: "." is in every JavaScript file, so it is not accepted.
+		{`[0-9]+\.[0-9]+`, ""},
+		{`(?:Lo-Dash|lodash) version`, " version"},
 		// A case-insensitive literal would not be found by a case-sensitive substring search.
 		{`(?i)jQuery v([0-9.]+)`, ""},
 		// The longest required member of a concatenation wins.
@@ -163,8 +167,6 @@ func TestRequiredLiteralOnlyAcceptsAnUnavoidableLiteral(t *testing.T) {
 		// A repeat with a minimum still requires its body.
 		{`(?:abc){2,4}`, "abc"},
 		{`(?:abc){0,4}`, ""},
-		// Nothing literal at all.
-		{`[0-9]+\.[0-9]+`, ""},
 		// Not parsable: no literal rather than a panic.
 		{`(unclosed`, ""},
 	}
@@ -175,17 +177,28 @@ func TestRequiredLiteralOnlyAcceptsAnUnavoidableLiteral(t *testing.T) {
 	}
 }
 
-// Every literal the corpus derivation accepted really is required: a body built from a pattern's own
-// literal must be the only way its match can be found. Checked structurally instead — every accepted
-// literal must appear in the pattern source, which a derivation that invented one would fail.
-func TestEveryDerivedCorpusLiteralAppearsInItsOwnPattern(t *testing.T) {
+// A body containing every derived literal opens every prefilter gate at once, so both paths run all
+// 206 patterns. That covers the other direction of the prefilter: a gate that opens must not change
+// what the pattern behind it decides.
+func TestABodyContainingEveryDerivedLiteralDetectsTheSameAsTheUnfilteredPass(t *testing.T) {
 	db := VendoredJsVulnDb()
+	var lits []string
 	for _, p := range db.content {
-		if p.literal == "" {
-			continue
+		if p.literal != "" {
+			lits = append(lits, p.literal)
 		}
-		if !strings.Contains(p.re.String(), p.literal) {
-			t.Errorf("literal %q is not a substring of its own pattern %q", p.literal, p.re.String())
+	}
+	if len(lits) != 205 {
+		t.Fatalf("derived literals = %d, want 205 of 206 content patterns", len(lits))
+	}
+	body := []byte(strings.Join(lits, "\n"))
+	got, want := db.detect("/all.js", body), db.detectWithoutPrefilter("/all.js", body)
+	if len(got) != len(want) {
+		t.Fatalf("prefiltered %d detections, unfiltered %d", len(got), len(want))
+	}
+	for i := range got {
+		if got[i].component != want[i].component || got[i].rawVersion != want[i].rawVersion {
+			t.Errorf("detection %d: got %+v, want %+v", i, got[i], want[i])
 		}
 	}
 }

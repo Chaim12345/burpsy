@@ -141,11 +141,13 @@ func (s *Server) liveAuditTick(ctx context.Context, highWater *uint64) {
 		return
 	}
 	start := time.Now()
-	findings, err := s.scanner.AuditMultiple(ctx, ids)
-	if err != nil {
-		s.logger.Warn("live audit sweep failed", zap.Error(err))
-		return
-	}
+	// AuditSession rather than AuditMultiple: this is the highest-volume audit path in the process, so
+	// it is where the engine's bounding pays for itself — a sweep over 200 captures of one host
+	// dispatches each per-URL check once and refuses the rest as already covered. The session outcome
+	// is the only place that saving is visible, and a sweep that reported "200 exchanges, 3 findings"
+	// while quietly admitting a fraction of the work would be the exact claim the engine exists to
+	// prevent.
+	outcome, findings := s.scanner.AuditSession(ctx, ids, s.scanner.AuditConfig())
 	for _, f := range findings {
 		s.findings.Add(core.NewFinding{
 			Name:        f.Name,
@@ -162,5 +164,15 @@ func (s *Server) liveAuditTick(ctx context.Context, highWater *uint64) {
 	s.logger.Debug("live audit sweep",
 		zap.Int("exchanges", len(ids)),
 		zap.Int("findings", len(findings)),
+		zap.String("engine", outcome.Summary()),
 		zap.Duration("took", time.Since(start)))
+	// A sweep the failure breaker stopped is not a sweep that found nothing, and it is worth more than
+	// a debug line: the next tick will start again against a target that has already stopped answering.
+	if outcome.Paused || outcome.TimedOut {
+		s.logger.Warn("live audit sweep was bounded before it finished",
+			zap.Int("exchanges", len(ids)),
+			zap.Int("checks_not_admitted", outcome.NotAdmitted()),
+			zap.Bool("paused", outcome.Paused),
+			zap.Bool("timed_out", outcome.TimedOut))
+	}
 }
