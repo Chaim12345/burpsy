@@ -3,7 +3,7 @@
 
 import { $, esc, statusBadge, getJSON, delJSON, toast } from "./common";
 
-interface LogEntry {
+export interface LogEntry {
   id: number;
   tool: string;
   host: string;
@@ -12,13 +12,18 @@ interface LogEntry {
   path: string;
   status: number | null;
   response_len: number;
+  started_ms: number;
   duration_ms: number;
   error: string | null;
 }
 interface LogResp {
   total: number;
+  shown: number;
   dropped: number;
-  counts: { repeater: number; intruder: number; scanner: number; bcheck: number };
+  // Keyed by tool name rather than a fixed set of four. The old shape named a "bcheck" tool that
+  // does not exist (so it read a permanent 0) and had no key for session, sequencer, comparer,
+  // decoder or crawler activity, so those rows were counted into nothing.
+  counts: Record<string, number>;
   entries: LogEntry[];
 }
 
@@ -60,15 +65,20 @@ async function load(): Promise<void> {
   const meta = $("#log-meta")!;
   const tool = $<HTMLSelectElement>("#log-filter")!.value;
   const q = $<HTMLInputElement>("#log-search")!.value.trim();
+  // "filter" and "tool", "search" and "q": the handler has always read the first of each pair, so
+  // the tab's own filter and search box sent parameters nothing looked at and silently returned the
+  // unfiltered log.
   const params = new URLSearchParams();
-  if (tool) params.set("tool", tool);
-  if (q) params.set("q", q);
+  if (tool) params.set("filter", tool);
+  if (q) params.set("search", q);
   const qs = params.toString();
   try {
     const resp = await getJSON<LogResp>(`/api/tools/log${qs ? `?${qs}` : ""}`);
+    const active = Object.entries(resp.counts)
+      .filter(([, n]) => n > 0)
+      .map(([name, n]) => `${name} ${n}`);
     meta.textContent =
-      `${resp.total} total (repeater ${resp.counts.repeater}, intruder ${resp.counts.intruder}, ` +
-      `scanner ${resp.counts.scanner}, bcheck ${resp.counts.bcheck})` +
+      `${resp.total} total${active.length ? ` (${active.join(", ")})` : ""}` +
       (resp.dropped ? ` · ${resp.dropped} dropped (capacity)` : "");
     body.innerHTML =
       resp.entries

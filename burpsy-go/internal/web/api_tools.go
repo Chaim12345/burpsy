@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/query"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
@@ -435,7 +437,13 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	attack := intruder.NewAttack(msg.Raw(), selected, resolved, plan).
 		WithLimits(limits).
 		WithGrep(grep)
+	// On the dashboard for the duration of the attack (DASH-01). The total is the plan's length —
+	// what will actually be sent — not the combination count, which is what the plan's bound already
+	// refused; the refusal shows up as the gated bucket on the result instead.
+	task := s.tasks.Start(dash.KindIntruder, fmt.Sprintf("%s %s:%d", kind, host, port), uint64(plan.Len()))
 	report := intruder.Run(attack, send, record)
+	task.Advance(uint64(report.Sent + report.Failed))
+	task.Finish(report.Breakdown())
 
 	if legacy {
 		rows := make([]AttemptView, 0, len(report.Attempts))
@@ -599,8 +607,13 @@ type scannerFinding struct {
 }
 
 // liveAuditEnableReq mirrors dashboard.ts's setAudit body.
+//
+// Query is a pointer so "absent" and "empty" stay apart: a POST that only flips the switch leaves the
+// installed filter alone, and `"query": ""` is the explicit way to clear it. Collapsing them would mean
+// every toggle silently widened the sweep back to the whole engagement scope.
 type liveAuditEnableReq struct {
-	Enabled bool `json:"enabled"`
+	Enabled bool    `json:"enabled"`
+	Query   *string `json:"query"`
 }
 
 // handleScannerLive is the /api/scanner/live endpoint: GET reports the sweep state,
@@ -617,7 +630,32 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.liveAudit != nil {
+			// The query is installed before the switch is flipped. If it will not parse the request is
+			// refused and nothing changes — a filter the operator believed they had set, followed by a
+			// sweep running against the whole scope because the parse failed quietly, is the one
+			// outcome an operator setting a filter must never get.
+			if req.Query != nil {
+				if err := s.liveAudit.SetQuery(*req.Query); err != nil {
+					http.Error(w, "live audit query: "+query.Render(err), http.StatusBadRequest)
+					return
+				}
+				if *req.Query == "" {
+					s.events.Record(dash.EventLiveAuditScoped, dash.SeverityInfo,
+						"the live audit query was cleared; every in-scope exchange is now eligible")
+				} else {
+					s.events.Record(dash.EventLiveAuditScoped, dash.SeverityInfo,
+						"the live audit is now filtered to: "+*req.Query)
+				}
+			}
+			was := s.liveAudit.IsEnabled()
 			s.liveAudit.SetEnabled(req.Enabled)
+			if was != req.Enabled {
+				kind, detail := dash.EventLiveAuditDisabled, "the operator switched the live active audit off"
+				if req.Enabled {
+					kind, detail = dash.EventLiveAuditEnabled, "the operator switched the live active audit on; active checks will now be sent at newly captured in-scope traffic"
+				}
+				s.events.Record(kind, dash.SeverityInfo, detail)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(s.liveAuditStatus())
@@ -672,6 +710,15 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 //
 // scanner.ts renders this by pretty-printing the JSON it gets back, so the richer body needs no
 // change on the TypeScript side — there is no typed audit response to keep in sync.
+// auditTarget names one audited exchange for the task list, falling back to the id when the exchange
+// is not readable — an unnamed task is still better than a task that does not appear.
+func auditTarget(store *core.TrafficStore, id uint64) string {
+	if ex, err := store.GetExchange(id); err == nil {
+		return fmt.Sprintf("%s %s%s", ex.Method, ex.Host, ex.Path)
+	}
+	return fmt.Sprintf("exchange %d", id)
+}
+
 func (s *Server) runAudit(ctx context.Context, id uint64) map[string]interface{} {
 	if s.scanner == nil {
 		// Built with the engagement scope: an active audit sends real traffic, and the engine refuses
@@ -684,10 +731,20 @@ func (s *Server) runAudit(ctx context.Context, id uint64) map[string]interface{}
 		"active_checks": s.scanner.ActiveCheckCount(),
 		"unimplemented": s.scanner.UnimplementedCheckCount(),
 	}
+	// On the dashboard while it runs, not only once it answers (DASH-01). Total is the check set,
+	// which is known up front for a single item.
+	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCount()))
 	outcome, findings := s.scanner.AuditWithin(ctx, id, s.scanner.AuditConfig())
+	task.Advance(uint64(outcome.Considered()))
+	task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
 	body["outcome"] = outcome
 	body["dispositions"] = outcome.Dispositions()
 	body["summary"] = outcome.Summary()
+	// The same four buckets the dashboard reads, on the audit's own response: a caller of this
+	// endpoint gets the count and what it does not account for without having to fold nine
+	// dispositions itself (DASH-03).
+	body["breakdown"] = dash.NewSummary("Audit", "findings", "checks",
+		outcome.Breakdown(), outcome.BreakdownReasons()...)
 	if outcome.Error != "" {
 		s.logger.Warn("audit refused", zap.Uint64("exchange_id", id), zap.String("reason", outcome.Error))
 		return body

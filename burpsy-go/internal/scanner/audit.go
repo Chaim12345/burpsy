@@ -464,6 +464,20 @@ type AuditConfig struct {
 	PauseSessionAfterFailedItems uint32
 	// PauseSessionAtFailedItemPercentage is Burp's `pause_task_failed_audit_item_percentage`.
 	PauseSessionAtFailedItemPercentage uint8
+	// Ledger is an optional admission ledger that outlives this run. Nil — the default — gives each
+	// run a fresh one, which is right for a one-shot audit: the caller asked for these exchanges to
+	// be audited and nothing earlier should refuse that work.
+	//
+	// It exists because the live sweep is not one-shot. The sweep calls AuditSession every three
+	// seconds forever, so a per-run ledger resets scope collapse on every tick, and every
+	// `given host` and `given path` check re-dispatches against the same host every three seconds
+	// for the life of the process. Against trickling proxy traffic that was invisible. Against a
+	// crawl it is dominant, and it would look exactly like the crawler causing a request storm.
+	//
+	// A shared ledger is the fix and it is not free: it is the one piece of audit state that grows
+	// with the size of the site rather than with the size of the batch. A caller that shares one is
+	// responsible for bounding it — see AuditLedger.Units and the sweep's own unit cap.
+	Ledger *AuditLedger
 }
 
 // DefaultAuditBudget is the default wall-clock budget for one audit run.

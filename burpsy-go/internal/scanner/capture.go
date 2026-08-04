@@ -1,0 +1,272 @@
+// The one path from "an exchange happened" to "stored, indexed, passively scanned, DOM-analysed,
+// findings recorded".
+//
+// # Why this is a type and not just a function the proxy happens to own
+//
+// The proxy reached this pipeline first, so it lived inside Server.runPassiveScan: store the
+// request, store the response, index the exchange, run the passive check set, run the static DOM
+// pass, enrich each finding, write it to the finding store. Six steps in a fixed order, three of
+// which have honest-reporting behaviour that took a phase each to get right — CoverageTracker's
+// skip counters, DOMAnalysis.Caveat, EnrichFinding's catalogue lookup.
+//
+// CRAWL-02 requires that crawled traffic be "captured, scoped and scanned through exactly the same
+// path as proxied traffic". A second copy of those six steps would satisfy the sentence and betray
+// the requirement: the copy would drift, and the first thing to drift is always the reporting, so
+// the crawler would end up with a coverage story that quietly disagrees with the proxy's about the
+// same response. This type is that path, extracted, so there is exactly one of it and both surfaces
+// call it rather than resembling each other.
+//
+// # What it deliberately does not do
+//
+// It does not decide whether a request may be sent. Egress authorisation is
+// sender.AuthorisedSender's job, on the bytes actually about to go on the wire, and it happens
+// before the transport is reached — long before anything here runs. What this type is handed is an
+// exchange that already happened.
+//
+// It also does not decide whether an exchange is *worth* scanning. PassiveScanner.Scan and
+// ScanDOM each apply the engagement scope themselves and record a skip when it excludes the
+// exchange (ScanSkipOutOfScope, DOMSkipOutOfScope), which is what keeps the count of "scanned and
+// clean" apart from the count of "never looked". Re-checking scope here would double-count those
+// skips against a single response.
+package scanner
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"go.uber.org/zap"
+)
+
+// Capture bundles the four collaborators the pipeline needs. A zero-valued field is tolerated
+// rather than fatal, matching what Server.runPassiveScan already did: a proxy configured without a
+// scanner or a finding store still captures traffic, and a caller that wants scanning wires both.
+//
+// Copied by value at every call site: the four fields are handles to shared, internally-locked
+// objects, so a copy addresses the same store, the same scanner and the same finding store.
+type Capture struct {
+	// Store receives both messages and the exchange index row. Required by Record; ScanExchange
+	// needs it only for the DOM pass, which reads the response back out of it.
+	Store *core.TrafficStore
+	// Scanner runs the passive check set and the static DOM pass. Nil means neither runs.
+	Scanner *PassiveScanner
+	// Findings receives every finding produced. Nil means findings are produced and dropped, so
+	// Scanner and Findings are wired together or not at all — see ScanExchange.
+	Findings *core.FindingStore
+	// Logger carries the DOM pass's truncation caveat. Nil is tolerated and silences it.
+	Logger *zap.Logger
+	// Source is the default attribution for every exchange recorded through this handle, for a surface
+	// that only ever produces one kind. A CapturedExchange naming its own Source overrides it.
+	//
+	// Set once at construction rather than repeated per call because the failure mode is forgetting:
+	// the proxy has five capture sites and a sixth would inherit the attribution rather than have to
+	// remember it. That is the same reason this seam exists at all — a property that has to be restated
+	// at every site is a property that will eventually be restated wrong at one of them.
+	//
+	// Unset means core.SourceUnattributed, and Record does not substitute anything for it. See
+	// Record's own note on why that stays a legal, visible value rather than a refusal.
+	Source core.Source
+}
+
+// CapturedExchange is one completed request/response pair, as bytes, for Record.
+//
+// Bytes rather than a parsed shape: the store parses them itself, and handing it anything already
+// interpreted would mean two parsers disagreeing about the same message. Host, Port, TLS, Method
+// and Path are the addressing the caller knows and the raw bytes do not always carry — a proxied
+// request in origin form has no host in its request line, and neither does one the crawler built.
+type CapturedExchange struct {
+	Host   string
+	Port   uint16
+	TLS    bool
+	Method string
+	Path   string
+	// Request and Response are the exact bytes sent and received.
+	Response []byte
+	Request  []byte
+	// Started is when the request went out and Duration how long the exchange took; both are
+	// carried rather than measured here, because Record runs after the fact.
+	Started  time.Time
+	Duration time.Duration
+	// Protocol is which protocol carried the exchange. The zero value is core.ProtocolHTTP1.
+	Protocol core.Protocol
+	// Source names the surface this exchange came from, so an operator reading history can tell traffic
+	// their own browser produced from traffic a crawl produced.
+	//
+	// The zero value is core.SourceUnattributed, which is deliberate on core.Exchange's side and worth
+	// repeating here: a capture that forgets to say where it came from shows as unattributed, which is
+	// visible and fixable, rather than defaulting to "proxy" and reading as a plausible lie about who
+	// caused the request.
+	Source core.Source
+	// Notes says something about this capture that its bytes cannot say for themselves.
+	//
+	// Carried here rather than assigned to the returned exchange afterwards, because the store's
+	// observers — the durable mirror and the live site map — run inside AddExchange, so a note
+	// attached after Record returns is a note neither of them ever sees. The two live uses are both
+	// "the recorded bytes are not the peer's bytes, and that difference is invisible in the bytes":
+	// a WebSocket handshake the proxy rewrote before forwarding, and a response the operator
+	// dropped so the client received nothing.
+	Notes *string
+}
+
+// ErrNoResponse is returned by Record when there are no response bytes to capture.
+//
+// It is a named error rather than a generic one because the caller has to distinguish "this attempt
+// produced nothing to store" from "the store is broken", and because the invariant it protects — see
+// Record — is one a future caller must be able to look up.
+var ErrNoResponse = errors.New("capture: no response bytes, so there is no exchange to index")
+
+// Record stores both messages, indexes the exchange, and scans it — the same six steps, in the same
+// order, that a proxied response takes.
+//
+// # An indexed exchange always has a stored response
+//
+// This is the invariant, and it is enforced rather than merely usual: Record indexes nothing unless
+// both messages are in the store. An earlier version indexed the request and left Response nil when
+// there were no response bytes or when the response failed to parse, on the reasoning that a
+// half-exchange is more honest than dropping one.
+//
+// That reasoning was wrong, and the cost is severe. internal/web/liveaudit.go's sweep walks the
+// exchange index from a monotonic high-water cursor and `break`s on the first `ex.Response == nil`
+// (liveaudit.go:157). A single nil-Response row therefore does not skip one exchange — it stops the
+// sweep at that index **for the life of the process**, while the sweep's own counter keeps reporting
+// the number it did reach. One failed crawl request would silently disable live audit and leave its
+// progress counter looking healthy. A shared seam whose failure mode is "another subsystem quietly
+// stops working" is not a seam worth sharing, so the failure is returned to the caller, who has a
+// skip ledger to name it in.
+//
+// The caller therefore gets an error, not a degraded exchange, in every case where either message is
+// missing: no response bytes (ErrNoResponse), a request the store rejects, or a response the store
+// rejects. Nothing is indexed and nothing is scanned, because there is nothing to scan.
+//
+// # An unattributed source is *not* refused, and that asymmetry is deliberate
+//
+// The obvious next question, having tightened the response, is whether an exchange with no Source
+// should be refused too, forcing every caller to name itself. It is not, because the two states fail
+// in opposite directions.
+//
+// A row with no response *lies*: nothing can distinguish it from an exchange whose answer has not
+// arrived yet, so a consumer must either stop at it or risk skipping a live one. A row with no source
+// says exactly what is true — nobody claimed it — and core.Source.String renders it as
+// "unattributed". Refusing it would convert an honest label into dropped traffic, which is the very
+// outcome the response rule exists to prevent being created silently. It would also mean a producer
+// added later cannot record anything at all until someone picks its name for it, and the failure
+// would land on the capture rather than on the reporting.
+//
+// Attribution is enforced where it costs nothing instead: Capture.Source sets it once per surface, and
+// the tests assert that every row a surface produces is attributed.
+//
+// # The exchange is published before it has been scanned
+//
+// AddExchange runs, and only then ScanExchange. So an observer that sees the exchange — a store
+// observer, a test, the site map — cannot assume its findings exist yet. The order is forced: a
+// finding references its exchange by id, and the id is assigned by AddExchange. It is worth stating
+// because a reader reasonably guesses the other way round, and because the window is no longer
+// negligible: ScanExchange now runs the static DOM pass as well as the passive check set, so the gap
+// between "row visible" and "findings recorded" is milliseconds rather than microseconds. A test that
+// asserts on findings straight after observing the exchange is racing this, and will lose
+// intermittently.
+func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
+	if len(x.Response) == 0 {
+		return nil, ErrNoResponse
+	}
+	reqID, err := c.Store.Put(x.Request, core.DirectionRequest)
+	if err != nil {
+		return nil, fmt.Errorf("capture: storing the request: %w", err)
+	}
+	respID, err := c.Store.Put(x.Response, core.DirectionResponse)
+	if err != nil {
+		// The request is already in the message log, which is append-only and has no retraction. That
+		// is acceptable: an orphaned message row costs its bytes and is reachable by id, whereas an
+		// exchange row with no response wedges the live-audit sweep. Nothing indexes this request, so
+		// nothing will read it as a completed exchange.
+		return nil, fmt.Errorf("capture: storing the response: %w", err)
+	}
+	ex := &core.Exchange{
+		Request:     reqID,
+		Response:    &respID,
+		Status:      storedStatus(c.Store, respID),
+		Host:        x.Host,
+		Port:        x.Port,
+		TLS:         x.TLS,
+		Method:      x.Method,
+		Path:        x.Path,
+		DurationMs:  uint64(x.Duration.Milliseconds()),
+		StartedMs:   uint64(x.Started.UnixMilli()),
+		Protocol:    x.Protocol,
+		ResponseLen: len(x.Response),
+		Notes:       x.Notes,
+		Source:      x.Source,
+	}
+	c.Store.AddExchange(ex)
+	c.ScanExchange(ex)
+	return ex, nil
+}
+
+// storedStatus reads the status code back off the stored response's parsed shape.
+//
+// Through the store rather than with a status-line parser of its own: core.Parse has already split
+// that line, and a second parser here could disagree with the one the whole store is indexed by.
+// A response whose status token is not a number yields nil — absent, which Exchange.Status already
+// models — rather than a zero that would read as a real status code.
+func storedStatus(store *core.TrafficStore, id core.MsgId) *uint16 {
+	if store == nil {
+		return nil
+	}
+	msg, err := store.Get(id)
+	if err != nil {
+		return nil
+	}
+	code, err := strconv.Atoi(msg.Text(msg.Shape.SecondToken))
+	if err != nil || code < 100 || code > 599 {
+		return nil
+	}
+	u := uint16(code)
+	return &u
+}
+
+// ScanExchange runs the passive check set and the static DOM pass over an already-indexed exchange
+// and writes every finding into the finding store.
+//
+// This is verbatim what Server.runPassiveScan did, moved so that the crawler reaches the same code
+// rather than a lookalike. Scanner and Findings are checked together because a scan whose findings
+// go nowhere is work done for nothing, and a finding store fed by no scanner has nothing to hold.
+func (c Capture) ScanExchange(ex *core.Exchange) {
+	if c.Scanner == nil || c.Findings == nil {
+		return
+	}
+	findings := c.Scanner.Scan(ex)
+
+	// Static DOM analysis reads the same captured response as the passive check set, so it belongs
+	// at the same call site rather than behind a second dispatch. Its caveat is logged rather than
+	// discarded: a DOM pass that hit its per-item budget analysed only part of the item, and
+	// letting that land in the finding store as an ordinary "nothing more here" is exactly what
+	// DOM-03 forbids.
+	dom := c.Scanner.ScanDOM(ex)
+	if caveat := dom.Caveat(); caveat != "" && dom.Skip == nil && c.Logger != nil {
+		c.Logger.Warn("static DOM analysis did not cover the whole response",
+			zap.String("host", ex.Host),
+			zap.String("path", ex.Path),
+			zap.String("caveat", caveat))
+	}
+	findings = append(findings, dom.Findings()...)
+
+	for _, f := range findings {
+		EnrichFinding(f)
+		nf := core.NewFinding{
+			Name:        f.Name,
+			Severity:    core.ParseSeverity(f.Severity),
+			Confidence:  core.ParseConfidence(f.Confidence),
+			Description: f.Description,
+			Remediation: f.Solution,
+		}
+		if ex.Response != nil {
+			nf.Occurrences = []core.Occurrence{{
+				Request:  ex.Request,
+				Response: ex.Response,
+			}}
+		}
+		c.Findings.Add(nf)
+	}
+}

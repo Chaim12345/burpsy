@@ -21,7 +21,25 @@ const (
 	ToolComparer
 	ToolSession
 	ToolDecoder
+	// ToolCrawler is the crawler's own fetches. Appended at the end rather than
+	// slotted in alphabetically because the ordinal is what the durable mirror
+	// stores: inserting a variant would relabel every persisted row above it.
+	ToolCrawler
 )
+
+// ToolAll is every tool, so a caller can build a per-tool histogram without
+// hard-coding the set — the reason a filter that pre-seeds its own list of tool
+// names silently reported zero for any tool added after it was written.
+var ToolAll = [8]Tool{
+	ToolRepeater,
+	ToolIntruder,
+	ToolScanner,
+	ToolSequencer,
+	ToolComparer,
+	ToolSession,
+	ToolDecoder,
+	ToolCrawler,
+}
 
 func (t Tool) String() string {
 	switch t {
@@ -39,6 +57,8 @@ func (t Tool) String() string {
 		return "session"
 	case ToolDecoder:
 		return "decoder"
+	case ToolCrawler:
+		return "crawler"
 	default:
 		return "unknown"
 	}

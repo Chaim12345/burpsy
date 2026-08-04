@@ -1,6 +1,27 @@
 // Package sitemap builds a tree of hosts → paths from the traffic store.
 // Mirrors the Rust burpsy-core sitemap module: the proxy records exchanges,
 // and the sitemap aggregates them into a navigable site structure for the web UI.
+//
+// # Continuous, not rebuilt on read (CRAWL-05)
+//
+// The requirement is that the site map is built from proxy traffic *continuously,
+// with no separate crawl action*. Sync alone did not do that. It rebuilt the whole
+// tree from the store, and its only caller was the GET /api/sitemap handler — so
+// the map was recomputed from scratch whenever an operator happened to open the
+// tab, was empty at every other moment, and cost O(all exchanges) per view. There
+// was no crawl action, which is half the requirement, but nothing was continuous.
+//
+// Follow is the other half. It registers the map as an observer of the traffic
+// store, so an exchange lands in the tree as it is recorded rather than when
+// someone looks. Sync stays as the backfill primitive Follow uses for the
+// exchanges that predate the registration, and as the repair path for a caller
+// that needs to rebuild.
+//
+// Because the registration is on the *store*, every producer feeds it: the proxy,
+// the crawler, and anything else that records an exchange. None of them needs to
+// know the site map exists. The read handler deliberately no longer calls Sync —
+// if it did, a broken observer would be invisible, which is exactly the
+// ported-but-uncalled failure this project has shipped before.
 package sitemap
 
 import (
@@ -36,6 +57,10 @@ type SiteMap struct {
 func New() *SiteMap { return &SiteMap{hosts: make(map[string]*HostNode)} }
 
 // Sync rebuilds the sitemap from the traffic store's current exchanges.
+//
+// A full rebuild, so calling it twice is idempotent rather than doubling every
+// count. Follow is what keeps the map current; this is the backfill and repair
+// path.
 func (sm *SiteMap) Sync(store *core.TrafficStore) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -43,6 +68,34 @@ func (sm *SiteMap) Sync(store *core.TrafficStore) {
 	for _, ex := range store.Exchanges() {
 		sm.addExchangeLocked(ex)
 	}
+}
+
+// Follow makes the map continuous: it subscribes to the store and folds in the
+// exchanges already recorded, with no window in which one could be missed or
+// counted twice — see core.TrafficStore.ObserveExchanges for why that is one
+// call and not two.
+//
+// Call once per map, before traffic flows and after any Restore. Following the
+// same store twice would subscribe twice and count every later arrival twice.
+func (sm *SiteMap) Follow(store *core.TrafficStore) {
+	if store == nil {
+		return
+	}
+	for _, ex := range store.ObserveExchanges(sm.Add) {
+		sm.Add(ex)
+	}
+}
+
+// Add folds one exchange into the tree. This is the observer Follow registers,
+// and it is safe to call from the store's append path: it takes only this map's
+// own lock and never reaches back into the store.
+func (sm *SiteMap) Add(ex *core.Exchange) {
+	if ex == nil {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.addExchangeLocked(ex)
 }
 
 func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
@@ -66,11 +119,48 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 		}
 		hn.Paths[ex.Path] = pn
 	}
+	// The id decides whether this exchange is new to the node, and it is checked
+	// before any counter moves: a path already holding this id has already had
+	// its method and status counted, and incrementing first would let a repeat
+	// add double the counts while leaving the id list right.
+	at, dup := idSlot(pn.ExchangeIDs, ex.ID)
+	if dup {
+		return
+	}
 	pn.Methods[ex.Method]++
 	if ex.Status != nil {
 		pn.Statuses[int(*ex.Status)]++
 	}
-	pn.ExchangeIDs = append(pn.ExchangeIDs, ex.ID)
+	insertIDAt(pn, at, ex.ID)
+}
+
+// idSlot returns where id belongs in an ascending slice, and whether it is
+// already there.
+func idSlot(ids []uint64, id uint64) (int, bool) {
+	n := len(ids)
+	if n == 0 || ids[n-1] < id {
+		return n, false
+	}
+	at := sort.Search(n, func(i int) bool { return ids[i] >= id })
+	return at, at < n && ids[at] == id
+}
+
+// insertIDAt keeps ExchangeIDs ascending, because the readers of that slice
+// ("the last 20", "the most recent") take its tail as the newest.
+//
+// The append is the fast path and the only one live traffic takes: ids are
+// assigned in order, so a new arrival belongs at the end. The shifting insert
+// covers Follow's backfill, which races its own subscription by design — an
+// exchange arriving mid-backfill is added before the older ones behind it, and
+// without this the site map would report a page's oldest capture as its latest.
+func insertIDAt(pn *PathNode, at int, id uint64) {
+	if at == len(pn.ExchangeIDs) {
+		pn.ExchangeIDs = append(pn.ExchangeIDs, id)
+		return
+	}
+	pn.ExchangeIDs = append(pn.ExchangeIDs, 0)
+	copy(pn.ExchangeIDs[at+1:], pn.ExchangeIDs[at:])
+	pn.ExchangeIDs[at] = id
 }
 
 // Hosts returns all host nodes, sorted by host name.

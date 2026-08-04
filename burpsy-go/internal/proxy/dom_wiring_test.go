@@ -45,7 +45,7 @@ func TestPassiveScanHookRunsStaticDomAnalysis(t *testing.T) {
 	}
 	store.AddExchange(ex)
 
-	srv.runPassiveScan(ex)
+	srv.capture().ScanExchange(ex)
 
 	var got *core.Finding
 	for _, f := range findings.All() {
@@ -91,7 +91,7 @@ func TestPassiveScanHookAddsNoDomFindingForANonScriptResponse(t *testing.T) {
 	}
 	store.AddExchange(ex)
 
-	srv.runPassiveScan(ex)
+	srv.capture().ScanExchange(ex)
 
 	for _, f := range findings.All() {
 		if strings.Contains(f.Name, "DOM-based") {

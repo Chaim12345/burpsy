@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/organizer"
@@ -36,6 +37,10 @@ type Server struct {
 	intercept          *intercept.Engine
 	persist            *persist.Store
 	liveAudit          *LiveAuditState
+	tasks              *dash.Registry
+	// events is the DASH-02 event log: what the tool *did*, as opposed to toolLog's what-it-*sent*.
+	// Two logs because they count different things — see internal/dash/events.go.
+	events *dash.EventLog
 }
 
 // maxRequestBodyBytes bounds any single API request body. Generous enough for
@@ -60,7 +65,16 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		organizer:          organizer.New(),
 		loginRuns:          newSessionLoginRuns(),
 		intercept:          intercept.NewEngine(),
+		tasks:              dash.NewRegistry(),
+		events:             dash.NewEventLog(),
 	}
+	// One wiring call gives every task in the process — including a crawl registered from outside this
+	// package — a started and a finished event, without either side knowing about the other.
+	s.tasks.WithEvents(s.events)
+	// The site map subscribes to the store here rather than rebuilding itself when
+	// the tab is opened — see the sitemap package docs (CRAWL-05). Constructed
+	// before any traffic can arrive, which is the ordering ObserveExchanges needs.
+	s.sitemap.Follow(store)
 	s.setupRoutes()
 	return s
 }
@@ -71,7 +85,13 @@ func (s *Server) WithLogger(logger *zap.Logger) *Server {
 	return s
 }
 
-// WithSender sets the HTTP sender used by the repeater.
+// WithSender sets the HTTP sender the request-originating handlers send through.
+//
+// It is the raw network layer and authorises nothing on its own. Every handler that originates a
+// request binds it into a sender.AuthorisedSender for that request's own authority first — the
+// intruder (api_tools.go) and the session macro runner (api_session.go) both do — so the engagement
+// scope decides about the request line before the dial. The repeater is the one deliberate exception
+// and states its own weaker host-level check where it makes it.
 func (s *Server) WithSender(snd *sender.Sender) *Server {
 	s.sender = snd
 	return s
@@ -155,11 +175,52 @@ func (s *Server) persistOrganizer() {
 	}
 }
 
-// WithSitemap sets the sitemap.
+// WithSitemap replaces the site map, subscribing the new one to the store.
+//
+// Call before traffic flows. The map NewServer built stays subscribed — the store
+// holds the only reference to its observer and there is no unsubscribe — so it
+// keeps being fed while nothing reads it. That waste is bounded and silent, and
+// the alternative (an unsubscribe protocol on the store) is more machinery than a
+// replacement nothing currently performs is worth.
 func (s *Server) WithSitemap(sm *sitemap.SiteMap) *Server {
 	s.sitemap = sm
+	sm.Follow(s.store)
 	return s
 }
+
+// WithTasks attaches a shared task registry, so work started outside this package
+// — a crawl, most importantly — appears on the same dashboard as the audits and
+// attacks this server starts itself. Passing nil leaves the server's own registry
+// in place rather than disabling the surface.
+func (s *Server) WithTasks(reg *dash.Registry) *Server {
+	if reg != nil {
+		s.tasks = reg
+		// The shared registry gets this server's event log, so tasks started elsewhere still produce
+		// lifecycle events on the pane that shows them. Attaching rather than replacing the log means
+		// the caller does not have to know the log exists to get this right.
+		reg.WithEvents(s.events)
+	}
+	return s
+}
+
+// WithEvents attaches a shared event log, or nil to keep this server's own. Wired into the task
+// registry as well, so lifecycle events land in the same log as everything else.
+func (s *Server) WithEvents(log *dash.EventLog) *Server {
+	if log != nil {
+		s.events = log
+		s.tasks.WithEvents(log)
+	}
+	return s
+}
+
+// Events returns the event log the process should record operator-visible actions into — the second
+// seam the crawler is wired through, alongside Tasks.
+func (s *Server) Events() *dash.EventLog { return s.events }
+
+// Tasks returns the registry long-running work registers with. This is the seam
+// the crawler is wired through: the process hands the same registry to both, and
+// a crawl announces itself with one call — see the /api/dashboard docs.
+func (s *Server) Tasks() *dash.Registry { return s.tasks }
 
 // WithSessionCoordinator sets the session coordinator.
 func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
@@ -215,6 +276,10 @@ func (s *Server) setupRoutes() {
 
 	// Site map
 	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
+
+	// Dashboard: running tasks, the activity log, and every summary count with its
+	// found/skipped/errored/gated breakdown.
+	s.mux.HandleFunc("/api/dashboard", s.handleDashboard)
 
 	// Match & Replace + tool log + decoder/comparer/organizer
 	s.mux.HandleFunc("/api/tools/rules", s.handleMatchReplaceRules)

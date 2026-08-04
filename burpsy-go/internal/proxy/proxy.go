@@ -706,14 +706,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			requestData, wsStripped = s.stripWsHandshake(requestData)
 		}
 
+		// Scope decides retention, not egress: an excluded request is still
+		// forwarded, it is simply not kept. The request bytes are not stored
+		// here — both halves of an exchange are put away together by the one
+		// producer once it is complete. See handleHTTP.
 		inScope := s.config.scope.Contains(reqHost, reqPort, path, true)
-		var reqID core.MsgId
-		if inScope {
-			reqID, err = s.config.store.Put(requestData, core.DirectionRequest)
-			if err != nil {
-				s.config.logger.Error("failed to store request", zap.Error(err))
-			}
-		}
 
 		// Forward over the persistent upstream connection.
 		if _, err := upstream.Write(requestData); err != nil {
@@ -736,43 +733,45 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					return
 				}
 				responseData := append(head, body...)
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, reqID, inScope, responseData, startTime) {
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime) {
 					return
 				}
 				continue
 			}
 
-			exchangeID := uint64(0)
+			// The handshake goes through the same producer as any other exchange;
+			// see handleWebSocketUpgrade for why it is recorded before the relay
+			// starts rather than when the socket finally closes.
+			var handshake *core.Exchange
 			if inScope {
-				respID, err := s.config.store.Put(head, core.DirectionResponse)
-				if err != nil {
-					s.config.logger.Error("failed to store response", zap.Error(err))
-				}
-				exchange := &core.Exchange{
-					Request:     reqID,
-					Response:    &respID,
-					Host:        reqHost,
-					Port:        reqPort,
-					TLS:         true,
-					Method:      method,
-					Path:        path,
-					Status:      parseStatusCode(head),
-					DurationMs:  uint64(time.Since(startTime).Milliseconds()),
-					StartedMs:   uint64(startTime.UnixMilli()),
-					Protocol:    core.ProtocolHTTP1,
-					ResponseLen: len(head),
+				handshake = s.record(scanner.CapturedExchange{
+					Host:     reqHost,
+					Port:     reqPort,
+					TLS:      true,
+					Method:   method,
+					Path:     path,
+					Request:  requestData,
+					Response: head,
+					Started:  startTime,
+					Duration: time.Since(startTime),
+					Protocol: core.ProtocolHTTP1,
+					Source:   core.SourceProxy,
 					// A handshake this proxy rewrote must not look pristine.
 					Notes: wsStripNote(wsStripped),
-				}
-				s.config.store.AddExchange(exchange)
-				exchangeID = exchange.ID
+				})
 			}
 
 			if _, err := tlsClient.Write(head); err != nil {
 				return
 			}
+			// Frames are captured when the handshake was, and attached to its row.
+			// Gated on the row existing rather than on its id being non-zero:
+			// exchange 0 is a real id — the first exchange in a fresh store has it
+			// — and testing the id silently dropped that connection's frames.
 			var capture *wsCapture
-			if exchangeID != 0 {
+			exchangeID := uint64(0)
+			if handshake != nil {
+				exchangeID = handshake.ID
 				capture = &wsCapture{scope: s.config.scope, host: reqHost, port: reqPort, tls: true, path: path}
 			}
 			s.relayWebsocket(exchangeID, tlsClient, br, upstream, upstreamBR, reqHost, reqPort, true, path, capture)
@@ -789,65 +788,73 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		}
 		responseData := append(head, body...)
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, reqID, inScope, responseData, startTime) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime) {
 			return
 		}
 	}
 }
 
-// handleTLSResponse completes one response in the TLS intercept loop: records
-// it and its exchange when the exchange is in scope, applies Match & Replace,
-// offers it to the intercept hold queue, and writes it to the client. It
-// reports whether the connection should keep serving — an intercept drop ends
-// the connection, exactly as the original path did.
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, reqID core.MsgId, inScope bool, responseData []byte, startTime time.Time) bool {
-	if inScope {
-		respID, err := s.config.store.Put(responseData, core.DirectionResponse)
-		if err != nil {
-			s.config.logger.Error("failed to store response", zap.Error(err))
-		}
-
-		exchange := &core.Exchange{
-			Request:     reqID,
-			Response:    &respID,
-			Host:        host,
-			Port:        port,
-			TLS:         true,
-			Method:      method,
-			Path:        path,
-			Status:      parseStatusCode(responseData),
-			DurationMs:  uint64(time.Since(startTime).Milliseconds()),
-			StartedMs:   uint64(startTime.UnixMilli()),
-			Protocol:    core.ProtocolHTTP1,
-			ResponseLen: len(responseData),
-		}
-		s.config.store.AddExchange(exchange)
-		s.runPassiveScan(exchange)
-	}
-
+// handleTLSResponse completes one response in the TLS intercept loop: applies
+// Match & Replace, offers it to the intercept hold queue, writes it to the
+// client, and captures the exchange when it is in scope. It reports whether the
+// connection should keep serving — an intercept drop ends the connection,
+// exactly as the original path did.
+//
+// Same order, same producer and same reasoning as completeResponse; see there.
+// The two used to differ in three ways that nothing chose: this one recorded the
+// pre-rewrite bytes, indexed them before the operator had seen them, and had its
+// own copy of the exchange literal. Only the retention gate is genuinely
+// different, because a tunnel serves whatever the client asks for and scope
+// decides which of it is kept.
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, requestData []byte, inScope bool, responseData []byte, startTime time.Time) bool {
 	// Apply Match & Replace on response
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
 	}
 
 	// Intercept: hold the response before it reaches the client.
+	var notes *string
+	keepServing := true
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, true, method, path, responseData,
 		)); held != nil {
 			action, raw := held.Wait()
 			if action == intercept.ActionDrop {
-				return false
+				keepServing = false
+				notes = interceptDropNote()
+			} else {
+				responseData = raw
 			}
-			responseData = raw
 		}
 	}
 
-	// Return the response to the client.
-	if _, err := clientConn.Write(responseData); err != nil {
-		return false
+	// Return the response to the client. A write that fails ends the connection
+	// but not the capture: the origin answered, and that is worth recording
+	// whether or not the client was still listening.
+	if keepServing {
+		if _, err := clientConn.Write(responseData); err != nil {
+			keepServing = false
+		}
 	}
-	return true
+
+	if inScope {
+		s.record(scanner.CapturedExchange{
+			Host:     host,
+			Port:     port,
+			TLS:      true,
+			Method:   method,
+			Path:     path,
+			Request:  requestData,
+			Response: responseData,
+			Started:  startTime,
+			Duration: time.Since(startTime),
+			Protocol: core.ProtocolHTTP1,
+			Source:   core.SourceProxy,
+			Notes:    notes,
+		})
+	}
+	return keepServing
 }
 
 func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
@@ -864,6 +871,26 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 
 	// Record the tunnel in the store (simplified: no decrypted request/response
 	// messages, just the CONNECT tunnel itself).
+	//
+	// # Why this one site does not go through scanner.Capture.Record
+	//
+	// Named, not overlooked. Every other capture site in this package is a
+	// request/response pair whose bytes the proxy has in hand, and Record's whole
+	// job is to put those bytes away and index them. A blind tunnel has no such
+	// bytes: this row exists to say "a client opened a tunnel to this host and we
+	// did not look inside", and it is asserted as message-less by
+	// TestConnectPassthroughBlind, which requires store.Get(ex.Request) to fail.
+	// Handing Record an empty pair would be refused (correctly), and synthesising
+	// a CONNECT request and a 200 to satisfy it would put bytes in history that
+	// no peer ever sent as a side effect of a refactor. The Rust original does
+	// synthesise both halves plus a byte-count summary when the tunnel closes; if
+	// that is wanted here it is a deliberate change to what a tunnel records, not
+	// a consequence of collapsing the capture sites.
+	//
+	// The cost is that this is the one row in the proxy with no Response, which is
+	// the shape internal/web/liveaudit.go's cursor stops at (it cannot tell a row
+	// that will never be completed from one still in flight). Record now refuses
+	// to mint that shape; this row is not minted by Record.
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
 		host = strings.Split(target, ":")[0]
@@ -881,6 +908,7 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 		Path:      target,
 		Protocol:  core.ProtocolHTTP1,
 		StartedMs: uint64(time.Now().UnixMilli()),
+		Source:    core.SourceProxy,
 	}
 	s.config.store.AddExchange(exchange)
 
@@ -955,18 +983,19 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		return
 	}
 
-	// Store request
-	reqID, err := s.config.store.Put(requestData, core.DirectionRequest)
-	if err != nil {
-		s.config.logger.Error("failed to store request", zap.Error(err))
-	}
+	// The request is not stored here. Both messages are put away together, by the
+	// one producer, once the exchange is complete — an exchange is a pair, and
+	// storing half of it up front is what let the request id be paired with a
+	// response that never arrived. A request whose forward fails below therefore
+	// leaves nothing behind at all, rather than an unindexed message no view can
+	// reach; the transport failure is logged, which is where it belongs.
 
 	// A request that asked to upgrade hands the connection off when the origin
 	// answers 101: the response head must be read on its own, because the bytes
 	// after it are WebSocket frames, not a response body. Gated on the request,
 	// so every other request takes the identical path it always took.
 	if core.IsWsUpgradeRequest(requestData) {
-		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, reqID, startTime, wsStripped)
+		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, startTime, wsStripped)
 		return
 	}
 
@@ -977,99 +1006,127 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		return
 	}
 
-	s.completeResponse(clientConn, method, host, port, false, path, requestData, reqID, responseData, startTime)
+	s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime)
 }
 
-// completeResponse stores a response, applies Match & Replace, offers it to the
-// intercept hold queue, writes it to the client, and records the exchange.
+// completeResponse delivers one response to the client and captures the exchange.
 // Shared by the ordinary path and by a refused WebSocket upgrade, so a 4xx
 // refusal is handled exactly like any other response.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqID core.MsgId, responseData []byte, startTime time.Time) {
-	// Store response
-	respID, err := s.config.store.Put(responseData, core.DirectionResponse)
-	if err != nil {
-		s.config.logger.Error("failed to store response", zap.Error(err))
-	}
-
+//
+// # The order, which is the only thing this function decides
+//
+// Everything the proxy does *to* the bytes happens first — Match & Replace, the
+// operator's hold queue, the write to the client — and then one call to the
+// shared producer with the bytes the client actually received. Those two halves
+// are deliberately not interleaved: Record's job is store-put, exchange
+// construction and indexing, and a proxy concern moved inside it would be a
+// concern the crawler cannot use, which is how the second copy this collapses
+// came about in the first place.
+//
+// Recording *after* the rewrite, rather than the origin's original, is the same
+// rule the request side already follows ("what history shows for this request
+// must be what upstream received"): an operator who rewrote a response must not
+// find bytes nobody ever saw in history, because every later replay and every
+// passive scan would then work from them. It is also what the Rust original
+// does. The previous code here stored the pre-rewrite bytes and then described
+// them with the post-rewrite status and length, so the row disagreed with the
+// message it indexed whenever a response rule fired.
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time) {
 	// Apply Match & Replace on response
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
 	}
 
 	// Intercept: hold the response for the operator before it reaches the client.
+	var notes *string
+	dropped := false
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		)); held != nil {
 			action, raw := held.Wait()
 			if action == intercept.ActionDrop {
-				return
+				dropped = true
+				notes = interceptDropNote()
+			} else {
+				responseData = raw
 			}
-			responseData = raw
 		}
 	}
 
 	// Send to client
-	clientConn.Write(responseData)
-
-	// Create exchange record
-	duration := uint64(time.Since(startTime).Milliseconds())
-	exchange := &core.Exchange{
-		Request:     reqID,
-		Response:    &respID,
-		Host:        host,
-		Port:        port,
-		TLS:         tls,
-		Method:      method,
-		Path:        path,
-		Status:      parseStatusCode(responseData),
-		DurationMs:  duration,
-		StartedMs:   uint64(startTime.UnixMilli()),
-		Protocol:    core.ProtocolHTTP1,
-		ResponseLen: len(responseData),
+	if !dropped {
+		clientConn.Write(responseData)
 	}
-	s.config.store.AddExchange(exchange)
-	s.runPassiveScan(exchange)
+
+	s.record(scanner.CapturedExchange{
+		Host:     host,
+		Port:     port,
+		TLS:      tls,
+		Method:   method,
+		Path:     path,
+		Request:  requestData,
+		Response: responseData,
+		Started:  startTime,
+		Duration: time.Since(startTime),
+		Protocol: core.ProtocolHTTP1,
+		Source:   core.SourceProxy,
+		Notes:    notes,
+	})
 }
 
-// runPassiveScan runs the configured passive scanner over an exchange and
-// persists any findings into the shared finding store.
-func (s *Server) runPassiveScan(exchange *core.Exchange) {
-	if s.config.scanner == nil || s.config.findings == nil {
-		return
-	}
-	findings := s.config.scanner.Scan(exchange)
+// interceptDropNote renders the exchange note for a response the operator
+// refused to forward.
+//
+// The row is recorded at all for the same reason wsStripNote's is: the recorded
+// bytes and the bytes the peer saw are not the same, and the difference is
+// invisible in the bytes themselves. Recording nothing would let an operator
+// drop a response and leave history showing a request that was never answered —
+// the one reading of it that is definitely wrong.
+func interceptDropNote() *string {
+	note := "[burpsy] the operator dropped this response, so the client received nothing. " +
+		"The bytes recorded here are the response as it stood when it was dropped — the origin's " +
+		"answer, after any Match & Replace rule — which is the only record that it arrived at all."
+	return &note
+}
 
-	// Static DOM analysis reads the same captured response as the passive check set, so it belongs
-	// at the same call site rather than behind a second dispatch. Its caveat is logged rather than
-	// discarded: a DOM pass that hit its per-item budget analysed only part of the item, and
-	// letting that land in the finding store as an ordinary "nothing more here" is exactly what
-	// DOM-03 forbids.
-	dom := s.config.scanner.ScanDOM(exchange)
-	if caveat := dom.Caveat(); caveat != "" && dom.Skip == nil {
-		s.config.logger.Warn("static DOM analysis did not cover the whole response",
-			zap.String("host", exchange.Host),
-			zap.String("path", exchange.Path),
-			zap.String("caveat", caveat))
+// record hands one completed exchange to scanner.Capture.Record: the shared
+// producer, the same call the crawler makes, which is what CRAWL-02 means by
+// "exactly the same path". It returns the row that was created, or nil when
+// nothing could be captured.
+//
+// Nil rather than a partly-filled row, and logged rather than worked around.
+// Record refuses a capture it cannot complete, because an exchange indexed with
+// no response is indistinguishable from one whose response has not arrived yet
+// and permanently stalls every cursor that walks the index in order — see
+// scanner.Capture.Record. The proxy's report of that refusal is this log line;
+// the crawler's is a skip record. Neither invents a row.
+func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
+	ex, err := s.capture().Record(x)
+	if err != nil {
+		s.config.logger.Error("failed to capture exchange",
+			zap.String("host", x.Host),
+			zap.String("method", x.Method),
+			zap.String("path", x.Path),
+			zap.Error(err))
+		return nil
 	}
-	findings = append(findings, dom.Findings()...)
+	return ex
+}
 
-	for _, f := range findings {
-		scanner.EnrichFinding(f)
-		nf := core.NewFinding{
-			Name:        f.Name,
-			Severity:    core.ParseSeverity(f.Severity),
-			Confidence:  core.ParseConfidence(f.Confidence),
-			Description: f.Description,
-			Remediation: f.Solution,
-		}
-		if exchange.Response != nil {
-			nf.Occurrences = []core.Occurrence{{
-				Request:  exchange.Request,
-				Response: exchange.Response,
-			}}
-		}
-		s.config.findings.Add(nf)
+// runPassiveScan is gone with the last caller that needed it. It existed as the proxy's own name for
+// "scan this exchange", and once every capture site records through Record — which scans as part of
+// recording — nothing in this package had a scan to dispatch separately. Keeping a one-line production
+// method alive for its tests would have made the scan look like a step a capture site can choose,
+// which is exactly the freedom that let the two copies drift.
+
+// capture is the proxy's handle on the shared capture-and-scan pipeline.
+func (s *Server) capture() scanner.Capture {
+	return scanner.Capture{
+		Store:    s.config.store,
+		Scanner:  s.config.scanner,
+		Findings: s.config.findings,
+		Logger:   s.config.logger,
 	}
 }
 
@@ -1232,30 +1289,9 @@ func readHTTPResponse(conn net.Conn) ([]byte, error) {
 	return httputil.ReadHTTPResponse(conn)
 }
 
-// parseStatusCode extracts the 3-digit status code from an HTTP response's
-// first line ("HTTP/1.1 200 OK"). It returns nil when the bytes do not parse
-// as a response, so an absent status is recorded honestly as absent rather
-// than guessed.
-func parseStatusCode(raw []byte) *uint16 {
-	idx := bytes.Index(raw, []byte("\r\n"))
-	var line []byte
-	if idx < 0 {
-		idx = bytes.IndexByte(raw, '\n')
-		if idx < 0 {
-			return nil
-		}
-		line = raw[:idx]
-	} else {
-		line = raw[:idx]
-	}
-	fields := bytes.Fields(line)
-	if len(fields) < 2 {
-		return nil
-	}
-	code, err := strconv.Atoi(string(fields[1]))
-	if err != nil || code < 100 || code > 599 {
-		return nil
-	}
-	u := uint16(code)
-	return &u
-}
+// The proxy's own status-line parser used to live here. It is gone rather than
+// unused: every exchange row is now built by scanner.Capture.Record, which reads
+// the status off the response the store has already parsed, so a second parser
+// in this package could only ever be a way for the row and the message it
+// indexes to disagree about the same bytes. Its three test cases moved with it,
+// to internal/scanner/capture_test.go.

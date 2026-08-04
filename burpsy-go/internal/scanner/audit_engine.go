@@ -271,8 +271,17 @@ type auditRun struct {
 
 // newAuditRun starts a run. A zero or negative TimeBudget means "no time budget", not "no time":
 // collapsing them would make a caller that forgot to set the field audit nothing at all.
+//
+// The ledger comes from the config when the caller supplied one, so a repeating caller can keep scope
+// collapse across runs — see AuditConfig.Ledger for why the live sweep must. Everything else on the
+// run is per-run by construction: the deadline, the request meter and both breakers are properties of
+// *this* batch, and sharing any of them would let one batch's failures bound the next one's work.
 func newAuditRun(cfg AuditConfig) *auditRun {
-	r := &auditRun{cfg: cfg, ledger: NewAuditLedger()}
+	ledger := cfg.Ledger
+	if ledger == nil {
+		ledger = NewAuditLedger()
+	}
+	r := &auditRun{cfg: cfg, ledger: ledger}
 	if cfg.TimeBudget > 0 {
 		r.deadline = time.Now().Add(cfg.TimeBudget)
 	}
@@ -512,6 +521,25 @@ func (o *SessionOutcome) Completed() int {
 		if it.Outcome.State.CompletedAudit() {
 			n++
 		}
+	}
+	return n
+}
+
+// AlreadyCovered counts checks refused across the session because an identical
+// `(dispatch unit, check)` had already run.
+//
+// Deliberately not part of NotAdmitted and deliberately not a caveat bucket in Breakdown: this is
+// work that *ran*, against an earlier item covering the same unit, which is the argument
+// ItemState.CompletedAudit already makes. It has its own accessor because it is the engine's largest
+// saving, and a caller sharing a ledger across runs needs to be able to show the saving is happening
+// rather than infer it from a request count that went down.
+func (o *SessionOutcome) AlreadyCovered() int {
+	if o == nil {
+		return 0
+	}
+	n := 0
+	for _, it := range o.Items {
+		n += it.Outcome.AlreadyCovered
 	}
 	return n
 }

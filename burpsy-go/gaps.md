@@ -931,6 +931,78 @@ stated rationale — previously all four fields used `EqualFold` uniformly, so
 
 ---
 
+## Phase 6 (crawler + dashboard), and a Go-only chokepoint defect it exposed
+
+Phase 6 of the Rust project's roadmap has no Rust implementation either — this is new
+capability in the Go port, not a port. Recorded here because building it surfaced a
+**security defect that existed only in Go**, and because the phase is delivered with a
+named gap rather than as a clean sweep.
+
+### The Go-only defect: two exported ways out, one unguarded
+
+`internal/sender/authorised.go`'s `AuthorisedSender` guarded only the raw-bytes path
+(`Send(ctx, raw []byte)` → `AuthoriseRaw` → dial). But `Sender.Send(ctx, *Request)` built a
+URL and went straight to `client.Do` with **no scope check at all**. Compounding it:
+`DefaultSenderConfig` set `FollowRedirects: true` and `CheckRedirect` was only installed on
+the `!FollowRedirects` branch, so the stdlib silently followed up to 10 redirects **to
+arbitrary authorities**, past any scope decision about the original target; `MaxRedirects: 10`
+was written once and read nowhere, so the bound was the stdlib's coincidental default rather
+than one we enforced. `Transport.Proxy: http.ProxyFromEnvironment` meant `HTTP_PROXY` could
+re-route it too.
+
+**Session macros used the unguarded path** (`internal/web/api_session.go`, with the server
+field typed `*sender.Sender`), so login and recovery traffic was unauthorised egress with
+redirect-following on. That is the "hostile target steers you to an internal service via a
+redirect" vector, reachable from a feature marked complete.
+
+**This is not a Rust parity gap — it is a Go regression against Rust.** `crates/web/src/routes/session.rs`
+holds an `AuthorisedMacroSender` and cites HARD-03 explicitly at `:490`; `crates/web/src/session_sender.rs:10`
+states that a macro step "is a constructed request in exactly the sense HARD-03 means". So the
+Rust side had this right and the Go port lost it in translation. The Rust `.planning/REQUIREMENTS.md`
+entry marking HARD-03 `[~]` with session macros still open is accurate *for Rust*; it was never
+the wrong claim, and the earlier working assumption that it overstated completeness was itself
+the error.
+
+Fixed: `CheckRedirect` returns `http.ErrUseLastResponse` unconditionally (a redirect is now a
+response the caller decides about per hop, re-authorising the new authority), both lying config
+fields are deleted, `AuthorisedSender.SendRequest` is the authorised entry for a `*Request`, and
+both the web and CLI session paths are repointed. Proven by three tests in
+`internal/web/session_scope_test.go` that assert the target's own hit count is **zero** — a
+refusal counter proves bookkeeping, only a silent target proves the dial did not happen. The
+same lying-field defect was found and removed in `internal/intruder`'s `AttackConfig`.
+
+### What Phase 6 delivers, and the one thing it does not
+
+CRAWL-01..07, DASH-01..03 and DSL-03 each land with a test that pins them, including: the
+crawler's own HARD-03 chokepoint test (target receives nothing); forms off by default;
+destructive-link refusal reported per reason with the matched signal; a stop that names the
+bound it hit and how many frontier URLs went unfetched; two-tier dedup (URL template + quota,
+and a content fingerprint that keeps raw link targets so `/user/1` and `/user/2` do not merge);
+and DSL-03 as two gates — a pre-fetch scope restricted to `host`/`method` and rejected *when the
+operator sets it*, plus post-fetch retention over the full grammar.
+
+**Named gap: authenticated crawling is only weakly delivered.** The crawler takes static
+`Config.Headers`, so an operator can paste a session cookie and it works until that cookie
+expires — after which the crawl quietly starts crawling the login page, with no re-login, no
+recovery, and **no detection that it happened**. `session.Coordinator`'s `EnsureLoggedIn` and
+`HandleRecovery` are not wired to it. Phase 6's stated goal is "crawl an authenticated target
+continuously", so that goal is not met; wiring it also needs a re-login generation counter (the
+coordinator's single-flight collapses *concurrent* callers but not sequential waves) and a
+per-crawl re-login cap with its own stop reason, because CRAWL-04's destructive-link heuristic
+can only ever be a heuristic and a self-inflicted logout will sometimes get through.
+
+### Two capture defects found while collapsing the shared path
+
+`scanner.Capture` was extracted so crawled and proxied traffic take one path (CRAWL-02), but
+`proxy.go` never called it — four hand-rolled `core.Exchange` literals remained, and the two
+copies had **already diverged**: `Capture.Record` set `Response` only when non-empty while the
+proxy set it unconditionally. A nil-`Response` exchange permanently wedged the live-audit
+sweep, which walks a monotonic cursor and stopped at that id for the life of the process while
+`Swept()` kept reporting the number it had reached — silent, permanent coverage loss. Fixed at
+both ends: `Record` now refuses to index a half-exchange at all (an invariant that holds for
+callers that do not exist yet), and the sweep bounds its wait, steps over, and counts what it
+gave up on as `skipped` — never folded into `swept`.
+
 ## Not gaps (verified present)
 
 These were suspected during review and confirmed **present** in Go:

@@ -11,6 +11,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 )
@@ -49,29 +50,21 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	reqBody, _ := io.ReadAll(r.Body)
 	_ = r.Body.Close()
 
+	// Rendered now, indexed later. This used to index the request on its own and
+	// fill the response fields in afterwards, which was wrong twice over: the
+	// mutation happened outside the store's lock on a pointer the store had
+	// already handed to its readers, and an origin error left the row indexed with
+	// no response for good — the shape that stalls a cursor walking the index. The
+	// bytes are held here instead and both halves are captured together, through
+	// the same producer as every other exchange in this package.
 	inScope := s.config.scope.Contains(host, port, path, true)
-	var ex *core.Exchange
+	var reqRaw []byte
 	if inScope {
-		reqRaw := burpsyhttp2.RenderRequest(
+		reqRaw = burpsyhttp2.RenderRequest(
 			r.Method, path, host,
 			filterHopHeaders(r.Header),
 			reqBody,
 		)
-		reqID, err := s.config.store.Put(reqRaw, core.DirectionRequest)
-		if err != nil {
-			s.config.logger.Error("failed to store h2 request", zap.Error(err))
-		}
-		ex = &core.Exchange{
-			Request:   reqID,
-			Host:      host,
-			Port:      port,
-			TLS:       true,
-			Method:    r.Method,
-			Path:      pathOnly(path),
-			StartedMs: uint64(startTime.UnixMilli()),
-			Protocol:  core.ProtocolHTTP2,
-		}
-		s.config.store.AddExchange(ex)
 	}
 
 	targetStr := "https://" + authority + path
@@ -87,11 +80,19 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 
 	resp, err := upstream.RoundTrip(outReq)
 	if err != nil {
-		if ex != nil {
-			note := "origin h2 error: " + err.Error()
-			ex.Notes = &note
-			ex.DurationMs = uint64(time.Since(startTime).Milliseconds())
-		}
+		// Logged, not indexed. There is no exchange: the origin never answered, so
+		// the pair this would record is half a pair. That is the same choice the
+		// HTTP/1 paths in proxy.go make for a forward that fails, and the same one
+		// the crawler makes when a send fails (it records a skip, not a capture).
+		// The row this used to leave behind carried the error in a note it attached
+		// *after* indexing — so the durable mirror never saw the note — and had no
+		// response, which is precisely the state that stops the live-audit sweep at
+		// that index for the life of the process.
+		s.config.logger.Error("h2 origin error",
+			zap.String("host", host),
+			zap.String("method", r.Method),
+			zap.String("path", path),
+			zap.Error(err))
 		http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -106,23 +107,30 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBody)
 
-	if ex != nil {
-		respRaw := burpsyhttp2.RenderResponse(
-			resp.StatusCode,
-			filterHopHeaders(resp.Header),
-			respBody,
-		)
-		respID, err := s.config.store.Put(respRaw, core.DirectionResponse)
-		if err != nil {
-			s.config.logger.Error("failed to store h2 response", zap.Error(err))
-			return
-		}
-		status := uint16(resp.StatusCode)
-		ex.Response = &respID
-		ex.Status = &status
-		ex.ResponseLen = len(respBody)
-		ex.DurationMs = uint64(time.Since(startTime).Milliseconds())
-		s.runPassiveScan(ex)
+	if inScope {
+		// ResponseLen is the whole rendered message, where the hand-rolled row
+		// counted the body alone. Every HTTP/1 row in this package has always meant
+		// the whole message, so h2 was the one protocol reporting a different
+		// quantity under the same name.
+		s.record(scanner.CapturedExchange{
+			Host:   host,
+			Port:   port,
+			TLS:    true,
+			Method: r.Method,
+			Path:   pathOnly(path),
+			// Rendered in HTTP/1 shape for history, which is what makes an h2 stream
+			// readable next to everything else and lets one status parser serve both.
+			Request: reqRaw,
+			Response: burpsyhttp2.RenderResponse(
+				resp.StatusCode,
+				filterHopHeaders(resp.Header),
+				respBody,
+			),
+			Started:  startTime,
+			Duration: time.Since(startTime),
+			Protocol: core.ProtocolHTTP2,
+			Source:   core.SourceProxy,
+		})
 	}
 }
 

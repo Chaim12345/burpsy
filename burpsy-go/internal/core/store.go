@@ -202,6 +202,60 @@ type Exchange struct {
 	Notes       *string
 	Related     []ChildRef
 	Protocol    Protocol
+	// Source names the surface that produced this exchange. See the Source type: the zero value is
+	// deliberately *not* proxy.
+	Source Source
+}
+
+// Source names the surface an exchange came from.
+//
+// # Why the zero value is not SourceProxy
+//
+// It would be convenient: the proxy is the overwhelming majority of traffic, so defaulting to it
+// would let most producers say nothing. That convenience is exactly the trap. A producer added later
+// that forgets to set this would silently claim to be proxy traffic, every per-source count would be
+// quietly wrong, and nothing anywhere would detect it — the count would still add up.
+//
+// So SourceUnattributed is the zero value and renders as such. A forgetful producer shows up as
+// unattributed, which is visible and fixable, rather than as a plausible lie. This is the same
+// fail-safe direction CheckCoverage takes with never-dispatched (see internal/scanner/coverage.go):
+// the default state is "no evidence", never "fine".
+//
+// # Why this exists at all
+//
+// CRAWL-02 requires crawled traffic to travel the identical capture/scan path as proxied traffic, so
+// by construction nothing downstream can tell them apart. That is correct, and it costs DASH-03 the
+// ability to say "9 issues from proxied traffic, 3 from the crawl" — it can only say "12". One field
+// buys that back. It cannot be added retroactively to exchanges already recorded, which is why it
+// lands with the crawler rather than after it.
+type Source string
+
+const (
+	// SourceUnattributed is the zero value: no producer claimed this exchange. Never treat it as
+	// proxy traffic — see the type doc.
+	SourceUnattributed Source = ""
+	// SourceProxy is traffic the operator's own client sent through the proxy.
+	SourceProxy Source = "proxy"
+	// SourceCrawl is traffic the crawler originated.
+	SourceCrawl Source = "crawl"
+	// SourceRepeater is a hand-driven resend.
+	SourceRepeater Source = "repeater"
+	// SourceIntruder is an attack payload.
+	SourceIntruder Source = "intruder"
+	// SourceScanner is an active audit probe.
+	SourceScanner Source = "scanner"
+)
+
+// Attributed reports whether a producer named this exchange's origin.
+func (s Source) Attributed() bool { return s != SourceUnattributed }
+
+// String renders the source for an operator, naming the unattributed case rather than showing an
+// empty cell that reads as though the field did not apply.
+func (s Source) String() string {
+	if s == SourceUnattributed {
+		return "unattributed"
+	}
+	return string(s)
 }
 
 // TrafficStore is an append-only message log plus an exchange index.
@@ -239,6 +293,18 @@ type TrafficStore struct {
 	// SQLite is durable backup.
 	onMessage  func(m *StoredMessage)
 	onExchange func(ex *Exchange)
+	// exchangeObservers are live derived views of the exchange index — the site
+	// map, today — that must be told about an arrival as it happens rather than
+	// rebuilding themselves when someone asks. They run under the same lock and
+	// the same contract as onExchange.
+	//
+	// A separate list rather than more work inside onExchange, because the two
+	// have different arities and different owners. onExchange has exactly one
+	// owner (the durable mirror) and is replaced wholesale; this fans out to
+	// however many views the process has wired, and folding a view into the
+	// mirror's single slot would make each the other's failure mode: installing
+	// persistence would silently unsubscribe the site map, and vice versa.
+	exchangeObservers []func(ex *Exchange)
 }
 
 // NewTrafficStore creates an in-memory traffic store.
@@ -276,8 +342,14 @@ func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
+	// The id is the position this message will take, and it is only consumed once the message is
+	// actually in the index. Incrementing first meant a rejected Put — a malformed message, a segment
+	// write that failed — burned an id nothing was ever stored at, so every later message's id sat one
+	// past its own slot. Get resolves by slot (position-is-the-id), so from that point on every
+	// exchange row pointed at the message before the one it meant, and the last id resolved to nothing:
+	// one unparseable response silently re-labelled the whole rest of the capture. Restore relies on
+	// the same invariant — it sets nextID to len(messages) — so this is what that path already assumes.
 	id := MsgId(ts.nextID)
-	ts.nextID++
 
 	shape, err := Parse(raw, direction)
 	if err != nil {
@@ -313,6 +385,7 @@ func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
 
 	ts.messages = append(ts.messages, msg)
 	ts.locations = append(ts.locations, loc)
+	ts.nextID++
 	atomic.AddInt64(&ts.bytes, int64(len(raw)))
 
 	if ts.onMessage != nil {
@@ -338,6 +411,49 @@ func (ts *TrafficStore) AddExchange(ex *Exchange) {
 	if ts.onExchange != nil {
 		ts.onExchange(ex)
 	}
+	for _, observe := range ts.exchangeObservers {
+		observe(ex)
+	}
+}
+
+// ObserveExchanges registers fn to be called for every exchange added from now
+// on, and returns the exchanges already in the store.
+//
+// Registration and the snapshot happen inside one lock hold because the two must
+// partition exactly: a live derived view backfills from the returned slice and
+// is told about everything after it, so no exchange is counted twice and none is
+// missed. Calling Exchanges() and then registering cannot promise that — an
+// AddExchange landing between the two calls is either double-counted or dropped
+// depending on which order the caller picked, and a site map that double-counts
+// one request is a site map nobody trusts the rest of.
+//
+// fn runs under the store's write lock, in append order, and must not call back
+// into the store — the same contract as the persistence sinks.
+//
+// It must also be cheap, and this is a hard constraint rather than a preference.
+// The lock it runs under is the one every AddExchange takes, so an observer is
+// simultaneously a per-response latency tax on the proxy and the ceiling on how
+// fast a crawler can capture. Fold into a map, increment a counter, take a slice
+// index: O(1)-ish and allocation-light. Anything that formats a string, marshals
+// JSON, writes to a file, takes a second lock, or grows without bound belongs on
+// an explicit call at the point the thing happened, not here. In particular the
+// dashboard's event log is deliberately NOT fed from this hook — see the note in
+// internal/dash/events.go.
+//
+// This is what makes the site map continuous (CRAWL-05) for *every* producer at
+// once. Anything that records traffic does so through AddExchange — the proxy,
+// the crawler, any future tool — so a view registered here sees all of it
+// without each producer having to remember to update it.
+func (ts *TrafficStore) ObserveExchanges(fn func(*Exchange)) []*Exchange {
+	if fn == nil {
+		return nil
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	existing := make([]*Exchange, len(ts.exchanges))
+	copy(existing, ts.exchanges)
+	ts.exchangeObservers = append(ts.exchangeObservers, fn)
+	return existing
 }
 
 // SetPersistenceSinks installs optional write-through hooks (see the onMessage
@@ -353,6 +469,13 @@ func (ts *TrafficStore) SetPersistenceSinks(onMessage func(*StoredMessage), onEx
 // Messages and exchanges are positional: their ids are their slice indexes, so
 // they must be supplied in id order and contiguously for lookups to stay
 // correct. This is the load path for the SQLite write-through store.
+//
+// Restore does not notify exchange observers, and must therefore run before any
+// are registered — which is the existing order: the durable mirror restores the
+// shared stores before the web server that owns the derived views is built.
+// Replaying the snapshot to observers instead would be worse than the ordering
+// rule it replaced: a view that had already backfilled would be handed every
+// restored exchange a second time and would double-count all of it.
 func (ts *TrafficStore) Restore(messages []*StoredMessage, exchanges []*Exchange) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()

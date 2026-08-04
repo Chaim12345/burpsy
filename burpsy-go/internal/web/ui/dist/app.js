@@ -100,18 +100,46 @@ function initDashboard() {
   section.innerHTML = `
     <div class="four">
       <div class="stat-tile"><div class="label">Exchanges captured</div><div class="value" id="dash-exchanges">–</div></div>
-      <div class="stat-tile"><div class="label">Findings</div><div class="value" id="dash-findings">–</div></div>
       <div class="stat-tile"><div class="label">Storage used</div><div class="value" id="dash-storage">–</div></div>
       <div class="stat-tile"><div class="label">Scope rules</div><div class="value" id="dash-scope">–</div></div>
+      <div class="stat-tile"><div class="label">Tasks running</div><div class="value" id="dash-running">–</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Counts, and what they do not account for</div>
+      <p class="hint">A count with a caveat is a floor, not a total. Nothing here reports a number
+        without reporting the work that produced no verdict.</p>
+      <div class="four" id="dash-summaries"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Tasks</div>
+      <table>
+        <thead><tr><th>Kind</th><th>Target</th><th>State</th><th>Progress</th><th>Result</th><th>Elapsed</th></tr></thead>
+        <tbody id="dash-tasks"></tbody>
+      </table>
+      <div id="dash-tasks-meta" class="hint"></div>
     </div>
     <div class="two">
       <div class="card">
-        <div class="card-title">Live activity</div>
+        <div class="card-title">Requests sent</div>
+        <p class="hint">Every request burpsy's own tools sent. Proxy traffic lives in History.</p>
         <table>
-          <thead><tr><th>Time</th><th>Source</th><th>Event</th></tr></thead>
+          <thead><tr><th>Time</th><th>Tool</th><th>Request</th></tr></thead>
           <tbody id="dash-activity"></tbody>
         </table>
+        <div id="dash-activity-meta" class="hint"></div>
       </div>
+      <div class="card">
+        <div class="card-title">What the tool did</div>
+        <p class="hint">Tasks starting and finishing, scope edits, bounds hit — the things that are not
+          requests, so they are not in the list beside this one.</p>
+        <table>
+          <thead><tr><th>Time</th><th>Kind</th><th>Detail</th></tr></thead>
+          <tbody id="dash-events"></tbody>
+        </table>
+        <div id="dash-events-meta" class="hint"></div>
+      </div>
+    </div>
+    <div class="two">
       <div class="card">
         <div class="row" style="justify-content:space-between;margin-bottom:4px">
           <div class="card-title" style="margin:0">Live active audit</div>
@@ -132,45 +160,97 @@ function initDashboard() {
   setInterval(() => void refresh(), 4000);
 }
 async function refresh() {
-  await Promise.all([refreshStats(), refreshScope(), refreshIssues(), refreshActivity(), refreshAudit()]);
+  await Promise.all([refreshDashboard(), refreshScope(), refreshAudit()]);
 }
-async function refreshStats() {
+async function refreshDashboard() {
   try {
-    const s = await getJSON("/api/stats");
-    $("#dash-exchanges").textContent = s.exchanges.toLocaleString();
-    $("#dash-storage").textContent = `${(s.stored_bytes / 1048576).toFixed(1)} MB`;
-  } catch {}
+    const d = await getJSON("/api/dashboard");
+    $("#dash-exchanges").textContent = d.exchanges.toLocaleString();
+    $("#dash-storage").textContent = `${(d.stored_bytes / 1048576).toFixed(1)} MB`;
+    $("#dash-running").textContent = String(d.tasks_running);
+    $("#dash-summaries").innerHTML = d.summaries.map(renderSummary).join("");
+    renderTasks(d);
+    renderActivity(d);
+    renderEvents(d);
+  } catch (e) {
+    $("#dash-summaries").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+}
+function renderSummary(s) {
+  const b = s.breakdown;
+  const chips = [
+    b.skipped > 0 ? `<span class="pill pill-outline sev-low">${b.skipped} skipped</span>` : "",
+    b.errored > 0 ? `<span class="pill pill-outline sev-high">${b.errored} errored</span>` : "",
+    b.gated > 0 ? `<span class="pill pill-outline sev-medium">${b.gated} gated</span>` : ""
+  ].filter(Boolean).join(" ");
+  const verdict = b.complete ? `<div class="hint ok">complete — nothing skipped, errored or gated</div>` : `<div class="hint err">a floor, not a total: ${b.unaccounted} ${esc(s.work_unit)} produced no verdict</div>`;
+  const reasons = b.complete ? "" : `<ul class="hint">${s.reasons.map((r) => `<li>${r.count} — ${esc(r.detail)}</li>`).join("")}</ul>`;
+  return `<div class="stat-tile">
+    <div class="label">${esc(s.label)}</div>
+    <div class="value">${b.found.toLocaleString()}</div>
+    <div class="hint">${esc(s.unit)}</div>
+    <div class="row">${chips}</div>
+    ${verdict}
+    ${reasons}
+  </div>`;
+}
+function renderTasks(d) {
+  const body = $("#dash-tasks");
+  body.innerHTML = d.tasks.length ? d.tasks.map((t) => `<tr>
+        <td><span class="tag">${esc(t.kind)}</span></td>
+        <td>${esc(t.target)}</td>
+        <td>${stateBadge(t)}</td>
+        <td>${progressCell(t)}</td>
+        <td>${resultCell(t)}</td>
+        <td>${(t.elapsed_ms / 1000).toFixed(1)}s</td>
+      </tr>`).join("") : `<tr><td colspan="6" class="hint">nothing has run yet — start an audit, an attack or a crawl</td></tr>`;
+  $("#dash-tasks-meta").textContent = `${d.tasks.length} shown, ${d.tasks_running} running` + (d.tasks_dropped ? ` · ${d.tasks_dropped} older finished tasks dropped at the capacity bound` : "");
+}
+function stateBadge(t) {
+  const cls = t.state === "failed" ? "sev-high" : t.state === "stopped" ? "sev-medium" : t.state === "done" ? "ok" : "";
+  return `<span class="pill pill-outline ${cls}">${esc(t.state)}</span>`;
+}
+function progressCell(t) {
+  if (!t.fraction_known) {
+    return `<span class="hint">${esc(t.progress)}</span>`;
+  }
+  return `<div class="seq-bar-track" title="${esc(t.progress)}">
+      <span class="seq-bar-fill" style="width:${(t.fraction * 100).toFixed(1)}%"></span>
+    </div><span class="hint">${esc(t.progress)}</span>`;
+}
+function resultCell(t) {
+  if (t.state === "running")
+    return `<span class="hint">pending</span>`;
+  const cls = t.complete ? "ok" : "err";
+  const note = t.note ? `<div class="hint">${esc(t.note)}</div>` : "";
+  return `<span class="${cls}">${esc(t.result.summary)}</span>${note}`;
+}
+function renderActivity(d) {
+  const body = $("#dash-activity");
+  body.innerHTML = d.activity.length ? d.activity.map((e) => `<tr>
+          <td>${relTime(e.started_ms)}</td>
+          <td><span class="tag tag-${esc(e.tool)}">${esc(e.tool)}</span></td>
+          <td>${esc(e.method)} ${esc(e.path)} ${e.error ? `<span class="err">${esc(e.error)}</span>` : e.status !== null ? `→ ${e.status}` : ""}</td>
+        </tr>`).join("") : `<tr><td colspan="3" class="hint">nothing yet — use Repeater to see activity here</td></tr>`;
+  $("#dash-activity-meta").textContent = `newest ${d.activity_shown} of ${d.activity_total}` + (d.activity_dropped ? ` · ${d.activity_dropped} dropped at the log's capacity bound` : "");
+}
+function renderEvents(d) {
+  const body = $("#dash-events");
+  body.innerHTML = d.events.length ? d.events.map((e) => `<tr>
+          <td>${relTime(e.at_ms)}</td>
+          <td><span class="pill pill-outline ${severityClass(e.severity)}">${esc(e.kind)}</span></td>
+          <td class="${severityClass(e.severity)}">${esc(e.detail)}</td>
+        </tr>`).join("") : `<tr><td colspan="3" class="hint">nothing yet — start an audit, a crawl or an attack</td></tr>`;
+  $("#dash-events-meta").textContent = `newest ${d.events_shown} of ${d.events_total}` + (d.events_dropped ? ` · ${d.events_dropped} dropped at the log's capacity bound` : "");
+}
+function severityClass(sev) {
+  return sev === "error" ? "err" : sev === "warn" ? "sev-medium" : "";
 }
 async function refreshScope() {
   try {
     const s = await getJSON("/api/scope");
     $("#dash-scope").textContent = s.allow_all ? "everything" : `${s.rules.length}`;
   } catch {}
-}
-async function refreshIssues() {
-  const el = $("#dash-findings");
-  try {
-    const r = await getJSON("/api/issues");
-    if (!r.enabled || !r.counts) {
-      el.innerHTML = `<span class="hint" style="font-size:11px">--bchecks disabled</span>`;
-      return;
-    }
-    const c = r.counts;
-    el.innerHTML = `<span class="sev-high">${c.high}</span> <span class="sev-medium">${c.medium}</span> ` + `<span class="sev-low">${c.low}</span> <span class="sev-info">${c.info}</span>`;
-  } catch {}
-}
-async function refreshActivity() {
-  const body = $("#dash-activity");
-  try {
-    const r = await getJSON("/api/tools/log?limit=20");
-    body.innerHTML = r.entries.length ? r.entries.map((e) => `<tr>
-          <td>${relTime(e.started_ms)}</td>
-          <td><span class="tag tag-${esc(e.tool)}">${esc(e.tool)}</span></td>
-          <td>${esc(e.method)} ${esc(e.path)} ${e.error ? `<span class="err">${esc(e.error)}</span>` : e.status !== null ? `→ ${e.status}` : ""}</td>
-        </tr>`).join("") : `<tr><td colspan="3" class="hint">nothing yet — use Repeater to see activity here</td></tr>`;
-  } catch (e) {
-    body.innerHTML = `<tr><td colspan="3" class="err">${esc(e.message)}</td></tr>`;
-  }
 }
 function relTime(startedMs) {
   const diffS = Math.max(0, Math.round((Date.now() - startedMs) / 1000));
@@ -191,7 +271,18 @@ async function refreshAudit() {
       return;
     }
     toggle.checked = r.enabled;
-    hint.textContent = r.enabled ? "sweeping new in-scope traffic" : "off";
+    const notes = [r.enabled ? "sweeping new in-scope traffic" : "off"];
+    if (r.query)
+      notes.push(`filtered to ${r.query}`);
+    if (r.behind > 0)
+      notes.push(`${r.behind} exchange(s) not reached yet`);
+    if (r.skipped)
+      notes.push(`${r.skipped} given up on (no response)`);
+    if (r.stalled_at !== undefined)
+      notes.push(`waiting on exchange ${r.stalled_at}`);
+    if (r.ledger_resets)
+      notes.push(`${r.ledger_resets} ledger reset(s)`);
+    hint.textContent = notes.join(" · ");
     $("#dash-audit-swept").textContent = String(r.swept ?? 0);
     $("#dash-audit-findings").textContent = String(r.findings ?? 0);
   } catch {}
@@ -2228,13 +2319,14 @@ async function load6() {
   const q = $("#log-search").value.trim();
   const params = new URLSearchParams;
   if (tool)
-    params.set("tool", tool);
+    params.set("filter", tool);
   if (q)
-    params.set("q", q);
+    params.set("search", q);
   const qs = params.toString();
   try {
     const resp = await getJSON(`/api/tools/log${qs ? `?${qs}` : ""}`);
-    meta.textContent = `${resp.total} total (repeater ${resp.counts.repeater}, intruder ${resp.counts.intruder}, ` + `scanner ${resp.counts.scanner}, bcheck ${resp.counts.bcheck})` + (resp.dropped ? ` · ${resp.dropped} dropped (capacity)` : "");
+    const active = Object.entries(resp.counts).filter(([, n]) => n > 0).map(([name, n]) => `${name} ${n}`);
+    meta.textContent = `${resp.total} total${active.length ? ` (${active.join(", ")})` : ""}` + (resp.dropped ? ` · ${resp.dropped} dropped (capacity)` : "");
     body.innerHTML = resp.entries.map((e) => `<tr>
         <td>${e.id}</td><td>${esc(e.tool)}</td><td>${esc(e.method)}</td>
         <td>${esc(e.host)}:${e.port}</td><td>${esc(e.path)}</td>
@@ -3457,7 +3549,7 @@ initOrganizer();
 initMatchReplace();
 initSession();
 initSequencer();
-async function refreshStats2() {
+async function refreshStats() {
   try {
     const s = await getJSON("/api/stats");
     const el = $("#stats");
@@ -3487,7 +3579,7 @@ async function refreshCaLink() {
     a.style.display = "none";
   }
 }
-refreshStats2();
+refreshStats();
 refreshScope2();
 refreshCaLink();
-setInterval(() => void refreshStats2(), 4000);
+setInterval(() => void refreshStats(), 4000);

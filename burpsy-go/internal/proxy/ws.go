@@ -52,6 +52,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
+	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
 )
 
@@ -118,12 +119,13 @@ func wsStripNote(removed []string) *string {
 }
 
 // handleWebSocketUpgrade takes over a connection whose request asked to upgrade
-// and whose origin answered 101. Called with the request already stored and the
-// exchange not yet created. An origin that refused the upgrade takes the
-// ordinary response path instead, so a refused upgrade is handled exactly like
-// any other response. strippedExtensions carries whatever stripWsHandshake
-// removed from the request, so the exchange can say the handshake was rewritten.
-func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, reqID core.MsgId, startTime time.Time, strippedExtensions []string) {
+// and whose origin answered 101. Called with nothing yet stored: the request
+// bytes are carried in so both halves of the handshake reach the shared producer
+// together. An origin that refused the upgrade takes the ordinary response path
+// instead, so a refused upgrade is handled exactly like any other response.
+// strippedExtensions carries whatever stripWsHandshake removed from the request,
+// so the exchange can say the handshake was rewritten.
+func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, startTime time.Time, strippedExtensions []string) {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	upstream, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -150,43 +152,59 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 			return
 		}
 		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqID, responseData, startTime)
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime)
 		return
 	}
 
 	// The handshake response is recorded before the relay starts, not after it
 	// ends. A WebSocket can stay open for hours, and an exchange whose response
 	// only appears when the socket finally closes would leave history showing a
-	// request that never got an answer for the entire session.
-	respID, err := s.config.store.Put(head, core.DirectionResponse)
-	if err != nil {
-		s.config.logger.Error("failed to store response", zap.Error(err))
-	}
-	exchange := &core.Exchange{
-		Request:     reqID,
-		Response:    &respID,
-		Host:        host,
-		Port:        port,
-		TLS:         false,
-		Method:      method,
-		Path:        path,
-		Status:      parseStatusCode(head),
-		DurationMs:  uint64(time.Since(startTime).Milliseconds()),
-		StartedMs:   uint64(startTime.UnixMilli()),
-		Protocol:    core.ProtocolHTTP1,
-		ResponseLen: len(head),
+	// request that never got an answer for the entire session — which is also the
+	// shape the shared producer now refuses outright, so recording it here is not
+	// merely nicer, it is the only way this row exists at all.
+	//
+	// The 101 head is the response, and it goes through scanner.Capture.Record
+	// like every other captured exchange. One consequence is deliberate: the
+	// handshake response is now passively scanned, where the hand-rolled version
+	// stored it and never scanned it. A 101's headers are headers, and "the same
+	// path as proxied traffic" is the requirement.
+	handshake := s.record(scanner.CapturedExchange{
+		Host:     host,
+		Port:     port,
+		TLS:      false,
+		Method:   method,
+		Path:     path,
+		Request:  requestData,
+		Response: head,
+		Started:  startTime,
+		Duration: time.Since(startTime),
+		Protocol: core.ProtocolHTTP1,
+		Source:   core.SourceProxy,
 		// A handshake this proxy rewrote must not look pristine.
 		Notes: wsStripNote(strippedExtensions),
-	}
-	s.config.store.AddExchange(exchange)
-
+	})
 	// The 101 goes to the client before frames start flowing.
 	if _, err := clientConn.Write(head); err != nil {
 		return
 	}
 
-	s.relayWebsocket(exchange.ID, clientConn, clientReader, upstream, upstreamBR,
-		host, port, false, path, &wsCapture{scope: s.config.scope, host: host, port: port, path: path})
+	// A handshake that could not be captured relays anyway, uncaptured — the same
+	// rule this file already applies when the frame stream desynchronises: the
+	// capture stops, the connection does not. Tearing down a working socket
+	// because our own bookkeeping failed would make the inspection tool the cause
+	// of the outage. Frames are only attached when there is a row to attach them
+	// to, so nothing accumulates against an exchange id that does not exist.
+	var capture *wsCapture
+	exchangeID := uint64(0)
+	if handshake != nil {
+		exchangeID = handshake.ID
+		capture = &wsCapture{scope: s.config.scope, host: host, port: port, path: path}
+	} else {
+		s.config.logger.Warn("relaying a websocket that could not be captured",
+			zap.String("host", host), zap.Uint16("port", port), zap.String("path", path))
+	}
+	s.relayWebsocket(exchangeID, clientConn, clientReader, upstream, upstreamBR,
+		host, port, false, path, capture)
 }
 
 // relayWebsocket pumps frames between the client and upstream until either side

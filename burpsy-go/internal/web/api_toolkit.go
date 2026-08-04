@@ -9,6 +9,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/tools"
 )
 
@@ -54,9 +55,9 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	hostFilter := q.Get("host")
 	pathFilter := q.Get("path")
 
-	// Keep the sitemap fresh relative to the store before folding.
-	s.sitemap.Sync(s.store)
-
+	// No Sync here. The map follows the store (see the sitemap package docs on CRAWL-05), so it is
+	// already current; rebuilding it on every read would also make a broken subscription invisible,
+	// because the read path would quietly do the subscription's job.
 	exchanges := s.store.Exchanges()
 	var tree []sitemapNodeView
 	var nodeCount int
@@ -422,21 +423,28 @@ func bytesEqual(a, b []byte) bool {
 
 // toolLogEntry mirrors toollog.ts's LogEntry.
 type toolLogEntry struct {
-	ID          uint64  `json:"id"`
-	Tool        string  `json:"tool"`
-	Host        string  `json:"host"`
-	Port        uint16  `json:"port"`
-	Method      string  `json:"method"`
-	Path        string  `json:"path"`
-	Status      *int    `json:"status"`
-	ResponseLen int     `json:"response_len"`
-	DurationMs  uint64  `json:"duration_ms"`
-	Error       *string `json:"error"`
+	ID          uint64 `json:"id"`
+	Tool        string `json:"tool"`
+	Host        string `json:"host"`
+	Port        uint16 `json:"port"`
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	Status      *int   `json:"status"`
+	ResponseLen int    `json:"response_len"`
+	// StartedMs is when the request went out, in Unix milliseconds. The UI's Dashboard pane has
+	// always rendered a relative time from this field; until now the wire shape did not carry it, so
+	// every row read "NaNs ago". Part of DASH-02: an event log with no times on it is not one.
+	StartedMs  uint64  `json:"started_ms"`
+	DurationMs uint64  `json:"duration_ms"`
+	Error      *string `json:"error"`
 }
 
 // toolLogResp mirrors toollog.ts's LogResp.
 type toolLogResp struct {
+	// Total is how many entries matched the filter, which is not how many are returned when a limit
+	// applies — Shown is. Both are reported so a caller showing 20 of 4000 can say so.
 	Total   int            `json:"total"`
+	Shown   int            `json:"shown"`
 	Dropped uint64         `json:"dropped"`
 	Counts  map[string]int `json:"counts"`
 	Entries []toolLogEntry `json:"entries"`
@@ -453,42 +461,58 @@ func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// toolLogGet serves GET /api/tools/log?filter=&search=&limit=.
+//
+// limit used to be accepted and ignored, which is why the Dashboard pane's `?limit=20` rendered the
+// entire log. Worse, the entries came back in append order, so the twenty rows an operator wanted
+// were the last twenty of however many thousand. A limit now takes the *newest* matches, in newest-
+// first order; without a limit the whole matching log comes back in append order, which is what the
+// Logger tab reads.
 func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := q.Get("filter")
 	search := q.Get("search")
+	limit := 0
+	if raw := q.Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
 	entries := s.toolLog.All()
-	view := make([]toolLogEntry, 0, len(entries))
-	counts := map[string]int{"repeater": 0, "intruder": 0, "scanner": 0, "bcheck": 0}
+	// Counts are over every match, not over the returned window: a per-tool histogram that shrank
+	// because the caller asked for twenty rows would be a histogram of the window, not of the log.
+	// Seeded from ToolAll so a tool added to the log is not silently absent from the histogram — the
+	// hard-coded four-key seed this replaces reported nothing at all for session, sequencer and
+	// comparer activity, and reported a permanent zero for a "bcheck" tool that does not exist.
+	counts := make(map[string]int, len(toollog.ToolAll))
+	for _, t := range toollog.ToolAll {
+		counts[t.String()] = 0
+	}
+	matched := make([]*toollog.Entry, 0, len(entries))
 	for _, e := range entries {
-		if filter != "" && e.Tool.String() != filter {
+		if !toolLogMatches(e, filter, search) {
 			continue
 		}
-		if search != "" && !strings.Contains(strings.ToLower(e.Host+e.Path+e.Method), strings.ToLower(search)) {
-			continue
-		}
-		var status *int
-		if e.Status > 0 {
-			st := e.Status
-			status = &st
-		}
-		view = append(view, toolLogEntry{
-			ID:          e.ID,
-			Tool:        e.Tool.String(),
-			Host:        e.Host,
-			Port:        e.Port,
-			Method:      e.Method,
-			Path:        e.Path,
-			Status:      status,
-			ResponseLen: 0,
-			DurationMs:  e.DurationMs,
-			Error:       strPtrIf(e.Note != "", e.Note),
-		})
+		matched = append(matched, e)
 		counts[e.Tool.String()]++
 	}
+
+	view := make([]toolLogEntry, 0, len(matched))
+	if limit > 0 {
+		for i := len(matched) - 1; i >= 0 && len(view) < limit; i-- {
+			view = append(view, toolLogEntryView(matched[i]))
+		}
+	} else {
+		for _, e := range matched {
+			view = append(view, toolLogEntryView(e))
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(toolLogResp{
-		Total:   len(view),
+		Total:   len(matched),
+		Shown:   len(view),
 		Dropped: s.toolLog.Dropped(),
 		Counts:  counts,
 		Entries: view,

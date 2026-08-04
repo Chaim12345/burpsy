@@ -78,7 +78,19 @@ func TestPlainHTTPInterceptionAndPassiveScan(t *testing.T) {
 		t.Errorf("body = %q, want hello", body)
 	}
 
-	// Exchange must be recorded.
+	// Exchange must be recorded. Polled, for the same reason the findings assertion below polls: the
+	// exchange is recorded by the proxy's connection goroutine *after* the response bytes have been
+	// written to the client, so a client that has already read its body proves nothing about whether
+	// that goroutine has reached AddExchange yet. Reading the store immediately passed on an idle
+	// machine and failed under load, which is the worst of both — a real ordering assumption that only
+	// showed itself when the suite was busy.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, n := store.Count(); n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	exchanges := store.Exchanges()
 	if len(exchanges) != 1 {
 		t.Fatalf("exchanges = %d, want 1", len(exchanges))
@@ -88,13 +100,8 @@ func TestPlainHTTPInterceptionAndPassiveScan(t *testing.T) {
 	}
 
 	// Passive scan findings: missing security headers on the target response.
-	// The scan runs in the proxy goroutine, so poll briefly.
 	var names map[string]bool
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && findings.Count() == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if findings.Count() == 0 {
+	if awaitFindings(findings, 3*time.Second) == 0 {
 		t.Fatal("passive scanner produced no findings")
 	}
 	names = map[string]bool{}
@@ -180,7 +187,13 @@ func TestTLSInterceptionMITM(t *testing.T) {
 		t.Errorf("body = %q, want secure hello", body)
 	}
 
-	// Exchange recorded as TLS.
+	// Exchange recorded as TLS. Polled, for the same reason the plain-HTTP test above polls: the TLS
+	// path now captures the exchange *after* the response has been written to the client, where it used
+	// to index the row before the operator's hold queue had even seen the response. The new order is
+	// what puts the delivered bytes in history rather than the origin's pre-rewrite ones — see
+	// handleTLSResponse — and it means a client holding its body no longer proves the capture goroutine
+	// has reached AddExchange.
+	awaitExchange(t, store)
 	exchanges := store.Exchanges()
 	if len(exchanges) != 1 {
 		t.Fatalf("exchanges = %d, want 1", len(exchanges))
@@ -193,9 +206,34 @@ func TestTLSInterceptionMITM(t *testing.T) {
 	}
 
 	// Passive findings from decrypted traffic.
-	if findings.Count() == 0 {
+	if awaitFindings(findings, 3*time.Second) == 0 {
 		t.Error("passive scanner produced no findings for intercepted TLS traffic")
 	}
+}
+
+// awaitFindings waits for the passive scan to reach the finding store, returning the count it
+// settled on.
+//
+// Needed because an exchange being visible in the store says nothing about whether its findings are.
+// scanner.Capture.Record publishes the exchange with AddExchange and only *then* runs ScanExchange,
+// so a test that asserts on exchanges and then immediately on findings is racing the scan. That
+// ordering is correct and should not change — a finding references its exchange, so the exchange must
+// have its id first — but it is the opposite of what a reader tends to assume.
+//
+// The window used to be microseconds, which is why asserting straight away passed for as long as it
+// did. It is now milliseconds, because the shared scan path also runs the static DOM pass, and a
+// millisecond is long enough to lose reliably. Note this waits for the scan to *finish*; it does not
+// weaken what is asserted afterwards, so a genuine regression — a scan that never runs — still fails
+// here, just three seconds later.
+func awaitFindings(findings *core.FindingStore, within time.Duration) int {
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if n := findings.Count(); n > 0 {
+			return n
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return findings.Count()
 }
 
 // TestConnectPassthroughBlind verifies passthrough hosts are blind-tunnelled
