@@ -177,7 +177,7 @@ func TestALocationOutsideItsSegmentIsRefusedRatherThanTruncated(t *testing.T) {
 	}
 	defer sl.Close()
 
-	loc, err := sl.Append([]byte("hello"))
+	loc, err := sl.Append(MsgId(0), DirectionRequest, []byte("hello"))
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestTheActiveSegmentIsReadableWithoutBeingMapped(t *testing.T) {
 	}
 	defer sl.Close()
 
-	loc, err := sl.Append([]byte("active-segment-bytes"))
+	loc, err := sl.Append(MsgId(0), DirectionRequest, []byte("active-segment-bytes"))
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -246,16 +246,22 @@ func TestVerifyCaptureDirActuallyFindsTheSegmentsThatWereWritten(t *testing.T) {
 	if len(verdicts) == 0 {
 		t.Fatal("VerifyCaptureDir examined no segments at all, yet the store just wrote several")
 	}
-	var checked int64
+	var records int
+	var payload int64
 	for _, v := range verdicts {
 		if v.Fault != nil {
 			t.Errorf("segment %s reported a fault: %s", v.Path, *v.Fault)
 		}
-		checked += int64(v.Checked)
+		records += v.Records
+		payload += v.PayloadBytes
 	}
-	if checked != written {
-		t.Errorf("verified %d bytes across %d segments but %d were written — Checked must be a byte "+
-			"count of what was actually read", checked, len(verdicts), written)
+	if records != 10 {
+		t.Errorf("verified %d records across %d segments but 10 messages were stored — every "+
+			"record written must be walked, not just every byte", records, len(verdicts))
+	}
+	if payload != written {
+		t.Errorf("verified %d payload bytes across %d segments but %d were written — PayloadBytes "+
+			"must count the message bytes actually checksummed", payload, len(verdicts), written)
 	}
 }
 

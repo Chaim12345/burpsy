@@ -650,12 +650,14 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 			if err := json.Unmarshal(exts, &parsed); err != nil {
 				return nil, err
 			}
-			for i, ex := range parsed {
-				rebuilt, err := session.NewExtraction(ex.Name, ex.From, ex.Pattern, ex.Group)
-				if err != nil {
+			// Recompile in place rather than rebuilding through NewExtraction from the handful of
+			// fields this loop happens to name: a field added to session.Extraction later (the owning
+			// step index and the header name both were) would otherwise be dropped on every load, so
+			// a rule would come back "restored" with its extractions bound to the wrong step.
+			for _, ex := range parsed {
+				if err := ex.Recompile(); err != nil {
 					return nil, err
 				}
-				parsed[i] = rebuilt
 			}
 			r.Extractions = parsed
 		}
@@ -818,8 +820,24 @@ func (s *Store) Restore(
 		if err != nil {
 			return fmt.Errorf("load session rules: %w", err)
 		}
+		// A saved rule goes back through the same validation a freshly-typed one does, so a rule written
+		// before a check existed can be refused on load. Each refusal is logged with its reason and
+		// then counted in a summary, because a rule dropped in silence leaves an operator with a
+		// project that looks fully restored and a target that has quietly stopped being
+		// authenticated. Restore keeps going rather than returning here: aborting on one bad session
+		// rule would take the organizer and the tool log down with it.
+		refused := 0
 		for _, r := range sessionRules {
-			sess.AddRule(r)
+			if _, err := sess.AddRule(r); err != nil {
+				s.log("restore session rule", err)
+				refused++
+			}
+		}
+		if refused > 0 {
+			s.log("restore session rules", fmt.Errorf(
+				"%d of %d saved session rule(s) no longer validate and were not installed; fix or "+
+					"delete them, or every request to the hosts they covered goes out unauthenticated",
+				refused, len(sessionRules)))
 		}
 	}
 

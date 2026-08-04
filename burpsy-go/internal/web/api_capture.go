@@ -35,8 +35,9 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		var err error
 		filter, err = compileQuery(q, s.store)
 		if err != nil {
-			// The UI renders this body verbatim with white-space:pre, caret and all.
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			// The UI renders this body verbatim with white-space:pre, caret and all — so send the
+			// caret rendering (message, source line, caret), not just the one-line message.
+			http.Error(w, query.Render(err), http.StatusBadRequest)
 			return
 		}
 	}
@@ -281,9 +282,8 @@ func derefMsgID(id *core.MsgId) uint64 {
 
 // handleIssues serves GET /api/issues. It follows the API's own "not configured" convention: a
 // plain 200 with enabled:false and a hint when passive scanning has nothing to report, never an
-// error-shaped body that would render as a broken panel. The Go port has no BCheck passive runner
-// wired to live traffic, so enabled stays false until that exists; findings recorded by explicit
-// active audits are still listed so the Scanner tab is never empty when work was done.
+// error-shaped body that would render as a broken panel. When a BCheck corpus is loaded via
+// --bchecks, enabled is true and loaded names how many passive checks will run.
 func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -295,9 +295,20 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		views = append(views, s.findingToIssueView(f))
 	}
 
+	loaded := 0
+	if s.passiveScanner != nil {
+		loaded = s.passiveScanner.Loaded()
+	}
+	enabled := loaded > 0
+	hint := ""
+	if !enabled {
+		hint = "passive BCheck scanning is not enabled; start with --bchecks DIR"
+	}
+
 	body := map[string]interface{}{
-		"enabled":  false,
-		"hint":     "passive BCheck scanning is not wired up in the Go port",
+		"enabled":  enabled,
+		"loaded":   loaded,
+		"hint":     hint,
 		"findings": views,
 	}
 	if len(views) > 0 {
@@ -364,7 +375,8 @@ func (f *queryFilter) match(ex *core.Exchange) bool {
 }
 
 // filteredExchangeQuery binds a store so Body() can resolve the request message. Mime is not
-// carried on the exchange and stays empty, which honestly leaves `mime = "..."` filters unmatching.
+// carried on the exchange and stays empty, which the query evaluator reads as "absent" — so every
+// `mime` comparison, `!=` included, is false here rather than some of them matching every row.
 type filteredExchangeQuery struct {
 	store *core.TrafficStore
 	ex    *core.Exchange

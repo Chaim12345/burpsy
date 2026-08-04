@@ -101,7 +101,9 @@ func cmdHistory(ctx *cliContext, args []string) error {
 	fs := newFlagSet("history")
 	limit := fs.Int("limit", 100, "maximum rows to print")
 	jsonOut := fs.Bool("json", false, "emit JSON rows instead of a table")
-	q := fs.String("query", "", "filter in the UI's query grammar (host:, method:, status:, mime:, body:)")
+	// The grammar is the query package's, not a `field:value` shorthand — the old help text
+	// advertised colons the parser never accepted, so every example it gave was a parse error.
+	q := fs.String("query", "", `filter in the UI's query grammar, e.g. 'status in 200..299 and host ~ "api."'`)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

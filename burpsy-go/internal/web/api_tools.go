@@ -641,9 +641,8 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "exchange_id is required", http.StatusBadRequest)
 		return
 	}
-	s.runAudit(r.Context(), req.ExchangeID)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"started": true, "exchange_id": req.ExchangeID})
+	json.NewEncoder(w).Encode(s.runAudit(r.Context(), req.ExchangeID))
 }
 
 // handleAuditByPath serves POST /api/audit/{id}, running an active scan over one exchange.
@@ -658,19 +657,40 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid exchange id", http.StatusBadRequest)
 		return
 	}
-	s.runAudit(r.Context(), id)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"started": true, "exchange_id": id})
+	json.NewEncoder(w).Encode(s.runAudit(r.Context(), id))
 }
 
-func (s *Server) runAudit(ctx context.Context, id uint64) {
+// runAudit audits one exchange and returns the response body both audit endpoints send.
+//
+// The body carries the engine's AuditOutcome, matching what the Rust route returns from its audit
+// hook (`{enabled, exchange, active_checks, outcome}`). Before the audit engine existed the reply was
+// `{started: true, exchange_id: N}` and the findings went to the finding store — so an operator who
+// audited a host that had stopped answering saw the same "started: true" as one whose whole check set
+// ran. Those two keys are kept for compatibility, and the outcome is what makes them mean something:
+// `dispositions` names every check that was *not* dispatched and why.
+//
+// scanner.ts renders this by pretty-printing the JSON it gets back, so the richer body needs no
+// change on the TypeScript side — there is no typed audit response to keep in sync.
+func (s *Server) runAudit(ctx context.Context, id uint64) map[string]interface{} {
 	if s.scanner == nil {
-		s.scanner = scanner.NewActiveScanner(s.store, s.logger)
+		// Built with the engagement scope: an active audit sends real traffic, and the engine refuses
+		// an out-of-scope exchange before it plans any work.
+		s.scanner = scanner.NewActiveScanner(s.store, s.logger).WithScope(s.scope)
 	}
-	findings, err := s.scanner.Audit(ctx, id)
-	if err != nil {
-		s.logger.Warn("audit failed", zap.Uint64("exchange_id", id), zap.Error(err))
-		return
+	body := map[string]interface{}{
+		"started":       true,
+		"exchange_id":   id,
+		"active_checks": s.scanner.ActiveCheckCount(),
+		"unimplemented": s.scanner.UnimplementedCheckCount(),
+	}
+	outcome, findings := s.scanner.AuditWithin(ctx, id, s.scanner.AuditConfig())
+	body["outcome"] = outcome
+	body["dispositions"] = outcome.Dispositions()
+	body["summary"] = outcome.Summary()
+	if outcome.Error != "" {
+		s.logger.Warn("audit refused", zap.Uint64("exchange_id", id), zap.String("reason", outcome.Error))
+		return body
 	}
 	ex, gerr := s.store.GetExchange(id)
 	if gerr == nil {
@@ -685,6 +705,7 @@ func (s *Server) runAudit(ctx context.Context, id uint64) {
 			Remediation: f.Solution,
 		})
 	}
+	return body
 }
 
 // ---- Sequencer ---------------------------------------------------------------------------------

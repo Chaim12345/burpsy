@@ -2,7 +2,6 @@
 package bcheck
 
 import (
-	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -230,6 +229,32 @@ func (c *Check) NeedsCollaborator() bool {
 	return containsInteractions(c.Statements)
 }
 
+// M2Runnable reports whether the evaluator can run this check with a sender but
+// no interaction server — the active set the audit engine dispatches.
+func (c *Check) M2Runnable() bool {
+	return !c.NeedsCollaborator() &&
+		c.Given != "insertion point" &&
+		!containsSendPayload(c.Statements)
+}
+
+func containsSendPayload(stmts []Statement) bool {
+	for _, s := range stmts {
+		switch t := s.(type) {
+		case *SendPayloadStatement:
+			return true
+		case *IfStatement:
+			if containsSendPayload(t.Then) || containsSendPayload(t.Else) {
+				return true
+			}
+		case *RunForEachStatement:
+			if containsSendPayload(t.Body) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // containsSend walks the statement tree for any outbound send.
 func containsSend(stmts []Statement) bool {
 	for _, s := range stmts {
@@ -401,15 +426,22 @@ func (ctx *Context) resolveRef(name string) string {
 		return ctx.resolveValue(v)
 	}
 	switch {
+	// The three single-argument builtins resolve their argument through
+	// resolveCallArg, not resolveRef. resolveRef resolves a *reference* — a
+	// variable name or a path — so it answers "" for the two argument shapes the
+	// corpus actually writes: a quoted literal (`base64_decode("DA==")`, which is
+	// how all five of the corpus's base64_decode calls are written) and a
+	// brace-wrapped reference (`to_lower({crlf.response.headers})`). Both used to
+	// resolve to "", and "" is also what a genuinely empty value looks like, so
+	// every one of those calls silently compared against nothing. Only a bare path
+	// (`to_lower(check1.response.body)`) ever worked. regex_replace already routed
+	// its arguments correctly; these three did not.
 	case strings.HasPrefix(name, "to_lower(") && strings.HasSuffix(name, ")"):
-		return strings.ToLower(ctx.resolveRef(innerCall(name, "to_lower(")))
+		return strings.ToLower(ctx.resolveCallArg(innerCall(name, "to_lower(")))
 	case strings.HasPrefix(name, "to_upper(") && strings.HasSuffix(name, ")"):
-		return strings.ToUpper(ctx.resolveRef(innerCall(name, "to_upper(")))
+		return strings.ToUpper(ctx.resolveCallArg(innerCall(name, "to_upper(")))
 	case strings.HasPrefix(name, "base64_decode(") && strings.HasSuffix(name, ")"):
-		if dec, err := base64.StdEncoding.DecodeString(ctx.resolveRef(innerCall(name, "base64_decode("))); err == nil {
-			return string(dec)
-		}
-		return ""
+		return base64DecodeTolerant(ctx.resolveCallArg(innerCall(name, "base64_decode(")))
 	case strings.HasPrefix(name, "regex_replace(") && strings.HasSuffix(name, ")"):
 		args := splitCallArgs(name[len("regex_replace(") : len(name)-1])
 		if len(args) != 3 {
@@ -504,6 +536,70 @@ func splitCallArgs(s string) []string {
 	}
 	out = append(out, s[start:])
 	return out
+}
+
+// base64DecodeTolerant decodes the standard base64 alphabet the way the corpus
+// actually needs it, and the way `crates/bcheck/src/funcs.rs:184` does: padding
+// is optional, `=` ends the value, and a character outside the alphabet is
+// skipped rather than failing the whole decode.
+//
+// `encoding/base64`'s StdEncoding is the wrong tool here even though it is the
+// obvious one. It requires padding and rejects whitespace, so the two shapes the
+// corpus contains — `"SGVsbG8"` (unpadded) and `"SGVs bG8="` (wrapped, so the
+// value carries a space) — both decoded to `""` on the Go side while decoding to
+// `"Hello"` on the Rust side. An empty string is exactly what a check that found
+// nothing also produces, so the failure was invisible: a check whose whole
+// premise was a decoded value silently compared against nothing.
+//
+// A value the corpus cannot have meant is still not invented: bits that do not
+// complete a byte are dropped, matching the Rust walk bit for bit.
+//
+// Divergence from Rust, and Go is the stronger side: Rust returns
+// `String::from_utf8_lossy`, so a genuinely binary decode becomes U+FFFD — its
+// own doc names this a known limitation, citing
+// `PathSuffix_WAF_Proxy.bcheck:32-34`, which decodes `"DA=="`, `"oA=="` and
+// `"hQ=="` to `\x0C`, `\xA0`, `\x85`. A Go string is a byte string, so those
+// bytes survive here and the check means what it says. Nothing is lost by not
+// replicating the lossy conversion.
+func base64DecodeTolerant(s string) string {
+	// val maps one alphabet character to its 6 bits, or reports that it is not
+	// part of the alphabet at all.
+	val := func(c byte) (byte, bool) {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			return c - 'A', true
+		case c >= 'a' && c <= 'z':
+			return c - 'a' + 26, true
+		case c >= '0' && c <= '9':
+			return c - '0' + 52, true
+		case c == '+':
+			return 62, true
+		case c == '/':
+			return 63, true
+		default:
+			return 0, false
+		}
+	}
+	out := make([]byte, 0, len(s)*3/4+1)
+	var acc uint32
+	var bits uint32
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '=' {
+			break
+		}
+		v, ok := val(c)
+		if !ok {
+			continue
+		}
+		acc = acc<<6 | uint32(v)
+		bits += 6
+		if bits >= 8 {
+			bits -= 8
+			out = append(out, byte(acc>>bits))
+		}
+	}
+	return string(out)
 }
 
 // ensureRNG seeds the random_str state from the response bytes on first use.

@@ -604,6 +604,36 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		return
 	}
 
+	clientOffer, replay, err := peekClientALPN(clientConn)
+	if err != nil {
+		return
+	}
+
+	intercepting := s.config.intercept != nil && s.config.intercept.Enabled()
+	offer := AlpnOffer(clientOffer, intercepting)
+	if len(clientOffer) > 0 && len(offer) == 0 {
+		s.config.logger.Warn("client ALPN offer cannot be carried",
+			zap.String("host", host),
+			zap.Strings("offered", clientOffer),
+			zap.Bool("intercepting", intercepting))
+		return
+	}
+
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	upstream, negotiated, err := dialUpstreamTLS(host, addr, offer)
+	if err != nil {
+		s.config.logger.Error("upstream TLS dial failed", zap.String("host", host), zap.Error(err))
+		return
+	}
+	defer upstream.Close()
+
+	protocol, err := NegotiatedProtocol(negotiated)
+	if err != nil {
+		s.config.logger.Warn("upstream negotiated unknown ALPN",
+			zap.String("host", host), zap.String("alpn", negotiated))
+		return
+	}
+
 	// Sign a leaf certificate for this host.
 	leaf, err := s.config.tls.engine.GetCertificate(host)
 	if err != nil {
@@ -611,29 +641,22 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		return
 	}
 
-	// TLS server side: terminate the client's TLS session.
-	tlsClient := tls.Server(clientConn, &tls.Config{
+	// TLS server side: offer the client exactly what the origin chose.
+	tlsClient := tls.Server(replay, &tls.Config{
 		Certificates: []tls.Certificate{*leaf},
+		NextProtos:   ClientALPNProtos(negotiated),
 	})
 	if err := tlsClient.Handshake(); err != nil {
-		// Handshake failures are common when clients reject the CA; drop quietly.
 		return
 	}
 	defer tlsClient.Close()
 
-	// TLS client side: connect to the origin.
-	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	upstream, err := tls.Dial("tcp", addr, &tls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: true, // standard testing-proxy behavior
-	})
-	if err != nil {
-		s.config.logger.Error("upstream TLS dial failed", zap.String("host", host), zap.Error(err))
+	if protocol == core.ProtocolHTTP2 {
+		s.relayH2(tlsClient, upstream, host, port)
 		return
 	}
-	defer upstream.Close()
 
-	// Serve HTTP over the decrypted channel, recording exchanges.
+	// Serve HTTP/1.1 over the decrypted channel, recording exchanges.
 	br := bufio.NewReader(tlsClient)
 	// The upstream side reads through one persistent buffered reader for the
 	// life of the connection. A fresh bufio per response would discard whatever
@@ -1017,13 +1040,21 @@ func (s *Server) runPassiveScan(exchange *core.Exchange) {
 	}
 	findings := s.config.scanner.Scan(exchange)
 	for _, f := range findings {
-		s.config.findings.Add(core.NewFinding{
+		scanner.EnrichFinding(f)
+		nf := core.NewFinding{
 			Name:        f.Name,
 			Severity:    core.ParseSeverity(f.Severity),
 			Confidence:  core.ParseConfidence(f.Confidence),
 			Description: f.Description,
 			Remediation: f.Solution,
-		})
+		}
+		if exchange.Response != nil {
+			nf.Occurrences = []core.Occurrence{{
+				Request:  exchange.Request,
+				Response: exchange.Response,
+			}}
+		}
+		s.config.findings.Add(nf)
 	}
 }
 

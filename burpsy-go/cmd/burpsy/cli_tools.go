@@ -273,9 +273,11 @@ func scanAudit(ctx *cliContext, args []string) error {
 	}
 	ctxb, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
 	defer cancel()
-	findings, err := ctx.scanner.Audit(ctxb, id)
-	if err != nil {
-		return err
+	// AuditWithin rather than Audit: the outcome is what says which checks were *not* dispatched, and
+	// a CLI that printed only findings would report a bounded audit as a clean one.
+	outcome, findings := ctx.scanner.AuditWithin(ctxb, id, ctx.scanner.AuditConfig())
+	if outcome.Error != "" {
+		return fmt.Errorf("exchange %d not audited: %s", id, outcome.Error)
 	}
 	ctx.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, 0, "audit")
 	for _, f := range findings {
@@ -290,6 +292,14 @@ func scanAudit(ctx *cliContext, args []string) error {
 		fmt.Fprintf(ctx.out, "%-8s %-10s %s\n", nf.Severity, nf.Confidence, nf.Name)
 	}
 	fmt.Fprintf(ctx.out, "\n%d finding(s) from exchange %d\n", len(findings), id)
+	// Printed unconditionally, including for a clean audit: "0 findings" means nothing without the
+	// count of checks that actually ran alongside it.
+	fmt.Fprintf(ctx.out, "%s\n", outcome.Summary())
+	for _, d := range outcome.Dispositions() {
+		if d.Count > 0 && d.StoppedLooking {
+			fmt.Fprintf(ctx.out, "  %d check(s) not dispatched: %s\n", d.Count, d.Reason)
+		}
+	}
 	return nil
 }
 

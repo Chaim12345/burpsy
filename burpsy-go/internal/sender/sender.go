@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
 	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
@@ -174,6 +175,10 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 
 // SendRaw sends a raw HTTP request string and returns the response.
 func (s *Sender) SendRaw(ctx context.Context, host string, port uint16, useTLS bool, rawRequest []byte) ([]byte, error) {
+	if burpsyhttp2.IsHTTP2Request(rawRequest) {
+		return s.sendH2Raw(ctx, host, port, useTLS, rawRequest)
+	}
+
 	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
 
 	var conn net.Conn

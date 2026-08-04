@@ -148,7 +148,13 @@ func sessionRulesAdd(ctx *cliContext, args []string) error {
 	if *validBody != "" {
 		rule.Validity = &session.ValidityRule{BodyContains: *validBody}
 	}
-	id := ctx.sess.AddRule(rule)
+	// The CLI earns the same refusals the web API does: AddRule validates, and a rule the operator
+	// typed wrongly is reported here rather than silently installed and discovered later as a login
+	// button that does nothing.
+	id, err := ctx.sess.AddRule(rule)
+	if err != nil {
+		return err
+	}
 	ctx.saveState()
 	fmt.Fprintf(ctx.out, "added rule %d\n", id)
 	return nil
@@ -189,7 +195,12 @@ func sessionRulesToggle(ctx *cliContext, args []string) error {
 		return fmt.Errorf("rule %d not found", id)
 	}
 	rule.Enabled = *enabled
-	ctx.sess.UpdateRule(id, rule)
+	// A stored rule that no longer validates (one saved before a check existed) must not be silently
+	// left enabled-but-unchanged: report it so the operator can fix the rule rather than wonder why
+	// toggling it had no effect.
+	if err := ctx.sess.UpdateRule(id, rule); err != nil {
+		return err
+	}
 	ctx.saveState()
 	fmt.Fprintf(ctx.out, "rule %d %s\n", id, onOff(*enabled))
 	return nil
@@ -213,13 +224,19 @@ func onOff(b bool) string {
 	return "disabled"
 }
 
-// sessionLogin replays the macro of the rule whose scope covers the probe host
-// through the HTTP sender, absorbing Set-Cookie into the coordinator's jar,
-// then reports whether the probe came back valid. This is the direct-engine
-// twin of the web's /api/session/login.
+// sessionLogin is the direct-engine twin of the web's POST /api/session/login: resolve the rule that
+// covers the probe host, send the probe with the coordinator's jar attached, and hand the response to
+// the coordinator's recovery path — which is what actually runs the login macro (single-flight per
+// rule, bounded by max_attempts) and retries the probe with the fresh session.
+//
+// It used to walk the rule's steps itself and then print "recovered" unconditionally at the end,
+// whatever the last response said, so the command reported success for having established nothing.
+// Every outcome is now named distinctly, for the reason the coordinator's docs give: "this is working"
+// and "this has quietly stopped trying" must be tellable apart.
 func sessionLogin(ctx *cliContext, args []string) error {
 	fs := newFlagSet("session login")
 	url := fs.String("url", "", "probe URL (the host picks the rule)")
+	method := fs.String("method", "GET", "probe method")
 	timeoutSec := fs.Int("timeout", 30, "per-request timeout in seconds")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -234,67 +251,95 @@ func sessionLogin(ctx *cliContext, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Resolved before anything is sent: with no rule for this target there is no macro to run with
+	// whatever comes back, so sending the probe would cost the target a request to no purpose.
 	rule := ctx.sess.MatchingRule(host)
 	if rule == nil {
-		fmt.Fprintln(ctx.out, "no_rule")
+		fmt.Fprintf(ctx.out, "no_rule_applies url=%s rules=%d\n", *url, len(ctx.sess.AllRules()))
 		return nil
 	}
-	for _, step := range rule.Steps {
-		status, body, err := ctx.cliRunStep(step.URL, step.Method, step.Body, *timeoutSec)
-		if err != nil {
-			fmt.Fprintf(ctx.out, "failed rule=%s step=%s\n", rule.Name, step.URL)
-			return nil
-		}
-		if rule.Validity != nil {
-			state := rule.Validity.Evaluate(status, nil, []byte(body))
-			if state == session.Valid {
-				fmt.Fprintf(ctx.out, "already_valid rule=%s\n", rule.Name)
-				return nil
-			}
-		}
-		_ = status
+	runner := ctx.cliMacroRunner(*timeoutSec)
+	probe := session.MacroStep{Method: strings.ToUpper(*method), URL: *url}
+	response, err := runner(probe)
+	if err != nil {
+		fmt.Fprintf(ctx.out, "probe_failed rule=%s error=%s\n", rule.Name, err)
+		return nil
 	}
-	fmt.Fprintf(ctx.out, "recovered rule=%s\n", rule.Name)
+	outcome := ctx.sess.HandleRecovery(probe, response, runner)
+	switch outcome.Kind {
+	case session.RecoveryNoRuleApplies:
+		// Unreachable here, since the rule was resolved above. Printed faithfully anyway rather than
+		// falling through to something that reads like success.
+		fmt.Fprintf(ctx.out, "no_rule_applies url=%s\n", outcome.URL)
+	case session.RecoveryAlreadyValid:
+		fmt.Fprintf(ctx.out, "already_valid rule=%s\n", rule.Name)
+	case session.RecoveryRecovered:
+		fmt.Fprintf(ctx.out, "recovered rule=%s login_attempts=%d\n", rule.Name, outcome.LoginAttempts)
+	case session.RecoveryStillInvalidAfterRelogin:
+		fmt.Fprintf(ctx.out, "still_invalid_after_relogin rule=%s login_attempts=%d\n", rule.Name, outcome.LoginAttempts)
+	case session.RecoveryGaveUp:
+		fmt.Fprintf(ctx.out, "gave_up rule=%s login_attempts=%d\n", rule.Name, outcome.LoginAttempts)
+	case session.RecoveryMacroFailed:
+		fmt.Fprintf(ctx.out, "macro_failed rule=%s attempt=%d %s\n", rule.Name, outcome.Attempt, outcome.Failure)
+	case session.RecoveryRetryFailed:
+		fmt.Fprintf(ctx.out, "retry_failed rule=%s login_attempts=%d error=%s\n", rule.Name, outcome.LoginAttempts, outcome.Error)
+	default:
+		// A new outcome kind must be printed here; saying so beats printing nothing and exiting 0.
+		return fmt.Errorf("recovery outcome kind %d has no cli mapping", int(outcome.Kind))
+	}
 	return nil
 }
 
-// cliRunStep executes one macro step through the sender, absorbing cookies.
-func (ctx *cliContext) cliRunStep(url, method, body string, timeoutSec int) (int, string, error) {
-	host, port, tls, path, err := parseTargetURL(url)
-	if err != nil {
-		return 0, "", err
-	}
-	if method == "" {
-		method = "GET"
-	}
-	req := &sender.Request{
-		Method: strings.ToUpper(method),
-		Host:   host,
-		Path:   path,
-		Headers: map[string]string{
-			"Host": host,
-		},
-		Body: []byte(body),
-		TLS:  tls,
-		Port: port,
-	}
-	if cookie := ctx.sess.CookieHeader(host, port, tls); cookie != "" {
-		req.Headers["Cookie"] = cookie
-	}
-	c, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
-	defer cancel()
-	resp, err := ctx.sender.Send(c, req)
-	if err != nil {
-		ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, 0, err.Error())
-		return 0, "", err
-	}
-	for k, v := range resp.Headers {
-		if strings.EqualFold(k, "Set-Cookie") {
-			ctx.sess.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
+// cliMacroRunner is the session package's MacroStepRunner seam bound to the CLI's sender, so the CLI
+// drives the same coordinator the web layer does. It carries the step's own headers and returns the
+// response's, which is what a HeaderPresent validity rule needs in order to mean anything from here —
+// the bespoke per-step sender this replaces sent only Host and discarded every response header.
+func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
+	return func(step session.MacroStep) (*session.StepResult, error) {
+		host, port, tls, path, err := parseTargetURL(step.URL)
+		if err != nil {
+			return nil, err
 		}
+		method := strings.ToUpper(step.Method)
+		if method == "" {
+			method = "GET"
+		}
+		req := &sender.Request{
+			Method:  method,
+			Host:    host,
+			Path:    path,
+			Headers: map[string]string{"Host": host},
+			Body:    []byte(step.Body),
+			TLS:     tls,
+			Port:    port,
+		}
+		for k, v := range step.Headers {
+			req.Headers[k] = v
+		}
+		// The coordinator attaches the jar's cookie to a step it owns; fill one in only when the step
+		// did not carry one (the operator's own probe).
+		if _, has := req.Headers["Cookie"]; !has {
+			if cookie := ctx.sess.CookieHeader(host, port, tls); cookie != "" {
+				req.Headers["Cookie"] = cookie
+			}
+		}
+		c, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+		resp, err := ctx.sender.Send(c, req)
+		if err != nil {
+			ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, 0, err.Error())
+			return nil, err
+		}
+		hdrs := make(map[string]string, len(resp.Headers))
+		for k, v := range resp.Headers {
+			hdrs[k] = v
+			if strings.EqualFold(k, "Set-Cookie") {
+				ctx.sess.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
+			}
+		}
+		ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode, uint64(resp.Duration.Milliseconds()), "")
+		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil
 	}
-	ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode, uint64(resp.Duration.Milliseconds()), "")
-	return resp.StatusCode, string(resp.Body), nil
 }
 
 func sessionCookies(ctx *cliContext, args []string) error {

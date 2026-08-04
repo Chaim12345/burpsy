@@ -110,10 +110,22 @@ func authRule(hosts []string, steps []MacroStep, maxAttempts int) *SessionRule {
 
 func getStep(url string) MacroStep { return MacroStep{Method: "GET", URL: url} }
 
+// mustAddRule installs a rule that the test intends to be valid. AddRule validates, so a fixture that
+// drifts into something the coordinator refuses fails here with the reason rather than as a
+// mystifying "no rule applies" further down.
+func mustAddRule(t *testing.T, c *Coordinator, rule *SessionRule) RuleID {
+	t.Helper()
+	id, err := c.AddRule(rule)
+	if err != nil {
+		t.Fatalf("AddRule(%q): %v", rule.Name, err)
+	}
+	return id
+}
+
 func TestHandleRecoveryAlreadyValidDoesNotTriggerALogin(t *testing.T) {
 	fake := newFakeSender()
 	c := NewCoordinator(zap.NewNop())
-	c.AddRule(authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
+	mustAddRule(t, c, authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
 
 	outcome := c.HandleRecovery(getStep("https://example.com/account"), validResponse(), fake.runner())
 	if outcome.Kind != RecoveryAlreadyValid {
@@ -132,7 +144,7 @@ func TestHandleRecoveryRunsMacroExactlyOnceThenRetriesOriginal(t *testing.T) {
 	fake.script("https://example.com/account", validResponse(), nil)
 
 	c := NewCoordinator(zap.NewNop())
-	c.AddRule(authRule([]string{"example.com"}, []MacroStep{
+	mustAddRule(t, c, authRule([]string{"example.com"}, []MacroStep{
 		getStep("https://example.com/login"),
 		getStep("https://example.com/dashboard"),
 	}, 3))
@@ -158,7 +170,7 @@ func TestHandleRecoveryGivesUpAfterMaxAttempts(t *testing.T) {
 		fake.script("https://example.com/login", invalidResponse(), nil)
 	}
 	c := NewCoordinator(zap.NewNop())
-	c.AddRule(authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
+	mustAddRule(t, c, authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
 
 	outcome := c.HandleRecovery(getStep("https://example.com/account"), invalidResponse(), fake.runner())
 	if fake.callCount("https://example.com/login") != 3 {
@@ -176,7 +188,7 @@ func TestTransportFailureDuringMacroIsMacroFailedAndNotRetried(t *testing.T) {
 	fake := newFakeSender()
 	fake.script("https://example.com/login", nil, errors.New("connection reset"))
 	c := NewCoordinator(zap.NewNop())
-	c.AddRule(authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
+	mustAddRule(t, c, authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
 
 	outcome := c.HandleRecovery(getStep("https://example.com/account"), invalidResponse(), fake.runner())
 	if fake.callCount("https://example.com/login") != 1 {
@@ -200,7 +212,7 @@ func TestLoginCookieIsAttachedToTheRetriedOriginalRequest(t *testing.T) {
 	fake.script("https://example.com/account", validResponse(), nil)
 
 	c := NewCoordinator(zap.NewNop())
-	c.AddRule(authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
+	mustAddRule(t, c, authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
 	outcome := c.HandleRecovery(getStep("https://example.com/account"), invalidResponse(), fake.runner())
 	if outcome.Kind != RecoveryRecovered {
 		t.Fatalf("outcome = %+v, want Recovered", outcome)
@@ -224,7 +236,7 @@ func TestNConcurrentInvalidObservationsCauseOneLoginNotN(t *testing.T) {
 	}
 
 	c := NewCoordinator(zap.NewNop())
-	c.AddRule(authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
+	mustAddRule(t, c, authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
 
 	ready := make(chan struct{})
 	release := make(chan struct{})
@@ -258,7 +270,7 @@ func TestNConcurrentInvalidObservationsCauseOneLoginNotN(t *testing.T) {
 func TestResponseForTargetNoRuleCoversIsReportedNotLoggedInto(t *testing.T) {
 	fake := newFakeSender()
 	c := NewCoordinator(zap.NewNop())
-	c.AddRule(authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
+	mustAddRule(t, c, authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
 
 	outcome := c.HandleRecovery(getStep("https://elsewhere.test/account"), invalidResponse(), fake.runner())
 	if outcome.Kind != RecoveryNoRuleApplies || outcome.URL != "https://elsewhere.test/account" {
@@ -293,7 +305,7 @@ func TestUpdateMacroPromotesLastSuccessfulRunKeepingPlaceholders(t *testing.T) {
 	fake.script("https://example.com/account", validResponse(), nil)
 
 	c := NewCoordinator(zap.NewNop())
-	id := c.AddRule(csrfRule())
+	id := mustAddRule(t, c, csrfRule())
 
 	if got := c.UpdateMacro(id); got.Kind != UpdateMacroNothingObserved {
 		t.Fatalf("UpdateMacro before any successful login = %+v, want NothingObserved", got)
@@ -336,7 +348,7 @@ func TestOnlyASuccessfulRunIsObservedForPromotion(t *testing.T) {
 		fake.script("https://example.com/login", invalidResponse(), nil)
 	}
 	c := NewCoordinator(zap.NewNop())
-	id := c.AddRule(authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
+	id := mustAddRule(t, c, authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3))
 
 	outcome := c.HandleRecovery(getStep("https://example.com/account"), invalidResponse(), fake.runner())
 	if outcome.Kind != RecoveryGaveUp {
@@ -352,7 +364,7 @@ func TestEnsureLoggedInReturnsLoginOutcomeDirectly(t *testing.T) {
 	fake.script("https://example.com/login", validResponse(), nil)
 	c := NewCoordinator(zap.NewNop())
 	rule := authRule([]string{"example.com"}, []MacroStep{getStep("https://example.com/login")}, 3)
-	c.AddRule(rule)
+	mustAddRule(t, c, rule)
 
 	out := c.EnsureLoggedIn(rule, fake.runner())
 	if out.Kind != LoginSucceeded || out.Attempts != 1 {

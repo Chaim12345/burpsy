@@ -1,5 +1,116 @@
 # burpsy-go — Rust parity gaps (verified)
 
+> **UPDATED 2026-08-04.** ⚠️ **The 2026-08-03 note below claiming the build is
+> broken is stale** — `go build ./...` and `go test ./...` are both clean across
+> every package as of this update (verified directly, not inferred). The mid-flight
+> refactor that note described has landed: **gap 1 (HTTP/2) and gap 2 (scanner
+> catalog + coverage) are both substantially closed**, uncommitted in the working
+> tree alongside this file. See their sections below, rewritten to match. Summary
+> of what changed since 2026-08-03:
+>
+> - **Gap 1 (HTTP/2): OPEN → PARTIAL.** `internal/http2` (normalise/parse),
+>   `internal/proxy/alpn.go`+`tls_peek.go`+`tls_dial.go`+`h2_relay.go`, and
+>   `internal/sender/h2.go` now give the proxy a real ALPN-negotiated HTTP/2 MITM
+>   relay and HTTP/2 egress for Repeater/Intruder raw sends, built on
+>   `golang.org/x/net/http2` rather than a hand-rolled frame layer. This closes
+>   the "can't intercept HTTP/2 sites" half of the gap. It does **not** close the
+>   "craft a deliberately malformed HTTP/2 frame / raw HPACK control" half —
+>   that's `crates/http2/src/{frame,hpack,malformed}.rs` (712+1309+1259 LOC), a
+>   different and much larger capability (manual low-level HTTP/2 editing for
+>   desync/smuggling research, not transport), newly identified as its own
+>   sub-gap. See the rewritten section 1 below.
+> - **Gap 2 (Scanner catalog + coverage): OPEN → mostly COMPLETE.**
+>   `internal/scanner/catalog.go`+`catalog_data.go` (generated, 183/183 issue
+>   definitions transcribed from the same Burp jar source as the Rust catalog)
+>   and `coverage.go` (a faithful port of `crates/scanner/src/coverage.rs`,
+>   documented single divergence: no `native` field, since Go has no native
+>   check set) are both real and tested, wired end-to-end: `passive.go` runs the
+>   BCheck corpus (opt-in via new `--bchecks DIR` flag) with per-check coverage
+>   tracked, `enrich.go` fills remediation from the catalog, and
+>   `GET /api/scanner/coverage` (`internal/web/api_scanner_coverage.go`) serves
+>   it. What's still open is the audit *engine* (ledger/dispatch-scope/budget
+>   model) — that remains gap 3, unchanged and separate. See the rewritten
+>   section 2 below.
+>
+> Gaps 3, 4, 5, and 10 are untouched by this update and still reflect the
+> 2026-08-03 analysis.
+>
+> **Same day, second round: gaps 9, 12, and 13 closed** by three parallel agents,
+> each verified independently (`go build ./...`/`go test ./...` clean in
+> isolation) and then re-verified together (whole-repo `gofmt -l .` clean,
+> `go build ./...`/`go test ./...` clean, `go vet ./...` clean). All three found
+> and fixed real bugs beyond their stated scope, not just documented gaps:
+>
+> - **Gap 13 (Query DSL): PARTIAL → COMPLETE.** Parens, `status in low..high`,
+>   the five string escapes, and parse-time type checking (DSL-04) all landed in
+>   `internal/query/query.go` (288 → 764 lines) with 24 new tests. Found and
+>   fixed en route: `==` never matched anything (only `=` was handled), and an
+>   absent `status`/`mime` was compared as a real value instead of "no match" —
+>   both silent-false bugs indistinguishable from a query that legitimately
+>   matched nothing. Deliberate behaviour change: `method` comparison is now
+>   case-sensitive (RFC 7230) where `host`/`mime` stay case-insensitive,
+>   matching Rust; previously all four fields used case-insensitive matching.
+> - **Gap 9 (segment CRC32): PARTIAL → COMPLETE.** `internal/core/segment.go`
+>   now writes the same 16-byte file header (magic `BURPSYSG` + version) and
+>   17-byte per-record header (len/msg_id/direction/crc32) as
+>   `crates/core/src/segment.rs`, byte-for-byte, verified against an
+>   independently-hand-built Python/`zlib.crc32` reference encoder. `Append`'s
+>   signature changed to take the message id and direction; `VerifyCaptureDir`
+>   now walks records and recomputes every checksum instead of reading to EOF
+>   and counting bytes, catching the exact same-length-byte-flip case the old
+>   ledger entry named as undetectable.
+> - **Gap 12 (session coordinator): PARTIAL → COMPLETE.** Config-time
+>   `SessionRule` validation (mirroring `crates/session/src/rule.rs`) is wired
+>   into every rule-install path, and `HandleRecovery`/`EnsureLoggedIn` are now
+>   actually called from both `POST /api/session/login` and the
+>   `burpsy session login` CLI command. Found and fixed en route (both were
+>   silent, both shipped): (1) a session rule submitted with "allow all hosts"
+>   scope could **never match any host**, because empty `ScopeHosts` was read
+>   as "matches nothing" instead of Rust's "applies everywhere" default — every
+>   such rule was silently dead on arrival while requests kept going out
+>   unauthenticated; (2) `POST /api/session/rules` **silently dropped every
+>   extraction** a caller submitted (the DTO shape didn't even match what the
+>   UI sends), so the `{{name}}` token-scraping feature was broken end-to-end
+>   through the web API; (3) `handleSessionLogin` reported `outcome: "recovered"`
+>   unconditionally whenever a probe wasn't already valid, without ever running
+>   the login macro — the exact "wiring" gap this wraps up.
+>
+> Full agent reports (files touched, byte layouts, test names, every named
+> divergence) are preserved in this session's transcript; the sections below
+> are the condensed ledger entries.
+
+> **STALE — superseded by the update above.** ⚠️ **CURRENT
+> BUILD STATE: the go-port HEAD does not compile.** A parallel refactor (scanner →
+> bcheck-driven passive flow via `internal/scanner/passive.go`, and session recovery
+> via `internal/session/recovery.go`) is mid-flight in the working tree: `go build
+> ./...` fails (e.g. `scanner.go:414 undefined: bcheck`, `passive.go:180
+> exchange.Timestamp`, `session` `TestUpdateMacro…` failing) and moves between
+> snapshots. All COMPLETE/OPEN/PARTIAL verdicts below describe **feature presence**
+> from source inspection, independent of the current broken build.
+>
+> This re-analysis supersedes the statuses in the Plan table below where they
+> differ. Since gaps.md was last written, commit `ad36d0a` landed RequestEdit and
+> the single-copy byte store (gaps 8/9), and a full source cross-check refreshed
+> 6/7/10/11/12 and added a **new gap (13: Query DSL)**. The delta from the old table:
+>
+> | Gap | Old status | New status | Why |
+> |-----|-----------|-----------|-----|
+> | 6 Intruder payload sets | PARTIAL | **COMPLETE** | `PayloadSet`, Numbers/Dates/BruteForce/CustomIterator, all 9 process rules ported |
+> | 7 Sequencer FIPS 140-2 | COMPLETE | COMPLETE | verified—all four §4.9.1 tests, matching thresholds |
+> | 8 `RequestEdit` | OPEN | **COMPLETE** | landed (`internal/core/edit.go`, wired into bcheck) |
+> | 9 Store verify_index | PARTIAL | PARTIAL | `VerifyIndex` fully ported w/ real on-disk resolution; on-disk CRC32 still missing (Rust has it) |
+> | 10 BCheck builtins | COMPLETE | **PARTIAL** | `base64_decode` is strict (`StdEncoding`, rejected tests) vs Rust tolerant decoder |
+> | 11 Comparer | PARTIAL(table)/COMPLETE(section) | **COMPLETE** | table was stale; `DiffWithBudget`/`Granularity`/`Truncated` all present |
+> | 12 Session coordinator | PARTIAL | PARTIAL | `recovery.go` landed (outcome types, single-flight, update-macro); config-time rule validation + live auto-recovery still missing; currently non-compiling |
+> | +13 Query DSL | n/a | **PARTIAL** | Go lacks parentheses, `in low..high`, string escapes, parse-time type safety (DSL-04) |
+>
+> Also **COMPLETE (verified): WebSocket relay** parity (`proxy/ws.go` vs
+> `crates/proxy/src/ws.rs`, relay-first/capture-second, per-message scope) — the
+> goroutine-vs-`select!` implementation difference is documented and equivalent.
+> **Remaining OPEN (unchanged):** HTTP/2 (1), scanner catalog+coverage (2), scanner
+> audit engine (3). `crates/http2` work exists on unmerged branches
+> (`.worktrees/h2-egress`, `h2-mitm`) and has not reached master.
+
 > **UPDATED 2026-08-03.** This is the graph-and-source-verified gap ledger for the
 > Go port, cross-checked against the Rust workspace with `codegraph` and
 > `codebase-memory` MCP indexes plus direct reads. Its purpose is honest
@@ -41,55 +152,130 @@ with the reason named), **PARTIAL** (ported with a reduced scope, named), or
 
 | # | Gap | Status | Priority |
 |---|-----|--------|----------|
-| 1 | HTTP/2 support absent | OPEN | P1 |
-| 2 | Scanner catalog + coverage absent | PARTIAL | P1 |
-| 3 | Scanner audit engine far thinner | PARTIAL | P2 |
+| 1 | HTTP/2 support absent | PARTIAL (relay+egress landed; raw frame/HPACK crafting still absent) | P1 |
+| 2 | Scanner catalog + coverage absent | PARTIAL (catalog+coverage landed and wired; audit engine still gap 3) | P1 |
+| 3 | Scanner audit engine far thinner | OPEN | P2 |
 | 4 | JS vulnerability checks hand-rolled | PARTIAL | P2 |
 | 5 | JWT weak-signature checks simplified | PARTIAL | P3 |
-| 6 | Intruder payload sets absent | PARTIAL | P1 |
+| 6 | Intruder payload sets absent | COMPLETE | P1 |
 | 7 | Sequencer FIPS 140-2 absent | COMPLETE | P2 |
-| 8 | `RequestEdit` absent as a type | OPEN | P2 |
-| 9 | Store `verify_index` partial | PARTIAL | P3 |
-| 10 | BCheck builtins partial | COMPLETE | P1 |
-| 11 | Comparer no granularity/budget | PARTIAL | P3 |
-| 12 | Session coordinator simplified | PARTIAL | P3 |
+| 8 | `RequestEdit` absent as a type | COMPLETE | P2 |
+| 9 | Store `verify_index` + on-disk checksum | COMPLETE | P3 |
+| 10 | BCheck builtins (`base64_decode` fidelity) | COMPLETE | P1 |
+| 11 | Comparer no granularity/budget | COMPLETE | P3 |
+| 12 | Session coordinator simplified | COMPLETE | P3 |
+| 13 | Query DSL (parens / `in` range / escapes / DSL-04) | COMPLETE | P2 |
 
 ---
 
 ## Filled — the twelve gaps
 
-### 1. HTTP/2 support absent — OPEN
+### 1. HTTP/2 support absent — PARTIAL (relay + egress landed 2026-08-04; raw frame/HPACK crafting still absent)
 
 **Rust:** a full `crates/http2` crate (pure framing/HPACK/normalisation over
 bytes, no sockets) plus a relay/sender stack:
 
-- `crates/http2/src/malformed.rs` — `stream_id_rules_are_judged_per_frame_type:820`,
-  `a_frame_interleaved_inside_a_header_block_is_reported:995`,
-  `padding_that_runs_past_the_frame_is_reported:1093`.
-- `crates/http2/src/normalise.rs` — `render_request:69`, `render_response:103`.
+- `crates/http2/src/frame.rs` (712 LOC) — a hand-rolled frame encoder covering
+  every frame type, including the ability to write **spec-illegal** frames on
+  purpose (wrong length, bad flags, malformed padding).
+- `crates/http2/src/hpack.rs` (1,309 LOC) — a hand-rolled HPACK codec giving an
+  operator control down to the header-block-fragment level.
+- `crates/http2/src/malformed.rs` (1,259 LOC) — a `Malformation` vocabulary
+  (`ClearFlags`, bad stream ids, unterminated header blocks, etc.) plus an
+  `audit` function that judges a hand-built frame program against every rule it
+  breaks, naming the RFC section. Explicitly a manual security-research tool
+  ("this module does not send anything" — its own doc header says so): craft a
+  deliberately malformed HTTP/2 request, see exactly which spec rules it
+  violates, for desync/smuggling-style research. Not a transport layer.
+- `crates/http2/src/normalise.rs` (235 LOC) — `render_request`/`render_response`,
+  turning one H2 stream into HTTP/1-shaped bytes so existing history/tools work.
 - `crates/proxy/src/h2_relay.rs` (477 LOC), `crates/sender/src/h2req.rs` (418),
-  `crates/sender/src/transport/h2.rs` (665).
+  `crates/sender/src/transport/h2.rs` (665) — the relay/sender stack built on
+  top of `frame.rs`/`hpack.rs`.
 
-**Go:** proxy and sender are HTTP/1.1-only; the CONNECT tunnel writes literal
-`HTTP/1.1 200 Connection Established` at `internal/proxy/proxy.go:516,753`.
-No H2 frames, HPACK, or stream handling.
+**Go (relay + egress now landed):** the proxy negotiates ALPN honestly instead
+of assuming HTTP/1.1: `internal/proxy/tls_peek.go` peeks the client's ClientHello
+for its offered protocols without consuming the handshake, `internal/proxy/alpn.go`
+(`AlpnOffer`, `NegotiatedProtocol`, `ClientALPNProtos`) decides what to offer the
+origin and what to hand back to the client, `internal/proxy/tls_dial.go` dials
+upstream with that offer, and `internal/proxy/proxy.go`'s `interceptTLS`
+(`:604-660`) replays the client's ClientHello (`peekClientALPN`'s `replay` conn)
+into a real TLS server handshake advertising exactly what the origin chose —
+never claiming an ALPN the origin didn't actually negotiate. When the negotiated
+protocol is `h2`, `internal/proxy/h2_relay.go`'s `relayH2`/`relayH2Stream` drive
+`golang.org/x/net/http2` on both decrypted legs (a `http2.Server` terminating the
+client, a `http2.Transport`/`ClientConn` to the origin), rendering each stream
+through `internal/http2/normalise.go`'s `RenderRequest`/`RenderResponse` (ported
+from `normalise.rs`) into the same HTTP/1-shaped history bytes every other tool
+already expects, and running the same passive-scan path (`runPassiveScan`) any
+HTTP/1.1 exchange gets. `internal/sender/h2.go`'s `sendH2Raw` (dispatched from
+`SendRaw` via `internal/http2/parse.go`'s `IsHTTP2Request`) gives Repeater/Intruder
+raw-request replay a real HTTP/2 client path over TLS, round-tripping through
+`http2.ClientConn` and rendering the response back through the same
+`RenderResponse`. Tests: `internal/proxy/alpn_test.go`, `internal/proxy/h2_relay_test.go`,
+`internal/http2/normalise_test.go`.
 
-**Decline path:** none recorded. This is the biggest functional difference; it
-bounds which targets the proxy can audit (HTTP/2-only hosts are not intercepted
-the way Burp does).
+**Still absent, named as its own sub-gap:** everything `frame.rs`/`hpack.rs`/
+`malformed.rs` provide — hand-crafting a spec-illegal HTTP/2 frame or a raw
+HPACK header-block fragment for manual research, and an audit that names which
+RFC rule a deliberately-malformed frame breaks. Go's relay is built on
+`golang.org/x/net/http2`, a conformant library that (by design) will not let a
+caller construct or transmit an illegal frame — so this is not a smaller version
+of the same capability, it is a capability the current design cannot express at
+all without a parallel hand-rolled frame/HPACK layer alongside the conformant
+one. **Decline path:** none recorded yet; this is a real, separately-sized
+follow-up (roughly the size of `frame.rs`+`hpack.rs`+`malformed.rs`, ~3,280 LOC)
+if Burp's raw-HTTP/2-editing parity is wanted, distinct from "the proxy can
+intercept HTTP/2 sites" which is now closed.
 
-### 2. Scanner catalog + coverage absent — PARTIAL
+### 2. Scanner catalog + coverage absent — mostly COMPLETE (landed 2026-08-04; audit engine remains gap 3)
 
 **Rust:** `crates/scanner/src/catalog.rs` (447) + `catalog_data.rs` (5,775) +
 `coverage.rs` (274) — the catalog of known checks, and per-check coverage
 reporting (which checks ran, which declined, why).
 
-**Go:** findings are ad-hoc strings emitted by the active scanner; there is no
-catalog type and no coverage report. Graph query for catalog/coverage types
-returns nothing.
+**Go (now ported):** `internal/scanner/catalog.go` (173 LOC) + `catalog_data.go`
+(3,698 LOC, **generated** by `internal/scanner/tools/gen_catalog.py` — do not
+hand-edit, regenerate instead) transcribe all **183/183** issue definitions from
+the same Burp Suite jar source the Rust catalog uses (`IssueDefinition`:
+`TypeIndex`/`DeclaredTypeIndex` kept verbatim even where they disagree in 2 of
+183 cases, `TypicalSeverity`, `Description`, `Remediation` — empty exactly when
+the source has none, never invented — `References`, `Classifications` with
+`CWEs()`/`CAPECs()` parsed from titles; 169/183 carry a remediation, 227
+references, 433 classifications — same counts as the Rust side). `coverage.go`
+(328 LOC) is a documented-faithful port of `crates/scanner/src/coverage.rs`:
+`ScanSkip` (why `Scan` returned before any check ran — no checks loaded, exchange
+not found, out of scope, response not found), `CheckCoverage`/`CoverageState`
+(errored beats a clean run in classification), `CoverageTracker`/`CoverageReport`
+with one write-lock per scan (not per check) via a locally-built `ScanDelta`
+buffer. The one named divergence: Rust's `CoverageReport` carries a `native`
+field for a native check set Go doesn't have yet, so the field is omitted
+rather than carried empty. `internal/scanner/passive.go` wires it all together:
+`LoadDir` parses a `.bcheck` corpus, classifies it into passive/active/needs-
+collaborator/needs-insertion-point buckets (`LoadReport`), and `scanBChecks`
+runs the loaded passive set per response, folding a per-response `ScanDelta`
+buffer into the tracker in one lock acquisition; `enrich.go`'s `EnrichFinding`
+fills remediation from the catalog by exact name match without ever overwriting
+a finding's own judged severity. Wired end-to-end: `cmd/burpsy/main.go` gained
+`--bchecks DIR` (opt-in, matching the Rust CLI; without it the pre-existing
+built-in header/cookie checks still run so old behaviour is preserved),
+`internal/proxy/proxy.go`'s `runPassiveScan` now calls `scanner.EnrichFinding`
+and attaches `Occurrences`, `internal/web/api_capture.go`'s `handleIssues` reports
+`enabled`/`loaded` honestly instead of a hardcoded `false`, and a new
+`GET /api/scanner/coverage` (`internal/web/api_scanner_coverage.go`) serves the
+live `CoverageReport` (checks, skips, state partition) to the UI. Tests:
+`internal/scanner/catalog_test.go`, `coverage_test.go`, `passive_test.go`,
+`internal/web/issues_api_test.go`.
 
-**Decline path:** none for catalog (P1); coverage reporting follows if catalog
-lands.
+**Not closed by this — still gap 3:** the audit *engine* — Rust's
+`crates/scanner/src/audit.rs` (931 LOC: `AuditLedger`, `DispatchScope`,
+`Disposition`, the budget/backpressure model) has no Go counterpart yet; Go's
+`ActiveScanner` still only runs the three hand-rolled active checks
+(SQLi/XSS/path-traversal). Catalog/coverage closing gap 2 does not imply gap 3
+is closed — they are genuinely separate subsystems in Rust too.
+
+**Decline path:** none; both catalog and coverage are ported, generated from
+the same source data, and wired into live traffic and the web API.
 
 ### 3. Scanner audit engine far thinner — PARTIAL
 
@@ -294,42 +480,65 @@ Still outstanding, and deliberately left: `internal/intruder/intruder.go`
 Content-Length. That is a separate gap from this one — it is about Intruder's
 `§marker§` model, not about the absence of an edit type.
 
-### 9. Store verification partial — PARTIAL (blocked on a segment format change)
+### 9. Store verification — COMPLETE (per-record CRC32 landed 2026-08-04)
 
-**Rust:** `crates/core/src/lib.rs` — `verify_capture_dir:453`, `verify_index:782`,
-`verify_segments:894`. Two mechanisms that deliberately do not subsume each other:
-`verify_index` proves the in-memory index is self-consistent (and would still pass
-if the bytes on disk had rotted, because it reads them *through* the index it is
-checking), while `verify_segments`/`verify_capture_dir` re-read each file and
-recompute every CRC, catching what appeared *after* the write.
+**Rust:** `crates/core/src/segment.rs` — a 16-byte segment file header
+(`SEGMENT_MAGIC = b"BURPSYSG"` + `SEGMENT_FORMAT_VERSION`) plus a 17-byte
+per-record header (`len:u32` + `msg_id:u64` + `direction:u8` + `crc32:u32`,
+`RECORD_HEADER_LEN`) preceding every payload; `scan_segment_file` walks records
+via these headers and recomputes each CRC. `crates/core/src/lib.rs` —
+`verify_capture_dir:453`, `verify_index:782`, `verify_segments:894`: two
+mechanisms that deliberately do not subsume each other — `verify_index` proves
+the in-memory index is self-consistent (and would still pass if the bytes on
+disk had rotted, because it reads them *through* the index it is checking),
+while `verify_segments`/`verify_capture_dir` re-read each file and recompute
+every CRC, catching what appeared *after* the write.
 
-**Go:** `internal/core/store.go` has `VerifyIndex` (position-is-the-id, the
-cross-references between all three indexes, and — in segment mode — that every
-message still resolves on disk to a payload of the length the index believes it
-has) and `VerifyCaptureDir`/`verifySegmentFile`.
+**Go (now ported):** `internal/core/segment_format.go` (new, 384 LOC) defines
+the on-disk layout matching Rust byte-for-byte: `SEGMENT_MAGIC`/
+`SEGMENT_FORMAT_VERSION`/`SEGMENT_FILE_HEADER_LEN` (16) and `RECORD_HEADER_LEN`
+(17, same four fields, same little-endian layout), `RecordHeader` encode/decode,
+and `ScanSegmentFile` which walks a sealed segment record-by-record recomputing
+each CRC32 (Go `hash/crc32.ChecksumIEEE`, matching Rust's `crc32fast`/CRC-32
+ISO-HDLC — cross-checked against an independently hand-built Python encoder
+using `zlib.crc32`, so the two aren't just internally consistent with
+themselves). `internal/core/segment.go`'s `SegmentLog.Append` now takes the
+message id and direction (signature: `Append(id MsgId, direction Direction,
+data []byte) (Location, error)`) and writes header-then-payload; `rotate()`
+writes the file header once per new segment. `Location.Offset`/`Length` still
+describe the payload span only, so the mmap/`ReadAt` path needed no change.
+`internal/core/store.go`'s `VerifyCaptureDir`/`verifySegmentFile` now walk
+records via `ScanSegmentFile` and report a typed `CorruptRecord` (short header
+/ unknown direction / length overruns the segment / checksum mismatch) naming
+the message id and byte offset, rather than a pass/fail byte count. Covered by
+`internal/core/segment_format_test.go` (14 tests), including
+`TestAFlippedPayloadByteIsCaughtEvenThoughTheLengthIsUnchanged` — the exact
+same-length-byte-flip case this gap named as undetectable — and
+`TestATruncatedFinalRecordIsReportedAsCorruptionNotAcceptedSilently`,
+`TestRecordsRoundTripAcrossSegmentsAndEverySegmentVerifiesClean` (20 records,
+forced rotation).
 
-This entry claimed there was "**no** `verify_index` equivalent", which was wrong.
-What is genuinely missing is the second mechanism's teeth: **the Go segment format
-carries no per-record CRC**, so `verifySegmentFile` can only prove a segment is
-readable end to end and report how many bytes it read. A byte flip that preserves
-the file length is undetectable. `VerifyCaptureDir`'s doc comment now says so
-explicitly rather than implying a guarantee it cannot make.
+Two real defects were fixed earlier while porting Gap 8's neighbours (still
+true): `VerifyCaptureDir` used to match `segment-*.log` while the writer emits
+`segment_%d.dat` (fixed via the shared `segmentNameFormat` constant), and
+`verifySegmentFile` used to report `size/1024` in a field named `Checked`. That
+field is now gone entirely — `SegmentVerdict` carries `Records`/`PayloadBytes`
+instead, since `Checked` had no way to say whether it meant bytes or records
+and different callers read it as each.
 
-Two real defects here were fixed while porting Gap 8's neighbours:
+Named divergences from the Rust layout, all documented in-file: Go's
+`CorruptRecord` is one struct with a `Kind` field rather than Rust's four enum
+variants; `ScanSegmentFile` streams in a 64 KB buffer rather than reading the
+whole segment into memory (Go's default segment target is 100 MB vs Rust's
+64 MB); a foreign/pre-existing file in the capture directory is named
+per-file by `VerifyCaptureDir` rather than refusing to open the whole
+directory, since Go's `SegmentLog` resumes an existing capture where Rust's
+does not.
 
-- `VerifyCaptureDir` matched `segment-*.log` while the writer emits
-  `segment_%d.dat`, so it examined **zero files and reported success**. The
-  filename now comes from one shared `segmentNameFormat` constant.
-- `verifySegmentFile` reported `size/1024` in a field named `Checked`, so a 2 MB
-  segment claimed to have checked 2048 of something. It is now a byte count of
-  what was actually read.
-
-**Decline path:** adding a per-record CRC changes the on-disk layout that every
-recorded `Location` is expressed against, and the SQLite mirror now persists those
-spans. So this is a format migration, not a local fix — it needs its own change
-with a version marker on the segment header. Note the Rust doc's constraint: the
-CRC is corruption detection only, never to be described as an integrity control,
-since anyone who can write to the capture directory can recompute it.
+**Decline path:** none; closed. The CRC remains, as the Rust doc insists,
+corruption detection only — never described as an integrity/tamper-evidence
+guarantee, since anyone who can write to the capture directory can recompute
+it.
 
 ### 10. BCheck builtins partial — COMPLETE
 
@@ -389,23 +598,196 @@ than the DP table means two large but similar bodies (the common case — compar
 two responses differing in one field) still diff exactly, where a cell-count cap
 would degenerate to whole-delete plus whole-insert.
 
-### 12. Session coordinator simplified — PARTIAL
+### 12. Session coordinator — COMPLETE (validation + live wiring landed 2026-08-04)
 
 **Rust:** `crates/session/src/coordinator.rs` — named `MacroStepFailure:56`,
 `RecoveryOutcome:95`, `UpdateMacroOutcome:132`, `ReloginCoordinator:191`
 (`matching_rule:292`, `shared_jar:309`, `handle_response:320`,
-`update_macro:508`, `send_with_jar:546`).
+`update_macro:508`, `send_with_jar:546`); `crates/session/src/rule.rs`
+`SessionRule::new:195-283` (config-time validation).
 
-**Go:** a `Coordinator` **does exist** (`internal/session/session.go:281-296`)
-with `RunMacro` (`:407-472`) that interpolates extractions, threads jar cookies,
-absorbs Set-Cookie, runs extractions on 2xx/3xx, and evaluates the validity rule
-against the last successful step. It is functional but *simpler*: it lacks the
-Rust crate's named failure/recovery/update outcome types, and
-update-macro/re-login logic lives in the web layer (`internal/web/api_session.go`)
-rather than in the coordinator.
+**Go:** the named outcome types landed first (`internal/session/recovery.go`:
+`MacroStepFailure`, `LoginOutcome`, `RecoveryOutcome`, `UpdateMacroOutcome`,
+single-flight `ensureLoggedIn`, `HandleRecovery`, `EnsureLoggedIn`). What
+remained — config-time validation and live wiring — landed 2026-08-04:
 
-**Decline path:** accepted simplification; the re-login policy trait wiring
-(`MacroSender`) is the documented Rust design this does not replicate.
+- **Validation** (`internal/session/validate.go`, new): `ValidateRule` mirrors
+  `SessionRule::new` — non-empty name, `max_attempts >= 1`, a non-empty macro,
+  every step needing a method and a host-bearing URL, a `{{name}}` placeholder
+  must be defined by a *strictly earlier* step, duplicate extraction names are
+  refused rule-wide. Wired into `Coordinator.AddRule`/`UpdateRule` (both now
+  return an error), so every install path is covered: the web API (400), the
+  `session rules add` CLI, and `persist.Restore` (refusals logged and counted,
+  one bad rule no longer takes the whole restore down).
+- **Live wiring**: `POST /api/session/login` (`internal/web/api_session.go`'s
+  `handleSessionLogin`) and the `burpsy session login` CLI command now both
+  call `Coordinator.HandleRecovery`, mapping all seven `RecoveryOutcomeKind`
+  variants to distinct results, instead of replaying the probe and reporting
+  `"recovered"` unconditionally without ever running the login macro.
+
+**Two real bugs found and fixed while closing this gap** (both pre-existing,
+both silent):
+1. `SessionRule.MatchHost` read an empty/nil `ScopeHosts` as "matches no host",
+   the inverse of Rust's `scope: None` → "applies everywhere" default. Every
+   session rule submitted with "allow all hosts" scope was therefore silently
+   dead on arrival — enabled, listed in the UI, but never matched by
+   `MatchingRule`, so requests to its target kept going out unauthenticated.
+   Fixed: nil/empty `ScopeHosts` now matches every host; an explicitly-stated-
+   but-empty scope (`{"allow_all": false, "rules": []}`) is still refused at
+   validation, matching Rust's distinct treatment of the two cases.
+2. `internal/web/api_session.go`'s `dtoToRule`/`ruleToDto` never read or wrote
+   a step's `Extract` field at all — every extraction submitted via
+   `POST /api/session/rules` was silently dropped in both directions, so the
+   `{{name}}` token-scraping feature was broken end-to-end through the web API
+   (it worked only for rules constructed directly in Go, e.g. in tests). Fixed
+   by decoding the UI's actual extraction union shape (`from: "body" |
+   {header}`, `how: {regex} | {json_path} | "whole"`) by hand; `json_path` is
+   refused with a named-divergence message (regex-only in this port) rather
+   than silently mis-run.
+
+Named model divergence (unchanged, now precisely scoped): Rust holds
+extractions inside each `MacroItem` (per-step); Go keeps a flat
+`rule.Extractions` with each `Extraction` tagged by its owning `Step` — an
+extraction now runs only against its own step's response (previously, before
+this fix, every extraction ran against every response).
+
+Covered by `internal/session/validate_test.go` (15 tests) and
+`internal/web/session_api_test.go` (13 tests, including
+`TestLoginProbeThatIsInvalidRunsTheMacroAndRetriesTheProbe`, which asserts the
+login endpoint actually hits the target once — the assertion the old
+rubber-stamp code fails).
+
+**Decline path:** none; closed. Remaining named divergence: the re-login
+policy trait wiring (`MacroSender`) is Rust design this doesn't replicate
+one-for-one, and `persist.Restore` reassigns rule IDs across a restart
+(pre-existing, unrelated to this gap).
+
+---
+
+## Updated delta details (independent re-analysis, 2026-08-03)
+
+What changed since the filled-sections above were written, with evidence.
+
+### Gap 9 — `verify_index` — CLOSED 2026-08-04, see section 9 above
+
+Superseded: the per-record CRC32 this entry called for has landed
+(`internal/core/segment_format.go`), matching Rust's byte layout exactly. See
+the rewritten section 9 above for the full detail; this entry is kept only for
+the historical record of what was missing before 2026-08-04.
+
+### Gap 10 — BCheck builtins — CLOSED 2026-08-04 (and the real defect was worse than this entry said)
+
+The builtin *set* was already 1:1 (to_lower/to_upper/base64_decode/regex_replace/
+random_str on both sides; collaborator deliberately absent). This entry named the
+`base64_decode` fidelity gap correctly:
+- **Rust** `crates/bcheck/src/funcs.rs:184` is a tolerant decoder: it skips
+  non-alphabet chars (`let Some(v) = val(c) else { continue }`) and stops at `=`,
+  so `"SGVsbG8"` (no padding) and `"SGVs bG8="` (embedded space) both decode to
+  `"Hello"` (test `funcs.rs:340-342`).
+- **Go** used `base64.StdEncoding.DecodeString`, which requires padding and
+  rejects whitespace, so both of the above decoded to `""`.
+
+Both are now fixed — `base64DecodeTolerant` (`internal/bcheck/bcheck.go`) is the
+Rust walk bit for bit — but investigating it surfaced a **strictly larger defect
+this entry had not identified**: all three single-argument builtins resolved their
+argument through `resolveRef`, which resolves a *reference* (a variable name or a
+path) and answers `""` for the two argument shapes the corpus actually writes:
+
+- a **quoted literal** — and *all five* `base64_decode` calls in the 264-file
+  corpus are quoted literals (`base64_decode("DA==")`,
+  `base64_decode("UwAGaXNSb290VHpOeg==")`, …). So `base64_decode` returned `""`
+  for **every call in the entire corpus**, whatever decoder sat behind it. The
+  padding fidelity issue was real but downstream of a call path that never
+  delivered the argument at all.
+- a **brace-wrapped reference** — the corpus writes
+  `to_lower({crlf.response.headers})` and `to_lower({nonce})`, which also
+  resolved to `""`.
+
+Only a bare path (`to_lower(check1.response.body)`) ever worked. `regex_replace`
+already routed its arguments correctly through `resolveCallArg`; these three did
+not. All three now use `resolveCallArg`, so quoted literals, backtick templates,
+brace references and bare paths all resolve. This is the same silent-`""` failure
+class as gap 13's DSL bugs: the empty string a broken resolve returns is
+indistinguishable from the empty string a check that legitimately matched nothing
+returns.
+
+**Divergence, with Go the stronger side:** Rust returns
+`String::from_utf8_lossy`, so a genuinely binary decode becomes U+FFFD — its own
+doc comment names this a known limitation, citing
+`PathSuffix_WAF_Proxy.bcheck:32-34`, which decodes `"DA=="`/`"oA=="`/`"hQ=="` to
+`\x0C`/`\xA0`/`\x85`. A Go string is a byte string, so those bytes survive and the
+check means what it says; fixing it in Rust "means a byte-typed value throughout
+the evaluator, not a change in this function."
+
+Covered by four tests in `bcheck_test.go`:
+`TestBase64DecodeIsTolerantOfPaddingAndWhitespace` (the three cases
+`funcs.rs:339-342` pins, plus CRLF wrapping, `=`-terminated, empty, and
+no-alphabet-characters), `TestBase64DecodeKeepsBinaryBytesRatherThanReplacingThem`
+(the three corpus binary values, asserting the byte survives rather than becoming
+U+FFFD), `TestSingleArgBuiltinsResolveEveryArgumentShapeTheCorpusWrites` (the
+RED-then-GREEN pin for the resolve bug — quoted literal, brace-wrapped, and bare
+path across all three builtins), and
+`TestBase64DecodeOfTheCorpusBinaryValuesThroughTheEvaluator` (the exact three
+calls at `PathSuffix_WAF_Proxy.bcheck:32-34`, as written). Corpus conformance
+re-verified after the change: 264 parsed, 0 failed, 100.0%.
+
+**Decline path:** none; closed.
+
+### Gap 12 — Session coordinator — CLOSED 2026-08-04, see section 12 above
+
+Superseded: config-time validation and live login/recovery wiring (the two
+items this entry called "remaining") both landed. See the rewritten section 12
+above for the full detail, including the two bugs found while closing it; this
+entry is kept only for the historical record of what was missing before
+2026-08-04.
+
+### Gap 13 — Query DSL — CLOSED 2026-08-04
+
+**Rust** `crates/query/src/` (~2020 LOC) is a typed lexer+parser+AST engine with:
+parenthesised grouping; a `status in low..high` range operator; quoted-string
+escapes (`\"`, `\\`, `\n`, `\t`, `\r`); and **parse-time field/operator type
+checking** so `status > "abc"` is a parse error, never a silent non-match (DSL-04,
+`lib.rs:59-63`).
+
+**Go (now ported):** `internal/query/query.go` (288 → 764 lines, still one file
+by design — this parser reads characters directly rather than materialising a
+token slice, so Rust's five-file lexer/parser/ast/eval/error split would just
+be four files of two functions each) gained all four items: a `parsePrimary`
+level for `"(" or-expr ")"` grouping plus a new expect-EOF check at the end of
+`Parse` (previously trailing junk like `status = 200)` was silently discarded,
+running a different query than typed); `status in low..high` (inclusive both
+ends, `..` a single token, digits-only, an inverted range parses and matches
+nothing exactly like Rust); the same five string escapes, with an unrecognised
+escape now a parse error instead of a dropped backslash; and parse-time
+field/operator/value type checking in `parseCmp` (host/method/mime need a
+string + `=`/`!=`/`~`, status needs a number + ordering ops or a range, body
+only `~`) — `Expr`'s fields are now unexported so `Parse` is the only
+constructor, mirroring Rust's private `Query(Expr)` wrapper; no ill-typed
+comparison can reach `Match`, which stays a plain, non-failing `bool`. A new
+`QueryError{At, Msg, Src}` + `Render()` ports Rust's caret-under-the-offending-
+byte rendering. Covered by `internal/query/query_test.go` (new, 24 tests).
+
+**Two silent-false bugs found and fixed en route** (both pre-existing, both a
+direct instance of the DSL-04 failure mode this gap exists to close): `==` was
+never handled by `evalCmp` (only `=`), so the web UI's own placeholder query
+(`status == 200 and host ~ "api." and not method == "OPTIONS"`) parsed
+successfully and then matched nothing, ever; and an absent `status`/`mime`
+(`Status() == 0` / `Mime() == ""`) was compared as a real value rather than
+read as "absent", so e.g. `status < 400` matched every request still awaiting
+its response and `mime != "x"` matched every row in the web UI (whose `Mime()`
+is hardcoded `""`).
+
+Named divergences from Rust, deliberately kept: `=` is accepted as a synonym
+for `==` (Rust rejects a lone `=`; Go has documented `=` since it was written);
+an unquoted bare word is a valid string value (`host = example.com`) — Rust
+requires quotes — though an all-digits bare word is still refused as a type
+error; one `QueryError` type instead of Rust's ten-variant enum. **Behaviour
+change worth flagging:** `method` comparison is now case-sensitive (RFC 7230
+method token) while `host`/`mime` stay case-insensitive, matching Rust's
+stated rationale — previously all four fields used `EqualFold` uniformly, so
+`method = "get"` no longer matches `GET`.
+
+**Decline path:** none; closed.
 
 ---
 
@@ -418,7 +800,8 @@ These were suspected during review and confirmed **present** in Go:
   `internal/scanner/scanner_reports.go` (`ExportFormat:15`, `ExportResult:24`,
   `Report:31`, `sarifLog:42`, `sarifRun:47`, `sarifTool:51`, `sarifDriver:54`,
   `sarifRule:59`, `sarifDesc:66`, `sarifConfig:69`).
-- **Session coordinator** — see gap 12; present but simplified.
+- **Session coordinator** — see gap 12; closed 2026-08-04 (validation + live
+  wiring landed).
 - **Persist (SQLite mirror)** — `internal/persist`; no Rust crate counterpart
   (Go extra, documented in the port).
 
@@ -428,5 +811,13 @@ These were suspected during review and confirmed **present** in Go:
   declined/skipped, never silently empty (`insertion.go` `[]Declined`).
 - The 104 `given response` files are the largest family the live-audit pipeline
   must be able to feed; coverage of that family is reported, not assumed.
-- `java_backrefs` (gap 10) is a *runtime* defect that conformance 264/264 does
-  not surface; it is tracked here as P1 despite the green parse number.
+- `java_backrefs` (gap 10) was a *runtime* defect that conformance 264/264 did
+  not surface; it was tracked as P1 despite the green parse number, and is now
+  fixed. The same is true of the two defects gap 10 closed on 2026-08-04 — a
+  strict `base64_decode` and, worse, all three single-argument builtins failing
+  to resolve a quoted or brace-wrapped argument. **A 100% parse rate says nothing
+  about whether a resolved value arrived**: every one of the corpus's five
+  `base64_decode` calls parsed cleanly and evaluated to `""`. This is the
+  standing argument for why this ledger counts runtime behaviour separately from
+  `cmd/conform`'s number, and why a builtin's argument shapes get their own
+  tests rather than being assumed from the corpus parsing.

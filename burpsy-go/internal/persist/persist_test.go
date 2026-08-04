@@ -123,7 +123,23 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	p.SaveMatchRules(mr.Rules(), mr.UpdateContentLength())
 
 	sess := session.NewCoordinator(zap.NewNop())
-	sess.AddRule(session.NewSessionRule("login", []string{"127.0.0.1"}, []session.MacroStep{{Method: "GET", URL: "http://127.0.0.1/login"}}))
+	sessRule := session.NewSessionRule("login", []string{"127.0.0.1"}, []session.MacroStep{
+		{Method: "GET", URL: "http://127.0.0.1/form"},
+		{Method: "POST", URL: "http://127.0.0.1/login?csrf={{csrf}}"},
+	})
+	// An extraction bound to the *second* step and reading a named header: both are fields the load
+	// path used to drop, because it rebuilt each extraction from the four arguments it happened to
+	// name rather than recompiling the one it unmarshalled.
+	csrf, err := session.NewExtraction("csrf", "header", `(.+)`, 1)
+	if err != nil {
+		t.Fatalf("NewExtraction: %v", err)
+	}
+	csrf.Header = "X-CSRF"
+	csrf.Step = 0
+	sessRule.Extractions = []*session.Extraction{csrf}
+	if _, err := sess.AddRule(sessRule); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
 	p.SaveSessionRules(sess.AllRules())
 
 	tl := toollog.New()
@@ -157,6 +173,18 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	rs := restoredSess.AllRules()
 	if len(rs) != 1 || rs[0].Name != "login" {
 		t.Fatalf("session rules = %+v", rs)
+	}
+	if len(rs[0].Extractions) != 1 {
+		t.Fatalf("session rule extractions = %+v, want one", rs[0].Extractions)
+	}
+	ex := rs[0].Extractions[0]
+	if ex.Header != "X-CSRF" || ex.Step != 0 {
+		t.Fatalf("restored extraction = %+v, want its header name and owning step intact", ex)
+	}
+	// Recompiled, not merely copied: an extraction whose regexp was not rebuilt runs and silently
+	// returns nothing, which is a rule that looks restored and cannot log in.
+	if got := ex.Run(map[string]string{"X-CSRF": "tok-9f3a"}, nil); got != "tok-9f3a" {
+		t.Fatalf("restored extraction ran to %q, want the header value", got)
 	}
 	if restoredTL.Count() != 1 || restoredTL.All()[0].Tool != toollog.ToolRepeater {
 		t.Fatalf("tool log = %+v", restoredTL.All())

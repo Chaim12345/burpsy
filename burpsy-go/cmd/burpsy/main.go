@@ -32,6 +32,7 @@ func main() {
 	interceptTLS := flag.Bool("intercept-tls", false, "enable TLS interception")
 	caDir := flag.String("ca-dir", proxy.DefaultCADir(), "CA certificate directory")
 	segmentBytes := flag.Uint64("segment-bytes", core.DefaultSegmentTargetBytes, "target bytes per segment file")
+	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files and passively scan responses")
 
 	// TLS passthrough flags
 	passthrough := flag.String("tls-passthrough", "", "host pattern to passthrough without interception (repeatable)")
@@ -52,26 +53,27 @@ func main() {
 	if *storeVerify != "" {
 		fmt.Printf("Verifying capture directory: %s\n", *storeVerify)
 		report := core.VerifyCaptureDir(*storeVerify)
-		if report == nil || len(report) == 0 {
-			fmt.Printf("%s: no sealed segments to check\n", *storeVerify)
+		if len(report) == 0 {
+			fmt.Printf("%s: no segments to check\n", *storeVerify)
 			os.Exit(0)
 		}
-		checked := 0
+		records := 0
+		var payload int64
 		faults := 0
 		for _, v := range report {
-			name := v.Path
-			if name == "" {
-				name = v.Path
-			}
-			checked += v.Checked
+			records += v.Records
+			payload += v.PayloadBytes
 			if v.Fault != nil {
+				// Dereferenced, not printed as a pointer: this used to print the
+				// address of the fault string instead of the fault.
 				faults++
-				fmt.Printf("FAULT %s  %d records read, then: %v\n", name, v.Checked, v.Fault)
+				fmt.Printf("FAULT %s  %d record(s) checked, then: %s\n", v.Path, v.Records, *v.Fault)
 			} else {
-				fmt.Printf("ok    %s  %d records\n", name, v.Checked)
+				fmt.Printf("ok    %s  %d record(s), %d payload byte(s)\n", v.Path, v.Records, v.PayloadBytes)
 			}
 		}
-		fmt.Printf("\nchecked %d record(s) across %d segment(s), %d with faults\n", checked, len(report), faults)
+		fmt.Printf("\nchecked %d record(s) / %d payload byte(s) across %d segment(s), %d with faults\n",
+			records, payload, len(report), faults)
 		if faults > 0 {
 			os.Exit(1)
 		}
@@ -171,13 +173,35 @@ func main() {
 		findingStore.SetPersistenceSink(persistStore.SaveFinding)
 	}
 
+	// Passive scanning is opt-in via --bchecks, mirroring the Rust CLI. Without
+	// it the built-in header/cookie checks still run so existing tests keep their
+	// expectations.
+	var passiveScanner *scanner.PassiveScanner
+	if *bchecksDir != "" {
+		ps, err := scanner.LoadDir(*bchecksDir, store, scope, logger)
+		if err != nil {
+			log.Fatalf("Failed to load BChecks from %s: %v", *bchecksDir, err)
+		}
+		passiveScanner = ps
+		logger.Info("bchecks loaded", zap.String("dir", *bchecksDir), zap.String("report", ps.Report().Summary()))
+		for i, e := range ps.Report().Errors {
+			if i >= 5 {
+				logger.Warn("more bcheck parse errors omitted", zap.Int("remaining", len(ps.Report().Errors)-5))
+				break
+			}
+			logger.Warn("unparsable bcheck", zap.String("file", e.File), zap.String("error", e.Err))
+		}
+	} else {
+		passiveScanner = scanner.NewPassiveScanner(store, logger)
+	}
+
 	// Create proxy config
 	interceptEngine := intercept.NewEngine()
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
 		WithLogger(logger).
-		WithScanner(scanner.NewPassiveScanner(store, logger)).
+		WithScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine)
 
@@ -198,6 +222,7 @@ func main() {
 		WithLogger(logger).
 		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
 		WithScanner(scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(sender.DefaultSenderConfig()))).
+		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine)
 	if persistStore != nil {

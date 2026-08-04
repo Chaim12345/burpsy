@@ -108,7 +108,11 @@ func (s *ActiveScanner) Export(e ExportFormat, scope *core.Scope) *ExportResult 
 		ScannedExchanges: 0,
 		Findings:         findings,
 		PassiveCoverage:  "passive checks: headers, cookies, info disclosure",
-		ActiveSummary:    fmt.Sprintf("%d active checks configured", countActiveChecks(s.config)),
+		// The unimplemented count is stated, not folded in: "7 active checks configured" read as
+		// seven checks that can return a verdict is exactly the coverage claim the audit engine's
+		// DispositionUnsupported bucket exists to contradict.
+		ActiveSummary: fmt.Sprintf("%d active checks configured, %d of them unimplemented",
+			countActiveChecks(s.config), s.UnimplementedCheckCount()),
 	}
 
 	switch e {
@@ -130,30 +134,11 @@ func scopeSnapshot(scope *core.Scope) string {
 	return "custom scope"
 }
 
+// countActiveChecks delegates to the audit engine's check table rather than re-deriving the count
+// from the switches. Two lists of the same seven checks would eventually disagree, and the one a
+// report prints is the one an operator would believe.
 func countActiveChecks(cfg *ScanConfig) int {
-	n := 0
-	if cfg.CheckSqli {
-		n++
-	}
-	if cfg.CheckXss {
-		n++
-	}
-	if cfg.CheckPathTraversal {
-		n++
-	}
-	if cfg.CheckSSRF {
-		n++
-	}
-	if cfg.CheckXXE {
-		n++
-	}
-	if cfg.CheckJwtWeak {
-		n++
-	}
-	if cfg.CheckJSVulns {
-		n++
-	}
-	return n
+	return len(enabledChecks(cfg))
 }
 
 func (s *ActiveScanner) exportJSON(r Report) *ExportResult {

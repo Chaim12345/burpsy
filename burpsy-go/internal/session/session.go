@@ -3,6 +3,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -119,39 +120,87 @@ func (vr *ValidityRule) Evaluate(status int, hdrs map[string]string, body []byte
 
 // --- Extraction ---
 
+// Extraction lifts one value out of a macro step's response so a *later* step can refer to it as
+// {{name}} — the CSRF token a login form hands out, a bearer token a token endpoint returns.
+//
+// Rust keeps each extraction inside the `MacroItem` whose response produces it
+// (crates/session/src/rule.rs) and deliberately keeps extractions *out* of `MacroStep`, because
+// `MacroStep` is also the type of the request being repaired and of the probe /api/session/login
+// hands in — neither of which has anything to extract. This port keeps `MacroStep` wire-shaped for
+// the same reason and holds a rule's extractions in one flat list, so the owning step has to be
+// named here instead: `Step` is the index of the macro step whose response this reads. Without it
+// there would be no way to answer "which response does this value come from", which is exactly what
+// config-time validation needs in order to refuse a step referring to a value no earlier step
+// produces (see validate.go).
 type Extraction struct {
-	Name    string `json:"name"`
-	From    string `json:"from"` // "body" | "header"
+	Name string `json:"name"`
+	// From is "body" or "header"; anything else extracts nothing, which ValidateRule refuses rather
+	// than letting a rule run with a placeholder that can never resolve.
+	From string `json:"from"`
+	// Header is the response header to read when From is "header". Empty means Pattern doubles as
+	// the header *selector* as well as the value matcher — the behaviour this port had before the
+	// name could be carried, kept working because a saved rule may still rely on it.
+	Header  string `json:"header,omitempty"`
 	Pattern string `json:"pattern"`
 	Group   int    `json:"group"`
-	re      *regexp.Regexp
+	// Step is the index of the macro step whose response this reads. Zero — the first step — is the
+	// common case and the value a rule stored before this field existed restores as.
+	Step int `json:"step"`
+	re   *regexp.Regexp
 }
 
 func NewExtraction(name, from, pattern string, group int) (*Extraction, error) {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
+	e := &Extraction{Name: name, From: from, Pattern: pattern, Group: group}
+	if err := e.Recompile(); err != nil {
 		return nil, err
 	}
-	return &Extraction{Name: name, From: from, Pattern: pattern, Group: group, re: re}, nil
+	return e, nil
+}
+
+// Recompile rebuilds the matcher that an Extraction restored from storage cannot carry — a compiled
+// regexp is not serialisable, so unmarshalling one leaves it inert and silently extracting nothing.
+//
+// Storage restores an extraction by unmarshalling it and calling this, rather than by feeding the
+// handful of fields it happens to know about back through NewExtraction: a field added to this
+// struct later would otherwise be dropped on every load, which is precisely how a rule comes back
+// "restored" and unable to log in.
+func (e *Extraction) Recompile() error {
+	if e == nil {
+		return nil
+	}
+	re, err := regexp.Compile(e.Pattern)
+	if err != nil {
+		return err
+	}
+	e.re = re
+	return nil
 }
 
 func (e *Extraction) Run(hdrs map[string]string, body []byte) string {
 	if e == nil || e.re == nil {
 		return ""
 	}
-	if e.From == "body" {
+	switch e.From {
+	case "body":
 		m := e.re.FindSubmatch(body)
 		if m != nil && e.Group < len(m) {
 			return string(m[e.Group])
 		}
-	}
-	if e.From == "header" {
+	case "header":
 		for k, v := range hdrs {
-			if e.re.MatchString(k) {
-				m := e.re.FindStringSubmatch(v)
-				if m != nil && e.Group < len(m) {
-					return m[e.Group]
+			// A named header is selected by its name, and the pattern is applied only to its value.
+			// With no name stated the pattern selects the header too, which is what this port did
+			// before an extraction could carry the name.
+			if e.Header != "" {
+				if !strings.EqualFold(k, e.Header) {
+					continue
 				}
+			} else if !e.re.MatchString(k) {
+				continue
+			}
+			m := e.re.FindStringSubmatch(v)
+			if m != nil && e.Group < len(m) {
+				return m[e.Group]
 			}
 		}
 	}
@@ -254,9 +303,25 @@ type SessionRule struct {
 	Extractions []*Extraction `json:"extractions"`
 }
 
+// MatchHost says whether this rule's scope covers `host`.
+//
+// A rule with no scope hosts applies **everywhere**. That is Rust's model — `SessionRuleSpec::scope`
+// is an `Option<Scope>` whose `None` arm means "applies everywhere" (crates/session/src/rule.rs,
+// `applies_to`) — and it is the only reading under which the common case works at all: a rule created
+// without a scope restriction ends up with no hosts, so answering `false` for it made every such
+// rule dead on arrival — enabled, listed in the UI, and unable to match a single host. That is the
+// worst kind of failure for a session rule to have, because nothing reports it: requests simply keep
+// going out unauthenticated.
+//
+// An explicitly *stated* but empty scope is a different thing and is refused at configuration time
+// instead (see ValidateRuleStatedScope): saying "restrict this rule to nothing" is a mistake worth
+// naming, while omitting the restriction is not.
 func (r *SessionRule) MatchHost(host string) bool {
-	if r == nil || len(r.ScopeHosts) == 0 {
+	if r == nil {
 		return false
+	}
+	if len(r.ScopeHosts) == 0 {
+		return true
 	}
 	for _, h := range r.ScopeHosts {
 		if host == h {
@@ -266,6 +331,32 @@ func (r *SessionRule) MatchHost(host string) bool {
 	return false
 }
 
+// extractionsFor returns the extractions that read step `index`'s response.
+//
+// An extraction runs against its own step's response and no other, matching Rust's per-`MacroItem`
+// extraction list. Running every extraction against every response instead would let a pattern
+// meant for the token endpoint fire on the login form's response, so which value a {{name}} carried
+// would depend on which response happened to match first — and the config-time rule that a
+// reference must be produced by an *earlier* step would be enforcing an order the runner ignored.
+func (r *SessionRule) extractionsFor(index int) []*Extraction {
+	if r == nil || len(r.Extractions) == 0 {
+		return nil
+	}
+	var out []*Extraction
+	for _, ex := range r.Extractions {
+		if ex != nil && ex.Step == index {
+			out = append(out, ex)
+		}
+	}
+	return out
+}
+
+// NewSessionRule builds the inert form of a rule: holding one proves nothing has been checked, the
+// same way Rust's `SessionRuleSpec` is separate from the validated `SessionRule`. Deliberately
+// permissive, because a caller assembling a rule field by field (the CLI, a DTO conversion) needs to
+// finish assembling before anything can be judged. ValidateRule is where every mistake that can be
+// caught without a network is caught, and Coordinator.AddRule / UpdateRule run it so no rule can be
+// installed behind validation's back.
 func NewSessionRule(name string, hosts []string, steps []MacroStep) *SessionRule {
 	if steps == nil {
 		steps = make([]MacroStep, 0)
@@ -313,14 +404,28 @@ func NewCoordinator(logger *zap.Logger) *Coordinator {
 	}
 }
 
-func (c *Coordinator) AddRule(rule *SessionRule) RuleID {
+// ErrNoSuchRule is what UpdateRule returns for an id the coordinator does not hold, so a caller can
+// tell "the rule you edited is gone" (a 404) from "the edit is not a valid rule" (a 400) without
+// matching on an error string.
+var ErrNoSuchRule = errors.New("no session rule with that id")
+
+// AddRule validates `rule` and appends it to the evaluation order, returning its new id.
+//
+// Validation lives here, not only in the HTTP handler, because every path that installs a rule — the
+// web API, the CLI, and restoring a saved project — has to earn the same refusals. A rule that skips
+// them surfaces later as "the log-in button did nothing", with the reason buried in whichever step
+// silently produced no value.
+func (c *Coordinator) AddRule(rule *SessionRule) (RuleID, error) {
+	if err := ValidateRule(rule); err != nil {
+		return 0, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := RuleID(atomic.AddInt64(&c.nextID, 1))
 	rule.ID = id
 	c.rules[id] = rule
 	c.order = append(c.order, id)
-	return id
+	return id, nil
 }
 
 func (c *Coordinator) RemoveRule(id RuleID) {
@@ -337,16 +442,23 @@ func (c *Coordinator) RemoveRule(id RuleID) {
 
 // UpdateRule replaces a rule's mutable fields in place, keeping its identity (ID and position in
 // the evaluation order). This is the write path behind PUT /api/session/rules/{id}.
-func (c *Coordinator) UpdateRule(id RuleID, rule *SessionRule) bool {
+//
+// Validated for the same reason AddRule is: an edit is as capable of installing an unrunnable rule
+// as a create, and the rule it replaces was working. Returns ErrNoSuchRule for an unknown id and a
+// *RuleError for an edit that does not validate, so the two can be answered differently.
+func (c *Coordinator) UpdateRule(id RuleID, rule *SessionRule) error {
+	if err := ValidateRule(rule); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cur, ok := c.rules[id]
 	if !ok {
-		return false
+		return ErrNoSuchRule
 	}
 	rule.ID = cur.ID
 	c.rules[id] = rule
-	return true
+	return nil
 }
 
 func (c *Coordinator) AllRules() []*SessionRule {
@@ -431,7 +543,7 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 	sent := make([]MacroStep, 0, len(rule.Steps))
 	results := make([]*StepResult, 0, len(rule.Steps))
 
-	for _, step := range rule.Steps {
+	for stepIndex, step := range rule.Steps {
 		// Interpolate extractions from earlier responses into this step.
 		step = interpolateStep(step, extracted)
 		sent = append(sent, step)
@@ -461,12 +573,9 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 				c.jarMgr.AbsorbSetCookie(host, port, tls, v)
 			}
 		}
-		// Run this step's extractions against the response.
+		// Run this step's own extractions against its response.
 		if res.Status >= 200 && res.Status < 400 {
-			for _, ex := range rule.Extractions {
-				if ex == nil {
-					continue
-				}
+			for _, ex := range rule.extractionsFor(stepIndex) {
 				if v := ex.Run(res.Headers, res.Body); v != "" {
 					extracted[ex.Name] = v
 				}

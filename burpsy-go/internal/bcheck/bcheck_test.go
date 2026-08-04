@@ -541,6 +541,101 @@ func TestJavaBackrefsMakesTheJwtHeaderSurviveReplacement(t *testing.T) {
 	}
 }
 
+func TestBase64DecodeIsTolerantOfPaddingAndWhitespace(t *testing.T) {
+	// The three cases crates/bcheck/src/funcs.rs:339-342 pins. The middle two are
+	// what `base64.StdEncoding.DecodeString` refused, and refusing them returned
+	// "" — indistinguishable from a check that decoded successfully and found
+	// nothing.
+	cases := []struct {
+		in, want, why string
+	}{
+		{"SGVsbG8=", "Hello", "padded, the easy case"},
+		{"SGVsbG8", "Hello", "padding is optional in the corpus"},
+		{"SGVs bG8=", "Hello", "a wrapped value carries whitespace"},
+		{"SGVs\r\nbG8=", "Hello", "and the wrap may be a full CRLF"},
+		{"SGVsbG8=trailing", "Hello", "= ends the value"},
+		{"", "", "nothing in, nothing out"},
+		{"!!!", "", "no alphabet characters decode to nothing, not to garbage"},
+	}
+	for _, c := range cases {
+		if got := base64DecodeTolerant(c.in); got != c.want {
+			t.Errorf("base64DecodeTolerant(%q) = %q, want %q — %s", c.in, got, c.want, c.why)
+		}
+	}
+}
+
+func TestBase64DecodeKeepsBinaryBytesRatherThanReplacingThem(t *testing.T) {
+	// PathSuffix_WAF_Proxy.bcheck:32-34 decodes these three into request paths.
+	// Rust's from_utf8_lossy turns each into U+FFFD and its own doc calls that a
+	// known limitation; a Go string is a byte string, so the real byte survives.
+	cases := []struct {
+		in   string
+		want byte
+	}{
+		{"DA==", 0x0C},
+		{"oA==", 0xA0},
+		{"hQ==", 0x85},
+	}
+	for _, c := range cases {
+		got := base64DecodeTolerant(c.in)
+		if len(got) != 1 || got[0] != c.want {
+			t.Errorf("base64DecodeTolerant(%q) = %q (% x), want the single byte %#x",
+				c.in, got, got, c.want)
+		}
+		if got == "�" {
+			t.Errorf("base64DecodeTolerant(%q) replaced the byte instead of keeping it", c.in)
+		}
+	}
+}
+
+func TestSingleArgBuiltinsResolveEveryArgumentShapeTheCorpusWrites(t *testing.T) {
+	// The premise this pins: these three builtins used to resolve their argument
+	// through resolveRef, which resolves a reference and answers "" for a quoted
+	// literal or a brace-wrapped ref. All five base64_decode calls in the corpus
+	// are quoted literals, so base64_decode answered "" for the whole corpus
+	// regardless of the decoder behind it; to_lower/to_upper answered "" for the
+	// brace-wrapped form. Only a bare path ever worked.
+	ctx := NewContext()
+	ctx.Variables["nonce"] = Value{Type: "str", StringVal: "AbC"}
+	ctx.Response = []byte("HTTP/1.1 200 OK\r\n\r\nBoDy")
+
+	cases := []struct {
+		expr, want, why string
+	}{
+		// Quoted literal — every base64_decode in the corpus looks like this.
+		{`base64_decode("SGVsbG8=")`, "Hello", "quoted literal argument"},
+		{`base64_decode("SGVsbG8")`, "Hello", "quoted and unpadded, both fixes at once"},
+		// Brace-wrapped reference — the corpus writes to_lower({crlf.response.headers}).
+		{`to_lower({nonce})`, "abc", "brace-wrapped reference"},
+		{`to_upper({nonce})`, "ABC", "brace-wrapped reference"},
+		// Bare path — the shape that already worked; must keep working.
+		{`to_lower(base.response.body)`, "body", "bare path still resolves"},
+		{`to_upper(base.response.body)`, "BODY", "bare path still resolves"},
+		// Quoted literal through the case builtins too.
+		{`to_lower("MiXeD")`, "mixed", "quoted literal argument"},
+	}
+	for _, c := range cases {
+		if got := ctx.resolveRef(c.expr); got != c.want {
+			t.Errorf("resolveRef(%s) = %q, want %q — %s", c.expr, got, c.want, c.why)
+		}
+	}
+}
+
+func TestBase64DecodeOfTheCorpusBinaryValuesThroughTheEvaluator(t *testing.T) {
+	// The exact three calls at PathSuffix_WAF_Proxy.bcheck:32-34, as written.
+	ctx := NewContext()
+	for expr, want := range map[string]byte{
+		`base64_decode("DA==")`: 0x0C,
+		`base64_decode("oA==")`: 0xA0,
+		`base64_decode("hQ==")`: 0x85,
+	} {
+		got := ctx.resolveRef(expr)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("resolveRef(%s) = %q (% x), want the single byte %#x", expr, got, got, want)
+		}
+	}
+}
+
 func TestRandomStrDrawsFromTheSafeAlphabet(t *testing.T) {
 	var st uint64 = 0x9e3779b97f4a7c15
 	s := randomStr(&st, 64)

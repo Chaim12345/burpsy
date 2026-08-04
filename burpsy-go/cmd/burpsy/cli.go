@@ -97,13 +97,17 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 	}
 	senderCfg := sender.DefaultSenderConfig()
 	ctx := &cliContext{
-		store:     store,
-		scope:     scope,
-		logger:    logger,
-		findings:  core.NewFindingStore(),
-		sess:      session.NewCoordinator(logger),
-		intruder:  intruder.NewIntruder(logger),
-		scanner:   scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(senderCfg)),
+		store:    store,
+		scope:    scope,
+		logger:   logger,
+		findings: core.NewFindingStore(),
+		sess:     session.NewCoordinator(logger),
+		intruder: intruder.NewIntruder(logger),
+		// WithScope, so the audit engine refuses an out-of-scope exchange before it plans any work
+		// and refuses any probe whose own URL leaves the engagement.
+		scanner: scanner.NewActiveScanner(store, logger).
+			WithSender(sender.NewSender(senderCfg)).
+			WithScope(scope),
 		mr:        matchreplace.NewRuleSet(),
 		toolLog:   toollog.New(),
 		organizer: organizer.New(),

@@ -58,10 +58,36 @@ interface CookiesResp {
   hint?: string;
 }
 
+/**
+ * One field per thing a recovery outcome can say. The server tags every outcome distinctly rather
+ * than collapsing them into ok/error — "the login was attempted and did not work" (`gave_up`) is a
+ * different thing from "the macro could not be sent" (`macro_failed`), and an operator has to be able
+ * to tell them apart. The whole body is also dumped as JSON below, so a field added server-side stays
+ * visible even before this type names it.
+ */
 interface LoginResp {
+  /**
+   * "no_rule_applies" | "already_valid" | "recovered" | "still_invalid_after_relogin" | "gave_up"
+   * | "macro_failed" | "retry_failed" | "probe_failed"
+   */
   outcome?: string;
   rule?: string;
   rule_id?: number;
+  /** no_rule_applies: the probe url, how many rules exist, and what to do about it. */
+  url?: string;
+  rules?: number;
+  hint?: string;
+  /** How many times the macro ran: recovered / still_invalid_after_relogin / gave_up / retry_failed. */
+  login_attempts?: number;
+  /** macro_failed: the 1-based attempt, and the step within it that could not be sent. */
+  attempt?: number;
+  step_index?: number;
+  /** still_invalid_after_relogin: "valid" | "invalid" | "indeterminate". */
+  validity?: string;
+  /** recovered / still_invalid_after_relogin: what the retried probe came back with. */
+  response?: { status: number; headers?: Record<string, string>; body: string };
+  /** macro_failed / retry_failed / probe_failed. */
+  error?: string;
 }
 
 const DEFAULT_VALIDITY = JSON.stringify({ status_is: 200 }, null, 2);

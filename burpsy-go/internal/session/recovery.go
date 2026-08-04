@@ -240,12 +240,9 @@ func (c *Coordinator) runMacroOnce(rule *SessionRule, runner MacroStepRunner) (*
 		// Recorded with this run's extracted values turned back into their placeholders, so
 		// promoting it later reinstates a template rather than a one-time secret.
 		sent = append(sent, untemplateStep(resolved, values))
-		// Run this step's extractions against the response so later steps can use the values.
+		// Run this step's own extractions against its response so later steps can use the values.
 		if resp.Status >= 200 && resp.Status < 400 {
-			for _, ex := range rule.Extractions {
-				if ex == nil {
-					continue
-				}
+			for _, ex := range rule.extractionsFor(stepIndex) {
 				if v := ex.Run(resp.Headers, resp.Body); v != "" {
 					values[ex.Name] = v
 				}
@@ -402,7 +399,14 @@ func (c *Coordinator) UpdateMacro(id RuleID) UpdateMacroOutcome {
 	steps := append([]MacroStep(nil), sent...)
 	updated := *rule
 	updated.Steps = steps
-	c.UpdateRule(id, &updated)
+	// Reachable rather than defensive, which is why UpdateMacroInvalid exists: a run that sent fewer
+	// steps than the rule stores (a step skipped for being out of scope) would leave an extraction
+	// naming a step that no longer exists. Rust refuses the same case in `SessionRule::with_steps` —
+	// "extractions belong to a step by position" — because silently dropping what a vanished step
+	// extracted is how a macro comes back looking repaired and still unable to log in.
+	if err := c.UpdateRule(id, &updated); err != nil {
+		return UpdateMacroOutcome{Kind: UpdateMacroInvalid, Error: err.Error()}
+	}
 	return UpdateMacroOutcome{Kind: UpdateMacroUpdated, Steps: steps}
 }
 

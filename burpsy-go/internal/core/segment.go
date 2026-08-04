@@ -2,6 +2,9 @@ package core
 
 import (
 	"fmt"
+	"hash/crc32"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +16,12 @@ import (
 const segmentNameFormat = "segment_%d.dat"
 
 // Location represents a location in a segment file.
+//
+// Offset and Length describe the *payload* span and nothing else: the record's
+// RecordHeaderLen-byte header sits in the bytes immediately before Offset. That
+// is what lets ReadAt slice a location straight out of a mapping without
+// knowing the framing exists, and what kept every read path unchanged when the
+// framing was added.
 type Location struct {
 	Segment string
 	Offset  int64
@@ -74,48 +83,179 @@ func NewSegmentLog(dir string, targetBytes uint64) (*SegmentLog, error) {
 
 	if maxSeg >= 0 {
 		sl.currentName = filepath.Join(dir, fmt.Sprintf(segmentNameFormat, maxSeg))
-		file, err := os.OpenFile(sl.currentName, os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open current segment: %w", err)
+		if err := sl.resume(); err != nil {
+			return nil, err
 		}
-		sl.currentFile = file
-		info, err := file.Stat()
-		if err != nil {
-			file.Close()
-			return nil, fmt.Errorf("failed to stat current segment: %w", err)
-		}
-		sl.currentOffset = info.Size()
 	}
 
 	return sl, nil
 }
 
-// Append writes data to the current segment, rotating if necessary.
-func (sl *SegmentLog) Append(data []byte) (Location, error) {
+// resume reopens the highest-numbered existing segment for appending, after
+// checking that it really is one of ours.
+//
+// The file header is written when a segment is created, so resuming must not
+// write it again — a second header in the middle of a file would be read back
+// as a record header with a nonsense length. What resume does instead is verify
+// the one that is already there, and pick up currentOffset from the file's real
+// size so the rotation arithmetic still describes the file rather than the
+// records.
+//
+// Only the segment being appended to is checked, not every file in the
+// directory. This is a deliberate divergence from the Rust SegmentLog::open,
+// which refuses the whole directory if any segment fails its header check: the
+// Go store resumes captures rather than demanding an empty directory, and a
+// stale file from some other tool is a thing for VerifyCaptureDir to name
+// per-file, not a reason the proxy cannot start.
+func (sl *SegmentLog) resume() error {
+	info, err := os.Stat(sl.currentName)
+	if err != nil {
+		return fmt.Errorf("failed to stat current segment: %w", err)
+	}
+
+	if info.Size() == 0 {
+		// A zero-length segment is one rotate created and was killed before it
+		// could write the header. It holds no records, so adopting it destroys
+		// nothing, where refusing would cost a restart over a file that has
+		// nothing in it to lose.
+		file, err := os.OpenFile(sl.currentName, os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to open current segment: %w", err)
+		}
+		if err := sl.writeFileHeader(file); err != nil {
+			file.Close()
+			return err
+		}
+		sl.currentFile = file
+		sl.currentOffset = SegmentFileHeaderLen
+		sl.totalWritten += SegmentFileHeaderLen
+		return nil
+	}
+
+	head := make([]byte, SegmentFileHeaderLen)
+	existing, err := os.Open(sl.currentName)
+	if err != nil {
+		return fmt.Errorf("failed to open current segment: %w", err)
+	}
+	_, readErr := io.ReadFull(existing, head)
+	existing.Close()
+	if readErr != nil {
+		return fmt.Errorf("%s is %d bytes, too short to hold the %d-byte segment header — "+
+			"refusing to append to it", sl.currentName, info.Size(), SegmentFileHeaderLen)
+	}
+	if err := validateSegmentFileHeader(sl.currentName, head); err != nil {
+		return fmt.Errorf("%w — refusing to append to it", err)
+	}
+
+	file, err := os.OpenFile(sl.currentName, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open current segment: %w", err)
+	}
+	sl.currentFile = file
+	sl.currentOffset = info.Size()
+	return nil
+}
+
+// writeFileHeader puts the magic and format version at the start of a segment
+// file that has just been created. Called exactly once per file, by rotate or
+// by resume adopting an empty one — never on a file that already holds records.
+func (sl *SegmentLog) writeFileHeader(file *os.File) error {
+	head := segmentFileHeader()
+	if _, err := file.Write(head[:]); err != nil {
+		return fmt.Errorf("failed to write the segment header to %s: %w", sl.currentName, err)
+	}
+	return nil
+}
+
+// Append writes one record — a RecordHeaderLen-byte header, then the payload —
+// and returns where the *payload* lives.
+//
+// The id and direction are parameters rather than something the log invents
+// because they are what makes a segment self-describing: without them a file
+// can be read back as bytes but not as messages, so a recovery pass would have
+// to trust an index it was supposed to be checking. The caller (TrafficStore.Put)
+// has both at hand, which is why they are passed rather than recovered later.
+//
+// The returned Location points past the header at the payload alone, so nothing
+// on the read side has to know the framing exists.
+func (sl *SegmentLog) Append(id MsgId, direction Direction, data []byte) (Location, error) {
+	if int64(len(data)) > math.MaxUint32 {
+		return Location{}, fmt.Errorf("message %d is %d bytes, which does not fit the record "+
+			"header's 32-bit length", uint64(id), len(data))
+	}
+	header, ok := RecordHeader{
+		Len:       uint32(len(data)),
+		MsgID:     id,
+		Direction: direction,
+		CRC32:     crc32.ChecksumIEEE(data),
+	}.encode()
+	if !ok {
+		// Refused rather than written as a request: see directionByte.
+		return Location{}, fmt.Errorf("message %d carries direction %d, which is neither request "+
+			"(%d) nor response (%d) — refusing to record it as either",
+			uint64(id), int(direction), int(DirectionRequest), int(DirectionResponse))
+	}
+
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 
-	// Check if we need to rotate
-	if sl.currentFile == nil || uint64(sl.currentOffset)+uint64(len(data)) > sl.targetBytes {
+	if sl.currentFile == nil {
+		if err := sl.rotate(); err != nil {
+			return Location{}, fmt.Errorf("failed to rotate segment: %w", err)
+		}
+	}
+	// Rotation happens only at a completed-record boundary, and only when the
+	// segment already holds a record: a message larger than the whole target
+	// would otherwise rotate an empty segment away and immediately overshoot the
+	// fresh one, leaving a header-only file behind for nothing. The target is a
+	// target, not a cap — an oversized message gets a segment to itself rather
+	// than being refused or split across two files.
+	record := int64(RecordHeaderLen) + int64(len(data))
+	if sl.currentOffset > SegmentFileHeaderLen && uint64(sl.currentOffset)+uint64(record) > sl.targetBytes {
 		if err := sl.rotate(); err != nil {
 			return Location{}, fmt.Errorf("failed to rotate segment: %w", err)
 		}
 	}
 
+	if n, err := sl.currentFile.Write(header[:]); err != nil {
+		sl.currentOffset += int64(n)
+		sl.totalWritten += int64(n)
+		return Location{}, sl.abandonAfterTornWrite("record header", err)
+	}
+	sl.currentOffset += RecordHeaderLen
+	sl.totalWritten += RecordHeaderLen
+
 	offset := sl.currentOffset
 	n, err := sl.currentFile.Write(data)
-	if err != nil {
-		return Location{}, fmt.Errorf("failed to write to segment: %w", err)
-	}
-
 	sl.currentOffset += int64(n)
 	sl.totalWritten += int64(n)
+	if err != nil {
+		return Location{}, sl.abandonAfterTornWrite("record payload", err)
+	}
 
 	return Location{
 		Segment: sl.currentName,
 		Offset:  offset,
 		Length:  int64(n),
 	}, nil
+}
+
+// abandonAfterTornWrite rotates away from a segment whose last record was only
+// partly written, and returns the error to report for the append that failed.
+//
+// A failed write (a full disk, most likely) leaves a header with no payload, or
+// a payload shorter than its header declares. That record is lost either way —
+// but every record after it would be lost too if the next append simply carried
+// on into the same file, because a scan stops at the first fault. Sealing the
+// damage into the tail of one segment costs a file and bounds the loss to the
+// one record that actually failed.
+func (sl *SegmentLog) abandonAfterTornWrite(what string, cause error) error {
+	if err := sl.rotate(); err != nil {
+		return fmt.Errorf("failed to write %s: %w (and the torn segment could not be rotated "+
+			"away from, so the next append would land after it: %v)", what, cause, err)
+	}
+	return fmt.Errorf("failed to write %s: %w (its segment was rotated away from, so the records "+
+		"after it are in a new file)", what, cause)
 }
 
 // rotate seals the current segment and creates a new one. Sealing means the
@@ -138,14 +278,25 @@ func (sl *SegmentLog) rotate() error {
 		}
 	}
 
+	// From here until the new file is ready there is no segment to append to,
+	// and saying so is what lets a later Append retry the rotation instead of
+	// writing into the handle that was just closed.
+	sl.currentFile = nil
 	sl.currentName = filepath.Join(sl.dir, fmt.Sprintf(segmentNameFormat, segNum))
 	file, err := os.Create(sl.currentName)
 	if err != nil {
 		return fmt.Errorf("failed to create new segment: %w", err)
 	}
+	// The magic and version go in here, on a brand new file and nowhere else.
+	// Resuming an existing segment must not write them again — see resume.
+	if err := sl.writeFileHeader(file); err != nil {
+		file.Close()
+		return err
+	}
 
 	sl.currentFile = file
-	sl.currentOffset = 0
+	sl.currentOffset = SegmentFileHeaderLen
+	sl.totalWritten += SegmentFileHeaderLen
 	return nil
 }
 
@@ -248,7 +399,9 @@ func (sl *SegmentLog) Read(loc Location) ([]byte, error) {
 	return out, nil
 }
 
-// TotalWritten returns the total bytes written across all segments.
+// TotalWritten returns the total bytes written across all segments — what the
+// capture directory costs, so it counts the framing (a file header per segment,
+// a record header per message) as well as the payloads.
 func (sl *SegmentLog) TotalWritten() int64 {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()

@@ -4,7 +4,6 @@ package core
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -288,9 +287,11 @@ func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
 	var loc Location
 	if ts.segmentLog != nil {
 		// Write to segment file; the returned location is kept so VerifyIndex
-		// can later prove the index and the log have not drifted apart.
+		// can later prove the index and the log have not drifted apart. The id
+		// and direction go into the record's own header, which is what lets
+		// VerifyCaptureDir read the file back as messages rather than as bytes.
 		var err error
-		loc, err = ts.segmentLog.Append(raw)
+		loc, err = ts.segmentLog.Append(id, direction, raw)
 		if err != nil {
 			return 0, fmt.Errorf("failed to write to segment: %w", err)
 		}
@@ -634,11 +635,34 @@ func (ts *TrafficStore) WsConnections() []WsConnection {
 	return out
 }
 
-// SegmentVerdict represents the result of verifying one segment.
+// SegmentVerdict is what one segment file reported when it was re-read.
+//
+// Records and PayloadBytes count what was actually checked before the walk
+// stopped, so a verdict that names a fault still says how much of the file was
+// good — "412 records, then byte 91,120" is actionable where a bare pass/fail
+// is not.
+//
+// The fields used to be a single Checked, which the writer set to a byte count
+// and the CLI printed as a record count. Naming both separately is the only way
+// neither reading can be wrong.
 type SegmentVerdict struct {
-	Path    string
-	Checked int
-	Fault   *string
+	Path string
+	// Records is how many records were read and had their checksum recomputed
+	// and matched.
+	Records int
+	// PayloadBytes is the message bytes those records cover: the file header
+	// and the per-record framing are not message bytes and are not counted.
+	PayloadBytes int64
+	// Fault is the operator-facing reason this segment did not verify, nil when
+	// it did. It is set for a whole-file fault (unreadable, not one of ours, a
+	// format version this build does not write) *and* for a corrupt record, so
+	// a caller that checks only Fault never misses corruption.
+	Fault *string
+	// Corrupt is the typed detail behind Fault when the fault was in a record
+	// rather than in the file as a whole. Nil for a clean segment and for a
+	// whole-file fault; check Fault, not this, to decide whether a segment
+	// verified.
+	Corrupt *CorruptRecord
 }
 
 // VerifyIndex checks the position-is-the-id invariant every O(1) lookup in
@@ -649,9 +673,10 @@ type SegmentVerdict struct {
 // a bare "mismatch". This is the port of the Rust store's `verify_index`.
 //
 // Like the Rust original, this proves the in-memory index is self-consistent
-// and deliberately does NOT re-read segment files for corruption — that is the
-// separate `VerifyCaptureDir` failure class. A byte flip that keeps a
-// payload's length still passes here; the two checks are never conflated.
+// and deliberately does NOT recompute record checksums — that is the separate
+// `VerifyCaptureDir` failure class, which walks the segment files themselves. A
+// byte flip that keeps a payload's length still passes here, and is caught
+// there; the two checks answer different questions and are never conflated.
 func (ts *TrafficStore) VerifyIndex() error {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
@@ -736,15 +761,20 @@ func (ts *TrafficStore) VerifyIndex() error {
 // is a real answer, not a pass.
 //
 // What this can and cannot prove is worth stating plainly, because the project's
-// value is honest counting. The segment format carries no per-record checksum
-// yet, so this verifies that each segment is readable end to end and reports how
-// many bytes it read. It does not detect a byte flip that leaves the file the
-// same length: that class of fault needs a CRC in the format, and adding one
-// changes the on-disk layout every recorded Location is expressed against.
+// value is honest counting. Each segment is walked record by record through the
+// headers written with it, and every record's payload is checksummed against the
+// CRC32 stored in its header, so a byte flip that leaves the file exactly as long
+// as it was is now caught and named — the one fault the old read-to-EOF byte
+// count could never see.
 //
-// Previously this looked for "segment-*.log" while the writer produced
-// "segment_%d.dat", so it matched nothing and reported success having examined
-// no files at all.
+// The checksum is corruption detection, not a security control. It catches torn
+// writes, bit rot, and truncation. It proves nothing about an adversary, who can
+// recompute a CRC exactly as easily as this code can.
+//
+// Two earlier defects are worth remembering here. This looked for "segment-*.log"
+// while the writer produced "segment_%d.dat", so it matched nothing and reported
+// success having examined no files at all; and once it did match, it could only
+// confirm that a file was readable to its end.
 func VerifyCaptureDir(dir string) []*SegmentVerdict {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -770,44 +800,29 @@ func VerifyCaptureDir(dir string) []*SegmentVerdict {
 
 func strPtr(s string) *string { return &s }
 
-// verifySegmentFile reads a segment through to its end and reports the number of
-// bytes it actually read. Checked is a byte count: it used to report
-// size/1024 under the same name, which made a 2 MB segment look like it had
-// checked 2048 of something.
+// verifySegmentFile walks one segment record by record, recomputing each
+// record's checksum, and folds the walk into a verdict.
+//
+// It used to read the file to EOF and report the byte count — a check that
+// passes on any file that can be read, including one whose bytes have been
+// rewritten in place. Everything it can now say beyond "readable" comes from
+// ScanSegmentFile; this function only decides how a scan reads as a verdict.
 func verifySegmentFile(path string) *SegmentVerdict {
-	file, err := os.Open(path)
+	scan, err := ScanSegmentFile(path)
 	if err != nil {
-		return &SegmentVerdict{Path: path, Fault: strPtr(fmt.Sprintf("open: %v", err))}
+		// A whole-file fault: there are no per-record verdicts to give about a
+		// file that is not a segment of ours, so Records stays zero rather than
+		// implying something was checked.
+		return &SegmentVerdict{Path: path, Fault: strPtr(err.Error())}
 	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return &SegmentVerdict{Path: path, Fault: strPtr(fmt.Sprintf("stat: %v", err))}
+	verdict := &SegmentVerdict{
+		Path:         path,
+		Records:      len(scan.Records),
+		PayloadBytes: scan.PayloadBytes(),
 	}
-
-	buf := make([]byte, 1<<20)
-	var read int64
-	for {
-		n, err := file.Read(buf)
-		read += int64(n)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return &SegmentVerdict{
-				Path:    path,
-				Checked: int(read),
-				Fault:   strPtr(fmt.Sprintf("read failed %d bytes in: %v", read, err)),
-			}
-		}
+	if scan.Corrupt != nil {
+		verdict.Corrupt = scan.Corrupt
+		verdict.Fault = strPtr(scan.Corrupt.Error())
 	}
-	if read != info.Size() {
-		return &SegmentVerdict{
-			Path:    path,
-			Checked: int(read),
-			Fault:   strPtr(fmt.Sprintf("read %d bytes but the segment is %d — it is being truncated under us", read, info.Size())),
-		}
-	}
-	return &SegmentVerdict{Path: path, Checked: int(read)}
+	return verdict
 }

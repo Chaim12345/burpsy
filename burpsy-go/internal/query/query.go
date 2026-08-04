@@ -1,65 +1,273 @@
-// Package query implements a small DSL for filtering traffic history.
-// Grammar: or-expression over and-expressions over comparisons.
+// Package query implements burpsy's filter grammar over captured traffic: one small, closed,
+// typed language shared by the History filter box, the CLI's `history --query`, and — DSL-02 — any
+// other consumer that can describe its own row type through Queryable.
 //
-//	expr   := or-expr
-//	or-expr := and-expr ("or" and-expr)*
-//	and-expr := not-expr ("and" not-expr)*
-//	not-expr := "not" not-expr | cmp
-//	cmp    := field op value
-//	field  := "host" | "method" | "status" | "mime" | "body"
-//	op     := "=" | "!=" | "~" | ">" | ">=" | "<" | "<="
-//	value  := STRING | NUMBER | IDENT
+// # Why a closed typed grammar and not an embedded scripting language
 //
-// Example: host ~ "example" and status >= 400
+// An embedded interpreter would buy expressiveness an operator filtering history does not need,
+// and would give up the one property they do need: `status > "abc"` must be rejected before a
+// single row is compared, not evaluated to false because comparing a number to a string happens to
+// be falsy. A typed grammar makes that a parse-time error; a general-purpose script only offers a
+// runtime one, in the one place — a history filter — where a runtime failure is easiest to mistake
+// for "no matches". That is DSL-04, and it can only be a guarantee if the grammar is closed.
+//
+// # Why the check lives in Parse and not in Match
+//
+// Match returns a plain bool, not (bool, error), and that is the point. Every *Expr that exists
+// came out of Parse, which has already checked the field, the operator and the value shape against
+// each other — so there is no ill-typed comparison left for Match to discover, and no reason for it
+// to have a failure channel that would collapse back into false. The Expr fields are unexported for
+// the same reason Rust wraps its tree in a private `Query(Expr)`: Parse is the only constructor, so
+// "this Expr is type-checked" is an invariant of the type rather than a convention.
+//
+// A malformed query is an error value; a query that legitimately selects nothing is a valid *Expr
+// whose Match returns false. Those two are different types here, so a caller cannot conflate them
+// by accident — only by deliberately discarding the error.
+//
+// # Grammar
+//
+//	query      := or-expr
+//	or-expr    := and-expr ( "or" and-expr )*
+//	and-expr   := unary-expr ( "and" unary-expr )*
+//	unary-expr := "not" unary-expr | primary
+//	primary    := "(" or-expr ")" | comparison
+//	comparison := field op value
+//	field      := "host" | "status" | "method" | "mime" | "body"
+//
+// `not` binds tighter than `and`, which binds tighter than `or` — `a or b and c` parses as
+// `a or (b and c)`. Parentheses override both, and `not` needs none of its own: `not host = "x"`
+// is valid because `not`'s operand is any unary-expr, and a bare comparison is one.
+//
+// # The field/operator matrix, all of it enforced by Parse
+//
+//   - host, method, mime: `=` (`==`), `!=`, `~` (contains), each with a string value. host and
+//     mime compare case-insensitively (DNS names and MIME type/subtype both are); method does not,
+//     because the HTTP method token is case-sensitive per RFC 7230 — folding case there would
+//     accept a query describing a different wire request than the one actually sent.
+//   - status: `=` (`==`), `!=`, `<`, `<=`, `>`, `>=` with an integer value, or `in low..high` for a
+//     range inclusive of both ends. A literal outside 0-65535 is rejected at parse time.
+//   - body: `~` only, matched case-sensitively against the raw bytes. There is no equality on body:
+//     matching a whole message body byte-for-byte is never what an operator means by "filter on
+//     body content".
+//
+// An inverted range (`status in 299..200`) parses and matches nothing, exactly as in Rust — the
+// bounds are compared, not reordered. That is a well-typed query that selects no rows, which is a
+// different thing from an ill-typed one, and only the latter is DSL-04's business.
+//
+// Quoted strings support the escapes \", \\, \n, \t and \r — the same five the Rust lexer takes,
+// and no others: an unrecognised escape is a parse error rather than a silently-dropped backslash.
+//
+// # Absent fields are absent, not zero
+//
+// Queryable models "no response yet" as Status() == 0 and "no Content-Type" as Mime() == "", since
+// neither is a value HTTP can produce. Every comparison on an absent field is false — never true,
+// and never an error. A query naming a field the row does not have yet is not a fault in the query,
+// but neither is a pending request a 0-status response: before this was explicit, `status < 400`
+// matched every request still waiting for its response, because 0 < 400.
+//
+// # Named divergences from crates/query
+//
+//   - One file, not five. Rust splits lexer/parser/ast/eval/error; this parser reads characters
+//     directly rather than materialising a token slice, so the split would be four files of two
+//     functions each. Behaviour is what parity is measured on, and the behaviour matches.
+//   - `=` is accepted as a synonym for `==`. Rust's lexer rejects a lone `=` outright. Go's grammar
+//     has documented `=` since it was written while the UI's own placeholder query uses `==`, and
+//     `==` used to parse and then silently never match — the exact failure mode DSL-04 exists to
+//     prevent. Both spellings are accepted rather than breaking either caller.
+//   - An unquoted bare word is accepted as a string value (`host = example.com`), which Rust
+//     rejects. Go's grammar has always allowed it and the CLI's --query examples are unquoted. A
+//     bare word that is all digits is still refused, because a number where a string belongs is a
+//     type error and not a hostname: quote it (`host = "8080"`) to mean the text.
+//   - One error type with an offset and a message, rather than Rust's ten-variant enum. Callers
+//     discriminate on position and text, not on variant; QueryError.Render carries over the caret
+//     rendering that Rust's QueryError::render provides.
 package query
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
-// Expr is a parsed query expression.
-type Expr struct {
-	Kind ExprKind
-	// And / Or
-	Left  *Expr
-	Right *Expr
-	// Cmp
-	Field string
-	Op    string
-	Val   string
-	IsNum bool
-}
-
-type ExprKind int
-
-const (
-	KindAnd ExprKind = iota
-	KindOr
-	KindNot
-	KindCmp
-)
-
-// Queryable is what the evaluator inspects on each exchange.
+// Queryable is what the evaluator inspects on each exchange. A consumer implements it over
+// whatever its own row type is, which is what lets one parsed *Expr drive both the history filter
+// and an unrelated match-and-replace candidate (DSL-02) without either knowing about the other.
 type Queryable interface {
 	Host() string
 	Method() string
-	Status() int // 0 = absent
+	Status() int // 0 = absent (no response yet)
 	Mime() string
 	Body() []byte
 }
 
-// Parse parses a query string.
+// Expr is a parsed, type-checked query expression. Parse is the only way to obtain one, so every
+// Expr that exists has already passed the field/operator/value rules above and Match cannot fail.
+//
+// The fields are unexported deliberately: an Expr assembled by hand could carry a comparison the
+// grammar forbids, and Match would then have to decide what an ill-typed comparison means — the
+// silent-false answer this package exists to eliminate.
+type Expr struct {
+	kind        exprKind
+	left, right *Expr
+
+	// Set only when kind == kindCmp.
+	field field
+	op    op
+	str   string // value for host/method/mime/body
+	num   uint16 // status value for =, !=, <, <=, >, >=
+	lo    uint16 // status range lower bound, inclusive (op == opIn)
+	hi    uint16 // status range upper bound, inclusive (op == opIn)
+}
+
+type exprKind int
+
+const (
+	kindAnd exprKind = iota
+	kindOr
+	kindNot
+	kindCmp
+)
+
+type field int
+
+const (
+	fieldHost field = iota
+	fieldMethod
+	fieldMime
+	fieldStatus
+	fieldBody
+)
+
+func (f field) String() string {
+	switch f {
+	case fieldHost:
+		return "host"
+	case fieldMethod:
+		return "method"
+	case fieldMime:
+		return "mime"
+	case fieldStatus:
+		return "status"
+	case fieldBody:
+		return "body"
+	}
+	return "?"
+}
+
+type op int
+
+const (
+	opEq op = iota
+	opNe
+	opContains
+	opLt
+	opLe
+	opGt
+	opGe
+	opIn
+)
+
+func (o op) String() string {
+	switch o {
+	case opEq:
+		return "="
+	case opNe:
+		return "!="
+	case opContains:
+		return "~"
+	case opLt:
+		return "<"
+	case opLe:
+		return "<="
+	case opGt:
+		return ">"
+	case opGe:
+		return ">="
+	case opIn:
+		return "in"
+	}
+	return "?"
+}
+
+// QueryError is a parse fault carrying the byte offset it was found at, plus the source it was
+// found in so Render can point at it. This type is the whole of DSL-04 on the Go side: there is no
+// function in this package that turns one into an *Expr that matches nothing.
+type QueryError struct {
+	// At is the byte offset in Src where the fault was found.
+	At int
+	// Msg says what the fault means to an operator, not which token disagreed.
+	Msg string
+	// Src is the query text the fault was found in, kept so Render needs no arguments.
+	Src string
+}
+
+func (e *QueryError) Error() string {
+	return fmt.Sprintf("query parse error at byte %d: %s", e.At, e.Msg)
+}
+
+// Render reproduces the offending line under the message with a caret pointing at At. A byte
+// offset alone in a JSON field is not "where" for an operator typing into a filter box — this is.
+// The output is three lines: message, source line, caret line.
+func (e *QueryError) Render() string {
+	at := e.At
+	if at > len(e.Src) {
+		at = len(e.Src)
+	}
+	lineStart := strings.LastIndexByte(e.Src[:at], '\n') + 1 // -1+1 == 0 when there is no newline
+	lineEnd := len(e.Src)
+	if i := strings.IndexByte(e.Src[at:], '\n'); i >= 0 {
+		lineEnd = at + i
+	}
+	// Column in runes, not bytes: a caret counted in bytes drifts right of the character it means
+	// as soon as the query contains a multi-byte host name.
+	col := len([]rune(e.Src[lineStart:at]))
+	return fmt.Sprintf("%s\n%s\n%s^", e.Error(), e.Src[lineStart:lineEnd], strings.Repeat(" ", col))
+}
+
+// Render formats err for display to an operator: the caret rendering when err came from Parse, and
+// the plain message otherwise. Callers that show a query fault in a UI want the caret; callers
+// that only log it can use err.Error() directly.
+func Render(err error) string {
+	if err == nil {
+		return ""
+	}
+	var qe *QueryError
+	if errors.As(err, &qe) {
+		return qe.Render()
+	}
+	return err.Error()
+}
+
+// Parse parses and type-checks a query string. A returned error is always a *QueryError.
 func Parse(input string) (*Expr, error) {
-	p := &parser{src: input, pos: 0}
-	return p.parseOr()
+	p := &parser{src: input}
+	p.skipWs()
+	if p.pos >= len(p.src) {
+		return nil, p.errAt(0, "the query is empty — there is nothing to filter on; write at least one comparison, e.g. `status = 200`")
+	}
+	e, err := p.parseOr()
+	if err != nil {
+		return nil, err
+	}
+	// Rust's parser demands EOF here. Without that check a trailing `)` or a mistyped second
+	// clause is silently discarded, and the query that runs is not the query that was typed —
+	// which reads, once again, as "that filter matched fewer rows than I expected".
+	p.skipWs()
+	if p.pos < len(p.src) {
+		return nil, p.errAt(p.pos, "expected the end of the query but found %q — an unbalanced ')' or a clause missing its `and`/`or` lands here", p.restOfToken())
+	}
+	return e, nil
 }
 
 type parser struct {
 	src string
 	pos int
+}
+
+func (p *parser) errAt(at int, format string, args ...interface{}) error {
+	return &QueryError{At: at, Msg: fmt.Sprintf(format, args...), Src: p.src}
 }
 
 func (p *parser) peek() byte {
@@ -70,74 +278,47 @@ func (p *parser) peek() byte {
 }
 
 func (p *parser) skipWs() {
-	for p.pos < len(p.src) && unicode.IsSpace(rune(p.src[p.pos])) {
+	for p.pos < len(p.src) && isSpaceByte(p.src[p.pos]) {
 		p.pos++
 	}
+}
+
+// restOfToken is for error messages only: the run of non-space bytes at the cursor, so a message
+// can quote what it choked on instead of naming a bare offset.
+func (p *parser) restOfToken() string {
+	start := p.pos
+	end := p.pos
+	for end < len(p.src) && !isSpaceByte(p.src[end]) {
+		end++
+	}
+	if end == start && start < len(p.src) {
+		end = start + 1
+	}
+	return p.src[start:end]
 }
 
 func (p *parser) consumeIdent() string {
 	p.skipWs()
 	start := p.pos
-	for p.pos < len(p.src) && (p.src[p.pos] == '_' || unicode.IsLetter(rune(p.src[p.pos])) || unicode.IsDigit(rune(p.src[p.pos]))) {
+	for p.pos < len(p.src) && (p.src[p.pos] == '_' || isAlpha(p.src[p.pos]) || isDigit(p.src[p.pos])) {
 		p.pos++
 	}
 	return p.src[start:p.pos]
 }
 
-func (p *parser) consumeString() (string, error) {
-	p.skipWs()
-	if p.peek() != '"' {
-		return "", p.errf("expected quoted string")
+// consumeKeyword consumes the whole identifier at the cursor if it equals kw, and consumes nothing
+// otherwise. Whole-identifier, not prefix: `order = "x"` must not be read as `or` followed by
+// `der`, and `nothing` must not be read as `not hing`.
+func (p *parser) consumeKeyword(kw string) bool {
+	saved := p.pos
+	if strings.EqualFold(p.consumeIdent(), kw) {
+		return true
 	}
-	p.pos++
-	start := p.pos
-	for p.pos < len(p.src) && p.src[p.pos] != '"' {
-		p.pos++
-	}
-	if p.pos >= len(p.src) {
-		return "", p.errf("unterminated string")
-	}
-	s := p.src[start:p.pos]
-	p.pos++
-	return s, nil
+	p.pos = saved
+	return false
 }
 
-func (p *parser) consumeOp() string {
-	p.skipWs()
-	start := p.pos
-	for p.pos < len(p.src) && strings.ContainsRune("=<>!~", rune(p.src[p.pos])) {
-		p.pos++
-	}
-	return p.src[start:p.pos]
-}
-
-func (p *parser) consumeValue() (string, bool, error) {
-	p.skipWs()
-	c := p.peek()
-	if c == '"' {
-		s, err := p.consumeStringSorted()
-		return s, false, err
-	}
-	start := p.pos
-	for p.pos < len(p.src) && !unicode.IsSpace(rune(p.src[p.pos])) &&
-		p.src[p.pos] != ')' && !strings.ContainsRune("=<>!~", rune(p.src[p.pos])) {
-		p.pos++
-	}
-	if start == p.pos {
-		return "", false, p.errf("expected value")
-	}
-	s := p.src[start:p.pos]
-	if _, err := strconv.Atoi(s); err == nil {
-		return s, true, nil
-	}
-	return s, false, nil
-}
-
-func (p *parser) consumeStringSorted() (string, error) { return p.consumeString() }
-
-func (p *parser) errf(format string, args ...interface{}) error {
-	return fmt.Errorf("query parse error at pos %d: %s", p.pos, fmt.Sprintf(format, args...))
-}
+// ---- boolean composition -----------------------------------------------------------------------
 
 func (p *parser) parseOr() (*Expr, error) {
 	left, err := p.parseAnd()
@@ -153,13 +334,13 @@ func (p *parser) parseOr() (*Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		left = &Expr{Kind: KindOr, Left: left, Right: right}
+		left = &Expr{kind: kindOr, left: left, right: right}
 	}
 	return left, nil
 }
 
 func (p *parser) parseAnd() (*Expr, error) {
-	left, err := p.parseNot()
+	left, err := p.parseUnary()
 	if err != nil {
 		return nil, err
 	}
@@ -168,120 +349,416 @@ func (p *parser) parseAnd() (*Expr, error) {
 		if !p.consumeKeyword("and") {
 			break
 		}
-		right, err := p.parseNot()
+		right, err := p.parseUnary()
 		if err != nil {
 			return nil, err
 		}
-		left = &Expr{Kind: KindAnd, Left: left, Right: right}
+		left = &Expr{kind: kindAnd, left: left, right: right}
 	}
 	return left, nil
 }
 
-func (p *parser) parseNot() (*Expr, error) {
+func (p *parser) parseUnary() (*Expr, error) {
 	p.skipWs()
 	if p.consumeKeyword("not") {
-		sub, err := p.parseNot()
+		sub, err := p.parseUnary()
 		if err != nil {
 			return nil, err
 		}
-		return &Expr{Kind: KindNot, Left: sub}, nil
+		return &Expr{kind: kindNot, left: sub}, nil
+	}
+	return p.parsePrimary()
+}
+
+// parsePrimary is the level parentheses live at: a group recurses all the way back to parseOr, so
+// the precedence the outer levels impose is exactly what `(` and `)` suspend.
+func (p *parser) parsePrimary() (*Expr, error) {
+	p.skipWs()
+	if p.peek() == '(' {
+		openAt := p.pos
+		p.pos++
+		inner, err := p.parseOr()
+		if err != nil {
+			return nil, err
+		}
+		p.skipWs()
+		if p.peek() != ')' {
+			// Reported at the cursor, which for a group that runs off the end of the input is the
+			// end of the input — the offset a caret should point at to say "it stopped here".
+			return nil, p.errAt(p.pos, "the group opened at byte %d is never closed — expected ')'", openAt)
+		}
+		p.pos++
+		return inner, nil
 	}
 	return p.parseCmp()
 }
 
+// ---- one `field op value` comparison -----------------------------------------------------------
+
+// parseCmp is where the type check happens: the single point at which a field, an operator and a
+// value literal come together. There is no path from input to a kindCmp Expr that skips it.
 func (p *parser) parseCmp() (*Expr, error) {
 	p.skipWs()
-	field := p.consumeIdent()
-	if field == "" {
-		return nil, p.errf("expected field name (host/method/status/mime/body)")
+	fieldAt := p.pos
+	name := p.consumeIdent()
+	if name == "" {
+		return nil, p.errAt(fieldAt, "expected a field name (host, status, method, mime, body) or '('")
 	}
-	op := p.consumeOp()
-	if op == "" {
-		return nil, p.errf("expected operator (=, !=, ~, >, >=, <, <=)")
+	f, ok := fieldByName(name)
+	if !ok {
+		return nil, p.errAt(fieldAt, "'%s' is not a field this grammar has — the fields are host, status, method, mime and body", name)
 	}
-	val, isNum, err := p.consumeValue()
+
+	o, opAt, err := p.parseOp(f)
 	if err != nil {
 		return nil, err
 	}
-	return &Expr{Kind: KindCmp, Field: field, Op: op, Val: val, IsNum: isNum}, nil
+	// Quote the operator as it was written, not as the canonical spelling: an operator told `==`
+	// does not apply should say `==`, or the message looks like it is answering a different query.
+	opLit := p.src[opAt:p.pos]
+	if !fieldAllows(f, o) {
+		return nil, p.errAt(opAt, "'%s' does not apply to %s — %s supports %s", opLit, f, f, allowedOps(f))
+	}
+
+	if f == fieldStatus {
+		return p.parseStatusValue(o)
+	}
+	val, err := p.parseStringValue(f)
+	if err != nil {
+		return nil, err
+	}
+	return &Expr{kind: kindCmp, field: f, op: o, str: val}, nil
 }
 
-func (p *parser) consumeKeyword(kw string) bool {
-	saved := p.pos
-	p.skipWs()
-	ident := p.consumeIdent()
-	if strings.EqualFold(ident, kw) {
-		return true
+func fieldByName(name string) (field, bool) {
+	switch strings.ToLower(name) {
+	case "host":
+		return fieldHost, true
+	case "method":
+		return fieldMethod, true
+	case "mime":
+		return fieldMime, true
+	case "status":
+		return fieldStatus, true
+	case "body":
+		return fieldBody, true
 	}
-	p.pos = saved
+	return 0, false
+}
+
+// fieldAllows is the operator half of the matrix. Spelled out per field rather than derived from a
+// "is this a string field" predicate, so adding a field or an operator forces a decision here
+// instead of inheriting one.
+func fieldAllows(f field, o op) bool {
+	switch f {
+	case fieldHost, fieldMethod, fieldMime:
+		return o == opEq || o == opNe || o == opContains
+	case fieldStatus:
+		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
+	case fieldBody:
+		return o == opContains
+	}
 	return false
 }
 
+// allowedOps names what would have worked, so the error is actionable rather than just a refusal.
+func allowedOps(f field) string {
+	switch f {
+	case fieldStatus:
+		return "=, !=, <, <=, >, >= and `in low..high`"
+	case fieldBody:
+		return "~ (contains) only, since matching a whole body exactly is rarely what \"filter on body content\" means"
+	}
+	return "=, != (case-insensitive for host and mime) and ~ (contains)"
+}
+
+// parseOp reads one operator: a run of symbol characters, or the word `in`. The field is taken only
+// to name it in the "expected an operator" message; legality is decided by the caller so that an
+// operator this grammar has but the field forbids reports as "does not apply to", not "unknown".
+func (p *parser) parseOp(f field) (op, int, error) {
+	p.skipWs()
+	at := p.pos
+	if p.pos >= len(p.src) {
+		return 0, at, p.errAt(at, "the query ended while an operator for %s was still expected (%s)", f, allowedOps(f))
+	}
+	if isAlpha(p.peek()) || p.peek() == '_' {
+		word := p.consumeIdent()
+		if strings.EqualFold(word, "in") {
+			return opIn, at, nil
+		}
+		return 0, at, p.errAt(at, "expected an operator for %s but found the word '%s' — %s supports %s", f, word, f, allowedOps(f))
+	}
+	start := p.pos
+	for p.pos < len(p.src) && strings.IndexByte("=<>!~", p.src[p.pos]) >= 0 {
+		p.pos++
+	}
+	switch p.src[start:p.pos] {
+	case "=", "==":
+		return opEq, at, nil
+	case "!=":
+		return opNe, at, nil
+	case "~":
+		return opContains, at, nil
+	case "<":
+		return opLt, at, nil
+	case "<=":
+		return opLe, at, nil
+	case ">":
+		return opGt, at, nil
+	case ">=":
+		return opGe, at, nil
+	case "":
+		return 0, at, p.errAt(at, "expected an operator for %s but found %q — %s supports %s", f, p.restOfToken(), f, allowedOps(f))
+	default:
+		return 0, at, p.errAt(at, "'%s' is not an operator this grammar has — %s supports %s", p.src[start:p.pos], f, allowedOps(f))
+	}
+}
+
+// parseStringValue reads the value of a comparison on host, method, mime or body.
+func (p *parser) parseStringValue(f field) (string, error) {
+	p.skipWs()
+	at := p.pos
+	if p.pos >= len(p.src) {
+		return "", p.errAt(at, "the query ended while a value for %s was still expected", f)
+	}
+	if p.peek() == '"' {
+		return p.consumeQuoted()
+	}
+	word := p.consumeBareWord()
+	if word == "" {
+		return "", p.errAt(at, "expected a value for %s but found %q — write it as a quoted string, e.g. %s ~ \"example\"", f, p.restOfToken(), f)
+	}
+	if isAllDigits(word) {
+		// The mirror image of `status > "abc"`: a number where a string belongs. Refused rather
+		// than compared as text, because a query that says `host = 8080` is a mistake, and
+		// answering it with an empty row list would hide that.
+		return "", p.errAt(at, "%s expects a string value but found the number %s — quote it (%s = \"%s\") if that is really the text you mean", f, word, f, word)
+	}
+	return word, nil
+}
+
+// parseStatusValue reads either one status literal or a `low..high` range, and is the other half of
+// the matrix: the value shape is decided by the operator that was already accepted for the field.
+func (p *parser) parseStatusValue(o op) (*Expr, error) {
+	lo, err := p.parseStatusNumber()
+	if err != nil {
+		return nil, err
+	}
+	if o != opIn {
+		return &Expr{kind: kindCmp, field: fieldStatus, op: o, num: lo}, nil
+	}
+	p.skipWs()
+	if !strings.HasPrefix(p.src[p.pos:], "..") {
+		return nil, p.errAt(p.pos, "expected '..' between the bounds of a status range — the form is `status in 200..299`, inclusive of both ends")
+	}
+	p.pos += 2
+	hi, err := p.parseStatusNumber()
+	if err != nil {
+		return nil, err
+	}
+	return &Expr{kind: kindCmp, field: fieldStatus, op: opIn, lo: lo, hi: hi}, nil
+}
+
+func (p *parser) parseStatusNumber() (uint16, error) {
+	p.skipWs()
+	at := p.pos
+	if p.pos >= len(p.src) {
+		return 0, p.errAt(at, "the query ended while a number for status was still expected")
+	}
+	if p.peek() == '"' {
+		// DSL-04's canonical case, `status > "abc"`. Rejected here, at parse time, so it can never
+		// reach Match and come back as false — a verdict indistinguishable from "no rows matched".
+		return 0, p.errAt(at, "status expects a number but found a quoted string — a comparison whose types do not fit is rejected here rather than silently matching nothing")
+	}
+	start := p.pos
+	for p.pos < len(p.src) && isDigit(p.src[p.pos]) {
+		p.pos++
+	}
+	if p.pos == start {
+		return 0, p.errAt(at, "status expects a number but found %q — a comparison whose types do not fit is rejected here rather than silently matching nothing", p.restOfToken())
+	}
+	text := p.src[start:p.pos]
+	n, err := strconv.ParseUint(text, 10, 16)
+	if err != nil {
+		return 0, p.errAt(at, "%s is not a valid status code — status is a 16-bit value (0-65535)", text)
+	}
+	return uint16(n), nil
+}
+
+// consumeQuoted reads a double-quoted string, decoding the five escapes the grammar has. An
+// unknown escape is an error, not a dropped backslash: `host ~ "a\qb"` is a typo, and quietly
+// searching for `aqb` would answer a question nobody asked.
+func (p *parser) consumeQuoted() (string, error) {
+	openAt := p.pos // the caller has checked p.peek() == '"'
+	p.pos++
+	var b strings.Builder
+	for p.pos < len(p.src) {
+		switch c := p.src[p.pos]; c {
+		case '"':
+			p.pos++
+			return b.String(), nil
+		case '\\':
+			if p.pos+1 >= len(p.src) {
+				return "", p.errAt(openAt, "the quoted string opened at byte %d is never closed — its last character is a trailing backslash", openAt)
+			}
+			esc := p.src[p.pos+1]
+			switch esc {
+			case '"':
+				b.WriteByte('"')
+			case '\\':
+				b.WriteByte('\\')
+			case 'n':
+				b.WriteByte('\n')
+			case 't':
+				b.WriteByte('\t')
+			case 'r':
+				b.WriteByte('\r')
+			default:
+				return "", p.errAt(p.pos+1, "'\\%c' is not a recognised escape — the escapes are \\\", \\\\, \\n, \\t and \\r", esc)
+			}
+			p.pos += 2
+		default:
+			// Byte-at-a-time is safe for multi-byte UTF-8: every continuation byte is copied
+			// through unchanged, and none of them can be '"' or '\\'.
+			b.WriteByte(c)
+			p.pos++
+		}
+	}
+	return "", p.errAt(openAt, "the quoted string opened at byte %d is never closed — add a closing '\"' before the end of the query", openAt)
+}
+
+// consumeBareWord reads an unquoted value: everything up to whitespace, a quote, a parenthesis or
+// an operator character. Non-ASCII bytes pass through, so an internationalised host name written
+// without quotes still works.
+func (p *parser) consumeBareWord() string {
+	start := p.pos
+	for p.pos < len(p.src) {
+		c := p.src[p.pos]
+		if isSpaceByte(c) || c == '"' || c == '(' || c == ')' || strings.IndexByte("=<>!~", c) >= 0 {
+			break
+		}
+		p.pos++
+	}
+	return p.src[start:p.pos]
+}
+
+func isSpaceByte(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
+}
+
+func isAlpha(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func isAllDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isDigit(s[i]) {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// ---- evaluation --------------------------------------------------------------------------------
+
 // Match evaluates the parsed expression against a Queryable.
+//
+// Returns a plain bool, not (bool, error): every Expr was type-checked when it was parsed, so
+// evaluating one cannot fail. A query that legitimately matches nothing looks like Parse returning
+// an *Expr whose Match is false — which is a different value, of a different type, from Parse
+// returning an error.
+//
+// A nil *Expr matches everything, so a caller holding "no filter" need not special-case it.
 func (e *Expr) Match(q Queryable) bool {
 	if e == nil {
 		return true
 	}
-	switch e.Kind {
-	case KindAnd:
-		return e.Left.Match(q) && e.Right.Match(q)
-	case KindOr:
-		return e.Left.Match(q) || e.Right.Match(q)
-	case KindNot:
-		return !e.Left.Match(q)
-	case KindCmp:
-		return evalCmp(e, q)
+	switch e.kind {
+	case kindAnd:
+		return e.left.Match(q) && e.right.Match(q)
+	case kindOr:
+		return e.left.Match(q) || e.right.Match(q)
+	case kindNot:
+		return !e.left.Match(q)
+	case kindCmp:
+		return e.matchCmp(q)
 	}
+	// Unreachable: kind is set only by this package's parser, and every kind it sets is above.
 	return false
 }
 
-func evalCmp(e *Expr, q Queryable) bool {
-	var fieldVal string
-	var isNumField bool
-	switch strings.ToLower(e.Field) {
-	case "host":
-		fieldVal = q.Host()
-	case "method":
-		fieldVal = q.Method()
-	case "status":
-		fieldVal = strconv.Itoa(q.Status())
-		isNumField = true
-	case "mime":
-		fieldVal = q.Mime()
-	case "body":
-		return strings.Contains(string(q.Body()), e.Val)
-	default:
-		return false
-	}
-	switch e.Op {
-	case "=":
-		return strings.EqualFold(fieldVal, e.Val)
-	case "!=":
-		return !strings.EqualFold(fieldVal, e.Val)
-	case "~":
-		return strings.Contains(strings.ToLower(fieldVal), strings.ToLower(e.Val))
-	case ">=", "<=", ">", "<":
-		a, errA := strconv.ParseInt(fieldVal, 10, 64)
-		b, errB := strconv.ParseInt(e.Val, 10, 64)
-		if errA != nil || errB != nil {
-			_ = isNumField
-			return false
+func (e *Expr) matchCmp(q Queryable) bool {
+	switch e.field {
+	case fieldHost:
+		// Case-insensitive: DNS names are, and an operator who typed `Example.COM` means the same
+		// host as `example.com`. Burp's own history search defaults to case-insensitive and offers
+		// a separate opt-in checkbox, which is the same call made here.
+		return strOp(e.op, q.Host(), e.str, true)
+	case fieldMethod:
+		// Case-sensitive per RFC 7230: a server that defines only GET does not also answer `get`.
+		return strOp(e.op, q.Method(), e.str, false)
+	case fieldMime:
+		mime := q.Mime()
+		if mime == "" {
+			return false // absent Content-Type: no comparison on it can hold
 		}
-		return compareNum(a, b, e.Op)
+		// Type and subtype are case-insensitive per RFC 2045.
+		return strOp(e.op, mime, e.str, true)
+	case fieldStatus:
+		status := q.Status()
+		if status == 0 {
+			return false // no response yet: not a 0-status response
+		}
+		return statusOp(e, status)
+	case fieldBody:
+		// Case-sensitive and byte-exact: a body needle is content, not an identifier.
+		return bytes.Contains(q.Body(), []byte(e.str))
 	}
+	// Unreachable: field is set only by parseCmp, from fieldByName.
 	return false
 }
 
-func compareNum(a, b int64, op string) bool {
-	switch op {
-	case ">":
-		return a > b
-	case ">=":
-		return a >= b
-	case "<":
-		return a < b
-	case "<=":
-		return a <= b
+func strOp(o op, actual, expected string, caseInsensitive bool) bool {
+	switch o {
+	case opEq:
+		if caseInsensitive {
+			return strings.EqualFold(actual, expected)
+		}
+		return actual == expected
+	case opNe:
+		if caseInsensitive {
+			return !strings.EqualFold(actual, expected)
+		}
+		return actual != expected
+	case opContains:
+		if caseInsensitive {
+			return strings.Contains(strings.ToLower(actual), strings.ToLower(expected))
+		}
+		return strings.Contains(actual, expected)
 	}
+	// Unreachable: fieldAllows admits no other operator for a string field.
+	return false
+}
+
+func statusOp(e *Expr, actual int) bool {
+	want := int(e.num)
+	switch e.op {
+	case opEq:
+		return actual == want
+	case opNe:
+		return actual != want
+	case opLt:
+		return actual < want
+	case opLe:
+		return actual <= want
+	case opGt:
+		return actual > want
+	case opGe:
+		return actual >= want
+	case opIn:
+		// Inclusive of both ends: `status in 200..299` matches 200 and 299.
+		return actual >= int(e.lo) && actual <= int(e.hi)
+	}
+	// Unreachable: fieldAllows admits no other operator for status.
 	return false
 }

@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
@@ -17,15 +19,35 @@ import (
 
 // ActiveScanner performs active security scanning.
 type ActiveScanner struct {
-	store      *core.TrafficStore
-	logger     *zap.Logger
-	config     *ScanConfig
-	sender     *sender.Sender
+	store  *core.TrafficStore
+	logger *zap.Logger
+	config *ScanConfig
+	sender *sender.Sender
+	// scope is the engagement scope, enforced before an item is planned and again on every probe's
+	// own bytes. Nil means no caller supplied one — see WithScope.
+	scope *core.Scope
+	// auditCfg is the budget/breaker configuration, when an operator set one explicitly. Nil defers
+	// to AuditConfig, which derives it from ScanConfig.
+	auditCfg *AuditConfig
+	// jsLib and jwtWeak are the two native checks (SCAN-01 in js_vulns.go, SCAN-02 in jwt_weak.go).
+	// Each carries its own dataset and coverage counters, so they are built once per scanner and
+	// reused across audits rather than rebuilt per exchange — re-parsing the 514 KB retire.js corpus
+	// for every audited exchange would dominate the scan. nativeChecks fills them lazily; the two
+	// With… setters override before first use.
+	jsLib      *JsLibraryCheck
+	jwtWeak    *JwtWeakSecretCheck
+	nativeOnce sync.Once
 	findings   []*Finding
 	findingsMu sync.RWMutex
 }
 
-// ScanConfig holds scanner configuration.
+// ScanConfig holds scanner configuration: which checks are in the set, and how the session is
+// paced.
+//
+// It is deliberately not merged with AuditConfig, which answers a different question — how much
+// work may be admitted before the engine stops. The two share no field, so they cannot disagree.
+// Timeout is the one that could have: it is read by ActiveScanner.AuditConfig as the source of the
+// audit's wall-clock budget rather than being duplicated there.
 type ScanConfig struct {
 	MaxConcurrency     int
 	Timeout            time.Duration
@@ -86,86 +108,48 @@ func (s *ActiveScanner) WithSender(snd *sender.Sender) *ActiveScanner {
 	return s
 }
 
-// Audit runs an active audit on an exchange.
+// Audit runs an active audit on an exchange, under this scanner's AuditConfig.
+//
+// The check set no longer runs as a straight line of ifs: every check passes the audit engine's
+// admission gate first, and every check that is not dispatched lands in a named Disposition on the
+// outcome. Callers that need to know what was *not* looked at should use AuditWithin, which returns
+// that outcome; this signature is kept for the web and CLI call sites that predate it.
+//
+// An item the engine refused before any dispatch — out of scope, or nothing auditable — comes back
+// as an error rather than an empty finding list. With two return values there is no other way to
+// keep "audited, found nothing" and "never looked" apart, and collapsing them is the exact defect
+// the engine exists to prevent.
 func (s *ActiveScanner) Audit(ctx context.Context, exchangeID uint64) ([]*Finding, error) {
-	exchange, err := s.store.GetExchange(exchangeID)
-	if err != nil {
-		return nil, err
+	outcome, findings := s.AuditWithin(ctx, exchangeID, s.AuditConfig())
+	if outcome.Error != "" {
+		return nil, errors.New(outcome.Error)
 	}
-
-	var findings []*Finding
-
-	// Run SQL injection checks
-	if s.config.CheckSqli {
-		sqliFindings := s.checkSQLi(ctx, exchange)
-		findings = append(findings, sqliFindings...)
-	}
-
-	// Run XSS checks
-	if s.config.CheckXss {
-		xssFindings := s.checkXSS(ctx, exchange)
-		findings = append(findings, xssFindings...)
-	}
-
-	// Run path traversal checks
-	if s.config.CheckPathTraversal {
-		ptFindings := s.checkPathTraversal(ctx, exchange)
-		findings = append(findings, ptFindings...)
-	}
-
-	// Run JWT weak secret checks
-	if s.config.CheckJwtWeak {
-		jwtFindings := s.checkJWTWeak(ctx, exchange)
-		findings = append(findings, jwtFindings...)
-	}
-
-	// Run JS vulnerability checks
-	if s.config.CheckJSVulns {
-		jsFindings := s.checkJSVulns(ctx, exchange)
-		findings = append(findings, jsFindings...)
-	}
-
-	// Store findings
-	s.findingsMu.Lock()
-	s.findings = append(s.findings, findings...)
-	s.findingsMu.Unlock()
-
 	return findings, nil
 }
 
-// AuditMultiple runs audits on multiple exchanges concurrently.
+// AuditMultiple runs audits on multiple exchanges concurrently, under one shared budget, ledger and
+// set of circuit breakers.
+//
+// A thin wrapper over AuditSession, kept at its original signature. AuditSession is the one to call
+// for the session outcome: the dispatch-unit count, the checks that were never admitted, and
+// whether the failure breaker paused the run.
 func (s *ActiveScanner) AuditMultiple(ctx context.Context, exchangeIDs []uint64) ([]*Finding, error) {
-	sem := make(chan struct{}, s.config.MaxConcurrency)
-	var wg sync.WaitGroup
-	allFindings := make([]*Finding, 0)
-	findingsMu := sync.Mutex{}
-
-	for _, id := range exchangeIDs {
-		wg.Add(1)
-		go func(exchangeID uint64) {
-			defer wg.Done()
-
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
+	outcome, findings := s.AuditSession(ctx, exchangeIDs, s.AuditConfig())
+	// The outcome now carries every refusal with its reason, but the log line stays: a caller that
+	// only reads stderr must not lose the fact that an exchange was skipped.
+	if s.logger != nil {
+		for _, item := range outcome.Items {
+			if item.Outcome.Error != "" {
+				s.logger.Warn("audit skipped",
+					zap.Uint64("exchange_id", item.ExchangeID),
+					zap.String("reason", item.Outcome.Error))
 			}
-
-			findings, err := s.Audit(ctx, exchangeID)
-			if err != nil {
-				s.logger.Warn("audit failed", zap.Uint64("exchange_id", exchangeID), zap.Error(err))
-				return
-			}
-
-			findingsMu.Lock()
-			allFindings = append(allFindings, findings...)
-			findingsMu.Unlock()
-		}(id)
+		}
 	}
-
-	wg.Wait()
-	return allFindings, nil
+	if findings == nil {
+		findings = make([]*Finding, 0)
+	}
+	return findings, nil
 }
 
 // checkSQLi performs SQL injection testing.
@@ -334,8 +318,32 @@ func (s *ActiveScanner) testPathTraversal(ctx context.Context, exchange *core.Ex
 // sendTestRequest dispatches a crafted test request through the sender when
 // available, otherwise falls back to the stored response body of the original
 // exchange (offline audit).
+//
+// Every probe that leaves this process leaves from here, which makes it the only place the audit
+// engine needs to instrument. It does two things beyond sending:
+//
+//   - It meters the probe. The meter rides on ctx (see meterKey) and is both what the request budget
+//     bounds and what tells a check that ran from a check that never saw its own probe response.
+//   - It authorises the probe's own bytes against the engagement scope. auditItem already tested the
+//     captured exchange, but a check that rewrites the path is sending somewhere else entirely, and
+//     only this URL says where. Putting the test on the send path makes it unbypassable rather than
+//     merely present.
+//
+// A refused probe returns nothing rather than the stored response: the fallback exists so an
+// operator with no sender can still audit captured traffic, not so a check can derive a verdict
+// about a payload that was never authorised to leave.
 func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exchange, testURL string) string {
 	if s.sender != nil {
+		meter := meterFrom(ctx)
+		meter.attempt()
+		if s.scope != nil && !s.scope.AuthoriseRequest(exchange.Host, exchange.Port, testURL, exchange.TLS) {
+			meter.refusal()
+			if s.logger != nil {
+				s.logger.Warn("test request refused: outside the engagement scope",
+					zap.String("host", exchange.Host), zap.String("url", testURL))
+			}
+			return ""
+		}
 		resp, err := s.sender.Send(ctx, &sender.Request{
 			Method: exchange.Method,
 			Host:   exchange.Host,
@@ -344,10 +352,14 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 			Port:   exchange.Port,
 		})
 		if err == nil && resp != nil {
+			meter.succeeded()
 			return string(resp.Body)
 		}
-		s.logger.Warn("test request failed, falling back to stored response",
-			zap.String("host", exchange.Host), zap.String("url", testURL), zap.Error(err))
+		meter.failure()
+		if s.logger != nil {
+			s.logger.Warn("test request failed, falling back to stored response",
+				zap.String("host", exchange.Host), zap.String("url", testURL), zap.Error(err))
+		}
 	}
 	return s.getResponseBody(exchange)
 }
@@ -404,15 +416,24 @@ func (s *ActiveScanner) ClearFindings() {
 	s.findings = make([]*Finding, 0)
 }
 
-// PassiveScanner performs passive security scanning.
+// PassiveScanner performs passive security scanning. With no BCheck corpus
+// loaded it runs the built-in header/cookie checks; after LoadDir it runs the
+// parsed passive BCheck set instead.
 type PassiveScanner struct {
-	store      *core.TrafficStore
-	logger     *zap.Logger
+	store    *core.TrafficStore
+	logger   *zap.Logger
+	scope    *core.Scope
+	passive  []*bcheck.Check
+	active   []*bcheck.Check
+	report   LoadReport
+	coverage *CoverageTracker
+
 	findings   []*Finding
 	findingsMu sync.RWMutex
 }
 
-// NewPassiveScanner creates a new passive scanner.
+// NewPassiveScanner creates a passive scanner with the built-in header/cookie
+// checks. Use LoadDir to run a PortSwigger BCheck corpus instead.
 func NewPassiveScanner(store *core.TrafficStore, logger *zap.Logger) *PassiveScanner {
 	return &PassiveScanner{
 		store:    store,
@@ -423,6 +444,10 @@ func NewPassiveScanner(store *core.TrafficStore, logger *zap.Logger) *PassiveSca
 
 // Scan performs passive scanning on an exchange.
 func (s *PassiveScanner) Scan(exchange *core.Exchange) []*Finding {
+	if s.coverage != nil {
+		return s.scanBChecks(exchange)
+	}
+
 	var findings []*Finding
 
 	// Check for missing security headers

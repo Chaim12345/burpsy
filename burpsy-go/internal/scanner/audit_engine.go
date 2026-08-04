@@ -1,0 +1,908 @@
+// The audit engine's driver: the check set, the dispatch plan, the per-item and per-session
+// outcomes, and the admission gate that bounds them. audit.go holds the vocabulary this file
+// dispatches with.
+//
+// This is the Go counterpart of `PassiveScanner::audit_item` / `audit_session` /
+// `AuditOutcome` / `SessionOutcome` / `Run` / `Metered` in crates/scanner/src/lib.rs. It is split
+// out from audit.go the same way the Rust original splits the model (audit.rs) from the driver
+// (lib.rs).
+//
+// # What the check set is here
+//
+// Rust dispatches a parsed BCheck corpus: `PassiveScanner.active` is a `Vec<Check>` and a check's
+// `given` clause names its dispatch scope. Go's ActiveScanner has no BCheck evaluator for active
+// checks yet — it has seven ScanConfig switches in front of five hand-written implementations. So
+// activeCheckSet is that table, made explicit: one entry per switch, each with the dispatch scope
+// its answer is keyed at and the function that runs it. The engine above it is scope-agnostic, so
+// swapping in a bcheck-driven set later is a change to this table and nothing else.
+//
+// Two of the seven switches — CheckSSRF and CheckXXE — have no implementation behind them. They are
+// in the table with a nil runner and dispatch as DispositionUnsupported, which is the honest answer:
+// before this engine existed, NewActiveScanner switched CheckSSRF *on* by default and nothing ran,
+// so an operator reading a clean audit had no way to know two of the checks they had enabled were
+// not there. Leaving them out of the table entirely would have preserved exactly that silence.
+package scanner
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"go.uber.org/zap"
+)
+
+// activeCheck is one built-in active check: its identity, the dispatch scope its answer is keyed at,
+// the ScanConfig switch that puts it in the set, and the function that runs it.
+//
+// run is nil for a check that is configurable but not implemented. Such a check is still counted —
+// see the file header for why that is the point rather than an oversight.
+type activeCheck struct {
+	name    string
+	scope   DispatchScope
+	enabled func(*ScanConfig) bool
+	run     func(*ActiveScanner, context.Context, *core.Exchange) []*Finding
+}
+
+// activeCheckSet is the built-in active check set, in table order.
+//
+// The scopes are a judgement about each check's evidence, not a guess:
+//
+//   - SQLi, XSS, path traversal, SSRF and XXE build their probes from the captured request target
+//     (Exchange.Path, query string included) and read the probe's own response. Two captures of the
+//     same URL cannot give different answers, so the unit is DispatchScopePerUrl and the second
+//     capture is refused as DispositionAlreadyCovered.
+//   - The JWT and JavaScript checks read *this exchange's stored response*. Two captures of one URL
+//     legitimately carry different tokens and different bundles, so the unit is
+//     DispatchScopePerRequest and every capture is audited.
+//
+// Getting this wrong in the coarse direction would silently skip real work, which is why it is
+// stated per check here rather than defaulted.
+var activeCheckSet = []activeCheck{
+	{
+		name:    "SQL injection",
+		scope:   DispatchScopePerUrl,
+		enabled: func(c *ScanConfig) bool { return c.CheckSqli },
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
+			return s.checkSQLi(ctx, ex)
+		},
+	},
+	{
+		name:    "Cross-site scripting (reflected)",
+		scope:   DispatchScopePerUrl,
+		enabled: func(c *ScanConfig) bool { return c.CheckXss },
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
+			return s.checkXSS(ctx, ex)
+		},
+	},
+	{
+		name:    "Path traversal",
+		scope:   DispatchScopePerUrl,
+		enabled: func(c *ScanConfig) bool { return c.CheckPathTraversal },
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
+			return s.checkPathTraversal(ctx, ex)
+		},
+	},
+	// Configurable, and on by default, with nothing behind it. Dispatches as
+	// DispositionUnsupported: "the evaluator cannot run this check, so it proves nothing".
+	{
+		name:    "Server-side request forgery",
+		scope:   DispatchScopePerUrl,
+		enabled: func(c *ScanConfig) bool { return c.CheckSSRF },
+		run:     nil,
+	},
+	{
+		name:    "XML external entity injection",
+		scope:   DispatchScopePerUrl,
+		enabled: func(c *ScanConfig) bool { return c.CheckXXE },
+		run:     nil,
+	},
+	{
+		name:    "JWT weak secret",
+		scope:   DispatchScopePerRequest,
+		enabled: func(c *ScanConfig) bool { return c.CheckJwtWeak },
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
+			return s.checkJWTWeak(ctx, ex)
+		},
+	},
+	{
+		name:    "Vulnerable JavaScript library",
+		scope:   DispatchScopePerRequest,
+		enabled: func(c *ScanConfig) bool { return c.CheckJSVulns },
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
+			return s.checkJSVulns(ctx, ex)
+		},
+	},
+}
+
+// enabledChecks is the check set one run dispatches: the table entries whose ScanConfig switch is
+// on, in table order.
+//
+// Snapshotted once per run, because a check's position in this slice is its identity in the
+// AuditLedger. A set that changed size between two items of one session would make the ledger's
+// bits describe different checks for different items.
+func enabledChecks(cfg *ScanConfig) []activeCheck {
+	if cfg == nil {
+		return nil
+	}
+	out := make([]activeCheck, 0, len(activeCheckSet))
+	for _, c := range activeCheckSet {
+		if c.enabled(cfg) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ActiveCheckCount reports how many checks are in the set this scanner would dispatch — the figure
+// AuditOutcome.Considered must equal for a dispatched item.
+func (s *ActiveScanner) ActiveCheckCount() int { return len(enabledChecks(s.config)) }
+
+// UnimplementedCheckCount reports how many of those checks have no implementation behind them and
+// can therefore only ever come back DispositionUnsupported.
+//
+// Reported separately from ActiveCheckCount so "seven checks configured" is never read as "seven
+// checks can produce a verdict".
+func (s *ActiveScanner) UnimplementedCheckCount() int {
+	n := 0
+	for _, c := range enabledChecks(s.config) {
+		if c.run == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// probeCounts is one snapshot of a meter, so a check's own send activity can be read as a delta
+// across the call rather than threaded through every check signature.
+type probeCounts struct {
+	attempted uint32
+	sent      uint32
+	failed    uint32
+	refused   uint32
+}
+
+// probeMeter counts the probes checks actually send, so the request budget bounds reality rather
+// than an estimate of it, and so a check that never saw a probe response can be told apart from one
+// that did.
+//
+// Atomics rather than a lock: the counters are independent and a check may fan out its own probes.
+type probeMeter struct {
+	attempted atomic.Uint32
+	sent      atomic.Uint32
+	failed    atomic.Uint32
+	refused   atomic.Uint32
+}
+
+// The methods are nil-safe: a check invoked outside an audit (a direct unit test, say) has no meter
+// on its context, and metering must not be the thing that makes that panic.
+func (m *probeMeter) attempt() {
+	if m != nil {
+		m.attempted.Add(1)
+	}
+}
+
+func (m *probeMeter) succeeded() {
+	if m != nil {
+		m.sent.Add(1)
+	}
+}
+
+func (m *probeMeter) failure() {
+	if m != nil {
+		m.failed.Add(1)
+	}
+}
+
+// refusal records a probe the scope gate refused. Counted as a failure too: the check saw no probe
+// response either way, and a refusal that only incremented its own counter would leave the check
+// looking like it ran.
+func (m *probeMeter) refusal() {
+	if m != nil {
+		m.refused.Add(1)
+		m.failed.Add(1)
+	}
+}
+
+func (m *probeMeter) snapshot() probeCounts {
+	if m == nil {
+		return probeCounts{}
+	}
+	return probeCounts{
+		attempted: m.attempted.Load(),
+		sent:      m.sent.Load(),
+		failed:    m.failed.Load(),
+		refused:   m.refused.Load(),
+	}
+}
+
+// since returns what happened between before and now — one check's own send activity.
+func (m *probeMeter) since(before probeCounts) probeCounts {
+	now := m.snapshot()
+	return probeCounts{
+		attempted: now.attempted - before.attempted,
+		sent:      now.sent - before.sent,
+		failed:    now.failed - before.failed,
+		refused:   now.refused - before.refused,
+	}
+}
+
+// meterKey is the context key the meter rides on.
+//
+// A context value rather than a parameter, deliberately: the meter has to reach sendTestRequest,
+// which every check calls, and the check functions are shared with checks this file does not own.
+// Threading a meter argument through all of them would put the accounting mechanism in the signature
+// of every check — including future ones, which would then be able to forget it. A context value is
+// unforgettable in exactly the way that matters: sendTestRequest is the only place a probe leaves,
+// and it is the only place that reads the meter.
+type meterKey struct{}
+
+func withMeter(ctx context.Context, m *probeMeter) context.Context {
+	return context.WithValue(ctx, meterKey{}, m)
+}
+
+// meterFrom returns the meter on ctx, or nil when there is none.
+func meterFrom(ctx context.Context) *probeMeter {
+	if ctx == nil {
+		return nil
+	}
+	m, _ := ctx.Value(meterKey{}).(*probeMeter)
+	return m
+}
+
+// auditRun is the shared state for one audit run: the clock, the budgets, and the ledger.
+//
+// Mutex-guarded because Go's AuditSession dispatches items concurrently where the Rust original
+// walks them in order. The bound is a property of the resident set, so it has to hold under
+// contention or it is not a bound.
+type auditRun struct {
+	cfg      AuditConfig
+	deadline time.Time
+	ledger   *AuditLedger
+
+	mu sync.Mutex
+	// requestsSent counts probes from items that have already finished. The current item's probes
+	// are counted separately, because its meter is still live.
+	requestsSent uint32
+}
+
+// newAuditRun starts a run. A zero or negative TimeBudget means "no time budget", not "no time":
+// collapsing them would make a caller that forgot to set the field audit nothing at all.
+func newAuditRun(cfg AuditConfig) *auditRun {
+	r := &auditRun{cfg: cfg, ledger: NewAuditLedger()}
+	if cfg.TimeBudget > 0 {
+		r.deadline = time.Now().Add(cfg.TimeBudget)
+	}
+	return r
+}
+
+// outOfTime reports whether the wall-clock budget is spent.
+func (r *auditRun) outOfTime() bool {
+	return !r.deadline.IsZero() && !time.Now().Before(r.deadline)
+}
+
+// overRequestBudget reports whether the outbound-probe budget is spent. currentItem is the live
+// meter of the item being dispatched, which has not yet been folded into requestsSent; pass 0 to ask
+// about the session total alone.
+func (r *auditRun) overRequestBudget(currentItem uint32) bool {
+	if !r.cfg.MaxRequests.Set {
+		return false
+	}
+	r.mu.Lock()
+	total := r.requestsSent
+	r.mu.Unlock()
+	sum := total + currentItem
+	if sum < total { // saturating, matching the Rust original
+		sum = ^uint32(0)
+	}
+	return sum >= r.cfg.MaxRequests.Value
+}
+
+// foldSent folds a finished item's probe count into the session total.
+func (r *auditRun) foldSent(n uint32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sum := r.requestsSent + n
+	if sum < r.requestsSent {
+		sum = ^uint32(0)
+	}
+	r.requestsSent = sum
+}
+
+func (r *auditRun) sent() uint32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.requestsSent
+}
+
+// AuditOutcome is what one audit pass did. Reported rather than summed into a single number so a run
+// where every send failed is distinguishable from a run that genuinely found nothing.
+//
+// The nine disposition counters partition the check set: Considered equals the number of enabled
+// checks whenever the item was dispatched. Six of the nine mean the engine chose not to look, and a
+// caller that ignores them is reading a bound as a clean result.
+type AuditOutcome struct {
+	// State is where the item ended up.
+	State ItemState `json:"state"`
+	// Ran counts checks that completed without a transport failure.
+	Ran int `json:"ran"`
+	// Findings counts findings this item produced.
+	Findings int `json:"findings"`
+	// SendFailures counts checks abandoned because no probe could be sent or read.
+	SendFailures int `json:"send_failures"`
+	// Skipped counts checks the engine could not run at all — no implementation, or a dispatch scope
+	// with no addressable unit.
+	Skipped int `json:"skipped"`
+	// NotRun counts checks never attempted because the time budget ran out.
+	NotRun int `json:"not_run"`
+	// AlreadyCovered counts checks not admitted because an identical (dispatch unit, check) already
+	// ran this session.
+	AlreadyCovered int `json:"already_covered"`
+	// RequestBudgetSpent counts checks not admitted because the outbound-request budget was spent.
+	RequestBudgetSpent int `json:"request_budget_spent"`
+	// UnitAbandoned counts checks not admitted because consecutive failures abandoned their dispatch
+	// unit.
+	UnitAbandoned int `json:"unit_abandoned"`
+	// ItemFailed counts checks not admitted because the item breaker failed the whole item.
+	ItemFailed int `json:"item_failed"`
+	// SessionPaused counts checks not admitted because the session breaker paused the run before
+	// this item.
+	SessionPaused int `json:"session_paused"`
+	// RequestsSent counts probe requests this item actually sent.
+	RequestsSent uint32 `json:"requests_sent"`
+	// RequestsRefused counts probes refused because the request's own path fell outside scope —
+	// typically a check that rewrote the path onto something the operator excluded. Reported, never
+	// silent: a refusal is the engine declining to look, not the target coming back clean.
+	RequestsRefused uint32 `json:"requests_refused"`
+	// FindingsDropped counts findings discarded because the check that produced them never saw a
+	// probe response.
+	//
+	// Not in the Rust original, because it cannot happen there: a BCheck whose send fails returns
+	// `EvalError::SendFailed` and produces no findings at all. Go's checks fall back to the stored
+	// response when a probe fails, which would let a check report "SQL injection with payload X"
+	// about a payload that never left the process. The engine drops those findings and counts the
+	// drop, so the safety fix is not itself a silent one.
+	FindingsDropped int `json:"findings_dropped"`
+	// TimedOut is true when the time budget stopped the run. Reported so "found nothing" is
+	// distinguishable from "never finished looking".
+	TimedOut bool `json:"timed_out"`
+	// Cancelled is true when the caller's context ended the run.
+	//
+	// Folded into DispositionTimeBudgetSpent for counting — a tenth disposition would break the
+	// nine-way partition that is the whole parity contract — but kept as its own flag, because
+	// "the operator navigated away" and "this host is too slow to audit in two minutes" are
+	// different facts about the same stopped run.
+	Cancelled bool `json:"cancelled"`
+	// Error names why an item was refused before any dispatch. Non-empty exactly for
+	// ItemStateOutOfScope and ItemStateUnauditable.
+	Error string `json:"error,omitempty"`
+}
+
+// Considered is every check that reached a disposition. Equals the size of the enabled check set
+// whenever the item was dispatched, and zero when it was refused before any work.
+func (o AuditOutcome) Considered() int {
+	return o.Ran +
+		o.SendFailures +
+		o.Skipped +
+		o.NotRun +
+		o.AlreadyCovered +
+		o.RequestBudgetSpent +
+		o.UnitAbandoned +
+		o.ItemFailed +
+		o.SessionPaused
+}
+
+// NotAdmitted is the checks the engine declined to admit. Non-zero here means a clean result is not
+// a clean bill of health.
+func (o AuditOutcome) NotAdmitted() int {
+	return o.NotRun +
+		o.AlreadyCovered +
+		o.RequestBudgetSpent +
+		o.UnitAbandoned +
+		o.ItemFailed +
+		o.SessionPaused
+}
+
+// DispositionCount pairs one disposition with how many checks landed in it, and with the line an
+// operator can act on. The reason travels with the count for the same reason SkipCount carries one:
+// a bare histogram makes the caller re-derive what each bucket means, and a caller that gets that
+// wrong reads a bound as a clean result.
+type DispositionCount struct {
+	Disposition Disposition `json:"disposition"`
+	Reason      string      `json:"reason"`
+	Count       int         `json:"count"`
+	// StoppedLooking marks the six buckets that mean the engine declined to admit the work.
+	StoppedLooking bool `json:"stopped_looking"`
+}
+
+// Dispositions is the full disposition histogram, in DispositionAll order, so a caller can render
+// *why* the engine stopped without hard-coding which of the counters mean "did not look".
+func (o AuditOutcome) Dispositions() [9]DispositionCount {
+	counts := [9]int{
+		o.Ran,
+		o.Skipped,
+		o.SendFailures,
+		o.AlreadyCovered,
+		o.NotRun,
+		o.RequestBudgetSpent,
+		o.UnitAbandoned,
+		o.ItemFailed,
+		o.SessionPaused,
+	}
+	var out [9]DispositionCount
+	for i, d := range DispositionAll {
+		out[i] = DispositionCount{
+			Disposition:    d,
+			Reason:         d.Explanation(),
+			Count:          counts[i],
+			StoppedLooking: d.StoppedLooking(),
+		}
+	}
+	return out
+}
+
+// Summary formats one item's outcome for logs and the CLI. Every non-zero refusal reason is named:
+// the point of the histogram is lost if the human-readable form collapses it back into a total.
+func (o AuditOutcome) Summary() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %d checks considered, %d ran, %d finding(s), %d probe(s) sent",
+		o.State.Label(), o.Considered(), o.Ran, o.Findings, o.RequestsSent)
+	var why []string
+	for _, d := range o.Dispositions() {
+		if d.Count > 0 && d.Disposition != DispositionRan {
+			why = append(why, fmt.Sprintf("%d %s", d.Count, d.Disposition.String()))
+		}
+	}
+	if len(why) > 0 {
+		fmt.Fprintf(&b, "; %s", strings.Join(why, ", "))
+	}
+	if o.RequestsRefused > 0 {
+		fmt.Fprintf(&b, "; %d probe(s) refused by scope", o.RequestsRefused)
+	}
+	if o.FindingsDropped > 0 {
+		fmt.Fprintf(&b, "; %d finding(s) dropped for want of a probe response", o.FindingsDropped)
+	}
+	if o.Error != "" {
+		fmt.Fprintf(&b, " (%s)", o.Error)
+	}
+	return b.String()
+}
+
+// refuse marks an item refused before any dispatch. Nothing is counted against the check set: no
+// check was considered, which is what Considered() == 0 means.
+func (o AuditOutcome) refuse(state ItemState, why string) AuditOutcome {
+	o.State = state
+	o.Error = why
+	return o
+}
+
+// ItemOutcome is one exchange's outcome inside a session, keeping the exchange id attached — the Go
+// shape of Rust's `(u64, AuditOutcome)` tuple.
+type ItemOutcome struct {
+	ExchangeID uint64       `json:"exchange_id"`
+	Outcome    AuditOutcome `json:"outcome"`
+}
+
+// SessionOutcome is what one AuditSession did.
+type SessionOutcome struct {
+	// Items holds one entry per requested exchange, in the order given.
+	Items []ItemOutcome `json:"items"`
+	// Findings counts findings across the whole session.
+	Findings int `json:"findings"`
+	// RequestsSent counts probe requests sent across the whole session.
+	RequestsSent uint32 `json:"requests_sent"`
+	// DispatchUnits counts the distinct dispatch units the ledger saw — the real size of the work,
+	// as opposed to the number of exchanges asked for.
+	DispatchUnits int `json:"dispatch_units"`
+	// FailedItems counts items the item breaker failed.
+	FailedItems int `json:"failed_items"`
+	// Paused is true when the session breaker stopped admitting items.
+	Paused bool `json:"paused"`
+	// TimedOut is true when the time budget stopped at least one item.
+	TimedOut bool `json:"timed_out"`
+}
+
+// Completed counts items that ran every check they were given.
+func (o *SessionOutcome) Completed() int {
+	n := 0
+	for _, it := range o.Items {
+		if it.Outcome.State.CompletedAudit() {
+			n++
+		}
+	}
+	return n
+}
+
+// NotAdmitted counts checks the engine declined to admit across the session.
+func (o *SessionOutcome) NotAdmitted() int {
+	n := 0
+	for _, it := range o.Items {
+		n += it.Outcome.NotAdmitted()
+	}
+	return n
+}
+
+// Summary formats a session for logs and reports.
+func (o *SessionOutcome) Summary() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d item(s): %d completed, %d dispatch unit(s), %d check(s) not admitted, %d finding(s), %d probe(s) sent",
+		len(o.Items), o.Completed(), o.DispatchUnits, o.NotAdmitted(), o.Findings, o.RequestsSent)
+	if o.FailedItems > 0 {
+		fmt.Fprintf(&b, "; %d item(s) failed", o.FailedItems)
+	}
+	if o.Paused {
+		b.WriteString("; session paused by the failure breaker")
+	}
+	if o.TimedOut {
+		b.WriteString("; time budget spent")
+	}
+	return b.String()
+}
+
+// AuditConfig returns the budget and breaker configuration this scanner audits under.
+//
+// ScanConfig.Timeout is the source of the default wall-clock budget rather than a second, competing
+// one. Before this engine existed that field was set by every caller and read by nobody in the tree,
+// so adopting it here gives it its only meaning instead of leaving two timeouts that can disagree
+// about when an audit should stop. WithAuditConfig overrides it outright, and that override wins
+// whatever order the two setters are called in.
+func (s *ActiveScanner) AuditConfig() AuditConfig {
+	if s.auditCfg != nil {
+		return *s.auditCfg
+	}
+	cfg := DefaultAuditConfig()
+	if s.config != nil && s.config.Timeout > 0 {
+		cfg.TimeBudget = s.config.Timeout
+	}
+	return cfg
+}
+
+// WithAuditConfig sets the budgets and breakers explicitly, in place of the ScanConfig-derived
+// default.
+func (s *ActiveScanner) WithAuditConfig(cfg AuditConfig) *ActiveScanner {
+	s.auditCfg = &cfg
+	return s
+}
+
+// WithScope gives the scanner the engagement scope.
+//
+// Optional, and nil means "no scope was supplied" rather than "nothing is in scope": ActiveScanner
+// had no scope at all before this engine, so refusing everything when a caller has not been updated
+// yet would break audits rather than protect anyone. With a scope set, it is enforced twice — once
+// on the captured exchange before any work is planned, and again inside sendTestRequest on the bytes
+// actually going out, because a check that rewrites the path is sending somewhere else entirely.
+func (s *ActiveScanner) WithScope(scope *core.Scope) *ActiveScanner {
+	s.scope = scope
+	return s
+}
+
+// AuditWithin audits one exchange under an explicit configuration, returning what the engine did
+// alongside the findings.
+//
+// One-shot: a fresh AuditLedger admits everything, so re-auditing the same exchange really
+// re-audits it. Scope collapse belongs to a *session*, not to a single operator-triggered audit — an
+// operator who clicks audit again means it.
+func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID uint64, cfg AuditConfig) (AuditOutcome, []*Finding) {
+	run := newAuditRun(cfg)
+	return s.auditItem(ctx, exchangeID, run, enabledChecks(s.config))
+}
+
+// AuditSession audits a batch of exchanges under one shared budget, ledger and set of circuit
+// breakers.
+//
+// This is where bounding pays for itself. A per-URL check has one answer per URL, so auditing 500
+// captures of one URL dispatches it once and refuses the other 499 as DispositionAlreadyCovered —
+// refused before a request is built, and *counted*, so the saving is visible rather than looking
+// like checks that quietly stopped firing.
+//
+// The time and request budgets are session-wide, not per exchange: once either is spent the loop
+// stops admitting items rather than re-deciding the same thing for each remaining one. Every skipped
+// item still comes back with its whole check set attributed to the reason.
+//
+// Scope is re-checked for every exchange, inside the loop. Hoisting that check would let one
+// in-scope exchange authorise traffic to an out-of-scope host in the same batch.
+//
+// # Divergence: this runs items concurrently
+//
+// The Rust original walks the batch in order on one thread. Go's AuditMultiple has always audited
+// concurrently under ScanConfig.MaxConcurrency, and taking that away would be a performance
+// regression dressed up as parity. The ledger and both breakers are therefore mutex-guarded, so the
+// resident set and the failure counts stay exact. What is *not* deterministic is which of two items
+// covering the same dispatch unit gets admitted and which is refused as DispositionAlreadyCovered:
+// in Rust it is always the later one in the given order, here it is whichever goroutine reaches the
+// admission gate first. The totals are identical either way; only the attribution moves. Items come
+// back in the order requested regardless.
+func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []uint64, cfg AuditConfig) (*SessionOutcome, []*Finding) {
+	checks := enabledChecks(s.config)
+	run := newAuditRun(cfg)
+	breaker := newSessionBreaker(cfg)
+	out := &SessionOutcome{Items: make([]ItemOutcome, len(exchangeIDs))}
+
+	// Index-aligned slots rather than an append under a mutex: the caller asked for these ids in
+	// this order, and an outcome that landed under the wrong id is worse than no outcome at all.
+	perItem := make([][]*Finding, len(exchangeIDs))
+	var paused atomic.Bool
+
+	limit := 1
+	if s.config != nil && s.config.MaxConcurrency > 1 {
+		limit = s.config.MaxConcurrency
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+
+	for i, id := range exchangeIDs {
+		wg.Add(1)
+		go func(slot int, exchangeID uint64) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				// Not a silent drop: the item is refused with its whole check set attributed, the
+				// same as any other item the engine chose not to start.
+				o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.NotRun })
+				o.TimedOut = true
+				o.Cancelled = true
+				out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
+				return
+			}
+
+			// Three whole-item refusals, decided before the exchange is even looked up. Each
+			// condition is monotone, so re-deriving it per check would mean planning every remaining
+			// item only to refuse it. Every one of them is still counted: a remaining item is never
+			// an item that came back clean.
+			switch {
+			case paused.Load():
+				out.Items[slot] = ItemOutcome{
+					ExchangeID: exchangeID,
+					Outcome:    s.refuseWholeItem(ItemStatePaused, len(checks), func(o *AuditOutcome) *int { return &o.SessionPaused }),
+				}
+				return
+			case run.outOfTime() || ctx.Err() != nil:
+				o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.NotRun })
+				o.TimedOut = true
+				o.Cancelled = ctx.Err() != nil
+				out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
+				return
+			case run.overRequestBudget(0):
+				out.Items[slot] = ItemOutcome{
+					ExchangeID: exchangeID,
+					Outcome:    s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.RequestBudgetSpent }),
+				}
+				return
+			}
+
+			o, found := s.auditItem(ctx, exchangeID, run, checks)
+			if o.State.Dispatched() && breaker.itemFinished(o.State == ItemStateFailed) {
+				paused.Store(true)
+			}
+			out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
+			perItem[slot] = found
+		}(i, id)
+	}
+	wg.Wait()
+
+	var findings []*Finding
+	for i := range out.Items {
+		out.Findings += out.Items[i].Outcome.Findings
+		out.TimedOut = out.TimedOut || out.Items[i].Outcome.TimedOut
+		findings = append(findings, perItem[i]...)
+	}
+	out.RequestsSent = run.sent()
+	out.DispatchUnits = run.ledger.Units()
+	out.FailedItems = int(breaker.failed())
+	out.Paused = paused.Load()
+	return out, findings
+}
+
+// refuseWholeItem builds an outcome for an item the session refused outright, with every check
+// attributed to the reason it was refused. Nothing here is dispatched, so RequestsSent stays zero.
+func (s *ActiveScanner) refuseWholeItem(state ItemState, checks int, counter func(*AuditOutcome) *int) AuditOutcome {
+	o := AuditOutcome{State: state}
+	*counter(&o) = checks
+	return o
+}
+
+// dispatchUnit is one addressable unit of work: a scope and the key identifying one instance of it.
+type dispatchUnit struct {
+	scope DispatchScope
+	key   string
+}
+
+// planStep is one `(dispatch unit, check)` pair in dispatch order. check indexes the run's check
+// set, which is also its identity in the ledger.
+type planStep struct {
+	unit  int
+	check int
+}
+
+// plan groups the check set into dispatch units for one exchange, coarsest scope first.
+//
+// Returns the units, a flat plan of steps in dispatch order, and the number of checks that have no
+// dispatch unit at all. Those last are counted rather than dropped: a check that silently vanishes
+// from the plan would make the outcome's counters stop summing to the check set, and the whole point
+// of the counters is that they do.
+func plan(ex *core.Exchange, checks []activeCheck) (units []dispatchUnit, steps []planStep, undispatchable int) {
+	for _, scope := range DispatchScopeAll {
+		var members []int
+		for i, c := range checks {
+			if c.scope != scope {
+				continue
+			}
+			// A check with no implementation has nowhere to run, whatever its scope claims. Counted
+			// here rather than admitted and then declined, because admitting it would spend a ledger
+			// bit and a budget test on work that cannot happen.
+			if c.run == nil {
+				undispatchable++
+				continue
+			}
+			members = append(members, i)
+		}
+		if len(members) == 0 {
+			continue
+		}
+		key, ok := scope.UnitKey(ex)
+		if !ok {
+			// A check bound to a scope this engine cannot key is in the same position as one with no
+			// implementation.
+			undispatchable += len(members)
+			continue
+		}
+		ix := len(units)
+		units = append(units, dispatchUnit{scope: scope, key: key})
+		for _, c := range members {
+			steps = append(steps, planStep{unit: ix, check: c})
+		}
+	}
+	return units, steps, undispatchable
+}
+
+// auditItem audits one exchange within a run's shared budget and ledger.
+//
+// The findings it returns are also folded into the scanner's own finding list, which is where
+// GetFindings and Export read from — the same contract Audit has always had.
+func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID uint64, run *auditRun, checks []activeCheck) (AuditOutcome, []*Finding) {
+	var o AuditOutcome
+	if len(checks) == 0 {
+		// Nothing was enabled, so nothing was declined either. Audited with zero considered is the
+		// honest reading, and it is what the Rust original returns for an empty check set.
+		o.State = ItemStateAudited
+		return o, nil
+	}
+	ex, err := s.store.GetExchange(exchangeID)
+	if err != nil || ex == nil {
+		return o.refuse(ItemStateUnauditable, "no such exchange"), nil
+	}
+	// Scope first, before a single byte is built. Sending unsolicited requests to a host outside the
+	// engagement is the one bug in this package that would matter outside the tool.
+	if s.scope != nil && !s.scope.Contains(ex.Host, ex.Port, ex.Path, ex.TLS) {
+		return o.refuse(ItemStateOutOfScope, fmt.Sprintf("%s is out of scope", ex.Host)), nil
+	}
+	// Every built-in check either reads this exchange's stored response or falls back to it when a
+	// probe fails, so without one nothing here can produce evidence. Refused rather than run,
+	// because a check set that inspected an empty body would come back clean.
+	if ex.Response == nil {
+		return o.refuse(ItemStateUnauditable, "exchange has no response yet"), nil
+	}
+	if _, err := s.store.Get(*ex.Response); err != nil {
+		return o.refuse(ItemStateUnauditable, "response not in store"), nil
+	}
+
+	o.State = ItemStateAuditing
+	meter := &probeMeter{}
+	ictx := withMeter(ctx, meter)
+	breaker := newItemBreaker(run.cfg)
+
+	// The plan is built before anything is dispatched, so "how much did we not do" is answerable at
+	// every point rather than reconstructed afterwards.
+	units, steps, undispatchable := plan(ex, checks)
+	o.Skipped += undispatchable
+
+	var found []*Finding
+	var stop Disposition
+	stopped := false
+	pos := 0
+	for pos < len(steps) {
+		unitIx := steps[pos].unit
+		abandoned := false
+		for pos < len(steps) && steps[pos].unit == unitIx {
+			// Hard stops. Each is monotone — once spent it stays spent — so the rest of the plan is
+			// attributed in one go rather than re-tested per step.
+			if run.outOfTime() || ctx.Err() != nil {
+				o.TimedOut = true
+				o.Cancelled = ctx.Err() != nil
+				stop, stopped = DispositionTimeBudgetSpent, true
+				break
+			}
+			if run.overRequestBudget(meter.snapshot().sent) {
+				stop, stopped = DispositionRequestBudgetSpent, true
+				break
+			}
+
+			check := steps[pos].check
+			pos++
+			if abandoned {
+				o.UnitAbandoned++
+				continue
+			}
+			if !run.ledger.Admit(units[unitIx].key, check) {
+				o.AlreadyCovered++
+				continue
+			}
+
+			before := meter.snapshot()
+			verdict := checks[check].run(s, ictx, ex)
+			d := meter.since(before)
+
+			// A check that attempted probes and had every one of them fail or be refused saw no
+			// evidence of its own. Its verdict came from the stored response instead, which says
+			// nothing about the payload it meant to send, so the findings go and the reason is
+			// recorded.
+			if d.attempted > 0 && d.sent == 0 {
+				o.SendFailures++
+				o.FindingsDropped += len(verdict)
+				if len(verdict) > 0 && s.logger != nil {
+					s.logger.Warn("dropping findings from a check whose probes never went out",
+						zap.String("check", checks[check].name),
+						zap.Uint64("exchange_id", exchangeID),
+						zap.Int("dropped", len(verdict)))
+				}
+				abandoned = breaker.checkFailed()
+				continue
+			}
+			o.Ran++
+			breaker.checkSucceeded()
+			o.Findings += len(verdict)
+			found = append(found, verdict...)
+		}
+		if stopped {
+			break
+		}
+		if breaker.unitFinished(abandoned) {
+			break
+		}
+	}
+
+	// Everything left in the plan is work this engine chose not to admit. Attributing it is what
+	// turns a bound into something a caller can see. The breaker owns whether the item failed; stop
+	// owns why dispatch ended.
+	remaining := len(steps) - pos
+	switch {
+	case breaker.failed():
+		o.ItemFailed += remaining
+		o.State = ItemStateFailed
+	case stopped && stop == DispositionTimeBudgetSpent:
+		o.NotRun += remaining
+		o.State = ItemStateBounded
+	case stopped && stop == DispositionRequestBudgetSpent:
+		o.RequestBudgetSpent += remaining
+		o.State = ItemStateBounded
+	default:
+		o.State = ItemStateAudited
+	}
+
+	counts := meter.snapshot()
+	o.RequestsSent = counts.sent
+	o.RequestsRefused = counts.refused
+	run.foldSent(o.RequestsSent)
+
+	// The Rust original asserts this in debug builds. A warning instead of a panic, because a
+	// production audit that miscounts must still return the work it did — but it must not do so
+	// silently, or the partition identity stops being something a caller can rely on.
+	if o.Considered() != len(checks) && s.logger != nil {
+		s.logger.Warn("audit outcome does not account for every check",
+			zap.Uint64("exchange_id", exchangeID),
+			zap.Int("considered", o.Considered()),
+			zap.Int("checks", len(checks)))
+	}
+
+	if len(found) > 0 {
+		s.findingsMu.Lock()
+		s.findings = append(s.findings, found...)
+		s.findingsMu.Unlock()
+	}
+	return o, found
+}

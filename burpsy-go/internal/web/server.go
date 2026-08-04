@@ -25,6 +25,7 @@ type Server struct {
 	mux                *http.ServeMux
 	sender             *sender.Sender
 	scanner            *scanner.ActiveScanner
+	passiveScanner     *scanner.PassiveScanner
 	findings           *core.FindingStore
 	sitemap            *sitemap.SiteMap
 	sessionCoordinator *session.Coordinator
@@ -79,6 +80,13 @@ func (s *Server) WithSender(snd *sender.Sender) *Server {
 // WithScanner sets the active scanner used by the audit endpoint.
 func (s *Server) WithScanner(scan *scanner.ActiveScanner) *Server {
 	s.scanner = scan
+	return s
+}
+
+// WithPassiveScanner sets the passive scanner used to report whether BCheck
+// scanning is enabled on live traffic.
+func (s *Server) WithPassiveScanner(scan *scanner.PassiveScanner) *Server {
+	s.passiveScanner = scan
 	return s
 }
 
@@ -187,6 +195,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intruder/points", s.handleIntruderPoints)
 	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)
 	s.mux.HandleFunc("/api/scanner/live", s.handleScannerLive)
+	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	s.mux.HandleFunc("/api/audit/", s.handleAuditByPath)
 	s.mux.HandleFunc("/api/sequencer/analyse", s.handleSequencerAnalyse)
