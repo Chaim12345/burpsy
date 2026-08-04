@@ -170,14 +170,9 @@ func TestNoProxyCaptureCanStallACursorWalkingTheIndex(t *testing.T) {
 
 	get(fmt.Sprintf("http://%s:%s/last", goodHost, goodPortStr))
 
-	// Poll for the last row: capture happens after the client has its bytes.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if hasPath(store, "/last") {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Wait for the last row: capture happens after the client has its bytes. This also checks every row
+	// recorded so far for a stored response, which is the property the walk below depends on.
+	awaitExchangeFor(t, store, "/last", "proxy")
 
 	reached, stalled := walkLikeLiveAudit(t, store)
 	if stalled != nil {
@@ -349,13 +344,7 @@ func TestTheBlindTunnelRowIsTheOnlyCaptureNotMadeByTheSharedProducer(t *testing.
 		t.Fatalf("read connect answer: %v", err)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, n := store.Count(); n > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	awaitExchange(t, store)
 	exchanges := store.Exchanges()
 	if len(exchanges) != 1 {
 		t.Fatalf("exchanges = %d, want 1 (the tunnel row)", len(exchanges))

@@ -78,19 +78,11 @@ func TestPlainHTTPInterceptionAndPassiveScan(t *testing.T) {
 		t.Errorf("body = %q, want hello", body)
 	}
 
-	// Exchange must be recorded. Polled, for the same reason the findings assertion below polls: the
-	// exchange is recorded by the proxy's connection goroutine *after* the response bytes have been
-	// written to the client, so a client that has already read its body proves nothing about whether
-	// that goroutine has reached AddExchange yet. Reading the store immediately passed on an idle
-	// machine and failed under load, which is the worst of both — a real ordering assumption that only
-	// showed itself when the suite was busy.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, n := store.Count(); n > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Exchange must be recorded. Waited for, because the exchange is recorded by the proxy's connection
+	// goroutine *after* the response bytes have been written to the client, so a client that has already
+	// read its body proves nothing about whether that goroutine has reached AddExchange yet. Reading the
+	// store immediately passed on an idle machine and failed under load, which is the worst of both.
+	awaitExchange(t, store)
 	exchanges := store.Exchanges()
 	if len(exchanges) != 1 {
 		t.Fatalf("exchanges = %d, want 1", len(exchanges))
@@ -296,10 +288,7 @@ func TestConnectPassthroughBlind(t *testing.T) {
 	}
 	// The CONNECT tunnel itself is recorded as an exchange (no request/response
 	// messages, since passthrough traffic is not decrypted).
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && len(store.Exchanges()) == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
+	awaitExchange(t, store)
 	exchanges := store.Exchanges()
 	if len(exchanges) != 1 {
 		t.Fatalf("exchanges = %d, want 1 (CONNECT tunnel record)", len(exchanges))

@@ -91,6 +91,48 @@ func TestARowLeavesAnUnreadableStatusAbsentRatherThanGuessingIt(t *testing.T) {
 	}
 }
 
+// Attribution comes from the handle unless the exchange names its own, and neither is invented when
+// both are silent.
+//
+// The default exists because a surface with several capture sites would otherwise have to restate its
+// own identity at each one — the proxy has five — and the site that forgets is the one that produces
+// rows nobody can attribute. The unattributed case is asserted here too, because it is a legal answer:
+// Record refusing it would turn an honest label into dropped traffic, which is the opposite of what
+// refusing an empty response buys.
+func TestAttributionComesFromTheHandleUnlessTheExchangeNamesItsOwn(t *testing.T) {
+	cases := []struct {
+		name       string
+		handle     core.Source
+		perCapture core.Source
+		want       core.Source
+	}{
+		{"the handle's default applies", core.SourceCrawl, "", core.SourceCrawl},
+		{"the exchange overrides the handle", core.SourceProxy, core.SourceRepeater, core.SourceRepeater},
+		{"the exchange alone is enough", "", core.SourceProxy, core.SourceProxy},
+		{"neither, and nothing is invented", "", "", core.SourceUnattributed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := core.NewTrafficStore()
+			c := Capture{Store: store, Logger: zap.NewNop(), Source: tc.handle}
+			ex, err := c.Record(CapturedExchange{
+				Host: "h.test", Port: 80, Method: "GET", Path: "/one",
+				Request: []byte(testRequest), Response: []byte(testResponse),
+				Source: tc.perCapture,
+			})
+			if err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+			if ex.Source != tc.want {
+				t.Errorf("Source = %q, want %q", ex.Source, tc.want)
+			}
+			if tc.want == core.SourceUnattributed && ex.Source.Attributed() {
+				t.Error("an unnamed capture reports itself as attributed")
+			}
+		})
+	}
+}
+
 // Notes has to be on the row before AddExchange runs, because the store's observers — the durable
 // mirror and the live site map — see the row from inside that call and never again. A note assigned to
 // the returned exchange afterwards is a note neither of them ever records, which is why

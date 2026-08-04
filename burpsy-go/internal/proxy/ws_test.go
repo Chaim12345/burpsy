@@ -231,8 +231,13 @@ func TestACompressedFrameIsRecordedWithANoteRatherThanAsPlaintext(t *testing.T) 
 	}
 }
 
-// awaitExchange waits for the handshake exchange to reach the store. The relay
-// records it from the connection's own goroutine, so a bare read would race it.
+// awaitExchange waits for the first exchange to reach the store and returns it.
+//
+// The one waiting idiom for "has the capture happened yet" in this package, used by the handshake
+// tests, the plain and TLS interception tests and the tunnel test. Every capture site records from the
+// connection's own goroutine, and all of them now do it *after* the response bytes have gone to the
+// client, so a bare read races the capture in every one of these tests rather than only in the relay's.
+// Two hand-rolled poll loops for the same question is how one of them ends up with the wrong bound.
 func awaitExchange(t *testing.T, store *core.TrafficStore) *core.Exchange {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -242,7 +247,7 @@ func awaitExchange(t *testing.T, store *core.TrafficStore) *core.Exchange {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("no handshake exchange was ever recorded")
+	t.Fatal("no exchange was ever recorded")
 	return nil
 }
 

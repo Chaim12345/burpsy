@@ -179,7 +179,6 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 		Started:  startTime,
 		Duration: time.Since(startTime),
 		Protocol: core.ProtocolHTTP1,
-		Source:   core.SourceProxy,
 		// A handshake this proxy rewrote must not look pristine.
 		Notes: wsStripNote(strippedExtensions),
 	})

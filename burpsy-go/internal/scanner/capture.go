@@ -197,11 +197,24 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		Protocol:    x.Protocol,
 		ResponseLen: len(x.Response),
 		Notes:       x.Notes,
-		Source:      x.Source,
+		// The per-exchange source wins when it is set, so a surface with a default can still record one
+		// exchange as something else; otherwise the handle's default applies. Neither is substituted for
+		// the other when both are unset — unattributed is a real answer, see above.
+		Source: sourceOf(x.Source, c.Source),
 	}
 	c.Store.AddExchange(ex)
 	c.ScanExchange(ex)
 	return ex, nil
+}
+
+// sourceOf picks the attribution for one row: what the exchange named, else what the handle defaults
+// to. A named function rather than an inline `if` so the precedence is stated once and can be tested
+// on its own.
+func sourceOf(perExchange, handleDefault core.Source) core.Source {
+	if perExchange.Attributed() {
+		return perExchange
+	}
+	return handleDefault
 }
 
 // storedStatus reads the status code back off the stored response's parsed shape.

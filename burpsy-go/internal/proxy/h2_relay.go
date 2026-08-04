@@ -129,7 +129,6 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 			Started:  startTime,
 			Duration: time.Since(startTime),
 			Protocol: core.ProtocolHTTP2,
-			Source:   core.SourceProxy,
 		})
 	}
 }

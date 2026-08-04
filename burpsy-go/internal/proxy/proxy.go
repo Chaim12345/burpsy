@@ -755,7 +755,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					Started:  startTime,
 					Duration: time.Since(startTime),
 					Protocol: core.ProtocolHTTP1,
-					Source:   core.SourceProxy,
+
 					// A handshake this proxy rewrote must not look pristine.
 					Notes: wsStripNote(wsStripped),
 				})
@@ -850,8 +850,8 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 			Started:  startTime,
 			Duration: time.Since(startTime),
 			Protocol: core.ProtocolHTTP1,
-			Source:   core.SourceProxy,
-			Notes:    notes,
+
+			Notes: notes,
 		})
 	}
 	return keepServing
@@ -1070,8 +1070,8 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		Started:  startTime,
 		Duration: time.Since(startTime),
 		Protocol: core.ProtocolHTTP1,
-		Source:   core.SourceProxy,
-		Notes:    notes,
+
+		Notes: notes,
 	})
 }
 
@@ -1121,12 +1121,19 @@ func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
 // which is exactly the freedom that let the two copies drift.
 
 // capture is the proxy's handle on the shared capture-and-scan pipeline.
+//
+// Source is set here, once, rather than at each capture site. Every exchange this package records is
+// traffic the operator's own client sent through the proxy, so the attribution is a property of the
+// surface and not of the call — and a sixth capture site added later inherits it instead of having to
+// remember it. The one row that does not come through this handle, the blind CONNECT tunnel, names
+// itself explicitly.
 func (s *Server) capture() scanner.Capture {
 	return scanner.Capture{
 		Store:    s.config.store,
 		Scanner:  s.config.scanner,
 		Findings: s.config.findings,
 		Logger:   s.config.logger,
+		Source:   core.SourceProxy,
 	}
 }
 
