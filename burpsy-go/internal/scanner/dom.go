@@ -806,14 +806,15 @@ propagation:
 func (e *domEngine) noteScriptShape(sc domScriptSrc) {
 	if domLooksMinified(sc.text) {
 		e.addUnresolved(DOMUnresolved{
-			Reason: DOMUnresolvedMinified, Script: sc.ref,
+			Reason: DOMUnresolvedMinified, Script: sc.ref, Line: sc.ref.Line,
 			Detail: fmt.Sprintf("%d bytes over %d source lines", len(sc.text), strings.Count(sc.text, "\n")+1),
 		})
 	}
 	for _, construct := range []string{"eval(", "new Function(", "with ("} {
 		if strings.Contains(sc.text, construct) {
 			e.addUnresolved(DOMUnresolved{
-				Reason: DOMUnresolvedDynamicCode, Script: sc.ref, Detail: construct,
+				Reason: DOMUnresolvedDynamicCode, Script: sc.ref, Line: sc.ref.Line,
+				Detail: construct,
 			})
 		}
 	}

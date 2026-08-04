@@ -891,6 +891,88 @@ func Test_an_equality_comparison_is_not_read_as_an_assignment(t *testing.T) {
 	}
 }
 
+// domRealisticPage is written the way page scripts actually are — an IIFE, nested callbacks, a
+// regex literal, a division, a CDN script, a JSON island, framework-shaped jQuery — because the
+// failure mode this test exists to catch is not a missed pattern but a lexing collapse: an earlier
+// draft folded the whole IIFE into one statement, which silently lost every assignment sink inside
+// it while still reporting "complete".
+const domRealisticPage = `<!doctype html>
+<html><head>
+<script src="https://cdn.example/jquery.min.js"></script>
+<script type="application/json" id="cfg">{"a":1}</script>
+</head>
+<body>
+<div id="out"></div>
+<script>
+(function () {
+  "use strict";
+  var params = {};
+  location.search.substring(1).split("&").forEach(function (pair) {
+    var kv = pair.split("=");
+    params[kv[0]] = decodeURIComponent(kv[1] || "");
+  });
+  var name = params.name || "guest";
+  document.getElementById("out").textContent = "Hi " + name;
+  var target = location.hash.slice(1);
+  if (target) {
+    document.getElementById("out").innerHTML = "<a href='" + target + "'>go</a>";
+  }
+  $("#banner").html(escapeHtml(params.msg));
+  window.addEventListener("message", function (event) {
+    if (event.origin !== "https://trusted.example") { return; }
+    eval(event.data);
+  });
+  setTimeout(function () { render(); }, 50);
+  var re = /^[a-z]+$/;
+  if (!re.test(name)) { console.log("bad " + name / 2); }
+})();
+</script>
+</body></html>`
+
+func Test_a_realistic_page_is_traced_without_the_lexer_collapsing_its_function_bodies(t *testing.T) {
+	a := AnalyzeDOMDocument([]byte(domRealisticPage), "text/html; charset=utf-8", DOMBudget{})
+
+	if !a.Complete() {
+		t.Errorf("Complete() = false on an ordinary page: %s", a.Caveat())
+	}
+	// The guard: a collapsed lexer yields a handful of mega-statements. This script has dozens.
+	if a.Budget.Statements < 40 {
+		t.Errorf("statements = %d, want dozens — a low count means function bodies were merged",
+			a.Budget.Statements)
+	}
+
+	xss := domFlowFor(t, a, "Cross-site scripting (DOM-based)")
+	if xss.Sink.Match != "innerHTML" || strings.Join(xss.Via, ",") != "target" {
+		t.Errorf("xss flow = %s via %v, want innerHTML via target", xss.Sink.Match, xss.Via)
+	}
+	if !strings.Contains(xss.Statement, "innerHTML") {
+		t.Errorf("statement is not the sink line: %q", xss.Statement)
+	}
+	inj := domFlowFor(t, a, "JavaScript injection (DOM-based)")
+	if inj.SourceExpr != "event.data" {
+		t.Errorf("injection source = %q, want event.data", inj.SourceExpr)
+	}
+	if len(a.Flows) != 2 {
+		t.Errorf("flows = %v, want exactly the two real ones", domFlowNames(a))
+	}
+
+	// The textContent write of an untraced value is neither reported nor unresolved: a text sink is
+	// safe whatever reaches it. The jQuery .html() of an object property this pass cannot follow is
+	// unresolved — the aliasing limit, surfaced rather than passed off as clean.
+	sawHTMLUnresolved := false
+	for _, u := range a.Unresolved {
+		if u.Reason == DOMUnresolvedUntracedValue && u.Sink == ".html" {
+			sawHTMLUnresolved = true
+		}
+	}
+	if !sawHTMLUnresolved {
+		t.Errorf("the jQuery .html() sink fed by an untracked object was not recorded: %v", a.Unresolved)
+	}
+	if len(a.SkippedScripts) != 2 {
+		t.Errorf("skipped scripts = %v, want the CDN script and the JSON island", a.SkippedScripts)
+	}
+}
+
 func Test_the_source_and_sink_tables_are_held_longest_match_first(t *testing.T) {
 	for i := 1; i < len(domSources); i++ {
 		if len(domSources[i-1].Expr) < len(domSources[i].Expr) {

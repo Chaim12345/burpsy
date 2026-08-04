@@ -1039,6 +1039,21 @@ func (s *Server) runPassiveScan(exchange *core.Exchange) {
 		return
 	}
 	findings := s.config.scanner.Scan(exchange)
+
+	// Static DOM analysis reads the same captured response as the passive check set, so it belongs
+	// at the same call site rather than behind a second dispatch. Its caveat is logged rather than
+	// discarded: a DOM pass that hit its per-item budget analysed only part of the item, and
+	// letting that land in the finding store as an ordinary "nothing more here" is exactly what
+	// DOM-03 forbids.
+	dom := s.config.scanner.ScanDOM(exchange)
+	if caveat := dom.Caveat(); caveat != "" && dom.Skip == nil {
+		s.config.logger.Warn("static DOM analysis did not cover the whole response",
+			zap.String("host", exchange.Host),
+			zap.String("path", exchange.Path),
+			zap.String("caveat", caveat))
+	}
+	findings = append(findings, dom.Findings()...)
+
 	for _, f := range findings {
 		scanner.EnrichFinding(f)
 		nf := core.NewFinding{
