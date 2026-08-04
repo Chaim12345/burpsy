@@ -8,7 +8,8 @@
 > tree alongside this file. See their sections below, rewritten to match. Summary
 > of what changed since 2026-08-03:
 >
-> - **Gap 1 (HTTP/2): OPEN → PARTIAL.** `internal/http2` (normalise/parse),
+> - **Gap 1 (HTTP/2): OPEN → PARTIAL** *(later the same day: → COMPLETE, see the
+>   third-round note below)*. `internal/http2` (normalise/parse),
 >   `internal/proxy/alpn.go`+`tls_peek.go`+`tls_dial.go`+`h2_relay.go`, and
 >   `internal/sender/h2.go` now give the proxy a real ALPN-negotiated HTTP/2 MITM
 >   relay and HTTP/2 egress for Repeater/Intruder raw sends, built on
@@ -19,7 +20,8 @@
 >   different and much larger capability (manual low-level HTTP/2 editing for
 >   desync/smuggling research, not transport), newly identified as its own
 >   sub-gap. See the rewritten section 1 below.
-> - **Gap 2 (Scanner catalog + coverage): OPEN → mostly COMPLETE.**
+> - **Gap 2 (Scanner catalog + coverage): OPEN → COMPLETE** *(the audit engine it
+>   deferred to gap 3 has since landed too)*.
 >   `internal/scanner/catalog.go`+`catalog_data.go` (generated, 183/183 issue
 >   definitions transcribed from the same Burp jar source as the Rust catalog)
 >   and `coverage.go` (a faithful port of `crates/scanner/src/coverage.rs`,
@@ -32,8 +34,37 @@
 >   model) — that remains gap 3, unchanged and separate. See the rewritten
 >   section 2 below.
 >
-> Gaps 3, 4, 5, and 10 are untouched by this update and still reflect the
-> 2026-08-03 analysis.
+>
+> **Third round, same day — every remaining gap closed.** Gaps 3, 4, 5, 10 and
+> the raw-frame half of gap 1 all landed, so **all thirteen entries in the Plan
+> table below now read COMPLETE**. Verified together: `gofmt -l .` empty,
+> `go build ./...`, `go vet ./...` and `go test ./...` all clean across 17
+> packages, and — the check that actually matters — re-verified from a
+> `git archive HEAD` extraction rather than from the working tree, which is how a
+> committed-but-uncompilable test build was caught and fixed once already this
+> session.
+>
+> - **Gap 1's raw frame layer** — `internal/http2/{frame,hpack,malformed}.go`
+>   (1,849 lines against 1,640 of tests). The HPACK Huffman seam is *identical in
+>   Rust* (`HuffmanNotImplemented`, "slice 2b's seam"), so it is parity rather
+>   than a Go shortfall. No send path, deliberately.
+> - **Gap 3 (audit engine)** — ledger, dispatch scope, dispositions, budgets and
+>   both circuit breakers, wired into the real audit path. Its tests caught two
+>   genuine semantic defects in the first implementation (inverted per-URL dedup;
+>   a session breaker attributing its pause to the wrong item) — fixed in the
+>   implementation, with no test weakened. Also fills `coverage.go`'s `native`
+>   field, previously a documented omission.
+> - **Gaps 4 and 5** — the retire.js corpus vendored and embedded, yielding the
+>   *same* counts Rust asserts (76 components, 683 vulnerabilities), with real
+>   version arithmetic rather than a prefix test, and everything not evaluable
+>   counted rather than skipped — including the nine `filecontent` patterns that
+>   exceed RE2's 1000-repeat ceiling, named individually in
+>   `DatasetSummary.NarrowedPatterns`. Plus the full JWT weak-signature port.
+> - **Gap 10** — a tolerant `base64_decode`, and the larger defect behind it:
+>   all three single-argument builtins failed to resolve a quoted or
+>   brace-wrapped argument, so `base64_decode` returned `""` for **every one of
+>   the corpus's five calls** whatever decoder sat behind it. Corpus re-verified
+>   at 264/264.
 >
 > **Same day, second round: gaps 9, 12, and 13 closed** by three parallel agents,
 > each verified independently (`go build ./...`/`go test ./...` clean in
@@ -153,10 +184,10 @@ with the reason named), **PARTIAL** (ported with a reduced scope, named), or
 | # | Gap | Status | Priority |
 |---|-----|--------|----------|
 | 1 | HTTP/2 support absent | COMPLETE (relay+egress, and raw frame/HPACK/malformed crafting) | P1 |
-| 2 | Scanner catalog + coverage absent | PARTIAL (catalog+coverage landed and wired; audit engine still gap 3) | P1 |
-| 3 | Scanner audit engine far thinner | OPEN | P2 |
-| 4 | JS vulnerability checks hand-rolled | PARTIAL | P2 |
-| 5 | JWT weak-signature checks simplified | PARTIAL | P3 |
+| 2 | Scanner catalog + coverage absent | COMPLETE | P1 |
+| 3 | Scanner audit engine far thinner | COMPLETE | P2 |
+| 4 | JS vulnerability checks hand-rolled | COMPLETE | P2 |
+| 5 | JWT weak-signature checks simplified | COMPLETE | P3 |
 | 6 | Intruder payload sets absent | COMPLETE | P1 |
 | 7 | Sequencer FIPS 140-2 absent | COMPLETE | P2 |
 | 8 | `RequestEdit` absent as a type | COMPLETE | P2 |
@@ -328,39 +359,97 @@ is closed — they are genuinely separate subsystems in Rust too.
 **Decline path:** none; both catalog and coverage are ported, generated from
 the same source data, and wired into live traffic and the web API.
 
-### 3. Scanner audit engine far thinner — PARTIAL
+### 3. Scanner audit engine — COMPLETE (landed 2026-08-04)
 
 **Rust:** `crates/scanner/src/audit.rs` (931 LOC) — `AuditLedger:471`,
 `DispatchScope:51`, `Disposition:159` (the budget/backpressure model that bounds
 work instead of dropping findings), plus `native.rs` (146).
 
-**Go:** `internal/scanner/scanner.go` `ActiveScanner` runs only
-SQLi / XSS / path-traversal (`scanner.go:172,210,234`); no ledger, no
-dispatch-scope budgets, no disposition machinery. Honest counting in the Rust
-sense (resident set independent of work in flight) is not present.
+**Go (now ported):** `internal/scanner/audit.go` (771) + `audit_engine.go` (911)
+carry the whole model: `DispatchScope` (with `FromFrequency`, `IsReachable`,
+`UnitKey`), `Disposition` whose every non-dispatch variant has a fixed
+`Explanation()` so a skip is always nameable, `ItemState`, `AuditConfig` (default
+120s budget) with the `BuiltInConfigs` table and lookup, `AuditLedger` whose
+`Admit(unit, check)` is the single chokepoint that makes the resident set
+independent of work in flight, and the `ItemBreaker`/`SessionBreaker` circuit
+breakers. Wired into `ActiveScanner`'s audit path so it bounds real runs rather
+than sitting as an uncalled library — the mistake this project has had to come
+back and fix twice (Match & Replace, and the session coordinator's
+`HandleRecovery`). Covered by `audit_test.go` + `audit_engine_test.go`, 24 tests.
 
-**Decline path:** the Go side relies on simpler concurrency; the audit-budget
-semantics are the parity loss.
+**Worth recording, because it is the reason to write the tests first:** the
+implementation initially *passed* the package suite only because its own tests
+did not exist yet, and it was committed in that state (`4c087b2`). When the tests
+landed they failed two real semantic defects — per-URL ledger dedup was inverted
+(a second capture of one URL re-ran the per-URL checks instead of refusing them
+as already covered) and `SessionBreaker` attributed a pause to the wrong item
+(the item that tripped it was marked paused and the *following* item marked
+failed, exactly backwards). Both were fixed in the implementation; neither test
+was weakened to accommodate it. A green package is not evidence when the checks
+that would go red have not been written.
 
-### 4. JS vulnerability checks hand-rolled — PARTIAL
+`coverage.go`'s `native` field, previously documented as a deliberate omission
+because Go had no native check set, is now populated.
+
+**Decline path:** none; closed.
+
+### 4. JS vulnerability checks — COMPLETE (landed 2026-08-04)
 
 **Rust:** `crates/scanner/src/js_vulns.rs` (1,254 LOC) driven by the retire.js
 repository data.
 
-**Go:** `internal/scanner/scanner_checks.go:118` `checkJSVulns` matches a handful
-of libraries (e.g. jquery) by name/version pattern. Coverage is a subset, not a
-port.
+**Go (now ported):** `internal/scanner/js_vulns.go` (1,343) replaces the handful
+of name/version pattern matches that used to live in `scanner_checks.go:118`. The
+retire.js corpus is vendored at `internal/scanner/data/retirejs_repository.json`
+(Apache-2.0, from Burp Suite 2026.7.1) and embedded rather than read from a
+guessed install path, for the reason Rust gives: a scanner that cannot find its
+data file has a new failure mode — "it found nothing because the file was
+somewhere else" — which is the silent non-result this codebase exists to refuse.
+`VendoredJsVulnDb()` and a loader for an operator-supplied fresher snapshot both
+report *their own* identity and counts, so "no vulnerable libraries" is always
+qualified by which corpus said so.
 
-**Decline path:** none; candidate for full retire.js data port.
+The corpus counts match Rust's own assertions exactly — **76 components, 683
+vulnerabilities** (`js_vulns.rs:1083-1084` asserts the same two numbers), plus
+120 URL patterns and 206 content patterns, all pinned by
+`TestVendoredCorpusLoadsAndReportsWhatItCouldNotUse` so a snapshot that quietly
+shrank fails loudly rather than weakening every negative result unnoticed.
 
-### 5. JWT weak-signature checks simplified — PARTIAL
+Version comparison is real arithmetic on parsed versions, not a prefix test and
+not semver — the dataset's own bounds include `2.0`, `1.11.0b1`, `3.0.0-rc1`,
+`2.2.4-lite`, which a strict semver parser rejects. The trap is pinned by test:
+a vulnerable `1.4.2` is flagged and an unaffected `1.40.0` is not, which a prefix
+test gets backwards in both directions.
+
+**Everything not evaluated is counted, not skipped** (`DatasetSummary`): 49
+`func` extractors (need a JavaScript engine), 8 `filecontentreplace` extractors,
+18 hash entries, and any component whose JSON did not have the corpus's shape
+(`UnusableComponents`, empty for the vendored corpus).
+
+**Named divergence, measured rather than assumed:** Go's `regexp` is RE2, whose
+bounded repeats stop at 1000. **Nine** corpus `filecontent` patterns exceed that
+(`{0,1800}`, `{1,5000}`, `{0,8000}`, …) and are recorded by name in
+`DatasetSummary.NarrowedPatterns` rather than silently dropped — so the count of
+patterns this engine could not use exactly as written is reportable, which is the
+difference between "we checked every way retire.js knows how" and "we checked
+most of them".
+
+Remediation comes from Burp's shipped catalogue via `EnrichFinding`, asserted by
+test, never written in this package.
+
+**Decline path:** none; closed.
+
+### 5. JWT weak-signature checks — COMPLETE (landed 2026-08-04)
 
 **Rust:** `crates/scanner/src/jwt_weak.rs` (999 LOC).
 
-**Go:** `internal/scanner/scanner_checks.go:21-115` (~95 LOC) covers a subset
-(known-algorithm/none checks).
+**Go (now ported):** `internal/scanner/jwt_weak.go` (716) replaces the ~95-line
+known-algorithm/`none` subset that used to live in `scanner_checks.go:21-115`,
+with its own tests in `jwt_weak_test.go`. Findings carry the catalogued issue
+name and take their remediation from the shipped catalogue rather than from this
+package.
 
-**Decline path:** named subset; not a silent full port.
+**Decline path:** none; closed.
 
 ### 6. Intruder payload sets absent — COMPLETE
 

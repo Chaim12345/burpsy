@@ -80,10 +80,16 @@
 //     DatasetSummary.NarrowedPatterns. Narrowing an upper bound can only ever match *fewer* strings
 //     than the corpus pattern, so it cannot invent a finding; dropping the pattern outright would be
 //     the larger false negative. See narrowBoundedRepeats.
-//  3. **No RegexSet prefilter.** Rust batches the `filecontent` patterns into RegexSet prefilters so
-//     one pass over a body replaces N. Go's standard library has no RegexSet, so each pattern is run
-//     separately. Same matches, more passes; scanning is off the proxy hot path, which is where that
-//     cost is affordable.
+//  3. **A required-literal prefilter replaces Rust's RegexSet.** Go's standard library has no
+//     RegexSet, and running all 206 `filecontent` patterns over one 540 KB bundle measured at 2.7
+//     seconds — the corpus is full of patterns with no literal prefix for the engine to memchr on
+//     (`/*\nYUI (§§version§§)`, `[^a-z.]jquery:[ ]?"…"`), each costing ~150 ms on its own. So each
+//     pattern carries a literal every match of it must contain, derived from its own syntax tree
+//     (see requiredLiteral), and the pattern runs only when a substring search finds that literal.
+//     Same matches — the derivation only ever accepts a literal that is genuinely required, and a
+//     pattern with no such literal always runs — at 82 ms for the same bundle. 205 of the corpus's
+//     206 content patterns get a prefilter; the one that does not is counted in
+//     DatasetSummary.ContentPatternsWithoutPrefilter.
 //  4. **The corpus's `critical` severity is kept as "critical".** Rust folds it onto High because its
 //     Severity type has four levels and growing a fifth would change a type every check shares.
 //     Finding.Severity here is already a string with a "critical" level, so folding would discard
@@ -105,6 +111,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strconv"
 	"strings"
@@ -383,6 +390,10 @@ type DatasetSummary struct {
 	Vulnerabilities int `json:"vulnerabilities"`
 	URLPatterns     int `json:"url_patterns"`
 	ContentPatterns int `json:"content_patterns"`
+	// ContentPatternsWithoutPrefilter counts content patterns for which no required literal could be
+	// derived, so they run against every JavaScript body rather than only the ones that could match.
+	// A cost figure, not a coverage one — those patterns are never skipped.
+	ContentPatternsWithoutPrefilter int `json:"content_patterns_without_prefilter"`
 	// HashEntries counts whole-file SHA-1 → version mappings loaded. Implemented here where the
 	// Rust module refuses them; see divergence 1 in the file docs.
 	HashEntries int `json:"hash_entries"`
@@ -434,11 +445,22 @@ func (d DatasetSummary) Summary() string {
 	)
 }
 
+// contentPattern is one `filecontent` regex plus the literal every match of it must contain.
+//
+// literal is the prefilter: a substring search for it is one to three orders of magnitude cheaper
+// than running the pattern, and a body that does not contain it cannot match. Empty when no literal
+// could be derived — those patterns always run, so a failed derivation costs speed and never
+// coverage.
+type contentPattern struct {
+	re      *regexp.Regexp
+	literal string
+}
+
 // JsVulnDb is the parsed corpus.
 type JsVulnDb struct {
 	components []jsComponent
-	// content holds every `filecontent` regex, flat.
-	content []*regexp.Regexp
+	// content holds every `filecontent` regex, flat, in component order.
+	content []contentPattern
 	// contentOwner is parallel to content: which component each flat pattern belongs to.
 	contentOwner []int
 	summary      DatasetSummary
@@ -577,7 +599,11 @@ func parseJsVulnDb(src, source string) *JsVulnDb {
 			}
 			summary.NarrowedPatterns = appendNarrowed(summary.NarrowedPatterns, name, "filecontent", notes)
 			ownContent++
-			db.content = append(db.content, re)
+			lit := requiredLiteral(re.String())
+			if lit == "" {
+				summary.ContentPatternsWithoutPrefilter++
+			}
+			db.content = append(db.content, contentPattern{re: re, literal: lit})
 			db.contentOwner = append(db.contentOwner, ci)
 		}
 
@@ -781,22 +807,88 @@ func (db *JsVulnDb) detect(url string, body []byte) []detection {
 		}
 	}
 
-	// Every `filecontent` pattern, one pass each: Go has no RegexSet to prefilter with. Only valid
-	// UTF-8 is scanned, matching the Rust module — the corpus patterns are text patterns and a
-	// regex run over arbitrary bytes would report matches inside what is really a binary blob.
+	// The `filecontent` patterns, in component order, each gated on its required literal. Only valid
+	// UTF-8 is scanned, matching the Rust module — the corpus patterns are text patterns and a regex
+	// run over arbitrary bytes would report matches inside what is really a binary blob.
+	//
+	// present memoises the substring searches, because the corpus reuses a literal across several
+	// patterns of the same library (jQuery has eleven content patterns) and searching a 540 KB body
+	// once per pattern for the same string is the cost this prefilter exists to remove.
 	if utf8.Valid(body) {
 		text := string(body)
-		for i, re := range db.content {
+		present := make(map[string]bool)
+		for i, p := range db.content {
 			ci := db.contentOwner[i]
 			if identifiedByHash[ci] {
 				continue
 			}
-			if v, ok := captureVersion(re, text); ok {
+			if p.literal != "" {
+				hit, known := present[p.literal]
+				if !known {
+					hit = strings.Contains(text, p.literal)
+					present[p.literal] = hit
+				}
+				if !hit {
+					continue
+				}
+			}
+			if v, ok := captureVersion(p.re, text); ok {
 				out = pushDetection(out, newDetection(ci, db.components[ci], v, signalContent))
 			}
 		}
 	}
 	return out
+}
+
+// requiredLiteral returns a literal string that every match of pattern must contain, or "" when none
+// can be derived.
+//
+// Soundness is the whole point, so the walk only accepts a literal from a position that is
+// *unavoidable*: the sole child of a capture, the body of a `+` or a `{n,}` with n ≥ 1, or any member
+// of a concatenation (every member must match for the concatenation to match). Anything optional
+// (`?`, `*`, `{0,n}`), any alternation (only one branch has to match), and any case-insensitive
+// literal (a substring search would not find the other casing) yield "" — which makes the pattern run
+// unconditionally. Erring that way costs time; erring the other way would make the check blind to a
+// library while its pattern count still claimed otherwise.
+//
+// Derived from the pattern source as compiled, so a narrowed pattern's literal describes the narrowed
+// pattern rather than the corpus's original.
+func requiredLiteral(pattern string) string {
+	ast, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return ""
+	}
+	return requiredLiteralOf(ast)
+}
+
+func requiredLiteralOf(re *syntax.Regexp) string {
+	switch re.Op {
+	case syntax.OpLiteral:
+		if re.Flags&syntax.FoldCase != 0 {
+			return ""
+		}
+		return string(re.Rune)
+	case syntax.OpCapture:
+		return requiredLiteralOf(re.Sub[0])
+	case syntax.OpPlus:
+		return requiredLiteralOf(re.Sub[0])
+	case syntax.OpRepeat:
+		if re.Min >= 1 {
+			return requiredLiteralOf(re.Sub[0])
+		}
+		return ""
+	case syntax.OpConcat:
+		best := ""
+		for _, sub := range re.Sub {
+			// The longest required literal is the most selective prefilter, and every member of a
+			// concatenation is required, so taking the longest is sound.
+			if lit := requiredLiteralOf(sub); len(lit) > len(best) {
+				best = lit
+			}
+		}
+		return best
+	}
+	return ""
 }
 
 // judge decides one detection against the component's known vulnerabilities.

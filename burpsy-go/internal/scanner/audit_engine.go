@@ -610,11 +610,15 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID uint64, cfg 
 // The Rust original walks the batch in order on one thread. Go's AuditMultiple has always audited
 // concurrently under ScanConfig.MaxConcurrency, and taking that away would be a performance
 // regression dressed up as parity. The ledger and both breakers are therefore mutex-guarded, so the
-// resident set and the failure counts stay exact. What is *not* deterministic is which of two items
-// covering the same dispatch unit gets admitted and which is refused as DispositionAlreadyCovered:
-// in Rust it is always the later one in the given order, here it is whichever goroutine reaches the
-// admission gate first. The totals are identical either way; only the attribution moves. Items come
-// back in the order requested regardless.
+// resident set and the failure counts stay exact.
+//
+// Items are *started* in the order given — a fixed pool of workers pulls from an ordered queue,
+// rather than every item racing for a semaphore — so with one worker this is exactly the Rust
+// behaviour, and with more it is as close as concurrency allows. What is not deterministic above one
+// worker is which of two items covering the same dispatch unit gets admitted and which is refused as
+// DispositionAlreadyCovered: in Rust it is always the later one in the given order, here it is
+// whichever worker reaches the admission gate first. The totals are identical either way; only the
+// attribution moves. Items come back in the order requested regardless.
 func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []uint64, cfg AuditConfig) (*SessionOutcome, []*Finding) {
 	checks := enabledChecks(s.config)
 	run := newAuditRun(cfg)
@@ -626,63 +630,62 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []uint64, 
 	perItem := make([][]*Finding, len(exchangeIDs))
 	var paused atomic.Bool
 
-	limit := 1
+	workers := 1
 	if s.config != nil && s.config.MaxConcurrency > 1 {
-		limit = s.config.MaxConcurrency
+		workers = s.config.MaxConcurrency
+		if workers > len(exchangeIDs) {
+			workers = len(exchangeIDs)
+		}
 	}
-	sem := make(chan struct{}, limit)
+	queue := make(chan int)
 	var wg sync.WaitGroup
-
-	for i, id := range exchangeIDs {
+	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func(slot int, exchangeID uint64) {
+		go func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				// Not a silent drop: the item is refused with its whole check set attributed, the
-				// same as any other item the engine chose not to start.
-				o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.NotRun })
-				o.TimedOut = true
-				o.Cancelled = true
-				out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
-				return
-			}
+			for slot := range queue {
+				exchangeID := exchangeIDs[slot]
 
-			// Three whole-item refusals, decided before the exchange is even looked up. Each
-			// condition is monotone, so re-deriving it per check would mean planning every remaining
-			// item only to refuse it. Every one of them is still counted: a remaining item is never
-			// an item that came back clean.
-			switch {
-			case paused.Load():
-				out.Items[slot] = ItemOutcome{
-					ExchangeID: exchangeID,
-					Outcome:    s.refuseWholeItem(ItemStatePaused, len(checks), func(o *AuditOutcome) *int { return &o.SessionPaused }),
+				// Three whole-item refusals, decided before the exchange is even looked up. Each
+				// condition is monotone, so re-deriving it per check would mean planning every
+				// remaining item only to refuse it. Every one of them is still counted: a remaining
+				// item is never an item that came back clean.
+				switch {
+				case paused.Load():
+					out.Items[slot] = ItemOutcome{
+						ExchangeID: exchangeID,
+						Outcome:    s.refuseWholeItem(ItemStatePaused, len(checks), func(o *AuditOutcome) *int { return &o.SessionPaused }),
+					}
+					continue
+				case run.outOfTime() || ctx.Err() != nil:
+					o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.NotRun })
+					o.TimedOut = true
+					o.Cancelled = ctx.Err() != nil
+					out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
+					continue
+				case run.overRequestBudget(0):
+					out.Items[slot] = ItemOutcome{
+						ExchangeID: exchangeID,
+						Outcome:    s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.RequestBudgetSpent }),
+					}
+					continue
 				}
-				return
-			case run.outOfTime() || ctx.Err() != nil:
-				o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.NotRun })
-				o.TimedOut = true
-				o.Cancelled = ctx.Err() != nil
-				out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
-				return
-			case run.overRequestBudget(0):
-				out.Items[slot] = ItemOutcome{
-					ExchangeID: exchangeID,
-					Outcome:    s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.RequestBudgetSpent }),
-				}
-				return
-			}
 
-			o, found := s.auditItem(ctx, exchangeID, run, checks)
-			if o.State.Dispatched() && breaker.itemFinished(o.State == ItemStateFailed) {
-				paused.Store(true)
+				o, found := s.auditItem(ctx, exchangeID, run, checks)
+				if o.State.Dispatched() && breaker.itemFinished(o.State == ItemStateFailed) {
+					paused.Store(true)
+				}
+				out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
+				perItem[slot] = found
 			}
-			out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
-			perItem[slot] = found
-		}(i, id)
+		}()
 	}
+	// Fed in order. A cancelled context is not a reason to stop feeding: an item nobody looked at
+	// must still come back with its check set attributed, and the refusals above are what do that.
+	for i := range exchangeIDs {
+		queue <- i
+	}
+	close(queue)
 	wg.Wait()
 
 	var findings []*Finding

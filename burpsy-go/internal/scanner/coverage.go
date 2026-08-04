@@ -34,8 +34,16 @@
 // write lock exactly once to fold the whole buffer in.
 //
 // This is a faithful port of crates/scanner/src/coverage.rs. The one deliberate divergence is that
-// the Rust CoverageReport carries a `native` field for SCAN-01/SCAN-02; the Go port has no native
-// check set yet, so there is nothing to report and the field is omitted rather than carried empty.
+// the Rust CoverageReport carries a `native` field for SCAN-01/SCAN-02, and this one does not.
+//
+// The reason has changed, so it is restated rather than left as written: the Go port *does* now have
+// those two checks (js_vulns.go and jwt_weak.go), but they hang off ActiveScanner, not
+// PassiveScanner — that is where Audit's callers reach them — and their coverage is read through
+// ActiveScanner.JsLibraryCoverage and JwtWeakCoverage. Rust's `native` field hangs off the *passive*
+// report because `NativeChecks` lives on its PassiveScanner. Adding the field here would mean the
+// passive scanner owning the two checks as well: two owners of one 514 KB retire.js corpus, parsed
+// twice, with two sets of coverage counters that could disagree about the same scan. So the field
+// stays absent, and the coverage it would have carried is reported by its actual owner instead.
 package scanner
 
 import (

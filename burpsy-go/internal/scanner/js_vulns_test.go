@@ -83,6 +83,113 @@ func TestRE2IncompatibleCorpusPatternsAreNamedNotSilentlyDropped(t *testing.T) {
 	}
 }
 
+// The prefilter must never change an answer, only the time it takes to reach one. Compared against
+// the same corpus run with every pattern unconditionally.
+func TestTheContentPrefilterNeverChangesWhatIsDetected(t *testing.T) {
+	db := VendoredJsVulnDb()
+	bodies := []string{
+		"",
+		"console.log('nothing here');",
+		"/*! jQuery v1.7.1 | (c) jQuery Foundation */",
+		"/*! jQuery v3.7.1 */ /*! Bootstrap v3.3.7 (http://getbootstrap.com) */",
+		"/**\n * @license AngularJS v1.2.0\n */",
+		"/* Handlebars v4.0.5 */ Handlebars.VERSION = \"4.0.5\";",
+		"/*\nYUI 3.5.0\n*/",
+		"var x=1;\n" + strings.Repeat("padding padding padding\n", 200) + "\n/*! jQuery v2.1.4 */",
+	}
+	for _, body := range bodies {
+		got := db.detect("/app.js", []byte(body))
+		want := db.detectWithoutPrefilter("/app.js", []byte(body))
+		if len(got) != len(want) {
+			t.Fatalf("body %q: prefiltered %d detections, unfiltered %d\n got %+v\nwant %+v",
+				truncate(body), len(got), len(want), got, want)
+		}
+		for i := range got {
+			if got[i].component != want[i].component || got[i].rawVersion != want[i].rawVersion ||
+				got[i].signal != want[i].signal {
+				t.Errorf("body %q detection %d: got %+v, want %+v", truncate(body), i, got[i], want[i])
+			}
+		}
+	}
+	if n := db.Summary().ContentPatternsWithoutPrefilter; n != 1 {
+		t.Errorf("content patterns without a prefilter = %d, want 1 (lodash's alternation)", n)
+	}
+}
+
+// detectWithoutPrefilter is the same content pass with the literal gate removed, for the soundness
+// test above. Test-only: nothing in the engine should run this, because it is the slow path the
+// prefilter exists to avoid.
+func (db *JsVulnDb) detectWithoutPrefilter(url string, body []byte) []detection {
+	var out []detection
+	text := string(body)
+	// Mirrors detect's URL pass so the two are comparable.
+	for _, d := range db.detect(url, nil) {
+		out = pushDetection(out, d)
+	}
+	for i, p := range db.content {
+		if v, ok := captureVersion(p.re, text); ok {
+			out = pushDetection(out, newDetection(db.contentOwner[i], db.components[db.contentOwner[i]], v, signalContent))
+		}
+	}
+	return out
+}
+
+func truncate(s string) string {
+	if len(s) <= 60 {
+		return s
+	}
+	return s[:60] + "…"
+}
+
+func TestRequiredLiteralOnlyAcceptsAnUnavoidableLiteral(t *testing.T) {
+	cases := []struct {
+		pattern string
+		want    string
+	}{
+		{`jQuery v([0-9.]+)`, "jQuery v"},
+		{`[^a-z.]jquery:[ ]?"([0-9.]+)"`, "jquery:"},
+		{`/\*[\s]+PDFObject v([0-9.]+)`, "PDFObject v"},
+		// Optional, so not required.
+		{`(?:@license)?abc`, "abc"},
+		{`(abc)?xy`, "xy"},
+		{`(abc)*`, ""},
+		// Only one branch of an alternation has to match.
+		{`(?:Lo-Dash|lodash) v`, " v"},
+		{`Lo-Dash|lodash`, ""},
+		// A case-insensitive literal would not be found by a case-sensitive substring search.
+		{`(?i)jQuery v([0-9.]+)`, ""},
+		// The longest required member of a concatenation wins.
+		{`ab.{1,5}longer_literal`, "longer_literal"},
+		// A repeat with a minimum still requires its body.
+		{`(?:abc){2,4}`, "abc"},
+		{`(?:abc){0,4}`, ""},
+		// Nothing literal at all.
+		{`[0-9]+\.[0-9]+`, ""},
+		// Not parsable: no literal rather than a panic.
+		{`(unclosed`, ""},
+	}
+	for _, c := range cases {
+		if got := requiredLiteral(c.pattern); got != c.want {
+			t.Errorf("requiredLiteral(%q) = %q, want %q", c.pattern, got, c.want)
+		}
+	}
+}
+
+// Every literal the corpus derivation accepted really is required: a body built from a pattern's own
+// literal must be the only way its match can be found. Checked structurally instead — every accepted
+// literal must appear in the pattern source, which a derivation that invented one would fail.
+func TestEveryDerivedCorpusLiteralAppearsInItsOwnPattern(t *testing.T) {
+	db := VendoredJsVulnDb()
+	for _, p := range db.content {
+		if p.literal == "" {
+			continue
+		}
+		if !strings.Contains(p.re.String(), p.literal) {
+			t.Errorf("literal %q is not a substring of its own pattern %q", p.literal, p.re.String())
+		}
+	}
+}
+
 func TestNarrowBoundedRepeatsOnlyTouchesAnOverLargeUpperBound(t *testing.T) {
 	cases := []struct {
 		name    string
