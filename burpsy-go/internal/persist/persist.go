@@ -13,7 +13,9 @@ package persist
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
@@ -103,6 +105,13 @@ CREATE TABLE IF NOT EXISTS scope_rules (
 	port    INTEGER,
 	PRIMARY KEY (kind, pattern)
 );
+CREATE TABLE IF NOT EXISTS scope_rules_v2 (
+	ord         INTEGER PRIMARY KEY,
+	kind        TEXT NOT NULL,
+	pattern     TEXT NOT NULL,
+	port        INTEGER,
+	path_prefix TEXT
+);
 CREATE TABLE IF NOT EXISTS matchreplace_rules (
 	ord      INTEGER PRIMARY KEY,
 	target   INTEGER NOT NULL,
@@ -172,6 +181,23 @@ CREATE TABLE IF NOT EXISTS tool_log (
 			return err
 		}
 	}
+	// session_rules gained `ord` because the evaluation order is data, not something to re-derive.
+	// Coordinator.MatchingRule walks its rules in order and returns the *first* one covering a host, so
+	// the order decides which login macro runs. The table had no order column and the load had no ORDER
+	// BY, which left the restored order to whatever the query happened to return — a restart could
+	// silently promote a different rule to first. A legacy row has ord NULL and is ordered by id, which
+	// is the order such a row was written in.
+	if err := s.addColumn("session_rules", "ord", "INTEGER"); err != nil {
+		return err
+	}
+	// exchanges gained duration_us so that "fast" and "never measured" stop being the same row.
+	// duration_ms is a whole-millisecond count, so a sub-millisecond exchange stored 0 — exactly what an
+	// exchange nobody timed stores. NULL here means unmeasured and a number means measured, including
+	// the measured zero. duration_ms is still written for what it is worth to an older build reading
+	// this database, and is the only thing a *legacy* row has: see LoadExchanges for how one is read.
+	if err := s.addColumn("exchanges", "duration_us", "INTEGER"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -221,6 +247,15 @@ func (s *Store) log(op string, err error) {
 	}
 }
 
+// note reports something wrong with what was *read back*, which log cannot: its message says a write
+// failed, and a restore-time finding logged under that wording sends whoever reads it looking for a
+// failure that never happened.
+func (s *Store) note(op string, err error) {
+	if s.logger != nil {
+		s.logger.Warn("persist read inconsistency", zap.String("op", op), zap.Error(err))
+	}
+}
+
 // ---- Messages + exchanges ----------------------------------------------------------------------
 
 // SaveMessage mirrors one stored message: its shape always, and then either the
@@ -257,6 +292,12 @@ func (s *Store) SaveMessage(m *core.StoredMessage) {
 }
 
 // SaveExchange mirrors one exchange.
+//
+// The duration is written twice on purpose: duration_us is the real value, NULL when nothing measured
+// it, and duration_ms is the rounded count the column has always held. Keeping duration_ms written
+// means a build older than this column still reads a sane row out of the same database, and it costs
+// four bytes; dropping it would silently turn every exchange into a zero-duration one over there. Which
+// column a *reader* trusts is decided in LoadExchanges.
 func (s *Store) SaveExchange(ex *core.Exchange) {
 	related, err := json.Marshal(ex.Related)
 	if err != nil {
@@ -266,14 +307,18 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	if ex.Status != nil {
 		status = int(*ex.Status)
 	}
+	var durationUs any
+	if ex.Duration.Measured {
+		durationUs = int64(ex.Duration.Us)
+	}
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
-		  response_len, started_ms, duration_ms, notes, protocol, related)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
-		ex.StartedMs, ex.DurationMs, nullStr(ex.Notes), int(ex.Protocol), related)
+		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs)
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -355,10 +400,23 @@ func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
 }
 
 // LoadExchanges restores every exchange in id order (ids are positional).
+//
+// # Reading the duration of a row this build did not write
+//
+// duration_us is the truth when it is present. When it is NULL the row predates the column, and such a
+// row carries only a whole-millisecond count — from which the two states core.ExchangeDuration keeps
+// apart genuinely cannot be recovered. So the reading is stated rather than guessed:
+//
+//   - duration_ms > 0 loads as measured, at millisecond precision (ms x 1000). The precision it never
+//     had is not invented; it is simply coarse.
+//   - duration_ms == 0 loads as *unmeasured*. It is ambiguous in the old data — it could have been a
+//     genuine sub-millisecond exchange — and "no evidence" is the fail-safe answer, the same direction
+//     CheckCoverage takes by treating an unrecorded check as never dispatched rather than as clean.
+//     Reporting it as a measured zero would be inventing a measurement nobody made.
 func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
-		        response_len, started_ms, duration_ms, notes, protocol, related
+		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -375,10 +433,20 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		var notes any
 		var protocol int
 		var related []byte
+		var durationMs uint64
+		var durationUs sql.NullInt64
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
-			&ex.DurationMs, &notes, &protocol, &related); err != nil {
+			&durationMs, &notes, &protocol, &related, &durationUs); err != nil {
 			return nil, err
+		}
+		switch {
+		case durationUs.Valid && durationUs.Int64 >= 0:
+			ex.Duration = core.MeasuredMicros(uint64(durationUs.Int64))
+		case durationMs > 0:
+			ex.Duration = core.MeasuredMicros(durationMs * 1000)
+		default:
+			ex.Duration = core.UnmeasuredDuration()
 		}
 		ex.Request = core.MsgId(request)
 		if v, ok := response.(int64); ok {
@@ -471,47 +539,202 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 // ---- Scope -------------------------------------------------------------------------------------
 
 // SaveScope replaces the scope rule set (small table; delete-and-reinsert is fine).
+//
+// # Why there are two tables, and why the old one is still written
+//
+// The original scope_rules keys on (kind, pattern) and has columns for neither the path prefix nor an
+// order. Both of those cost an operator's scope its meaning, in the direction that matters:
+//
+//   - Two rules with the same kind and host and *different ports* — `include app.test:80` and
+//     `include app.test:443`, an ordinary pair — collide on that key, so the second silently replaced
+//     the first and one of the two authorised ports was gone after a restart.
+//   - core.ScopeRule.PathPrefix had nowhere to go at all, so `include app.test` limited to `/api` came
+//     back covering the whole host: an authorisation boundary widened by a restart.
+//
+// SQLite cannot alter a primary key, so the rule set moved to scope_rules_v2, which has no natural key
+// at all — the set is replaced wholesale, so a key was only ever an opportunity to lose a row — and
+// carries port, path prefix and order.
+//
+// The legacy table is still written, best-effort and as lossily as it always was, for one reason: an
+// older build reads *only* that table, and core.Scope with no rules is default-allow. Stopping the
+// legacy write would turn a downgrade into an engagement with no scope at all, which is the one failure
+// direction worth carrying a duplicate table to avoid.
 func (s *Store) SaveScope(rules []*core.ScopeRule) {
-	if _, err := s.db.Exec(`DELETE FROM scope_rules`); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM scope_rules_v2`); err != nil {
 		s.log("scope clear", err)
 		return
 	}
-	for _, r := range rules {
+	if _, err := s.db.Exec(`DELETE FROM scope_rules`); err != nil {
+		s.log("scope clear legacy", err)
+		// Not fatal: the v2 table is the one that will be read back.
+	}
+	for i, r := range rules {
 		var port any
 		if r.Port != nil {
 			port = int(*r.Port)
 		}
-		kind := "include"
-		if r.Kind == core.ScopeExclude {
-			kind = "exclude"
+		var pathPrefix any
+		if r.PathPrefix != nil {
+			pathPrefix = *r.PathPrefix
 		}
+		kind := scopeKindName(r.Kind)
+		if _, err := s.db.Exec(
+			`INSERT INTO scope_rules_v2 (ord, kind, pattern, port, path_prefix) VALUES (?, ?, ?, ?, ?)`,
+			i, kind, r.Pattern, port, pathPrefix); err != nil {
+			// Returning here would leave the durable scope narrower *or* wider than the live one with no
+			// record of which rules made it, so every remaining rule is still attempted and every failure
+			// is named.
+			s.log("scope rule", fmt.Errorf("rule %d (%s %s): %w", i, kind, r.Pattern, err))
+			continue
+		}
+		// The legacy mirror, whose key cannot hold two rules that differ only by port or path. A failure
+		// here is logged and stepped over: it costs a downgraded build one rule, not this one.
 		if _, err := s.db.Exec(
 			`INSERT OR REPLACE INTO scope_rules (kind, pattern, port) VALUES (?, ?, ?)`,
 			kind, r.Pattern, port); err != nil {
-			s.log("scope rule", err)
-			return
+			s.log("scope rule legacy mirror", err)
 		}
 	}
 }
 
-// LoadScope restores scope rules.
+func scopeKindName(k core.ScopeRuleKind) string {
+	if k == core.ScopeExclude {
+		return "exclude"
+	}
+	return "include"
+}
+
+// LoadScope restores scope rules, in the order they were saved.
+//
+// scope_rules_v2 is authoritative when it holds anything. The legacy table is read when v2 is **empty**,
+// which is a database written before v2 existed — and such a row cannot carry a path prefix, so the rule
+// comes back host-and-port-wide. That is stated rather than papered over: it is the widening the v2 table
+// exists to stop, and it cannot be recovered from data that never held it.
+//
+// Note "empty", not "absent": migrate creates v2 on open, so every old database arrives here with an
+// empty v2 beside a populated legacy table. Treating "v2 is the current table" as reason enough to read
+// only v2 would hand core.Scope zero rules, and an empty core.Scope is default-allow — the fallback is
+// what stops an upgrade from failing open. Pinned by
+// TestLoadScopeFallsBackToAnEmptyV2AndAPopulatedLegacyTable, which asserts v2 is present and empty first
+// so it cannot pass for the wrong reason.
 func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
-	rows, err := s.db.Query(`SELECT kind, pattern, port FROM scope_rules`)
+	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix FROM scope_rules_v2 ORDER BY ord`)
 	if err != nil {
 		return nil, err
 	}
+	out, err := scanScopeRows(rows, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > 0 {
+		s.checkLegacyScopeDivergence(out)
+		return out, nil
+	}
+	legacy, err := s.db.Query(`SELECT kind, pattern, port, NULL FROM scope_rules`)
+	if err != nil {
+		return nil, err
+	}
+	return scanScopeRows(legacy, false)
+}
+
+// checkLegacyScopeDivergence reports a legacy scope row that this build did not write.
+//
+// # The one silent path the two tables still leave, and why this is only a warning
+//
+// An older build writes the scope to the legacy table alone, because v2 does not exist for it. So a
+// project opened by an older binary *after* this one — an operator switching between two builds against
+// one database — has its most recent scope edit in the legacy table while v2 holds the older set. This
+// loader prefers v2 and would therefore restore a stale scope, in an unknown direction, saying nothing.
+// That is the same class of failure as the port this file used to drop, so it does not get to be silent.
+//
+// The signal is sound rather than a heuristic. SaveScope mirrors every v2 rule into the legacy table with
+// the same kind, pattern and port; the legacy key can only ever *drop* one of two rules that share a
+// (kind, pattern), never invent one. So for any database written only by this build, the legacy triples
+// are a subset of v2's. A legacy triple that is not in v2 is proof that something else wrote it.
+//
+// It warns rather than switching tables because which set is current genuinely cannot be recovered from
+// the data: preferring the legacy rows would discard the path prefixes v2 holds, and merging the two
+// would widen every include — failing open, the direction this file must never fail in. So the operator
+// is told, by rule, that an edit made under another build is not in effect, and their next scope edit
+// re-syncs both tables.
+func (s *Store) checkLegacyScopeDivergence(current []*core.ScopeRule) {
+	rows, err := s.db.Query(`SELECT kind, pattern, port FROM scope_rules`)
+	if err != nil {
+		// Nothing to say: the legacy table is a mirror, and failing to read it is not a reason to distrust
+		// the table that is authoritative.
+		return
+	}
+	defer rows.Close()
+	held := make(map[string]bool, len(current))
+	for _, r := range current {
+		held[scopeTriple(scopeKindName(r.Kind), r.Pattern, r.Port)] = true
+	}
+	var orphans []string
+	for rows.Next() {
+		var kind, pattern string
+		var port sql.NullInt64
+		if err := rows.Scan(&kind, &pattern, &port); err != nil {
+			return
+		}
+		var p *uint16
+		if port.Valid && port.Int64 > 0 && port.Int64 <= 65535 {
+			v := uint16(port.Int64)
+			p = &v
+		}
+		key := scopeTriple(kind, pattern, p)
+		if !held[key] {
+			orphans = append(orphans, key)
+		}
+	}
+	if len(orphans) == 0 {
+		return
+	}
+	s.note("scope tables diverge", fmt.Errorf(
+		"the legacy scope table holds %d rule(s) the current one does not (%s); an older build wrote the "+
+			"scope after this one did, so its edit is NOT in effect and the restored scope is the older set — "+
+			"re-apply the change and save the scope to bring both tables back into step",
+		len(orphans), strings.Join(orphans, ", ")))
+}
+
+// scopeTriple is the identity SaveScope mirrors into the legacy table: kind, pattern and port. The path
+// prefix is deliberately not part of it, because the legacy table cannot hold one.
+func scopeTriple(kind, pattern string, port *uint16) string {
+	if port == nil {
+		return kind + " " + pattern + " :any"
+	}
+	return fmt.Sprintf("%s %s :%d", kind, pattern, *port)
+}
+
+// scanScopeRows builds rules from a (kind, pattern, port, path_prefix) result set.
+//
+// Port and path prefix are applied here rather than being scanned and dropped, which is what the load
+// path used to do with the port: it selected the column, scanned it into a variable and then built the
+// rule from the pattern alone. A rule restricted to one port therefore came back matching every port on
+// that host — silently authorising traffic the operator had not authorised, for an include rule, and
+// silently excluding traffic they had allowed, for an exclude one.
+func scanScopeRows(rows *sql.Rows, withPath bool) ([]*core.ScopeRule, error) {
 	defer rows.Close()
 	var out []*core.ScopeRule
 	for rows.Next() {
 		var kind, pattern string
-		var port any
-		if err := rows.Scan(&kind, &pattern, &port); err != nil {
+		var port sql.NullInt64
+		var pathPrefix sql.NullString
+		if err := rows.Scan(&kind, &pattern, &port, &pathPrefix); err != nil {
 			return nil, err
 		}
 		// kind is stored as a string ("include"/"exclude") for readability.
-		r := core.NewScopeRule(core.ScopeInclude, pattern)
+		k := core.ScopeInclude
 		if kind == "exclude" {
-			r = core.NewScopeRule(core.ScopeExclude, pattern)
+			k = core.ScopeExclude
+		}
+		r := core.NewScopeRule(k, pattern)
+		if port.Valid && port.Int64 > 0 && port.Int64 <= 65535 {
+			p := uint16(port.Int64)
+			r.Port = &p
+		}
+		if withPath && pathPrefix.Valid && pathPrefix.String != "" {
+			prefix := pathPrefix.String
+			r.PathPrefix = &prefix
 		}
 		out = append(out, r)
 	}
@@ -579,7 +802,9 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		s.log("session clear", err)
 		return
 	}
-	for _, r := range rules {
+	// The index is written as `ord` so the evaluation order survives the round trip. The caller passes
+	// Coordinator.AllRules(), which is already in evaluation order.
+	for i, r := range rules {
 		hosts, err := json.Marshal(r.ScopeHosts)
 		if err != nil {
 			hosts = nil
@@ -598,19 +823,26 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		}
 		if _, err := s.db.Exec(
 			`INSERT OR REPLACE INTO session_rules
-			 (id, name, enabled, scope_hosts, macro, validity, max_attempts, extractions)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, macro, validity, r.MaxAttempts, exts); err != nil {
+			 (id, name, enabled, scope_hosts, macro, validity, max_attempts, extractions, ord)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, macro, validity, r.MaxAttempts, exts, i); err != nil {
 			s.log("session rule", err)
 			return
 		}
 	}
 }
 
-// LoadSessionRules restores session rules, recompiling extraction regexes.
+// LoadSessionRules restores session rules **in their persisted evaluation order**, recompiling each
+// extraction's matcher.
+//
+// The ORDER BY is load-bearing, not tidiness. Coordinator.MatchingRule returns the first rule whose
+// scope covers a host, so the order decides which login macro runs; this query had no ORDER BY at all,
+// which left it to whatever SQLite returned. COALESCE(ord, id) covers a database written before the
+// order column existed: such a row was written in id order, so id is the honest fallback for it.
 func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, enabled, scope_hosts, macro, validity, max_attempts, extractions FROM session_rules`)
+		`SELECT id, name, enabled, scope_hosts, macro, validity, max_attempts, extractions
+		 FROM session_rules ORDER BY COALESCE(ord, id), id`)
 	if err != nil {
 		return nil, err
 	}
@@ -826,18 +1058,41 @@ func (s *Store) Restore(
 		// project that looks fully restored and a target that has quietly stopped being
 		// authenticated. Restore keeps going rather than returning here: aborting on one bad session
 		// rule would take the organizer and the tool log down with it.
-		refused := 0
+		//
+		// RestoreRule, not AddRule: AddRule mints a fresh id from the coordinator's counter, so a rule
+		// saved as id 3 came back as id 1 and every RuleID anyone had written down — a note, a log line,
+		// a `POST /api/session/rules/3/run` — silently named a different rule's login macro. The rules
+		// are installed in the order LoadSessionRules returned them, which is the persisted evaluation
+		// order, and RestoreRule appends in call order, so that order is what survives.
+		//
+		// Id collisions are counted apart from validation refusals: the two are different faults with
+		// different fixes, and rolling them into one number would tell an operator to go and check the
+		// wrong thing.
+		refused, collided := 0, 0
 		for _, r := range sessionRules {
-			if _, err := sess.AddRule(r); err != nil {
-				s.log("restore session rule", err)
-				refused++
+			err := sess.RestoreRule(r)
+			if err == nil {
+				continue
 			}
+			s.log("restore session rule", err)
+			if errors.Is(err, session.ErrDuplicateRuleID) {
+				collided++
+				continue
+			}
+			refused++
 		}
 		if refused > 0 {
 			s.log("restore session rules", fmt.Errorf(
 				"%d of %d saved session rule(s) no longer validate and were not installed; fix or "+
 					"delete them, or every request to the hosts they covered goes out unauthenticated",
 				refused, len(sessionRules)))
+		}
+		if collided > 0 {
+			s.log("restore session rules", fmt.Errorf(
+				"%d of %d saved session rule(s) carry an id another rule already holds and were not installed; "+
+					"this database has duplicate session rule ids and one rule per collision is missing, so a "+
+					"request the missing rule covered goes out unauthenticated",
+				collided, len(sessionRules)))
 		}
 	}
 

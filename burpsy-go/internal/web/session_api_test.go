@@ -398,9 +398,18 @@ func TestAnExtractionWithAnUnusablePatternIs400NotASilentDrop(t *testing.T) {
 	}
 }
 
-func TestAnExtractionByJsonPathIsRefusedAsAStatedDivergence(t *testing.T) {
+// A json-path extraction is accepted, stored, and read back as the json path the operator typed.
+//
+// This used to be TestAnExtractionByJsonPathIsRefusedAsAStatedDivergence: the UI could express
+// json_path, the extractor could not run it, and a stated refusal was the honest answer. It is now
+// implemented over a documented subset (internal/session/jsonpath.go), so the refusal moved from "this
+// method" to "this path shape" — see the test below.
+func TestAnExtractionByJsonPathRoundTrips(t *testing.T) {
 	srv := sessionTestServer()
-	rec := postJSON(t, srv, "/api/session/rules", map[string]any{
+	var created struct {
+		Rule wireSessionRule `json:"rule"`
+	}
+	if code := postJSONInto(t, srv, "/api/session/rules", map[string]any{
 		"name":    "json path",
 		"enabled": true,
 		"steps": []any{map[string]any{
@@ -412,14 +421,47 @@ func TestAnExtractionByJsonPathIsRefusedAsAStatedDivergence(t *testing.T) {
 			}},
 		}},
 		"validity": map[string]any{"status_is": 200},
-	})
-	// The UI can express json_path; this port's extractor cannot run it. Refused rather than compiled
-	// as a regex that would match nothing while looking configured.
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("POST with a json path extraction = %d, want 400", rec.Code)
+	}, &created); code != http.StatusOK {
+		t.Fatalf("POST with a json path extraction = %d, want 200 now that json_path is implemented", code)
 	}
-	if !strings.Contains(rec.Body.String(), "json path") {
-		t.Fatalf("body = %q, want it to name json path as unimplemented", rec.Body.String())
+	ex := created.Rule.Steps[0].Extract
+	if len(ex) != 1 {
+		t.Fatalf("step 0 extract = %+v, want one entry", ex)
+	}
+	// Read back as a json path, not as the regex an extractor-shaped conversion would leave behind: the
+	// operator's dropdown has to come back on the option they chose.
+	var how struct {
+		JSONPath string `json:"json_path"`
+	}
+	if err := json.Unmarshal(ex[0].How, &how); err != nil || how.JSONPath != "data.token" {
+		t.Fatalf("extraction how = %s, want {\"json_path\":\"data.token\"}", ex[0].How)
+	}
+}
+
+// A path outside the supported subset is refused when the rule is saved, naming what is unsupported.
+//
+// The timing is the point: accepted here and unwalkable at login time, it would report as "the token
+// was not in the response" — a claim about the target, when the truth is a limit of this scanner.
+func TestAnExtractionByAnUnsupportedJsonPathIsRefused(t *testing.T) {
+	srv := sessionTestServer()
+	rec := postJSON(t, srv, "/api/session/rules", map[string]any{
+		"name":    "wildcard path",
+		"enabled": true,
+		"steps": []any{map[string]any{
+			"method": "POST", "url": "https://target.test/token", "headers": []any{}, "body": "",
+			"extract": []any{map[string]any{
+				"name": "tok",
+				"from": "body",
+				"how":  map[string]any{"json_path": "data.tokens[*]"},
+			}},
+		}},
+		"validity": map[string]any{"status_is": 200},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST with a wildcard json path = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "wildcard") {
+		t.Fatalf("body = %q, want it to name the wildcard as the unsupported construct", rec.Body.String())
 	}
 }
 

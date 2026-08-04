@@ -146,11 +146,45 @@ type Extraction struct {
 	// Step is the index of the macro step whose response this reads. Zero — the first step — is the
 	// common case and the value a rule stored before this field existed restores as.
 	Step int `json:"step"`
-	re   *regexp.Regexp
+	// JSONPath, when non-empty, lifts the value by walking the source as JSON instead of by matching
+	// Pattern against it. Exactly one of the two says how this extraction works, and ValidateRule
+	// refuses a rule that states both or neither — an extraction that could be read either way is one
+	// whose behaviour depends on which branch happens to be tested first.
+	//
+	// The supported path grammar is a deliberate subset (see jsonpath.go), and everything outside it is
+	// refused when the rule is configured rather than resolving to nothing at login time.
+	//
+	// Added after Pattern existed, so an extraction saved before this field did loads with it empty and
+	// goes on being a regex extraction.
+	JSONPath string `json:"json_path,omitempty"`
+	re       *regexp.Regexp
+	path     jsonPath
 }
 
 func NewExtraction(name, from, pattern string, group int) (*Extraction, error) {
 	e := &Extraction{Name: name, From: from, Pattern: pattern, Group: group}
+	if err := e.Recompile(); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// NewJSONPathExtraction builds the json-path form: the value is found by walking the source as JSON
+// rather than by matching a regex over its text.
+//
+// The path is parsed here, so a path outside the supported subset is an error the operator sees while
+// saving the rule — naming the construct that is unsupported — rather than an extraction that looks
+// configured and resolves nothing when the login runs. Group is deliberately not a parameter: a
+// capture group is a property of a regex, and offering one here would be offering a field that is
+// silently ignored.
+func NewJSONPathExtraction(name, from, path string) (*Extraction, error) {
+	// Refused here rather than left to Recompile, which reads an empty JSONPath as "this is a regex
+	// extraction" and would compile the equally-empty Pattern into a matcher that resolves the empty
+	// string against anything. A caller that asked for a json path must never be handed that.
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("extraction %q: %w", name, errEmptyJSONPath)
+	}
+	e := &Extraction{Name: name, From: from, JSONPath: path}
 	if err := e.Recompile(); err != nil {
 		return nil, err
 	}
@@ -168,25 +202,170 @@ func (e *Extraction) Recompile() error {
 	if e == nil {
 		return nil
 	}
+	if e.JSONPath != "" {
+		// Both stated is refused here as well as in ValidateRule, because Recompile is what a restore
+		// path calls and it must not pick a winner: an extraction that would run as a regex on one build
+		// and as a json path on another is a rule whose behaviour depends on the reader.
+		if e.Pattern != "" {
+			return fmt.Errorf("extraction %q states both a regex pattern %q and a json path %q; it can only work one way",
+				e.Name, e.Pattern, e.JSONPath)
+		}
+		p, err := parseJSONPath(e.JSONPath)
+		if err != nil {
+			return fmt.Errorf("extraction %q: %w", e.Name, err)
+		}
+		e.path = p
+		e.re = nil
+		return nil
+	}
 	re, err := regexp.Compile(e.Pattern)
 	if err != nil {
 		return err
 	}
 	e.re = re
+	e.path = nil
 	return nil
 }
 
+// ExtractOutcome is what one extraction produced, beyond the value itself.
+//
+// It exists because a bare string cannot say the thing that matters. Every failure mode of an
+// extraction used to arrive as "", the same value a response that genuinely carries an empty token
+// produces — so an operator whose login stopped working could not tell a wrong path from a wrong
+// response from a body that was not JSON at all, and the three have completely different fixes. This
+// is the same distinction scanner.CoverageState draws between "never dispatched" and "ran clean".
+type ExtractOutcome int
+
+const (
+	// ExtractResolved: a value was found. It may be the empty string, and that is a real answer about
+	// the response rather than a failure of the extraction.
+	ExtractResolved ExtractOutcome = iota
+	// ExtractNoValue: the source was read and the value is not in it — the regex did not match, or the
+	// json path does not resolve against this document. Result.Detail says where it stopped.
+	ExtractNoValue
+	// ExtractNullValue: a json path resolved and the value is JSON null. Apart from ExtractNoValue
+	// because "the server sent null" is an answer about the target and "that key is absent" is an
+	// answer about the path.
+	ExtractNullValue
+	// ExtractSourceNotJSON: a json-path extraction was pointed at text that is not JSON. The single
+	// most useful outcome to keep distinct: it usually means the step returned an error page, and every
+	// other reading of it blames the path.
+	ExtractSourceNotJSON
+	// ExtractNotAScalar: the json path resolved to an object or an array, which is not something a
+	// {{placeholder}} can carry.
+	ExtractNotAScalar
+	// ExtractNoSuchHeader: the extraction reads a header and the response carries no header that
+	// matches. Distinct from a header that is present and does not match the pattern.
+	ExtractNoSuchHeader
+	// ExtractInert: the extraction cannot run as configured — its matcher was never compiled (restored
+	// without Recompile), or it reads from something that is neither the body nor a header. Never a
+	// statement about the response. ValidateRule refuses every rule that could produce this, so it
+	// firing means something installed a rule behind validation's back.
+	ExtractInert
+)
+
+// ExtractOutcomeAll is every outcome, so a caller can render a legend or a histogram without
+// hard-coding the set — the same reason ScanSkipAll and SkipAll exist.
+var ExtractOutcomeAll = [7]ExtractOutcome{
+	ExtractResolved,
+	ExtractNoValue,
+	ExtractNullValue,
+	ExtractSourceNotJSON,
+	ExtractNotAScalar,
+	ExtractNoSuchHeader,
+	ExtractInert,
+}
+
+func (o ExtractOutcome) String() string {
+	switch o {
+	case ExtractResolved:
+		return "resolved"
+	case ExtractNoValue:
+		return "no-value"
+	case ExtractNullValue:
+		return "null-value"
+	case ExtractSourceNotJSON:
+		return "source-not-json"
+	case ExtractNotAScalar:
+		return "not-a-scalar"
+	case ExtractNoSuchHeader:
+		return "no-such-header"
+	case ExtractInert:
+		return "inert"
+	}
+	return "unknown"
+}
+
+// Explanation is one line an operator can act on.
+func (o ExtractOutcome) Explanation() string {
+	switch o {
+	case ExtractResolved:
+		return "the value was found"
+	case ExtractNoValue:
+		return "the source was read and does not carry this value"
+	case ExtractNullValue:
+		return "the json path resolved and the value is null"
+	case ExtractSourceNotJSON:
+		return "the json path was applied to text that is not JSON, so nothing could be looked up in it"
+	case ExtractNotAScalar:
+		return "the json path resolved to an object or an array, which is not a single value"
+	case ExtractNoSuchHeader:
+		return "the response carries no header this extraction could read"
+	case ExtractInert:
+		return "the extraction cannot run as configured, so it never looked at the response"
+	}
+	return "unknown outcome"
+}
+
+// Resolved reports whether a value was found. Derived from the outcome rather than from the value
+// being non-empty, because an empty value that *was* found is a different thing from one that was not.
+func (o ExtractOutcome) Resolved() bool { return o == ExtractResolved }
+
+// ExtractResult is one extraction's whole answer: the value, why it is what it is, and a line naming
+// what went wrong when it is not a value.
+type ExtractResult struct {
+	Outcome ExtractOutcome
+	// Value is meaningful only when Outcome is ExtractResolved; every other outcome carries "".
+	Value string
+	// Detail is the specific thing that happened — the key that was absent, the JSON parse error, the
+	// header that was looked for. Empty when there is nothing to add to the outcome.
+	Detail string
+}
+
+// Run returns the extracted value, or "" for every outcome that is not a resolved value.
+//
+// Kept as-is for the callers that only thread values forward. RunResult is the one to use when the
+// difference between "empty" and "not there" matters, which is any path that reports to an operator.
 func (e *Extraction) Run(hdrs map[string]string, body []byte) string {
-	if e == nil || e.re == nil {
-		return ""
+	return e.RunResult(hdrs, body).Value
+}
+
+// RunResult runs the extraction and says exactly what happened.
+func (e *Extraction) RunResult(hdrs map[string]string, body []byte) ExtractResult {
+	if e == nil {
+		return ExtractResult{Outcome: ExtractInert, Detail: "there is no extraction to run"}
+	}
+	if e.JSONPath != "" {
+		return e.runJSONPath(hdrs, body)
+	}
+	if e.re == nil {
+		return ExtractResult{Outcome: ExtractInert, Detail: fmt.Sprintf(
+			"extraction %q has an uncompiled pattern; build it with NewExtraction or call Recompile after "+
+				"unmarshalling one, so what runs is what was validated", e.Name)}
 	}
 	switch e.From {
 	case "body":
 		m := e.re.FindSubmatch(body)
-		if m != nil && e.Group < len(m) {
-			return string(m[e.Group])
+		if m == nil {
+			return ExtractResult{Outcome: ExtractNoValue, Detail: "the pattern did not match the response body"}
 		}
+		if e.Group >= len(m) {
+			return ExtractResult{Outcome: ExtractNoValue, Detail: fmt.Sprintf(
+				"the pattern matched the body but has %d capture group(s), so there is no group %d", len(m)-1, e.Group)}
+		}
+		return ExtractResult{Outcome: ExtractResolved, Value: string(m[e.Group])}
 	case "header":
+		selected := ""
 		for k, v := range hdrs {
 			// A named header is selected by its name, and the pattern is applied only to its value.
 			// With no name stated the pattern selects the header too, which is what this port did
@@ -198,13 +377,78 @@ func (e *Extraction) Run(hdrs map[string]string, body []byte) string {
 			} else if !e.re.MatchString(k) {
 				continue
 			}
+			selected = k
 			m := e.re.FindStringSubmatch(v)
 			if m != nil && e.Group < len(m) {
-				return m[e.Group]
+				return ExtractResult{Outcome: ExtractResolved, Value: m[e.Group]}
 			}
 		}
+		if selected == "" {
+			return ExtractResult{Outcome: ExtractNoSuchHeader, Detail: e.headerWanted()}
+		}
+		return ExtractResult{Outcome: ExtractNoValue, Detail: fmt.Sprintf(
+			"header %q is present and its value does not yield group %d of the pattern", selected, e.Group)}
 	}
-	return ""
+	return ExtractResult{Outcome: ExtractInert, Detail: fmt.Sprintf(
+		"extraction %q reads from %q, which is neither \"body\" nor \"header\"", e.Name, e.From)}
+}
+
+// runJSONPath is the json-path arm of RunResult: pick the source text, then walk it.
+func (e *Extraction) runJSONPath(hdrs map[string]string, body []byte) ExtractResult {
+	if e.path == nil {
+		return ExtractResult{Outcome: ExtractInert, Detail: fmt.Sprintf(
+			"extraction %q has an unparsed json path %q; call Recompile after unmarshalling one, so what runs "+
+				"is what was validated", e.Name, e.JSONPath)}
+	}
+	var src []byte
+	switch e.From {
+	case "body":
+		src = body
+	case "header":
+		// A json path over a header needs the header named: with a regex the pattern doubles as the
+		// selector, and a json path cannot select anything. ValidateRule refuses the nameless form, so
+		// this is the belt to that braces.
+		if strings.TrimSpace(e.Header) == "" {
+			return ExtractResult{Outcome: ExtractInert, Detail: fmt.Sprintf(
+				"extraction %q reads a json path from a header without naming which header", e.Name)}
+		}
+		found := false
+		for k, v := range hdrs {
+			if strings.EqualFold(k, e.Header) {
+				src = []byte(v)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ExtractResult{Outcome: ExtractNoSuchHeader, Detail: e.headerWanted()}
+		}
+	default:
+		return ExtractResult{Outcome: ExtractInert, Detail: fmt.Sprintf(
+			"extraction %q reads from %q, which is neither \"body\" nor \"header\"", e.Name, e.From)}
+	}
+	value, outcome, detail, isJSON := walkJSON(src, e.path)
+	if !isJSON {
+		return ExtractResult{Outcome: ExtractSourceNotJSON, Detail: detail}
+	}
+	switch outcome {
+	case jsonWalkFound:
+		return ExtractResult{Outcome: ExtractResolved, Value: value}
+	case jsonWalkNull:
+		return ExtractResult{Outcome: ExtractNullValue, Detail: detail}
+	case jsonWalkNotAValue:
+		return ExtractResult{Outcome: ExtractNotAScalar, Detail: detail}
+	}
+	return ExtractResult{Outcome: ExtractNoValue, Detail: detail}
+}
+
+// headerWanted names what the extraction was looking for, so "no such header" says which one.
+func (e *Extraction) headerWanted() string {
+	if strings.TrimSpace(e.Header) != "" {
+		return fmt.Sprintf("no response header is named %q", e.Header)
+	}
+	return fmt.Sprintf("no response header's name matches the pattern %q, which is also this extraction's "+
+		"header selector because it names no header", e.Pattern)
 }
 
 // --- MacroStep ---
@@ -409,6 +653,11 @@ func NewCoordinator(logger *zap.Logger) *Coordinator {
 // matching on an error string.
 var ErrNoSuchRule = errors.New("no session rule with that id")
 
+// ErrDuplicateRuleID is what RestoreRule returns when the id a restored rule carries is already
+// held. Named so a restore path can count and report id collisions apart from rules that simply no
+// longer validate: the two say completely different things about the saved project.
+var ErrDuplicateRuleID = errors.New("a session rule with that id is already installed")
+
 // AddRule validates `rule` and appends it to the evaluation order, returning its new id.
 //
 // Validation lives here, not only in the HTTP handler, because every path that installs a rule — the
@@ -426,6 +675,60 @@ func (c *Coordinator) AddRule(rule *SessionRule) (RuleID, error) {
 	c.rules[id] = rule
 	c.order = append(c.order, id)
 	return id, nil
+}
+
+// RestoreRule installs a rule that an earlier run already gave an id, **keeping that id**.
+//
+// # Why AddRule is the wrong door for a saved rule
+//
+// AddRule mints a fresh id from this coordinator's own counter. That is right for a rule an operator
+// has just typed and wrong for one coming back from storage: a rule that was id 3 when the project
+// was saved comes back as id 1, and every RuleID recorded anywhere else — an operator's note, a log
+// line, a `POST /api/session/rules/3/run` in someone's shell history, a saved reference in another
+// tool — then names a *different* rule. That is worse than an error, because the call still succeeds:
+// it runs the wrong login macro against a live target and reports success for having done so.
+//
+// # Order is the caller's, and it is the evaluation order
+//
+// This appends to the same `order` slice AddRule does, and `order` is what MatchingRule walks to
+// decide which rule owns a host. So a restore path must call this in the order the rules were
+// persisted in, not in whatever order its query happened to return, or the *first* rule matching a
+// host after a restart can be a different rule than before it. internal/persist keeps an explicit
+// order column for exactly that reason.
+//
+// # Two loud refusals rather than a silent win
+//
+//   - An id of zero or below is not an id a persisted rule can carry (AddRule mints from 1), so it is
+//     refused rather than quietly renumbered into something an operator's notes do not name.
+//   - An id already installed is ErrDuplicateRuleID. Installing it would drop one of the two rules
+//     while reporting success, and which one lost would depend on load order.
+//
+// nextID is advanced past every restored id, so a rule added *after* a restore can never be minted
+// onto an id a restored rule already holds — which would be the same silent collision arriving later.
+func (c *Coordinator) RestoreRule(rule *SessionRule) error {
+	if err := ValidateRule(rule); err != nil {
+		return err
+	}
+	if rule.ID <= 0 {
+		return &RuleError{
+			Rule: ruleLabel(rule),
+			Message: fmt.Sprintf("this rule was restored carrying id %d, which is not an id any rule was ever "+
+				"saved with: installing it would mean renumbering it, and anything that recorded its old id "+
+				"would then name a different rule", int64(rule.ID)),
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if held, clash := c.rules[rule.ID]; clash {
+		return fmt.Errorf("%w: id %d is held by %q, so restoring %q at it would drop one of the two",
+			ErrDuplicateRuleID, int64(rule.ID), held.Name, rule.Name)
+	}
+	c.rules[rule.ID] = rule
+	c.order = append(c.order, rule.ID)
+	if int64(rule.ID) > atomic.LoadInt64(&c.nextID) {
+		atomic.StoreInt64(&c.nextID, int64(rule.ID))
+	}
+	return nil
 }
 
 func (c *Coordinator) RemoveRule(id RuleID) {
@@ -504,6 +807,36 @@ func (c *Coordinator) HandleResponse(host string, port uint16, tls bool, status 
 	}
 }
 
+// logExtraction records what one extraction produced, so an extraction that lifted nothing is
+// visible without reading the wire.
+//
+// Both macro runners drop a value that did not resolve, which is right — a stale or empty token must
+// not be threaded into the next step — but dropping it silently is how a login turns into "the button
+// did nothing". A resolved value is logged at debug and never logged *itself*: it is a session token
+// by construction, and putting one in a log file is a credential leak with a long tail. Everything
+// else is a warning naming the rule, the step, the extraction and the reason.
+func (c *Coordinator) logExtraction(rule *SessionRule, stepIndex int, ex *Extraction, out ExtractResult) {
+	if c.logger == nil || ex == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("rule", ruleLabel(rule)),
+		zap.Int("step", stepIndex),
+		zap.String("extraction", ex.Name),
+		zap.String("outcome", out.Outcome.String()),
+	}
+	if out.Detail != "" {
+		fields = append(fields, zap.String("detail", out.Detail))
+	}
+	if out.Outcome.Resolved() {
+		fields = append(fields, zap.Int("value_len", len(out.Value)))
+		c.logger.Debug("session extraction resolved", fields...)
+		return
+	}
+	fields = append(fields, zap.String("why", out.Outcome.Explanation()))
+	c.logger.Warn("session extraction lifted no value", fields...)
+}
+
 // CookieHeader returns the cookie header for the authority.
 func (c *Coordinator) CookieHeader(host string, port uint16, tls bool) string {
 	return c.jarMgr.CookieHeader(host, port, tls)
@@ -576,8 +909,10 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 		// Run this step's own extractions against its response.
 		if res.Status >= 200 && res.Status < 400 {
 			for _, ex := range rule.extractionsFor(stepIndex) {
-				if v := ex.Run(res.Headers, res.Body); v != "" {
-					extracted[ex.Name] = v
+				out := ex.RunResult(res.Headers, res.Body)
+				c.logExtraction(rule, stepIndex, ex, out)
+				if out.Outcome.Resolved() && out.Value != "" {
+					extracted[ex.Name] = out.Value
 				}
 			}
 		}

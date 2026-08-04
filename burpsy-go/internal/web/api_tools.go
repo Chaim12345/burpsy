@@ -16,7 +16,6 @@ import (
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/query"
-	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/toollog"
@@ -77,8 +76,19 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// SendRaw handles a raw HTTP request (possibly HTTP/1.0-style with Host line) over the wire.
+	// Timed here because SendRaw does not report a duration and the exchange row used to be written with a
+	// hardcoded zero — which, before core.ExchangeDuration existed, was indistinguishable from a
+	// sub-millisecond send, so the repeater's own "duration_ms: 0" reply looked like a measurement.
+	//
+	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
+	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
+	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
+	// replayed captured h2 bytes, and would now be wrong far more often.
 	ctx := r.Context()
-	rawResp, err := s.sender.SendRaw(ctx, host, port, tls, []byte(req.Request))
+	sendStarted := time.Now()
+	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, host, port, tls, []byte(req.Request),
+		sender.ProtocolPreferenceAuto)
+	elapsed := time.Since(sendStarted)
 	if err != nil {
 		// Surface the dial/parse error to the UI so Repeater is not silently empty.
 		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "SEND", "", 0, 0, err.Error())
@@ -109,20 +119,22 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		Path:        firstLinePath(req.Request),
 		Status:      status,
 		ResponseLen: len(rawResp),
-		StartedMs:   uint64(time.Now().UnixMilli()),
-		DurationMs:  0,
+		StartedMs:   uint64(sendStarted.UnixMilli()),
+		Duration:    core.MeasuredDuration(elapsed),
 		Request:     reqMsgID,
 		Response:    &respMsgID,
-		Protocol:    core.ProtocolHTTP1,
+		// What actually carried the send, not what the request bytes asked for. outcome.Downgrade says why
+		// it was HTTP/1.1 when it was, and Sender.Protocols counts it across every surface.
+		Protocol: outcome.Protocol,
 	}
 	s.store.AddExchange(ex)
 
-	s.toolLog.Record(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status), ex.DurationMs, "")
+	s.toolLog.Record(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status), ex.Duration.Millis(), "")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(repeaterSendResp{
 		Status:        intOrZero(status),
-		DurationMs:    ex.DurationMs,
+		DurationMs:    ex.Duration.Millis(),
 		Response:      string(rawResp),
 		RequestMsgID:  uint64(reqMsgID),
 		ResponseMsgID: uint64(respMsgID),
@@ -588,12 +600,6 @@ func clampInt(v, lo, hi int) int {
 
 // ---- Scanner -----------------------------------------------------------------------------------
 
-type scannerAuditReq struct {
-	Method     string `json:"method"`
-	Target     string `json:"target"`
-	ExchangeID uint64 `json:"exchange_id,omitempty"`
-}
-
 // scannerFinding mirrors scanner.ts's result shape.
 type scannerFinding struct {
 	Name        string `json:"name"`
@@ -662,107 +668,6 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-// handleScannerAudit is the legacy /api/scanner/audit alias for /api/audit/{id}.
-func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req scannerAuditReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.ExchangeID == 0 {
-		http.Error(w, "exchange_id is required", http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.runAudit(r.Context(), req.ExchangeID))
-}
-
-// handleAuditByPath serves POST /api/audit/{id}, running an active scan over one exchange.
-func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/audit/")
-	id, err := strconv.ParseUint(strings.TrimSuffix(idStr, "/"), 10, 64)
-	if err != nil || id == 0 {
-		http.Error(w, "Invalid exchange id", http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.runAudit(r.Context(), id))
-}
-
-// runAudit audits one exchange and returns the response body both audit endpoints send.
-//
-// The body carries the engine's AuditOutcome, matching what the Rust route returns from its audit
-// hook (`{enabled, exchange, active_checks, outcome}`). Before the audit engine existed the reply was
-// `{started: true, exchange_id: N}` and the findings went to the finding store — so an operator who
-// audited a host that had stopped answering saw the same "started: true" as one whose whole check set
-// ran. Those two keys are kept for compatibility, and the outcome is what makes them mean something:
-// `dispositions` names every check that was *not* dispatched and why.
-//
-// scanner.ts renders this by pretty-printing the JSON it gets back, so the richer body needs no
-// change on the TypeScript side — there is no typed audit response to keep in sync.
-// auditTarget names one audited exchange for the task list, falling back to the id when the exchange
-// is not readable — an unnamed task is still better than a task that does not appear.
-func auditTarget(store *core.TrafficStore, id uint64) string {
-	if ex, err := store.GetExchange(id); err == nil {
-		return fmt.Sprintf("%s %s%s", ex.Method, ex.Host, ex.Path)
-	}
-	return fmt.Sprintf("exchange %d", id)
-}
-
-func (s *Server) runAudit(ctx context.Context, id uint64) map[string]interface{} {
-	if s.scanner == nil {
-		// Built with the engagement scope: an active audit sends real traffic, and the engine refuses
-		// an out-of-scope exchange before it plans any work.
-		s.scanner = scanner.NewActiveScanner(s.store, s.logger).WithScope(s.scope)
-	}
-	body := map[string]interface{}{
-		"started":       true,
-		"exchange_id":   id,
-		"active_checks": s.scanner.ActiveCheckCount(),
-		"unimplemented": s.scanner.UnimplementedCheckCount(),
-	}
-	// On the dashboard while it runs, not only once it answers (DASH-01). Total is the check set,
-	// which is known up front for a single item.
-	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCount()))
-	outcome, findings := s.scanner.AuditWithin(ctx, id, s.scanner.AuditConfig())
-	task.Advance(uint64(outcome.Considered()))
-	task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
-	body["outcome"] = outcome
-	body["dispositions"] = outcome.Dispositions()
-	body["summary"] = outcome.Summary()
-	// The same four buckets the dashboard reads, on the audit's own response: a caller of this
-	// endpoint gets the count and what it does not account for without having to fold nine
-	// dispositions itself (DASH-03).
-	body["breakdown"] = dash.NewSummary("Audit", "findings", "checks",
-		outcome.Breakdown(), outcome.BreakdownReasons()...)
-	if outcome.Error != "" {
-		s.logger.Warn("audit refused", zap.Uint64("exchange_id", id), zap.String("reason", outcome.Error))
-		return body
-	}
-	ex, gerr := s.store.GetExchange(id)
-	if gerr == nil {
-		s.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, 0, "audit")
-	}
-	for _, f := range findings {
-		s.findings.Add(core.NewFinding{
-			Name:        f.Name,
-			Severity:    core.ParseSeverity(f.Severity),
-			Confidence:  core.ParseConfidence(f.Confidence),
-			Description: f.Description,
-			Remediation: f.Solution,
-		})
-	}
-	return body
 }
 
 // ---- Sequencer ---------------------------------------------------------------------------------

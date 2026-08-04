@@ -932,8 +932,22 @@ const domRealisticPage = `<!doctype html>
 func Test_a_realistic_page_is_traced_without_the_lexer_collapsing_its_function_bodies(t *testing.T) {
 	a := AnalyzeDOMDocument([]byte(domRealisticPage), "text/html; charset=utf-8", DOMBudget{})
 
-	if !a.Complete() {
-		t.Errorf("Complete() = false on an ordinary page: %s", a.Caveat())
+	// This page carries an external CDN script and a non-executable <script type>, so the pass did
+	// NOT read every script in it and must not claim to have. This assertion used to be
+	// `if !a.Complete()` — it asserted the opposite, and passed, because Complete() consulted only the
+	// budget and ignored SkippedScripts entirely. That made a page whose every script is external —
+	// i.e. any modern single-page app — report a clean complete pass over zero bytes of JavaScript.
+	// The assertion was pinning the bug, so it is inverted here rather than the fix being relaxed.
+	if a.Complete() {
+		t.Error("Complete() = true although this page has scripts the pass never read; " +
+			"an unread script makes the analysis a floor, not a total")
+	}
+	if len(a.SkippedScripts) != 2 {
+		t.Errorf("SkippedScripts = %d, want 2 (the external src and the non-executable type)", len(a.SkippedScripts))
+	}
+	// And the caveat has to say so, since that is what a report prints next to the findings.
+	if cav := a.Caveat(); !strings.Contains(cav, "were not read") {
+		t.Errorf("Caveat() = %q, want it to name the scripts that were not read", cav)
 	}
 	// The guard: a collapsed lexer yields a handful of mega-statements. This script has dozens.
 	if a.Budget.Statements < 40 {
@@ -1004,5 +1018,50 @@ func Test_a_sanitizer_declares_which_issue_classes_it_is_accepted_for(t *testing
 		if w.Why == "" {
 			t.Errorf("weak encoder %q has no recorded reason for not being accepted", w.Call)
 		}
+	}
+}
+
+// The SPA case, stated as its own test because it is the common one and the old behaviour was
+// indistinguishable from a clean result. A page whose only script is external gives the pass nothing
+// to read: Scripts is empty, no flow is possible, and the budget is untouched — so before
+// SkippedScripts was consulted this returned Complete() == true with an empty Caveat(), byte-identical
+// to "analysed it all, found nothing".
+func Test_a_page_whose_scripts_are_all_external_is_not_a_clean_pass(t *testing.T) {
+	a := AnalyzeDOMDocument(
+		[]byte(`<html><head><script src="/static/app.bundle.js"></script></head><body></body></html>`),
+		"text/html", DOMBudget{})
+
+	if a.Skip != nil {
+		t.Fatalf("the pass declined to run entirely (%s); it should run and report what it could not read",
+			a.Skip.Explanation())
+	}
+	if len(a.Scripts) != 0 {
+		t.Errorf("Scripts = %d, want 0 — there is no inline script here", len(a.Scripts))
+	}
+	if len(a.SkippedScripts) != 1 {
+		t.Fatalf("SkippedScripts = %d, want 1", len(a.SkippedScripts))
+	}
+	if a.Complete() {
+		t.Error("Complete() = true after reading zero bytes of JavaScript; that is the exact claim " +
+			"this type exists to make impossible")
+	}
+	cav := a.Caveat()
+	if cav == "" {
+		t.Fatal("Caveat() is empty, so a report would print these (zero) findings as a complete result")
+	}
+	if !strings.Contains(cav, "external URL") {
+		t.Errorf("Caveat() = %q, want it to name the external script as the reason", cav)
+	}
+}
+
+// A page with no scripts at all is genuinely complete — there was nothing to miss. Without this the
+// fix above could be satisfied by making every analysis report incomplete, which would be useless.
+func Test_a_page_with_no_scripts_at_all_is_a_complete_pass(t *testing.T) {
+	a := AnalyzeDOMDocument([]byte(`<html><body><p>static content</p></body></html>`), "text/html", DOMBudget{})
+	if !a.Complete() {
+		t.Errorf("Complete() = false on a page with no scripts: %s", a.Caveat())
+	}
+	if cav := a.Caveat(); cav != "" {
+		t.Errorf("Caveat() = %q, want empty — nothing about this pass needs qualifying", cav)
 	}
 }

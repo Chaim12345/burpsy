@@ -533,22 +533,133 @@ type BuiltInConfig struct {
 	MaximumAuditTimeMinutes OptUint32
 }
 
+// builtInConfigKeys is the one description of what a shipped configuration can change.
+//
+// Both Apply and BuiltInConfig.Keys read this table, which is the point: SCAN-03 asks an operator to
+// be able to *choose* a configuration, and a chooser has to be told what each one does. The obvious
+// way to tell them — a hand-written list of key names in whatever surface presents the choice — is a
+// second copy of this knowledge that drifts the first time a key is added, and drifts silently,
+// because a listing that is missing a key still renders. So the list an operator reads and the
+// overlay the engine performs are generated from the same rows, and a key can only exist here once.
+//
+// read and apply are a pair per row: read pulls the preset's value for the key, apply is the only
+// place that knows which AuditConfig field it lands in and in what unit. Test
+// Test_every_built_in_config_field_has_a_key_row asserts the row count matches the number of fields on
+// BuiltInConfig, so a field added without a row fails rather than being quietly unreportable and
+// quietly not applied.
+var builtInConfigKeys = []struct {
+	// name is the key as this engine's own API spells it.
+	name string
+	// burpKey is the key as Burp's configuration JSON spells it, so an operator comparing against
+	// Burp's own UI can find the same knob.
+	burpKey string
+	// what is one line an operator can act on: what changes when this key is set.
+	what  string
+	read  func(BuiltInConfig) OptUint32
+	apply func(*AuditConfig, uint32)
+}{
+	{
+		name:    "consecutive_check_failures_to_abandon_unit",
+		burpKey: "scanner/error_handling/consecutive_audit_check_failures_to_skip_insertion_point",
+		what:    "how many checks may fail in a row before the rest of that dispatch unit is abandoned (0 disables the breaker)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.ConsecutiveCheckFailuresToAbandonUnit },
+		apply:   func(a *AuditConfig, v uint32) { a.ConsecutiveCheckFailuresToAbandonUnit = v },
+	},
+	{
+		name:    "consecutive_unit_failures_to_fail_item",
+		burpKey: "scanner/error_handling/consecutive_insertion_point_failures_to_fail_audit_item",
+		what:    "how many dispatch units may be abandoned in a row before the whole item is failed (0 disables the breaker)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.ConsecutiveUnitFailuresToFailItem },
+		apply:   func(a *AuditConfig, v uint32) { a.ConsecutiveUnitFailuresToFailItem = v },
+	},
+	{
+		name:    "pause_session_after_failed_items",
+		burpKey: "scanner/error_handling/pause_task_failed_audit_item_count",
+		what:    "how many failed items pause the whole session (0 means never pause on a count)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.PauseSessionAfterFailedItems },
+		apply:   func(a *AuditConfig, v uint32) { a.PauseSessionAfterFailedItems = v },
+	},
+	{
+		name:    "maximum_audit_time_minutes",
+		burpKey: "scanner/audit_optimization/maximum_crawl_and_audit_time",
+		what:    "the wall-clock ceiling for the whole run, in minutes",
+		read:    func(c BuiltInConfig) OptUint32 { return c.MaximumAuditTimeMinutes },
+		apply:   func(a *AuditConfig, v uint32) { a.TimeBudget = time.Duration(v) * time.Minute },
+	},
+}
+
+// BuiltInConfigKey is one key a shipped configuration can carry, with this preset's value for it or
+// the fact that this preset leaves it alone.
+//
+// Set false is not Value 0: unset inherits the base configuration, zero disables a breaker. Both
+// spellings appear in Burp's shipped files and they mean different things, so the two are reported
+// separately rather than collapsed into a number.
+type BuiltInConfigKey struct {
+	// Name is the key as this engine's API spells it.
+	Name string `json:"name"`
+	// BurpKey is the key as Burp's own configuration JSON spells it.
+	BurpKey string `json:"burp_key"`
+	// What is one line describing what setting this key changes.
+	What string `json:"what"`
+	// Value is meaningful only when Set is true.
+	Value uint32 `json:"value,omitempty"`
+	// Set reports whether this preset's source file sets the key at all.
+	Set bool `json:"set"`
+}
+
+// Keys returns every key a shipped configuration can carry, in a fixed order, each carrying this
+// preset's value or reporting itself unset.
+//
+// Every key is returned, including the ones this preset does not set. A listing that dropped the unset
+// ones would leave an operator unable to tell "this preset leaves the time budget alone" from "this
+// engine has no time budget" — the same collapse CheckCoverage exists to prevent, applied to
+// configuration rather than to checks.
+func (c BuiltInConfig) Keys() []BuiltInConfigKey {
+	out := make([]BuiltInConfigKey, 0, len(builtInConfigKeys))
+	for _, k := range builtInConfigKeys {
+		v := k.read(c)
+		out = append(out, BuiltInConfigKey{
+			Name:    k.name,
+			BurpKey: k.burpKey,
+			What:    k.what,
+			Value:   v.Value,
+			Set:     v.Set,
+		})
+	}
+	return out
+}
+
 // Apply overlays this preset's keys onto a base configuration, leaving unset keys alone.
 func (c BuiltInConfig) Apply(base AuditConfig) AuditConfig {
-	if c.ConsecutiveCheckFailuresToAbandonUnit.Set {
-		base.ConsecutiveCheckFailuresToAbandonUnit = c.ConsecutiveCheckFailuresToAbandonUnit.Value
-	}
-	if c.ConsecutiveUnitFailuresToFailItem.Set {
-		base.ConsecutiveUnitFailuresToFailItem = c.ConsecutiveUnitFailuresToFailItem.Value
-	}
-	if c.PauseSessionAfterFailedItems.Set {
-		base.PauseSessionAfterFailedItems = c.PauseSessionAfterFailedItems.Value
-	}
-	if c.MaximumAuditTimeMinutes.Set {
-		base.TimeBudget = time.Duration(c.MaximumAuditTimeMinutes.Value) * time.Minute
+	for _, k := range builtInConfigKeys {
+		if v := k.read(c); v.Set {
+			k.apply(&base, v.Value)
+		}
 	}
 	return base
 }
+
+// BuiltInConfigNames lists every shipped configuration's name, in table order.
+//
+// Exists so a caller refusing an unknown name can say what the known ones are, rather than answering a
+// typo with a bare "not found" and leaving the operator to guess at exact strings that contain spaces
+// and hyphens.
+func BuiltInConfigNames() []string {
+	out := make([]string, 0, len(BuiltInConfigs))
+	for _, c := range BuiltInConfigs {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+// BurpShippedConfigCount is how many scan configurations Burp Suite 2026.7.1 ships in
+// resources/BuiltInConfigs/.
+//
+// Named and kept here, beside the subset this engine implements, so every surface that reports "6 of
+// N" reads N from one place. Two hand-written 29s — one in the API body, one in the CLI listing — is a
+// number that can drift in one surface and not the other, and a wrong denominator makes the six look
+// like the whole of what Burp has.
+const BurpShippedConfigCount = 29
 
 // BuiltInConfigs is the six shipped configurations that set a key this engine implements.
 //

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // DefaultSegmentTargetBytes is the default target size for segment files.
@@ -185,6 +186,95 @@ const (
 	ChildH2Frame
 )
 
+// ExchangeDuration is how long an exchange took, **and whether anything measured it at all**.
+//
+// # The two states this exists to keep apart
+//
+// This replaced a plain `DurationMs uint64`, which could not tell "fast" from "unrecorded". A
+// millisecond count rounds a sub-millisecond exchange — every loopback fetch, every replay from a
+// local origin — down to 0, and 0 is also what a producer that never timed anything leaves behind. So
+// a reader of an exchange row could not distinguish "this took under a millisecond" from "nobody
+// timed this", and neither could a test: internal/proxy/parity_test.go had to classify the field as
+// "the two producers may differ" and assert nothing about it, because asserting non-zero would have
+// been asserting that the test machine is slow. That is a coverage hole of exactly the kind
+// scanner.CoverageTracker exists to close, in the shape of a struct field.
+//
+// # Why microseconds *and* a flag, rather than one or the other
+//
+// Microseconds alone would only move the boundary: a measured 0 µs would still be indistinguishable
+// from an unmeasured one, and the sub-microsecond case is reachable for an exchange served out of
+// memory. A flag alone would keep the millisecond rounding, so "0 ms, measured" would still be the
+// answer for most of a loopback crawl. Both together make the two states unrepresentable as one —
+// Measured says whether a claim is being made, Us says what the claim is.
+//
+// A pointer (*uint64) was the other candidate and was rejected for one reason: the zero value has to
+// be the safe one. A struct's zero value is {0, false} — unmeasured, which is the honest default for a
+// producer that forgets to set it, and it cannot be nil-dereferenced by a reader that forgets to check.
+// That is the same fail-safe direction Source takes by not defaulting to SourceProxy.
+type ExchangeDuration struct {
+	// Us is the duration in microseconds. Meaningful only when Measured is true.
+	Us uint64
+	// Measured says whether a producer actually timed this exchange. False is the zero value, so an
+	// exchange nobody timed reports as untimed rather than as instantaneous.
+	Measured bool
+}
+
+// MeasuredDuration records a duration a producer actually measured.
+//
+// A negative duration — a clock that went backwards between two reads — is clamped to zero and still
+// counts as measured: the measurement happened, and reporting it as unmeasured would lose that.
+func MeasuredDuration(d time.Duration) ExchangeDuration {
+	if d < 0 {
+		return ExchangeDuration{Us: 0, Measured: true}
+	}
+	return ExchangeDuration{Us: uint64(d.Microseconds()), Measured: true}
+}
+
+// MeasuredMicros records a duration already in microseconds — the form a durable store holds, so a
+// restore does not have to round-trip through time.Duration to rebuild one.
+func MeasuredMicros(us uint64) ExchangeDuration {
+	return ExchangeDuration{Us: us, Measured: true}
+}
+
+// UnmeasuredDuration is the zero value, named so a producer that genuinely cannot time an exchange
+// says so on purpose instead of leaving a field out and hoping the default means what it wants.
+func UnmeasuredDuration() ExchangeDuration { return ExchangeDuration{} }
+
+// Millis is the duration in whole milliseconds, truncated, and 0 when nothing was measured.
+//
+// Lossy by construction, and that is the point: this is the legacy wire and storage shape, kept so an
+// existing consumer keeps working. Never test it against zero to decide whether an exchange was timed
+// — that is the exact confusion this type exists to end. Ask Measured.
+func (d ExchangeDuration) Millis() uint64 { return d.Us / 1000 }
+
+// Micros is the duration in microseconds, and 0 when nothing was measured.
+func (d ExchangeDuration) Micros() uint64 {
+	if !d.Measured {
+		return 0
+	}
+	return d.Us
+}
+
+// Duration is the measurement as a time.Duration, and 0 when nothing was measured.
+func (d ExchangeDuration) Duration() time.Duration {
+	if !d.Measured {
+		return 0
+	}
+	return time.Duration(d.Us) * time.Microsecond
+}
+
+// String renders the duration for an operator, naming the unmeasured case rather than printing a zero
+// that reads as an instantaneous exchange.
+func (d ExchangeDuration) String() string {
+	if !d.Measured {
+		return "unmeasured"
+	}
+	if d.Us < 1000 {
+		return fmt.Sprintf("%dµs", d.Us)
+	}
+	return d.Duration().Round(time.Microsecond).String()
+}
+
 // Exchange represents one proxied exchange. Holds IDs, never payloads.
 type Exchange struct {
 	ID          uint64
@@ -198,10 +288,12 @@ type Exchange struct {
 	Status      *uint16
 	ResponseLen int
 	StartedMs   uint64
-	DurationMs  uint64
-	Notes       *string
-	Related     []ChildRef
-	Protocol    Protocol
+	// Duration is how long the exchange took, or the explicit "nobody measured this". See
+	// ExchangeDuration for why it is not a millisecond count.
+	Duration ExchangeDuration
+	Notes    *string
+	Related  []ChildRef
+	Protocol Protocol
 	// Source names the surface that produced this exchange. See the Source type: the zero value is
 	// deliberately *not* proxy.
 	Source Source

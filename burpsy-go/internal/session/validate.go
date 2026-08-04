@@ -28,6 +28,12 @@ package session
 //   - Two extractions with the same name. The later one silently wins, so which value a {{name}}
 //     carries would depend on a step order nobody stated.
 //   - An extraction with an unusable pattern, an unreferable name, or an out-of-range step.
+//   - An extraction that says how it works twice (a pattern *and* a json path) or not at all.
+//   - A json path outside the supported subset, named by the construct that is unsupported. This is
+//     the one refusal whose *timing* is the point: a path accepted here and unwalkable at login time
+//     would report as "the token was not in the response", which blames the target for a limit of this
+//     scanner. See jsonpath.go for the grammar and internal/session/jsonpath.go's package docs for why
+//     it is a subset at all.
 //
 // Every one of those otherwise surfaces as "the log in again button did nothing", with the reason
 // buried in whichever step produced no value.
@@ -76,14 +82,24 @@ func ValidateRuleStatedScope(rule *SessionRule, scopeStated bool) error {
 	return validateRule(rule, scopeStated)
 }
 
+// ruleLabel is how a rule is named in a refusal: its trimmed name, or "<unnamed>" when that is the
+// thing missing. Shared with the refusals Coordinator raises outside this file (RestoreRule's), so a
+// rule is identified the same way whichever check turned it down.
+func ruleLabel(rule *SessionRule) string {
+	if rule == nil {
+		return "<unnamed>"
+	}
+	if label := strings.TrimSpace(rule.Name); label != "" {
+		return label
+	}
+	return "<unnamed>"
+}
+
 func validateRule(rule *SessionRule, scopeStated bool) error {
 	if rule == nil {
 		return &RuleError{Rule: "<unnamed>", Message: "there is no rule to install"}
 	}
-	label := strings.TrimSpace(rule.Name)
-	if label == "" {
-		label = "<unnamed>"
-	}
+	label := ruleLabel(rule)
 	refuse := func(format string, args ...interface{}) error {
 		return &RuleError{Rule: label, Message: fmt.Sprintf(format, args...)}
 	}
@@ -141,26 +157,61 @@ func validateRule(rule *SessionRule, scopeStated bool) error {
 				return refuse("step %d extracts %q from %q, which is neither \"body\" nor \"header\"",
 					index, ex.Name, ex.From)
 			}
-			if ex.Pattern == "" {
-				return refuse("step %d extracts %q with an empty pattern, which lifts an empty value "+
-					"and leaves every {{%s}} unresolved on the wire", index, ex.Name, ex.Name)
+			// An extraction says how it works exactly once. Both stated would mean the behaviour depends
+			// on which branch the runtime tests first, and neither stated is an extraction that can only
+			// ever lift an empty value.
+			if ex.Pattern != "" && ex.JSONPath != "" {
+				return refuse("step %d extracts %q both by the pattern %q and by the json path %q; "+
+					"an extraction can only work one way", index, ex.Name, ex.Pattern, ex.JSONPath)
 			}
-			if ex.re == nil {
-				// Two distinct faults, reported apart: a pattern that cannot compile is the
-				// operator's to fix, while a pattern that compiles but was never compiled *here* is
-				// a caller that built an Extraction by hand and skipped NewExtraction/Recompile —
-				// leaving an extraction that runs and silently returns nothing.
-				if _, err := regexp.Compile(ex.Pattern); err != nil {
-					return refuse("step %d extracts %q with an unusable pattern %q: %v",
-						index, ex.Name, ex.Pattern, err)
+			if ex.Pattern == "" && ex.JSONPath == "" {
+				return refuse("step %d extracts %q with neither a pattern nor a json path, which lifts an "+
+					"empty value and leaves every {{%s}} unresolved on the wire", index, ex.Name, ex.Name)
+			}
+			if ex.JSONPath != "" {
+				// The whole point of implementing a *subset* is that everything outside it is named here,
+				// while the rule is being installed. A path this package cannot walk, accepted now and
+				// resolving nothing at login time, would read to an operator as "the token was not in the
+				// response" — a statement about the target, when the truth is a statement about this
+				// scanner. See jsonpath.go for the supported grammar.
+				if ex.Group != 0 {
+					return refuse("step %d extracts %q by a json path and also names capture group %d; a "+
+						"capture group is part of a regex and nothing here would use it", index, ex.Name, ex.Group)
 				}
-				return refuse("step %d extracts %q with an uncompiled pattern: build it with "+
-					"NewExtraction, or call Recompile after unmarshalling one, so what runs is what was validated",
-					index, ex.Name)
-			}
-			if ex.Group < 0 {
-				return refuse("step %d extracts %q from capture group %d; a group index cannot be negative",
-					index, ex.Name, ex.Group)
+				if ex.From == "header" && strings.TrimSpace(ex.Header) == "" {
+					return refuse("step %d extracts %q by a json path from a header without naming the header; "+
+						"a regex extraction can use its pattern to select the header, a json path cannot", index, ex.Name)
+				}
+				if ex.path == nil {
+					// The same two distinct faults the regex arm reports apart: a path outside the
+					// supported subset is the operator's to fix and names what is unsupported, while a
+					// path that parses but was never parsed *here* is a caller that skipped
+					// NewJSONPathExtraction/Recompile.
+					if _, err := parseJSONPath(ex.JSONPath); err != nil {
+						return refuse("step %d extracts %q by an unsupported json path: %v", index, ex.Name, err)
+					}
+					return refuse("step %d extracts %q with an unparsed json path: build it with "+
+						"NewJSONPathExtraction, or call Recompile after unmarshalling one, so what runs is what was validated",
+						index, ex.Name)
+				}
+			} else {
+				if ex.re == nil {
+					// Two distinct faults, reported apart: a pattern that cannot compile is the
+					// operator's to fix, while a pattern that compiles but was never compiled *here* is
+					// a caller that built an Extraction by hand and skipped NewExtraction/Recompile —
+					// leaving an extraction that runs and silently returns nothing.
+					if _, err := regexp.Compile(ex.Pattern); err != nil {
+						return refuse("step %d extracts %q with an unusable pattern %q: %v",
+							index, ex.Name, ex.Pattern, err)
+					}
+					return refuse("step %d extracts %q with an uncompiled pattern: build it with "+
+						"NewExtraction, or call Recompile after unmarshalling one, so what runs is what was validated",
+						index, ex.Name)
+				}
+				if ex.Group < 0 {
+					return refuse("step %d extracts %q from capture group %d; a group index cannot be negative",
+						index, ex.Name, ex.Group)
+				}
 			}
 			if from, clash := definedBy[ex.Name]; clash {
 				return refuse("step %d extracts %q, which step %d already extracts: the later one would "+

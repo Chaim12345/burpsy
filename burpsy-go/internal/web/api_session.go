@@ -77,21 +77,32 @@ func (d sessionExtractDto) extractFrom() (from string, header string, err error)
 	return "header", *asHeader.Header, nil
 }
 
-// extractHow decodes ExtractHow into the (pattern, group) pair this port's extractor runs.
+// extractHowSpec is the decoded ExtractHow: either a regex with a capture group, or a json path.
+// Exactly one of Pattern and JSONPath is set, which is the same invariant session.Extraction holds.
+type extractHowSpec struct {
+	Pattern  string
+	Group    int
+	JSONPath string
+}
+
+// extractHow decodes ExtractHow into the form this port's extractor runs.
 //
-// `json_path` is refused rather than silently treated as a regex: session.Extraction implements
-// regex extraction only, and a JSON path quietly compiled as a pattern would match nothing while
-// looking configured. That is a named divergence from the Rust crate, which implements all three.
-func (d sessionExtractDto) extractHow() (pattern string, group int, err error) {
+// All three arms of the UI's union are now implemented: `whole` as a match-everything regex, `regex`
+// as itself, and `json_path` by the hand-rolled walker in internal/session/jsonpath.go. That walker
+// covers a deliberate subset of JSONPath — dotted keys and array indices, no recursive descent, no
+// wildcards, no slices, no filters — and refuses anything outside it while the rule is being saved,
+// naming the construct that is unsupported. A path is never quietly compiled as a regex: it would
+// match nothing while looking configured, which is the failure this whole file exists to avoid.
+func (d sessionExtractDto) extractHow() (extractHowSpec, error) {
 	if len(d.How) == 0 || string(d.How) == "null" {
-		return "", 0, fmt.Errorf("extraction %q does not say how to extract; state a regex, a json path, or \"whole\"", d.Name)
+		return extractHowSpec{}, fmt.Errorf("extraction %q does not say how to extract; state a regex, a json path, or \"whole\"", d.Name)
 	}
 	var asString string
 	if err := json.Unmarshal(d.How, &asString); err == nil {
 		if asString != "whole" {
-			return "", 0, fmt.Errorf("extraction %q extracts by %q, which is not a known method", d.Name, asString)
+			return extractHowSpec{}, fmt.Errorf("extraction %q extracts by %q, which is not a known method", d.Name, asString)
 		}
-		return wholeValuePattern, 0, nil
+		return extractHowSpec{Pattern: wholeValuePattern}, nil
 	}
 	var tagged struct {
 		Regex *struct {
@@ -101,21 +112,29 @@ func (d sessionExtractDto) extractHow() (pattern string, group int, err error) {
 		JSONPath *string `json:"json_path"`
 	}
 	if err := json.Unmarshal(d.How, &tagged); err != nil {
-		return "", 0, fmt.Errorf("extraction %q: cannot read how it extracts from %s: %w", d.Name, string(d.How), err)
+		return extractHowSpec{}, fmt.Errorf("extraction %q: cannot read how it extracts from %s: %w", d.Name, string(d.How), err)
 	}
 	switch {
+	case tagged.Regex != nil && tagged.JSONPath != nil:
+		// The union admits one arm. Refused rather than resolved by precedence, because whichever arm a
+		// precedence rule dropped would be the one the operator was looking at in the form.
+		return extractHowSpec{}, fmt.Errorf("extraction %q states both a regex and a json path; state one",
+			d.Name)
 	case tagged.Regex != nil:
 		// A blank group means the UI's own default of 1 (the first capture), not group 0.
-		group = 1
+		group := 1
 		if tagged.Regex.Group != nil {
 			group = *tagged.Regex.Group
 		}
-		return tagged.Regex.Pattern, group, nil
+		return extractHowSpec{Pattern: tagged.Regex.Pattern, Group: group}, nil
 	case tagged.JSONPath != nil:
-		return "", 0, fmt.Errorf("extraction %q extracts by json path %q, which this port does not "+
-			"implement: state it as a regex over the response body instead", d.Name, *tagged.JSONPath)
+		if strings.TrimSpace(*tagged.JSONPath) == "" {
+			return extractHowSpec{}, fmt.Errorf("extraction %q extracts by an empty json path, so there is "+
+				"nothing to look up", d.Name)
+		}
+		return extractHowSpec{JSONPath: *tagged.JSONPath}, nil
 	default:
-		return "", 0, fmt.Errorf("extraction %q: %s names no extraction method", d.Name, string(d.How))
+		return extractHowSpec{}, fmt.Errorf("extraction %q: %s names no extraction method", d.Name, string(d.How))
 	}
 }
 
@@ -127,6 +146,10 @@ func extractionToDto(ex *session.Extraction) sessionExtractDto {
 		d.From = json.RawMessage(mustJSON(map[string]string{"header": ex.Header}))
 	} else {
 		d.From = json.RawMessage(`"body"`)
+	}
+	if ex.JSONPath != "" {
+		d.How = json.RawMessage(mustJSON(map[string]string{"json_path": ex.JSONPath}))
+		return d
 	}
 	if ex.Pattern == wholeValuePattern && ex.Group == 0 {
 		d.How = json.RawMessage(`"whole"`)
@@ -367,16 +390,28 @@ func dtoToRule(dto sessionRuleDto) (*session.SessionRule, error) {
 			if err != nil {
 				return nil, fmt.Errorf("step %d: %w", i, err)
 			}
-			pattern, group, err := e.extractHow()
+			how, err := e.extractHow()
 			if err != nil {
 				return nil, fmt.Errorf("step %d: %w", i, err)
 			}
-			// A pattern that does not compile is the operator's typo, and it has to be an error: an
-			// extraction dropped for being unusable leaves a rule that looks configured and cannot
-			// log in.
-			ex, err := session.NewExtraction(e.Name, from, pattern, group)
-			if err != nil {
-				return nil, fmt.Errorf("step %d: extraction %q has an unusable pattern %q: %w", i, e.Name, pattern, err)
+			// A pattern that does not compile, or a json path outside the supported subset, is the
+			// operator's to fix and it has to be an error: an extraction dropped for being unusable
+			// leaves a rule that looks configured and cannot log in. Both are refused here, while the
+			// operator is looking at the form, rather than at login time where an unwalkable path would
+			// report as "the token was not in the response".
+			var ex *session.Extraction
+			if how.JSONPath != "" {
+				ex, err = session.NewJSONPathExtraction(e.Name, from, how.JSONPath)
+				if err != nil {
+					return nil, fmt.Errorf("step %d: extraction %q cannot use the json path %q: %w",
+						i, e.Name, how.JSONPath, err)
+				}
+			} else {
+				ex, err = session.NewExtraction(e.Name, from, how.Pattern, how.Group)
+				if err != nil {
+					return nil, fmt.Errorf("step %d: extraction %q has an unusable pattern %q: %w",
+						i, e.Name, how.Pattern, err)
+				}
 			}
 			ex.Header = header
 			ex.Step = i

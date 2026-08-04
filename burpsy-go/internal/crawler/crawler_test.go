@@ -1195,3 +1195,85 @@ func TestOversizedResponseIsFetchedAndDeliberatelyNotCaptured(t *testing.T) {
 		t.Fatalf("%d fetched but %d exchanges indexed", rep.Fetched, exchanges)
 	}
 }
+
+// Config.Headers is where an operator puts a session cookie. buildRequest used to write them onto
+// every request it built, and frontier items are not all operator-chosen: they come from links in
+// target-supplied markup, from Location headers, and from robots.txt. So a page could name any other
+// host and the crawler would hand over the operator's session.
+//
+// TestAuthenticatedCrawlSendsTheOperatorsHeaders above cannot catch this — it uses one host, so every
+// request legitimately carries the header. These use a genuine second origin.
+func TestTheOperatorsHeadersDoNotFollowALinkToAnotherOrigin(t *testing.T) {
+	var otherGot []string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		otherGot = append(otherGot, r.Header.Get("Cookie"))
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>other</body></html>`))
+	}))
+	t.Cleanup(other.Close)
+
+	var seedGot []string
+	seed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seedGot = append(seedGot, r.Header.Get("Cookie"))
+		w.Header().Set("Content-Type", "text/html")
+		// The hostile bit: the target names another origin and the crawler follows it.
+		_, _ = w.Write([]byte(`<html><body><a href="` + other.URL + `/log">go</a></body></html>`))
+	}))
+	t.Cleanup(seed.Close)
+
+	h := newHarness() // empty scope == default-allow, so the other origin is authorised
+	cfg := h.config(seed.URL + "/")
+	cfg.Headers = map[string]string{"Cookie": "session=abc123"}
+	rep := run(t, cfg)
+
+	if len(otherGot) == 0 {
+		t.Fatal("the second origin was never fetched, so this test proves nothing about what it received")
+	}
+	for i, got := range otherGot {
+		if got != "" {
+			t.Errorf("request %d to the non-seed origin carried Cookie %q; the operator's session must "+
+				"never travel to a host discovered from the target's own content", i, got)
+		}
+	}
+	// The seed origin must still be authenticated, or the fix has broken authenticated crawling.
+	authed := 0
+	for _, got := range seedGot {
+		if got == "session=abc123" {
+			authed++
+		}
+	}
+	if authed == 0 {
+		t.Error("the seed origin received no authenticated request; the header binding is too strict")
+	}
+	if rep.HeadersWithheld == 0 {
+		t.Error("HeadersWithheld is 0 although the crawl sent unauthenticated requests off-origin; " +
+			"a crawl that stopped authenticating must say so rather than look like a clean result")
+	}
+}
+
+// The same-host-different-scheme case. A cookie issued over https must not go out in cleartext
+// because the target linked to http on the same host — scope does not distinguish the two, since
+// Contains never consults TLS.
+func TestTheOperatorsHeadersDoNotFollowASchemeDowngradeOnTheSameHost(t *testing.T) {
+	h := newHarness()
+	cfg := h.config("https://app.test/")
+	cfg.Headers = map[string]string{"Cookie": "session=abc123"}
+	c, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	https, _ := url.Parse("https://app.test/x")
+	httpu, _ := url.Parse("http://app.test/x")
+
+	if got := string(c.buildRequest(frontierItem{url: https, method: "GET"})); !strings.Contains(got, "session=abc123") {
+		t.Error("the seeded https origin did not receive the operator's header")
+	}
+	if got := string(c.buildRequest(frontierItem{url: httpu, method: "GET"})); strings.Contains(got, "session=abc123") {
+		t.Error("a plain-http URL on the seeded host carried the operator's cookie; that puts the " +
+			"session on the wire in cleartext, and the scheme is part of an origin for exactly this reason")
+	}
+	if c.headersWithheld != 1 {
+		t.Errorf("headersWithheld = %d, want 1", c.headersWithheld)
+	}
+}

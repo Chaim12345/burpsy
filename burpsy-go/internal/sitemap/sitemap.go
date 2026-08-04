@@ -61,11 +61,20 @@ func New() *SiteMap { return &SiteMap{hosts: make(map[string]*HostNode)} }
 // A full rebuild, so calling it twice is idempotent rather than doubling every
 // count. Follow is what keeps the map current; this is the backfill and repair
 // path.
+// The store is read *before* this map's lock is taken, and that ordering is
+// load-bearing rather than incidental. core.TrafficStore.AddExchange runs its
+// observers — including Add — while holding the store's own lock, so the live
+// path acquires ts.mu and then sm.mu. Taking sm.mu here and then calling
+// store.Exchanges(), which acquires ts.mu, would be the opposite order: a
+// classic AB-BA inversion that deadlocks the entire capture path the first time
+// a Sync overlaps an arriving response, permanently and with no way out.
+// Snapshotting first means this function only ever holds one lock at a time.
 func (sm *SiteMap) Sync(store *core.TrafficStore) {
+	exchanges := store.Exchanges()
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.hosts = make(map[string]*HostNode)
-	for _, ex := range store.Exchanges() {
+	for _, ex := range exchanges {
 		sm.addExchangeLocked(ex)
 	}
 }
@@ -164,19 +173,84 @@ func insertIDAt(pn *PathNode, at int, id uint64) {
 }
 
 // Hosts returns all host nodes, sorted by host name.
+//
+// # Why this deep-copies, and why a shallower version was a process-killing bug
+//
+// This used to copy only the top-level slice and hand back the live *HostNode
+// pointers, releasing the lock on return. Every caller then walked hn.Paths,
+// pn.ExchangeIDs, pn.Methods and pn.Statuses with no lock held at all — while
+// addExchangeLocked wrote those exact structures from the store's append path.
+// Reading a Go map while another goroutine writes it is not a stale read: the
+// runtime raises `fatal error: concurrent map iteration and map write`, which is
+// not a panic. There is no recover, no graceful shutdown; the proxy listener dies
+// with the process and any capture not yet mirrored to SQLite is gone.
+//
+// It was reachable the whole time and needed only an operator opening the site-map
+// tab while traffic flowed. It became routine when the tab started refetching
+// itself about once a second under live push, which is what turned a rare race
+// into an ordinary one.
+//
+// The fix is a snapshot rather than a documented "callers must hold the lock",
+// because that contract cannot be enforced and every caller is an HTTP handler in
+// another package. Returning immutable copies makes the unsafe read unwritable.
+// Note what it deliberately does NOT do: reach into the store. The live path holds
+// ts.mu and then sm.mu, so anything here that acquired ts.mu while holding sm.mu
+// would deadlock capture permanently — see the note on Sync.
+//
+// The cost is real and worth stating: this allocates proportionally to the whole
+// tree on every read, and the site-map tab now reads about once a second. That is
+// the price of a read that cannot crash the process, and it is the right trade —
+// but it is why the tree's size, not the read frequency, is what to watch if this
+// ever shows up in a profile.
 func (sm *SiteMap) Hosts() []*HostNode {
 	sm.mu.RLock()
-	defer sm.mu.RUnlock()
 	out := make([]*HostNode, 0, len(sm.hosts))
 	for _, hn := range sm.hosts {
-		out = append(out, hn)
+		out = append(out, hn.clone())
 	}
+	sm.mu.RUnlock()
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Host != out[j].Host {
 			return out[i].Host < out[j].Host
 		}
 		return out[i].Port < out[j].Port
 	})
+	return out
+}
+
+// clone deep-copies a host node so a reader can walk it after the lock is gone.
+// Called with sm.mu held.
+func (hn *HostNode) clone() *HostNode {
+	out := &HostNode{
+		Host:  hn.Host,
+		Port:  hn.Port,
+		TLS:   hn.TLS,
+		Paths: make(map[string]*PathNode, len(hn.Paths)),
+	}
+	for k, pn := range hn.Paths {
+		out.Paths[k] = pn.clone()
+	}
+	return out
+}
+
+// clone deep-copies a path node, including the three structures the append path
+// mutates in place: the two count maps and the id slice. Copying the maps by
+// reference would leave exactly the crash this snapshot exists to prevent.
+// Called with sm.mu held.
+func (pn *PathNode) clone() *PathNode {
+	out := &PathNode{
+		Path:        pn.Path,
+		Methods:     make(map[string]int, len(pn.Methods)),
+		Statuses:    make(map[int]int, len(pn.Statuses)),
+		ExchangeIDs: make([]uint64, len(pn.ExchangeIDs)),
+	}
+	for m, n := range pn.Methods {
+		out.Methods[m] = n
+	}
+	for s, n := range pn.Statuses {
+		out.Statuses[s] = n
+	}
+	copy(out.ExchangeIDs, pn.ExchangeIDs)
 	return out
 }
 

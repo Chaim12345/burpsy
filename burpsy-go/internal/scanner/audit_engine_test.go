@@ -7,8 +7,10 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -544,37 +546,198 @@ func Test_an_exchange_outside_the_engagement_scope_is_refused_before_any_probe(t
 	}
 }
 
-func Test_a_probe_whose_own_url_leaves_the_scope_is_refused_and_counted(t *testing.T) {
+// countingProbeTarget records the request path of everything that actually arrived.
+//
+// A counter on the target is the only instrument that proves a refusal happened before the dial.
+// probeMeter.refused proves bookkeeping, and bookkeeping can be perfectly right while the request
+// still goes out; only a silent target proves it did not. Same reasoning, and the same shape, as
+// sender.countingTarget and the session-scope tests in internal/web.
+type countingProbeTarget struct {
+	mu   sync.Mutex
+	hits map[string]int
+	host string
+	port uint16
+}
+
+func newCountingProbeTarget(t *testing.T) *countingProbeTarget {
+	t.Helper()
+	ct := &countingProbeTarget{hits: map[string]int{}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ct.mu.Lock()
+		ct.hits[r.URL.Path]++
+		ct.mu.Unlock()
+		w.Write([]byte("<html>the target answered</html>"))
+	}))
+	t.Cleanup(srv.Close)
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("target address %q: %v", srv.URL, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("target port %q: %v", portStr, err)
+	}
+	ct.host, ct.port = host, uint16(port)
+	return ct
+}
+
+func (ct *countingProbeTarget) hitCount(path string) int {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	return ct.hits[path]
+}
+
+func (ct *countingProbeTarget) total() int {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	n := 0
+	for _, c := range ct.hits {
+		n += c
+	}
+	return n
+}
+
+// The claim: a probe whose payload rewrites the request path out of scope is refused *before the
+// dial*, and the proof is a target that received nothing on that path.
+//
+// This drives sendTestRequest directly because no check shipped today splices a payload into a path
+// position — all three append a query string — and this is the case the gate exists for. It is also
+// where the old check and the new one genuinely disagree: scope is defined over request paths, and the
+// old call handed scope.AuthoriseRequest a path with a query string glued onto it, so a rule written
+// against the real request line could match the wire and miss that string.
+//
+// This test replaces one that asserted the same intent through an exclude rule of the shape
+// `path prefix "/search?"`. That rule refused every probe, but only because the glued string it was
+// matched against is one no request line can carry — core.Scope's requestPath drops the query. The
+// refusal was an artefact of asking the wrong question, so the test is rebuilt around a probe that is
+// really out of scope rather than around a rule that can never match a path.
+func Test_a_probe_whose_payload_rewrites_the_path_out_of_scope_never_reaches_the_target(t *testing.T) {
 	store := core.NewTrafficStore()
-	port := reflectingTarget(t)
-	id := seedAuditExchange(t, store, "127.0.0.1", port, "/search", "<html>seed</html>")
+	target := newCountingProbeTarget(t)
+	id := seedAuditExchange(t, store, target.host, target.port, "/search", "<html>seed</html>")
+	exchange, err := store.GetExchange(id)
+	if err != nil {
+		t.Fatalf("get exchange: %v", err)
+	}
+
+	// In scope everywhere on this host except /admin. The captured exchange is /search, so the item
+	// itself is in scope and only a probe that rewrites its way to /admin is not.
 	scope := core.NewScope()
-	scope.AddInclude("127.0.0.1")
-	// The captured exchange is /search, which stays in scope; every probe appends a query string, and
-	// this rule takes those out. auditItem's check on the exchange cannot see that — only the bytes
-	// about to go out can.
-	scope.Add(core.NewScopeRuleWithPath(core.ScopeExclude, "127.0.0.1", "/search?"))
+	scope.AddInclude(target.host)
+	scope.Add(core.NewScopeRuleWithPath(core.ScopeExclude, target.host, "/admin"))
 	scan := NewActiveScanner(store, zap.NewNop()).
 		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
 		WithScope(scope).
-		WithConfig(&ScanConfig{MaxConcurrency: 1, CheckXss: true})
+		WithConfig(probeChecksOnly())
+
+	meter := &probeMeter{}
+	ctx := withMeter(context.Background(), meter)
+
+	body := scan.sendTestRequest(ctx, exchange, "/admin/delete?file=../../../etc/passwd")
+
+	if got := target.hitCount("/admin/delete"); got != 0 {
+		t.Fatalf("/admin/delete was hit %d times, want 0: the refusal must happen before the dial", got)
+	}
+	if got := target.total(); got != 0 {
+		t.Fatalf("the target saw %d request(s), want 0", got)
+	}
+	if body != "" {
+		// The stored-response fallback is for an operator with no sender, not a way for a check to
+		// reach a verdict about a payload that was never authorised to leave.
+		t.Errorf("a refused probe returned %q, want nothing: the stored response is not this probe's answer", body)
+	}
+	counts := meter.snapshot()
+	if counts.refused != 1 {
+		t.Errorf("refused = %d, want 1: the refusal must be counted as well as enforced", counts.refused)
+	}
+	if counts.sent != 0 {
+		t.Errorf("sent = %d, want 0", counts.sent)
+	}
+	if counts.failed != 1 {
+		t.Errorf("failed = %d, want 1: the check saw no probe response either way", counts.failed)
+	}
+
+	// Without this the zero above proves nothing — it would be equally well explained by a sender that
+	// cannot send at all. An in-scope probe through the same gate, same scanner, must arrive.
+	if got := scan.sendTestRequest(ctx, exchange, "/search?xss=%3Cb%3E"); !strings.Contains(got, "the target answered") {
+		t.Fatalf("the in-scope probe returned %q, want the target's own body", got)
+	}
+	if got := target.hitCount("/search"); got != 1 {
+		t.Fatalf("/search was hit %d times, want 1", got)
+	}
+	if counts = meter.snapshot(); counts.sent != 1 || counts.refused != 1 {
+		t.Errorf("sent/refused = %d/%d, want 1/1", counts.sent, counts.refused)
+	}
+}
+
+// The end-to-end counterpart: a real audit's probes are authorised against their own request line, and
+// an exclude on the path they carry stops every one of them with the target seeing nothing.
+//
+// auditItem's own scope test refuses this item first — which is correct and is what ItemStateOutOfScope
+// asserts — so this pins both gates at once: the item is refused before any work is planned, *and*
+// nothing reached the target.
+func Test_an_audit_of_an_excluded_path_reaches_the_target_zero_times(t *testing.T) {
+	store := core.NewTrafficStore()
+	target := newCountingProbeTarget(t)
+	id := seedAuditExchange(t, store, target.host, target.port, "/admin/users", "<html>seed</html>")
+	scope := core.NewScope()
+	scope.AddInclude(target.host)
+	scope.Add(core.NewScopeRuleWithPath(core.ScopeExclude, target.host, "/admin"))
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithScope(scope).
+		WithConfig(probeChecksOnly())
 
 	outcome, findings := scan.AuditWithin(context.Background(), id, DefaultAuditConfig())
 
-	if outcome.State == ItemStateOutOfScope {
-		t.Fatal("the exchange itself is in scope; only its probes are not")
+	if got := target.total(); got != 0 {
+		t.Fatalf("the target saw %d request(s), want 0", got)
 	}
-	if outcome.RequestsRefused == 0 {
-		t.Error("refused probes must be counted, or a refusal reads as a target that came back clean")
+	if outcome.State != ItemStateOutOfScope {
+		t.Errorf("state = %s, want out of scope", outcome.State.Label())
 	}
 	if outcome.RequestsSent != 0 {
-		t.Errorf("requests sent = %d, want 0: nothing may reach the target", outcome.RequestsSent)
-	}
-	if outcome.SendFailures != 1 {
-		t.Errorf("send failures = %d, want 1: the check saw no probe response", outcome.SendFailures)
+		t.Errorf("requests sent = %d, want 0", outcome.RequestsSent)
 	}
 	if len(findings) != 0 {
 		t.Errorf("findings = %d, want 0", len(findings))
+	}
+}
+
+// The over-refusal half of the same disagreement, stated as a test so it cannot regress silently: a
+// probe whose request line is in scope is sent, even though the string the old check read — the path
+// with its query string glued on — matched an exclude rule. core.Scope.requestPath drops the query, so
+// no rule of that shape can match any real request path, and refusing on it was an artefact.
+func Test_an_exclude_rule_naming_a_query_string_does_not_refuse_an_in_scope_request_line(t *testing.T) {
+	store := core.NewTrafficStore()
+	target := newCountingProbeTarget(t)
+	id := seedAuditExchange(t, store, target.host, target.port, "/search", "<html>seed</html>")
+	exchange, err := store.GetExchange(id)
+	if err != nil {
+		t.Fatalf("get exchange: %v", err)
+	}
+	scope := core.NewScope()
+	scope.AddInclude(target.host)
+	scope.Add(core.NewScopeRuleWithPath(core.ScopeExclude, target.host, "/search?"))
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithScope(scope).
+		WithConfig(probeChecksOnly())
+
+	meter := &probeMeter{}
+	scan.sendTestRequest(withMeter(context.Background(), meter), exchange, "/search?xss=%3Cb%3E")
+
+	if got := target.hitCount("/search"); got != 1 {
+		t.Fatalf("/search was hit %d times, want 1: GET /search is in scope whatever the query carries", got)
+	}
+	if counts := meter.snapshot(); counts.refused != 0 || counts.sent != 1 {
+		t.Errorf("refused/sent = %d/%d, want 0/1", counts.refused, counts.sent)
+	}
+	// And the rule still bites where it can: the same host's /admin is genuinely excluded.
+	scope.Add(core.NewScopeRuleWithPath(core.ScopeExclude, target.host, "/admin"))
+	scan.sendTestRequest(withMeter(context.Background(), meter), exchange, "/admin?xss=%3Cb%3E")
+	if got := target.hitCount("/admin"); got != 0 {
+		t.Fatalf("/admin was hit %d times, want 0", got)
 	}
 }
 

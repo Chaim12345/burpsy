@@ -157,16 +157,20 @@ func exchangeView(ex *core.Exchange) map[string]interface{} {
 		status = *ex.Status
 	}
 	return map[string]interface{}{
-		"id":            ex.ID,
-		"method":        ex.Method,
-		"path":          ex.Path,
-		"host":          ex.Host,
-		"port":          ex.Port,
-		"tls":           ex.TLS,
-		"status":        status,
-		"response_len":  ex.ResponseLen,
-		"started_ms":    ex.StartedMs,
-		"duration_ms":   ex.DurationMs,
+		"id":           ex.ID,
+		"method":       ex.Method,
+		"path":         ex.Path,
+		"host":         ex.Host,
+		"port":         ex.Port,
+		"tls":          ex.TLS,
+		"status":       status,
+		"response_len": ex.ResponseLen,
+		"started_ms":   ex.StartedMs,
+		// Millis, and no finer field beside it: this map is documented as the shape the UI's history table
+		// expects, so it carries exactly the fields internal/web's ExchangeView carries. A measured
+		// sub-millisecond exchange and an untimed one are both 0 here — see ExchangeView's note for what
+		// closing that would take.
+		"duration_ms":   ex.Duration.Millis(),
 		"request_msg":   ex.Request,
 		"response_msg":  ex.Response,
 		"protocol":      ex.Protocol.VersionToken(),

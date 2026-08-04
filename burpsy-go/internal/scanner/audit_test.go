@@ -9,6 +9,7 @@ package scanner
 
 import (
 	"encoding/json"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -486,5 +487,112 @@ func Test_an_absent_option_and_an_option_set_to_zero_are_different_answers(t *te
 	}
 	if (OptUint32{}).Set {
 		t.Error("the zero value of OptUint32 is absent, not a set zero")
+	}
+}
+
+// SCAN-03 asks an operator to be able to *choose* a built-in configuration, and a chooser has to be
+// told what each one does. The listing an operator reads and the overlay the engine performs are
+// therefore generated from the same table (builtInConfigKeys), and these two tests are what makes
+// "generated" mean something: the first fails if a field is added to BuiltInConfig without a row, and
+// the second re-derives every preset's effect independently of the table.
+
+// Every OptUint32 on BuiltInConfig must have a row in builtInConfigKeys. Without this, a key added to
+// the struct would be silently unreportable *and* silently not applied — Apply would skip it and the
+// listing would omit it, and nothing would fail.
+func Test_every_built_in_config_field_has_a_key_row(t *testing.T) {
+	typ := reflect.TypeOf(BuiltInConfig{})
+	optFields := make([]string, 0, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		if typ.Field(i).Type == reflect.TypeOf(OptUint32{}) {
+			optFields = append(optFields, typ.Field(i).Name)
+		}
+	}
+	if len(optFields) != len(builtInConfigKeys) {
+		t.Fatalf("BuiltInConfig has %d overlayable field(s) %v but builtInConfigKeys has %d row(s): a field with no row is neither applied nor listed",
+			len(optFields), optFields, len(builtInConfigKeys))
+	}
+	// Keys() must report all of them, every time, set or not: an operator has to be able to tell "this
+	// preset leaves the time budget alone" from "this engine has no time budget".
+	for _, c := range BuiltInConfigs {
+		if got := len(c.Keys()); got != len(optFields) {
+			t.Errorf("%s reported %d key(s), want all %d", c.Name, got, len(optFields))
+		}
+	}
+	seen := map[string]bool{}
+	for _, k := range builtInConfigKeys {
+		if k.name == "" || k.burpKey == "" || k.what == "" {
+			t.Errorf("key row %q is missing a name, a Burp key or a description", k.name)
+		}
+		if seen[k.name] {
+			t.Errorf("two rows are named %q", k.name)
+		}
+		seen[k.name] = true
+	}
+}
+
+// Keys() and Apply() must agree, and the oracle is a switch written out by hand here: this test's copy
+// of "which AuditConfig field does this key land in" is independent of the table's, so a row whose
+// apply function writes the wrong field fails rather than agreeing with itself.
+func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) {
+	// A base with nothing in common with any preset's values, so an inherited field and an overlaid one
+	// can never coincide by accident.
+	base := AuditConfig{
+		TimeBudget:                            7 * time.Second,
+		ConsecutiveCheckFailuresToAbandonUnit: 91,
+		ConsecutiveUnitFailuresToFailItem:     92,
+		PauseSessionAfterFailedItems:          93,
+		PauseSessionAtFailedItemPercentage:    94,
+	}
+	for _, c := range BuiltInConfigs {
+		applied := c.Apply(base)
+		for _, k := range c.Keys() {
+			var got, wantSet, wantUnset uint64
+			switch k.Name {
+			case "consecutive_check_failures_to_abandon_unit":
+				got, wantSet, wantUnset = uint64(applied.ConsecutiveCheckFailuresToAbandonUnit), uint64(k.Value), uint64(base.ConsecutiveCheckFailuresToAbandonUnit)
+			case "consecutive_unit_failures_to_fail_item":
+				got, wantSet, wantUnset = uint64(applied.ConsecutiveUnitFailuresToFailItem), uint64(k.Value), uint64(base.ConsecutiveUnitFailuresToFailItem)
+			case "pause_session_after_failed_items":
+				got, wantSet, wantUnset = uint64(applied.PauseSessionAfterFailedItems), uint64(k.Value), uint64(base.PauseSessionAfterFailedItems)
+			case "maximum_audit_time_minutes":
+				got = uint64(applied.TimeBudget)
+				wantSet = uint64(time.Duration(k.Value) * time.Minute)
+				wantUnset = uint64(base.TimeBudget)
+			default:
+				t.Fatalf("%s reports key %q, which this test does not know how to check — add it here rather than letting it go unverified", c.Name, k.Name)
+			}
+			if k.Set && got != wantSet {
+				t.Errorf("%s sets %s to %d but the applied config holds %d", c.Name, k.Name, wantSet, got)
+			}
+			if !k.Set && got != wantUnset {
+				t.Errorf("%s does not set %s, but the applied config holds %d instead of the base's %d", c.Name, k.Name, got, wantUnset)
+			}
+		}
+		// The keys a preset does not set must not be reported as zeroes: that is the absent/zero
+		// distinction OptUint32 exists for, one layer up.
+		if c.Name == "Crawl and Audit - Balanced" {
+			for _, k := range c.Keys() {
+				if k.Name == "maximum_audit_time_minutes" && k.Set {
+					t.Error("Balanced does not set a time limit; reporting it as set would be a fabricated key")
+				}
+			}
+		}
+	}
+}
+
+// The name list a refusal quotes has to be the real one, in table order, or an operator retyping from
+// it gets refused again.
+func Test_the_config_name_list_is_the_table(t *testing.T) {
+	names := BuiltInConfigNames()
+	if len(names) != len(BuiltInConfigs) {
+		t.Fatalf("names = %d, want %d", len(names), len(BuiltInConfigs))
+	}
+	for i, n := range names {
+		if n != BuiltInConfigs[i].Name {
+			t.Errorf("names[%d] = %q, want %q", i, n, BuiltInConfigs[i].Name)
+		}
+		if _, ok := BuiltInConfigByName(n); !ok {
+			t.Errorf("%q is listed but does not resolve", n)
+		}
 	}
 }

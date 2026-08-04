@@ -34,6 +34,10 @@ func main() {
 	caDir := flag.String("ca-dir", proxy.DefaultCADir(), "CA certificate directory")
 	segmentBytes := flag.Uint64("segment-bytes", core.DefaultSegmentTargetBytes, "target bytes per segment file")
 	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files and passively scan responses")
+	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
+	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
+	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
+	scanConfig := flag.String("scan-config", "", `run audits under a built-in scan configuration by name ("list" prints them)`)
 
 	// TLS passthrough flags
 	passthrough := flag.String("tls-passthrough", "", "host pattern to passthrough without interception (repeatable)")
@@ -42,6 +46,14 @@ func main() {
 	storeVerify := flag.String("store-verify", "", "verify a capture directory and exit")
 
 	flag.Parse()
+
+	// Before anything is built: this either prints a list and exits, or resolves a name, or refuses one
+	// that does not exist. Resolving it late — after the proxy is listening — would mean a typo takes
+	// the whole process down mid-engagement instead of at the command line.
+	auditConfig, err := resolveScanConfig(*scanConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// CLI mode: when the first positional argument names a subcommand, drive the
 	// engines directly (no HTTP) and exit. Global flags above still parse, so
@@ -81,11 +93,11 @@ func main() {
 		os.Exit(0)
 	}
 	// Initialize logger
-	logger, err := zap.NewProduction()
-	if err != nil {
+	logger, lerr := zap.NewProduction()
+	if lerr != nil {
 		// A logger is required for every subsystem below; fail fast rather than
 		// dereference a nil *zap.Logger later.
-		log.Fatalf("Failed to initialize logger: %v", err)
+		log.Fatalf("Failed to initialize logger: %v", lerr)
 	}
 	defer logger.Sync()
 
@@ -222,7 +234,15 @@ func main() {
 	webServer := web.NewServer(store, scope).
 		WithLogger(logger).
 		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
-		WithScanner(scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(sender.DefaultSenderConfig()))).
+		// WithScope is not optional here even though ActiveScanner treats it as such: without it this
+		// scanner's probes are authorised against nothing, and this is the scanner every /api/audit call
+		// uses. The web server only builds a scoped one of its own when none was attached, so leaving it
+		// off here meant the flag-configured engagement scope silently did not apply to active probes.
+		// WithAuditConfig carries -scan-config, so the endpoint's default is the one the operator named.
+		WithScanner(scanner.NewActiveScanner(store, logger).
+			WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+			WithScope(scope).
+			WithAuditConfig(auditConfig)).
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
@@ -259,6 +279,43 @@ func main() {
 	if err := store.Sync(); err != nil {
 		logger.Error("Failed to seal capture", zap.Error(err))
 	}
+}
+
+// resolveScanConfig turns -scan-config into the AuditConfig every audit this process runs defaults to.
+//
+// Three answers, kept apart: an empty flag is the shipped default; "list" prints the available names and
+// exits 0, because a name containing spaces and hyphens is not guessable and an operator should not have
+// to read the source to find one; anything else must resolve, and a name that does not is fatal rather
+// than a warning that starts the process under a configuration the operator did not ask for.
+func resolveScanConfig(name string) (scanner.AuditConfig, error) {
+	base := scanner.DefaultAuditConfig()
+	switch name {
+	case "":
+		return base, nil
+	case "list":
+		fmt.Println("built-in scan configurations (-scan-config NAME):")
+		for _, c := range scanner.BuiltInConfigs {
+			fmt.Printf("  %s\n", c.Name)
+			for _, k := range c.Keys() {
+				if k.Set {
+					fmt.Printf("      %-42s = %-5d  %s\n", k.Name, k.Value, k.What)
+				} else {
+					fmt.Printf("      %-42s   unset  (inherits the default)\n", k.Name)
+				}
+			}
+		}
+		fmt.Printf("\n%d of the %d configurations Burp ships set a key this engine implements; the rest\n"+
+			"configure crawling, insertion points, parameter relocation and JavaScript analysis, which\n"+
+			"this engine does not have, and are omitted rather than offered as knobs that do nothing.\n",
+			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount)
+		os.Exit(0)
+	}
+	preset, ok := scanner.BuiltInConfigByName(name)
+	if !ok {
+		return base, fmt.Errorf("no built-in scan configuration is named %q; run -scan-config list to see the %d available",
+			name, len(scanner.BuiltInConfigs))
+	}
+	return preset.Apply(base), nil
 }
 
 // readCACert reads the CA certificate the proxy signs with, for the web server to serve at /ca.crt.

@@ -81,10 +81,19 @@ var exchangeFieldRules = map[string]fieldRule{
 	// message the row points at.
 	"ResponseLen": rulePopulated,
 	"StartedMs":   rulePopulated,
-	// Not checked for presence, and the reason is worth stating rather than leaving as an omission: this
-	// is a whole-millisecond count, and an exchange with a loopback origin finishes inside one. Zero is
-	// then the honest value, so asserting non-zero here would be asserting that the test machine is slow.
-	"DurationMs": ruleMayDiffer,
+	// The two legs time different work — a relayed exchange and a crawler fetch — so their durations are
+	// not comparable and no rule here can say anything about the *value*. What must hold for both is that
+	// they measured at all, and that is asserted explicitly per leg below rather than through
+	// rulePopulated.
+	//
+	// Deliberately not rulePopulated, even though it would now pass: that rule fails a field on IsZero,
+	// and reading "the duration is non-zero" as "the exchange was timed" is the exact conflation that made
+	// this field a false failure earlier today. A sub-millisecond loopback exchange legitimately rounded to
+	// 0 and *both* sides "failed" identically, which was the tell that the assertion was wrong rather than
+	// two producers being broken. core.ExchangeDuration.Measured is now the thing that is actually being
+	// claimed, so the test claims it by name — and it stays true on a fast machine, with no sleep anywhere
+	// to clear a threshold.
+	"Duration": ruleMayDiffer,
 	// Source is the one field that must differ: it names which surface produced the row, and that is
 	// the point of it. Everything else being equal is what makes it useful.
 	"Source":   ruleMayDiffer,
@@ -170,6 +179,20 @@ func TestTheProxyAndTheCrawlerRecordTheSameShapeOfExchange(t *testing.T) {
 		}
 		if leg.ex.Source != core.SourceProxy && leg.ex.Source != core.SourceCrawl {
 			t.Errorf("%s: the row is unattributed, so history cannot say which surface produced it", leg.name)
+		}
+		// Both producers must *time* their exchange. Only the flag is asserted, deliberately: against a
+		// loopback origin the elapsed time is often under a millisecond and can be under a microsecond, so
+		// any assertion about the magnitude would be an assertion about the machine — which is how this
+		// field became a false failure before core.ExchangeDuration existed.
+		if !leg.ex.Duration.Measured {
+			t.Errorf("%s: the row carries no measurement, so history cannot tell a fast exchange from an "+
+				"untimed one for this producer", leg.name)
+		}
+		// And the honest converse, stated so a future reader does not "fix" the check above by requiring a
+		// non-zero value: a measured zero is a legitimate row, not a missing measurement.
+		if leg.ex.Duration.Measured && leg.ex.Duration.Us == 0 {
+			t.Logf("%s: measured 0µs — a legitimate value on a fast loopback, and distinguishable from "+
+				"unmeasured only because Measured is carried separately", leg.name)
 		}
 		// The row describes the bytes it points at. This is what the plain-HTTP proxy path got wrong: it
 		// stored one version of the response and then described it with another's status and length.

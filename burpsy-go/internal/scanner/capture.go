@@ -87,6 +87,10 @@ type CapturedExchange struct {
 	Request  []byte
 	// Started is when the request went out and Duration how long the exchange took; both are
 	// carried rather than measured here, because Record runs after the fact.
+	//
+	// A Duration of exactly zero is taken to mean "this producer did not time the exchange" and is
+	// recorded as core.UnmeasuredDuration — see the duration method for why that reading is safe at
+	// microsecond resolution and was not at millisecond resolution.
 	Started  time.Time
 	Duration time.Duration
 	// Protocol is which protocol carried the exchange. The zero value is core.ProtocolHTTP1.
@@ -192,7 +196,7 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		TLS:         x.TLS,
 		Method:      x.Method,
 		Path:        x.Path,
-		DurationMs:  uint64(x.Duration.Milliseconds()),
+		Duration:    x.duration(),
 		StartedMs:   uint64(x.Started.UnixMilli()),
 		Protocol:    x.Protocol,
 		ResponseLen: len(x.Response),
@@ -205,6 +209,24 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 	c.Store.AddExchange(ex)
 	c.ScanExchange(ex)
 	return ex, nil
+}
+
+// duration reads CapturedExchange.Duration as a measurement or as the absence of one.
+//
+// Zero means unmeasured, and that reading is sound precisely because core.ExchangeDuration counts
+// microseconds. A real exchange — a socket write, a wait, a read — cannot complete in zero microseconds
+// on a monotonic clock, so an exact zero is a producer that never set the field. At millisecond
+// resolution the same rule would have been wrong for every loopback fetch, which is the whole reason
+// the underlying representation changed rather than just its accessors.
+//
+// A producer that measures and legitimately wants to record "under a microsecond" gets
+// core.MeasuredDuration on the exchange it builds itself; this seam's contract is the zero rule, stated
+// on the field.
+func (x CapturedExchange) duration() core.ExchangeDuration {
+	if x.Duration == 0 {
+		return core.UnmeasuredDuration()
+	}
+	return core.MeasuredDuration(x.Duration)
 }
 
 // sourceOf picks the attribution for one row: what the exchange named, else what the handle defaults

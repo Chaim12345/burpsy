@@ -25,6 +25,13 @@ type AuthorisedResult struct {
 	Raw      []byte
 	Duration time.Duration
 	Status   *int
+	// Outcome is which protocol carried the send, and why it was not HTTP/2 when it was not.
+	//
+	// Carried on the result rather than left to Sender.Protocols, because a caller that ran one payload
+	// needs to know what that payload travelled over — an intruder run whose findings are all "no
+	// difference" reads very differently once you know every request went out as HTTP/1.1 at an h2 front
+	// end. See protocol.go.
+	Outcome SendOutcome
 }
 
 // AuthorisedSender is a sender bound to one named target whose scope is checked against the
@@ -64,12 +71,23 @@ func NewAuthorisedSender(scope ScopeChecker, net *Sender, host string, port uint
 // request that fails to send at the transport is neither sent nor refused, and is reported by the
 // caller.
 func (a *AuthorisedSender) Send(ctx context.Context, raw []byte) (AuthorisedResult, error) {
+	return a.SendAs(ctx, raw, ProtocolPreferenceAuto)
+}
+
+// SendAs is Send with the protocol choice made explicit, for a caller that needs the bytes on the wire to
+// be exactly the bytes it wrote.
+//
+// A preference is not a scope waiver and cannot become one: the same AuthoriseRaw gate runs on the same
+// bytes, bound to the same authority, and the only thing pref changes is whether those bytes may be
+// re-expressed as h2 first. ProtocolPreferenceHTTP1 is still reported as a downgrade, so pinning shows up
+// in the coverage report rather than being knowable only to whoever passed the flag.
+func (a *AuthorisedSender) SendAs(ctx context.Context, raw []byte, pref ProtocolPreference) (AuthorisedResult, error) {
 	if err := a.scope.AuthoriseRaw(a.host, a.port, a.tls, raw); err != nil {
 		a.refused.Add(1)
 		return AuthorisedResult{}, err
 	}
 	start := time.Now()
-	resp, err := a.net.SendRaw(ctx, a.host, a.port, a.tls, raw)
+	resp, outcome, err := a.net.SendRawOutcome(ctx, a.host, a.port, a.tls, raw, pref)
 	if err != nil {
 		return AuthorisedResult{}, err
 	}
@@ -78,6 +96,7 @@ func (a *AuthorisedSender) Send(ctx context.Context, raw []byte) (AuthorisedResu
 		Raw:      resp,
 		Duration: time.Since(start),
 		Status:   httputil.ResponseStatus(resp),
+		Outcome:  outcome,
 	}, nil
 }
 

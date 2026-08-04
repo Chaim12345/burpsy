@@ -13,6 +13,23 @@ import (
 // ExchangeView is the wire shape every exchange-facing endpoint serves. It mirrors the
 // `Exchange` interface in the UI's types.ts: ids into the message store rather than payloads,
 // `null` (never `0`) for an absent response or status, and a protocol token the UI switches on.
+//
+// # duration_ms is deliberately unchanged, and what that costs
+//
+// core.Exchange stopped holding a millisecond count (see core.ExchangeDuration) and this field did not
+// change with it: it is still a number, derived from the finer internal representation, so every existing
+// consumer reads exactly what it read before and no UI change is needed.
+//
+// The cost is real and is stated rather than left to be discovered. duration_ms cannot express the
+// distinction the internal type exists for — a measured sub-millisecond exchange and an exchange nobody
+// timed both render as 0 — so a row showing "0 ms" means "under a millisecond, or never measured". The
+// distinction is available everywhere else: in the store, in the database (exchanges.duration_us, NULL
+// when unmeasured), and to any Go caller through core.Exchange.Duration.Measured.
+//
+// Closing it on the wire is one additive field: `DurationUs *uint64` with `json:"duration_us"`, nil when
+// unmeasured, plus `duration_us: number | null` on the UI's Exchange interface and a render that shows
+// "<1 ms" for a measured zero and an em dash for null. Deliberately not done here — internal/web/ui/ is
+// owned elsewhere, and a JSON field no consumer reads is a shape change bought for nothing.
 type ExchangeView struct {
 	ID          uint64  `json:"id"`
 	Request     uint64  `json:"request"`
@@ -81,10 +98,12 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		Status:      ex.Status,
 		ResponseLen: ex.ResponseLen,
 		StartedMs:   ex.StartedMs,
-		DurationMs:  ex.DurationMs,
-		Notes:       ex.Notes,
-		Related:     []any{},
-		Protocol:    protocolToken(ex.Protocol),
+		// Millis, not the raw microseconds: this field's JSON shape predates core.ExchangeDuration and
+		// stays exactly as it was. See the note under ExchangeView for what that cannot express.
+		DurationMs: ex.Duration.Millis(),
+		Notes:      ex.Notes,
+		Related:    []any{},
+		Protocol:   protocolToken(ex.Protocol),
 	}
 }
 

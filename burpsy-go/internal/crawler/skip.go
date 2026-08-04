@@ -119,6 +119,16 @@ const (
 	SkipFrontierFull
 	// SkipLinksPerPage means the page carried more links than the per-page bound admits.
 	SkipLinksPerPage
+	// SkipFingerprintBudget means the URL had never been seen and was refused anyway, because one of the
+	// two tables the crawl remembers request identity in — the exact-request fingerprint set or the
+	// URL-template table — was at MaxFingerprints. The record's Detail names which table.
+	//
+	// Its own reason rather than SkipFrontierFull, which is the bound it would otherwise be laundered
+	// through: "the queue was full" and "I have run out of room to remember what I have already sent" are
+	// different problems with different fixes, and the second is the one whose failure mode is a
+	// re-crawl. See StopFingerprintBudget for why the alternative — evicting a fingerprint to make room —
+	// is the less honest direction.
+	SkipFingerprintBudget
 
 	// ---- response handling: fetched, but nothing further came of it ----
 
@@ -154,7 +164,7 @@ const (
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [26]Skip{
+var SkipAll = [27]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -175,6 +185,7 @@ var SkipAll = [26]Skip{
 	SkipDepthLimit,
 	SkipFrontierFull,
 	SkipLinksPerPage,
+	SkipFingerprintBudget,
 	SkipNotHTML,
 	SkipContentEncoded,
 	SkipSendFailed,
@@ -228,18 +239,20 @@ func (s Skip) slot() int {
 		return 18
 	case SkipLinksPerPage:
 		return 19
-	case SkipNotHTML:
+	case SkipFingerprintBudget:
 		return 20
-	case SkipContentEncoded:
+	case SkipNotHTML:
 		return 21
-	case SkipSendFailed:
+	case SkipContentEncoded:
 		return 22
-	case SkipResponseUnreadable:
+	case SkipSendFailed:
 		return 23
-	case SkipResponseTooLarge:
+	case SkipResponseUnreadable:
 		return 24
-	case SkipRetentionExcluded:
+	case SkipResponseTooLarge:
 		return 25
+	case SkipRetentionExcluded:
+		return 26
 	}
 	panic("unknown Skip")
 }
@@ -287,6 +300,8 @@ func (s Skip) String() string {
 		return "frontier-full"
 	case SkipLinksPerPage:
 		return "links-per-page"
+	case SkipFingerprintBudget:
+		return "fingerprint-budget"
 	case SkipNotHTML:
 		return "not-html"
 	case SkipContentEncoded:
@@ -346,6 +361,8 @@ func (s Skip) Explanation() string {
 		return "the frontier was at its capacity bound and the link was dropped"
 	case SkipLinksPerPage:
 		return "the page carried more links than the per-page bound admits"
+	case SkipFingerprintBudget:
+		return "a request-identity table was full, so this URL could not be remembered and was not queued"
 	case SkipNotHTML:
 		return "the response was fetched and scanned but is not HTML, so no links were extracted"
 	case SkipContentEncoded:
@@ -431,7 +448,7 @@ func (s Skip) Category() SkipCategory {
 		return CategoryPolicy
 	case SkipAlreadyQueued, SkipDuplicateLocation:
 		return CategoryDuplicate
-	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota:
+	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget:
 		return CategoryLimit
 	case SkipNotHTML, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded:
@@ -570,7 +587,7 @@ func (r SkipReport) Summary() string {
 // would be a data race whether or not it produced a wrong number.
 type skipLedger struct {
 	mu         sync.Mutex
-	counts     [26]uint64
+	counts     [27]uint64
 	records    []SkipRecord
 	dropped    int
 	maxRecords int

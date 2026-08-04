@@ -102,7 +102,19 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		logger:   logger,
 		findings: core.NewFindingStore(),
 		sess:     session.NewCoordinator(logger),
-		intruder: intruder.NewIntruder(logger),
+		// WithSend, because the engine has no other way out and refuses to send without one. It used
+		// to dial targets itself with no scope check at all, which made `intruder run` the one CLI
+		// surface that ignored -scope-include entirely. A fresh AuthorisedSender per request rather
+		// than one per run: a payload spliced into a path position rewrites the request line, so the
+		// authority has to be re-judged against the bytes each time.
+		intruder: intruder.NewIntruder(logger).WithSend(
+			func(c context.Context, host string, port uint16, tls bool, raw []byte) ([]byte, error) {
+				sent, err := sender.NewAuthorisedSender(scope, sender.NewSender(senderCfg), host, port, tls).Send(c, raw)
+				if err != nil {
+					return nil, err
+				}
+				return sent.Raw, nil
+			}),
 		// WithScope, so the audit engine refuses an out-of-scope exchange before it plans any work
 		// and refuses any probe whose own URL leaves the engagement.
 		scanner: scanner.NewActiveScanner(store, logger).

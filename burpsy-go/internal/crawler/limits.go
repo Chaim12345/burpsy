@@ -19,9 +19,10 @@
 //
 // The second half of CRAWL-07 is "what it did not reach", which a stop reason alone does not
 // answer: "the request budget ran out" says nothing about whether four URLs or four thousand were
-// left in the queue. So the report also carries the five ways a discovered URL can go unfetched —
-// still queued, dropped at the frontier bound, past the depth limit, past the per-page link bound, or
-// past a template quota — counted separately and summed by Unfetched.
+// left in the queue. So the report also carries the six ways a discovered URL can go unfetched —
+// still queued, dropped at the frontier bound, past the depth limit, past the per-page link bound,
+// past a template quota, or refused because a request-identity table was full — counted separately
+// and summed by Unfetched.
 //
 // # What a limited crawl must never be renderable as
 //
@@ -75,6 +76,30 @@ type Limits struct {
 	// have half a megabyte of it analysed is a resource failure disguised as thoroughness. The hole is
 	// counted (SkipResponseTooLarge) rather than left to be inferred.
 	MaxCaptureBytes int
+	// MaxFingerprints caps each of the two tables the crawl uses to remember request identity: the
+	// exact-request fingerprint set (which answers "have I sent this already") and the URL-template
+	// table (which holds the per-template quota's counts). Both are in RAM for the whole crawl.
+	//
+	// # Why this bound has to exist at all
+	//
+	// Phase 1's premise is that the *store* is bounded by disk rather than by RAM, and an unbounded
+	// in-process map is against that grain. Neither table had a bound of its own:
+	//
+	//   - the fingerprint set was bounded only *derivatively*, at MaxFrontier + MaxRequests, since an
+	//     entry is added exactly when an item is queued. A derivative bound is not a stated one: nothing
+	//     reported the set's size, and raising either of those two limits raised this one silently.
+	//   - the template table was not bounded at all. An entry is created before the frontier-capacity
+	//     check, so every link dropped at a full frontier still adds one for a template not seen before,
+	//     and an application that mints path shapes (rather than ids inside a known shape) grows it
+	//     without limit for a crawl that is fetching nothing new.
+	//
+	// # Why the same number bounds both
+	//
+	// They grow together — one entry each per newly-admitted request shape — so bounding one while the
+	// other ran free would bound nothing. One named limit and one stop reason keeps the report readable;
+	// the stop's Detail names *which* table filled, and LimitReport.Fingerprints and .Templates report
+	// both sizes on every crawl whether or not the bound was reached.
+	MaxFingerprints int
 }
 
 // DefaultLimits is the bound used when a caller does not supply one.
@@ -102,6 +127,13 @@ func DefaultLimits() Limits {
 		// 8 MiB covers any page, any script bundle and most documents. httputil already refuses to
 		// read past 64 MiB, so this is the narrower, crawl-specific bound between the two.
 		MaxCaptureBytes: 8 * 1024 * 1024,
+		// A fingerprint is a normalised method+URL and a template is a URL with its ids replaced, so an
+		// entry costs on the order of a hundred bytes plus map overhead: 50 000 of each is single-digit
+		// megabytes per table. With the default request and frontier bounds the fingerprint set cannot
+		// reach 5 500 entries, so this never fires on a default crawl — which is the point. It is the
+		// stated ceiling for the crawl whose other bounds were raised, and for the template table, which
+		// grows even while the crawl fetches nothing new.
+		MaxFingerprints: 50_000,
 	}
 }
 
@@ -133,6 +165,9 @@ func (l Limits) normalise() Limits {
 	}
 	if l.MaxCaptureBytes <= 0 {
 		l.MaxCaptureBytes = d.MaxCaptureBytes
+	}
+	if l.MaxFingerprints <= 0 {
+		l.MaxFingerprints = d.MaxFingerprints
 	}
 	return l
 }
@@ -170,10 +205,32 @@ const (
 	// StopCaptureBytes means at least one response was larger than the capture bound, so it was
 	// neither stored nor scanned.
 	StopCaptureBytes
+	// StopFingerprintBudget means one of the two request-identity tables reached MaxFingerprints, so
+	// URLs the crawl had never seen were refused admission rather than remembered.
+	//
+	// # Why refusing admission, and not evicting
+	//
+	// The alternative was to keep admitting URLs and evict old fingerprints, on the reasoning that a
+	// dropped fingerprint costs at most a re-fetch of a page already seen, where a dropped frontier entry
+	// costs a page never visited. The re-fetch cost is bounded — MaxRequests still bounds total fetches —
+	// but that argument understates what eviction actually does here:
+	//
+	//   - The frontier is FIFO and bounded. Re-admitted duplicates *displace* genuine unvisited work at
+	//     MaxFrontier, so the coverage loss does not stay a re-fetch; it becomes unvisited pages
+	//     attributed to StopFrontierCapacity. That is precisely the laundering SkipTemplateQuota exists to
+	//     prevent: a true statement about the wrong bound.
+	//   - The loss is unmeasurable. Nothing can say which pages went unvisited because the budget went on
+	//     repeats, so the report would carry a smaller Unfetched than the truth.
+	//
+	// Refusing admission fails visibly instead: one counted decline per URL (SkipFingerprintBudget, with
+	// the URL in the skip sample), one stop, and LimitReport.FingerprintDropped folded into Unfetched, so
+	// Complete() is false and Caveat names it. The residual cost is stated rather than hidden: a crawl
+	// that reaches this keeps fetching what is already queued and stops discovering, and it says so.
+	StopFingerprintBudget
 )
 
 // CrawlStopAll is every stop, so a caller can render a legend without hard-coding the set.
-var CrawlStopAll = [10]CrawlStop{
+var CrawlStopAll = [11]CrawlStop{
 	StopRequestBudget,
 	StopDuration,
 	StopLocationBudget,
@@ -184,6 +241,7 @@ var CrawlStopAll = [10]CrawlStop{
 	StopCancelled,
 	StopTemplateQuota,
 	StopCaptureBytes,
+	StopFingerprintBudget,
 }
 
 func (s CrawlStop) String() string {
@@ -208,6 +266,8 @@ func (s CrawlStop) String() string {
 		return "template-quota"
 	case StopCaptureBytes:
 		return "capture-bytes"
+	case StopFingerprintBudget:
+		return "fingerprint-budget"
 	}
 	return "unknown"
 }
@@ -235,6 +295,8 @@ func (s CrawlStop) Explanation() string {
 		return "a URL template was sampled to its quota; the application has more URLs of that shape than were fetched"
 	case StopCaptureBytes:
 		return "a response was larger than the capture bound, so it was neither stored nor scanned"
+	case StopFingerprintBudget:
+		return "a request-identity table reached its bound, so URLs the crawl had never seen were refused rather than remembered; the application is larger than this crawl can keep track of"
 	}
 	return "unknown stop"
 }
@@ -254,7 +316,7 @@ type LimitReport struct {
 	// never stop early without recording one.
 	Stops []CrawlStop `json:"stops,omitempty"`
 
-	// The five ways a discovered URL goes unfetched. Kept apart rather than summed into one field,
+	// The six ways a discovered URL goes unfetched. Kept apart rather than summed into one field,
 	// because they call for different responses: a large FrontierRemaining means raise the request
 	// budget, a large DepthDeferred means raise the depth, and a large FrontierDropped means the
 	// frontier bound is the thing in the way.
@@ -270,9 +332,21 @@ type LimitReport struct {
 	LinksDropped int `json:"links_dropped"`
 	// TemplateQuotaDropped counts URLs not queued because their template was already at quota.
 	TemplateQuotaDropped int `json:"template_quota_dropped"`
+	// FingerprintDropped counts URLs the crawl had never seen and refused to admit because a
+	// request-identity table was at MaxFingerprints. See StopFingerprintBudget for why these are refused
+	// rather than made room for by eviction.
+	FingerprintDropped int `json:"fingerprint_dropped"`
 	// Templates counts distinct URL templates seen, so an operator can read the ratio of templates to
 	// requests and tell a wide application from a deep one.
 	Templates int `json:"templates"`
+	// Fingerprints counts entries in the exact-request fingerprint set — every distinct request the crawl
+	// queued and therefore has to remember for the rest of the run.
+	//
+	// Reported on every crawl, not only when the bound was reached. Both this and Templates are the sizes
+	// of tables that live in RAM for the whole crawl, and a bound whose consumption is invisible until it
+	// fires is a bound nobody can plan around: an operator raising MaxRequests or MaxFrontier is raising
+	// what these two cost, and this is where they can see by how much.
+	Fingerprints int `json:"fingerprints"`
 }
 
 // Truncated reports whether any bound was hit. Derived from Stops, never stored — see the package
@@ -297,7 +371,8 @@ func (r LimitReport) Hit(stop CrawlStop) bool {
 // this should say "at least", and Caveat does. It also excludes responses dropped at the capture bound
 // — those were fetched, so they are not unfetched; Report.NotCaptured counts them.
 func (r LimitReport) Unfetched() int {
-	return r.FrontierRemaining + r.FrontierDropped + r.DepthDeferred + r.LinksDropped + r.TemplateQuotaDropped
+	return r.FrontierRemaining + r.FrontierDropped + r.DepthDeferred + r.LinksDropped +
+		r.TemplateQuotaDropped + r.FingerprintDropped
 }
 
 // record adds a stop, at most once each. Order of first occurrence is preserved, so the list reads
@@ -322,13 +397,14 @@ func (r LimitReport) Caveat() string {
 		reasons = append(reasons, s.Explanation())
 	}
 	return fmt.Sprintf(
-		"this crawl is incomplete: at least %d discovered URLs went unfetched (%d still queued, %d dropped at the frontier bound, %d past the depth limit, %d past the per-page link bound, %d past a template quota) — %s",
+		"this crawl is incomplete: at least %d discovered URLs went unfetched (%d still queued, %d dropped at the frontier bound, %d past the depth limit, %d past the per-page link bound, %d past a template quota, %d refused with the identity tables full) — %s",
 		r.Unfetched(),
 		r.FrontierRemaining,
 		r.FrontierDropped,
 		r.DepthDeferred,
 		r.LinksDropped,
 		r.TemplateQuotaDropped,
+		r.FingerprintDropped,
 		strings.Join(reasons, "; "),
 	)
 }

@@ -2,16 +2,13 @@ package intruder
 
 import (
 	"context"
-	"crypto/tls"
+	"errors"
 	"fmt"
-	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/burpsy-go/burpsy/internal/httputil"
 	"go.uber.org/zap"
 )
 
@@ -73,6 +70,30 @@ type Intruder struct {
 	// an attack without depending on the caller to cancel the context it
 	// passed in. Guarded by progressMu (set/cleared alongside the Status).
 	runCancel context.CancelFunc
+	// send is the only way out of this engine. Nil means the engine cannot send at all — see
+	// sendAttack for why that is a refusal rather than a fallback to dialling directly.
+	send AttackSendFunc
+}
+
+// AttackSendFunc puts one spliced attack request on the wire and returns the raw response.
+//
+// The seam exists so this package never learns about scope: the caller supplies a function closed
+// over a sender.AuthorisedSender bound to the target's own authority, and the scope decision happens
+// there, on the bytes, before the dial. A payload spliced into a path position rewrites the request
+// line, so authorising the named target once at the start of a run would be checking something other
+// than what goes out.
+type AttackSendFunc func(ctx context.Context, host string, port uint16, tls bool, raw []byte) ([]byte, error)
+
+// errNoAuthorisedSender is returned for every attempt when no send function was supplied. A named
+// error so a caller can tell "this engine was never wired" from a transport failure against a host.
+var errNoAuthorisedSender = errors.New(
+	"intruder: no authorised sender was supplied, so nothing can be sent; " +
+		"wire one with WithSend so the engagement scope decides about each request")
+
+// WithSend supplies the authorised egress path. An engine without one refuses to send.
+func (i *Intruder) WithSend(fn AttackSendFunc) *Intruder {
+	i.send = fn
+	return i
 }
 
 // NewIntruder creates a new intruder instance.
@@ -221,66 +242,31 @@ func (i *Intruder) injectPayload(baseRequest string, positions []int, payload st
 	return result
 }
 
-// sendAttack sends a single attack request.
+// sendAttack sends a single attack request through the injected authorised sender.
+//
+// It used to dial the target itself — tls.DialWithDialer with InsecureSkipVerify, or a bare
+// net.DialTimeout — so it never entered internal/sender and no scope check of any kind ran on the
+// bytes it put on the wire. `burpsy -scope-include app.example.com intruder run -target
+// internal-admin.corp:8080 ...` delivered the whole attack volume to a host the operator's own scope
+// excluded, with TLS unverified, and reported it as an ordinary attack. HARD-03 names every
+// request-originating surface; this was one, and it was the last unguarded one.
+//
+// The send is injected rather than constructed here so this package keeps knowing nothing about
+// scope — the same trait-seam shape session.MacroStepRunner uses. The gate lives at the call site,
+// which is where the engagement scope is known. TLS verification now comes from the shared sender's
+// config instead of being hardcoded off.
 func (i *Intruder) sendAttack(ctx context.Context, request string, host string, port uint16, useTLS bool) *AttackResult {
 	startTime := time.Now()
 	result := &AttackResult{}
 
-	// Connect to target
-	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	var conn net.Conn
-	var err error
-	if useTLS {
-		dialer := &net.Dialer{Timeout: i.config.Timeout}
-		conn, err = tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{
-			ServerName:         host,
-			InsecureSkipVerify: true, // proxy-style scanning of arbitrary targets
-		})
-	} else {
-		conn, err = net.DialTimeout("tcp", addr, i.config.Timeout)
-	}
-	if err != nil {
-		result.Error = err
+	if i.send == nil {
+		// Fail closed. An attack engine with no authorised way out must refuse rather than fall back
+		// to dialling directly, which is precisely the defect this replaced.
+		result.Error = errNoAuthorisedSender
 		result.Time = time.Since(startTime)
 		return result
 	}
-	defer conn.Close()
-
-	// If the caller's context already carries a deadline, honour it; otherwise
-	// fall back to the configured per-request timeout.
-	deadline := time.Now().Add(i.config.Timeout)
-	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
-		deadline = dl
-	}
-	if err := conn.SetDeadline(deadline); err != nil {
-		result.Error = fmt.Errorf("set deadline: %w", err)
-		result.Time = time.Since(startTime)
-		return result
-	}
-
-	// Close the conn when ctx is cancelled, so a blocked Read/Write unblocks
-	// instead of waiting out the whole deadline. sendAttack previously ignored
-	// ctx entirely, so a Stop()/timeout could not interrupt an in-flight read.
-	stop := make(chan struct{})
-	defer close(stop)
-	go func() {
-		select {
-		case <-ctx.Done():
-			conn.Close()
-		case <-stop:
-		}
-	}()
-
-	// Send request
-	_, err = conn.Write([]byte(request))
-	if err != nil {
-		result.Error = err
-		result.Time = time.Since(startTime)
-		return result
-	}
-
-	// Read response
-	resp, err := httputil.ReadHTTPResponse(conn)
+	resp, err := i.send(ctx, host, port, useTLS, []byte(request))
 	if err != nil {
 		result.Error = err
 		result.Time = time.Since(startTime)

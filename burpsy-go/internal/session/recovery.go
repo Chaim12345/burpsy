@@ -243,8 +243,15 @@ func (c *Coordinator) runMacroOnce(rule *SessionRule, runner MacroStepRunner) (*
 		// Run this step's own extractions against its response so later steps can use the values.
 		if resp.Status >= 200 && resp.Status < 400 {
 			for _, ex := range rule.extractionsFor(stepIndex) {
-				if v := ex.Run(resp.Headers, resp.Body); v != "" {
-					values[ex.Name] = v
+				out := ex.RunResult(resp.Headers, resp.Body)
+				c.logExtraction(rule, stepIndex, ex, out)
+				// A value that did not resolve leaves its {{name}} in the step verbatim rather than being
+				// substituted with "", which is the existing behaviour and the more debuggable of the two:
+				// a login that sent a literal "{{csrf}}" says what went wrong in the request itself, where
+				// one that sent an empty parameter looks like the application rejecting a real attempt.
+				// logExtraction is what makes the reason available without reading the wire.
+				if out.Outcome.Resolved() && out.Value != "" {
+					values[ex.Name] = out.Value
 				}
 			}
 		}

@@ -315,6 +315,27 @@ func (s *ActiveScanner) testPathTraversal(ctx context.Context, exchange *core.Ex
 	return false
 }
 
+// noEngagementScope is the gate a scanner built without WithScope uses.
+//
+// It authorises everything, which is what ActiveScanner has always done with a nil scope — see
+// WithScope: nil means "no scope was supplied", not "nothing is in scope". It exists so that the
+// nil case does not get its own egress path. There is exactly one place a probe leaves this
+// process, and it is always through an AuthorisedSender; a second branch calling Sender.Send
+// directly is how a chokepoint stops being unbypassable, which is the whole of HARD-03.
+type noEngagementScope struct{}
+
+func (noEngagementScope) AuthoriseRaw(string, uint16, bool, []byte) error { return nil }
+
+// probeGate binds the engagement scope and this scanner's sender to one exchange's authority, so
+// every probe at it is authorised against the bytes it will actually put on the wire.
+func (s *ActiveScanner) probeGate(exchange *core.Exchange) *sender.AuthorisedSender {
+	var gate sender.ScopeChecker = noEngagementScope{}
+	if s.scope != nil {
+		gate = s.scope
+	}
+	return sender.NewAuthorisedSender(gate, s.sender, exchange.Host, exchange.Port, exchange.TLS)
+}
+
 // sendTestRequest dispatches a crafted test request through the sender when
 // available, otherwise falls back to the stored response body of the original
 // exchange (offline audit).
@@ -324,10 +345,42 @@ func (s *ActiveScanner) testPathTraversal(ctx context.Context, exchange *core.Ex
 //
 //   - It meters the probe. The meter rides on ctx (see meterKey) and is both what the request budget
 //     bounds and what tells a check that ran from a check that never saw its own probe response.
-//   - It authorises the probe's own bytes against the engagement scope. auditItem already tested the
-//     captured exchange, but a check that rewrites the path is sending somewhere else entirely, and
-//     only this URL says where. Putting the test on the send path makes it unbypassable rather than
-//     merely present.
+//   - It authorises the probe against the engagement scope, through the same shared chokepoint every
+//     other request-originating surface uses: sender.AuthorisedSender.SendRequest, which runs
+//     core.Scope.AuthoriseRaw over the rendered request line before the dial.
+//
+// # Why the bytes and not testURL
+//
+// This used to call scope.AuthoriseRequest(host, port, testURL, tls) and then Sender.Send, which
+// authorises nothing. That was a real check, not a bypass, but it was a weaker one and it asked the
+// wrong question. Scope is defined over request *paths* — core.Scope's requestPath drops the query
+// string, exactly as burpsy-core does — and testURL is a path with a query string glued to it. So the
+// string handed to a parameter meaning "path" was one no request line ever carries, and the two
+// checks could disagree in both directions:
+//
+//   - Over-refusal, today's shape. Every check here splices its payload into the query, so an
+//     operator rule written as exclude(host, "/search?") matched the glued string and refused probes
+//     whose request line — GET /search?… — is squarely in scope. No rule of that shape can ever match
+//     a real path, so the refusals were an artefact of the gluing.
+//   - Under-refusal, as soon as a payload reaches a path position. The wire path is not a prefix of
+//     testURL in general: url.Parse plus RequestURI re-encodes bytes a path may not carry literally
+//     and turns an empty path into "/", so an exclude the operator wrote can match the request line
+//     while missing the string this check read. A probe would then leave under a rule that forbids it.
+//
+// AuthoriseRaw closes both because it reads the rendered request line, and sender.Render and
+// sender.Send derive that line and the dialled URL from one parse — so the gate cannot be authorising
+// a target the wire does not carry.
+//
+// # Why Refused() and not the error text
+//
+// SendRequest refuses on scope, on a wrong authority and on a request it cannot even render, and
+// fails separately at the transport. Its refusal counter is the exact discriminator between "nothing
+// left this process" and "the target did not answer", so the meter reads that rather than matching on
+// an error string. One consequence is deliberate: a probe whose testURL will not parse is now a
+// refusal rather than a send failure. Nothing was sent and the target did not misbehave, so counting
+// it against the target — and against the failure breaker that abandons units — would blame the host
+// for our own malformed probe. probeMeter.refusal already also increments the failure count, so the
+// breakers see the same thing either way.
 //
 // A refused probe returns nothing rather than the stored response: the fallback exists so an
 // operator with no sender can still audit captured traffic, not so a check can derive a verdict
@@ -336,21 +389,22 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 	if s.sender != nil {
 		meter := meterFrom(ctx)
 		meter.attempt()
-		if s.scope != nil && !s.scope.AuthoriseRequest(exchange.Host, exchange.Port, testURL, exchange.TLS) {
-			meter.refusal()
-			if s.logger != nil {
-				s.logger.Warn("test request refused: outside the engagement scope",
-					zap.String("host", exchange.Host), zap.String("url", testURL))
-			}
-			return ""
-		}
-		resp, err := s.sender.Send(ctx, &sender.Request{
+		gate := s.probeGate(exchange)
+		resp, err := gate.SendRequest(ctx, &sender.Request{
 			Method: exchange.Method,
 			Host:   exchange.Host,
 			Path:   testURL,
 			TLS:    exchange.TLS,
 			Port:   exchange.Port,
 		})
+		if gate.Refused() > 0 {
+			meter.refusal()
+			if s.logger != nil {
+				s.logger.Warn("test request refused: outside the engagement scope",
+					zap.String("host", exchange.Host), zap.String("url", testURL), zap.Error(err))
+			}
+			return ""
+		}
 		if err == nil && resp != nil {
 			meter.succeeded()
 			return string(resp.Body)

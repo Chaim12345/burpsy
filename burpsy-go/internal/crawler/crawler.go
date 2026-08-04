@@ -315,6 +315,11 @@ type Report struct {
 	// them, the target asked for them not to be visited, and that request was deliberately not
 	// honoured. An operator reviewing a crawl should be able to see how much of it came from there.
 	RobotsPathsFound int `json:"robots_paths_found"`
+	// HeadersWithheld counts requests sent without Config.Headers because their origin was not one the
+	// operator seeded. Non-zero means the crawl left the origins it was given credentials for, so any
+	// "nothing found" beyond that point is unauthenticated coverage rather than a clean result — which
+	// is exactly the distinction that would otherwise be invisible.
+	HeadersWithheld int `json:"headers_withheld"`
 	// LinksFound and FormsFound count what was discovered in responses, before any gate.
 	// FormsSubmitted counts forms actually sent — zero unless FormSubmission is on.
 	LinksFound     int `json:"links_found"`
@@ -417,10 +422,38 @@ type Crawler struct {
 	// away — they are the crawler's cross-check that its own Refused count matches the chokepoint's.
 	senders map[string]*sender.AuthorisedSender
 
-	frontier  []frontierItem
+	// credentialOrigins are the origins Config.Headers may be sent to: the seeds' own origins, and
+	// nothing else. Keyed by originKey, so scheme, host and port all have to match.
+	//
+	// This exists because Config.Headers is where an operator puts a session cookie, and buildRequest
+	// used to write them onto *every* request it built. Frontier items are not all operator-chosen:
+	// they come from links in target-supplied markup, from Location headers on redirects, and from
+	// robots.txt. So a page under an in-scope wildcard could name any sibling host — or the same host
+	// over plain http — and the crawler would hand over the operator's session cookie, in cleartext in
+	// the http case. Scope is not a defence here: a wildcard include, or an empty-but-non-nil Scope
+	// (which default-allows), both authorise the request, and authorising a request is not the same
+	// question as whether it should carry credentials.
+	//
+	// Seeds are the right boundary because they are the one set of origins the operator named
+	// themselves. Everything else in the frontier is, ultimately, target-controlled.
+	credentialOrigins map[string]bool
+	// headersWithheld counts requests that did not carry Config.Headers because their origin was not a
+	// seed origin. Counted rather than silent: a crawl that reached an authenticated area and then
+	// quietly stopped authenticating would otherwise look like a crawl that found nothing there.
+	headersWithheld int
+
+	frontier []frontierItem
+	// queued holds one exact-request fingerprint per request ever queued, which is what makes
+	// SkipAlreadyQueued possible: an entry stays after the item leaves the frontier, because the question
+	// it answers is "have I already sent this", not "is this waiting". It is therefore the one structure
+	// that grows for the whole crawl and never shrinks, and it is bounded by Limits.MaxFingerprints —
+	// stated rather than left at the MaxFrontier + MaxRequests it worked out to before, since a
+	// derivative bound moves whenever either of those does and nothing reported it.
 	queued    map[string]bool
 	locations map[string]string
-	// templates counts fetches admitted per URL template, for the quota.
+	// templates counts fetches admitted per URL template, for the quota. Bounded by
+	// Limits.MaxFingerprints as well: an entry is created for every template not seen before, including
+	// for links dropped at a full frontier, so this one grows even while the crawl fetches nothing new.
 	templates map[string]int
 	// robotsSeeded records the authorities whose robots.txt has already been read, so it is read once
 	// per authority and never in a loop.
@@ -460,7 +493,7 @@ func New(cfg Config) (*Crawler, error) {
 			return nil, fmt.Errorf("seed %q has no host", s)
 		}
 		if u.User != nil {
-			return nil, fmt.Errorf("seed %q embeds credentials in the URL; put them in Config.Headers instead, where they are not also sent to whatever the target redirects to", s)
+			return nil, fmt.Errorf("seed %q embeds credentials in the URL; put them in Config.Headers instead, which are sent only to the origins you seed and never to a host discovered from the target's own content", s)
 		}
 		u.Fragment = ""
 		u.RawFragment = ""
@@ -526,23 +559,31 @@ func New(cfg Config) (*Crawler, error) {
 		// count the loop would ignore. Burst of 1 is strict spacing, which is what politeness means
 		// for an unattended traversal. No AutoThrottle on the aggregate limiter: a 429 belongs to the
 		// host that sent it, so throttling lives on the per-host limiters instead.
-		limiter:      intruder.NewRateLimiter(&intruder.RateLimit{PerSecond: &rps, Burst: 1, MaxInFlight: 1, Name: "crawl"}),
-		skips:        newSkipLedger(maxRecords),
-		logger:       logger,
-		senders:      make(map[string]*sender.AuthorisedSender),
-		queued:       make(map[string]bool),
-		locations:    make(map[string]string),
-		templates:    make(map[string]int),
-		hostLimiters: make(map[string]*intruder.RateLimiter),
-		robotsSeeded: make(map[string]bool),
-		requestsPer:  rps,
-		retention:    retention,
+		limiter: intruder.NewRateLimiter(&intruder.RateLimit{PerSecond: &rps, Burst: 1, MaxInFlight: 1, Name: "crawl"}),
+		skips:   newSkipLedger(maxRecords),
+		logger:  logger,
+		senders: make(map[string]*sender.AuthorisedSender),
+		// Built from the validated seeds below rather than from cfg.Seeds' raw strings, so the key is
+		// computed from the same parse the requests are.
+		credentialOrigins: make(map[string]bool),
+		queued:            make(map[string]bool),
+		locations:         make(map[string]string),
+		templates:         make(map[string]int),
+		hostLimiters:      make(map[string]*intruder.RateLimiter),
+		robotsSeeded:      make(map[string]bool),
+		requestsPer:       rps,
+		retention:         retention,
 	}
 	// Seeds enter through the same admission gates as any discovered link, minus the destructive
 	// check — see destructive.go for why the operator's own instruction is not second-guessed. They
 	// are recorded on the report's LimitReport through the same counters, so a seed refused by scope
 	// is visible rather than a crawl that mysteriously fetched nothing.
 	c.seedURLs = seeds
+	// Config.Headers travel only to the origins the operator seeded. Recorded here, from the parsed
+	// seeds, so the key is computed by the same function that keys the outgoing request.
+	for _, s := range seeds {
+		c.credentialOrigins[originKey(s)] = true
+	}
 	return c, nil
 }
 
@@ -642,11 +683,15 @@ func (c *Crawler) Run(ctx context.Context) Report {
 
 	lim.FrontierRemaining = len(c.frontier)
 	lim.Templates = len(c.templates)
+	// Reported whether or not the bound was reached: these two tables are what the crawl holds in RAM for
+	// its whole run, and a consumption nobody can see is a bound nobody can plan around.
+	lim.Fingerprints = len(c.queued)
 	lim.Requests = rep.Fetched
 	lim.Locations = len(c.locations)
 	lim.Elapsed = time.Since(started)
 	rep.Elapsed = lim.Elapsed
 	rep.Locations = len(c.locations)
+	rep.HeadersWithheld = c.headersWithheld
 	rep.Limits = lim
 	rep.Skips = c.skips.Snapshot()
 	return rep
@@ -1196,6 +1241,23 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		})
 		return false
 	}
+	// The RAM bound on the two tables that remember request identity, checked here — after the template
+	// quota, so an application with an unbounded id space still reports as a template quota, and *before*
+	// the two inserts below, because a table that cannot record this request cannot dedup it either. See
+	// StopFingerprintBudget for why a full table refuses the URL instead of evicting an old entry to make
+	// room for it, and Limits.MaxFingerprints for why one number bounds both tables.
+	if _, knownTemplate := c.templates[template]; !knownTemplate && len(c.templates) >= c.limits.MaxFingerprints {
+		c.recordFingerprintBudget(item, foundAt, lim, fmt.Sprintf(
+			"the URL-template table is at its bound of %d, so this new template could not be recorded",
+			c.limits.MaxFingerprints))
+		return false
+	}
+	if len(c.queued) >= c.limits.MaxFingerprints {
+		c.recordFingerprintBudget(item, foundAt, lim, fmt.Sprintf(
+			"the request-fingerprint set is at its bound of %d, so this request could not be remembered as sent",
+			c.limits.MaxFingerprints))
+		return false
+	}
 	c.templates[template]++
 	if len(c.frontier) >= c.limits.MaxFrontier {
 		lim.record(StopFrontierCapacity)
@@ -1210,6 +1272,22 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 	c.queued[key] = true
 	c.frontier = append(c.frontier, item)
 	return true
+}
+
+// recordFingerprintBudget records one URL refused because a request-identity table was full: the
+// stop, the unfetched count that feeds LimitReport.Unfetched, and the skip record naming the URL and
+// which table it was.
+//
+// One helper for both tables so the three bookkeeping steps cannot drift apart between them — a
+// refusal that records the skip and forgets the stop would be a URL counted as skipped on a crawl that
+// still claimed to be complete.
+func (c *Crawler) recordFingerprintBudget(item frontierItem, foundAt string, lim *LimitReport, detail string) {
+	lim.record(StopFingerprintBudget)
+	lim.FingerprintDropped++
+	c.skips.record(SkipRecord{
+		Reason: SkipFingerprintBudget, URL: item.url.String(), Method: item.method,
+		Text: item.text, FoundAt: foundAt, Detail: detail,
+	})
 }
 
 // frontierRow is what a crawl-scope query is evaluated against (DSL-03).
@@ -1251,11 +1329,21 @@ func (r fetchedRow) Body() []byte   { return r.body }
 // senderFor returns the AuthorisedSender bound to one origin, building it on first use. The scope
 // handle passed in is the crawl's, so every send this package makes is checked against the same
 // scope by the same chokepoint.
+// originKey identifies one origin: scheme, host and port together.
+//
+// The scheme is part of the identity on purpose. An origin that differs only by scheme is a different
+// origin for credential purposes — sending a cookie issued over https to an http URL on the same host
+// puts it on the wire in cleartext, which is the TLS-downgrade half of the credential leak this key
+// exists to prevent.
+func originKey(u *url.URL) string {
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Hostname()) + ":" + strconv.Itoa(int(portOf(u)))
+}
+
 func (c *Crawler) senderFor(u *url.URL) *sender.AuthorisedSender {
 	tls := strings.EqualFold(u.Scheme, "https")
 	host := u.Hostname()
 	port := portOf(u)
-	key := u.Scheme + "://" + host + ":" + strconv.Itoa(int(port))
+	key := originKey(u)
 	if s, ok := c.senders[key]; ok {
 		return s
 	}
@@ -1328,11 +1416,20 @@ func (c *Crawler) buildRequest(item frontierItem) []byte {
 	b.WriteString("\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	b.WriteString("\r\nAccept-Encoding: identity")
 	b.WriteString("\r\nConnection: close\r\n")
-	for name, value := range c.cfg.Headers {
-		b.WriteString(name)
-		b.WriteString(": ")
-		b.WriteString(value)
-		b.WriteString("\r\n")
+	// Operator headers go only to a seed origin. See Crawler.credentialOrigins for why scope is not
+	// the right gate for this: scope decides whether a request may be sent, which is a different
+	// question from whether it may carry the operator's session.
+	if len(c.cfg.Headers) > 0 {
+		if c.credentialOrigins[originKey(item.url)] {
+			for name, value := range c.cfg.Headers {
+				b.WriteString(name)
+				b.WriteString(": ")
+				b.WriteString(value)
+				b.WriteString("\r\n")
+			}
+		} else {
+			c.headersWithheld++
+		}
 	}
 	if len(item.body) > 0 {
 		b.WriteString("Content-Type: ")

@@ -13,6 +13,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/report"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
@@ -94,7 +95,14 @@ func cmdRepeater(ctx *cliContext, args []string) error {
 	ctxb, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSec)*time.Second)
 	defer cancel()
 	start := time.Now()
-	resp, err := ctx.sender.SendRaw(ctxb, host, port, *tls, reqBytes)
+	// Through the chokepoint, not the raw sender. This used to call ctx.sender.SendRaw directly,
+	// which authorises nothing: `-scope-include app.example.com repeater -target other.host` sent the
+	// request anyway. HARD-03 names every request-originating surface, and the CLI is one — the fact
+	// that cli_session.go already did this correctly is what made the omission here easy to miss.
+	// AuthorisedSender.Send re-authorises the bytes actually going on the wire, so a hand-edited
+	// request line cannot smuggle a different target past a check made on the flag.
+	sent, err := sender.NewAuthorisedSender(ctx.scope, ctx.sender, host, port, *tls).Send(ctxb, reqBytes)
+	resp := sent.Raw
 	if err != nil {
 		ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", 0, 0, err.Error())
 		return err

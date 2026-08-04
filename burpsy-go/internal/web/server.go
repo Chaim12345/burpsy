@@ -313,10 +313,16 @@ func (s *Server) setupRoutes() {
 
 	// Tools
 	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)
+	// Which protocol this tool's own traffic actually used, and a send path for a deliberately malformed
+	// frame program. See api_protocol.go: both are capabilities that existed and had no route to an
+	// operator.
+	s.mux.HandleFunc("/api/protocols", s.handleProtocols)
+	s.mux.HandleFunc("/api/http2/program", s.handleHTTP2Program)
 	s.mux.HandleFunc("/api/intruder/points", s.handleIntruderPoints)
 	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)
 	s.mux.HandleFunc("/api/scanner/live", s.handleScannerLive)
 	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
+	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	s.mux.HandleFunc("/api/audit/", s.handleAuditByPath)
 	s.mux.HandleFunc("/api/sequencer/analyse", s.handleSequencerAnalyse)

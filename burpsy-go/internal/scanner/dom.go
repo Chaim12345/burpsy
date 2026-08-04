@@ -73,6 +73,7 @@ package scanner
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -311,6 +312,34 @@ type DOMScriptSkip struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// unreadScriptReason renders the unread-script half of a Caveat.
+//
+// It names the reasons rather than only counting, because "3 scripts were not read" does not tell an
+// operator whether to care: an external src means the page's logic is elsewhere and this pass could
+// never see it, while a non-executable type means there was nothing to read. Those call for different
+// responses, so the caveat distinguishes them.
+func unreadScriptReason(n int, skipped []DOMScriptSkip) string {
+	seen := make(map[DOMScriptSkipReason]int, 2)
+	for _, sk := range skipped {
+		seen[sk.Reason]++
+	}
+	parts := make([]string, 0, len(seen))
+	for _, r := range []DOMScriptSkipReason{DOMScriptSkipExternalSrc, DOMScriptSkipNonExecutableType} {
+		if c, ok := seen[r]; ok {
+			parts = append(parts, strconv.Itoa(c)+" "+r.Explanation())
+		}
+	}
+	// Any reason added later without being listed above still gets counted rather than vanishing.
+	counted := 0
+	for _, c := range seen {
+		counted += c
+	}
+	if counted < n {
+		parts = append(parts, strconv.Itoa(n-counted)+" for an unnamed reason")
+	}
+	return strconv.Itoa(n) + " script(s) present in this item were not read (" + strings.Join(parts, ", ") + ")"
+}
+
 // DOMFlow is one traced source-to-sink flow that is reported as a finding.
 type DOMFlow struct {
 	// Issue is the full catalogued issue name, base plus variant.
@@ -497,8 +526,14 @@ type DOMAnalysis struct {
 
 // Complete reports whether the pass covered the whole item within its budget. False whenever any
 // bound was hit — see Caveat for the line to print alongside the findings.
+// A script that was present and not read makes the pass incomplete just as surely as a budget stop
+// does. This used to consult only the budget, so a page whose every <script> was external — which is
+// every modern single-page app — analysed zero bytes of JavaScript and reported Complete() == true
+// with an empty Caveat(). That output is byte-identical to "analysed it all, found nothing", which is
+// the one claim this type exists to make impossible. SkippedScripts is the evidence and it was being
+// collected and then ignored.
 func (a DOMAnalysis) Complete() bool {
-	return !a.Budget.Truncated()
+	return !a.Budget.Truncated() && len(a.SkippedScripts) == 0
 }
 
 // Caveat is the line a report must print next to this analysis's findings, or "" when the pass
@@ -511,12 +546,18 @@ func (a DOMAnalysis) Caveat() string {
 	if a.Skip != nil {
 		return "static DOM analysis did not run: " + a.Skip.Explanation()
 	}
-	if !a.Budget.Truncated() {
+	if a.Complete() {
 		return ""
 	}
-	reasons := make([]string, 0, len(a.Budget.Stops))
+	reasons := make([]string, 0, len(a.Budget.Stops)+1)
 	for _, s := range a.Budget.Stops {
 		reasons = append(reasons, s.Explanation())
+	}
+	// Unread scripts are named separately from budget stops because they are a different kind of
+	// incompleteness and call for a different response: a budget stop means "raise the bound", an
+	// unread external script means "this page's logic lives somewhere this pass cannot follow".
+	if n := len(a.SkippedScripts); n > 0 {
+		reasons = append(reasons, unreadScriptReason(n, a.SkippedScripts))
 	}
 	return "static DOM analysis is INCOMPLETE for this item, so these findings are a floor and not a total: " +
 		strings.Join(reasons, "; ")

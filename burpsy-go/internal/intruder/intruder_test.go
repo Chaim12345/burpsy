@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/httputil"
+
 	"go.uber.org/zap"
 )
 
@@ -64,6 +66,65 @@ func TestPayloadGeneratorGenerateFromFile(t *testing.T) {
 
 // TestRunSendsOverPlainHTTP starts a local HTTP server and drives a real
 // intruder attack against it, verifying status parsing and result delivery.
+// testSend is a plain dialling send, used to exercise the engine's own mechanics (splicing,
+// concurrency, cancellation) without involving the scope chokepoint.
+//
+// The engine deliberately has no built-in way out any more: it used to dial targets itself with no
+// scope check, which made `burpsy intruder run` ignore -scope-include entirely. Authorisation is
+// asserted where the gate actually lives — see cmd/burpsy/cli_scope_test.go, which proves an
+// out-of-scope target receives nothing. Here it would only be testing the stub.
+func testSend(t *testing.T) AttackSendFunc {
+	t.Helper()
+	return func(ctx context.Context, host string, port uint16, useTLS bool, raw []byte) ([]byte, error) {
+		d := &net.Dialer{Timeout: 5 * time.Second}
+		conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+		if err != nil {
+			return nil, err
+		}
+		defer conn.Close()
+		if dl, ok := ctx.Deadline(); ok {
+			_ = conn.SetDeadline(dl)
+		} else {
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		}
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			select {
+			case <-ctx.Done():
+				conn.Close()
+			case <-stop:
+			}
+		}()
+		if _, err := conn.Write(raw); err != nil {
+			return nil, err
+		}
+		return httputil.ReadHTTPResponse(conn)
+	}
+}
+
+// The new invariant: an engine with no authorised way out refuses rather than falling back to
+// dialling directly, which is exactly the defect the injected send replaced.
+func TestAnIntruderWithNoAuthorisedSenderRefusesToSend(t *testing.T) {
+	intr := NewIntruder(testLogger())
+	results, err := intr.Run(context.Background(),
+		"GET /?q=\u00a7x\u00a7 HTTP/1.1\r\nHost: h\r\n\r\n",
+		"127.0.0.1", 1, false, []string{"a"}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	n := 0
+	for res := range results {
+		n++
+		if res.Error == nil {
+			t.Error("a payload reported success with no authorised sender wired")
+		}
+	}
+	if n == 0 {
+		t.Fatal("no results at all; the refusal must be reported per payload, not silently dropped")
+	}
+}
+
 func TestRunSendsOverPlainHTTP(t *testing.T) {
 	var mu sync.Mutex
 	received := make([]string, 0)
@@ -90,7 +151,8 @@ func TestRunSendsOverPlainHTTP(t *testing.T) {
 	port := uint16(portU64)
 
 	intr := NewIntruder(testLogger()).
-		WithConfig(&AttackConfig{MaxConcurrency: 4, Timeout: 5 * time.Second})
+		WithConfig(&AttackConfig{MaxConcurrency: 4, Timeout: 5 * time.Second}).
+		WithSend(testSend(t))
 
 	base := "GET /search?q=§test§ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
 	payloads := []string{"one", "two", "three"}
@@ -177,7 +239,7 @@ func TestIntruderStopCancelsRunningAttack(t *testing.T) {
 	}
 	base := "GET / HTTP/1.1\r\nHost: " + host + "\r\n\r\n"
 
-	intr := NewIntruder(testLogger())
+	intr := NewIntruder(testLogger()).WithSend(testSend(t))
 	intr.WithConfig(&AttackConfig{MaxConcurrency: 8, Timeout: 2 * time.Second})
 
 	results, err := intr.Run(context.Background(), base, host, uint16(port), false, payloads, []int{})
