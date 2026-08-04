@@ -648,6 +648,31 @@ func Test_an_empty_check_set_audits_nothing_and_claims_nothing(t *testing.T) {
 	}
 }
 
+// An empty batch is a real caller state — an operator audits a selection and selects nothing — and
+// the worker pool sizes itself from the batch, so this is the shape that would deadlock if the pool
+// were built without a worker to feed.
+func Test_an_empty_batch_is_an_empty_session_not_a_stalled_one(t *testing.T) {
+	scan := NewActiveScanner(core.NewTrafficStore(), zap.NewNop()).
+		WithConfig(&ScanConfig{MaxConcurrency: 8, CheckSqli: true})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		session, findings := scan.AuditSession(context.Background(), nil, DefaultAuditConfig())
+		if len(session.Items) != 0 || len(findings) != 0 {
+			t.Errorf("items = %d, findings = %d, want 0 and 0", len(session.Items), len(findings))
+		}
+		if session.DispatchUnits != 0 {
+			t.Errorf("dispatch units = %d, want 0", session.DispatchUnits)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("AuditSession stalled on an empty batch")
+	}
+}
+
 // The session summary is what a report prints, so it must not collapse the refusals back into a
 // total — the one thing the whole disposition model exists to prevent.
 func Test_the_session_summary_names_the_checks_it_did_not_admit(t *testing.T) {
