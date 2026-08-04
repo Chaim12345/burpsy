@@ -49,6 +49,9 @@ type ViewMode = "text" | "hex";
 /** The last decode response, kept so flipping Text/Hex re-renders instead of re-requesting. */
 let lastDecode: SmartResp | ExplicitResp | null = null;
 
+/** The currently displayed output string to be copied. */
+let currentOutputText: string | null = null;
+
 /**
  * Whether the output pane is currently showing that decode. Encode and hash write to the same pane,
  * and silently swapping their result back to a stale decode when the radio moves would be worse than
@@ -90,17 +93,49 @@ export function initDecoder(): void {
           <span class="hint">one-way — there is no decode back</span>
         </div>
       </div>
-      <div><pre id="dec-output"></pre></div>
+      <div class="stack">
+        <div class="row" style="justify-content: space-between; margin-bottom: 0; width: 100%;">
+          <span class="hint">output</span>
+          <button class="ghost small" id="dec-copy" aria-label="Copy output to clipboard" disabled>Copy</button>
+        </div>
+        <pre id="dec-output"></pre>
+      </div>
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());
   $("#enc-run")!.addEventListener("click", () => void runEncode());
   $("#hash-run")!.addEventListener("click", () => void runHash());
+  $("#dec-copy")!.addEventListener("click", () => void copyOutput());
   $all<HTMLInputElement>('input[name="dec-view"]').forEach((r) => {
     r.addEventListener("change", () => {
       if (paneShowsDecode && lastDecode) $("#dec-output")!.innerHTML = renderDecodeResp(lastDecode);
     });
   });
+}
+
+function updateCopyButton(): void {
+  const btn = $<HTMLButtonElement>("#dec-copy");
+  if (btn) {
+    btn.disabled = !currentOutputText;
+  }
+}
+
+async function copyOutput(): Promise<void> {
+  if (!currentOutputText) return;
+  const btn = $<HTMLButtonElement>("#dec-copy")!;
+  try {
+    await navigator.clipboard.writeText(currentOutputText);
+    const oldText = btn.textContent;
+    btn.textContent = "Copied!";
+    btn.disabled = true;
+    setTimeout(() => {
+      btn.textContent = oldText;
+      btn.disabled = !currentOutputText;
+    }, 1500);
+  } catch (e) {
+    const toastModule = await import("./common");
+    toastModule.toast("Failed to copy", "error");
+  }
 }
 
 function viewMode(): ViewMode {
@@ -185,6 +220,8 @@ async function runDecode(): Promise<void> {
   const guess = $<HTMLInputElement>("#dec-guess")!.checked;
   const out = $("#dec-output")!;
   out.textContent = "decoding…";
+  currentOutputText = null;
+  updateCopyButton();
   try {
     const resp = await postJSON<SmartResp | ExplicitResp>("/api/tools/decode", {
       input,
@@ -194,9 +231,13 @@ async function runDecode(): Promise<void> {
     lastDecode = resp;
     paneShowsDecode = true;
     out.innerHTML = renderDecodeResp(resp);
+    currentOutputText = resp.output.text;
+    updateCopyButton();
   } catch (e) {
     paneShowsDecode = false;
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    currentOutputText = null;
+    updateCopyButton();
   }
 }
 
@@ -206,11 +247,17 @@ async function runEncode(): Promise<void> {
   const out = $("#dec-output")!;
   paneShowsDecode = false;
   out.textContent = "encoding…";
+  currentOutputText = null;
+  updateCopyButton();
   try {
     const resp = await postJSON<EncodeResp>("/api/tools/encode", { input, encoding });
     out.innerHTML = `<b>${esc(resp.encoding)}:</b>\n${bytesLine(resp.output)}`;
+    currentOutputText = resp.output.text;
+    updateCopyButton();
   } catch (e) {
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    currentOutputText = null;
+    updateCopyButton();
   }
 }
 
@@ -222,11 +269,17 @@ async function runHash(): Promise<void> {
   // worth printing — so the view radio deliberately does not apply here.
   paneShowsDecode = false;
   out.textContent = "hashing…";
+  currentOutputText = null;
+  updateCopyButton();
   try {
     const resp = await postJSON<HashResp>("/api/tools/hash", { input, algorithm });
     const bytes = resp.output.len / 2;
     out.innerHTML = `<b>${esc(resp.algorithm)}:</b>\n${esc(resp.output.text)}\n<span class="hint">(${bytes} bytes, hex)</span>`;
+    currentOutputText = resp.output.text;
+    updateCopyButton();
   } catch (e) {
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    currentOutputText = null;
+    updateCopyButton();
   }
 }
