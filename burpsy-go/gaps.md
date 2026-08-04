@@ -152,7 +152,7 @@ with the reason named), **PARTIAL** (ported with a reduced scope, named), or
 
 | # | Gap | Status | Priority |
 |---|-----|--------|----------|
-| 1 | HTTP/2 support absent | PARTIAL (relay+egress landed; raw frame/HPACK crafting still absent) | P1 |
+| 1 | HTTP/2 support absent | COMPLETE (relay+egress, and raw frame/HPACK/malformed crafting) | P1 |
 | 2 | Scanner catalog + coverage absent | PARTIAL (catalog+coverage landed and wired; audit engine still gap 3) | P1 |
 | 3 | Scanner audit engine far thinner | OPEN | P2 |
 | 4 | JS vulnerability checks hand-rolled | PARTIAL | P2 |
@@ -215,18 +215,69 @@ raw-request replay a real HTTP/2 client path over TLS, round-tripping through
 `RenderResponse`. Tests: `internal/proxy/alpn_test.go`, `internal/proxy/h2_relay_test.go`,
 `internal/http2/normalise_test.go`.
 
-**Still absent, named as its own sub-gap:** everything `frame.rs`/`hpack.rs`/
-`malformed.rs` provide — hand-crafting a spec-illegal HTTP/2 frame or a raw
-HPACK header-block fragment for manual research, and an audit that names which
-RFC rule a deliberately-malformed frame breaks. Go's relay is built on
-`golang.org/x/net/http2`, a conformant library that (by design) will not let a
-caller construct or transmit an illegal frame — so this is not a smaller version
-of the same capability, it is a capability the current design cannot express at
-all without a parallel hand-rolled frame/HPACK layer alongside the conformant
-one. **Decline path:** none recorded yet; this is a real, separately-sized
-follow-up (roughly the size of `frame.rs`+`hpack.rs`+`malformed.rs`, ~3,280 LOC)
-if Burp's raw-HTTP/2-editing parity is wanted, distinct from "the proxy can
-intercept HTTP/2 sites" which is now closed.
+**The raw frame-crafting sub-gap — now also closed (2026-08-04).** The
+capability `frame.rs`/`hpack.rs`/`malformed.rs` provide is *not* a smaller
+version of the transport above it: `golang.org/x/net/http2` is a conformant
+library and by design will not let a caller construct or transmit an illegal
+frame. So it was ported as a deliberately parallel, hand-rolled layer alongside
+the conformant one, stdlib-only:
+
+- `internal/http2/frame.go` (417) — `FrameHeader` (`Encode`/`DecodeFrameHeader`,
+  `StreamIDMasked`, `ReservedBitSet`), `FrameSpec` (`WithDeclaredLen`,
+  `LengthIsDishonest`), `H2FrameProgram`, and `ReadFrames`/`StripPreface` with a
+  `Tail` describing what was left over. Preserves whatever it is handed — an
+  operator who sets the fields directly can put an illegal frame on the wire,
+  which is the point.
+- `internal/http2/hpack.go` (759) — `Encoder`/`Decoder` over the static and
+  dynamic tables with the integer/string primitives, `HeaderField`, and
+  `HpackError` naming the fault and its byte offset. One codec per (connection,
+  direction), because a dynamic table is connection state that each `Decode`
+  both reads and mutates.
+- `internal/http2/malformed.go` (673) — the `Malformation` vocabulary
+  (`ClearFlags`, `DeclareLength`, `SetStreamID`, …; applying one never refuses
+  and never touches a field it does not name) plus `Audit`, which judges a
+  program **client-to-server** and reports ~20 `ViolationKind`s each carrying
+  the RFC section it breaks: missing preface (§3.4), length-field overflow and
+  payload/length disagreement (§4.1), reserved bit set (§5.1.1), stream-id zero
+  on a stream frame / non-zero on a connection frame, even stream id from a
+  client, non-increasing stream id, fixed-length violations, SETTINGS length not
+  a multiple of six, SETTINGS ACK with a payload, PUSH_PROMISE from a client
+  (§8.4), CONTINUATION with nothing to continue / on another stream, a frame
+  interleaved inside a header block (§6.2), a header block never terminated,
+  DATA on an unopened stream, a frame after a stream closed, and padding faults
+  (§6.1).
+
+Rust's "what the audit does not check, and why" section is carried across
+verbatim in intent (`malformed.go:54`) — `SETTINGS_MAX_FRAME_SIZE` (unknowable
+without the peer's own SETTINGS), SETTINGS payload contents, flow control,
+`GOAWAY`/`PRIORITY`/`RST_STREAM` payload semantics, and HPACK validity are all
+named as unchecked rather than left to look covered.
+
+**Named seam, identical in both languages:** a string literal with the Huffman
+flag set reports `HpackHuffmanNotImplemented` rather than being decoded. Rust
+does exactly the same (`crates/http2/src/hpack.rs:131`
+`HpackError::HuffmanNotImplemented`, which its own docs call "slice 2b's seam"),
+so this is parity, not a Go shortfall — the port carries the seam across so both
+implementations decode the same inputs and refuse the same ones. Stated plainly
+in the Go module docs because it bounds usefulness: real peers Huffman-code most
+header strings, so decoding a *captured* block will often stop at this error;
+blocks this package's own `Encoder` produced always decode, since it never sets
+H=1.
+
+**Deliberately no send path.** This layer emits octets and an audit report and
+stops there. Rust is explicit that authorising a malformed frame program is a
+harder problem than authorising a request — a program with a dishonest length or
+an unterminated header block cannot have its `:path` fields authorised
+individually, because the peer will not decode the block we decoded. Wiring it
+to a socket needs that classifier first and is a separate slice in both
+languages.
+
+Covered by `frame_test.go` (382), `hpack_test.go` (703), `malformed_test.go`
+(555) — 1,640 lines of tests against 1,849 of implementation, including Go
+counterparts of the three Rust tests this ledger previously named
+(`stream_id_rules_are_judged_per_frame_type`,
+`a_frame_interleaved_inside_a_header_block_is_reported`,
+`padding_that_runs_past_the_frame_is_reported`).
 
 ### 2. Scanner catalog + coverage absent — mostly COMPLETE (landed 2026-08-04; audit engine remains gap 3)
 
