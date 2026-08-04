@@ -147,6 +147,11 @@ export function initSession(): void {
       <div id="sess-login-out"></div>
     </div>
     <div class="card">
+      <!-- The one Refresh button left on a data pane other than the site map's, and it stays because
+           there is nothing to push: the coordinator's cookie jar has no enumeration API and no change
+           hook, so /api/session/cookies reports "wired" with an empty table (see api_session.go). A
+           live subscription would announce a kind nothing can ever emit. When the jar learns to
+           enumerate itself, it gets a change signal and this button goes with the others. -->
       <div class="row"><b>Cookie jar</b><button class="ghost small" id="sess-cookies-refresh">Refresh</button></div>
       <div id="sess-cookies"></div>
     </div>

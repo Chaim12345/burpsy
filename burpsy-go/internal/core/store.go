@@ -305,6 +305,12 @@ type TrafficStore struct {
 	// mirror's single slot would make each the other's failure mode: installing
 	// persistence would silently unsubscribe the site map, and vice versa.
 	exchangeObservers []func(ex *Exchange)
+	// onWsChange is an optional signal that a WebSocket frame was captured, for
+	// the live-update stream. A single slot rather than a list, and no payload:
+	// its only consumer tells a browser that the ws history endpoint is stale, so
+	// it needs to know that something arrived and nothing about what. Runs under
+	// the write lock, and under exactly the contract ObserveExchanges documents.
+	onWsChange func()
 }
 
 // NewTrafficStore creates an in-memory traffic store.
@@ -430,15 +436,23 @@ func (ts *TrafficStore) AddExchange(ex *Exchange) {
 // fn runs under the store's write lock, in append order, and must not call back
 // into the store — the same contract as the persistence sinks.
 //
-// It must also be cheap, and this is a hard constraint rather than a preference.
-// The lock it runs under is the one every AddExchange takes, so an observer is
-// simultaneously a per-response latency tax on the proxy and the ceiling on how
-// fast a crawler can capture. Fold into a map, increment a counter, take a slice
-// index: O(1)-ish and allocation-light. Anything that formats a string, marshals
-// JSON, writes to a file, takes a second lock, or grows without bound belongs on
-// an explicit call at the point the thing happened, not here. In particular the
-// dashboard's event log is deliberately NOT fed from this hook — see the note in
-// internal/dash/events.go.
+// It must also be cheap, and this is a hard constraint rather than a preference,
+// permanently. The lock it runs under is the one every AddExchange takes, so an
+// observer is simultaneously a per-response latency tax on the proxy and the
+// ceiling on how fast a crawler can capture. Fold into a map, increment a
+// counter, take a slice index: O(1)-ish and allocation-light. Anything that
+// formats a string, marshals JSON, writes to a network connection or a file,
+// takes a second lock, sends on an unbuffered channel, or grows without bound
+// belongs on an explicit call at the point the thing happened, not here. In
+// particular the dashboard's event log is deliberately NOT fed from this hook —
+// see the note in internal/dash/events.go.
+//
+// The two observers in the tree are both shaped by that. The site map folds the
+// arrival into a tree it already holds. The live-update stream (internal/web's
+// event hub) does one atomic increment and one non-blocking channel send, and a
+// goroutine that is not on this stack decides who to tell and writes the bytes —
+// an observer that wrote to a browser's connection from here would make one slow
+// client the whole capture path's speed limit.
 //
 // This is what makes the site map continuous (CRAWL-05) for *every* producer at
 // once. Anything that records traffic does so through AddExchange — the proxy,
@@ -612,7 +626,25 @@ func (ts *TrafficStore) AddWsMessage(m *WsMessage, payload []byte) MsgId {
 	ts.wsPayloads = append(ts.wsPayloads, stored)
 	ts.wsMessages = append(ts.wsMessages, m)
 	atomic.AddInt64(&ts.bytes, int64(len(stored)))
+	if ts.onWsChange != nil {
+		ts.onWsChange()
+	}
 	return id
+}
+
+// OnWsChange installs the signal called after every captured WebSocket frame, or
+// nil to remove it. Single slot, so re-installing replaces rather than doubling.
+//
+// A signal rather than an observer because the caller that wants it — the live
+// update stream — needs to know that the ws index changed, not what changed: it
+// tells the browser to refetch, and /api/ws/history renders the row. It runs
+// under the store's write lock on the WebSocket capture path, so it is held to
+// the same O(1)-and-allocation-light contract as ObserveExchanges, for the same
+// reason: a relay pumping a busy socket waits behind it.
+func (ts *TrafficStore) OnWsChange(fn func()) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.onWsChange = fn
 }
 
 // WsMessages returns a newest-first page of captured WebSocket messages.

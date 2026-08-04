@@ -9,6 +9,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/query"
+	"go.uber.org/zap"
 )
 
 // handleHistory serves GET /api/history?limit=N[&q=query]. The UI expects a bare array of
@@ -405,4 +406,41 @@ func sortedUints(vs []uint16) []uint16 {
 	copy(out, vs)
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+// handleCACert serves the proxy's CA certificate so a browser can be told to trust it.
+//
+// Without this there is no way to get the CA into a browser short of finding it on disk, and a
+// browser that does not trust it cannot reach an HSTS host through the proxy at all — HSTS forbids
+// clicking through a certificate warning, by design, so the operator is simply stuck. The frontend
+// has always linked to this path (`#ca-link` in index.html, gated on a HEAD of this route in
+// app.ts); the route itself was missing, so the link stayed hidden and the reason was invisible.
+//
+// HEAD is answered because that is how the UI decides whether to show the link: a 200 means
+// interception is on and there is a CA worth importing.
+//
+// A 404 when interception is off, rather than an empty 200: a zero-byte certificate file is worse
+// than no file, because a browser will accept the download and then fail to import it, which sends
+// the operator looking for the fault in their browser rather than in their burpsy flags.
+func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if len(s.caCertPEM) == 0 {
+		http.Error(w, "TLS interception is not enabled, so there is no CA to trust; start with -intercept-tls", http.StatusNotFound)
+		return
+	}
+	// application/x-x509-ca-cert is what browsers recognise as a CA to import. The filename matters
+	// for the download the UI link triggers.
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", `attachment; filename="burpsy-ca.crt"`)
+	w.Header().Set("Content-Length", strconv.Itoa(len(s.caCertPEM)))
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if _, err := w.Write(s.caCertPEM); err != nil {
+		s.logger.Warn("failed to write CA certificate", zap.Error(err))
+	}
 }

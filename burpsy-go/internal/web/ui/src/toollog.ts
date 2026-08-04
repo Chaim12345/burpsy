@@ -1,7 +1,12 @@
 // Logger tab: every request burpsy's own tools sent (Repeater/Intruder/Scanner/BCheck), kept apart
 // from proxy History by construction — see crates/tools/src/logger.rs.
 
-import { $, esc, statusBadge, getJSON, delJSON, toast } from "./common";
+import { $, $all, esc, statusBadge, getJSON, delJSON, emit, switchTab, toast } from "./common";
+import { EVT_FILTER_HISTORY } from "./types";
+import { attachRowContextMenu } from "./contextmenu";
+import type { MenuItem } from "./contextmenu";
+import { copyText } from "./sendto";
+import { live } from "./live";
 
 export interface LogEntry {
   id: number;
@@ -27,6 +32,9 @@ interface LogResp {
   entries: LogEntry[];
 }
 
+/** The rows currently rendered, so the delegated right-click menu can resolve a `<tr>` back to one. */
+let rendered: LogEntry[] = [];
+
 export function initToolLog(): void {
   const el = $("#logger");
   if (!el) return;
@@ -40,16 +48,17 @@ export function initToolLog(): void {
         <option value="bcheck">bcheck</option>
       </select>
       <input id="log-search" type="search" placeholder="search host/path/method" class="grow" />
-      <button class="ghost" id="log-refresh">Refresh</button>
       <button class="ghost" id="log-clear">Clear</button>
       <span id="log-meta" class="hint"></span>
     </div>
+    <p class="hint">Right-click a row to copy its host or path, or to filter History by that host.
+      There is no send-to-Repeater here: a logged row records what burpsy sent, not a stored request
+      that could be reloaded, so there is nothing to hand over.</p>
     <table>
       <thead><tr><th>#</th><th>Tool</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Len</th><th>ms</th><th>Error</th></tr></thead>
       <tbody id="log-body"></tbody>
     </table>
   `;
-  $("#log-refresh")!.addEventListener("click", () => void load());
   $("#log-filter")!.addEventListener("change", () => void load());
   $("#log-clear")!.addEventListener("click", () => void clear());
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -57,7 +66,45 @@ export function initToolLog(): void {
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = setTimeout(() => void load(), 300);
   });
+  attachRowContextMenu<LogEntry>({
+    container: "#log-body",
+    rowSelector: "tr[data-id]",
+    resolve: (tr) => rendered.find((e) => e.id === Number(tr.dataset["id"])) ?? null,
+    heading: (e) => `${e.tool}: ${e.method} ${e.path}`,
+    select: (e) => $all("#log-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === e.id)),
+    items: (e) => rowMenuItems(e),
+  });
+  // Every request one of burpsy's own tools sends lands here, so the pane follows the stream rather than
+  // a Refresh button. The filter and the search box are re-applied by load() itself.
+  live({ kinds: ["toollog"], section: "logger", refresh: () => void load() });
   void load();
+}
+
+/** A logged row is a request burpsy itself sent, so it is never *in* proxy History and there is no
+ * stored message to reload — the tool log carries no message ids and no TLS flag, so this pane cannot
+ * honestly build a URL scheme or a raw request from a row. What it can do is point at the same host's
+ * captured traffic, which is what the History filter entry does. */
+function rowMenuItems(e: LogEntry): MenuItem[] {
+  const hostPort = `${e.host}:${e.port}`;
+  return [
+    {
+      label: `Filter History by ${e.host}`,
+      run: () => {
+        emit(EVT_FILTER_HISTORY, { search: e.host });
+        switchTab("history");
+      },
+    },
+    {
+      label: `Filter History by ${e.path}`,
+      run: () => {
+        emit(EVT_FILTER_HISTORY, { search: e.path });
+        switchTab("history");
+      },
+    },
+    { separator: true },
+    { label: "Copy host:port", run: () => void copyText(hostPort, hostPort) },
+    { label: "Copy path", run: () => void copyText(e.path, "the path") },
+  ];
 }
 
 async function load(): Promise<void> {
@@ -80,10 +127,11 @@ async function load(): Promise<void> {
     meta.textContent =
       `${resp.total} total${active.length ? ` (${active.join(", ")})` : ""}` +
       (resp.dropped ? ` · ${resp.dropped} dropped (capacity)` : "");
+    rendered = resp.entries;
     body.innerHTML =
       resp.entries
         .map(
-          (e) => `<tr>
+          (e) => `<tr data-id="${e.id}">
         <td>${e.id}</td><td>${esc(e.tool)}</td><td>${esc(e.method)}</td>
         <td>${esc(e.host)}:${e.port}</td><td>${esc(e.path)}</td>
         <td>${statusBadge(e.status)}</td><td>${e.response_len}</td><td>${e.duration_ms}</td>

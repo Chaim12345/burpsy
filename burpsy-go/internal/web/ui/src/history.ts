@@ -5,9 +5,19 @@
 // every row from `GET /api/history?limit=300` is already fetched, so a filter change just re-renders
 // a filtered slice of the last fetch — no new backend endpoint or re-fetch involved.
 
-import { $, $all, esc, statusBadge, getJSON, postJSON, emit, switchTab, toast, on } from "./common";
-import type { Exchange, MessageView, ScopeInfo, ShowExchangeDetail } from "./types";
-import { EVT_SEND_TO_REPEATER, EVT_SEND_TO_INTRUDER, EVT_SEND_TO_COMPARER, EVT_SHOW_EXCHANGE } from "./types";
+import { $, $all, esc, statusBadge, getJSON, toast, on } from "./common";
+import type { Exchange, MessageView, ScopeInfo, ShowExchangeDetail, FilterHistoryDetail } from "./types";
+import { EVT_SHOW_EXCHANGE, EVT_FILTER_HISTORY } from "./types";
+import { attachRowContextMenu } from "./contextmenu";
+import { live } from "./live";
+import { registerRowTarget } from "./shortcuts";
+import {
+  exchangeMenuItems,
+  sendToRepeater,
+  sendToIntruder,
+  sendToComparer,
+  saveToOrganizer,
+} from "./sendto";
 
 /** All rows from the last `load()`, before any filter is applied. */
 let allRows: Exchange[] = [];
@@ -15,13 +25,20 @@ let allRows: Exchange[] = [];
 let cachedScope: ScopeInfo | null = null;
 /** Debounces the query box: unlike the other filters, a query change means a server round-trip. */
 let queryTimer: ReturnType<typeof setTimeout> | undefined;
+/** The row the operator last clicked or right-clicked. The keyboard shortcuts act on this, so it is
+ * the whole reason a selection exists here at all: before, opening a row only filled the two panes
+ * below and nothing remembered which row that was. */
+let selected: Exchange | null = null;
+/** The currently rendered rows by id, so the delegated context menu can resolve a `<tr>` back to its
+ * exchange after any re-render. */
+let rendered = new Map<number, Exchange>();
 
 export function initHistory(): void {
   const section = $("#history");
   if (!section) return;
   section.innerHTML = `
     <div class="row">
-      <button class="go" id="hist-refresh">Refresh</button>
+      <span class="hint">right-click a row for send-to actions · Ctrl+R Repeater · Ctrl+I Intruder · ? for all shortcuts</span>
       <span id="hist-note" class="hint"></span>
     </div>
     <div class="row">
@@ -48,7 +65,6 @@ export function initHistory(): void {
       <div><b class="muted">Response</b><pre id="hist-res"></pre></div>
     </div>
   `;
-  $("#hist-refresh")!.addEventListener("click", () => void load());
   $all<HTMLInputElement>(".hist-status").forEach((c) => c.addEventListener("change", () => applyFilter()));
   $("#hist-search")!.addEventListener("input", () => applyFilter());
   $("#hist-regex")!.addEventListener("change", () => applyFilter());
@@ -65,7 +81,33 @@ export function initHistory(): void {
     }
   });
   on<ShowExchangeDetail>(EVT_SHOW_EXCHANGE, (d) => void loadExchangeById(d.exchangeId));
+  on<FilterHistoryDetail>(EVT_FILTER_HISTORY, (d) => {
+    $<HTMLInputElement>("#hist-search")!.value = d.search;
+    applyFilter();
+  });
+  // Attached to the tbody, not to each row: every filter change re-renders `#hist-body` by assigning
+  // innerHTML, which would drop per-row listeners.
+  attachRowContextMenu<Exchange>({
+    container: "#hist-body",
+    rowSelector: "tr[data-id]",
+    resolve: (row) => rendered.get(Number(row.dataset["id"])) ?? null,
+    heading: (ex) => `#${ex.id} ${ex.method} ${ex.path}`,
+    select: (ex) => markSelected(ex),
+    items: (ex) => exchangeMenuItems(ex),
+  });
+  registerRowTarget("history", () => (selected ? { label: `exchange #${selected.id}`, exchange: selected } : null));
+  // Captured traffic arrives here without being asked for, which is why this pane no longer has a
+  // Refresh button. A re-render keeps the selection (see wireRows) and the query box, so a row that
+  // arrives while the operator is reading one does not move the ground under them.
+  live({ kinds: ["history"], section: "history", refresh: () => void load() });
   void load();
+}
+
+/** Marks one row as the selection, for the shortcuts and for the operator to see which row a Ctrl+R
+ * would act on. */
+function markSelected(ex: Exchange): void {
+  selected = ex;
+  $all("#hist-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === ex.id));
 }
 
 /** Loads one exchange by id straight from the server (bypassing `allRows`/the current filter) —
@@ -200,11 +242,14 @@ function rowHtml(r: Exchange): string {
 }
 
 function wireRows(rows: Exchange[]): void {
-  const byId = new Map(rows.map((r) => [r.id, r]));
+  rendered = new Map(rows.map((r) => [r.id, r]));
+  const byId = rendered;
   $all("#hist-body tr").forEach((tr) => {
     const id = Number(tr.dataset["id"]);
     const ex = byId.get(id);
     if (!ex) return;
+    // A re-render throws away the selected class, so restore it from the id that is still selected.
+    if (selected && selected.id === id) tr.classList.add("on");
     tr.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).closest("button")) return;
       void openExchange(ex);
@@ -219,6 +264,7 @@ function wireRows(rows: Exchange[]): void {
 }
 
 async function openExchange(ex: Exchange): Promise<void> {
+  markSelected(ex);
   const reqEl = $("#hist-req")!;
   const resEl = $("#hist-res")!;
   reqEl.textContent = "loading…";
@@ -239,44 +285,26 @@ async function openExchange(ex: Exchange): Promise<void> {
   }
 }
 
-function targetOf(ex: Exchange): string {
-  return `${ex.tls ? "https" : "http"}://${ex.host}:${ex.port}`;
-}
-
+/** The row buttons, the right-click menu and the keyboard shortcuts all end up in sendto.ts. These
+ * action bodies used to live here, which is why no other pane could offer the same hand-offs. */
 async function handleAction(act: string, ex: Exchange): Promise<void> {
+  markSelected(ex);
   switch (act) {
-    case "repeater": {
-      try {
-        const req = await getJSON<MessageView>(`/api/message/${ex.request}`);
-        emit(EVT_SEND_TO_REPEATER, { target: targetOf(ex), raw: req.text, protocol: ex.protocol });
-        switchTab("repeater");
-      } catch (e) {
-        toast((e as Error).message, "error");
-      }
+    case "repeater":
+      await sendToRepeater(ex);
       break;
-    }
-    case "intruder": {
-      emit(EVT_SEND_TO_INTRUDER, { msgId: ex.request, target: targetOf(ex) });
-      switchTab("intruder");
+    case "intruder":
+      sendToIntruder(ex);
       break;
-    }
     case "cmp-a":
-    case "cmp-b": {
-      const side = act === "cmp-a" ? "a" : "b";
-      emit(EVT_SEND_TO_COMPARER, { side, msgId: ex.request, label: `${ex.method} ${ex.path}` });
-      switchTab("comparer");
-      toast(`sent request #${ex.request} to Comparer ${side.toUpperCase()}`);
+      sendToComparer(ex, "a");
       break;
-    }
-    case "organize": {
-      try {
-        await postJSON("/api/tools/organizer", { exchange: ex.id });
-        toast(`saved ${ex.method} ${ex.path} to Organizer`);
-      } catch (e) {
-        toast((e as Error).message, "error");
-      }
+    case "cmp-b":
+      sendToComparer(ex, "b");
       break;
-    }
+    case "organize":
+      await saveToOrganizer(ex);
+      break;
     default:
       break;
   }

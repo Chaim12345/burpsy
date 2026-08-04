@@ -8,8 +8,10 @@
 // Every count now arrives as a Summary carrying its own found/skipped/errored/gated breakdown, and
 // renderSummary refuses to draw the number without them.
 
-import { $, esc, getJSON, postJSON } from "./common";
+import { $, esc, getJSON } from "./common";
 import type { LogEntry } from "./toollog";
+import { liveAuditCardHtml, mountLiveAudit } from "./liveaudit";
+import { live } from "./live";
 
 interface ScopeInfo {
   allow_all: boolean;
@@ -86,23 +88,6 @@ interface DashboardResp {
   stored_bytes: number;
   sources: Record<string, number>;
 }
-interface LiveAuditResp {
-  wired: boolean;
-  enabled: boolean;
-  hint?: string;
-  swept?: number;
-  findings?: number;
-  // Carried beside `swept`, never added to it: an exchange the sweep gave up waiting on is not one
-  // that came back clean. `stalled_at` is the exchange id the cursor is currently waiting on.
-  skipped?: number;
-  stalled_at?: number;
-  // Not optional: a zero backlog is the most useful thing this field says ("the sweep is caught up"),
-  // and omitting it would make caught-up indistinguishable from a build that never reported it.
-  behind: number;
-  collapsed: number;
-  ledger_resets: number;
-  query?: string;
-}
 
 export function initDashboard(): void {
   const section = $("#dashboard");
@@ -150,30 +135,32 @@ export function initDashboard(): void {
       </div>
     </div>
     <div class="two">
-      <div class="card">
-        <div class="row" style="justify-content:space-between;margin-bottom:4px">
-          <div class="card-title" style="margin:0">Live active audit</div>
-          <label class="switch"><input type="checkbox" id="dash-audit-toggle" /><span class="slider"></span></label>
-        </div>
-        <p class="hint">Auditing new in-scope traffic. Active checks are never sent automatically
-          while this is off.</p>
-        <div id="dash-audit-hint" class="hint"></div>
-        <div class="row">
-          <div class="stat-tile grow"><div class="label">Exchanges swept</div><div class="value" id="dash-audit-swept">0</div></div>
-          <div class="stat-tile grow"><div class="label">Findings</div><div class="value" id="dash-audit-findings">0</div></div>
-        </div>
-      </div>
+      ${liveAuditCardHtml("dash")}
     </div>
   `;
-  $<HTMLInputElement>("#dash-audit-toggle")!.addEventListener("change", (e) =>
-    void setAudit((e.target as HTMLInputElement).checked),
-  );
+  // The switch, its counters and its POST all live in liveaudit.ts, because the Scanner tab draws the
+  // same control: two panes each with their own copy of this state is how a UI ends up claiming the
+  // sweep is on in one place and off in another.
+  mountLiveAudit("dash");
+  // Four kinds, because this pane is a view of all of them: traffic feeds the counts, findings feed the
+  // issue summary, the tool log is the activity table and the event log is the task table. One endpoint
+  // reads all four, so one refresh answers any of them.
+  //
+  // A longer minimum gap than the other panes: /api/dashboard walks every store to build its summaries,
+  // and re-reading it six times a second during a crawl would spend more on rendering the numbers than
+  // on capturing what they count. Once a second is live enough for a progress bar.
+  live({
+    kinds: ["history", "issues", "toollog", "dashboard"],
+    section: "dashboard",
+    refresh: () => void refresh(),
+    minGapMs: 1000,
+    fallbackMs: 4000,
+  });
   void refresh();
-  setInterval(() => void refresh(), 4000);
 }
 
 async function refresh(): Promise<void> {
-  await Promise.all([refreshDashboard(), refreshScope(), refreshAudit()]);
+  await Promise.all([refreshDashboard(), refreshScope()]);
 }
 
 async function refreshDashboard(): Promise<void> {
@@ -329,40 +316,4 @@ function relTime(startedMs: number): string {
   if (diffS < 60) return `${diffS}s ago`;
   if (diffS < 3600) return `${Math.round(diffS / 60)}m ago`;
   return `${Math.round(diffS / 3600)}h ago`;
-}
-
-async function refreshAudit(): Promise<void> {
-  const toggle = $<HTMLInputElement>("#dash-audit-toggle")!;
-  const hint = $("#dash-audit-hint")!;
-  try {
-    const r = await getJSON<LiveAuditResp>("/api/scanner/live");
-    toggle.disabled = !r.wired;
-    if (!r.wired) {
-      hint.textContent = r.hint ?? "not available";
-      return;
-    }
-    toggle.checked = r.enabled;
-    // The backlog and what the sweep gave up on are stated next to the state, never folded into
-    // "sweeping": a sweep 9,000 exchanges behind is not caught up, and an operator reading only
-    // "sweeping new in-scope traffic" would think it was.
-    const notes: string[] = [r.enabled ? "sweeping new in-scope traffic" : "off"];
-    if (r.query) notes.push(`filtered to ${r.query}`);
-    if (r.behind > 0) notes.push(`${r.behind} exchange(s) not reached yet`);
-    if (r.skipped) notes.push(`${r.skipped} given up on (no response)`);
-    if (r.stalled_at !== undefined) notes.push(`waiting on exchange ${r.stalled_at}`);
-    if (r.ledger_resets) notes.push(`${r.ledger_resets} ledger reset(s)`);
-    hint.textContent = notes.join(" · ");
-    $("#dash-audit-swept")!.textContent = String(r.swept ?? 0);
-    $("#dash-audit-findings")!.textContent = String(r.findings ?? 0);
-  } catch {
-    // best-effort
-  }
-}
-
-async function setAudit(enabled: boolean): Promise<void> {
-  try {
-    await postJSON("/api/scanner/live", { enabled });
-  } finally {
-    void refreshAudit();
-  }
 }

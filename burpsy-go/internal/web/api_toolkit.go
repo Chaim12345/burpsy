@@ -849,7 +849,7 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		item := s.organizer.Add(req.Exchange)
-		s.persistOrganizer()
+		s.organizerChanged()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(item)
 	default:
@@ -879,14 +879,14 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Item not found", http.StatusNotFound)
 			return
 		}
-		s.persistOrganizer()
+		s.organizerChanged()
 		w.WriteHeader(http.StatusOK)
 	case http.MethodDelete:
 		if !s.organizer.Remove(id) {
 			http.Error(w, "Item not found", http.StatusNotFound)
 			return
 		}
-		s.persistOrganizer()
+		s.organizerChanged()
 		w.WriteHeader(http.StatusOK)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

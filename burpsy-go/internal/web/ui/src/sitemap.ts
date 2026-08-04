@@ -8,6 +8,11 @@
 
 import { $, esc, getJSON, emit, switchTab } from "./common";
 import { EVT_SHOW_EXCHANGE } from "./types";
+import { attachRowContextMenu } from "./contextmenu";
+import type { MenuItem } from "./contextmenu";
+import { exchangeIdMenuItems } from "./sendto";
+import { registerRowTarget } from "./shortcuts";
+import { live } from "./live";
 
 interface NodeView {
   id: number;
@@ -60,6 +65,10 @@ interface Finding {
 }
 
 let selected: { host: string; path: string } | null = null;
+/** The selected node's most recent exchange, or null when nothing has been captured at that exact
+ * node. A site-map node is a path, not a request, so this id is the only thing the send-to actions
+ * and the keyboard shortcuts can act on. */
+let selectedExchange: number | null = null;
 let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 
 export function initSitemap(): void {
@@ -70,12 +79,20 @@ export function initSitemap(): void {
       <button class="go" id="site-refresh">Refresh</button>
       <input id="site-q" placeholder="filter by segment or path…" style="width:220px" />
       <label><input type="checkbox" id="site-scope-only" /> in scope only</label>
+      <span class="hint">right-click a node to send its latest exchange to a tool · ? for shortcuts</span>
       <span id="site-note" class="hint"></span>
+      <span id="site-stale" class="hint"></span>
     </div>
     <div id="site-tree" class="tree"></div>
     <div id="site-detail"></div>
   `;
   $("#site-refresh")!.addEventListener("click", () => void load());
+  // The one pane that keeps its Refresh button, and the reason is the tree: it is lazily expanded, and
+  // load() redraws it from the root, so pushing a redraw would collapse whatever branch the operator had
+  // opened — every 150ms, for as long as a crawl runs. Losing someone's place in the tree is worse than
+  // a stale count. What is pushed instead is the fact that the tree is out of date, which is the part
+  // they could not otherwise know without clicking.
+  live({ kinds: ["history"], section: "sitemap", refresh: markTreeStale, minGapMs: 1000 });
   $<HTMLInputElement>("#site-q")!.addEventListener("input", () => {
     clearTimeout(searchDebounce);
     searchDebounce = setTimeout(() => void load(), 300);
@@ -92,7 +109,52 @@ export function initSitemap(): void {
       void select(node);
     }
   });
+  attachRowContextMenu<HTMLElement>({
+    container: "#site-tree",
+    rowSelector: ".node",
+    resolve: (node) => node,
+    heading: (node) => `${node.dataset["host"] ?? ""}${node.dataset["path"] ?? ""}`,
+    // Right-click selects but never deselects: `select()` toggles on a second click, and a menu that
+    // dropped the selection out from under itself would act on nothing.
+    select: (node) => {
+      if (selected?.host !== node.dataset["host"] || selected?.path !== node.dataset["path"]) void select(node);
+    },
+    items: (node) => nodeMenuItems(node),
+  });
+  registerRowTarget("sitemap", () =>
+    selected
+      ? {
+          label: `${selected.host}${selected.path}`,
+          ...(selectedExchange !== null ? { exchangeId: selectedExchange } : {}),
+          note: `nothing has been captured at ${selected.host}${selected.path} yet — there is no request to send`,
+        }
+      : null,
+  );
   void load();
+}
+
+/** Reads the node's most recent exchange id out of its dataset. Exchange id 0 is a real id in this
+ * store, so an absent value is distinguished from a zero one by the empty string, not by falsiness. */
+function nodeExchangeId(node: HTMLElement): number | null {
+  const raw = node.dataset["lastExchange"];
+  if (raw === undefined || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function nodeMenuItems(node: HTMLElement): MenuItem[] {
+  const items: MenuItem[] = [];
+  if (node.dataset["haschildren"] === "1") {
+    // A node whose children have never been fetched reads as "not none" too, so `loaded` decides
+    // first: only an already-loaded, already-shown node can be collapsed.
+    const open =
+      node.dataset["loaded"] === "1" && (node.nextElementSibling as HTMLElement | null)?.style.display !== "none";
+    items.push({ label: open ? "Collapse" : "Expand", run: () => void toggle(node) }, { separator: true });
+  }
+  items.push(
+    ...exchangeIdMenuItems(nodeExchangeId(node), "no exchange captured at this node yet", { showInHistory: true }),
+  );
+  return items;
 }
 
 function query(): string {
@@ -105,9 +167,28 @@ function query(): string {
   return s ? `?${s}` : "";
 }
 
+/** Exchanges captured since the tree was last drawn, from the stream's own counts. */
+let staleSince = 0;
+
+/** Says the tree is out of date, without redrawing it — see the live() registration in initSitemap.
+ *
+ * `changes` of 0 means the refresh was a poll rather than a pushed change, and a poll cannot tell
+ * whether anything arrived — so the marker is left saying whatever it last honestly knew rather than
+ * claiming zero. That is also why the site map shows no staleness marker at all while the event stream
+ * is down: the pane is back to exactly what it did before, a button and no claim. */
+function markTreeStale(changes: number): void {
+  if (changes <= 0) return;
+  staleSince += changes;
+  const marker = $("#site-stale");
+  if (marker) marker.textContent = `· ${staleSince} captured since this tree was drawn — Refresh`;
+}
+
 async function load(): Promise<void> {
   const note = $("#site-note")!;
   const container = $("#site-tree")!;
+  staleSince = 0;
+  const marker = $("#site-stale");
+  if (marker) marker.textContent = "";
   try {
     const resp = await getJSON<TreeResp>(`/api/sitemap${query()}`);
     const matched = resp.matched != null ? ` · ${resp.matched} of ${resp.nodes} match` : "";
@@ -138,7 +219,8 @@ function nodeLi(n: NodeView, rootHost: string): string {
   const isSelected = selected && selected.host === rootHost && selected.path === n.path;
   return `<li>
     <div class="node${n.requested ? "" : " unrequested"}${isSelected ? " on" : ""}" data-host="${esc(rootHost)}" data-path="${esc(n.path)}"
-         data-haschildren="${hasChildren ? 1 : 0}" data-loaded="${loaded ? 1 : 0}">
+         data-haschildren="${hasChildren ? 1 : 0}" data-loaded="${loaded ? 1 : 0}"
+         data-last-exchange="${n.last_exchange ?? ""}">
       <span class="twisty">${hasChildren ? (loaded ? "▾" : "▸") : "·"}</span>
       <span class="seg">${esc(n.segment)}</span>
       <span class="count">${esc(meta)}</span>
@@ -185,11 +267,17 @@ async function select(node: HTMLElement): Promise<void> {
   const path = node.dataset["path"] ?? "/";
   if (selected && selected.host === host && selected.path === path) {
     selected = null;
+    selectedExchange = null;
     $("#site-detail")!.innerHTML = "";
     node.classList.remove("on");
     return;
   }
   selected = { host, path };
+  // Read from the row's own dataset rather than waiting for the fetch below: a Ctrl+R landing between
+  // the click and the response should still act on the row that was clicked.
+  selectedExchange = nodeExchangeId(node);
+  $("#site-tree")!.querySelectorAll(".node.on").forEach((n) => n.classList.remove("on"));
+  node.classList.add("on");
   const out = $("#site-detail")!;
   out.innerHTML = `<p class="hint">loading…</p>`;
   try {
@@ -201,6 +289,9 @@ async function select(node: HTMLElement): Promise<void> {
       out.innerHTML = `<p class="err">node not found</p>`;
       return;
     }
+    // The fetched node is authoritative; the dataset value was only the optimistic first guess. Guard
+    // against a second click having landed while this was in flight.
+    if (selected?.host === host && selected?.path === path) selectedExchange = n.last_exchange;
     await renderDetail(n, host);
   } catch (e) {
     out.innerHTML = `<p class="err">${esc((e as Error).message)}</p>`;

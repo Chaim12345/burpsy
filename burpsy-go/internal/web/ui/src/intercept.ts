@@ -1,15 +1,17 @@
 // Intercept tab: the two condition lists that decide what gets held, then the queue itself — hold,
-// view/edit, forward or drop live proxy requests *and* responses. Polls the queue while this tab is
-// loaded, since a held message is exactly the case where the operator is waiting on it.
+// view/edit, forward or drop live proxy requests *and* responses. The queue is pushed from the server
+// (see live.ts): a held message blocks its connection with somebody watching this tab, so it is the one
+// surface where the difference between "as it happens" and "within 1.5 seconds" is the whole feature.
 //
 // Why the rule tables are edited locally and saved explicitly, unlike Match & Replace's per-row PUT:
-// the queue below them polls every 1.5s, and a PUT-per-keystroke against a list the poll re-renders
-// would fight the operator's cursor. So `load()` only ever touches `#ic-body`, the rule tables live in
+// the queue below them re-renders whenever the server says it changed, and a PUT-per-keystroke against
+// a list that re-render touched would fight the operator's cursor. So `load()` only ever touches `#ic-body`, the rule tables live in
 // their own containers, and every keystroke writes into local state rather than to the server. The
 // server sees a list only when "Save" is pressed — which is also the one place a bad regex can be
 // reported, since that is where the server compiles it.
 
 import { $, $all, esc, getJSON, postJSON, putJSON } from "./common";
+import { live } from "./live";
 
 type MatchField = "host" | "path" | "extension" | "method" | "url" | "status_code" | "content_type";
 type Category = "regex" | "literal";
@@ -81,8 +83,9 @@ const lists: Record<Direction, ListState> = {
   response: { active: false, rules: [] },
 };
 
-let pollTimer: ReturnType<typeof setInterval> | undefined;
 let selectedId: number | null = null;
+/** Ticks the "Held" column while something is held — see startHeldClock. */
+let heldClock: ReturnType<typeof setInterval> | undefined;
 
 export function initIntercept(): void {
   const section = $("#intercept");
@@ -93,7 +96,6 @@ export function initIntercept(): void {
       <span>Intercept is on</span>
       <span id="ic-status" class="hint"></span>
       <span class="grow"></span>
-      <button class="ghost" id="ic-refresh">Refresh</button>
     </div>
     ${rulesSectionHtml("request")}
     ${rulesSectionHtml("response")}
@@ -107,17 +109,16 @@ export function initIntercept(): void {
   $<HTMLInputElement>("#ic-enabled")!.addEventListener("change", (e) =>
     void setEnabled((e.target as HTMLInputElement).checked),
   );
-  $("#ic-refresh")!.addEventListener("click", () => {
-    void load();
-    void loadRules("request");
-    void loadRules("response");
-  });
   (["request", "response"] as const).forEach(wireRulesSection);
   void load();
   void loadRules("request");
   void loadRules("response");
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(() => void load(), 1500);
+  // The latency that matters most in the whole UI: a held request blocks its connection, and an operator
+  // is sitting here waiting for the row to appear. So this pane takes every frame as it arrives —
+  // minGapMs 0, because /api/intercept returns the queue and nothing else — instead of the 1.5s poll
+  // that used to be the wait. The rule lists are not re-read: they only change when this pane changes
+  // them, and re-reading would fight the operator's typing.
+  live({ kinds: ["intercept"], section: "intercept", refresh: () => void load(), minGapMs: 0, fallbackMs: 1500 });
 }
 
 async function setEnabled(enabled: boolean): Promise<void> {
@@ -153,10 +154,12 @@ async function load(): Promise<void> {
       <td>${h.id}</td><td>${esc(h.direction)}</td><td>${esc(h.method)}</td>
       <td>${esc(h.host)}:${h.port}${h.tls ? " (tls)" : ""}</td>
       <td>${esc(h.path)}</td><td>${h.status === null ? "-" : h.status}</td>
-      <td>${h.held_ms} ms</td><td>${h.len}</td>
+      <td class="ic-held" data-base="${h.held_ms}">${h.held_ms} ms</td><td>${h.len}</td>
     </tr>`,
       )
       .join("") || `<tr><td colspan="8" class="hint">nothing held</td></tr>`;
+
+  startHeldClock(Date.now());
 
   $all("#ic-body tr[data-id]").forEach((tr) => {
     tr.addEventListener("click", () => {
@@ -172,6 +175,34 @@ async function load(): Promise<void> {
     selectedId = null;
     $("#ic-editor")!.innerHTML = "";
   }
+}
+
+/** Ages the "Held" column between fetches.
+ *
+ * The queue itself is pushed, so it is only re-read when it actually changes — which would leave a
+ * message that has been held for a minute still reporting the 3ms it had been held for when its row
+ * arrived. That number is the one thing on the row that changes without anything happening, so it is
+ * counted here instead: the server's own held_ms is the baseline, and the local clock adds the time
+ * since the fetch. No request, and it stops itself as soon as the queue is empty.
+ */
+function startHeldClock(fetchedAt: number): void {
+  if (heldClock !== undefined) {
+    clearInterval(heldClock);
+    heldClock = undefined;
+  }
+  if ($all(".ic-held").length === 0) return;
+  heldClock = setInterval(() => {
+    const cells = $all<HTMLElement>(".ic-held");
+    if (cells.length === 0) {
+      if (heldClock !== undefined) clearInterval(heldClock);
+      heldClock = undefined;
+      return;
+    }
+    const since = Date.now() - fetchedAt;
+    cells.forEach((cell) => {
+      cell.textContent = `${Number(cell.dataset["base"] ?? 0) + since} ms`;
+    });
+  }, 1000);
 }
 
 /// "Interception is on" and "nothing is being held" are both true whenever a list is switched off or

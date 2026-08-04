@@ -18,6 +18,9 @@ import { initOrganizer } from "./organizer";
 import { initMatchReplace } from "./matchreplace";
 import { initSession } from "./session";
 import { initSequencer } from "./sequencer";
+import { initShortcuts } from "./shortcuts";
+import { initLive, live } from "./live";
+import { refreshLiveAudit } from "./liveaudit";
 
 initTabs();
 initDashboard();
@@ -35,6 +38,9 @@ initOrganizer();
 initMatchReplace();
 initSession();
 initSequencer();
+// Last: the bindings act on the selection each pane registered above, so every pane must have had its
+// chance to register before a key can be pressed.
+initShortcuts();
 
 async function refreshStats(): Promise<void> {
   try {
@@ -74,4 +80,28 @@ async function refreshCaLink(): Promise<void> {
 void refreshStats();
 void refreshScope();
 void refreshCaLink();
-setInterval(() => void refreshStats(), 4000);
+
+// The header counts follow captured traffic, so they are pushed like everything else rather than polled
+// on a timer. `section: ""` because the header is always on screen — unlike a pane, it has no tab to be
+// hidden behind. The 4s fallback is what this used to do unconditionally, and now only happens when the
+// event stream is not delivering.
+live({ kinds: ["history"], section: "", refresh: () => void refreshStats(), fallbackMs: 4000 });
+
+// The live-audit card is drawn on two panes (Dashboard and Scanner) and its counts follow captured
+// traffic and new findings, so it is registered once per pane rather than once per module: each copy
+// only needs re-reading while its own tab is on screen, and liveaudit.ts collapses two fetches in the
+// same tick into one. Wired here rather than in mountLiveAudit because the module knows its own id
+// prefixes, not which section each of them was mounted into.
+for (const section of ["dashboard", "scanner"]) {
+  live({
+    kinds: ["history", "issues", "dashboard"],
+    section,
+    refresh: () => void refreshLiveAudit(),
+    minGapMs: 1000,
+    fallbackMs: 4000,
+  });
+}
+
+// Last of all: every pane has registered by now, and initLive must not open the stream before the panes
+// that would answer its frames exist.
+initLive();

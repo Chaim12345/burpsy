@@ -91,6 +91,11 @@ type ToolLog struct {
 	// runs under the lock, must not call back into the log, and must not fail
 	// the in-memory record.
 	onRecord func(e *Entry)
+	// onChange is an optional signal that the log changed at all (see OnChange).
+	// Separate from onRecord because the two have different owners — that one is
+	// the durable mirror's single slot — and because this one also fires for a
+	// clear, which a live pane has to hear about as much as an arrival.
+	onChange func()
 }
 
 const DefaultCapacity = 100000
@@ -131,7 +136,27 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 	if l.onRecord != nil {
 		l.onRecord(e)
 	}
+	if l.onChange != nil {
+		l.onChange()
+	}
 	return id
+}
+
+// OnChange installs the signal called after the log changes, or nil to remove it.
+// Single slot, so re-installing replaces rather than doubling.
+//
+// It carries no entry: its consumer is the live-update stream, which tells the
+// browser that /api/tools/log is stale and lets that handler render the row. It
+// runs under the log's write lock, on the path of every request any tool sends, so
+// it must stay O(1) and allocation-light — an intruder attack at a hundred
+// requests a second records a hundred entries a second.
+func (l *ToolLog) OnChange(fn func()) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.onChange = fn
 }
 
 // SetPersistenceSink installs an optional write-through hook (see the onRecord
@@ -184,4 +209,7 @@ func (l *ToolLog) Clear() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = l.entries[:0]
+	if l.onChange != nil {
+		l.onChange()
+	}
 }

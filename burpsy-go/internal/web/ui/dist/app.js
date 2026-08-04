@@ -92,6 +92,305 @@ function emit(event, detail) {
   bus.dispatchEvent(new CustomEvent(event, { detail }));
 }
 
+// src/liveaudit.ts
+var mounts = [];
+var last = null;
+var inFlight = null;
+function liveAuditCardHtml(prefix) {
+  return `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:4px">
+        <div class="card-title" style="margin:0">Live active audit</div>
+        <label class="switch" title="audit new in-scope traffic as it is captured"><input type="checkbox" id="${prefix}-audit-toggle" /><span class="slider"></span></label>
+      </div>
+      <p class="hint">Auditing new in-scope traffic. Active checks are never sent automatically
+        while this is off.</p>
+      <div id="${prefix}-audit-hint" class="hint"></div>
+      <div class="row">
+        <div class="stat-tile grow"><div class="label">Exchanges swept</div><div class="value" id="${prefix}-audit-swept">0</div></div>
+        <div class="stat-tile grow"><div class="label">Findings</div><div class="value" id="${prefix}-audit-findings">0</div></div>
+      </div>
+      <div class="row" id="${prefix}-audit-chips"></div>
+      <div id="${prefix}-audit-verdict"></div>
+    </div>`;
+}
+function mountLiveAudit(prefix) {
+  const toggle = $(`#${prefix}-audit-toggle`);
+  if (!toggle)
+    return;
+  if (!mounts.includes(prefix))
+    mounts.push(prefix);
+  toggle.addEventListener("change", (e) => void setLiveAudit(e.target.checked));
+  if (last)
+    applyTo(prefix, last);
+  refreshLiveAudit();
+}
+function refreshLiveAudit() {
+  if (mounts.length === 0)
+    return Promise.resolve();
+  if (inFlight)
+    return inFlight;
+  inFlight = (async () => {
+    try {
+      const r = await getJSON("/api/scanner/live");
+      last = r;
+      for (const prefix of mounts)
+        applyTo(prefix, r);
+    } catch {} finally {
+      inFlight = null;
+    }
+  })();
+  return inFlight;
+}
+async function setLiveAudit(enabled) {
+  try {
+    last = await postJSON("/api/scanner/live", { enabled });
+    for (const prefix of mounts)
+      applyTo(prefix, last);
+  } catch (e) {
+    toast(e.message, "error");
+    await refreshLiveAudit();
+  }
+}
+function applyTo(prefix, r) {
+  const toggle = $(`#${prefix}-audit-toggle`);
+  const hint = $(`#${prefix}-audit-hint`);
+  const chips = $(`#${prefix}-audit-chips`);
+  const verdict = $(`#${prefix}-audit-verdict`);
+  if (!toggle || !hint)
+    return;
+  toggle.disabled = !r.wired;
+  if (!r.wired) {
+    toggle.checked = false;
+    hint.textContent = r.hint ?? "not available";
+    if (chips)
+      chips.innerHTML = "";
+    if (verdict)
+      verdict.innerHTML = "";
+    return;
+  }
+  toggle.checked = r.enabled;
+  const state = r.enabled ? "sweeping new in-scope traffic" : "off — no active checks are being sent";
+  hint.textContent = r.query ? `${state} · filtered to ${r.query}` : state;
+  $(`#${prefix}-audit-swept`).textContent = (r.swept ?? 0).toLocaleString();
+  $(`#${prefix}-audit-findings`).textContent = (r.findings ?? 0).toLocaleString();
+  if (chips)
+    chips.innerHTML = chipsHtml(r);
+  if (verdict)
+    verdict.innerHTML = verdictHtml(r);
+}
+function chipsHtml(r) {
+  const chips = [];
+  if (r.behind > 0) {
+    chips.push(chip(`${r.behind.toLocaleString()} not swept yet`, "sev-medium", "captured but not yet reached by the sweep cursor"));
+  }
+  if (r.skipped) {
+    chips.push(chip(`${r.skipped.toLocaleString()} given up on`, "sev-low", "the sweep stopped waiting for a response; these were not audited and are not counted as clean"));
+  }
+  if (r.stalled_at !== undefined) {
+    chips.push(chip(`waiting on #${r.stalled_at}`, "sev-medium", "the cursor is blocked on this exchange"));
+  }
+  if (r.collapsed) {
+    chips.push(chip(`${r.collapsed.toLocaleString()} already covered`, "", "checks the shared ledger refused because an identical one had already run — this work ran, it is not a gap"));
+  }
+  if (r.ledger_resets) {
+    chips.push(chip(`${r.ledger_resets.toLocaleString()} ledger reset(s)`, "sev-low", "the dedup ledger was dropped at its cap; checks it had collapsed will re-dispatch once more"));
+  }
+  return chips.join(" ");
+}
+function chip(text, cls, title) {
+  return `<span class="pill pill-outline ${cls}" title="${esc(title)}">${esc(text)}</span>`;
+}
+function verdictHtml(r) {
+  const gaps = [];
+  if (r.behind > 0)
+    gaps.push(`${r.behind.toLocaleString()} exchange(s) not reached yet`);
+  if (r.skipped)
+    gaps.push(`${r.skipped.toLocaleString()} given up on with no response`);
+  if (r.stalled_at !== undefined)
+    gaps.push(`the cursor is waiting on exchange ${r.stalled_at}`);
+  if (gaps.length === 0) {
+    return `<div class="hint ok">complete — the sweep is caught up, nothing skipped and nothing waiting</div>`;
+  }
+  return `<div class="hint err">a floor, not a total: ${esc(gaps.join("; "))}</div>`;
+}
+
+// src/live.ts
+var DEFAULT_FALLBACK_MS = 4000;
+var DEFAULT_MIN_GAP_MS = 300;
+var FALLBACK_TICK_MS = 500;
+var SILENCE_LIMIT_MS = 60000;
+var WATCHDOG_TICK_MS = 15000;
+var panes = [];
+var stream = null;
+var delivering = false;
+var connects = 0;
+var lastFrameAt = 0;
+var fallbackTimer;
+var indicator = null;
+function live(spec) {
+  panes.push({
+    kinds: spec.kinds,
+    section: spec.section,
+    refresh: spec.refresh,
+    fallbackMs: spec.fallbackMs ?? DEFAULT_FALLBACK_MS,
+    minGapMs: spec.minGapMs ?? DEFAULT_MIN_GAP_MS,
+    stale: false,
+    owed: 0,
+    lastRun: Date.now()
+  });
+}
+function initLive() {
+  ensureIndicator();
+  watchTabSwitches();
+  connect();
+  startFallback();
+  setInterval(() => {
+    if (delivering && Date.now() - lastFrameAt > SILENCE_LIMIT_MS) {
+      reconnect();
+    }
+  }, WATCHDOG_TICK_MS);
+}
+function connect() {
+  if (typeof EventSource === "undefined") {
+    markDown();
+    return;
+  }
+  try {
+    stream = new EventSource("/api/events");
+  } catch {
+    markDown();
+    return;
+  }
+  stream.onmessage = (e) => onFrame(e.data);
+  stream.onerror = () => {
+    markDown();
+  };
+}
+function reconnect() {
+  stream?.close();
+  stream = null;
+  markDown();
+  connect();
+}
+function onFrame(data) {
+  lastFrameAt = Date.now();
+  let frame;
+  try {
+    frame = JSON.parse(data);
+  } catch {
+    return;
+  }
+  if (!frame.kind)
+    return;
+  if (frame.kind === "hello") {
+    markUp();
+    if (connects++ > 0)
+      panes.forEach((pane) => markStale(pane, 0));
+    return;
+  }
+  if (frame.kind === "ping") {
+    markUp();
+    return;
+  }
+  markUp();
+  for (const pane of panes) {
+    if (pane.kinds.includes(frame.kind))
+      markStale(pane, frame.changes ?? 0);
+  }
+}
+function markStale(pane, changes) {
+  pane.stale = true;
+  pane.owed += changes;
+  schedule(pane);
+}
+function schedule(pane) {
+  if (!pane.stale || pane.timer !== undefined || !visible(pane))
+    return;
+  const wait = Math.max(0, pane.minGapMs - (Date.now() - pane.lastRun));
+  pane.timer = setTimeout(() => {
+    pane.timer = undefined;
+    if (!pane.stale || !visible(pane))
+      return;
+    pane.stale = false;
+    pane.lastRun = Date.now();
+    const owed = pane.owed;
+    pane.owed = 0;
+    pane.refresh(owed);
+  }, wait);
+}
+function visible(pane) {
+  if (pane.section === "")
+    return true;
+  return document.getElementById(pane.section)?.classList.contains("on") === true;
+}
+function watchTabSwitches() {
+  const sections = Array.from(document.querySelectorAll("main > section"));
+  if (sections.length === 0)
+    return;
+  const observer = new MutationObserver(() => {
+    for (const pane of panes) {
+      if (pane.stale)
+        schedule(pane);
+    }
+  });
+  sections.forEach((s) => observer.observe(s, { attributes: true, attributeFilter: ["class"] }));
+}
+function startFallback() {
+  if (fallbackTimer !== undefined)
+    return;
+  fallbackTimer = setInterval(() => {
+    if (delivering)
+      return;
+    const now = Date.now();
+    for (const pane of panes) {
+      if (!visible(pane) || now - pane.lastRun < pane.fallbackMs)
+        continue;
+      pane.stale = false;
+      pane.owed = 0;
+      pane.lastRun = now;
+      pane.refresh(0);
+    }
+  }, FALLBACK_TICK_MS);
+}
+function stopFallback() {
+  if (fallbackTimer === undefined)
+    return;
+  clearInterval(fallbackTimer);
+  fallbackTimer = undefined;
+}
+function markUp() {
+  lastFrameAt = Date.now();
+  if (delivering)
+    return;
+  delivering = true;
+  stopFallback();
+  renderIndicator();
+}
+function markDown() {
+  if (!delivering && fallbackTimer !== undefined)
+    return;
+  delivering = false;
+  startFallback();
+  renderIndicator();
+}
+function ensureIndicator() {
+  const stats = $("#stats");
+  if (!stats || indicator)
+    return;
+  indicator = document.createElement("span");
+  indicator.id = "live-state";
+  indicator.className = "hint";
+  stats.insertAdjacentElement("afterend", indicator);
+  renderIndicator();
+}
+function renderIndicator() {
+  if (!indicator)
+    return;
+  indicator.textContent = delivering ? "live" : "polling";
+  indicator.title = delivering ? "changes are pushed from the server as they happen (/api/events)" : "the event stream is not delivering, so panes are polled on an interval instead — this is the fallback, not a live view";
+}
+
 // src/dashboard.ts
 function initDashboard() {
   const section = $("#dashboard");
@@ -140,27 +439,21 @@ function initDashboard() {
       </div>
     </div>
     <div class="two">
-      <div class="card">
-        <div class="row" style="justify-content:space-between;margin-bottom:4px">
-          <div class="card-title" style="margin:0">Live active audit</div>
-          <label class="switch"><input type="checkbox" id="dash-audit-toggle" /><span class="slider"></span></label>
-        </div>
-        <p class="hint">Auditing new in-scope traffic. Active checks are never sent automatically
-          while this is off.</p>
-        <div id="dash-audit-hint" class="hint"></div>
-        <div class="row">
-          <div class="stat-tile grow"><div class="label">Exchanges swept</div><div class="value" id="dash-audit-swept">0</div></div>
-          <div class="stat-tile grow"><div class="label">Findings</div><div class="value" id="dash-audit-findings">0</div></div>
-        </div>
-      </div>
+      ${liveAuditCardHtml("dash")}
     </div>
   `;
-  $("#dash-audit-toggle").addEventListener("change", (e) => void setAudit(e.target.checked));
+  mountLiveAudit("dash");
+  live({
+    kinds: ["history", "issues", "toollog", "dashboard"],
+    section: "dashboard",
+    refresh: () => void refresh(),
+    minGapMs: 1000,
+    fallbackMs: 4000
+  });
   refresh();
-  setInterval(() => void refresh(), 4000);
 }
 async function refresh() {
-  await Promise.all([refreshDashboard(), refreshScope(), refreshAudit()]);
+  await Promise.all([refreshDashboard(), refreshScope()]);
 }
 async function refreshDashboard() {
   try {
@@ -260,58 +553,562 @@ function relTime(startedMs) {
     return `${Math.round(diffS / 60)}m ago`;
   return `${Math.round(diffS / 3600)}h ago`;
 }
-async function refreshAudit() {
-  const toggle = $("#dash-audit-toggle");
-  const hint = $("#dash-audit-hint");
-  try {
-    const r = await getJSON("/api/scanner/live");
-    toggle.disabled = !r.wired;
-    if (!r.wired) {
-      hint.textContent = r.hint ?? "not available";
-      return;
-    }
-    toggle.checked = r.enabled;
-    const notes = [r.enabled ? "sweeping new in-scope traffic" : "off"];
-    if (r.query)
-      notes.push(`filtered to ${r.query}`);
-    if (r.behind > 0)
-      notes.push(`${r.behind} exchange(s) not reached yet`);
-    if (r.skipped)
-      notes.push(`${r.skipped} given up on (no response)`);
-    if (r.stalled_at !== undefined)
-      notes.push(`waiting on exchange ${r.stalled_at}`);
-    if (r.ledger_resets)
-      notes.push(`${r.ledger_resets} ledger reset(s)`);
-    hint.textContent = notes.join(" · ");
-    $("#dash-audit-swept").textContent = String(r.swept ?? 0);
-    $("#dash-audit-findings").textContent = String(r.findings ?? 0);
-  } catch {}
-}
-async function setAudit(enabled) {
-  try {
-    await postJSON("/api/scanner/live", { enabled });
-  } finally {
-    refreshAudit();
-  }
-}
 
 // src/types.ts
 var EVT_SEND_TO_REPEATER = "send-to-repeater";
 var EVT_SEND_TO_INTRUDER = "send-to-intruder";
 var EVT_SEND_TO_COMPARER = "send-to-comparer";
 var EVT_SHOW_EXCHANGE = "show-exchange";
+var EVT_FILTER_HISTORY = "filter-history";
+
+// src/contextmenu.ts
+var MENU_ID = "ctx-menu";
+var EDGE_MARGIN = 4;
+var openMenu = null;
+function isContextMenuOpen() {
+  return openMenu !== null;
+}
+function closeContextMenu() {
+  if (!openMenu)
+    return;
+  openMenu.remove();
+  openMenu = null;
+  document.removeEventListener("pointerdown", onOutsidePointer, true);
+  document.removeEventListener("keydown", onMenuKey, true);
+  window.removeEventListener("scroll", closeContextMenu, true);
+  window.removeEventListener("resize", closeContextMenu);
+  window.removeEventListener("blur", closeContextMenu);
+}
+function showContextMenu(x, y, items, heading) {
+  closeContextMenu();
+  const drawable = items.filter((i) => i.separator || i.label);
+  if (drawable.length === 0)
+    return;
+  const el = document.createElement("div");
+  el.id = MENU_ID;
+  el.setAttribute("role", "menu");
+  el.tabIndex = -1;
+  if (heading) {
+    const h = document.createElement("div");
+    h.className = "ctx-head";
+    h.textContent = heading;
+    el.appendChild(h);
+  }
+  for (const item of drawable) {
+    if (item.separator) {
+      const sep = document.createElement("div");
+      sep.className = "ctx-sep";
+      el.appendChild(sep);
+      continue;
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ctx-item";
+    btn.setAttribute("role", "menuitem");
+    btn.disabled = item.disabled === true;
+    btn.tabIndex = -1;
+    const label = document.createElement("span");
+    label.textContent = item.label ?? "";
+    btn.appendChild(label);
+    if (item.hint) {
+      const hint = document.createElement("span");
+      hint.className = "ctx-hint";
+      hint.textContent = item.hint;
+      btn.appendChild(hint);
+    }
+    btn.addEventListener("mouseenter", () => btn.focus());
+    btn.addEventListener("click", () => {
+      const run = item.run;
+      closeContextMenu();
+      if (run)
+        run();
+    });
+    el.appendChild(btn);
+  }
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
+  el.style.left = "-9999px";
+  el.style.top = "0";
+  document.body.appendChild(el);
+  position(el, x, y);
+  openMenu = el;
+  document.addEventListener("pointerdown", onOutsidePointer, true);
+  document.addEventListener("keydown", onMenuKey, true);
+  window.addEventListener("scroll", closeContextMenu, true);
+  window.addEventListener("resize", closeContextMenu);
+  window.addEventListener("blur", closeContextMenu);
+  el.focus({ preventScroll: true });
+}
+function position(el, x, y) {
+  const r = el.getBoundingClientRect();
+  const maxX = window.innerWidth - EDGE_MARGIN;
+  const maxY = window.innerHeight - EDGE_MARGIN;
+  let left = x;
+  let top = y;
+  if (left + r.width > maxX)
+    left = x - r.width;
+  if (top + r.height > maxY)
+    top = y - r.height;
+  el.style.left = `${Math.max(EDGE_MARGIN, left)}px`;
+  el.style.top = `${Math.max(EDGE_MARGIN, top)}px`;
+}
+function itemsOf(menu) {
+  return Array.from(menu.querySelectorAll(".ctx-item:not(:disabled)"));
+}
+function onOutsidePointer(e) {
+  if (openMenu && !openMenu.contains(e.target))
+    closeContextMenu();
+}
+function onMenuKey(e) {
+  const menu = openMenu;
+  if (!menu)
+    return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();
+    closeContextMenu();
+    return;
+  }
+  if (e.key === "Tab") {
+    e.preventDefault();
+    e.stopPropagation();
+    closeContextMenu();
+    return;
+  }
+  const keys = ["ArrowDown", "ArrowUp", "Home", "End"];
+  if (!keys.includes(e.key))
+    return;
+  const entries = itemsOf(menu);
+  if (entries.length === 0)
+    return;
+  e.preventDefault();
+  e.stopPropagation();
+  const current = entries.findIndex((b) => b === document.activeElement);
+  let next;
+  switch (e.key) {
+    case "Home":
+      next = 0;
+      break;
+    case "End":
+      next = entries.length - 1;
+      break;
+    case "ArrowUp":
+      next = current <= 0 ? entries.length - 1 : current - 1;
+      break;
+    default:
+      next = current === -1 || current === entries.length - 1 ? 0 : current + 1;
+  }
+  entries[next]?.focus();
+}
+function attachRowContextMenu(opts) {
+  const container = typeof opts.container === "string" ? document.querySelector(opts.container) : opts.container;
+  if (!container)
+    return;
+  container.addEventListener("contextmenu", (e) => {
+    const row = e.target?.closest(opts.rowSelector);
+    if (!row || !container.contains(row))
+      return;
+    const model = opts.resolve(row);
+    if (model === null)
+      return;
+    const items = opts.items(model, row);
+    if (items.length === 0)
+      return;
+    e.preventDefault();
+    opts.select?.(model, row);
+    showContextMenu(e.clientX, e.clientY, items, opts.heading?.(model, row));
+  });
+}
+
+// src/sendto.ts
+function targetOf(ex) {
+  return `${ex.tls ? "https" : "http"}://${ex.host}:${ex.port}`;
+}
+function urlOf(ex) {
+  const scheme = ex.tls ? "https" : "http";
+  const defaultPort = ex.tls ? 443 : 80;
+  const authority = ex.port === defaultPort ? ex.host : `${ex.host}:${ex.port}`;
+  return `${scheme}://${authority}${ex.path}`;
+}
+async function sendToRepeater(ex) {
+  try {
+    const req = await getJSON(`/api/message/${ex.request}`);
+    emit(EVT_SEND_TO_REPEATER, { target: targetOf(ex), raw: req.text, protocol: ex.protocol });
+    switchTab("repeater");
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+function sendToIntruder(ex) {
+  emit(EVT_SEND_TO_INTRUDER, { msgId: ex.request, target: targetOf(ex) });
+  switchTab("intruder");
+}
+function sendToComparer(ex, side) {
+  emit(EVT_SEND_TO_COMPARER, { side, msgId: ex.request, label: `${ex.method} ${ex.path}` });
+  switchTab("comparer");
+  toast(`sent request #${ex.request} to Comparer ${side.toUpperCase()}`);
+}
+function showInHistory(ex) {
+  emit(EVT_SHOW_EXCHANGE, { exchangeId: ex.id });
+  switchTab("history");
+}
+async function saveToOrganizer(ex) {
+  try {
+    await postJSON("/api/tools/organizer", { exchange: ex.id });
+    toast(`saved ${ex.method} ${ex.path} to Organizer`);
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+function openUrl(ex) {
+  window.open(urlOf(ex), "_blank", "noopener,noreferrer");
+}
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`copied ${what}`);
+    return;
+  } catch {}
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("aria-hidden", "true");
+  ta.style.position = "fixed";
+  ta.style.top = "-1000px";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  ta.remove();
+  toast(ok ? `copied ${what}` : `could not copy ${what} — the clipboard is blocked`, ok ? "info" : "error");
+}
+function shellQuote(s) {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+function asCurl(ex, raw) {
+  const split = raw.search(/\r?\n\r?\n/);
+  const head = split === -1 ? raw : raw.slice(0, split);
+  const body = split === -1 ? "" : raw.slice(split).replace(/^\r?\n\r?\n/, "");
+  const lines = head.split(/\r?\n/);
+  const method = (lines[0] ?? "").split(" ")[0] || ex.method || "GET";
+  const parts = [`curl -i -sS -X ${method} ${shellQuote(urlOf(ex))}`];
+  for (const line of lines.slice(1)) {
+    const colon = line.indexOf(":");
+    if (colon <= 0)
+      continue;
+    if (/^content-length$/i.test(line.slice(0, colon).trim()))
+      continue;
+    parts.push(`-H ${shellQuote(line.trim())}`);
+  }
+  if (body.length > 0)
+    parts.push(`--data-raw ${shellQuote(body)}`);
+  return parts.join(" \\\n  ");
+}
+async function copyAsCurl(ex) {
+  try {
+    const req = await getJSON(`/api/message/${ex.request}`);
+    await copyText(asCurl(ex, req.text), `#${ex.id} as curl`);
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+function exchangeActions(showHistory) {
+  const actions = [
+    { label: "Send to Repeater", hint: "Ctrl+R", act: (ex) => sendToRepeater(ex) },
+    { label: "Send to Intruder", hint: "Ctrl+I", act: (ex) => sendToIntruder(ex) },
+    { label: "Send to Comparer (A)", act: (ex) => sendToComparer(ex, "a") },
+    { label: "Send to Comparer (B)", act: (ex) => sendToComparer(ex, "b") },
+    { label: "Save to Organizer", before: true, act: (ex) => saveToOrganizer(ex) },
+    { label: "Copy URL", before: true, act: (ex) => copyText(urlOf(ex), `#${ex.id} URL`) },
+    { label: "Copy as curl", act: (ex) => copyAsCurl(ex) },
+    { label: "Open URL in a new tab", act: (ex) => openUrl(ex) }
+  ];
+  if (showHistory) {
+    actions.push({ label: "Show in History", before: true, act: (ex) => showInHistory(ex) });
+  }
+  return actions;
+}
+function toMenuItems(actions, run) {
+  const items = [];
+  for (const a of actions) {
+    if (a.before)
+      items.push({ separator: true });
+    const item = { label: a.label, run: run(a) };
+    if (a.hint !== undefined)
+      item.hint = a.hint;
+    items.push(item);
+  }
+  return items;
+}
+function exchangeMenuItems(ex, opts) {
+  return toMenuItems(exchangeActions(opts?.showInHistory === true), (a) => () => void a.act(ex));
+}
+function exchangeIdMenuItems(id, absent = "no captured request here — nothing to send", opts) {
+  if (id === null || id === undefined)
+    return [{ label: absent, disabled: true }];
+  return toMenuItems(exchangeActions(opts?.showInHistory === true), (a) => () => void withExchange(id, (ex) => a.act(ex)));
+}
+async function withExchange(id, fn) {
+  try {
+    const ex = await getJSON(`/api/exchange/${id}`);
+    await fn(ex);
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+async function fetchExchange(id) {
+  try {
+    return await getJSON(`/api/exchange/${id}`);
+  } catch (e) {
+    toast(e.message, "error");
+    return null;
+  }
+}
+
+// src/shortcuts.ts
+var rowSources = new Map;
+function registerRowTarget(tabId, get) {
+  rowSources.set(tabId, get);
+}
+function activeTabId() {
+  return $("main > section.on")?.id ?? null;
+}
+function tabLabel(tabId) {
+  const btn = $all("nav button[data-t]").find((b) => b.dataset["t"] === tabId);
+  return btn?.textContent?.trim() ?? tabId;
+}
+function activeRowSource() {
+  const id = activeTabId();
+  return id === null ? undefined : rowSources.get(id);
+}
+function hasRowSource() {
+  return activeRowSource() !== undefined;
+}
+async function resolveTarget(t) {
+  if (t.exchange)
+    return t.exchange;
+  if (t.exchangeId !== undefined)
+    return await fetchExchange(t.exchangeId);
+  toast(t.note ?? `${t.label} has no captured request to send`, "error");
+  return null;
+}
+function sendSelected(where, keys) {
+  const get = activeRowSource();
+  if (!get)
+    return;
+  const target = get();
+  if (!target) {
+    const id = activeTabId();
+    toast(`nothing selected — click a row in ${id ? tabLabel(id) : "this tab"} first, then press ${keys}`);
+    return;
+  }
+  resolveTarget(target).then((ex) => {
+    if (!ex)
+      return;
+    if (where === "repeater")
+      sendToRepeater(ex);
+    else
+      sendToIntruder(ex);
+  });
+}
+function moveTab(delta) {
+  const buttons = $all("nav button[data-t]");
+  if (buttons.length === 0)
+    return;
+  const current = buttons.findIndex((b) => b.classList.contains("on"));
+  const from = current === -1 ? 0 : current;
+  const next = buttons[((from + delta) % buttons.length + buttons.length) % buttons.length];
+  const id = next?.dataset["t"];
+  if (id)
+    switchTab(id);
+}
+function mod(e) {
+  return (e.ctrlKey || e.metaKey) && !e.altKey;
+}
+var ROW_PANES = "History, Site map, WS History, Scanner";
+var BINDINGS = [
+  {
+    keys: "Ctrl+R",
+    what: "Send the selected row to Repeater",
+    where: ROW_PANES,
+    when: (e) => mod(e) && !e.shiftKey && e.key.toLowerCase() === "r",
+    claim: hasRowSource,
+    run: () => sendSelected("repeater", "Ctrl+R")
+  },
+  {
+    keys: "Ctrl+I",
+    what: "Send the selected row to Intruder",
+    where: ROW_PANES,
+    when: (e) => mod(e) && !e.shiftKey && e.key.toLowerCase() === "i",
+    claim: hasRowSource,
+    run: () => sendSelected("intruder", "Ctrl+I")
+  },
+  {
+    keys: "Ctrl+Enter",
+    what: "Send the request being edited",
+    where: "Repeater — works inside the editor",
+    when: (e) => mod(e) && !e.shiftKey && e.key === "Enter",
+    claim: () => activeTabId() === "repeater" && $("#rep-send") !== null,
+    run: () => $("#rep-send")?.click(),
+    inEditable: true
+  },
+  {
+    keys: "Ctrl+Shift+→",
+    what: "Next tab",
+    where: "anywhere",
+    when: (e) => mod(e) && e.shiftKey && e.key === "ArrowRight",
+    run: () => moveTab(1)
+  },
+  {
+    keys: "Ctrl+Shift+←",
+    what: "Previous tab",
+    where: "anywhere",
+    when: (e) => mod(e) && e.shiftKey && e.key === "ArrowLeft",
+    run: () => moveTab(-1)
+  },
+  {
+    keys: "?",
+    what: "Show or hide this list",
+    where: "anywhere",
+    when: (e) => !e.ctrlKey && !e.metaKey && !e.altKey && e.key === "?",
+    run: () => toggleSheet()
+  }
+];
+var SHEET_ID = "shortcut-sheet";
+var MENU_PANES = [
+  ["History", "send to Repeater / Intruder / Comparer, save to Organizer, copy URL or curl"],
+  ["Site map", "the node's most recent exchange: send to any tool, copy its URL, open it in History"],
+  ["WS History", "the upgrade exchange, and copy the message payload"],
+  ["Scanner", "the finding's first occurrence: open it in History or send it to any tool"],
+  ["Logger", "copy the host or path, or filter History by that host"]
+];
+function sheetHtml() {
+  const rows = BINDINGS.map((b) => `<tr><td><kbd>${esc(b.keys)}</kbd></td><td>${esc(b.what)}</td><td class="hint">${esc(b.where)}</td></tr>`).join("");
+  const menus = MENU_PANES.map(([pane, what]) => `<tr><td><b>${esc(pane)}</b></td><td colspan="2" class="hint">${esc(what)}</td></tr>`).join("");
+  return `
+    <div class="sheet">
+      <div class="row">
+        <b class="card-title" style="margin:0">Keyboard shortcuts</b>
+        <span class="grow"></span>
+        <button class="ghost small" id="sheet-close">Close</button>
+      </div>
+      <table>
+        <thead><tr><th>Key</th><th>Does</th><th>Where</th></tr></thead>
+        <tbody>
+          ${rows}
+          <tr><td><kbd>Esc</kbd></td><td>Close this list, or an open right-click menu</td><td class="hint">anywhere</td></tr>
+        </tbody>
+      </table>
+      <p class="hint">On macOS press <kbd>⌘</kbd> wherever this says <kbd>Ctrl</kbd>. Tab switching
+        avoids <kbd>Ctrl</kbd>+<kbd>1</kbd>..<kbd>9</kbd> because the browser reserves those for its own
+        tabs and a page cannot override them. <kbd>Ctrl</kbd>+<kbd>R</kbd> stays the browser's reload on
+        any tab without selectable rows.</p>
+      <div class="card-title" style="margin-top:12px">Right-click a row</div>
+      <table><tbody>${menus}</tbody></table>
+      <p class="hint">Right-click also selects the row, so <kbd>Ctrl</kbd>+<kbd>R</kbd> afterwards acts
+        on the same one.</p>
+    </div>`;
+}
+function sheetEl() {
+  return document.getElementById(SHEET_ID);
+}
+function closeSheet() {
+  const el = sheetEl();
+  if (!el)
+    return;
+  el.remove();
+  document.removeEventListener("keydown", onSheetKey, true);
+}
+function openSheet() {
+  if (sheetEl())
+    return;
+  const el = document.createElement("div");
+  el.id = SHEET_ID;
+  el.className = "sheet-backdrop";
+  el.innerHTML = sheetHtml();
+  document.body.appendChild(el);
+  el.addEventListener("click", (e) => {
+    if (e.target === el || e.target.id === "sheet-close")
+      closeSheet();
+  });
+  document.addEventListener("keydown", onSheetKey, true);
+}
+function toggleSheet() {
+  if (sheetEl())
+    closeSheet();
+  else
+    openSheet();
+}
+function onSheetKey(e) {
+  if (e.key === "Escape" || e.key === "?") {
+    e.preventDefault();
+    e.stopPropagation();
+    closeSheet();
+  }
+}
+function inEditable(target) {
+  if (!(target instanceof HTMLElement))
+    return false;
+  if (target.isContentEditable)
+    return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+function onKey(e) {
+  if (isContextMenuOpen())
+    return;
+  if (e.isComposing)
+    return;
+  const editable = inEditable(e.target);
+  for (const b of BINDINGS) {
+    if (!b.when(e))
+      continue;
+    if (editable && b.inEditable !== true)
+      return;
+    if (b.claim && !b.claim())
+      return;
+    e.preventDefault();
+    b.run();
+    return;
+  }
+}
+function addHelpButton() {
+  const header = $("header");
+  if (!header || document.getElementById("shortcut-help"))
+    return;
+  const btn = document.createElement("button");
+  btn.id = "shortcut-help";
+  btn.className = "ghost small";
+  btn.type = "button";
+  btn.textContent = "? shortcuts";
+  btn.title = "keyboard shortcuts and right-click actions (press ?)";
+  btn.addEventListener("click", () => toggleSheet());
+  const caLink = document.getElementById("ca-link");
+  if (caLink)
+    header.insertBefore(btn, caLink);
+  else
+    header.appendChild(btn);
+}
+function initShortcuts() {
+  addHelpButton();
+  document.addEventListener("keydown", onKey);
+}
 
 // src/history.ts
 var allRows = [];
 var cachedScope = null;
 var queryTimer;
+var selected = null;
+var rendered = new Map;
 function initHistory() {
   const section = $("#history");
   if (!section)
     return;
   section.innerHTML = `
     <div class="row">
-      <button class="go" id="hist-refresh">Refresh</button>
+      <span class="hint">right-click a row for send-to actions · Ctrl+R Repeater · Ctrl+I Intruder · ? for all shortcuts</span>
       <span id="hist-note" class="hint"></span>
     </div>
     <div class="row">
@@ -338,7 +1135,6 @@ function initHistory() {
       <div><b class="muted">Response</b><pre id="hist-res"></pre></div>
     </div>
   `;
-  $("#hist-refresh").addEventListener("click", () => void load());
   $all(".hist-status").forEach((c) => c.addEventListener("change", () => applyFilter()));
   $("#hist-search").addEventListener("input", () => applyFilter());
   $("#hist-regex").addEventListener("change", () => applyFilter());
@@ -356,7 +1152,25 @@ function initHistory() {
     }
   });
   on(EVT_SHOW_EXCHANGE, (d) => void loadExchangeById(d.exchangeId));
+  on(EVT_FILTER_HISTORY, (d) => {
+    $("#hist-search").value = d.search;
+    applyFilter();
+  });
+  attachRowContextMenu({
+    container: "#hist-body",
+    rowSelector: "tr[data-id]",
+    resolve: (row) => rendered.get(Number(row.dataset["id"])) ?? null,
+    heading: (ex) => `#${ex.id} ${ex.method} ${ex.path}`,
+    select: (ex) => markSelected(ex),
+    items: (ex) => exchangeMenuItems(ex)
+  });
+  registerRowTarget("history", () => selected ? { label: `exchange #${selected.id}`, exchange: selected } : null);
+  live({ kinds: ["history"], section: "history", refresh: () => void load() });
   load();
+}
+function markSelected(ex) {
+  selected = ex;
+  $all("#hist-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === ex.id));
 }
 async function loadExchangeById(id) {
   try {
@@ -465,12 +1279,15 @@ function rowHtml(r) {
   </tr>`;
 }
 function wireRows(rows) {
-  const byId = new Map(rows.map((r) => [r.id, r]));
+  rendered = new Map(rows.map((r) => [r.id, r]));
+  const byId = rendered;
   $all("#hist-body tr").forEach((tr) => {
     const id = Number(tr.dataset["id"]);
     const ex = byId.get(id);
     if (!ex)
       return;
+    if (selected && selected.id === id)
+      tr.classList.add("on");
     tr.addEventListener("click", (e) => {
       if (e.target.closest("button"))
         return;
@@ -485,6 +1302,7 @@ function wireRows(rows) {
   });
 }
 async function openExchange(ex) {
+  markSelected(ex);
   const reqEl = $("#hist-req");
   const resEl = $("#hist-res");
   reqEl.textContent = "loading…";
@@ -504,43 +1322,24 @@ async function openExchange(ex) {
     }
   }
 }
-function targetOf(ex) {
-  return `${ex.tls ? "https" : "http"}://${ex.host}:${ex.port}`;
-}
 async function handleAction(act, ex) {
+  markSelected(ex);
   switch (act) {
-    case "repeater": {
-      try {
-        const req = await getJSON(`/api/message/${ex.request}`);
-        emit(EVT_SEND_TO_REPEATER, { target: targetOf(ex), raw: req.text, protocol: ex.protocol });
-        switchTab("repeater");
-      } catch (e) {
-        toast(e.message, "error");
-      }
+    case "repeater":
+      await sendToRepeater(ex);
       break;
-    }
-    case "intruder": {
-      emit(EVT_SEND_TO_INTRUDER, { msgId: ex.request, target: targetOf(ex) });
-      switchTab("intruder");
+    case "intruder":
+      sendToIntruder(ex);
       break;
-    }
     case "cmp-a":
-    case "cmp-b": {
-      const side = act === "cmp-a" ? "a" : "b";
-      emit(EVT_SEND_TO_COMPARER, { side, msgId: ex.request, label: `${ex.method} ${ex.path}` });
-      switchTab("comparer");
-      toast(`sent request #${ex.request} to Comparer ${side.toUpperCase()}`);
+      sendToComparer(ex, "a");
       break;
-    }
-    case "organize": {
-      try {
-        await postJSON("/api/tools/organizer", { exchange: ex.id });
-        toast(`saved ${ex.method} ${ex.path} to Organizer`);
-      } catch (e) {
-        toast(e.message, "error");
-      }
+    case "cmp-b":
+      sendToComparer(ex, "b");
       break;
-    }
+    case "organize":
+      await saveToOrganizer(ex);
+      break;
     default:
       break;
   }
@@ -549,6 +1348,7 @@ async function handleAction(act, ex) {
 // src/wshistory.ts
 var connectionsByExchange = new Map;
 var currentRows = [];
+var selected2 = null;
 function initWshistory() {
   const section = $("#wshistory");
   if (!section)
@@ -558,7 +1358,7 @@ function initWshistory() {
       <label>connection
         <select id="ws-conn"><option value="">all connections</option></select>
       </label>
-      <button class="ghost" id="ws-refresh">Refresh</button>
+      <span class="hint">right-click a row for the upgrade exchange's send-to actions · ? for shortcuts</span>
       <span id="ws-meta" class="hint"></span>
     </div>
     <table>
@@ -573,9 +1373,37 @@ function initWshistory() {
       <pre id="ws-payload">select a row</pre>
     </div>
   `;
-  $("#ws-refresh").addEventListener("click", () => void loadAll());
   $("#ws-conn").addEventListener("change", () => void load2());
+  attachRowContextMenu({
+    container: "#ws-body",
+    rowSelector: "tr[data-id]",
+    resolve: (tr) => currentRows.find((r) => r.id === Number(tr.dataset["id"])) ?? null,
+    heading: (row) => `message #${row.id} on exchange #${row.exchange}`,
+    select: (row) => markSelected2(row),
+    items: (row) => rowMenuItems(row)
+  });
+  registerRowTarget("wshistory", () => selected2 ? { label: `WS message #${selected2.id}`, exchangeId: selected2.exchange } : null);
+  live({ kinds: ["ws"], section: "wshistory", refresh: () => void loadAll() });
   loadAll();
+}
+function markSelected2(row) {
+  selected2 = row;
+  $all("#ws-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === row.id));
+}
+function rowMenuItems(row) {
+  return [
+    { label: "Copy this message's payload", run: () => void copyPayload(row) },
+    { separator: true },
+    ...exchangeIdMenuItems(row.exchange, "this message has no upgrade exchange recorded", { showInHistory: true })
+  ];
+}
+async function copyPayload(row) {
+  try {
+    const msg = await getJSON(`/api/ws/message/${row.id}`);
+    await copyText(msg.opcode === "text" ? msg.text : msg.hex, `message #${row.id} payload`);
+  } catch (e) {
+    toast(e.message, "error");
+  }
 }
 async function loadAll() {
   try {
@@ -632,10 +1460,13 @@ function wireRows2() {
     const row = byId.get(id);
     if (!row)
       return;
+    if (selected2 && selected2.id === id)
+      tr.classList.add("on");
     tr.addEventListener("click", () => void openMessage(row));
   });
 }
 async function openMessage(row) {
+  markSelected2(row);
   const el = $("#ws-payload");
   el.textContent = "loading…";
   let msg;
@@ -658,7 +1489,8 @@ async function openMessage(row) {
 }
 
 // src/sitemap.ts
-var selected = null;
+var selected3 = null;
+var selectedExchange = null;
 var searchDebounce;
 function initSitemap() {
   const section = $("#sitemap");
@@ -669,12 +1501,15 @@ function initSitemap() {
       <button class="go" id="site-refresh">Refresh</button>
       <input id="site-q" placeholder="filter by segment or path…" style="width:220px" />
       <label><input type="checkbox" id="site-scope-only" /> in scope only</label>
+      <span class="hint">right-click a node to send its latest exchange to a tool · ? for shortcuts</span>
       <span id="site-note" class="hint"></span>
+      <span id="site-stale" class="hint"></span>
     </div>
     <div id="site-tree" class="tree"></div>
     <div id="site-detail"></div>
   `;
   $("#site-refresh").addEventListener("click", () => void load3());
+  live({ kinds: ["history"], section: "sitemap", refresh: markTreeStale, minGapMs: 1000 });
   $("#site-q").addEventListener("input", () => {
     clearTimeout(searchDebounce);
     searchDebounce = setTimeout(() => void load3(), 300);
@@ -692,7 +1527,39 @@ function initSitemap() {
       select(node);
     }
   });
+  attachRowContextMenu({
+    container: "#site-tree",
+    rowSelector: ".node",
+    resolve: (node) => node,
+    heading: (node) => `${node.dataset["host"] ?? ""}${node.dataset["path"] ?? ""}`,
+    select: (node) => {
+      if (selected3?.host !== node.dataset["host"] || selected3?.path !== node.dataset["path"])
+        select(node);
+    },
+    items: (node) => nodeMenuItems(node)
+  });
+  registerRowTarget("sitemap", () => selected3 ? {
+    label: `${selected3.host}${selected3.path}`,
+    ...selectedExchange !== null ? { exchangeId: selectedExchange } : {},
+    note: `nothing has been captured at ${selected3.host}${selected3.path} yet — there is no request to send`
+  } : null);
   load3();
+}
+function nodeExchangeId(node) {
+  const raw = node.dataset["lastExchange"];
+  if (raw === undefined || raw === "")
+    return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+function nodeMenuItems(node) {
+  const items = [];
+  if (node.dataset["haschildren"] === "1") {
+    const open = node.dataset["loaded"] === "1" && node.nextElementSibling?.style.display !== "none";
+    items.push({ label: open ? "Collapse" : "Expand", run: () => void toggle(node) }, { separator: true });
+  }
+  items.push(...exchangeIdMenuItems(nodeExchangeId(node), "no exchange captured at this node yet", { showInHistory: true }));
+  return items;
 }
 function query() {
   const q = $("#site-q").value.trim();
@@ -705,9 +1572,22 @@ function query() {
   const s = params.toString();
   return s ? `?${s}` : "";
 }
+var staleSince = 0;
+function markTreeStale(changes) {
+  if (changes <= 0)
+    return;
+  staleSince += changes;
+  const marker = $("#site-stale");
+  if (marker)
+    marker.textContent = `· ${staleSince} captured since this tree was drawn — Refresh`;
+}
 async function load3() {
   const note = $("#site-note");
   const container = $("#site-tree");
+  staleSince = 0;
+  const marker = $("#site-stale");
+  if (marker)
+    marker.textContent = "";
   try {
     const resp = await getJSON(`/api/sitemap${query()}`);
     const matched = resp.matched != null ? ` · ${resp.matched} of ${resp.nodes} match` : "";
@@ -727,10 +1607,11 @@ function nodeLi(n, rootHost) {
     n.params.length ? `params: ${n.params.join(",")}` : ""
   ].filter(Boolean).join(" · ");
   const childrenHtml = loaded ? `<ul>${n.children.map((c) => nodeLi(c, rootHost)).join("")}</ul>` : "";
-  const isSelected = selected && selected.host === rootHost && selected.path === n.path;
+  const isSelected = selected3 && selected3.host === rootHost && selected3.path === n.path;
   return `<li>
     <div class="node${n.requested ? "" : " unrequested"}${isSelected ? " on" : ""}" data-host="${esc(rootHost)}" data-path="${esc(n.path)}"
-         data-haschildren="${hasChildren ? 1 : 0}" data-loaded="${loaded ? 1 : 0}">
+         data-haschildren="${hasChildren ? 1 : 0}" data-loaded="${loaded ? 1 : 0}"
+         data-last-exchange="${n.last_exchange ?? ""}">
       <span class="twisty">${hasChildren ? loaded ? "▾" : "▸" : "·"}</span>
       <span class="seg">${esc(n.segment)}</span>
       <span class="count">${esc(meta)}</span>
@@ -768,13 +1649,17 @@ async function toggle(node) {
 async function select(node) {
   const host = node.dataset["host"] ?? "";
   const path = node.dataset["path"] ?? "/";
-  if (selected && selected.host === host && selected.path === path) {
-    selected = null;
+  if (selected3 && selected3.host === host && selected3.path === path) {
+    selected3 = null;
+    selectedExchange = null;
     $("#site-detail").innerHTML = "";
     node.classList.remove("on");
     return;
   }
-  selected = { host, path };
+  selected3 = { host, path };
+  selectedExchange = nodeExchangeId(node);
+  $("#site-tree").querySelectorAll(".node.on").forEach((n) => n.classList.remove("on"));
+  node.classList.add("on");
   const out = $("#site-detail");
   out.innerHTML = `<p class="hint">loading…</p>`;
   try {
@@ -784,6 +1669,8 @@ async function select(node) {
       out.innerHTML = `<p class="err">node not found</p>`;
       return;
     }
+    if (selected3?.host === host && selected3?.path === path)
+      selectedExchange = n.last_exchange;
     await renderDetail(n, host);
   } catch (e) {
     out.innerHTML = `<p class="err">${esc(e.message)}</p>`;
@@ -988,7 +1875,7 @@ var DEFAULT_PAYLOADS = [`'
 `, '"', "../../etc/passwd", "{{7*7}}", "<script>"].join(",");
 var SINGLE = -1;
 var points = [];
-var selected2 = new Set;
+var selected4 = new Set;
 var mode = "sniper";
 var sources = new Map;
 function sourceFor(idx) {
@@ -1075,7 +1962,7 @@ async function findPoints() {
   const body = $("#int-points");
   const msgId = Number($("#int-msg").value);
   const all = $("#int-all").checked;
-  selected2.clear();
+  selected4.clear();
   for (const idx of [...sources.keys()]) {
     if (idx !== SINGLE)
       sources.delete(idx);
@@ -1093,16 +1980,16 @@ async function findPoints() {
 }
 function renderPointsTable() {
   const body = $("#int-points");
-  body.innerHTML = points.map((p) => `<tr><td><input type="checkbox" class="int-pt" data-idx="${p.index}" ${selected2.has(p.index) ? "checked" : ""} /></td>
+  body.innerHTML = points.map((p) => `<tr><td><input type="checkbox" class="int-pt" data-idx="${p.index}" ${selected4.has(p.index) ? "checked" : ""} /></td>
            <td>${p.index}</td><td>${esc(p.kind)}</td><td>${esc(p.label)}</td><td>${p.offset}</td><td>${p.len}</td><td>${esc(p.current)}</td></tr>`).join("") || `<tr><td colspan="7" class="hint">no insertion points found</td></tr>`;
   $all("#int-points .int-pt").forEach((cb) => {
     cb.addEventListener("change", () => {
       captureSourceValues();
       const idx = Number(cb.dataset["idx"]);
       if (cb.checked)
-        selected2.add(idx);
+        selected4.add(idx);
       else
-        selected2.delete(idx);
+        selected4.delete(idx);
       renderPayloadArea();
     });
   });
@@ -1154,7 +2041,7 @@ function captureSourceValues() {
 }
 function renderPayloadArea() {
   const area = $("#int-payloads");
-  const sel = [...selected2].sort((a, b) => a - b);
+  const sel = [...selected4].sort((a, b) => a - b);
   if (mode === "sniper" || mode === "battering_ram") {
     area.innerHTML = renderSourceBlock(SINGLE, "");
     wireSourceControls();
@@ -1435,7 +2322,7 @@ async function runAttack() {
   const meta = $("#int-meta");
   const report = $("#int-report");
   const results = $("#int-results");
-  const sel = [...selected2].sort((a, b) => a - b);
+  const sel = [...selected4].sort((a, b) => a - b);
   if (sel.length === 0) {
     meta.innerHTML = `<span class="err">select at least one insertion point</span>`;
     return;
@@ -1586,8 +2473,8 @@ var lists = {
   request: { active: true, rules: [] },
   response: { active: false, rules: [] }
 };
-var pollTimer;
 var selectedId = null;
+var heldClock;
 function initIntercept() {
   const section = $("#intercept");
   if (!section)
@@ -1598,7 +2485,6 @@ function initIntercept() {
       <span>Intercept is on</span>
       <span id="ic-status" class="hint"></span>
       <span class="grow"></span>
-      <button class="ghost" id="ic-refresh">Refresh</button>
     </div>
     ${rulesSectionHtml("request")}
     ${rulesSectionHtml("response")}
@@ -1610,18 +2496,11 @@ function initIntercept() {
     <div id="ic-editor"></div>
   `;
   $("#ic-enabled").addEventListener("change", (e) => void setEnabled(e.target.checked));
-  $("#ic-refresh").addEventListener("click", () => {
-    load4();
-    loadRules("request");
-    loadRules("response");
-  });
   ["request", "response"].forEach(wireRulesSection);
   load4();
   loadRules("request");
   loadRules("response");
-  if (pollTimer)
-    clearInterval(pollTimer);
-  pollTimer = setInterval(() => void load4(), 1500);
+  live({ kinds: ["intercept"], section: "intercept", refresh: () => void load4(), minGapMs: 0, fallbackMs: 1500 });
 }
 async function setEnabled(enabled) {
   try {
@@ -1649,8 +2528,9 @@ async function load4() {
       <td>${h.id}</td><td>${esc(h.direction)}</td><td>${esc(h.method)}</td>
       <td>${esc(h.host)}:${h.port}${h.tls ? " (tls)" : ""}</td>
       <td>${esc(h.path)}</td><td>${h.status === null ? "-" : h.status}</td>
-      <td>${h.held_ms} ms</td><td>${h.len}</td>
+      <td class="ic-held" data-base="${h.held_ms}">${h.held_ms} ms</td><td>${h.len}</td>
     </tr>`).join("") || `<tr><td colspan="8" class="hint">nothing held</td></tr>`;
+  startHeldClock(Date.now());
   $all("#ic-body tr[data-id]").forEach((tr) => {
     tr.addEventListener("click", () => {
       const id = Number(tr.dataset["id"]);
@@ -1663,6 +2543,27 @@ async function load4() {
     selectedId = null;
     $("#ic-editor").innerHTML = "";
   }
+}
+function startHeldClock(fetchedAt) {
+  if (heldClock !== undefined) {
+    clearInterval(heldClock);
+    heldClock = undefined;
+  }
+  if ($all(".ic-held").length === 0)
+    return;
+  heldClock = setInterval(() => {
+    const cells = $all(".ic-held");
+    if (cells.length === 0) {
+      if (heldClock !== undefined)
+        clearInterval(heldClock);
+      heldClock = undefined;
+      return;
+    }
+    const since = Date.now() - fetchedAt;
+    cells.forEach((cell) => {
+      cell.textContent = `${Number(cell.dataset["base"] ?? 0) + since} ms`;
+    });
+  }, 1000);
 }
 function queueHint(resp) {
   if (!resp.wired)
@@ -1723,8 +2624,8 @@ function note(dir, text, isError = false) {
   else
     el.textContent = text;
 }
-function optionsHtml(opts, selected3) {
-  return opts.map((o) => `<option value="${o.value}"${o.value === selected3 ? " selected" : ""}>${o.label}</option>`).join("");
+function optionsHtml(opts, selected5) {
+  return opts.map((o) => `<option value="${o.value}"${o.value === selected5 ? " selected" : ""}>${o.label}</option>`).join("");
 }
 function renderRules(dir) {
   const body = $(`#ic-${dir}-body`);
@@ -1861,14 +2762,17 @@ async function dropHeld(id) {
 
 // src/scanner.ts
 var openFindingId = null;
+var rendered2 = [];
+var selected5 = null;
 function initScanner() {
   const section = $("#scanner");
   if (!section)
     return;
   section.innerHTML = `
+    ${liveAuditCardHtml("scan")}
     <div class="row">
-      <button class="go" id="scan-refresh">Refresh</button>
       <span id="scan-counts"></span>
+      <span class="hint">right-click a finding to open or send its first occurrence · ? for shortcuts</span>
       <span class="grow"></span>
       <span class="hint">Audit exchange:</span>
       <input id="scan-audit-id" placeholder="exchange id" style="width:110px" />
@@ -1888,9 +2792,59 @@ function initScanner() {
     </table>
     <div id="scan-detail"></div>
   `;
-  $("#scan-refresh").addEventListener("click", () => void load5());
   $("#scan-audit-run").addEventListener("click", () => void runAudit());
+  mountLiveAudit("scan");
+  attachRowContextMenu({
+    container: "#scan-body",
+    rowSelector: "tr[data-id]",
+    resolve: (tr) => rendered2.find((f) => f.id === Number(tr.dataset["id"])) ?? null,
+    heading: (f) => f.issue_name ?? f.check_name,
+    select: (f) => markSelected3(f),
+    items: (f) => findingMenuItems(f)
+  });
+  registerRowTarget("scanner", () => {
+    if (!selected5)
+      return null;
+    const first = selected5.occurrences[0];
+    return {
+      label: `finding "${selected5.issue_name ?? selected5.check_name}"`,
+      ...first ? { exchangeId: first.exchange_id } : {},
+      note: "this finding has no recorded occurrence, so there is no request to send"
+    };
+  });
+  live({ kinds: ["issues"], section: "scanner", refresh: () => void load5() });
   load5();
+}
+function markSelected3(f) {
+  selected5 = f;
+  $all("#scan-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === f.id));
+}
+function findingMenuItems(f) {
+  const first = f.occurrences[0];
+  const items = [
+    { label: "Copy finding as text", run: () => void copyText(findingAsText(f), "the finding") },
+    { separator: true }
+  ];
+  if (!first) {
+    items.push({ label: "no occurrence recorded — nothing to send", disabled: true });
+    return items;
+  }
+  items.push({ label: `First occurrence: #${first.exchange_id} ${first.path}`, disabled: true });
+  items.push(...exchangeIdMenuItems(first.exchange_id, undefined, { showInHistory: true }));
+  return items;
+}
+function findingAsText(f) {
+  return [
+    `${f.severity} / ${f.confidence} confidence — ${f.issue_name ?? f.check_name}`,
+    `check: ${f.check_name}`,
+    `host: ${f.host}`,
+    `seen: ${f.times_seen} time(s)`,
+    `occurrences: ${f.occurrences.map((o) => `#${o.exchange_id} ${o.path}`).join(", ") || "none recorded"}`,
+    "",
+    `detail: ${f.detail ?? "none recorded"}`,
+    `remediation: ${f.remediation ?? "none recorded"}`
+  ].join(`
+`);
 }
 async function load5() {
   const body = $("#scan-body");
@@ -1926,13 +2880,23 @@ async function load5() {
   wireRows3(resp.findings);
 }
 function wireRows3(findings) {
+  rendered2 = findings;
   const byId = new Map(findings.map((f) => [f.id, f]));
+  if (selected5 && !byId.has(selected5.id))
+    selected5 = null;
   $all("#scan-body tr").forEach((tr) => {
     const id = Number(tr.dataset["id"]);
     const f = byId.get(id);
     if (!f)
       return;
-    tr.addEventListener("click", () => toggleDetail(f));
+    if (selected5 && selected5.id === id) {
+      selected5 = f;
+      tr.classList.add("on");
+    }
+    tr.addEventListener("click", () => {
+      markSelected3(f);
+      toggleDetail(f);
+    });
   });
 }
 function toggleDetail(f) {
@@ -2278,6 +3242,7 @@ async function runCompare() {
 }
 
 // src/toollog.ts
+var rendered3 = [];
 function initToolLog() {
   const el = $("#logger");
   if (!el)
@@ -2292,16 +3257,17 @@ function initToolLog() {
         <option value="bcheck">bcheck</option>
       </select>
       <input id="log-search" type="search" placeholder="search host/path/method" class="grow" />
-      <button class="ghost" id="log-refresh">Refresh</button>
       <button class="ghost" id="log-clear">Clear</button>
       <span id="log-meta" class="hint"></span>
     </div>
+    <p class="hint">Right-click a row to copy its host or path, or to filter History by that host.
+      There is no send-to-Repeater here: a logged row records what burpsy sent, not a stored request
+      that could be reloaded, so there is nothing to hand over.</p>
     <table>
       <thead><tr><th>#</th><th>Tool</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Len</th><th>ms</th><th>Error</th></tr></thead>
       <tbody id="log-body"></tbody>
     </table>
   `;
-  $("#log-refresh").addEventListener("click", () => void load6());
   $("#log-filter").addEventListener("change", () => void load6());
   $("#log-clear").addEventListener("click", () => void clear());
   let searchTimer;
@@ -2310,7 +3276,38 @@ function initToolLog() {
       clearTimeout(searchTimer);
     searchTimer = setTimeout(() => void load6(), 300);
   });
+  attachRowContextMenu({
+    container: "#log-body",
+    rowSelector: "tr[data-id]",
+    resolve: (tr) => rendered3.find((e) => e.id === Number(tr.dataset["id"])) ?? null,
+    heading: (e) => `${e.tool}: ${e.method} ${e.path}`,
+    select: (e) => $all("#log-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === e.id)),
+    items: (e) => rowMenuItems2(e)
+  });
+  live({ kinds: ["toollog"], section: "logger", refresh: () => void load6() });
   load6();
+}
+function rowMenuItems2(e) {
+  const hostPort = `${e.host}:${e.port}`;
+  return [
+    {
+      label: `Filter History by ${e.host}`,
+      run: () => {
+        emit(EVT_FILTER_HISTORY, { search: e.host });
+        switchTab("history");
+      }
+    },
+    {
+      label: `Filter History by ${e.path}`,
+      run: () => {
+        emit(EVT_FILTER_HISTORY, { search: e.path });
+        switchTab("history");
+      }
+    },
+    { separator: true },
+    { label: "Copy host:port", run: () => void copyText(hostPort, hostPort) },
+    { label: "Copy path", run: () => void copyText(e.path, "the path") }
+  ];
 }
 async function load6() {
   const body = $("#log-body");
@@ -2327,7 +3324,8 @@ async function load6() {
     const resp = await getJSON(`/api/tools/log${qs ? `?${qs}` : ""}`);
     const active = Object.entries(resp.counts).filter(([, n]) => n > 0).map(([name, n]) => `${name} ${n}`);
     meta.textContent = `${resp.total} total${active.length ? ` (${active.join(", ")})` : ""}` + (resp.dropped ? ` · ${resp.dropped} dropped (capacity)` : "");
-    body.innerHTML = resp.entries.map((e) => `<tr>
+    rendered3 = resp.entries;
+    body.innerHTML = resp.entries.map((e) => `<tr data-id="${e.id}">
         <td>${e.id}</td><td>${esc(e.tool)}</td><td>${esc(e.method)}</td>
         <td>${esc(e.host)}:${e.port}</td><td>${esc(e.path)}</td>
         <td>${statusBadge(e.status)}</td><td>${e.response_len}</td><td>${e.duration_ms}</td>
@@ -2356,12 +3354,11 @@ function initOrganizer() {
     <div class="row">
       <input id="org-add-exchange" placeholder="exchange id" style="width:120px" />
       <button class="ghost" id="org-add">Add</button>
-      <button class="ghost" id="org-refresh">Refresh</button>
     </div>
     <div id="org-list"></div>
   `;
-  $("#org-refresh").addEventListener("click", () => void load7());
   $("#org-add").addEventListener("click", () => void add());
+  live({ kinds: ["organizer"], section: "organizer", refresh: () => void load7() });
   load7();
 }
 async function add() {
@@ -2605,8 +3602,8 @@ function renderTable() {
     tr.querySelector(".mr-row-delete").addEventListener("click", () => void deleteRule(i));
   });
 }
-function optionsHtml2(opts, selected3) {
-  return opts.map((o) => `<option value="${o.value}" ${o.value === selected3 ? "selected" : ""}>${o.label}</option>`).join("");
+function optionsHtml2(opts, selected6) {
+  return opts.map((o) => `<option value="${o.value}" ${o.value === selected6 ? "selected" : ""}>${o.label}</option>`).join("");
 }
 function ruleFormHtml(rule, isNew) {
   return `<div class="card">
@@ -2832,6 +3829,11 @@ function initSession() {
       <div id="sess-login-out"></div>
     </div>
     <div class="card">
+      <!-- The one Refresh button left on a data pane other than the site map's, and it stays because
+           there is nothing to push: the coordinator's cookie jar has no enumeration API and no change
+           hook, so /api/session/cookies reports "wired" with an empty table (see api_session.go). A
+           live subscription would announce a kind nothing can ever emit. When the jar learns to
+           enumerate itself, it gets a change signal and this button goes with the others. -->
       <div class="row"><b>Cookie jar</b><button class="ghost small" id="sess-cookies-refresh">Refresh</button></div>
       <div id="sess-cookies"></div>
     </div>
@@ -3183,7 +4185,7 @@ async function loadCookies() {
 // src/sequencer.ts
 var POSITIONS_SHOWN = 24;
 var POLL_MS = 1000;
-var pollTimer2;
+var pollTimer;
 var activeCapture;
 var showAllPositions = false;
 var lastReport = null;
@@ -3252,13 +4254,13 @@ Connection: close
   `;
   $all("input[name=seq-src]").forEach((r) => {
     r.onchange = () => {
-      const live = r.value === "live" && r.checked;
+      const live2 = r.value === "live" && r.checked;
       const paste = $("#seq-paste-pane");
       const livePane = $("#seq-live-pane");
       if (paste)
-        paste.style.display = live ? "none" : "";
+        paste.style.display = live2 ? "none" : "";
       if (livePane)
-        livePane.style.display = live ? "" : "none";
+        livePane.style.display = live2 ? "" : "none";
     };
   });
   $("#seq-analyse").addEventListener("click", () => void analysePaste());
@@ -3338,9 +4340,9 @@ async function startCapture() {
     }
     $("#seq-stop").disabled = false;
     renderProgress(view);
-    if (pollTimer2)
-      clearInterval(pollTimer2);
-    pollTimer2 = setInterval(() => void poll(), POLL_MS);
+    if (pollTimer)
+      clearInterval(pollTimer);
+    pollTimer = setInterval(() => void poll(), POLL_MS);
   } catch (e) {
     meta.innerHTML = `<span class="err">${esc(e.message)}</span>`;
   }
@@ -3381,9 +4383,9 @@ async function poll() {
   renderProgress(view);
 }
 function stopPolling() {
-  if (pollTimer2)
-    clearInterval(pollTimer2);
-  pollTimer2 = undefined;
+  if (pollTimer)
+    clearInterval(pollTimer);
+  pollTimer = undefined;
   $("#seq-stop").disabled = true;
 }
 var ENDED_LABEL = {
@@ -3549,6 +4551,7 @@ initOrganizer();
 initMatchReplace();
 initSession();
 initSequencer();
+initShortcuts();
 async function refreshStats() {
   try {
     const s = await getJSON("/api/stats");
@@ -3582,4 +4585,14 @@ async function refreshCaLink() {
 refreshStats();
 refreshScope2();
 refreshCaLink();
-setInterval(() => void refreshStats(), 4000);
+live({ kinds: ["history"], section: "", refresh: () => void refreshStats(), fallbackMs: 4000 });
+for (const section of ["dashboard", "scanner"]) {
+  live({
+    kinds: ["history", "issues", "dashboard"],
+    section,
+    refresh: () => void refreshLiveAudit(),
+    minGapMs: 1000,
+    fallbackMs: 4000
+  });
+}
+initLive();

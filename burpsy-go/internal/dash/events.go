@@ -144,6 +144,10 @@ type EventLog struct {
 	capacity int
 	dropped  uint64
 	nextID   uint64
+	// onChange is an optional signal that an event was recorded, for the live-update stream (see
+	// OnChange). No payload: its consumer tells a browser that /api/dashboard is stale and lets that
+	// handler render the event, so there stays one place that serialises one.
+	onChange func()
 }
 
 // NewEventLog creates an empty log at the default capacity.
@@ -186,7 +190,25 @@ func (l *EventLog) RecordFor(taskID uint64, kind string, sev Severity, detail st
 		AtMs:     uint64(time.Now().UnixMilli()),
 	})
 	l.evictLocked()
+	if l.onChange != nil {
+		l.onChange()
+	}
 	return l.nextID
+}
+
+// OnChange installs the signal called after an event is recorded, or nil to remove it. Single slot, so
+// re-installing replaces rather than doubling.
+//
+// It runs under the log's lock, which is taken from Registry.emit — so from wherever a task started or
+// finished, including a crawl. Held to the same contract as the traffic store's observers: increment a
+// counter, signal non-blockingly, and do the work somewhere that is not this stack.
+func (l *EventLog) OnChange(fn func()) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.onChange = fn
 }
 
 // evictLocked trims to capacity, oldest first, counting what it drops. Unlike Registry.evictLocked

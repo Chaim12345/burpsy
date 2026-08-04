@@ -761,3 +761,132 @@ button.ghost:disabled:hover {
   color: var(--dim);
   text-align: right;
 }
+
+/* ---- right-click context menu (contextmenu.ts) --------------------------------------------------
+
+   One menu element is created and removed per open, rather than one hidden menu per pane kept in the
+   DOM: the items differ per row, so a persistent menu would have to be rebuilt on every open anyway.
+   Fixed positioning with a viewport clamp lives in the module — this file only has to make the thing
+   float above everything and scroll when it is taller than the window. */
+
+#ctx-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 210px;
+  max-width: 340px;
+  max-height: calc(100vh - 8px);
+  overflow-y: auto;
+  background: var(--pan);
+  border: 1px solid var(--brd);
+  border-radius: var(--radius-lg);
+  padding: 4px 0;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 50%);
+  outline: none;
+}
+.ctx-head {
+  padding: 5px 12px 7px;
+  color: var(--dim);
+  font: 11px var(--font-mono);
+  border-bottom: 1px solid var(--brd);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--fg);
+  text-align: left;
+  padding: 5px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+/* :focus, not only :hover — the arrow keys move focus, so the highlight has to follow focus or a
+   keyboard-driven menu gives no indication of where Enter would land. */
+.ctx-item:hover:not(:disabled),
+.ctx-item:focus-visible,
+.ctx-item:focus {
+  background: color-mix(in srgb, var(--acc) 20%, transparent);
+  outline: none;
+}
+.ctx-item:disabled {
+  color: var(--dim);
+  cursor: default;
+}
+.ctx-item .ctx-hint {
+  color: var(--dim);
+  font: 11px var(--font-mono);
+  flex-shrink: 0;
+}
+.ctx-sep {
+  height: 1px;
+  background: var(--brd);
+  margin: 4px 0;
+}
+
+/* ---- selected table row (the row Ctrl+R and Ctrl+I act on) ------------------------------------ */
+
+tr.on td,
+tr.on:hover td {
+  background: color-mix(in srgb, var(--acc) 16%, transparent);
+}
+
+/* ---- keyboard shortcut cheat sheet (shortcuts.ts) --------------------------------------------- */
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgb(0 0 0 / 55%);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 16px;
+  overflow-y: auto;
+}
+.sheet {
+  background: var(--pan);
+  border: 1px solid var(--brd);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  width: min(720px, 100%);
+}
+.sheet table {
+  margin-bottom: 4px;
+}
+/* The global `td` rule is nowrap + ellipsis, which is right for a traffic table and wrong here: it
+   truncated "History, Site map, WS History, Scanner" mid-word, so the sheet documenting the shortcuts
+   could not state where they applied. */
+.sheet td {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  max-width: none;
+}
+.sheet td:first-child {
+  width: 1%;
+  white-space: nowrap;
+}
+kbd {
+  display: inline-block;
+  border: 1px solid var(--brd);
+  border-bottom-width: 2px;
+  border-radius: var(--radius);
+  background: var(--input-bg);
+  color: var(--fg);
+  padding: 1px 6px;
+  font: 11px var(--font-mono);
+}
+/* Sits in normal flow right after the tab strip. Deliberately not `margin-left:auto`: #stats
+   already claims the free space with one, and a second auto margin would split it and park this
+   button in the middle of the header. */
+#shortcut-help {
+  font-family: var(--font-mono);
+}

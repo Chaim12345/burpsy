@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -224,7 +225,12 @@ func main() {
 		WithScanner(scanner.NewActiveScanner(store, logger).WithSender(sender.NewSender(sender.DefaultSenderConfig()))).
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
-		WithIntercept(interceptEngine)
+		WithIntercept(interceptEngine).
+		// So /ca.crt can serve it. Read here rather than in the web server because this is where the
+		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
+		// for a client that already trusts the CA, and the operator gets told why the download is
+		// missing instead of the link silently staying hidden.
+		WithCACertPEM(readCACert(*interceptTLS, *caDir, logger))
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
@@ -253,4 +259,24 @@ func main() {
 	if err := store.Sync(); err != nil {
 		logger.Error("Failed to seal capture", zap.Error(err))
 	}
+}
+
+// readCACert reads the CA certificate the proxy signs with, for the web server to serve at /ca.crt.
+//
+// Returns nil when interception is off — there is no CA a browser needs then, and the UI's CA link
+// keys off the route reporting absence. A read failure is logged rather than fatal: the proxy can
+// still intercept for a client that already trusts the CA, so refusing to start would be a worse
+// outcome than a missing download link with a reason next to it.
+func readCACert(interceptTLS bool, caDir string, logger *zap.Logger) []byte {
+	if !interceptTLS {
+		return nil
+	}
+	path := filepath.Join(caDir, "ca.crt")
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		logger.Warn("CA certificate could not be read, so /ca.crt will report it as unavailable",
+			zap.String("path", path), zap.Error(err))
+		return nil
+	}
+	return pem
 }

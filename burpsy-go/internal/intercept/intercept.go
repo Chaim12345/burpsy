@@ -311,6 +311,8 @@ type Engine struct {
 	responses List
 	nextID    uint64
 	held      map[uint64]*Held
+	// onChange is an optional signal that the queue or the switch changed (see OnChange).
+	onChange func()
 }
 
 // NewEngine creates an intercept engine with both lists off.
@@ -318,6 +320,38 @@ func NewEngine() *Engine {
 	return &Engine{
 		mu:   make(chan struct{}, 1),
 		held: make(map[uint64]*Held),
+	}
+}
+
+// OnChange installs the signal called after the held queue or the intercept switch changes, or nil to
+// remove it. Single slot, so re-installing replaces rather than doubling.
+//
+// It exists for the live-update stream, and the held queue is the reason that stream is worth having:
+// an operator sitting on the Intercept tab is *waiting* for a held request, and every millisecond
+// between the hold and the row appearing is a millisecond they spend looking at nothing. It carries no
+// message — the consumer tells the browser that /api/intercept is stale and that handler renders the
+// queue.
+//
+// It is never called with the engine's lock held: a held message blocks its proxy connection, and a
+// signal that could order against this lock would put a subscriber's business in front of the next
+// message the proxy wants to hold.
+func (e *Engine) OnChange(fn func()) {
+	if e == nil {
+		return
+	}
+	e.mu <- struct{}{}
+	e.onChange = fn
+	<-e.mu
+}
+
+// signalChange fires the change signal, if one is installed. Takes the lock only to read the slot, and
+// calls out with it released — see OnChange.
+func (e *Engine) signalChange() {
+	e.mu <- struct{}{}
+	fn := e.onChange
+	<-e.mu
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -332,6 +366,9 @@ func (e *Engine) Enabled() bool {
 // resolved by the operator regardless of the switch's state.
 func (e *Engine) SetEnabled(v bool) {
 	e.mu <- struct{}{}
+	// Registered before the unlock defer, so LIFO runs it after: the signal must never be delivered
+	// with this lock held. Same two lines at every mutation below.
+	defer e.signalChange()
 	defer func() { <-e.mu }()
 	e.enabled = v
 }
@@ -367,6 +404,7 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 	}
 
 	e.mu <- struct{}{}
+	defer e.signalChange()
 	defer func() { <-e.mu }()
 	if d == DirectionRequest {
 		e.requests = List{Active: active, Rules: compiled}
@@ -437,6 +475,7 @@ func (e *Engine) Hold(m *Message) *Held {
 		return nil
 	}
 	e.mu <- struct{}{}
+	defer e.signalChange()
 	defer func() { <-e.mu }()
 	e.nextID++
 	h := &Held{
@@ -501,6 +540,7 @@ func (e *Engine) Forward(id uint64, edited string, fixContentLength bool) error 
 	e.mu <- struct{}{}
 	delete(e.held, id)
 	<-e.mu
+	e.signalChange()
 	return nil
 }
 
@@ -520,6 +560,7 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	e.mu <- struct{}{}
 	delete(e.held, id)
 	<-e.mu
+	e.signalChange()
 	return nil
 }
 

@@ -43,6 +43,7 @@ export const EVT_SEND_TO_REPEATER = "send-to-repeater";
 export const EVT_SEND_TO_INTRUDER = "send-to-intruder";
 export const EVT_SEND_TO_COMPARER = "send-to-comparer";
 export const EVT_SHOW_EXCHANGE = "show-exchange";
+export const EVT_FILTER_HISTORY = "filter-history";
 
 export interface SendToRepeaterDetail {
   target: string;
@@ -64,4 +65,11 @@ export interface SendToComparerDetail {
 
 export interface ShowExchangeDetail {
   exchangeId: number;
+}
+
+/** Fills History's method/host/path filter box and shows the tab. Used by panes whose rows are not
+ * proxy exchanges (Logger rows are requests burpsy itself sent, so they are never *in* History) but
+ * which can still point the operator at the same host's captured traffic. */
+export interface FilterHistoryDetail {
+  search: string;
 }

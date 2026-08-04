@@ -137,6 +137,12 @@ type FindingStore struct {
 	// under the store lock, must not call back into the store, and must not fail
 	// the in-memory add — memory is authoritative, SQLite is durable backup.
 	onAdd func(f *Finding)
+	// onChange is an optional signal that the set of findings changed at all (see
+	// OnChange). Separate from onAdd because it has a different owner and a
+	// different arity: onAdd is the durable mirror's single slot and only cares
+	// about arrivals, this one is the live-update stream and also fires for a
+	// delete and a clear, which the UI has to hear about too.
+	onChange func()
 }
 
 // NewFindingStore creates a new finding store.
@@ -170,7 +176,34 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 	if fs.onAdd != nil {
 		fs.onAdd(f)
 	}
+	fs.signalChangeLocked()
 	return id
+}
+
+// OnChange installs the signal called after the findings change, or nil to remove
+// it. Single slot, so re-installing replaces rather than doubling.
+//
+// It carries no finding: its consumer is the live-update stream, which tells the
+// browser that /api/issues is stale and lets that handler render the finding — so
+// there stays exactly one place that serialises one. It runs under the store's
+// write lock, so it is held to the same cheapness contract as the traffic store's
+// observers (see TrafficStore.ObserveExchanges): passive scanning adds findings
+// from the proxy's own response path.
+func (fs *FindingStore) OnChange(fn func()) {
+	if fs == nil {
+		return
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.onChange = fn
+}
+
+// signalChangeLocked fires the change signal, if one is installed. Called with the
+// write lock held, from every mutation.
+func (fs *FindingStore) signalChangeLocked() {
+	if fs.onChange != nil {
+		fs.onChange()
+	}
 }
 
 // SetPersistenceSink installs an optional write-through hook (see the onAdd
@@ -235,6 +268,7 @@ func (fs *FindingStore) Delete(id uint64) bool {
 	for i, f := range fs.findings {
 		if f.ID == id {
 			fs.findings = append(fs.findings[:i], fs.findings[i+1:]...)
+			fs.signalChangeLocked()
 			return true
 		}
 	}
@@ -248,6 +282,7 @@ func (fs *FindingStore) Clear() {
 	defer fs.mu.Unlock()
 	fs.findings = fs.findings[:0]
 	fs.nextID = 0
+	fs.signalChangeLocked()
 }
 
 // getTimestamp returns the current Unix time in milliseconds.

@@ -2,7 +2,12 @@
 // proxy History, because a WS row is a one-way message keyed by its connection rather than a
 // request/response pair. See crates/web/src/routes/websockets.rs for why the two are separate.
 
-import { $, $all, esc, getJSON } from "./common";
+import { $, $all, esc, getJSON, toast } from "./common";
+import { attachRowContextMenu } from "./contextmenu";
+import type { MenuItem } from "./contextmenu";
+import { exchangeIdMenuItems, copyText } from "./sendto";
+import { registerRowTarget } from "./shortcuts";
+import { live } from "./live";
 
 interface RowView {
   id: number;
@@ -50,6 +55,8 @@ interface ConnectionView {
  * per-row fetch. */
 let connectionsByExchange = new Map<number, ConnectionView>();
 let currentRows: RowView[] = [];
+/** The row the operator last opened or right-clicked, for the keyboard shortcuts. */
+let selected: RowView | null = null;
 
 export function initWshistory(): void {
   const section = $("#wshistory");
@@ -59,7 +66,7 @@ export function initWshistory(): void {
       <label>connection
         <select id="ws-conn"><option value="">all connections</option></select>
       </label>
-      <button class="ghost" id="ws-refresh">Refresh</button>
+      <span class="hint">right-click a row for the upgrade exchange's send-to actions · ? for shortcuts</span>
       <span id="ws-meta" class="hint"></span>
     </div>
     <table>
@@ -74,9 +81,47 @@ export function initWshistory(): void {
       <pre id="ws-payload">select a row</pre>
     </div>
   `;
-  $("#ws-refresh")!.addEventListener("click", () => void loadAll());
   $("#ws-conn")!.addEventListener("change", () => void load());
+  attachRowContextMenu<RowView>({
+    container: "#ws-body",
+    rowSelector: "tr[data-id]",
+    resolve: (tr) => currentRows.find((r) => r.id === Number(tr.dataset["id"])) ?? null,
+    heading: (row) => `message #${row.id} on exchange #${row.exchange}`,
+    select: (row) => markSelected(row),
+    items: (row) => rowMenuItems(row),
+  });
+  registerRowTarget("wshistory", () =>
+    selected ? { label: `WS message #${selected.id}`, exchangeId: selected.exchange } : null,
+  );
+  // A live socket is the case where polling was worst: frames arrive in bursts with nothing to click.
+  // loadAll rather than load, because a new connection has to reach the picker as well as the table.
+  live({ kinds: ["ws"], section: "wshistory", refresh: () => void loadAll() });
   void loadAll();
+}
+
+function markSelected(row: RowView): void {
+  selected = row;
+  $all("#ws-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === row.id));
+}
+
+/** A WebSocket row is one frame, not a request/response pair, so the send-to actions here act on the
+ * HTTP exchange that carried the Upgrade — the only thing in this pane a Repeater tab can be built
+ * from. Said plainly in the labels rather than left for the operator to discover by surprise. */
+function rowMenuItems(row: RowView): MenuItem[] {
+  return [
+    { label: "Copy this message's payload", run: () => void copyPayload(row) },
+    { separator: true },
+    ...exchangeIdMenuItems(row.exchange, "this message has no upgrade exchange recorded", { showInHistory: true }),
+  ];
+}
+
+async function copyPayload(row: RowView): Promise<void> {
+  try {
+    const msg = await getJSON<MessageResp>(`/api/ws/message/${row.id}`);
+    await copyText(msg.opcode === "text" ? msg.text : msg.hex, `message #${row.id} payload`);
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
 }
 
 /** Refreshes the connection picker, then loads the currently-selected connection's rows. */
@@ -147,11 +192,13 @@ function wireRows(): void {
     const id = Number(tr.dataset["id"]);
     const row = byId.get(id);
     if (!row) return;
+    if (selected && selected.id === id) tr.classList.add("on");
     tr.addEventListener("click", () => void openMessage(row));
   });
 }
 
 async function openMessage(row: RowView): Promise<void> {
+  markSelected(row);
   const el = $("#ws-payload")!;
   el.textContent = "loading…";
   let msg: MessageResp;

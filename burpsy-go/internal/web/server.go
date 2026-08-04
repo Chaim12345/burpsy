@@ -41,6 +41,14 @@ type Server struct {
 	// events is the DASH-02 event log: what the tool *did*, as opposed to toolLog's what-it-*sent*.
 	// Two logs because they count different things — see internal/dash/events.go.
 	events *dash.EventLog
+	// caCertPEM is the CA certificate the proxy signs leaves with, served at /ca.crt so a browser can
+	// be told to trust it. Nil when interception is off, and then the route reports that rather than
+	// serving an empty file — see handleCACert.
+	caCertPEM []byte
+	// live is the change-event hub behind /api/events: every store the UI reads signals it, and it
+	// coalesces those signals into "this kind changed" frames the browser refetches on. See events.go
+	// for why the frames carry no data and why the producer side is atomics only.
+	live *eventHub
 }
 
 // maxRequestBodyBytes bounds any single API request body. Generous enough for
@@ -67,6 +75,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		intercept:          intercept.NewEngine(),
 		tasks:              dash.NewRegistry(),
 		events:             dash.NewEventLog(),
+		live:               newEventHub(),
 	}
 	// One wiring call gives every task in the process — including a crawl registered from outside this
 	// package — a started and a finished event, without either side knowing about the other.
@@ -75,8 +84,30 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 	// the tab is opened — see the sitemap package docs (CRAWL-05). Constructed
 	// before any traffic can arrive, which is the ordering ObserveExchanges needs.
 	s.sitemap.Follow(store)
+	// The traffic store's two live signals are installed once, here, because the
+	// store is never replaced after construction — there is no WithStore. The
+	// exchange one goes through ObserveExchanges, which appends rather than
+	// replaces, so installing it anywhere re-entrant would double-count.
+	store.ObserveExchanges(func(*core.Exchange) { s.live.notify(changeHistory) })
+	store.OnWsChange(func() { s.live.notify(changeWS) })
+	s.followLive()
 	s.setupRoutes()
 	return s
+}
+
+// followLive installs the live-update hub's change signals on every replaceable store the server
+// currently holds.
+//
+// Called from NewServer and again from each With* that swaps one of those stores out, which is safe
+// because every hook here is a single slot: re-installing replaces rather than adds. A store that was
+// replaced keeps its hook pointing at the same hub, which costs one atomic increment on an object
+// nothing reads any more — the same bounded, silent waste WithSitemap documents, and the same reason it
+// is not worth an unsubscribe protocol.
+func (s *Server) followLive() {
+	s.findings.OnChange(func() { s.live.notify(changeIssues) })
+	s.toolLog.OnChange(func() { s.live.notify(changeToolLog) })
+	s.events.OnChange(func() { s.live.notify(changeDashboard) })
+	s.intercept.OnChange(func() { s.live.notify(changeIntercept) })
 }
 
 // WithLogger sets the logger.
@@ -113,6 +144,7 @@ func (s *Server) WithPassiveScanner(scan *scanner.PassiveScanner) *Server {
 // WithFindings sets the findings store.
 func (s *Server) WithFindings(fs *core.FindingStore) *Server {
 	s.findings = fs
+	s.followLive()
 	return s
 }
 
@@ -120,12 +152,23 @@ func (s *Server) WithFindings(fs *core.FindingStore) *Server {
 // must hold the same instance, or edits here would not affect the hold queue.
 func (s *Server) WithIntercept(engine *intercept.Engine) *Server {
 	s.intercept = engine
+	s.followLive()
 	return s
 }
 
 // WithLiveAudit attaches the live audit state, or nil to report the feature unwired.
 func (s *Server) WithLiveAudit(la *LiveAuditState) *Server {
 	s.liveAudit = la
+	return s
+}
+
+// WithCACertPEM supplies the CA certificate the proxy signs leaves with, so /ca.crt can serve it.
+//
+// Passed in rather than read from disk here: the web server has no business knowing where the CA
+// directory is, and the process that generated or loaded the CA already holds the bytes. Nil or empty
+// leaves the route reporting that interception is off, which is what the UI's CA link keys off.
+func (s *Server) WithCACertPEM(pem []byte) *Server {
+	s.caCertPEM = pem
 	return s
 }
 
@@ -175,6 +218,18 @@ func (s *Server) persistOrganizer() {
 	}
 }
 
+// organizerChanged mirrors the organizer and tells the live stream, and is what every organizer
+// mutation calls instead of persisting directly.
+//
+// The organizer is notified from the handler rather than from a store hook — unlike traffic, findings
+// and the tool log — because the handler is the only thing that ever mutates it. A hook inside a
+// web-owned store would be a seam with one side. The case that makes the signal worth having is
+// cross-tab: History's Save writes here, and before this the Organizer tab found out by being clicked.
+func (s *Server) organizerChanged() {
+	s.persistOrganizer()
+	s.live.notify(changeOrganizer)
+}
+
 // WithSitemap replaces the site map, subscribing the new one to the store.
 //
 // Call before traffic flows. The map NewServer built stays subscribed — the store
@@ -209,6 +264,7 @@ func (s *Server) WithEvents(log *dash.EventLog) *Server {
 	if log != nil {
 		s.events = log
 		s.tasks.WithEvents(log)
+		s.followLive()
 	}
 	return s
 }
@@ -237,6 +293,7 @@ func (s *Server) WithMatchReplace(mr *matchreplace.RuleSet) *Server {
 // WithToolLog sets the tool log.
 func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 	s.toolLog = tl
+	s.followLive()
 	return s
 }
 
@@ -247,6 +304,9 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/exchange/", s.handleExchange)
 	s.mux.HandleFunc("/api/exchanges/", s.handleExchange) // legacy alias for /api/exchange/
 	s.mux.HandleFunc("/api/stats", s.handleStats)
+	// Not under /api: a browser is told to fetch this by URL, and the UI links to it as a download.
+	// Matches the Rust route (crates/web/src/lib.rs) so the shipped frontend's CA link works unchanged.
+	s.mux.HandleFunc("/ca.crt", s.handleCACert)
 	s.mux.HandleFunc("/api/scope", s.handleScope)
 	s.mux.HandleFunc("/api/issues", s.handleIssues)
 	s.mux.HandleFunc("/api/findings", s.handleFindings) // legacy alias for /api/issues
@@ -280,6 +340,10 @@ func (s *Server) setupRoutes() {
 	// Dashboard: running tasks, the activity log, and every summary count with its
 	// found/skipped/errored/gated breakdown.
 	s.mux.HandleFunc("/api/dashboard", s.handleDashboard)
+
+	// Live change events: the stream that replaced the UI's polling, plus its own honest counters.
+	s.mux.HandleFunc("/api/events", s.handleEvents)
+	s.mux.HandleFunc("/api/events/stats", s.handleEventsStats)
 
 	// Match & Replace + tool log + decoder/comparer/organizer
 	s.mux.HandleFunc("/api/tools/rules", s.handleMatchReplaceRules)

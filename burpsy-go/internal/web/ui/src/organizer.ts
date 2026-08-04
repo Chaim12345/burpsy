@@ -3,6 +3,7 @@
 // here too, for completeness.
 
 import { $, $all, esc, getJSON, postJSON, delJSON, toast } from "./common";
+import { live } from "./live";
 
 interface OrgItem {
   id: number;
@@ -21,12 +22,13 @@ export function initOrganizer(): void {
     <div class="row">
       <input id="org-add-exchange" placeholder="exchange id" style="width:120px" />
       <button class="ghost" id="org-add">Add</button>
-      <button class="ghost" id="org-refresh">Refresh</button>
     </div>
     <div id="org-list"></div>
   `;
-  $("#org-refresh")!.addEventListener("click", () => void load());
   $("#org-add")!.addEventListener("click", () => void add());
+  // The case this exists for is cross-tab: History's Save writes an item here, and before the stream
+  // this pane found out by being clicked.
+  live({ kinds: ["organizer"], section: "organizer", refresh: () => void load() });
   void load();
 }
 
