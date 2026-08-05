@@ -3,50 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>burpsy</title>
+    <!-- Inlined so the console stays entirely self-contained and offline. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23d64d35'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='20' font-weight='bold' text-anchor='middle' fill='%23fff9ef'%3Eb%3C/text%3E%3C/svg%3E"
+    />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header>
-      <h1>burpsy</h1>
-      <nav>
-        <button class="on" data-t="dashboard">Dashboard</button>
-        <button data-t="history">History</button>
-        <button data-t="wshistory">WS History</button>
-        <button data-t="sitemap">Site map</button>
-        <button data-t="repeater">Repeater</button>
-        <button data-t="intruder">Intruder</button>
-        <button data-t="intercept">Intercept</button>
-        <button data-t="scanner">Scanner</button>
-        <button data-t="decoder">Decoder</button>
-        <button data-t="comparer">Comparer</button>
-        <button data-t="logger">Logger</button>
-        <button data-t="organizer">Organizer</button>
-        <button data-t="matchreplace">Match/Replace</button>
-        <button data-t="session">Session</button>
-        <button data-t="sequencer">Sequencer</button>
-      </nav>
-      <a id="ca-link" href="/ca.crt" download style="display: none">CA cert</a>
-      <span id="scope-badge" class="badge" title=""></span>
-      <div id="stats"></div>
-    </header>
-    <main>
-      <section id="dashboard" class="on"></section>
-      <section id="history"></section>
-      <section id="wshistory"></section>
-      <section id="sitemap"></section>
-      <section id="repeater"></section>
-      <section id="intruder"></section>
-      <section id="intercept"></section>
-      <section id="scanner"></section>
-      <section id="decoder"></section>
-      <section id="comparer"></section>
-      <section id="logger"></section>
-      <section id="organizer"></section>
-      <section id="matchreplace"></section>
-      <section id="session"></section>
-      <section id="sequencer"></section>
-    </main>
+    <div id="root"></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

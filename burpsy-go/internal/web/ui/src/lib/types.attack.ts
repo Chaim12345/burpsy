@@ -1,0 +1,211 @@
+/**
+ * Attack-area wire types (Intercept, Scanner) that are richer than the shared trimmed views in
+ * `types.ts`, plus the shapes that have no shared equivalent at all. Kept in their own module so this
+ * work does not collide with concurrent edits to the shared `types.ts`. Field names mirror the Go
+ * json tags exactly.
+ */
+
+import type { Occurrence } from "./types";
+
+/* --- intercept ------------------------------------------------------------ */
+
+/**
+ * Full held-message row. The shared `HeldMessage` carries only what a minimal list needs; the Go
+ * `heldView` (api_intercept.go) also sends the port, whether the connection was TLS, the response
+ * status for a held response, how long it has been held and its byte length — every column an
+ * operator triages the queue by.
+ */
+export interface HeldMessageDetail {
+  id: number;
+  direction: string;
+  host: string;
+  port: number;
+  tls: boolean;
+  method: string;
+  path: string;
+  status: number | null;
+  held_ms: number;
+  len: number;
+  raw: string;
+}
+
+/**
+ * Full intercept status. Adds the two flags that make "interception is on and nothing is held"
+ * legible: they report whether a direction's rule list is unconditional, which is otherwise
+ * indistinguishable from a proxy that has stopped working.
+ */
+export interface InterceptStateDetail {
+  enabled: boolean;
+  wired: boolean;
+  hint?: string;
+  pending: number;
+  held: HeldMessageDetail[];
+  holds_every_request?: boolean;
+  holds_every_response?: boolean;
+}
+
+/** One condition in an interception rule list. Mirrors intercept.ts's RuleSpec / `interceptRuleSpec`. */
+export interface InterceptRuleSpec {
+  field: "host" | "path" | "extension" | "method" | "url" | "status_code" | "content_type";
+  category: "regex" | "literal";
+  string_match: string;
+  enabled: boolean;
+  comment: string;
+}
+
+/** GET/PUT body for /api/intercept/rules/{requests|responses} — Go's `interceptListState`. */
+export interface InterceptListState {
+  wired: boolean;
+  active: boolean;
+  unconditional: boolean;
+  count: number;
+  rules: InterceptRuleSpec[];
+}
+
+/* --- scanner findings ----------------------------------------------------- */
+
+/**
+ * Full finding row. The shared `Finding` omits `id` — which is the only stable row identity the
+ * endpoint offers — and types `detail`/`remediation` as present when Go sends `*string`, so a
+ * finding recorded with neither reads as the literal string "null" unless they are nullable here.
+ */
+export interface FindingDetail {
+  id: number;
+  check_name?: string;
+  issue_name?: string | null;
+  severity: string;
+  confidence: string;
+  host: string;
+  detail: string | null;
+  remediation: string | null;
+  times_seen: number;
+  occurrences: Occurrence[];
+}
+
+export interface IssuesDetail {
+  enabled: boolean;
+  hint?: string;
+  loaded?: number;
+  findings: FindingDetail[];
+  counts?: Record<string, number>;
+}
+
+/* --- scanner: audit configurations --------------------------------------- */
+
+/**
+ * One resolved audit configuration. `max_requests` is nullable rather than a plain number because
+ * Go's OptUint32 keeps "uncapped" and "capped at zero" apart, and those are opposite instructions.
+ */
+export interface AuditConfigView {
+  time_budget_ms: number;
+  max_requests: number | null;
+  consecutive_check_failures_to_abandon_unit: number;
+  consecutive_unit_failures_to_fail_item: number;
+  pause_session_after_failed_items: number;
+  pause_session_at_failed_item_percentage: number;
+}
+
+/** One key a shipped Burp configuration can carry. `set` false is not `value` 0: unset inherits the
+ * base configuration, zero disables a breaker, and both spellings appear in Burp's own files. */
+export interface BuiltInConfigKey {
+  name: string;
+  burp_key: string;
+  what: string;
+  value?: number;
+  set: boolean;
+}
+
+export interface BuiltInConfigView {
+  name: string;
+  keys: BuiltInConfigKey[];
+  resolved: AuditConfigView;
+}
+
+/** GET /api/scanner/configs. Read-only: api_scanner_configs.go serves GET alone, so the console can
+ * name a preset on an audit request but cannot edit the table. */
+export interface ScannerConfigsResponse {
+  configs: BuiltInConfigView[];
+  default: AuditConfigView;
+  shipped_by_burp: number;
+  implemented_here: number;
+  omitted_reason: string;
+  how_to_run_under: string;
+  applies_to_server: string;
+}
+
+/* --- scanner: passive coverage ------------------------------------------- */
+
+export interface CoverageCheckView {
+  name: string;
+  ran: number;
+  findings: number;
+  errored: number;
+  last_error?: string;
+  state: string;
+}
+
+export interface CoveragePartitionView {
+  state: string;
+  count: number;
+}
+
+/** GET /api/scanner/coverage. Everything past `enabled`/`hint` is absent when no BCheck corpus is
+ * loaded, which is the gated case the page must render honestly rather than as zeroes. */
+export interface ScannerCoverage {
+  enabled: boolean;
+  hint?: string;
+  loaded?: number;
+  summary?: string;
+  checks?: CoverageCheckView[];
+  skips?: number;
+  partition?: CoveragePartitionView[];
+}
+
+/* --- scanner: live active audit ------------------------------------------ */
+
+/**
+ * GET/POST /api/scanner/live — the live active-audit sweep.
+ *
+ * `behind`, `collapsed` and `ledger_resets` are deliberately not optional, matching the Go struct's
+ * lack of `omitempty` on them: a zero backlog is the single most useful thing this endpoint says
+ * ("the sweep is caught up"), and making it omittable would render caught-up indistinguishable from
+ * a server that never reported a backlog at all.
+ */
+export interface LiveAuditState {
+  wired: boolean;
+  enabled: boolean;
+  hint?: string;
+  swept?: number;
+  findings?: number;
+  /** Exchanges the sweep gave up waiting on. Carried beside `swept`, never added to it. */
+  skipped?: number;
+  behind: number;
+  collapsed: number;
+  ledger_resets: number;
+  query?: string;
+  /** The exchange id the cursor is blocked on, absent while it is moving. */
+  stalled_at?: number;
+}
+
+/* --- scanner: targeted audit result -------------------------------------- */
+
+/**
+ * POST /api/audit/{id}. The legacy `started`/`exchange_id` pair is kept by the server for
+ * compatibility; `config_name` and `config` are what prove the run honoured the preset that was
+ * asked for. `outcome`/`dispositions`/`breakdown` are scanner-internal and deliberately left
+ * unknown — their shape is not stable enough to mirror field-by-field, so they are rendered through
+ * JsonView rather than a bespoke layout that would silently drop keys.
+ */
+export interface AuditResult {
+  started: boolean;
+  exchange_id: number;
+  active_checks: number;
+  unimplemented: number;
+  config_name: string;
+  config: AuditConfigView;
+  summary?: string;
+  outcome?: unknown;
+  dispositions?: unknown;
+  breakdown?: unknown;
+  error?: string;
+}

@@ -28,3 +28,6 @@
 # from anywhere in the tree.
 .codegraph/
 .cursor/
+
+# Frontend dependencies are restored from the committed Bun lockfile.
+node_modules/
