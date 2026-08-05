@@ -9,6 +9,7 @@
 // finding, so those are flagged rather than hidden.
 
 import { $, $all, esc, postJSON, getJSON, toast } from "./common";
+import { wireSyntaxEditor } from "./syntax";
 
 // ---- wire shapes, mirrored from crates/web/src/routes/sequencer.rs and burpsy-sequencer ----
 
@@ -122,7 +123,7 @@ export function initSequencer(): void {
   const section = $("#sequencer");
   if (!section) return;
   section.innerHTML = `
-    <div class="card">
+    <div class="sequencer-layout"><div class="panel seq-config">
       <div class="row">
         <b>Token source</b>
         <label><input type="radio" name="seq-src" value="paste" checked /> paste a list</label>
@@ -178,8 +179,10 @@ Connection: close
       </div>
     </div>
 
-    <div id="seq-results"></div>
+    <div id="seq-results" class="seq-results"><div class="empty-state"><b>No analysis yet</b><span>Paste tokens or capture them from a request to begin.</span></div></div></div>
   `;
+
+  wireSyntaxEditor($<HTMLTextAreaElement>("#seq-raw")!);
 
   $all<HTMLInputElement>("input[name=seq-src]").forEach((r) => {
     r.onchange = () => {

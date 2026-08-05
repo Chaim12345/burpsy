@@ -39,7 +39,7 @@ export function initToolLog(): void {
   const el = $("#logger");
   if (!el) return;
   el.innerHTML = `
-    <div class="row">
+    <div class="command-bar">
       <select id="log-filter">
         <option value="">all</option>
         <option value="repeater">repeater</option>
@@ -48,16 +48,14 @@ export function initToolLog(): void {
         <option value="bcheck">bcheck</option>
       </select>
       <input id="log-search" type="search" placeholder="search host/path/method" class="grow" />
-      <button class="ghost" id="log-clear">Clear</button>
+      <button class="ghost danger" id="log-clear">Clear log</button>
       <span id="log-meta" class="hint"></span>
     </div>
-    <p class="hint">Right-click a row to copy its host or path, or to filter History by that host.
-      There is no send-to-Repeater here: a logged row records what burpsy sent, not a stored request
-      that could be reloaded, so there is nothing to hand over.</p>
-    <table>
+    <div class="page-actions"><span class="hint">Right-click a row to copy its host or path, or filter History to matching traffic.</span></div>
+    <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Tool traffic</div><div class="panel-title">Requests sent by burpsy</div></div></div><div class="table-scroll"><table>
       <thead><tr><th>#</th><th>Tool</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Len</th><th>ms</th><th>Error</th></tr></thead>
       <tbody id="log-body"></tbody>
-    </table>
+    </table></div></div>
   `;
   $("#log-filter")!.addEventListener("change", () => void load());
   $("#log-clear")!.addEventListener("click", () => void clear());
@@ -138,7 +136,7 @@ async function load(): Promise<void> {
         <td class="err">${esc(e.error ?? "")}</td>
       </tr>`,
         )
-        .join("") || `<tr><td colspan="9" class="hint">nothing logged yet</td></tr>`;
+        .join("") || `<tr><td colspan="9" class="empty-cell">No tool traffic yet. Requests from Repeater, Intruder, and Scanner will appear here.</td></tr>`;
   } catch (e) {
     body.innerHTML = `<tr><td colspan="9" class="err">${esc((e as Error).message)}</td></tr>`;
   }

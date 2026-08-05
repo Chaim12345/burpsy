@@ -12,6 +12,7 @@
 
 import { $, $all, esc, getJSON, postJSON, putJSON } from "./common";
 import { live } from "./live";
+import { wireSyntaxEditor } from "./syntax";
 
 type MatchField = "host" | "path" | "extension" | "method" | "url" | "status_code" | "content_type";
 type Category = "regex" | "literal";
@@ -91,20 +92,23 @@ export function initIntercept(): void {
   const section = $("#intercept");
   if (!section) return;
   section.innerHTML = `
-    <div class="row">
+    <div class="command-bar">
       <label class="switch"><input type="checkbox" id="ic-enabled" /><span class="slider"></span></label>
-      <span>Intercept is on</span>
+      <b>Request interception</b>
       <span id="ic-status" class="hint"></span>
       <span class="grow"></span>
     </div>
-    ${rulesSectionHtml("request")}
-    ${rulesSectionHtml("response")}
-    <div class="row"><b>Held queue</b><span id="ic-queue-hint" class="hint"></span></div>
-    <table>
-      <thead><tr><th>#</th><th>Dir</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Held</th><th>Len</th></tr></thead>
-      <tbody id="ic-body"></tbody>
-    </table>
-    <div id="ic-editor"></div>
+    <div class="intercept-workspace">
+      <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Waiting for review</div><div class="panel-title">Held queue</div></div><span id="ic-queue-hint" class="hint"></span></div><div class="table-scroll"><table>
+        <thead><tr><th>#</th><th>Dir</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Held</th><th>Len</th></tr></thead>
+        <tbody id="ic-body"></tbody>
+      </table></div></div>
+      <div id="ic-editor" class="intercept-editor">${emptyEditorHtml()}</div>
+    </div>
+    <details class="config-panel">
+      <summary><span><b>Interception rules</b><small>Choose which requests and responses enter the held queue</small></span></summary>
+      <div class="config-panel-body">${rulesSectionHtml("request")}${rulesSectionHtml("response")}</div>
+    </details>
   `;
   $<HTMLInputElement>("#ic-enabled")!.addEventListener("change", (e) =>
     void setEnabled((e.target as HTMLInputElement).checked),
@@ -173,8 +177,12 @@ async function load(): Promise<void> {
   // (forwarded/dropped elsewhere, or its client disconnected).
   if (selectedId !== null && !resp.held.some((h) => h.id === selectedId)) {
     selectedId = null;
-    $("#ic-editor")!.innerHTML = "";
+    $("#ic-editor")!.innerHTML = emptyEditorHtml();
   }
+}
+
+function emptyEditorHtml(): string {
+  return `<div class="empty-state"><b>Select held traffic</b><span>Review, edit, forward, or drop it here.</span></div>`;
 }
 
 /** Ages the "Held" column between fetches.
@@ -401,10 +409,10 @@ function openEditor(h: HeldView): void {
       ? `#${h.id} response ${h.status ?? "?"} to ${esc(h.method)} ${esc(h.host)}:${h.port}${esc(h.path)}`
       : `#${h.id} ${esc(h.method)} ${esc(h.host)}:${h.port}${esc(h.path)}`;
   editor.innerHTML = `
-    <div class="card">
-      <div class="row"><b>${title}</b></div>
+    <div class="editor-pane intercept-message">
+      <div class="pane-label">${title}</div>
       <textarea id="ic-raw" spellcheck="false">${esc(h.raw)}</textarea>
-      <div class="row">
+      <div class="editor-actions">
         <label><input type="checkbox" id="ic-fixlen" checked /> fix Content-Length</label>
         <button class="go" id="ic-forward">Forward</button>
         <input id="ic-reason" placeholder="drop reason (optional)" style="width:220px" />
@@ -413,6 +421,7 @@ function openEditor(h: HeldView): void {
       </div>
     </div>
   `;
+  wireSyntaxEditor($<HTMLTextAreaElement>("#ic-raw")!);
   $("#ic-forward")!.addEventListener("click", () => void forward(h.id));
   $("#ic-drop")!.addEventListener("click", () => void dropHeld(h.id));
 }
@@ -427,7 +436,7 @@ async function forward(id: number): Promise<void> {
     return;
   }
   selectedId = null;
-  $("#ic-editor")!.innerHTML = "";
+  $("#ic-editor")!.innerHTML = emptyEditorHtml();
   void load();
 }
 
@@ -440,6 +449,6 @@ async function dropHeld(id: number): Promise<void> {
     return;
   }
   selectedId = null;
-  $("#ic-editor")!.innerHTML = "";
+  $("#ic-editor")!.innerHTML = emptyEditorHtml();
   void load();
 }

@@ -8,7 +8,7 @@
 // Every count now arrives as a Summary carrying its own found/skipped/errored/gated breakdown, and
 // renderSummary refuses to draw the number without them.
 
-import { $, esc, getJSON } from "./common";
+import { $, $all, esc, getJSON, switchTab } from "./common";
 import type { LogEntry } from "./toollog";
 import { liveAuditCardHtml, mountLiveAudit } from "./liveaudit";
 import { live } from "./live";
@@ -93,51 +93,45 @@ export function initDashboard(): void {
   const section = $("#dashboard");
   if (!section) return;
   section.innerHTML = `
-    <div class="four">
+    <div class="dashboard-head">
+    <div class="metric-grid">
       <div class="stat-tile"><div class="label">Exchanges captured</div><div class="value" id="dash-exchanges">–</div></div>
       <div class="stat-tile"><div class="label">Storage used</div><div class="value" id="dash-storage">–</div></div>
       <div class="stat-tile"><div class="label">Scope rules</div><div class="value" id="dash-scope">–</div></div>
       <div class="stat-tile"><div class="label">Tasks running</div><div class="value" id="dash-running">–</div></div>
     </div>
-    <div class="card">
-      <div class="card-title">Counts, and what they do not account for</div>
-      <p class="hint">A count with a caveat is a floor, not a total. Nothing here reports a number
-        without reporting the work that produced no verdict.</p>
-      <div class="four" id="dash-summaries"></div>
+    <div class="quick-launch panel"><div class="eyebrow">Quick launch</div><div class="panel-title">Start working</div>
+      <button class="launch-action" data-jump="history"><b>Inspect traffic</b><span>Open HTTP history</span></button>
+      <button class="launch-action" data-jump="repeater"><b>Send a request</b><span>Open Repeater</span></button>
+      <button class="launch-action" data-jump="scanner"><b>Review findings</b><span>Open Scanner</span></button>
+    </div></div>
+    <div class="section-block">
+      <div class="section-heading"><div><div class="eyebrow">Coverage ledger</div><div class="panel-title">Counts and incomplete work</div></div><p class="hint">Every result stays attached to skipped, errored, and gated work.</p></div>
+      <div class="metric-grid" id="dash-summaries"></div>
     </div>
-    <div class="card">
-      <div class="card-title">Tasks</div>
-      <table>
+    <div class="table-panel">
+      <div class="panel-head"><div><div class="eyebrow">Work in progress</div><div class="panel-title">Tasks</div></div><div id="dash-tasks-meta" class="hint"></div></div><div class="table-scroll"><table>
         <thead><tr><th>Kind</th><th>Target</th><th>State</th><th>Progress</th><th>Result</th><th>Elapsed</th></tr></thead>
         <tbody id="dash-tasks"></tbody>
-      </table>
-      <div id="dash-tasks-meta" class="hint"></div>
+      </table></div>
     </div>
-    <div class="two">
-      <div class="card">
-        <div class="card-title">Requests sent</div>
-        <p class="hint">Every request burpsy's own tools sent. Proxy traffic lives in History.</p>
-        <table>
+    <div class="activity-grid">
+      <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Network activity</div><div class="panel-title">Requests sent</div></div><div id="dash-activity-meta" class="hint"></div></div><div class="table-scroll"><table>
           <thead><tr><th>Time</th><th>Tool</th><th>Request</th></tr></thead>
           <tbody id="dash-activity"></tbody>
-        </table>
-        <div id="dash-activity-meta" class="hint"></div>
-      </div>
-      <div class="card">
-        <div class="card-title">What the tool did</div>
-        <p class="hint">Tasks starting and finishing, scope edits, bounds hit — the things that are not
-          requests, so they are not in the list beside this one.</p>
-        <table>
+        </table></div></div>
+      <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">System activity</div><div class="panel-title">What burpsy did</div></div><div id="dash-events-meta" class="hint"></div></div><div class="table-scroll"><table>
           <thead><tr><th>Time</th><th>Kind</th><th>Detail</th></tr></thead>
           <tbody id="dash-events"></tbody>
-        </table>
-        <div id="dash-events-meta" class="hint"></div>
-      </div>
+        </table></div></div>
     </div>
-    <div class="two">
+    <div class="audit-row">
       ${liveAuditCardHtml("dash")}
     </div>
   `;
+  $all<HTMLButtonElement>("#dashboard [data-jump]").forEach((button) => {
+    button.addEventListener("click", () => switchTab(button.dataset["jump"]!));
+  });
   // The switch, its counters and its POST all live in liveaudit.ts, because the Scanner tab draws the
   // same control: two panes each with their own copy of this state is how a UI ends up claiming the
   // sweep is on in one place and off in another.

@@ -84,15 +84,96 @@ export const delJSON = <T>(url: string): Promise<T> => request<T>("DELETE", url)
 
 // ---- tabs ---------------------------------------------------------------------------------
 
+const TAB_SUBTITLES: Record<string, string> = {
+  dashboard: "Operations, coverage, and recent activity",
+  history: "Captured HTTP traffic and message inspection",
+  wshistory: "Captured WebSocket conversations",
+  sitemap: "Discovered hosts, paths, and observed behavior",
+  intercept: "Review and modify traffic before it continues",
+  repeater: "Edit and resend individual requests",
+  intruder: "Automated payload-driven request attacks",
+  scanner: "Passive findings and targeted active audits",
+  sequencer: "Measure token quality and randomness",
+  decoder: "Decode, encode, and hash technical data",
+  comparer: "Inspect byte- or word-level differences",
+  logger: "Requests originated by burpsy tools",
+  organizer: "Curated exchanges and investigation notes",
+  matchreplace: "Automatic request and response transformations",
+  session: "Login macros, validation, and recovery policy",
+};
+
 export function switchTab(id: string): void {
-  $all("nav button[data-t]").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset["t"] === id));
+  let title = "burpsy";
+  $all<HTMLButtonElement>("nav button[data-t]").forEach((b) => {
+    const active = b.dataset["t"] === id;
+    b.classList.toggle("on", active);
+    b.setAttribute("aria-current", active ? "page" : "false");
+    if (active) title = b.textContent?.trim() || title;
+  });
   $all("main > section").forEach((s) => s.classList.toggle("on", s.id === id));
+  $all("main > section").forEach((s) => s.setAttribute("aria-hidden", String(s.id !== id)));
+  const heading = $("#page-title");
+  if (heading) heading.textContent = title;
+  const subtitle = $("#page-subtitle");
+  if (subtitle) subtitle.textContent = TAB_SUBTITLES[id] ?? "Security testing workspace";
+  document.title = `${title} · burpsy`;
+  history.replaceState(null, "", `#${id}`);
+  closeNavigation();
 }
 
 export function initTabs(): void {
-  $all<HTMLButtonElement>("nav button[data-t]").forEach((b) => {
+  const tabs = $all<HTMLButtonElement>("nav button[data-t]");
+  const visible = tabs.filter((b) => (b.offsetParent !== null));
+  visible.forEach((b, index) => {
     b.onclick = () => switchTab(b.dataset["t"]!);
+    b.onkeydown = (event) => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      const next = (index + (event.key === "ArrowDown" ? 1 : -1) + visible.length) % visible.length;
+      visible[next]!.focus();
+    };
   });
+  const requested = location.hash.slice(1);
+  if (requested && tabs.some((tab) => tab.dataset["t"] === requested)) switchTab(requested);
+
+  $("#nav-toggle")?.addEventListener("click", () => {
+    document.body.classList.toggle("nav-open");
+    updateNavigationState();
+  });
+  $("#nav-scrim")?.addEventListener("click", closeNavigation);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeNavigation();
+  });
+}
+
+/** Adds durable accessible names to the many compact technical editors without duplicating their
+ * visible placeholders. Tool panes are mounted after initTabs(), so app.ts calls this once they all
+ * exist. Native labels remain authoritative; this only fills otherwise unnamed controls. */
+export function enhanceAccessibility(): void {
+  $all<HTMLInputElement | HTMLTextAreaElement>("input[placeholder], textarea[placeholder]").forEach((control) => {
+    if (!control.getAttribute("aria-label") && !control.labels?.length) {
+      control.setAttribute("aria-label", control.placeholder);
+    }
+  });
+  $all<HTMLSelectElement>("select").forEach((control) => {
+    if (!control.getAttribute("aria-label") && !control.labels?.length && !control.title) {
+      const first = control.options[0]?.textContent?.trim();
+      if (first) control.setAttribute("aria-label", first);
+    }
+  });
+  $all<HTMLElement>("main > section").forEach((section) => section.setAttribute("aria-hidden", String(!section.classList.contains("on"))));
+}
+
+function closeNavigation(): void {
+  document.body.classList.remove("nav-open");
+  updateNavigationState();
+}
+
+function updateNavigationState(): void {
+  const open = document.body.classList.contains("nav-open");
+  $("#nav-toggle")?.setAttribute("aria-expanded", String(open));
+  const scrim = $<HTMLElement>("#nav-scrim");
+  if (scrim) scrim.hidden = !open;
 }
 
 // ---- toast ----------------------------------------------------------------------------------
@@ -104,6 +185,8 @@ export function toast(message: string, kind: "info" | "error" = "info"): void {
   if (!el) {
     el = document.createElement("div");
     el.id = "toast";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
     document.body.appendChild(el);
   }
   el.textContent = message;

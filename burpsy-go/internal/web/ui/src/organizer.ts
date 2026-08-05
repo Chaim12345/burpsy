@@ -19,11 +19,11 @@ export function initOrganizer(): void {
   const el = $("#organizer");
   if (!el) return;
   el.innerHTML = `
-    <div class="row">
-      <input id="org-add-exchange" placeholder="exchange id" style="width:120px" />
-      <button class="ghost" id="org-add">Add</button>
+    <div class="command-bar">
+      <input id="org-add-exchange" placeholder="Exchange ID" class="control-short" />
+      <button class="go" id="org-add">Add to organizer</button>
     </div>
-    <div id="org-list"></div>
+    <div id="org-list" class="organizer-grid"></div>
   `;
   $("#org-add")!.addEventListener("click", () => void add());
   // The case this exists for is cross-tab: History's Save writes an item here, and before the stream
@@ -54,7 +54,7 @@ async function load(): Promise<void> {
     const resp = await getJSON<{ items: OrgItem[] }>("/api/tools/organizer");
     list.innerHTML = resp.items.length
       ? resp.items.map(itemHtml).join("")
-      : `<p class="hint">nothing saved yet — use "Save" on a History row, or add by exchange id above</p>`;
+      : `<div class="empty-state"><b>No saved items</b><span>Save an exchange from History or add one by ID above.</span></div>`;
     wireItems();
   } catch (e) {
     list.innerHTML = `<p class="err">${esc((e as Error).message)}</p>`;

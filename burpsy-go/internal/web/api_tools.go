@@ -28,7 +28,7 @@ import (
 type repeaterSendReq struct {
 	Target   string `json:"target"`   // e.g. "http://host:port" or "host:port"
 	Protocol string `json:"protocol"` // optional "http" / "https"
-	Request  string `json:"request"`  // raw request text
+	Request  string `json:"raw"`  // raw request text
 }
 
 // repeaterSendResp mirrors repeater.ts's SendResp.

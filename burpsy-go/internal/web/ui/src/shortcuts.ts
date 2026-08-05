@@ -248,7 +248,7 @@ function openSheet(): void {
   document.addEventListener("keydown", onSheetKey, true);
 }
 
-function toggleSheet(): void {
+export function toggleSheet(): void {
   if (sheetEl()) closeSheet();
   else openSheet();
 }
@@ -287,11 +287,18 @@ function onKey(e: KeyboardEvent): void {
   }
 }
 
-/** Adds the header affordance. Done from here rather than in index.html so the button and the sheet
- * it opens are never out of step, and so this module is the only thing that needs to know the sheet
- * exists. */
+/** Adds the header help affordance. Done from here rather than in index.html so the button and the
+ * sheet it opens are never out of step, and so this module is the only thing that needs to know the
+ * sheet exists.
+ *
+ * Inserted into the workspace header (identified by class, not tag, so the menu bar and the
+ * workspace header cannot be confused) and appended rather than positioned relative to the CA link:
+ * the CA link used to live beside it in the header, but the sidebar redesign moved it into the
+ * sidebar foot, and `insertBefore` on a node that is no longer a child threw `NotFoundError` and
+ * halted the whole module. Appending to the header's own children does not care where the CA link
+ * went. */
 function addHelpButton(): void {
-  const header = $("header");
+  const header = $<HTMLElement>(".workspace > header") ?? $("header");
   if (!header || document.getElementById("shortcut-help")) return;
   const btn = document.createElement("button");
   btn.id = "shortcut-help";
@@ -300,9 +307,7 @@ function addHelpButton(): void {
   btn.textContent = "? shortcuts";
   btn.title = "keyboard shortcuts and right-click actions (press ?)";
   btn.addEventListener("click", () => toggleSheet());
-  const caLink = document.getElementById("ca-link");
-  if (caLink) header.insertBefore(btn, caLink);
-  else header.appendChild(btn);
+  header.appendChild(btn);
 }
 
 export function initShortcuts(): void {

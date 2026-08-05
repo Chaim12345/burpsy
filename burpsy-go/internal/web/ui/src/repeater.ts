@@ -6,6 +6,7 @@
 import { $, esc, statusBadge, postJSON, on, toast } from "./common";
 import { EVT_SEND_TO_REPEATER } from "./types";
 import type { SendToRepeaterDetail } from "./types";
+import { renderSyntax, refreshSyntaxEditor, wireSyntaxEditor } from "./syntax";
 
 type Protocol = "Http1" | "Http2";
 
@@ -40,8 +41,8 @@ export function initRepeater(): void {
   if (!section) return;
   section.innerHTML = `
     <div class="tabstrip" id="rep-tabs"></div>
-    <div class="row">
-      <input id="rep-target" placeholder="http://host:port or https://host" style="width:340px" />
+    <div class="command-bar">
+      <input id="rep-target" placeholder="http://host:port or https://host" class="control-target" />
       <select id="rep-protocol" title="protocol to send this request over (H2-01)">
         <option value="Http1">HTTP/1.1</option>
         <option value="Http2">HTTP/2</option>
@@ -49,13 +50,14 @@ export function initRepeater(): void {
       <button class="go" id="rep-send">Send</button>
       <span id="rep-meta" class="hint"></span>
     </div>
-    <div class="two">
-      <textarea id="rep-raw" spellcheck="false"></textarea>
-      <pre id="rep-res"></pre>
+    <div class="split-workspace tall">
+      <article class="editor-pane"><div class="pane-label">Request editor</div><textarea id="rep-raw" spellcheck="false"></textarea></article>
+      <article class="editor-pane"><div class="pane-label">Response</div><pre id="rep-res">Send the request to inspect the response.</pre></article>
     </div>
   `;
   $("#rep-send")!.addEventListener("click", () => void send());
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
+  wireSyntaxEditor($<HTMLTextAreaElement>("#rep-raw")!);
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {
     addTab({ target: d.target, raw: d.raw, protocol: d.protocol });
@@ -104,11 +106,12 @@ function loadActiveIntoEditor(): void {
   if (!tab) return;
   $<HTMLInputElement>("#rep-target")!.value = tab.target;
   $<HTMLTextAreaElement>("#rep-raw")!.value = tab.raw;
+  refreshSyntaxEditor($<HTMLTextAreaElement>("#rep-raw")!);
   $<HTMLSelectElement>("#rep-protocol")!.value = tab.protocol;
   $("#rep-meta")!.innerHTML = tab.request_msg_id
     ? `${statusBadge(tab.status)} · ${tab.duration_ms} ms · req msg ${tab.request_msg_id}`
     : "";
-  $("#rep-res")!.textContent = tab.response;
+  renderSyntax($("#rep-res")!, tab.response, "http");
 }
 
 function addTab(opts?: { target?: string; raw?: string; protocol?: Protocol }): void {
@@ -172,7 +175,7 @@ async function send(): Promise<void> {
     tab.response = d.response;
     if (activeId === sendingId) {
       $("#rep-meta")!.innerHTML = `${statusBadge(d.status)} · ${d.duration_ms} ms · req msg ${d.request_msg_id}`;
-      $("#rep-res")!.textContent = d.response;
+      renderSyntax($("#rep-res")!, d.response, "http");
     }
   } catch (e) {
     if (activeId === sendingId) {

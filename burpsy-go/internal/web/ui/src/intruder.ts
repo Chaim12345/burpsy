@@ -224,17 +224,19 @@ export function initIntruder(): void {
   const section = $("#intruder");
   if (!section) return;
   section.innerHTML = `
-    <div class="row">
-      <input id="int-msg" placeholder="request msg id" style="width:130px" />
-      <input id="int-target" placeholder="http://host:port" style="width:280px" />
+    <div class="command-bar">
+      <input id="int-msg" placeholder="Request message ID" style="width:170px" />
+      <input id="int-target" placeholder="http://host:port" class="control-target" />
       <label><input type="checkbox" id="int-all" /> all point types</label>
       <button class="go" id="int-find">Find points</button>
     </div>
-    <table>
+    <div class="intruder-builder"><div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Step 1</div><div class="panel-title">Insertion points</div></div></div><div class="table-scroll"><table>
       <thead><tr><th></th><th>#</th><th>Kind</th><th>Label</th><th>Offset</th><th>Len</th><th>Current value</th></tr></thead>
       <tbody id="int-points"></tbody>
-    </table>
-    <div class="row" style="margin-top:10px">
+    </table></div></div>
+    <div class="panel intruder-config">
+    <div class="panel-head"><div><div class="eyebrow">Step 2</div><div class="panel-title">Attack configuration</div></div></div>
+    <div class="row">
       <label>mode
         <select id="int-mode">
           <option value="sniper">sniper</option>
@@ -261,6 +263,7 @@ export function initIntruder(): void {
       <label>factor <input id="int-throttle-factor" value="2" style="width:50px" /></label>
       <label>recover after <input id="int-throttle-recover" value="50" style="width:60px" /></label>
     </div>
+    </div></div>
     <div id="int-report" class="hint"></div>
     <div id="int-results"></div>
   `;

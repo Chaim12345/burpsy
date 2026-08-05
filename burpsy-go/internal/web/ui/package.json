@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "bun build src/app.ts --outdir dist",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "bun test"
   }
 }

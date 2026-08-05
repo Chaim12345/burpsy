@@ -11,13 +11,8 @@ import { EVT_SHOW_EXCHANGE, EVT_FILTER_HISTORY } from "./types";
 import { attachRowContextMenu } from "./contextmenu";
 import { live } from "./live";
 import { registerRowTarget } from "./shortcuts";
-import {
-  exchangeMenuItems,
-  sendToRepeater,
-  sendToIntruder,
-  sendToComparer,
-  saveToOrganizer,
-} from "./sendto";
+import { exchangeMenuItems } from "./sendto";
+import { renderSyntax } from "./syntax";
 
 /** All rows from the last `load()`, before any filter is applied. */
 let allRows: Exchange[] = [];
@@ -37,32 +32,38 @@ export function initHistory(): void {
   const section = $("#history");
   if (!section) return;
   section.innerHTML = `
-    <div class="row">
+    <div class="page-actions">
       <span class="hint">right-click a row for send-to actions · Ctrl+R Repeater · Ctrl+I Intruder · ? for all shortcuts</span>
       <span id="hist-note" class="hint"></span>
     </div>
-    <div class="row">
-      <label><input type="checkbox" class="hist-status" value="2" checked /> 2xx</label>
-      <label><input type="checkbox" class="hist-status" value="3" checked /> 3xx</label>
-      <label><input type="checkbox" class="hist-status" value="4" checked /> 4xx</label>
-      <label><input type="checkbox" class="hist-status" value="5" checked /> 5xx</label>
-      <label><input type="checkbox" id="hist-scope-only" /> in scope only</label>
-      <input id="hist-search" placeholder="filter method/host/path" style="width:220px" />
-      <label><input type="checkbox" id="hist-regex" /> regex</label>
+    <div class="filter-panel">
+      <div class="row">
+        <input id="hist-search" placeholder="Filter by method, host, or path" class="control-wide" />
+        <label><input type="checkbox" id="hist-regex" /> regex</label>
+        <span class="filter-divider"></span>
+        <label><input type="checkbox" class="hist-status" value="2" checked /> 2xx</label>
+        <label><input type="checkbox" class="hist-status" value="3" checked /> 3xx</label>
+        <label><input type="checkbox" class="hist-status" value="4" checked /> 4xx</label>
+        <label><input type="checkbox" class="hist-status" value="5" checked /> 5xx</label>
+        <label><input type="checkbox" id="hist-scope-only" /> in scope only</label>
+      </div>
+      <input id="hist-query" placeholder='Advanced query: status == 200 and host ~ "api." and not method == "OPTIONS"' />
     </div>
-    <div class="row">
-      <input id="hist-query" placeholder='query: status == 200 and host ~ "api." and not method == "OPTIONS"' style="width:100%" />
+    <div class="table-panel">
+      <div class="panel-head"><div><div class="eyebrow">Captured traffic</div><div class="panel-title">HTTP exchanges</div></div></div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>#</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th>
+                <th>Len</th><th>ms</th><th>TLS</th></tr>
+          </thead>
+          <tbody id="hist-body"></tbody>
+        </table>
+      </div>
     </div>
-    <table>
-      <thead>
-        <tr><th>#</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th>
-            <th>Len</th><th>ms</th><th>TLS</th><th>Actions</th></tr>
-      </thead>
-      <tbody id="hist-body"></tbody>
-    </table>
-    <div class="two" style="margin-top:10px">
-      <div><b class="muted">Request</b><pre id="hist-req">select a row</pre></div>
-      <div><b class="muted">Response</b><pre id="hist-res"></pre></div>
+    <div class="split-workspace">
+      <article class="editor-pane"><div class="pane-label">Request</div><pre id="hist-req">Select an exchange to inspect its request.</pre></article>
+      <article class="editor-pane"><div class="pane-label">Response</div><pre id="hist-res">The response will appear here.</pre></article>
     </div>
   `;
   $all<HTMLInputElement>(".hist-status").forEach((c) => c.addEventListener("change", () => applyFilter()));
@@ -133,7 +134,7 @@ async function load(): Promise<void> {
     // line, then a `^` caret under the offending byte. `white-space:pre` keeps the caret aligned;
     // a plain innerHTML drop would collapse that spacing into one line.
     allRows = [];
-    body.innerHTML = `<tr><td colspan="9" class="err"><pre style="white-space:pre;margin:0">${esc((e as Error).message)}</pre></td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="err"><pre style="white-space:pre;margin:0">${esc((e as Error).message)}</pre></td></tr>`;
     return;
   }
   applyFilter();
@@ -155,11 +156,12 @@ function applyFilter(): void {
   const note = $("#hist-note")!;
 
   if (allRows.length === 0) {
-    body.innerHTML = "";
     const activeQuery = $<HTMLInputElement>("#hist-query")?.value.trim();
-    note.textContent = activeQuery
+    const message = activeQuery
       ? "no history rows match the query"
       : "no traffic yet — set your browser proxy to this host:8080";
+    note.textContent = message;
+    body.innerHTML = `<tr><td colspan="8" class="empty-cell">${esc(message)}</td></tr>`;
     return;
   }
 
@@ -191,7 +193,7 @@ function applyFilter(): void {
 
   body.innerHTML = rows.length
     ? rows.map(rowHtml).join("")
-    : `<tr><td colspan="9" class="hint">no rows match the current filter</td></tr>`;
+    : `<tr><td colspan="8" class="hint">no rows match the current filter</td></tr>`;
   wireRows(rows);
   note.textContent = regexInvalid ? "invalid regex — search ignored" : "";
 }
@@ -231,13 +233,6 @@ function rowHtml(r: Exchange): string {
     <td>${r.id}</td><td>${esc(r.method)}</td><td>${esc(r.host)}:${r.port}</td>
     <td>${esc(r.path)}</td><td>${statusBadge(r.status)}</td><td>${r.response_len}</td>
     <td>${r.duration_ms}</td><td>${r.tls ? "yes" : ""}</td>
-    <td class="actions">
-      <button class="ghost small" data-act="repeater">Repeater</button>
-      <button class="ghost small" data-act="intruder">Intruder</button>
-      <button class="ghost small" data-act="cmp-a">Cmp A</button>
-      <button class="ghost small" data-act="cmp-b">Cmp B</button>
-      <button class="ghost small" data-act="organize">Save</button>
-    </td>
   </tr>`;
 }
 
@@ -254,12 +249,6 @@ function wireRows(rows: Exchange[]): void {
       if ((e.target as HTMLElement).closest("button")) return;
       void openExchange(ex);
     });
-    $all("button", tr).forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        void handleAction(btn.dataset["act"] ?? "", ex);
-      });
-    });
   });
 }
 
@@ -271,41 +260,16 @@ async function openExchange(ex: Exchange): Promise<void> {
   resEl.textContent = "";
   try {
     const req = await getJSON<MessageView>(`/api/message/${ex.request}`);
-    reqEl.textContent = req.text;
+    renderSyntax(reqEl, req.text, "http");
   } catch (e) {
     reqEl.textContent = (e as Error).message;
   }
   if (ex.response !== null) {
     try {
       const res = await getJSON<MessageView>(`/api/message/${ex.response}`);
-      resEl.textContent = res.text;
+      renderSyntax(resEl, res.text, "http");
     } catch (e) {
       resEl.textContent = (e as Error).message;
     }
-  }
-}
-
-/** The row buttons, the right-click menu and the keyboard shortcuts all end up in sendto.ts. These
- * action bodies used to live here, which is why no other pane could offer the same hand-offs. */
-async function handleAction(act: string, ex: Exchange): Promise<void> {
-  markSelected(ex);
-  switch (act) {
-    case "repeater":
-      await sendToRepeater(ex);
-      break;
-    case "intruder":
-      sendToIntruder(ex);
-      break;
-    case "cmp-a":
-      sendToComparer(ex, "a");
-      break;
-    case "cmp-b":
-      sendToComparer(ex, "b");
-      break;
-    case "organize":
-      await saveToOrganizer(ex);
-      break;
-    default:
-      break;
   }
 }

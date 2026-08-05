@@ -59,14 +59,95 @@ var getJSON = (url) => request("GET", url);
 var postJSON = (url, body = {}) => request("POST", url, body);
 var putJSON = (url, body = {}) => request("PUT", url, body);
 var delJSON = (url) => request("DELETE", url);
+var TAB_SUBTITLES = {
+  dashboard: "Operations, coverage, and recent activity",
+  history: "Captured HTTP traffic and message inspection",
+  wshistory: "Captured WebSocket conversations",
+  sitemap: "Discovered hosts, paths, and observed behavior",
+  intercept: "Review and modify traffic before it continues",
+  repeater: "Edit and resend individual requests",
+  intruder: "Automated payload-driven request attacks",
+  scanner: "Passive findings and targeted active audits",
+  sequencer: "Measure token quality and randomness",
+  decoder: "Decode, encode, and hash technical data",
+  comparer: "Inspect byte- or word-level differences",
+  logger: "Requests originated by burpsy tools",
+  organizer: "Curated exchanges and investigation notes",
+  matchreplace: "Automatic request and response transformations",
+  session: "Login macros, validation, and recovery policy"
+};
 function switchTab(id) {
-  $all("nav button[data-t]").forEach((b) => b.classList.toggle("on", b.dataset["t"] === id));
+  let title = "burpsy";
+  $all("nav button[data-t]").forEach((b) => {
+    const active = b.dataset["t"] === id;
+    b.classList.toggle("on", active);
+    b.setAttribute("aria-current", active ? "page" : "false");
+    if (active)
+      title = b.textContent?.trim() || title;
+  });
   $all("main > section").forEach((s) => s.classList.toggle("on", s.id === id));
+  $all("main > section").forEach((s) => s.setAttribute("aria-hidden", String(s.id !== id)));
+  const heading = $("#page-title");
+  if (heading)
+    heading.textContent = title;
+  const subtitle = $("#page-subtitle");
+  if (subtitle)
+    subtitle.textContent = TAB_SUBTITLES[id] ?? "Security testing workspace";
+  document.title = `${title} · burpsy`;
+  history.replaceState(null, "", `#${id}`);
+  closeNavigation();
 }
 function initTabs() {
-  $all("nav button[data-t]").forEach((b) => {
+  const tabs = $all("nav button[data-t]");
+  const visible = tabs.filter((b) => b.offsetParent !== null);
+  visible.forEach((b, index) => {
     b.onclick = () => switchTab(b.dataset["t"]);
+    b.onkeydown = (event) => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
+        return;
+      event.preventDefault();
+      const next = (index + (event.key === "ArrowDown" ? 1 : -1) + visible.length) % visible.length;
+      visible[next].focus();
+    };
   });
+  const requested = location.hash.slice(1);
+  if (requested && tabs.some((tab) => tab.dataset["t"] === requested))
+    switchTab(requested);
+  $("#nav-toggle")?.addEventListener("click", () => {
+    document.body.classList.toggle("nav-open");
+    updateNavigationState();
+  });
+  $("#nav-scrim")?.addEventListener("click", closeNavigation);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape")
+      closeNavigation();
+  });
+}
+function enhanceAccessibility() {
+  $all("input[placeholder], textarea[placeholder]").forEach((control) => {
+    if (!control.getAttribute("aria-label") && !control.labels?.length) {
+      control.setAttribute("aria-label", control.placeholder);
+    }
+  });
+  $all("select").forEach((control) => {
+    if (!control.getAttribute("aria-label") && !control.labels?.length && !control.title) {
+      const first = control.options[0]?.textContent?.trim();
+      if (first)
+        control.setAttribute("aria-label", first);
+    }
+  });
+  $all("main > section").forEach((section) => section.setAttribute("aria-hidden", String(!section.classList.contains("on"))));
+}
+function closeNavigation() {
+  document.body.classList.remove("nav-open");
+  updateNavigationState();
+}
+function updateNavigationState() {
+  const open = document.body.classList.contains("nav-open");
+  $("#nav-toggle")?.setAttribute("aria-expanded", String(open));
+  const scrim = $("#nav-scrim");
+  if (scrim)
+    scrim.hidden = !open;
 }
 var toastTimer;
 function toast(message, kind = "info") {
@@ -74,6 +155,8 @@ function toast(message, kind = "info") {
   if (!el) {
     el = document.createElement("div");
     el.id = "toast";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
     document.body.appendChild(el);
   }
   el.textContent = message;
@@ -397,51 +480,45 @@ function initDashboard() {
   if (!section)
     return;
   section.innerHTML = `
-    <div class="four">
+    <div class="dashboard-head">
+    <div class="metric-grid">
       <div class="stat-tile"><div class="label">Exchanges captured</div><div class="value" id="dash-exchanges">–</div></div>
       <div class="stat-tile"><div class="label">Storage used</div><div class="value" id="dash-storage">–</div></div>
       <div class="stat-tile"><div class="label">Scope rules</div><div class="value" id="dash-scope">–</div></div>
       <div class="stat-tile"><div class="label">Tasks running</div><div class="value" id="dash-running">–</div></div>
     </div>
-    <div class="card">
-      <div class="card-title">Counts, and what they do not account for</div>
-      <p class="hint">A count with a caveat is a floor, not a total. Nothing here reports a number
-        without reporting the work that produced no verdict.</p>
-      <div class="four" id="dash-summaries"></div>
+    <div class="quick-launch panel"><div class="eyebrow">Quick launch</div><div class="panel-title">Start working</div>
+      <button class="launch-action" data-jump="history"><b>Inspect traffic</b><span>Open HTTP history</span></button>
+      <button class="launch-action" data-jump="repeater"><b>Send a request</b><span>Open Repeater</span></button>
+      <button class="launch-action" data-jump="scanner"><b>Review findings</b><span>Open Scanner</span></button>
+    </div></div>
+    <div class="section-block">
+      <div class="section-heading"><div><div class="eyebrow">Coverage ledger</div><div class="panel-title">Counts and incomplete work</div></div><p class="hint">Every result stays attached to skipped, errored, and gated work.</p></div>
+      <div class="metric-grid" id="dash-summaries"></div>
     </div>
-    <div class="card">
-      <div class="card-title">Tasks</div>
-      <table>
+    <div class="table-panel">
+      <div class="panel-head"><div><div class="eyebrow">Work in progress</div><div class="panel-title">Tasks</div></div><div id="dash-tasks-meta" class="hint"></div></div><div class="table-scroll"><table>
         <thead><tr><th>Kind</th><th>Target</th><th>State</th><th>Progress</th><th>Result</th><th>Elapsed</th></tr></thead>
         <tbody id="dash-tasks"></tbody>
-      </table>
-      <div id="dash-tasks-meta" class="hint"></div>
+      </table></div>
     </div>
-    <div class="two">
-      <div class="card">
-        <div class="card-title">Requests sent</div>
-        <p class="hint">Every request burpsy's own tools sent. Proxy traffic lives in History.</p>
-        <table>
+    <div class="activity-grid">
+      <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Network activity</div><div class="panel-title">Requests sent</div></div><div id="dash-activity-meta" class="hint"></div></div><div class="table-scroll"><table>
           <thead><tr><th>Time</th><th>Tool</th><th>Request</th></tr></thead>
           <tbody id="dash-activity"></tbody>
-        </table>
-        <div id="dash-activity-meta" class="hint"></div>
-      </div>
-      <div class="card">
-        <div class="card-title">What the tool did</div>
-        <p class="hint">Tasks starting and finishing, scope edits, bounds hit — the things that are not
-          requests, so they are not in the list beside this one.</p>
-        <table>
+        </table></div></div>
+      <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">System activity</div><div class="panel-title">What burpsy did</div></div><div id="dash-events-meta" class="hint"></div></div><div class="table-scroll"><table>
           <thead><tr><th>Time</th><th>Kind</th><th>Detail</th></tr></thead>
           <tbody id="dash-events"></tbody>
-        </table>
-        <div id="dash-events-meta" class="hint"></div>
-      </div>
+        </table></div></div>
     </div>
-    <div class="two">
+    <div class="audit-row">
       ${liveAuditCardHtml("dash")}
     </div>
   `;
+  $all("#dashboard [data-jump]").forEach((button) => {
+    button.addEventListener("click", () => switchTab(button.dataset["jump"]));
+  });
   mountLiveAudit("dash");
   live({
     kinds: ["history", "issues", "toollog", "dashboard"],
@@ -1075,7 +1152,7 @@ function onKey(e) {
   }
 }
 function addHelpButton() {
-  const header = $("header");
+  const header = $(".workspace > header") ?? $("header");
   if (!header || document.getElementById("shortcut-help"))
     return;
   const btn = document.createElement("button");
@@ -1085,15 +1162,190 @@ function addHelpButton() {
   btn.textContent = "? shortcuts";
   btn.title = "keyboard shortcuts and right-click actions (press ?)";
   btn.addEventListener("click", () => toggleSheet());
-  const caLink = document.getElementById("ca-link");
-  if (caLink)
-    header.insertBefore(btn, caLink);
-  else
-    header.appendChild(btn);
+  header.appendChild(btn);
 }
 function initShortcuts() {
   addHelpButton();
   document.addEventListener("keydown", onKey);
+}
+
+// src/syntax.ts
+function span(cls, value) {
+  return `<span class="${cls}">${esc(value)}</span>`;
+}
+function highlightJsonValue(value, depth = 0) {
+  const indent = "  ".repeat(depth);
+  const childIndent = "  ".repeat(depth + 1);
+  if (value === null)
+    return span("syn-null", "null");
+  if (typeof value === "string")
+    return span("syn-string", JSON.stringify(value));
+  if (typeof value === "number")
+    return span("syn-number", String(value));
+  if (typeof value === "boolean")
+    return span("syn-boolean", String(value));
+  if (Array.isArray(value)) {
+    if (!value.length)
+      return span("syn-punc", "[]");
+    return `${span("syn-punc", "[")}
+${value.map((item) => `${childIndent}${highlightJsonValue(item, depth + 1)}`).join(`${span("syn-punc", ",")}
+`)}
+${indent}${span("syn-punc", "]")}`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+    if (!entries.length)
+      return span("syn-punc", "{}");
+    return `${span("syn-punc", "{")}
+${entries.map(([key, item]) => `${childIndent}${span("syn-key", JSON.stringify(key))}${span("syn-punc", ":")} ${highlightJsonValue(item, depth + 1)}`).join(`${span("syn-punc", ",")}
+`)}
+${indent}${span("syn-punc", "}")}`;
+  }
+  return esc(String(value));
+}
+function highlightJson(raw) {
+  try {
+    return highlightJsonValue(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+function highlightMarkup(raw) {
+  let out = "";
+  let cursor = 0;
+  const token = /<!--[^]*?-->|<\/?[A-Za-z][^>]*>|&(?:#\d+|#x[\da-f]+|[A-Za-z]+);/gi;
+  for (const match of raw.matchAll(token)) {
+    const index = match.index ?? 0;
+    out += esc(raw.slice(cursor, index));
+    const value = match[0];
+    if (value.startsWith("<!--")) {
+      out += span("syn-comment", value);
+    } else if (value.startsWith("&")) {
+      out += span("syn-entity", value);
+    } else {
+      const tag = /^(<\/?)([\w:-]+)([^>]*)(>)$/.exec(value);
+      if (!tag)
+        out += esc(value);
+      else {
+        const opening = tag[1];
+        const name = tag[2];
+        const rawAttrs = tag[3];
+        const closing = tag[4];
+        let attrs = "";
+        let attrCursor = 0;
+        const attrToken = /([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*')/g;
+        for (const attr of rawAttrs.matchAll(attrToken)) {
+          const attrIndex = attr.index ?? 0;
+          attrs += esc(rawAttrs.slice(attrCursor, attrIndex));
+          attrs += `${span("syn-attr", attr[1])}${esc(attr[2])}${span("syn-string", attr[3])}`;
+          attrCursor = attrIndex + attr[0].length;
+        }
+        attrs += esc(rawAttrs.slice(attrCursor));
+        out += `${span("syn-punc", opening)}${span("syn-tag", name)}${attrs}${span("syn-punc", closing)}`;
+      }
+    }
+    cursor = index + value.length;
+  }
+  return out + esc(raw.slice(cursor));
+}
+function highlightForm(raw) {
+  return raw.split("&").map((part) => {
+    const at = part.indexOf("=");
+    if (at < 0)
+      return span("syn-key", part);
+    return `${span("syn-key", part.slice(0, at))}${span("syn-punc", "=")}${span("syn-string", part.slice(at + 1))}`;
+  }).join(span("syn-punc", "&"));
+}
+function highlightBody(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed)
+    return "";
+  const json = (trimmed.startsWith("{") || trimmed.startsWith("[")) && highlightJson(trimmed);
+  if (json)
+    return json;
+  if (trimmed.startsWith("<"))
+    return highlightMarkup(raw);
+  if (/^[^\s=&]+=[^\n]*(?:&[^\s=&]+=[^\n]*)+$/.test(trimmed))
+    return highlightForm(trimmed);
+  return esc(raw);
+}
+function highlightStartLine(line) {
+  const response = /^(HTTP\/\S+)\s+(\d{3})(?:\s+(.*))?$/.exec(line);
+  if (response) {
+    return `${span("syn-protocol", response[1])} ${span("syn-status", response[2])}${response[3] ? ` ${span("syn-reason", response[3])}` : ""}`;
+  }
+  const request2 = /^(\S+)\s+(\S+)\s+(HTTP\/\S+)$/.exec(line);
+  if (request2) {
+    return `${span("syn-method", request2[1])} ${span("syn-target", request2[2])} ${span("syn-protocol", request2[3])}`;
+  }
+  return esc(line);
+}
+function highlightHttp(raw) {
+  const normalized = raw.replace(/\r\n/g, `
+`);
+  const split = normalized.indexOf(`
+
+`);
+  const head = split >= 0 ? normalized.slice(0, split) : normalized;
+  const body = split >= 0 ? normalized.slice(split + 2) : "";
+  const lines = head.split(`
+`);
+  const highlighted = lines.map((line, index) => {
+    if (index === 0)
+      return highlightStartLine(line);
+    const at = line.indexOf(":");
+    if (at < 1)
+      return esc(line);
+    return `${span("syn-header", line.slice(0, at))}${span("syn-punc", ":")} ${span("syn-header-value", line.slice(at + 1).trimStart())}`;
+  });
+  return highlighted.join(`
+`) + (split >= 0 ? `
+
+${highlightBody(body)}` : "");
+}
+function highlightAuto(raw) {
+  const trimmed = raw.trim();
+  if (/^(?:[A-Z]+\s+\S+\s+HTTP\/|HTTP\/\S+\s+\d{3})/.test(trimmed))
+    return highlightHttp(raw);
+  const json = highlightJson(trimmed);
+  if (json)
+    return json;
+  if (trimmed.startsWith("<"))
+    return highlightMarkup(raw);
+  return esc(raw);
+}
+function renderSyntax(element, raw, kind = "auto") {
+  element.classList.add("syntax-view");
+  element.innerHTML = kind === "http" ? highlightHttp(raw) : highlightAuto(raw);
+}
+function refreshSyntaxEditor(textarea, kind = "http") {
+  const wrapper = textarea.closest(".syntax-editor");
+  const layer = wrapper?.querySelector("pre");
+  if (!layer)
+    return;
+  layer.innerHTML = kind === "http" ? highlightHttp(textarea.value) : highlightAuto(textarea.value);
+  layer.scrollTop = textarea.scrollTop;
+  layer.scrollLeft = textarea.scrollLeft;
+}
+function wireSyntaxEditor(textarea, kind = "http") {
+  if (textarea.closest(".syntax-editor")) {
+    refreshSyntaxEditor(textarea, kind);
+    return;
+  }
+  const parent = textarea.parentElement;
+  if (!parent)
+    return;
+  const wrapper = document.createElement("div");
+  wrapper.className = "syntax-editor";
+  const layer = document.createElement("pre");
+  layer.className = "syntax-view";
+  layer.setAttribute("aria-hidden", "true");
+  parent.insertBefore(wrapper, textarea);
+  wrapper.append(layer, textarea);
+  const refresh2 = () => refreshSyntaxEditor(textarea, kind);
+  textarea.addEventListener("input", refresh2);
+  textarea.addEventListener("scroll", refresh2);
+  refresh2();
 }
 
 // src/history.ts
@@ -1107,32 +1359,38 @@ function initHistory() {
   if (!section)
     return;
   section.innerHTML = `
-    <div class="row">
+    <div class="page-actions">
       <span class="hint">right-click a row for send-to actions · Ctrl+R Repeater · Ctrl+I Intruder · ? for all shortcuts</span>
       <span id="hist-note" class="hint"></span>
     </div>
-    <div class="row">
-      <label><input type="checkbox" class="hist-status" value="2" checked /> 2xx</label>
-      <label><input type="checkbox" class="hist-status" value="3" checked /> 3xx</label>
-      <label><input type="checkbox" class="hist-status" value="4" checked /> 4xx</label>
-      <label><input type="checkbox" class="hist-status" value="5" checked /> 5xx</label>
-      <label><input type="checkbox" id="hist-scope-only" /> in scope only</label>
-      <input id="hist-search" placeholder="filter method/host/path" style="width:220px" />
-      <label><input type="checkbox" id="hist-regex" /> regex</label>
+    <div class="filter-panel">
+      <div class="row">
+        <input id="hist-search" placeholder="Filter by method, host, or path" class="control-wide" />
+        <label><input type="checkbox" id="hist-regex" /> regex</label>
+        <span class="filter-divider"></span>
+        <label><input type="checkbox" class="hist-status" value="2" checked /> 2xx</label>
+        <label><input type="checkbox" class="hist-status" value="3" checked /> 3xx</label>
+        <label><input type="checkbox" class="hist-status" value="4" checked /> 4xx</label>
+        <label><input type="checkbox" class="hist-status" value="5" checked /> 5xx</label>
+        <label><input type="checkbox" id="hist-scope-only" /> in scope only</label>
+      </div>
+      <input id="hist-query" placeholder='Advanced query: status == 200 and host ~ "api." and not method == "OPTIONS"' />
     </div>
-    <div class="row">
-      <input id="hist-query" placeholder='query: status == 200 and host ~ "api." and not method == "OPTIONS"' style="width:100%" />
+    <div class="table-panel">
+      <div class="panel-head"><div><div class="eyebrow">Captured traffic</div><div class="panel-title">HTTP exchanges</div></div></div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>#</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th>
+                <th>Len</th><th>ms</th><th>TLS</th></tr>
+          </thead>
+          <tbody id="hist-body"></tbody>
+        </table>
+      </div>
     </div>
-    <table>
-      <thead>
-        <tr><th>#</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th>
-            <th>Len</th><th>ms</th><th>TLS</th><th>Actions</th></tr>
-      </thead>
-      <tbody id="hist-body"></tbody>
-    </table>
-    <div class="two" style="margin-top:10px">
-      <div><b class="muted">Request</b><pre id="hist-req">select a row</pre></div>
-      <div><b class="muted">Response</b><pre id="hist-res"></pre></div>
+    <div class="split-workspace">
+      <article class="editor-pane"><div class="pane-label">Request</div><pre id="hist-req">Select an exchange to inspect its request.</pre></article>
+      <article class="editor-pane"><div class="pane-label">Response</div><pre id="hist-res">The response will appear here.</pre></article>
     </div>
   `;
   $all(".hist-status").forEach((c) => c.addEventListener("change", () => applyFilter()));
@@ -1188,7 +1446,7 @@ async function load() {
     allRows = await getJSON(`/api/history${qs}`);
   } catch (e) {
     allRows = [];
-    body.innerHTML = `<tr><td colspan="9" class="err"><pre style="white-space:pre;margin:0">${esc(e.message)}</pre></td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="err"><pre style="white-space:pre;margin:0">${esc(e.message)}</pre></td></tr>`;
     return;
   }
   applyFilter();
@@ -1206,9 +1464,10 @@ function applyFilter() {
   const body = $("#hist-body");
   const note = $("#hist-note");
   if (allRows.length === 0) {
-    body.innerHTML = "";
     const activeQuery = $("#hist-query")?.value.trim();
-    note.textContent = activeQuery ? "no history rows match the query" : "no traffic yet — set your browser proxy to this host:8080";
+    const message = activeQuery ? "no history rows match the query" : "no traffic yet — set your browser proxy to this host:8080";
+    note.textContent = message;
+    body.innerHTML = `<tr><td colspan="8" class="empty-cell">${esc(message)}</td></tr>`;
     return;
   }
   const checkedClasses = new Set($all(".hist-status").filter((c) => c.checked).map((c) => c.value));
@@ -1233,7 +1492,7 @@ function applyFilter() {
       return false;
     return true;
   });
-  body.innerHTML = rows.length ? rows.map(rowHtml).join("") : `<tr><td colspan="9" class="hint">no rows match the current filter</td></tr>`;
+  body.innerHTML = rows.length ? rows.map(rowHtml).join("") : `<tr><td colspan="8" class="hint">no rows match the current filter</td></tr>`;
   wireRows(rows);
   note.textContent = regexInvalid ? "invalid regex — search ignored" : "";
 }
@@ -1269,13 +1528,6 @@ function rowHtml(r) {
     <td>${r.id}</td><td>${esc(r.method)}</td><td>${esc(r.host)}:${r.port}</td>
     <td>${esc(r.path)}</td><td>${statusBadge(r.status)}</td><td>${r.response_len}</td>
     <td>${r.duration_ms}</td><td>${r.tls ? "yes" : ""}</td>
-    <td class="actions">
-      <button class="ghost small" data-act="repeater">Repeater</button>
-      <button class="ghost small" data-act="intruder">Intruder</button>
-      <button class="ghost small" data-act="cmp-a">Cmp A</button>
-      <button class="ghost small" data-act="cmp-b">Cmp B</button>
-      <button class="ghost small" data-act="organize">Save</button>
-    </td>
   </tr>`;
 }
 function wireRows(rows) {
@@ -1293,12 +1545,6 @@ function wireRows(rows) {
         return;
       openExchange(ex);
     });
-    $all("button", tr).forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        handleAction(btn.dataset["act"] ?? "", ex);
-      });
-    });
   });
 }
 async function openExchange(ex) {
@@ -1309,39 +1555,17 @@ async function openExchange(ex) {
   resEl.textContent = "";
   try {
     const req = await getJSON(`/api/message/${ex.request}`);
-    reqEl.textContent = req.text;
+    renderSyntax(reqEl, req.text, "http");
   } catch (e) {
     reqEl.textContent = e.message;
   }
   if (ex.response !== null) {
     try {
       const res = await getJSON(`/api/message/${ex.response}`);
-      resEl.textContent = res.text;
+      renderSyntax(resEl, res.text, "http");
     } catch (e) {
       resEl.textContent = e.message;
     }
-  }
-}
-async function handleAction(act, ex) {
-  markSelected(ex);
-  switch (act) {
-    case "repeater":
-      await sendToRepeater(ex);
-      break;
-    case "intruder":
-      sendToIntruder(ex);
-      break;
-    case "cmp-a":
-      sendToComparer(ex, "a");
-      break;
-    case "cmp-b":
-      sendToComparer(ex, "b");
-      break;
-    case "organize":
-      await saveToOrganizer(ex);
-      break;
-    default:
-      break;
   }
 }
 
@@ -1354,24 +1578,21 @@ function initWshistory() {
   if (!section)
     return;
   section.innerHTML = `
-    <div class="row">
+    <div class="command-bar">
       <label>connection
         <select id="ws-conn"><option value="">all connections</option></select>
       </label>
-      <span class="hint">right-click a row for the upgrade exchange's send-to actions · ? for shortcuts</span>
       <span id="ws-meta" class="hint"></span>
     </div>
-    <table>
+    <div class="page-actions"><span class="hint">Right-click a message to use the upgrade exchange with another tool.</span></div>
+    <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Captured traffic</div><div class="panel-title">WebSocket messages</div></div></div><div class="table-scroll"><table>
       <thead>
         <tr><th>#</th><th>Dir</th><th>Opcode</th><th>Host</th><th>Path</th>
             <th>Len</th><th>Frames</th><th>Time</th></tr>
       </thead>
       <tbody id="ws-body"></tbody>
-    </table>
-    <div id="ws-detail" style="margin-top:10px">
-      <b class="muted">Payload</b>
-      <pre id="ws-payload">select a row</pre>
-    </div>
+    </table></div></div>
+    <article id="ws-detail" class="editor-pane"><div class="pane-label">Message payload</div><pre id="ws-payload">Select a message to inspect its payload.</pre></article>
   `;
   $("#ws-conn").addEventListener("change", () => void load2());
   attachRowContextMenu({
@@ -1485,7 +1706,7 @@ async function openMessage(row) {
   $("#ws-detail").querySelector(".hint.err")?.remove();
   if (warning)
     el.insertAdjacentHTML("beforebegin", warning);
-  el.textContent = closeLine + body;
+  renderSyntax(el, closeLine + body, "auto");
 }
 
 // src/sitemap.ts
@@ -1497,16 +1718,17 @@ function initSitemap() {
   if (!section)
     return;
   section.innerHTML = `
-    <div class="row">
-      <button class="go" id="site-refresh">Refresh</button>
-      <input id="site-q" placeholder="filter by segment or path…" style="width:220px" />
+    <div class="command-bar">
+      <input id="site-q" placeholder="Filter by segment or path…" class="control-wide" />
       <label><input type="checkbox" id="site-scope-only" /> in scope only</label>
-      <span class="hint">right-click a node to send its latest exchange to a tool · ? for shortcuts</span>
+      <button class="ghost" id="site-refresh">Refresh tree</button>
       <span id="site-note" class="hint"></span>
       <span id="site-stale" class="hint"></span>
     </div>
-    <div id="site-tree" class="tree"></div>
-    <div id="site-detail"></div>
+    <div class="explorer-layout">
+      <div class="panel explorer-tree"><div class="panel-head"><div><div class="eyebrow">Structure</div><div class="panel-title">Discovered surface</div></div></div><div id="site-tree" class="tree"></div></div>
+      <div id="site-detail" class="explorer-detail"><div class="empty-state"><b>Select a node</b><span>Its captured methods, statuses, and latest exchange will appear here.</span></div></div>
+    </div>
   `;
   $("#site-refresh").addEventListener("click", () => void load3());
   live({ kinds: ["history"], section: "sitemap", refresh: markTreeStale, minGapMs: 1000 });
@@ -1740,8 +1962,8 @@ function initRepeater() {
     return;
   section.innerHTML = `
     <div class="tabstrip" id="rep-tabs"></div>
-    <div class="row">
-      <input id="rep-target" placeholder="http://host:port or https://host" style="width:340px" />
+    <div class="command-bar">
+      <input id="rep-target" placeholder="http://host:port or https://host" class="control-target" />
       <select id="rep-protocol" title="protocol to send this request over (H2-01)">
         <option value="Http1">HTTP/1.1</option>
         <option value="Http2">HTTP/2</option>
@@ -1749,13 +1971,14 @@ function initRepeater() {
       <button class="go" id="rep-send">Send</button>
       <span id="rep-meta" class="hint"></span>
     </div>
-    <div class="two">
-      <textarea id="rep-raw" spellcheck="false"></textarea>
-      <pre id="rep-res"></pre>
+    <div class="split-workspace tall">
+      <article class="editor-pane"><div class="pane-label">Request editor</div><textarea id="rep-raw" spellcheck="false"></textarea></article>
+      <article class="editor-pane"><div class="pane-label">Response</div><pre id="rep-res">Send the request to inspect the response.</pre></article>
     </div>
   `;
   $("#rep-send").addEventListener("click", () => void send());
   $("#rep-tabs").addEventListener("click", (e) => onTabStripClick(e));
+  wireSyntaxEditor($("#rep-raw"));
   addTab();
   on(EVT_SEND_TO_REPEATER, (d) => {
     addTab({ target: d.target, raw: d.raw, protocol: d.protocol });
@@ -1797,9 +2020,10 @@ function loadActiveIntoEditor() {
     return;
   $("#rep-target").value = tab.target;
   $("#rep-raw").value = tab.raw;
+  refreshSyntaxEditor($("#rep-raw"));
   $("#rep-protocol").value = tab.protocol;
   $("#rep-meta").innerHTML = tab.request_msg_id ? `${statusBadge(tab.status)} · ${tab.duration_ms} ms · req msg ${tab.request_msg_id}` : "";
-  $("#rep-res").textContent = tab.response;
+  renderSyntax($("#rep-res"), tab.response, "http");
 }
 function addTab(opts) {
   if (tabs.length > 0)
@@ -1861,7 +2085,7 @@ async function send() {
     tab.response = d.response;
     if (activeId === sendingId) {
       $("#rep-meta").innerHTML = `${statusBadge(d.status)} · ${d.duration_ms} ms · req msg ${d.request_msg_id}`;
-      $("#rep-res").textContent = d.response;
+      renderSyntax($("#rep-res"), d.response, "http");
     }
   } catch (e) {
     if (activeId === sendingId) {
@@ -1904,17 +2128,19 @@ function initIntruder() {
   if (!section)
     return;
   section.innerHTML = `
-    <div class="row">
-      <input id="int-msg" placeholder="request msg id" style="width:130px" />
-      <input id="int-target" placeholder="http://host:port" style="width:280px" />
+    <div class="command-bar">
+      <input id="int-msg" placeholder="Request message ID" style="width:170px" />
+      <input id="int-target" placeholder="http://host:port" class="control-target" />
       <label><input type="checkbox" id="int-all" /> all point types</label>
       <button class="go" id="int-find">Find points</button>
     </div>
-    <table>
+    <div class="intruder-builder"><div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Step 1</div><div class="panel-title">Insertion points</div></div></div><div class="table-scroll"><table>
       <thead><tr><th></th><th>#</th><th>Kind</th><th>Label</th><th>Offset</th><th>Len</th><th>Current value</th></tr></thead>
       <tbody id="int-points"></tbody>
-    </table>
-    <div class="row" style="margin-top:10px">
+    </table></div></div>
+    <div class="panel intruder-config">
+    <div class="panel-head"><div><div class="eyebrow">Step 2</div><div class="panel-title">Attack configuration</div></div></div>
+    <div class="row">
       <label>mode
         <select id="int-mode">
           <option value="sniper">sniper</option>
@@ -1941,6 +2167,7 @@ function initIntruder() {
       <label>factor <input id="int-throttle-factor" value="2" style="width:50px" /></label>
       <label>recover after <input id="int-throttle-recover" value="50" style="width:60px" /></label>
     </div>
+    </div></div>
     <div id="int-report" class="hint"></div>
     <div id="int-results"></div>
   `;
@@ -2480,20 +2707,23 @@ function initIntercept() {
   if (!section)
     return;
   section.innerHTML = `
-    <div class="row">
+    <div class="command-bar">
       <label class="switch"><input type="checkbox" id="ic-enabled" /><span class="slider"></span></label>
-      <span>Intercept is on</span>
+      <b>Request interception</b>
       <span id="ic-status" class="hint"></span>
       <span class="grow"></span>
     </div>
-    ${rulesSectionHtml("request")}
-    ${rulesSectionHtml("response")}
-    <div class="row"><b>Held queue</b><span id="ic-queue-hint" class="hint"></span></div>
-    <table>
-      <thead><tr><th>#</th><th>Dir</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Held</th><th>Len</th></tr></thead>
-      <tbody id="ic-body"></tbody>
-    </table>
-    <div id="ic-editor"></div>
+    <div class="intercept-workspace">
+      <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Waiting for review</div><div class="panel-title">Held queue</div></div><span id="ic-queue-hint" class="hint"></span></div><div class="table-scroll"><table>
+        <thead><tr><th>#</th><th>Dir</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Held</th><th>Len</th></tr></thead>
+        <tbody id="ic-body"></tbody>
+      </table></div></div>
+      <div id="ic-editor" class="intercept-editor">${emptyEditorHtml()}</div>
+    </div>
+    <details class="config-panel">
+      <summary><span><b>Interception rules</b><small>Choose which requests and responses enter the held queue</small></span></summary>
+      <div class="config-panel-body">${rulesSectionHtml("request")}${rulesSectionHtml("response")}</div>
+    </details>
   `;
   $("#ic-enabled").addEventListener("change", (e) => void setEnabled(e.target.checked));
   ["request", "response"].forEach(wireRulesSection);
@@ -2541,8 +2771,11 @@ async function load4() {
   });
   if (selectedId !== null && !resp.held.some((h) => h.id === selectedId)) {
     selectedId = null;
-    $("#ic-editor").innerHTML = "";
+    $("#ic-editor").innerHTML = emptyEditorHtml();
   }
+}
+function emptyEditorHtml() {
+  return `<div class="empty-state"><b>Select held traffic</b><span>Review, edit, forward, or drop it here.</span></div>`;
 }
 function startHeldClock(fetchedAt) {
   if (heldClock !== undefined) {
@@ -2719,10 +2952,10 @@ function openEditor(h) {
   const editor = $("#ic-editor");
   const title = h.direction === "response" ? `#${h.id} response ${h.status ?? "?"} to ${esc(h.method)} ${esc(h.host)}:${h.port}${esc(h.path)}` : `#${h.id} ${esc(h.method)} ${esc(h.host)}:${h.port}${esc(h.path)}`;
   editor.innerHTML = `
-    <div class="card">
-      <div class="row"><b>${title}</b></div>
+    <div class="editor-pane intercept-message">
+      <div class="pane-label">${title}</div>
       <textarea id="ic-raw" spellcheck="false">${esc(h.raw)}</textarea>
-      <div class="row">
+      <div class="editor-actions">
         <label><input type="checkbox" id="ic-fixlen" checked /> fix Content-Length</label>
         <button class="go" id="ic-forward">Forward</button>
         <input id="ic-reason" placeholder="drop reason (optional)" style="width:220px" />
@@ -2731,6 +2964,7 @@ function openEditor(h) {
       </div>
     </div>
   `;
+  wireSyntaxEditor($("#ic-raw"));
   $("#ic-forward").addEventListener("click", () => void forward(h.id));
   $("#ic-drop").addEventListener("click", () => void dropHeld(h.id));
 }
@@ -2744,7 +2978,7 @@ async function forward(id) {
     return;
   }
   selectedId = null;
-  $("#ic-editor").innerHTML = "";
+  $("#ic-editor").innerHTML = emptyEditorHtml();
   load4();
 }
 async function dropHeld(id) {
@@ -2756,7 +2990,7 @@ async function dropHeld(id) {
     return;
   }
   selectedId = null;
-  $("#ic-editor").innerHTML = "";
+  $("#ic-editor").innerHTML = emptyEditorHtml();
   load4();
 }
 
@@ -2770,27 +3004,28 @@ function initScanner() {
     return;
   section.innerHTML = `
     ${liveAuditCardHtml("scan")}
-    <div class="row">
+    <div class="command-bar">
       <span id="scan-counts"></span>
-      <span class="hint">right-click a finding to open or send its first occurrence · ? for shortcuts</span>
       <span class="grow"></span>
-      <span class="hint">Audit exchange:</span>
-      <input id="scan-audit-id" placeholder="exchange id" style="width:110px" />
-      <button class="ghost" id="scan-audit-run">Audit</button>
+      <label>Audit exchange <input id="scan-audit-id" placeholder="ID" class="control-short" /></label>
+      <button class="go" id="scan-audit-run">Run audit</button>
     </div>
-    <div class="row">
-      <span class="hint">Download report:</span>
-      <a class="ghost" href="/api/report/html" download>HTML</a>
-      <a class="ghost" href="/api/report/json" download>JSON</a>
-      <a class="ghost" href="/api/report/sarif" download>SARIF</a>
+    <div class="page-actions">
+      <span class="hint">Right-click a finding to open or send its first occurrence.</span>
+      <span class="grow"></span><span class="hint">Export</span>
+      <a class="text-action" href="/api/report/html" download>HTML</a>
+      <a class="text-action" href="/api/report/json" download>JSON</a>
+      <a class="text-action" href="/api/report/sarif" download>SARIF</a>
     </div>
     <div id="scan-hint" class="hint"></div>
     <div id="scan-audit-out"></div>
-    <table>
-      <thead><tr><th>Sev</th><th>Conf</th><th>Check</th><th>Issue</th><th>Host</th><th>Seen</th><th>Detail</th></tr></thead>
-      <tbody id="scan-body"></tbody>
-    </table>
-    <div id="scan-detail"></div>
+    <div class="scanner-workspace">
+      <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Results</div><div class="panel-title">Findings</div></div></div><div class="table-scroll"><table>
+        <thead><tr><th>Sev</th><th>Conf</th><th>Check</th><th>Issue</th><th>Host</th><th>Seen</th><th>Detail</th></tr></thead>
+        <tbody id="scan-body"></tbody>
+      </table></div></div>
+      <div id="scan-detail" class="scanner-detail"><div class="empty-state"><b>Select a finding</b><span>Its evidence, remediation, and occurrences will appear here.</span></div></div>
+    </div>
   `;
   $("#scan-audit-run").addEventListener("click", () => void runAudit());
   mountLiveAudit("scan");
@@ -2860,7 +3095,7 @@ async function load5() {
   if (!resp.enabled) {
     hint.textContent = resp.hint ?? "passive scanning is not enabled";
     counts.textContent = "";
-    body.innerHTML = "";
+    body.innerHTML = `<tr><td colspan="7" class="empty-cell">${esc(resp.hint ?? "Passive scanning is not enabled.")}</td></tr>`;
     return;
   }
   hint.textContent = "";
@@ -2874,9 +3109,9 @@ async function load5() {
       <td>${esc(f.host)}</td>
       <td>${f.times_seen}</td>
       <td>${esc(f.detail ?? "")}</td>
-    </tr>`).join("") || `<tr><td colspan="7" class="hint">no findings yet</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="7" class="empty-cell">No findings yet. Passive and active results will appear here.</td></tr>`;
   openFindingId = null;
-  $("#scan-detail").innerHTML = "";
+  $("#scan-detail").innerHTML = emptyFindingHtml();
   wireRows3(resp.findings);
 }
 function wireRows3(findings) {
@@ -2903,14 +3138,14 @@ function toggleDetail(f) {
   const out = $("#scan-detail");
   if (openFindingId === f.id) {
     openFindingId = null;
-    out.innerHTML = "";
+    out.innerHTML = emptyFindingHtml();
     return;
   }
   openFindingId = f.id;
   out.innerHTML = findingDetailHtml(f);
   $("#scan-detail-close").addEventListener("click", () => {
     openFindingId = null;
-    out.innerHTML = "";
+    out.innerHTML = emptyFindingHtml();
   });
   $all("button[data-exchange-id]", out).forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2919,6 +3154,9 @@ function toggleDetail(f) {
       switchTab("history");
     });
   });
+}
+function emptyFindingHtml() {
+  return `<div class="empty-state"><b>Select a finding</b><span>Its evidence, remediation, and occurrences will appear here.</span></div>`;
 }
 function findingDetailHtml(f) {
   const occurrences = f.occurrences.length ? f.occurrences.map((o) => `<button class="ghost small" data-exchange-id="${o.exchange_id}">#${o.exchange_id} ${esc(o.path)}</button>`).join("") : `<span class="hint">no occurrences recorded</span>`;
@@ -2978,10 +3216,11 @@ function initDecoder() {
   if (!el)
     return;
   el.innerHTML = `
-    <div class="two">
-      <div class="stack">
+    <div class="split-workspace tall">
+      <article class="editor-pane">
+        <div class="pane-label">Input</div>
         <textarea id="dec-input" placeholder="paste text to decode / encode / hash"></textarea>
-        <div class="row">
+        <div class="editor-actions">
           <select id="dec-encoding">
             <option value="smart">smart</option>
             ${LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
@@ -2989,26 +3228,26 @@ function initDecoder() {
           <label><input type="checkbox" id="dec-guess" /> guess base64/hex</label>
           <button class="go" id="dec-run">Decode</button>
         </div>
-        <div class="row">
+        <div class="editor-actions secondary-actions">
           <span class="hint">view decoded output as</span>
           <label><input type="radio" name="dec-view" value="text" checked /> Text</label>
           <label><input type="radio" name="dec-view" value="hex" /> Hex</label>
         </div>
-        <div class="row">
+        <div class="editor-actions secondary-actions">
           <select id="enc-encoding">
             ${ENCODABLE_LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
           <button class="go" id="enc-run">Encode</button>
         </div>
-        <div class="row">
+        <div class="editor-actions secondary-actions">
           <select id="hash-algorithm">
             ${HASH_ALGORITHMS.map((a) => `<option value="${a}">${a}</option>`).join("")}
           </select>
           <button class="go" id="hash-run">Hash</button>
           <span class="hint">one-way — there is no decode back</span>
         </div>
-      </div>
-      <div><pre id="dec-output"></pre></div>
+      </article>
+      <article class="editor-pane"><div class="pane-label">Output</div><pre id="dec-output">Decoded, encoded, or hashed output will appear here.</pre></article>
     </div>
   `;
   $("#dec-run").addEventListener("click", () => void runDecode());
@@ -3137,29 +3376,28 @@ function initComparer() {
   if (!el)
     return;
   el.innerHTML = `
-    <div class="two">
-      <div class="stack">
-        <div class="hint" id="cmp-a-label">Side A</div>
+    <div class="split-workspace">
+      <article class="editor-pane">
+        <div class="pane-label" id="cmp-a-label">Side A</div>
         <input id="cmp-a-msg" placeholder="msg id (optional)" style="width:140px" />
         <textarea id="cmp-a-text" placeholder="text for side A"></textarea>
-      </div>
-      <div class="stack">
-        <div class="hint" id="cmp-b-label">Side B</div>
+      </article>
+      <article class="editor-pane">
+        <div class="pane-label" id="cmp-b-label">Side B</div>
         <input id="cmp-b-msg" placeholder="msg id (optional)" style="width:140px" />
         <textarea id="cmp-b-text" placeholder="text for side B"></textarea>
-      </div>
+      </article>
     </div>
-    <div class="row">
+    <div class="command-bar">
       <select id="cmp-granularity"><option value="word">word</option><option value="byte">byte</option></select>
       <button class="go" id="cmp-run">Compare</button>
       <span id="cmp-meta" class="hint"></span>
-    </div>
-    <div class="row">
+      <span class="grow"></span>
       <button class="ghost" id="cmp-hunk-prev">◀ Prev</button>
       <span id="cmp-hunk-counter" class="hint">no hunks</span>
       <button class="ghost" id="cmp-hunk-next">Next ▶</button>
     </div>
-    <pre id="cmp-output"></pre>
+    <article class="editor-pane diff-pane"><div class="pane-label">Differences</div><pre id="cmp-output">Run a comparison to see changed hunks.</pre></article>
   `;
   $("#cmp-run").addEventListener("click", () => void runCompare());
   $("#cmp-hunk-prev").addEventListener("click", () => jumpHunk(-1));
@@ -3248,7 +3486,7 @@ function initToolLog() {
   if (!el)
     return;
   el.innerHTML = `
-    <div class="row">
+    <div class="command-bar">
       <select id="log-filter">
         <option value="">all</option>
         <option value="repeater">repeater</option>
@@ -3257,16 +3495,14 @@ function initToolLog() {
         <option value="bcheck">bcheck</option>
       </select>
       <input id="log-search" type="search" placeholder="search host/path/method" class="grow" />
-      <button class="ghost" id="log-clear">Clear</button>
+      <button class="ghost danger" id="log-clear">Clear log</button>
       <span id="log-meta" class="hint"></span>
     </div>
-    <p class="hint">Right-click a row to copy its host or path, or to filter History by that host.
-      There is no send-to-Repeater here: a logged row records what burpsy sent, not a stored request
-      that could be reloaded, so there is nothing to hand over.</p>
-    <table>
+    <div class="page-actions"><span class="hint">Right-click a row to copy its host or path, or filter History to matching traffic.</span></div>
+    <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Tool traffic</div><div class="panel-title">Requests sent by burpsy</div></div></div><div class="table-scroll"><table>
       <thead><tr><th>#</th><th>Tool</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Len</th><th>ms</th><th>Error</th></tr></thead>
       <tbody id="log-body"></tbody>
-    </table>
+    </table></div></div>
   `;
   $("#log-filter").addEventListener("change", () => void load6());
   $("#log-clear").addEventListener("click", () => void clear());
@@ -3330,7 +3566,7 @@ async function load6() {
         <td>${esc(e.host)}:${e.port}</td><td>${esc(e.path)}</td>
         <td>${statusBadge(e.status)}</td><td>${e.response_len}</td><td>${e.duration_ms}</td>
         <td class="err">${esc(e.error ?? "")}</td>
-      </tr>`).join("") || `<tr><td colspan="9" class="hint">nothing logged yet</td></tr>`;
+      </tr>`).join("") || `<tr><td colspan="9" class="empty-cell">No tool traffic yet. Requests from Repeater, Intruder, and Scanner will appear here.</td></tr>`;
   } catch (e) {
     body.innerHTML = `<tr><td colspan="9" class="err">${esc(e.message)}</td></tr>`;
   }
@@ -3351,11 +3587,11 @@ function initOrganizer() {
   if (!el)
     return;
   el.innerHTML = `
-    <div class="row">
-      <input id="org-add-exchange" placeholder="exchange id" style="width:120px" />
-      <button class="ghost" id="org-add">Add</button>
+    <div class="command-bar">
+      <input id="org-add-exchange" placeholder="Exchange ID" class="control-short" />
+      <button class="go" id="org-add">Add to organizer</button>
     </div>
-    <div id="org-list"></div>
+    <div id="org-list" class="organizer-grid"></div>
   `;
   $("#org-add").addEventListener("click", () => void add());
   live({ kinds: ["organizer"], section: "organizer", refresh: () => void load7() });
@@ -3380,7 +3616,7 @@ async function load7() {
   const list = $("#org-list");
   try {
     const resp = await getJSON("/api/tools/organizer");
-    list.innerHTML = resp.items.length ? resp.items.map(itemHtml).join("") : `<p class="hint">nothing saved yet — use "Save" on a History row, or add by exchange id above</p>`;
+    list.innerHTML = resp.items.length ? resp.items.map(itemHtml).join("") : `<div class="empty-state"><b>No saved items</b><span>Save an exchange from History or add one by ID above.</span></div>`;
     wireItems();
   } catch (e) {
     list.innerHTML = `<p class="err">${esc(e.message)}</p>`;
@@ -3451,21 +3687,18 @@ function initMatchReplace() {
   if (!el)
     return;
   el.innerHTML = `
-    <div class="row"><b>Rules</b><span id="mr-affects" class="hint"></span></div>
-    <div class="row">
+    <div class="command-bar">
       <label><input type="checkbox" id="mr-ucl" /> fix Content-Length after a body rewrite</label>
-      <button class="ghost small" id="mr-reload">Reload from server</button>
+      <button class="ghost" id="mr-reload">Reload rules</button>
       <span id="mr-meta" class="hint"></span>
     </div>
-    <table>
+    <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Automatic transforms</div><div class="panel-title">Rules</div></div><span id="mr-affects" class="hint"></span></div><div class="table-scroll"><table>
       <thead><tr><th style="width:40px">On</th><th>Type</th><th>Match</th><th>Replace</th><th>Comment</th><th></th></tr></thead>
       <tbody id="mr-body"></tbody>
-    </table>
-    <button class="dashed" id="mr-add-rule">+ add rule</button>
+    </table></div><button class="dashed panel-add" id="mr-add-rule">+ add rule</button></div>
     <div id="mr-form"></div>
 
-    <div class="row"><b>Dry-run test</b></div>
-    <div class="row">
+    <div class="panel test-lab"><div class="panel-head"><div><div class="eyebrow">Preview</div><div class="panel-title">Dry-run test</div></div></div><div class="row">
       <select id="mr-direction"><option value="request">request</option><option value="response">response</option></select>
       <input id="mr-host" placeholder="host" value="localhost" style="width:140px" />
       <input id="mr-port" placeholder="port" value="80" style="width:80px" />
@@ -3479,11 +3712,13 @@ function initMatchReplace() {
       <span id="mr-test-meta" class="hint"></span>
     </div>
     <pre id="mr-test-out"></pre>
+    </div>
   `;
   $("#mr-reload").addEventListener("click", () => void loadRules2());
   $("#mr-add-rule").addEventListener("click", () => openForm(null));
   $("#mr-ucl").addEventListener("change", (e) => void toggleUpdateContentLength(e.target.checked));
   $("#mr-test").addEventListener("click", () => void testRules());
+  wireSyntaxEditor($("#mr-test-text"));
   ["mr-direction", "mr-host", "mr-port", "mr-path", "mr-method", "mr-tls", "mr-test-text"].forEach((id) => {
     const field = $(`#${id}`);
     field.addEventListener(changeEventFor(field), () => schedulePreview());
@@ -3728,8 +3963,8 @@ async function runPreview() {
       draft_rules: draftRules
     });
     metaEl.textContent = resp.changed ? "changed" : "no change";
-    origEl.textContent = sampleText;
-    modEl.textContent = resp.output.text;
+    renderSyntax(origEl, sampleText, "http");
+    renderSyntax(modEl, resp.output.text, "http");
   } catch (e) {
     metaEl.innerHTML = `<span class="err">${esc(e.message)}</span>`;
   }
@@ -3769,7 +4004,7 @@ async function testRules() {
       tls: $("#mr-tls").checked
     });
     meta.textContent = resp.changed ? "changed" : "no change";
-    out.textContent = resp.output.text;
+    renderSyntax(out, resp.output.text, "http");
   } catch (e) {
     meta.innerHTML = `<span class="err">${esc(e.message)}</span>`;
   }
@@ -3785,11 +4020,15 @@ function initSession() {
   if (!section)
     return;
   section.innerHTML = `
-    <div class="card">
+    <div class="session-layout"><div class="session-rail"><div class="card">
       <div class="row"><b>Session handling rules</b><span id="sess-hint" class="hint"></span></div>
       <div id="sess-rule-list"></div>
       <button class="dashed" id="sess-add-rule">+ add rule</button>
     </div>
+    <div class="card">
+      <div class="row"><b>Cookie jar</b><button class="ghost small" id="sess-cookies-refresh">Refresh</button></div>
+      <div id="sess-cookies"></div>
+    </div></div><div class="session-workspace">
     <div class="card" id="sess-editor" style="display:none">
       <div class="row"><b id="sess-editor-title">Rule</b><span id="sess-save-meta" class="hint"></span></div>
       <div class="row">
@@ -3828,15 +4067,7 @@ function initSession() {
       </div>
       <div id="sess-login-out"></div>
     </div>
-    <div class="card">
-      <!-- The one Refresh button left on a data pane other than the site map's, and it stays because
-           there is nothing to push: the coordinator's cookie jar has no enumeration API and no change
-           hook, so /api/session/cookies reports "wired" with an empty table (see api_session.go). A
-           live subscription would announce a kind nothing can ever emit. When the jar learns to
-           enumerate itself, it gets a change signal and this button goes with the others. -->
-      <div class="row"><b>Cookie jar</b><button class="ghost small" id="sess-cookies-refresh">Refresh</button></div>
-      <div id="sess-cookies"></div>
-    </div>
+    </div></div>
   `;
   $("#sess-add-rule").addEventListener("click", () => startDraft());
   $("#sess-add-step").addEventListener("click", () => addStepRow());
@@ -3845,6 +4076,8 @@ function initSession() {
   $("#sess-login").addEventListener("click", () => void logInAgain());
   $("#sess-update-macro").addEventListener("click", () => void updateMacro());
   $("#sess-cookies-refresh").addEventListener("click", () => void loadCookies());
+  wireSyntaxEditor($("#sess-scope"), "auto");
+  wireSyntaxEditor($("#sess-validity"), "auto");
   loadRules3();
   loadCookies();
 }
@@ -3941,6 +4174,8 @@ function renderEditor() {
   $("#sess-max").value = rule.max_attempts === undefined ? "" : String(rule.max_attempts);
   $("#sess-scope").value = rule.scope === undefined || rule.scope === null ? "" : JSON.stringify(rule.scope, null, 2);
   $("#sess-validity").value = JSON.stringify(rule.validity, null, 2);
+  refreshSyntaxEditor($("#sess-scope"), "auto");
+  refreshSyntaxEditor($("#sess-validity"), "auto");
   $("#sess-steps").innerHTML = "";
   rule.steps.forEach((s) => addStepRow(s));
 }
@@ -4194,7 +4429,7 @@ function initSequencer() {
   if (!section)
     return;
   section.innerHTML = `
-    <div class="card">
+    <div class="sequencer-layout"><div class="panel seq-config">
       <div class="row">
         <b>Token source</b>
         <label><input type="radio" name="seq-src" value="paste" checked /> paste a list</label>
@@ -4250,8 +4485,9 @@ Connection: close
       </div>
     </div>
 
-    <div id="seq-results"></div>
+    <div id="seq-results" class="seq-results"><div class="empty-state"><b>No analysis yet</b><span>Paste tokens or capture them from a request to begin.</span></div></div></div>
   `;
+  wireSyntaxEditor($("#seq-raw"));
   $all("input[name=seq-src]").forEach((r) => {
     r.onchange = () => {
       const live2 = r.value === "live" && r.checked;
@@ -4534,7 +4770,195 @@ function positionHtml(p) {
   </div>`;
 }
 
+// src/theme.ts
+var THEMES = new Set(["obsidian", "graphite", "midnight", "paper"]);
+var ACCENTS = new Set(["amber", "cyan", "lime", "rose", "violet"]);
+function stored(key, allowed, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return value && allowed.has(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function remember(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+function applyTheme(theme) {
+  document.documentElement.dataset["theme"] = theme;
+  document.documentElement.style.colorScheme = theme === "paper" ? "light" : "dark";
+  remember("burpsy-theme", theme);
+  $all("[data-theme-choice]").forEach((button) => {
+    const selected6 = button.dataset["themeChoice"] === theme;
+    button.classList.toggle("on", selected6);
+    button.setAttribute("aria-checked", String(selected6));
+  });
+}
+function applyAccent(accent) {
+  document.documentElement.dataset["accent"] = accent;
+  remember("burpsy-accent", accent);
+  $all("[data-accent-choice]").forEach((button) => {
+    const selected6 = button.dataset["accentChoice"] === accent;
+    button.classList.toggle("on", selected6);
+    button.setAttribute("aria-checked", String(selected6));
+  });
+}
+function closeMenu() {
+  const menu = $("#theme-menu");
+  const toggle2 = $("#theme-toggle");
+  if (menu)
+    menu.hidden = true;
+  toggle2?.setAttribute("aria-expanded", "false");
+}
+function initTheme() {
+  const theme = stored("burpsy-theme", THEMES, "obsidian");
+  const accent = stored("burpsy-accent", ACCENTS, "amber");
+  applyTheme(theme);
+  applyAccent(accent);
+  const menu = $("#theme-menu");
+  const toggle2 = $("#theme-toggle");
+  toggle2?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!menu)
+      return;
+    menu.hidden = !menu.hidden;
+    toggle2.setAttribute("aria-expanded", String(!menu.hidden));
+  });
+  menu?.addEventListener("click", (event) => event.stopPropagation());
+  $all("[data-theme-choice]").forEach((button) => {
+    button.addEventListener("click", () => applyTheme(button.dataset["themeChoice"]));
+  });
+  $all("[data-accent-choice]").forEach((button) => {
+    button.addEventListener("click", () => applyAccent(button.dataset["accentChoice"]));
+  });
+  document.addEventListener("click", closeMenu);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape")
+      closeMenu();
+  });
+}
+
+// src/menubar.ts
+var openMenu2 = null;
+function closeAll() {
+  $all(".menu-pop").forEach((p) => {
+    p.hidden = true;
+    const trigger = $(`.menu-trigger[data-menu="${p.dataset["menuPop"]}"]`);
+    if (trigger)
+      trigger.setAttribute("aria-expanded", "false");
+  });
+  openMenu2 = null;
+}
+function openPop(name) {
+  closeAll();
+  const pop = $(`.menu-pop[data-menu-pop="${name}"]`);
+  const trigger = $(`.menu-trigger[data-menu="${name}"]`);
+  if (!pop || !trigger)
+    return;
+  pop.hidden = false;
+  trigger.setAttribute("aria-expanded", "true");
+  openMenu2 = name;
+  const first = $(".menu-entry", pop);
+  if (first)
+    first.focus();
+}
+function handleTriggerClick(e) {
+  const btn = e.target.closest(".menu-trigger");
+  if (!btn)
+    return;
+  const name = btn.dataset["menu"];
+  if (!name)
+    return;
+  if (openMenu2 === name) {
+    closeAll();
+  } else {
+    openPop(name);
+  }
+}
+function handleEntryClick(e) {
+  const btn = e.target.closest(".menu-entry");
+  if (!btn)
+    return;
+  const action = btn.dataset["action"];
+  closeAll();
+  if (action)
+    runAction(action);
+}
+function runAction(action) {
+  switch (action) {
+    case "reload":
+      location.reload();
+      break;
+    case "new-window":
+      window.open(location.href, "_blank");
+      break;
+    case "shortcuts":
+      toggleSheet();
+      break;
+    case "about":
+      toast("burpsy — a memory-frugal HTTP testing proxy");
+      break;
+    default:
+      toast(`${action}: not yet implemented`);
+      break;
+  }
+}
+function onKey2(e) {
+  if (!openMenu2)
+    return;
+  const pop = $(`.menu-pop[data-menu-pop="${openMenu2}"]`);
+  if (!pop)
+    return;
+  const items = $all(".menu-entry", pop);
+  const idx = items.indexOf(document.activeElement);
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();
+    closeAll();
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    const next = (idx + 1) % items.length;
+    items[next]?.focus();
+    return;
+  }
+  if (e.key === "ArrowUp") {
+    e.preventDefault();
+    const prev = (idx - 1 + items.length) % items.length;
+    items[prev]?.focus();
+    return;
+  }
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    document.activeElement?.click();
+    return;
+  }
+}
+function onBodyClick(e) {
+  const target = e.target;
+  if (target.closest(".menu-trigger"))
+    return;
+  if (target.closest(".menu-pop"))
+    return;
+  if (openMenu2)
+    closeAll();
+}
+function initMenubar() {
+  const bar = $(".menubar");
+  if (!bar)
+    return;
+  bar.addEventListener("click", handleTriggerClick);
+  bar.addEventListener("click", handleEntryClick);
+  document.addEventListener("click", onBodyClick, true);
+  document.addEventListener("keydown", onKey2, true);
+}
+
 // src/app.ts
+initTheme();
+initMenubar();
 initTabs();
 initDashboard();
 initHistory();
@@ -4551,13 +4975,14 @@ initOrganizer();
 initMatchReplace();
 initSession();
 initSequencer();
+enhanceAccessibility();
 initShortcuts();
 async function refreshStats() {
   try {
     const s = await getJSON("/api/stats");
     const el = $("#stats");
     if (el) {
-      el.textContent = `${s.exchanges} exchanges · ${s.messages} msgs · ${(s.stored_bytes / 1048576).toFixed(2)} MB stored`;
+      el.innerHTML = `<span>${s.exchanges.toLocaleString()} exchanges</span><span>${s.messages.toLocaleString()} messages</span><span>${(s.stored_bytes / 1048576).toFixed(2)} MB</span>`;
     }
   } catch {}
 }

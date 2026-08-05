@@ -7,30 +7,119 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header>
-      <h1>burpsy</h1>
-      <nav>
-        <button class="on" data-t="dashboard">Dashboard</button>
-        <button data-t="history">History</button>
-        <button data-t="wshistory">WS History</button>
-        <button data-t="sitemap">Site map</button>
-        <button data-t="repeater">Repeater</button>
-        <button data-t="intruder">Intruder</button>
-        <button data-t="intercept">Intercept</button>
-        <button data-t="scanner">Scanner</button>
-        <button data-t="decoder">Decoder</button>
-        <button data-t="comparer">Comparer</button>
-        <button data-t="logger">Logger</button>
-        <button data-t="organizer">Organizer</button>
-        <button data-t="matchreplace">Match/Replace</button>
-        <button data-t="session">Session</button>
-        <button data-t="sequencer">Sequencer</button>
-      </nav>
-      <a id="ca-link" href="/ca.crt" download style="display: none">CA cert</a>
-      <span id="scope-badge" class="badge" title=""></span>
-      <div id="stats"></div>
-    </header>
-    <main>
+    <a class="skip-link" href="#main-content">Skip to workspace</a>
+    <div class="app-shell">
+      <!-- ---- menubar ---- -->
+      <div class="menubar">
+        <div class="menubar-left">
+          <div class="brand"><span class="brand-mark" aria-hidden="true">b/</span><span class="brand-name">burpsy</span></div>
+          <nav class="menu-bar" aria-label="Application menus">
+            <div class="menu-item">
+              <button class="menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false" data-menu="file">File</button>
+              <div class="menu-pop" role="menu" data-menu-pop="file" hidden>
+                <button class="menu-entry" role="menuitem" data-action="reload">Reload</button>
+                <button class="menu-entry" role="menuitem" data-action="new-window">New Window</button>
+                <div class="menu-sep"></div>
+                <button class="menu-entry" role="menuitem" data-action="save-project">Save Project</button>
+                <button class="menu-entry" role="menuitem" data-action="open-project">Open Project</button>
+              </div>
+            </div>
+            <div class="menu-item">
+              <button class="menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false" data-menu="project">Project</button>
+              <div class="menu-pop" role="menu" data-menu-pop="project" hidden>
+                <button class="menu-entry" role="menuitem" data-action="project-options">Project Options</button>
+                <button class="menu-entry" role="menuitem" data-action="user-options">User Options</button>
+                <div class="menu-sep"></div>
+                <button class="menu-entry" role="menuitem" data-action="scope">Scope</button>
+              </div>
+            </div>
+            <div class="menu-item">
+              <button class="menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false" data-menu="help">Help</button>
+              <div class="menu-pop" role="menu" data-menu-pop="help" hidden>
+                <button class="menu-entry" role="menuitem" data-action="shortcuts">Keyboard Shortcuts</button>
+                <button class="menu-entry" role="menuitem" data-action="about">About burpsy</button>
+              </div>
+            </div>
+          </nav>
+        </div>
+        <div class="menubar-right">
+          <span id="scope-badge" class="badge" title=""></span>
+          <div id="stats"></div>
+          <div class="theme-picker">
+            <button id="theme-toggle" class="icon-button theme-toggle" type="button" aria-label="Choose appearance" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">&#9680;</span></button>
+            <div id="theme-menu" class="theme-menu" role="menu" hidden>
+              <div class="theme-menu-label">Appearance</div>
+              <div class="theme-options" role="radiogroup" aria-label="Theme">
+                <button type="button" data-theme-choice="obsidian" role="radio"><span class="theme-preview preview-obsidian"></span><span><b>Obsidian</b><small>Deep neutral</small></span></button>
+                <button type="button" data-theme-choice="graphite" role="radio"><span class="theme-preview preview-graphite"></span><span><b>Graphite</b><small>Warm charcoal</small></span></button>
+                <button type="button" data-theme-choice="midnight" role="radio"><span class="theme-preview preview-midnight"></span><span><b>Midnight</b><small>Cool contrast</small></span></button>
+                <button type="button" data-theme-choice="paper" role="radio"><span class="theme-preview preview-paper"></span><span><b>Paper</b><small>Focused light</small></span></button>
+              </div>
+              <div class="theme-menu-label">Accent</div>
+              <div class="accent-options" role="radiogroup" aria-label="Accent color">
+                <button type="button" data-accent-choice="amber" class="accent-amber" role="radio" aria-label="Amber"></button>
+                <button type="button" data-accent-choice="cyan" class="accent-cyan" role="radio" aria-label="Cyan"></button>
+                <button type="button" data-accent-choice="lime" class="accent-lime" role="radio" aria-label="Lime"></button>
+                <button type="button" data-accent-choice="rose" class="accent-rose" role="radio" aria-label="Rose"></button>
+                <button type="button" data-accent-choice="violet" class="accent-violet" role="radio" aria-label="Violet"></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- ---- body: sidebar + workspace ---- -->
+      <div class="app-body">
+        <aside id="app-sidebar">
+          <nav aria-label="Primary workspace">
+            <details class="nav-group" open>
+              <summary class="nav-label">Overview</summary>
+              <div class="nav-group-items">
+                <button class="on" data-t="dashboard" aria-current="page">Dashboard</button>
+                <button data-t="history">HTTP history</button>
+                <button data-t="wshistory">WebSockets</button>
+                <button data-t="sitemap">Site map</button>
+              </div>
+            </details>
+            <details class="nav-group" open>
+              <summary class="nav-label">Proxy</summary>
+              <div class="nav-group-items">
+                <button data-t="intercept">Intercept</button>
+              </div>
+            </details>
+            <details class="nav-group" open>
+              <summary class="nav-label">Test</summary>
+              <div class="nav-group-items">
+                <button data-t="repeater">Repeater</button>
+                <button data-t="intruder">Intruder</button>
+                <button data-t="scanner">Scanner</button>
+                <button data-t="sequencer">Sequencer</button>
+              </div>
+            </details>
+            <details class="nav-group" open>
+              <summary class="nav-label">Utilities</summary>
+              <div class="nav-group-items">
+                <button data-t="decoder">Decoder</button>
+                <button data-t="comparer">Comparer</button>
+                <button data-t="logger">Logger</button>
+                <button data-t="organizer">Organizer</button>
+              </div>
+            </details>
+            <details class="nav-group" open>
+              <summary class="nav-label">Configuration</summary>
+              <div class="nav-group-items">
+                <button data-t="matchreplace">Match / Replace</button>
+                <button data-t="session">Session</button>
+              </div>
+            </details>
+          </nav>
+          <div class="sidebar-foot"><a id="ca-link" href="/ca.crt" download style="display: none">Download CA certificate</a></div>
+        </aside>
+        <div class="workspace">
+          <header>
+            <button id="nav-toggle" class="icon-button" type="button" aria-label="Open navigation" aria-controls="app-sidebar" aria-expanded="false"><span aria-hidden="true">&#9776;</span></button>
+            <div class="page-heading"><div id="page-title" class="page-title">Dashboard</div><div id="page-subtitle" class="page-subtitle">Operations, coverage, and recent activity</div></div>
+          </header>
+          <main id="main-content" tabindex="-1">
       <section id="dashboard" class="on"></section>
       <section id="history"></section>
       <section id="wshistory"></section>
@@ -46,7 +135,11 @@
       <section id="matchreplace"></section>
       <section id="session"></section>
       <section id="sequencer"></section>
-    </main>
+          </main>
+        </div>
+      </div>
+    </div>
+    <div id="nav-scrim" hidden></div>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

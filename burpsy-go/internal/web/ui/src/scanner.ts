@@ -50,27 +50,28 @@ export function initScanner(): void {
   if (!section) return;
   section.innerHTML = `
     ${liveAuditCardHtml("scan")}
-    <div class="row">
+    <div class="command-bar">
       <span id="scan-counts"></span>
-      <span class="hint">right-click a finding to open or send its first occurrence · ? for shortcuts</span>
       <span class="grow"></span>
-      <span class="hint">Audit exchange:</span>
-      <input id="scan-audit-id" placeholder="exchange id" style="width:110px" />
-      <button class="ghost" id="scan-audit-run">Audit</button>
+      <label>Audit exchange <input id="scan-audit-id" placeholder="ID" class="control-short" /></label>
+      <button class="go" id="scan-audit-run">Run audit</button>
     </div>
-    <div class="row">
-      <span class="hint">Download report:</span>
-      <a class="ghost" href="/api/report/html" download>HTML</a>
-      <a class="ghost" href="/api/report/json" download>JSON</a>
-      <a class="ghost" href="/api/report/sarif" download>SARIF</a>
+    <div class="page-actions">
+      <span class="hint">Right-click a finding to open or send its first occurrence.</span>
+      <span class="grow"></span><span class="hint">Export</span>
+      <a class="text-action" href="/api/report/html" download>HTML</a>
+      <a class="text-action" href="/api/report/json" download>JSON</a>
+      <a class="text-action" href="/api/report/sarif" download>SARIF</a>
     </div>
     <div id="scan-hint" class="hint"></div>
     <div id="scan-audit-out"></div>
-    <table>
-      <thead><tr><th>Sev</th><th>Conf</th><th>Check</th><th>Issue</th><th>Host</th><th>Seen</th><th>Detail</th></tr></thead>
-      <tbody id="scan-body"></tbody>
-    </table>
-    <div id="scan-detail"></div>
+    <div class="scanner-workspace">
+      <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Results</div><div class="panel-title">Findings</div></div></div><div class="table-scroll"><table>
+        <thead><tr><th>Sev</th><th>Conf</th><th>Check</th><th>Issue</th><th>Host</th><th>Seen</th><th>Detail</th></tr></thead>
+        <tbody id="scan-body"></tbody>
+      </table></div></div>
+      <div id="scan-detail" class="scanner-detail"><div class="empty-state"><b>Select a finding</b><span>Its evidence, remediation, and occurrences will appear here.</span></div></div>
+    </div>
   `;
   $("#scan-audit-run")!.addEventListener("click", () => void runAudit());
   // Same control as the Dashboard's, same state, same endpoint — liveaudit.ts owns all three, so the
@@ -150,7 +151,7 @@ async function load(): Promise<void> {
   if (!resp.enabled) {
     hint.textContent = resp.hint ?? "passive scanning is not enabled";
     counts.textContent = "";
-    body.innerHTML = "";
+    body.innerHTML = `<tr><td colspan="7" class="empty-cell">${esc(resp.hint ?? "Passive scanning is not enabled.")}</td></tr>`;
     return;
   }
   hint.textContent = "";
@@ -171,10 +172,10 @@ async function load(): Promise<void> {
       <td>${esc(f.detail ?? "")}</td>
     </tr>`,
       )
-      .join("") || `<tr><td colspan="7" class="hint">no findings yet</td></tr>`;
+      .join("") || `<tr><td colspan="7" class="empty-cell">No findings yet. Passive and active results will appear here.</td></tr>`;
   // A refresh may change ids/contents underneath an open panel, so close it rather than show stale data.
   openFindingId = null;
-  $("#scan-detail")!.innerHTML = "";
+  $("#scan-detail")!.innerHTML = emptyFindingHtml();
   wireRows(resp.findings);
 }
 
@@ -203,14 +204,14 @@ function toggleDetail(f: Finding): void {
   const out = $("#scan-detail")!;
   if (openFindingId === f.id) {
     openFindingId = null;
-    out.innerHTML = "";
+    out.innerHTML = emptyFindingHtml();
     return;
   }
   openFindingId = f.id;
   out.innerHTML = findingDetailHtml(f);
   $("#scan-detail-close")!.addEventListener("click", () => {
     openFindingId = null;
-    out.innerHTML = "";
+    out.innerHTML = emptyFindingHtml();
   });
   $all("button[data-exchange-id]", out).forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -219,6 +220,10 @@ function toggleDetail(f: Finding): void {
       switchTab("history");
     });
   });
+}
+
+function emptyFindingHtml(): string {
+  return `<div class="empty-state"><b>Select a finding</b><span>Its evidence, remediation, and occurrences will appear here.</span></div>`;
 }
 
 function findingDetailHtml(f: Finding): string {

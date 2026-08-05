@@ -16,6 +16,7 @@
 // enabled-looking button that could only fail is not offered.
 
 import { $, esc, getJSON, postJSON, putJSON, delJSON } from "./common";
+import { refreshSyntaxEditor, wireSyntaxEditor } from "./syntax";
 
 // ---- wire shapes ------------------------------------------------------------------------------
 
@@ -103,11 +104,15 @@ export function initSession(): void {
   const section = $("#session");
   if (!section) return;
   section.innerHTML = `
-    <div class="card">
+    <div class="session-layout"><div class="session-rail"><div class="card">
       <div class="row"><b>Session handling rules</b><span id="sess-hint" class="hint"></span></div>
       <div id="sess-rule-list"></div>
       <button class="dashed" id="sess-add-rule">+ add rule</button>
     </div>
+    <div class="card">
+      <div class="row"><b>Cookie jar</b><button class="ghost small" id="sess-cookies-refresh">Refresh</button></div>
+      <div id="sess-cookies"></div>
+    </div></div><div class="session-workspace">
     <div class="card" id="sess-editor" style="display:none">
       <div class="row"><b id="sess-editor-title">Rule</b><span id="sess-save-meta" class="hint"></span></div>
       <div class="row">
@@ -146,15 +151,7 @@ export function initSession(): void {
       </div>
       <div id="sess-login-out"></div>
     </div>
-    <div class="card">
-      <!-- The one Refresh button left on a data pane other than the site map's, and it stays because
-           there is nothing to push: the coordinator's cookie jar has no enumeration API and no change
-           hook, so /api/session/cookies reports "wired" with an empty table (see api_session.go). A
-           live subscription would announce a kind nothing can ever emit. When the jar learns to
-           enumerate itself, it gets a change signal and this button goes with the others. -->
-      <div class="row"><b>Cookie jar</b><button class="ghost small" id="sess-cookies-refresh">Refresh</button></div>
-      <div id="sess-cookies"></div>
-    </div>
+    </div></div>
   `;
   $("#sess-add-rule")!.addEventListener("click", () => startDraft());
   $("#sess-add-step")!.addEventListener("click", () => addStepRow());
@@ -163,6 +160,8 @@ export function initSession(): void {
   $("#sess-login")!.addEventListener("click", () => void logInAgain());
   $("#sess-update-macro")!.addEventListener("click", () => void updateMacro());
   $("#sess-cookies-refresh")!.addEventListener("click", () => void loadCookies());
+  wireSyntaxEditor($<HTMLTextAreaElement>("#sess-scope")!, "auto");
+  wireSyntaxEditor($<HTMLTextAreaElement>("#sess-validity")!, "auto");
   void loadRules();
   void loadCookies();
 }
@@ -276,6 +275,8 @@ function renderEditor(): void {
   $<HTMLTextAreaElement>("#sess-scope")!.value =
     rule.scope === undefined || rule.scope === null ? "" : JSON.stringify(rule.scope, null, 2);
   $<HTMLTextAreaElement>("#sess-validity")!.value = JSON.stringify(rule.validity, null, 2);
+  refreshSyntaxEditor($<HTMLTextAreaElement>("#sess-scope")!, "auto");
+  refreshSyntaxEditor($<HTMLTextAreaElement>("#sess-validity")!, "auto");
   $("#sess-steps")!.innerHTML = "";
   rule.steps.forEach((s) => addStepRow(s));
 }

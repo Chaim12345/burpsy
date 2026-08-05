@@ -75,16 +75,17 @@ export function initSitemap(): void {
   const section = $("#sitemap");
   if (!section) return;
   section.innerHTML = `
-    <div class="row">
-      <button class="go" id="site-refresh">Refresh</button>
-      <input id="site-q" placeholder="filter by segment or path…" style="width:220px" />
+    <div class="command-bar">
+      <input id="site-q" placeholder="Filter by segment or path…" class="control-wide" />
       <label><input type="checkbox" id="site-scope-only" /> in scope only</label>
-      <span class="hint">right-click a node to send its latest exchange to a tool · ? for shortcuts</span>
+      <button class="ghost" id="site-refresh">Refresh tree</button>
       <span id="site-note" class="hint"></span>
       <span id="site-stale" class="hint"></span>
     </div>
-    <div id="site-tree" class="tree"></div>
-    <div id="site-detail"></div>
+    <div class="explorer-layout">
+      <div class="panel explorer-tree"><div class="panel-head"><div><div class="eyebrow">Structure</div><div class="panel-title">Discovered surface</div></div></div><div id="site-tree" class="tree"></div></div>
+      <div id="site-detail" class="explorer-detail"><div class="empty-state"><b>Select a node</b><span>Its captured methods, statuses, and latest exchange will appear here.</span></div></div>
+    </div>
   `;
   $("#site-refresh")!.addEventListener("click", () => void load());
   // The one pane that keeps its Refresh button, and the reason is the tree: it is lazily expanded, and

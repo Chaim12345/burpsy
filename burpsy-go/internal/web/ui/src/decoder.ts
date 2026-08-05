@@ -60,10 +60,11 @@ export function initDecoder(): void {
   const el = $("#decoder");
   if (!el) return;
   el.innerHTML = `
-    <div class="two">
-      <div class="stack">
+    <div class="split-workspace tall">
+      <article class="editor-pane">
+        <div class="pane-label">Input</div>
         <textarea id="dec-input" placeholder="paste text to decode / encode / hash"></textarea>
-        <div class="row">
+        <div class="editor-actions">
           <select id="dec-encoding">
             <option value="smart">smart</option>
             ${LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
@@ -71,26 +72,26 @@ export function initDecoder(): void {
           <label><input type="checkbox" id="dec-guess" /> guess base64/hex</label>
           <button class="go" id="dec-run">Decode</button>
         </div>
-        <div class="row">
+        <div class="editor-actions secondary-actions">
           <span class="hint">view decoded output as</span>
           <label><input type="radio" name="dec-view" value="text" checked /> Text</label>
           <label><input type="radio" name="dec-view" value="hex" /> Hex</label>
         </div>
-        <div class="row">
+        <div class="editor-actions secondary-actions">
           <select id="enc-encoding">
             ${ENCODABLE_LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
           <button class="go" id="enc-run">Encode</button>
         </div>
-        <div class="row">
+        <div class="editor-actions secondary-actions">
           <select id="hash-algorithm">
             ${HASH_ALGORITHMS.map((a) => `<option value="${a}">${a}</option>`).join("")}
           </select>
           <button class="go" id="hash-run">Hash</button>
           <span class="hint">one-way — there is no decode back</span>
         </div>
-      </div>
-      <div><pre id="dec-output"></pre></div>
+      </article>
+      <article class="editor-pane"><div class="pane-label">Output</div><pre id="dec-output">Decoded, encoded, or hashed output will appear here.</pre></article>
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());

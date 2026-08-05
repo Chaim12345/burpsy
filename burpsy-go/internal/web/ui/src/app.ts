@@ -1,7 +1,7 @@
 // Entry point: wires up tab switching and every tab's init(), then keeps the header (stats, scope,
 // CA cert link) refreshed. Bundled by Bun into one app.js — see crates/web/build.rs.
 
-import { initTabs, getJSON, $ } from "./common";
+import { initTabs, enhanceAccessibility, getJSON, $ } from "./common";
 import type { Stats, ScopeInfo } from "./types";
 import { initDashboard } from "./dashboard";
 import { initHistory } from "./history";
@@ -21,7 +21,11 @@ import { initSequencer } from "./sequencer";
 import { initShortcuts } from "./shortcuts";
 import { initLive, live } from "./live";
 import { refreshLiveAudit } from "./liveaudit";
+import { initTheme } from "./theme";
+import { initMenubar } from "./menubar";
 
+initTheme();
+initMenubar();
 initTabs();
 initDashboard();
 initHistory();
@@ -38,6 +42,7 @@ initOrganizer();
 initMatchReplace();
 initSession();
 initSequencer();
+enhanceAccessibility();
 // Last: the bindings act on the selection each pane registered above, so every pane must have had its
 // chance to register before a key can be pressed.
 initShortcuts();
@@ -47,7 +52,7 @@ async function refreshStats(): Promise<void> {
     const s = await getJSON<Stats>("/api/stats");
     const el = $("#stats");
     if (el) {
-      el.textContent = `${s.exchanges} exchanges · ${s.messages} msgs · ${(s.stored_bytes / 1048576).toFixed(2)} MB stored`;
+      el.innerHTML = `<span>${s.exchanges.toLocaleString()} exchanges</span><span>${s.messages.toLocaleString()} messages</span><span>${(s.stored_bytes / 1048576).toFixed(2)} MB</span>`;
     }
   } catch {
     // best-effort; a transient failure here should not spam the console every 4s

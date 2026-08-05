@@ -31,29 +31,28 @@ export function initComparer(): void {
   const el = $("#comparer");
   if (!el) return;
   el.innerHTML = `
-    <div class="two">
-      <div class="stack">
-        <div class="hint" id="cmp-a-label">Side A</div>
+    <div class="split-workspace">
+      <article class="editor-pane">
+        <div class="pane-label" id="cmp-a-label">Side A</div>
         <input id="cmp-a-msg" placeholder="msg id (optional)" style="width:140px" />
         <textarea id="cmp-a-text" placeholder="text for side A"></textarea>
-      </div>
-      <div class="stack">
-        <div class="hint" id="cmp-b-label">Side B</div>
+      </article>
+      <article class="editor-pane">
+        <div class="pane-label" id="cmp-b-label">Side B</div>
         <input id="cmp-b-msg" placeholder="msg id (optional)" style="width:140px" />
         <textarea id="cmp-b-text" placeholder="text for side B"></textarea>
-      </div>
+      </article>
     </div>
-    <div class="row">
+    <div class="command-bar">
       <select id="cmp-granularity"><option value="word">word</option><option value="byte">byte</option></select>
       <button class="go" id="cmp-run">Compare</button>
       <span id="cmp-meta" class="hint"></span>
-    </div>
-    <div class="row">
+      <span class="grow"></span>
       <button class="ghost" id="cmp-hunk-prev">◀ Prev</button>
       <span id="cmp-hunk-counter" class="hint">no hunks</span>
       <button class="ghost" id="cmp-hunk-next">Next ▶</button>
     </div>
-    <pre id="cmp-output"></pre>
+    <article class="editor-pane diff-pane"><div class="pane-label">Differences</div><pre id="cmp-output">Run a comparison to see changed hunks.</pre></article>
   `;
   $("#cmp-run")!.addEventListener("click", () => void runCompare());
   $("#cmp-hunk-prev")!.addEventListener("click", () => jumpHunk(-1));

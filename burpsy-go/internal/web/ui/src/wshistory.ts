@@ -8,6 +8,7 @@ import type { MenuItem } from "./contextmenu";
 import { exchangeIdMenuItems, copyText } from "./sendto";
 import { registerRowTarget } from "./shortcuts";
 import { live } from "./live";
+import { renderSyntax } from "./syntax";
 
 interface RowView {
   id: number;
@@ -62,24 +63,21 @@ export function initWshistory(): void {
   const section = $("#wshistory");
   if (!section) return;
   section.innerHTML = `
-    <div class="row">
+    <div class="command-bar">
       <label>connection
         <select id="ws-conn"><option value="">all connections</option></select>
       </label>
-      <span class="hint">right-click a row for the upgrade exchange's send-to actions · ? for shortcuts</span>
       <span id="ws-meta" class="hint"></span>
     </div>
-    <table>
+    <div class="page-actions"><span class="hint">Right-click a message to use the upgrade exchange with another tool.</span></div>
+    <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Captured traffic</div><div class="panel-title">WebSocket messages</div></div></div><div class="table-scroll"><table>
       <thead>
         <tr><th>#</th><th>Dir</th><th>Opcode</th><th>Host</th><th>Path</th>
             <th>Len</th><th>Frames</th><th>Time</th></tr>
       </thead>
       <tbody id="ws-body"></tbody>
-    </table>
-    <div id="ws-detail" style="margin-top:10px">
-      <b class="muted">Payload</b>
-      <pre id="ws-payload">select a row</pre>
-    </div>
+    </table></div></div>
+    <article id="ws-detail" class="editor-pane"><div class="pane-label">Message payload</div><pre id="ws-payload">Select a message to inspect its payload.</pre></article>
   `;
   $("#ws-conn")!.addEventListener("change", () => void load());
   attachRowContextMenu<RowView>({
@@ -216,5 +214,5 @@ async function openMessage(row: RowView): Promise<void> {
   el.innerHTML = "";
   $("#ws-detail")!.querySelector(".hint.err")?.remove();
   if (warning) el.insertAdjacentHTML("beforebegin", warning);
-  el.textContent = closeLine + body;
+  renderSyntax(el, closeLine + body, "auto");
 }

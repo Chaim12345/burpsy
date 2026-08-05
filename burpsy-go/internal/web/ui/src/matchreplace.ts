@@ -10,6 +10,7 @@
 // fix-Content-Length controls, all of which PUT immediately the same way the old UI did.
 
 import { $, $all, esc, getJSON, putJSON, postJSON } from "./common";
+import { renderSyntax, wireSyntaxEditor } from "./syntax";
 
 type Target =
   | "request_first_line"
@@ -80,21 +81,18 @@ export function initMatchReplace(): void {
   const el = $("#matchreplace");
   if (!el) return;
   el.innerHTML = `
-    <div class="row"><b>Rules</b><span id="mr-affects" class="hint"></span></div>
-    <div class="row">
+    <div class="command-bar">
       <label><input type="checkbox" id="mr-ucl" /> fix Content-Length after a body rewrite</label>
-      <button class="ghost small" id="mr-reload">Reload from server</button>
+      <button class="ghost" id="mr-reload">Reload rules</button>
       <span id="mr-meta" class="hint"></span>
     </div>
-    <table>
+    <div class="table-panel"><div class="panel-head"><div><div class="eyebrow">Automatic transforms</div><div class="panel-title">Rules</div></div><span id="mr-affects" class="hint"></span></div><div class="table-scroll"><table>
       <thead><tr><th style="width:40px">On</th><th>Type</th><th>Match</th><th>Replace</th><th>Comment</th><th></th></tr></thead>
       <tbody id="mr-body"></tbody>
-    </table>
-    <button class="dashed" id="mr-add-rule">+ add rule</button>
+    </table></div><button class="dashed panel-add" id="mr-add-rule">+ add rule</button></div>
     <div id="mr-form"></div>
 
-    <div class="row"><b>Dry-run test</b></div>
-    <div class="row">
+    <div class="panel test-lab"><div class="panel-head"><div><div class="eyebrow">Preview</div><div class="panel-title">Dry-run test</div></div></div><div class="row">
       <select id="mr-direction"><option value="request">request</option><option value="response">response</option></select>
       <input id="mr-host" placeholder="host" value="localhost" style="width:140px" />
       <input id="mr-port" placeholder="port" value="80" style="width:80px" />
@@ -108,6 +106,7 @@ export function initMatchReplace(): void {
       <span id="mr-test-meta" class="hint"></span>
     </div>
     <pre id="mr-test-out"></pre>
+    </div>
   `;
   $("#mr-reload")!.addEventListener("click", () => void loadRules());
   $("#mr-add-rule")!.addEventListener("click", () => openForm(null));
@@ -115,6 +114,7 @@ export function initMatchReplace(): void {
     void toggleUpdateContentLength((e.target as HTMLInputElement).checked),
   );
   $("#mr-test")!.addEventListener("click", () => void testRules());
+  wireSyntaxEditor($<HTMLTextAreaElement>("#mr-test-text")!);
   ["mr-direction", "mr-host", "mr-port", "mr-path", "mr-method", "mr-tls", "mr-test-text"].forEach((id) => {
     const field = $(`#${id}`)!;
     field.addEventListener(changeEventFor(field), () => schedulePreview());
@@ -388,8 +388,8 @@ async function runPreview(): Promise<void> {
       draft_rules: draftRules,
     });
     metaEl.textContent = resp.changed ? "changed" : "no change";
-    origEl.textContent = sampleText;
-    modEl.textContent = resp.output.text;
+    renderSyntax(origEl, sampleText, "http");
+    renderSyntax(modEl, resp.output.text, "http");
   } catch (e) {
     metaEl.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
   }
@@ -432,7 +432,7 @@ async function testRules(): Promise<void> {
       tls: $<HTMLInputElement>("#mr-tls")!.checked,
     });
     meta.textContent = resp.changed ? "changed" : "no change";
-    out.textContent = resp.output.text;
+    renderSyntax(out, resp.output.text, "http");
   } catch (e) {
     meta.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
   }
