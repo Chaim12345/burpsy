@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -580,7 +581,7 @@ func (s *Server) handleToolsDecode(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	decoded, layers, err := decodeLayer(dec, req.Encoding, req.Input)
+	decoded, layers, partial, err := decodeLayer(dec, req.Encoding, req.Input)
 	if err != nil {
 		http.Error(w, "decode failed: "+err.Error(), http.StatusBadRequest)
 		return
@@ -589,37 +590,38 @@ func (s *Server) handleToolsDecode(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"mode":   "explicit",
 		"layers": layers,
-		"output": bytesView([]byte(decoded)),
+		// True when a compressed stream only partly decompressed: the output is a
+		// prefix, not the whole plaintext, and searching it can mislead.
+		"partial": partial,
+		"output":  bytesView([]byte(decoded)),
 	})
 }
 
-func decodeLayer(dec *tools.Decoder, encoding, input string) (string, []string, error) {
-	switch encoding {
-	case "url":
-		out, err := dec.DecodeURL(input)
-		return out, []string{"url"}, err
-	case "html":
-		return dec.DecodeHTML(input), []string{"html"}, nil
-	case "base64":
-		out, err := dec.DecodeBase64(input)
-		return out, []string{"base64"}, err
-	case "base64url":
-		out, err := dec.DecodeBase64(input)
-		return out, []string{"base64url"}, err
-	case "hex":
-		out, err := dec.DecodeHex(input)
-		return out, []string{"hex"}, err
-	case "jwt":
-		_, payload, _, err := dec.DecodeJWT(input)
-		if err != nil {
-			return "", nil, err
-		}
-		return payload, []string{"jwt"}, nil
-	case "ascii":
-		return dec.ToASCII(input), []string{"ascii"}, nil
-	default:
-		return input, []string{encoding}, nil
+// decodeLayer resolves the named layer through tools.ParseLayer so the handler
+// covers exactly the codec table — previously it hand-rolled a partial switch, so
+// gzip and deflate fell through to a default that returned the input unchanged
+// while still reporting the layer as applied, and base64url was decoded with the
+// standard alphabet. The returned bool is the codec's partial-decompression flag:
+// a truncated gzip stream must never be reported as a clean decode.
+func decodeLayer(dec *tools.Decoder, encoding, input string) (string, []string, bool, error) {
+	// ASCII is a Decoder helper, not one of the codec layers.
+	if strings.EqualFold(strings.TrimSpace(encoding), "ascii") {
+		return dec.ToASCII(input), []string{"ascii"}, false, nil
 	}
+	layer, ok := tools.ParseLayer(encoding)
+	if !ok {
+		names := make([]string, 0, len(tools.AllLayers())+1)
+		for _, l := range tools.AllLayers() {
+			names = append(names, l.String())
+		}
+		names = append(names, "ascii")
+		return "", nil, false, fmt.Errorf("unknown encoding %q: expected one of %s", encoding, strings.Join(names, ", "))
+	}
+	out, partial, err := tools.Decode(layer, []byte(input))
+	if err != nil {
+		return "", nil, false, err
+	}
+	return string(out), []string{layer.String()}, partial, nil
 }
 
 // smartDecode runs the input through the known layers in order until decoding stops changing it.
