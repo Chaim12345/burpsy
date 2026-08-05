@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-07-28 | Updated: 2026-08-02 -->
+<!-- Generated: 2026-07-28 | Updated: 2026-08-05 -->
 
 # crates
 
@@ -9,6 +9,10 @@ The thirteen workspace crates. The split is not cosmetic — it enforces the dep
 keeps the memory model intact. `core` owns the store and knows nothing about networks; `bcheck` is a
 pure interpreter with no transport; `sender` is the only crate that opens a socket for a constructed
 request. A crate boundary here is a statement about what a component is *not* allowed to reach.
+
+**Status:** Stable/frozen. This Rust tree is the reference implementation — it proved the architecture,
+the memory model, and the scope chokepoint design. New features land in the Go port (`burpsy-go/`).
+No active development happens here; changes are limited to bug fixes and verification.
 
 ## Subdirectories
 
