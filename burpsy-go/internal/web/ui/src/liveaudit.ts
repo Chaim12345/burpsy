@@ -105,12 +105,19 @@ export function refreshLiveAudit(): Promise<void> {
 /** Flips the switch. Every mount is re-rendered from the server's answer, so the two panes cannot
  * drift apart and a refused POST cannot leave a switch showing a state the sweep is not in. */
 async function setLiveAudit(enabled: boolean): Promise<void> {
+  const button = $(`#${mounts[0]}-audit-toggle`)!;
+  const originalChecked = button.checked;
+  
   try {
+    button.disabled = true;
     last = await postJSON<LiveAuditResp>("/api/scanner/live", { enabled });
     for (const prefix of mounts) applyTo(prefix, last);
   } catch (e) {
     toast((e as Error).message, "error");
+    button.checked = originalChecked;
     await refreshLiveAudit();
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -131,7 +138,7 @@ function applyTo(prefix: string, r: LiveAuditResp): void {
   }
   toggle.checked = r.enabled;
   const state = r.enabled ? "sweeping new in-scope traffic" : "off — no active checks are being sent";
-  hint.textContent = r.query ? `${state} · filtered to ${r.query}` : state;
+  hint.textContent = r.query ? `${state}  filtered to ${r.query}` : state;
   $(`#${prefix}-audit-swept`)!.textContent = (r.swept ?? 0).toLocaleString();
   $(`#${prefix}-audit-findings`)!.textContent = (r.findings ?? 0).toLocaleString();
   if (chips) chips.innerHTML = chipsHtml(r);

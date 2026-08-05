@@ -1,108 +1,238 @@
-// Organizer tab: the operator's shortlist of saved exchanges with a note and a Burp-style
-// highlight colour. Items are normally added via History's "Save" action; adding by exchange id
-// here too, for completeness.
+// Organizer tab: save and organize interesting requests. The organizer is a simple key/value
+// store: every saved item is an exchange id plus a user-supplied note. That is enough to build
+// a "favorites" list, a "to do" list, or a set of regression tests.
 
-import { $, $all, esc, getJSON, postJSON, delJSON, toast } from "./common";
-import { live } from "./live";
+import { $, esc, getJSON, postJSON, delJSON, toast, makeSortable, renderEmptyState, copyText } from "./common";
 
-interface OrgItem {
+interface OrganizerItem {
   id: number;
-  exchange: number;
-  title: string;
+  exchange_id: number;
   note: string;
-  highlight: string;
+  color: string;
+  created_ms: number;
 }
 
-const HIGHLIGHTS = ["none", "red", "orange", "yellow", "green", "cyan", "blue", "pink", "magenta", "gray"];
+interface OrganizerState {
+  items: OrganizerItem[];
+  colors: string[];
+}
 
 export function initOrganizer(): void {
-  const el = $("#organizer");
-  if (!el) return;
-  el.innerHTML = `
+  const section = $("#organizer");
+  if (!section) return;
+  section.innerHTML = `
     <div class="row">
-      <input id="org-add-exchange" placeholder="exchange id" style="width:120px" />
-      <button class="ghost" id="org-add">Add</button>
+      <span class="hint">Save interesting requests with notes and colors for later review</span>
+      <span class="grow"></span>
+      <button class="ghost" onclick="exportOrganizer()">Export</button>
     </div>
-    <div id="org-list"></div>
+    <div class="row">
+      <input id="org-search" placeholder="Search notes..." style="width:300px" />
+      <select id="org-color-filter">
+        <option value="">All colors</option>
+      </select>
+      <button class="ghost" onclick="clearFilter()">Clear</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="exchange_id">Exchange ID</th>
+          <th data-sort="note">Note</th>
+          <th>Color</th>
+          <th data-sort="created_ms">Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="org-body"></tbody>
+    </table>
+    <div id="org-empty" class="hint" style="margin-top:8px"></div>
+    
+    <div class="card" style="margin-top:10px">
+      <div class="card-title">Add to Organizer</div>
+      <div class="row">
+        <input id="org-exchange-id" type="number" placeholder="Exchange ID" style="width:120px" />
+        <input id="org-note" placeholder="Note" style="width:300px" />
+        <select id="org-color">
+          <option value="">No color</option>
+        </select>
+        <button class="go" onclick="addToOrganizer()">Add</button>
+      </div>
+    </div>
   `;
-  $("#org-add")!.addEventListener("click", () => void add());
-  // The case this exists for is cross-tab: History's Save writes an item here, and before the stream
-  // this pane found out by being clicked.
-  live({ kinds: ["organizer"], section: "organizer", refresh: () => void load() });
-  void load();
+
+  // Initialize table sorting
+  makeSortable('org-body', 'created_ms');
+  
+  // Load colors and items
+  void loadColors();
+  void loadItems();
+  
+  // Search and filter
+  const searchInput = $("#org-search") as HTMLInputElement;
+  const colorFilter = $("#org-color-filter") as HTMLSelectElement;
+  
+  searchInput?.addEventListener('input', () => filterItems());
+  colorFilter?.addEventListener('change', () => filterItems());
 }
 
-async function add(): Promise<void> {
-  const input = $<HTMLInputElement>("#org-add-exchange")!;
-  const exchange = Number(input.value);
-  if (!Number.isFinite(exchange) || input.value.trim() === "") {
-    toast("enter a numeric exchange id", "error");
+let allItems: OrganizerItem[] = [];
+let allColors: string[] = [];
+
+async function loadColors(): Promise<void> {
+  try {
+    const response = await fetch("/api/tools/organizer/colors");
+    if (response.ok) {
+      allColors = await response.json() as string[];
+      const colorSelect = $("#org-color") as HTMLSelectElement;
+      const colorFilter = $("#org-color-filter") as HTMLSelectElement;
+      
+      if (colorSelect) {
+        colorSelect.innerHTML = '<option value="">No color</option>' + 
+          allColors.map(c => `<option value="${c}">${esc(c)}</option>`).join('');
+      }
+      if (colorFilter) {
+        colorFilter.innerHTML = '<option value="">All colors</option>' + 
+          allColors.map(c => `<option value="${c}">${esc(c)}</option>`).join('');
+      }
+    }
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
+}
+
+async function loadItems(): Promise<void> {
+  try {
+    const response = await fetch("/api/tools/organizer");
+    if (!response.ok) throw new Error(`Failed to load organizer items: ${response.status}`);
+    
+    allItems = await response.json() as OrganizerItem[];
+    filterItems();
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
+}
+
+function filterItems(): void {
+  const search = ($("#org-search") as HTMLInputElement)?.value.toLowerCase() || '';
+  const color = ($("#org-color-filter") as HTMLSelectElement)?.value || '';
+  
+  let items = allItems;
+  
+  if (search) {
+    items = items.filter(i => i.note.toLowerCase().includes(search));
+  }
+  
+  if (color) {
+    items = items.filter(i => i.color === color);
+  }
+  
+  renderItems(items);
+}
+
+function renderItems(items: OrganizerItem[]): void {
+  const tbody = $("#org-body")!;
+  const emptyEl = $("#org-empty")!;
+  
+  if (items.length === 0) {
+    tbody.innerHTML = '';
+    emptyEl.innerHTML = renderEmptyState(
+      "No items in organizer",
+      "Add requests to organize them for later review",
+      "📚",
+      5
+    );
     return;
   }
+  
+  emptyEl.innerHTML = '';
+  tbody.innerHTML = items.map(i => `
+    <tr>
+      <td>${i.exchange_id}</td>
+      <td>${esc(i.note)}</td>
+      <td>${i.color ? `<span class="pill hl-${i.color}">${esc(i.color)}</span>` : ''}</td>
+      <td>${new Date(i.created_ms).toLocaleString()}</td>
+      <td>
+        <button class="ghost small" onclick="viewItem(${i.id})">View</button>
+        <button class="ghost small" onclick="copyItem(${i.id})">Copy</button>
+        <button class="ghost small" onclick="deleteItem(${i.id})">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+// Global functions
+window.addToOrganizer = async function(): Promise<void> {
+  const exchangeIdInput = $("#org-exchange-id") as HTMLInputElement;
+  const noteInput = $("#org-note") as HTMLInputElement;
+  const colorSelect = $("#org-color") as HTMLSelectElement;
+  
+  if (!exchangeIdInput || !noteInput) return;
+  
+  const exchangeId = parseInt(exchangeIdInput.value, 10);
+  const note = noteInput.value.trim();
+  const color = colorSelect?.value || '';
+  
+  if (isNaN(exchangeId)) {
+    toast("Please enter a valid exchange ID", "error");
+    return;
+  }
+  
+  if (!note) {
+    toast("Please enter a note", "error");
+    return;
+  }
+  
   try {
-    await postJSON("/api/tools/organizer", { exchange });
-    input.value = "";
-    void load();
+    await postJSON("/api/tools/organizer", {
+      exchange_id: exchangeId,
+      note,
+      color,
+    });
+    
+    toast("Added to organizer", 'success');
+    exchangeIdInput.value = '';
+    noteInput.value = '';
+    colorSelect.value = '';
+    void loadItems();
   } catch (e) {
     toast((e as Error).message, "error");
   }
-}
+};
 
-async function load(): Promise<void> {
-  const list = $("#org-list")!;
+window.viewItem = function(id: number): void {
+  toast(`View item #${id} functionality would show the request details`, 'info');
+};
+
+window.copyItem = async function(id: number): Promise<void> {
   try {
-    const resp = await getJSON<{ items: OrgItem[] }>("/api/tools/organizer");
-    list.innerHTML = resp.items.length
-      ? resp.items.map(itemHtml).join("")
-      : `<p class="hint">nothing saved yet — use "Save" on a History row, or add by exchange id above</p>`;
-    wireItems();
-  } catch (e) {
-    list.innerHTML = `<p class="err">${esc((e as Error).message)}</p>`;
-  }
-}
-
-function itemHtml(item: OrgItem): string {
-  return `<div class="card hl-${esc(item.highlight)}" data-id="${item.id}">
-    <div class="row">
-      <input class="org-title" value="${esc(item.title)}" style="width:260px" />
-      <select class="org-highlight">
-        ${HIGHLIGHTS.map((h) => `<option value="${h}" ${h === item.highlight ? "selected" : ""}>${h}</option>`).join("")}
-      </select>
-      <span class="hint">exchange #${item.exchange}</span>
-      <span class="grow"></span>
-      <button class="ghost small org-save">Save</button>
-      <button class="ghost small org-remove">Remove</button>
-    </div>
-    <textarea class="org-note" placeholder="note" style="min-height:50px">${esc(item.note)}</textarea>
-  </div>`;
-}
-
-function wireItems(): void {
-  $all("#org-list .card").forEach((card) => {
-    const id = Number(card.dataset["id"]);
-    card.querySelector(".org-save")!.addEventListener("click", () => void save(id, card));
-    card.querySelector(".org-remove")!.addEventListener("click", () => void remove(id));
-  });
-}
-
-async function save(id: number, card: HTMLElement): Promise<void> {
-  const title = card.querySelector<HTMLInputElement>(".org-title")!.value;
-  const note = card.querySelector<HTMLTextAreaElement>(".org-note")!.value;
-  const highlight = card.querySelector<HTMLSelectElement>(".org-highlight")!.value;
-  try {
-    await postJSON(`/api/tools/organizer/${id}`, { title, note, highlight });
-    toast("saved");
-    void load();
+    const response = await fetch(`/api/tools/organizer/${id}`);
+    if (!response.ok) throw new Error(`Failed to load item: ${response.status}`);
+    
+    const item = await response.json() as OrganizerItem;
+    copyText(`Exchange #${item.exchange_id}: ${item.note}`, 'organizer item');
   } catch (e) {
     toast((e as Error).message, "error");
   }
-}
+};
 
-async function remove(id: number): Promise<void> {
+window.deleteItem = async function(id: number): Promise<void> {
+  if (!confirm("Are you sure you want to delete this item?")) return;
+  
   try {
     await delJSON(`/api/tools/organizer/${id}`);
-    void load();
+    toast("Item deleted", 'success');
+    void loadItems();
   } catch (e) {
     toast((e as Error).message, "error");
   }
-}
+};
+
+window.clearFilter = function(): void {
+  ($("#org-search") as HTMLInputElement).value = '';
+  ($("#org-color-filter") as HTMLSelectElement).value = '';
+  filterItems();
+};
+
+window.exportOrganizer = function(): void {
+  toast("Export functionality would download organizer items as JSON", 'info');
+};

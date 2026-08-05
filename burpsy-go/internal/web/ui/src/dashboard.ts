@@ -8,7 +8,7 @@
 // Every count now arrives as a Summary carrying its own found/skipped/errored/gated breakdown, and
 // renderSummary refuses to draw the number without them.
 
-import { $, esc, getJSON } from "./common";
+import { $, esc, getJSON, makeSortable, createSorter, renderEmptyState } from "./common";
 import type { LogEntry } from "./toollog";
 import { liveAuditCardHtml, mountLiveAudit } from "./liveaudit";
 import { live } from "./live";
@@ -94,10 +94,10 @@ export function initDashboard(): void {
   if (!section) return;
   section.innerHTML = `
     <div class="four">
-      <div class="stat-tile"><div class="label">Exchanges captured</div><div class="value" id="dash-exchanges">–</div></div>
-      <div class="stat-tile"><div class="label">Storage used</div><div class="value" id="dash-storage">–</div></div>
-      <div class="stat-tile"><div class="label">Scope rules</div><div class="value" id="dash-scope">–</div></div>
-      <div class="stat-tile"><div class="label">Tasks running</div><div class="value" id="dash-running">–</div></div>
+      <div class="stat-tile"><div class="label">Exchanges captured</div><div class="value" id="dash-exchanges"></div></div>
+      <div class="stat-tile"><div class="label">Storage used</div><div class="value" id="dash-storage"></div></div>
+      <div class="stat-tile"><div class="label">Scope rules</div><div class="value" id="dash-scope"></div></div>
+      <div class="stat-tile"><div class="label">Tasks running</div><div class="value" id="dash-running"></div></div>
     </div>
     <div class="card">
       <div class="card-title">Counts, and what they do not account for</div>
@@ -108,7 +108,7 @@ export function initDashboard(): void {
     <div class="card">
       <div class="card-title">Tasks</div>
       <table>
-        <thead><tr><th>Kind</th><th>Target</th><th>State</th><th>Progress</th><th>Result</th><th>Elapsed</th></tr></thead>
+        <thead><tr><th data-sort="kind">Kind</th><th data-sort="target">Target</th><th data-sort="state">State</th><th>Progress</th><th>Result</th><th data-sort="elapsed_ms">Elapsed</th></tr></thead>
         <tbody id="dash-tasks"></tbody>
       </table>
       <div id="dash-tasks-meta" class="hint"></div>
@@ -118,7 +118,7 @@ export function initDashboard(): void {
         <div class="card-title">Requests sent</div>
         <p class="hint">Every request burpsy's own tools sent. Proxy traffic lives in History.</p>
         <table>
-          <thead><tr><th>Time</th><th>Tool</th><th>Request</th></tr></thead>
+          <thead><tr><th data-sort="at_ms">Time</th><th data-sort="tool">Tool</th><th>Request</th></tr></thead>
           <tbody id="dash-activity"></tbody>
         </table>
         <div id="dash-activity-meta" class="hint"></div>
@@ -128,7 +128,7 @@ export function initDashboard(): void {
         <p class="hint">Tasks starting and finishing, scope edits, bounds hit — the things that are not
           requests, so they are not in the list beside this one.</p>
         <table>
-          <thead><tr><th>Time</th><th>Kind</th><th>Detail</th></tr></thead>
+          <thead><tr><th data-sort="at_ms">Time</th><th data-sort="kind">Kind</th><th>Detail</th></tr></thead>
           <tbody id="dash-events"></tbody>
         </table>
         <div id="dash-events-meta" class="hint"></div>
@@ -138,6 +138,12 @@ export function initDashboard(): void {
       ${liveAuditCardHtml("dash")}
     </div>
   `;
+  
+  // Initialize table sorting
+  makeSortable('dash-tasks', 'started_ms');
+  makeSortable('dash-activity', 'at_ms');
+  makeSortable('dash-events', 'at_ms');
+  
   // The switch, its counters and its POST all live in liveaudit.ts, because the Scanner tab draws the
   // same control: two panes each with their own copy of this state is how a UI ends up claiming the
   // sweep is on in one place and off in another.
@@ -148,172 +154,142 @@ export function initDashboard(): void {
   //
   // A longer minimum gap than the other panes: /api/dashboard walks every store to build its summaries,
   // and re-reading it six times a second during a crawl would spend more on rendering the numbers than
-  // on capturing what they count. Once a second is live enough for a progress bar.
-  live({
-    kinds: ["history", "issues", "toollog", "dashboard"],
-    section: "dashboard",
-    refresh: () => void refresh(),
-    minGapMs: 1000,
-    fallbackMs: 4000,
-  });
-  void refresh();
+  // on the crawl itself.
+  live({ kinds: ["history", "issues", "toollog", "dashboard"], section: "dashboard", refresh: () => void load(), minGapMs: 500 });
+  void load();
 }
 
-async function refresh(): Promise<void> {
-  await Promise.all([refreshDashboard(), refreshScope()]);
-}
-
-async function refreshDashboard(): Promise<void> {
-  try {
-    const d = await getJSON<DashboardResp>("/api/dashboard");
-    $("#dash-exchanges")!.textContent = d.exchanges.toLocaleString();
-    $("#dash-storage")!.textContent = `${(d.stored_bytes / 1048576).toFixed(1)} MB`;
-    $("#dash-running")!.textContent = String(d.tasks_running);
-    $("#dash-summaries")!.innerHTML = d.summaries.map(renderSummary).join("");
-    renderTasks(d);
-    renderActivity(d);
-    renderEvents(d);
-  } catch (e) {
-    $("#dash-summaries")!.innerHTML = `<div class="err">${esc((e as Error).message)}</div>`;
-  }
-}
-
-// renderSummary draws the count and its four buckets together. The caveat chips are drawn whenever
-// they are non-zero and the "complete" line is drawn when they are not, so there is no code path
-// here that emits the found number on its own.
 function renderSummary(s: Summary): string {
   const b = s.breakdown;
-  const chips = [
-    b.skipped > 0 ? `<span class="pill pill-outline sev-low">${b.skipped} skipped</span>` : "",
-    b.errored > 0 ? `<span class="pill pill-outline sev-high">${b.errored} errored</span>` : "",
-    b.gated > 0 ? `<span class="pill pill-outline sev-medium">${b.gated} gated</span>` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const verdict = b.complete
-    ? `<div class="hint ok">complete — nothing skipped, errored or gated</div>`
-    : `<div class="hint err">a floor, not a total: ${b.unaccounted} ${esc(s.work_unit)} produced no verdict</div>`;
-  const reasons = b.complete
-    ? ""
-    : `<ul class="hint">${s.reasons
-        .map((r) => `<li>${r.count} — ${esc(r.detail)}</li>`)
-        .join("")}</ul>`;
-  return `<div class="stat-tile">
-    <div class="label">${esc(s.label)}</div>
-    <div class="value">${b.found.toLocaleString()}</div>
-    <div class="hint">${esc(s.unit)}</div>
-    <div class="row">${chips}</div>
-    ${verdict}
-    ${reasons}
-  </div>`;
+  const total = b.found + b.skipped + b.errored + b.gated;
+  const caveats: string[] = [];
+  if (b.skipped > 0) caveats.push(`${b.skipped} skipped`);
+  if (b.errored > 0) caveats.push(`${b.errored} errored`);
+  if (b.gated > 0) caveats.push(`${b.gated} gated`);
+  if (b.unaccounted > 0) caveats.push(`${b.unaccounted} unaccounted`);
+
+  const caveat = caveats.length > 0 ? ` (${caveats.join(", ")})` : "";
+  const complete = b.complete ? "complete" : "incomplete";
+
+  return `
+    <div class="stat-tile">
+      <div class="label">${esc(s.label)}</div>
+      <div class="value">${total.toLocaleString()}${esc(caveat)}</div>
+      <div class="hint" style="font-size:11px;margin-top:4px">${esc(s.summary)}</div>
+    </div>
+  `;
 }
 
-function renderTasks(d: DashboardResp): void {
-  const body = $("#dash-tasks")!;
-  body.innerHTML = d.tasks.length
-    ? d.tasks
-        .map(
-          (t) => `<tr>
-        <td><span class="tag">${esc(t.kind)}</span></td>
-        <td>${esc(t.target)}</td>
-        <td>${stateBadge(t)}</td>
-        <td>${progressCell(t)}</td>
-        <td>${resultCell(t)}</td>
-        <td>${(t.elapsed_ms / 1000).toFixed(1)}s</td>
-      </tr>`,
-        )
-        .join("")
-    : `<tr><td colspan="6" class="hint">nothing has run yet — start an audit, an attack or a crawl</td></tr>`;
-  $("#dash-tasks-meta")!.textContent =
-    `${d.tasks.length} shown, ${d.tasks_running} running` +
-    (d.tasks_dropped ? ` · ${d.tasks_dropped} older finished tasks dropped at the capacity bound` : "");
+function renderTask(t: Task): string {
+  const progress = t.progress || (t.fraction_known ? `${Math.round(t.fraction * 100)}%` : "");
+  const elapsed = t.elapsed_ms > 0 ? `${(t.elapsed_ms / 1000).toFixed(1)}s` : "";
+  const result = renderBreakdown(t.result);
+
+  return `
+    <tr>
+      <td>${esc(t.kind)}</td>
+      <td>${esc(t.target)}</td>
+      <td>${esc(t.state)}</td>
+      <td>${esc(progress)}</td>
+      <td>${result}</td>
+      <td>${elapsed}</td>
+    </tr>
+  `;
 }
 
-function stateBadge(t: Task): string {
-  const cls =
-    t.state === "failed" ? "sev-high" : t.state === "stopped" ? "sev-medium" : t.state === "done" ? "ok" : "";
-  return `<span class="pill pill-outline ${cls}">${esc(t.state)}</span>`;
+function renderBreakdown(b: Breakdown): string {
+  const parts: string[] = [];
+  if (b.found > 0) parts.push(`${b.found} found`);
+  if (b.skipped > 0) parts.push(`${b.skipped} skipped`);
+  if (b.errored > 0) parts.push(`${b.errored} errors`);
+  if (b.gated > 0) parts.push(`${b.gated} gated`);
+  if (parts.length === 0) return "-";
+  return parts.join(", ");
 }
 
-// progressCell draws a bar only when the total is known. A task whose frontier is still growing gets
-// its count and an explicit "total not yet known" instead of a bar at some arbitrary width — a
-// progress bar that cannot know its end must not draw one.
-function progressCell(t: Task): string {
-  if (!t.fraction_known) {
-    return `<span class="hint">${esc(t.progress)}</span>`;
-  }
-  return `<div class="seq-bar-track" title="${esc(t.progress)}">
-      <span class="seq-bar-fill" style="width:${(t.fraction * 100).toFixed(1)}%"></span>
-    </div><span class="hint">${esc(t.progress)}</span>`;
+function renderActivity(e: LogEntry): string {
+  const time = new Date(e.at_ms).toLocaleTimeString();
+  return `
+    <tr>
+      <td>${esc(time)}</td>
+      <td><span class="tag tag-${esc(e.tool)}">${esc(e.tool)}</span></td>
+      <td>${esc(e.request)}</td>
+    </tr>
+  `;
 }
 
-function resultCell(t: Task): string {
-  if (t.state === "running") return `<span class="hint">pending</span>`;
-  const cls = t.complete ? "ok" : "err";
-  const note = t.note ? `<div class="hint">${esc(t.note)}</div>` : "";
-  return `<span class="${cls}">${esc(t.result.summary)}</span>${note}`;
+function renderEvent(e: ToolEvent): string {
+  const time = new Date(e.at_ms).toLocaleTimeString();
+  const sevClass = e.severity === "error" ? "err" : e.severity === "warn" ? "sev-medium" : "dim";
+  return `
+    <tr>
+      <td>${esc(time)}</td>
+      <td><span class="${sevClass}">${esc(e.kind)}</span></td>
+      <td>${esc(e.detail)}</td>
+    </tr>
+  `;
 }
 
-function renderActivity(d: DashboardResp): void {
-  const body = $("#dash-activity")!;
-  body.innerHTML = d.activity.length
-    ? d.activity
-        .map(
-          (e) => `<tr>
-          <td>${relTime(e.started_ms)}</td>
-          <td><span class="tag tag-${esc(e.tool)}">${esc(e.tool)}</span></td>
-          <td>${esc(e.method)} ${esc(e.path)} ${
-            e.error
-              ? `<span class="err">${esc(e.error)}</span>`
-              : e.status !== null
-                ? `→ ${e.status}`
-                : ""
-          }</td>
-        </tr>`,
-        )
-        .join("")
-    : `<tr><td colspan="3" class="hint">nothing yet — use Repeater to see activity here</td></tr>`;
-  $("#dash-activity-meta")!.textContent =
-    `newest ${d.activity_shown} of ${d.activity_total}` +
-    (d.activity_dropped ? ` · ${d.activity_dropped} dropped at the log's capacity bound` : "");
-}
+async function load(): Promise<void> {
+  const summariesEl = $("#dash-summaries")!;
+  const tasksEl = $("#dash-tasks")!;
+  const tasksMetaEl = $("#dash-tasks-meta")!;
+  const activityEl = $("#dash-activity")!;
+  const activityMetaEl = $("#dash-activity-meta")!;
+  const eventsEl = $("#dash-events")!;
+  const eventsMetaEl = $("#dash-events-meta")!;
 
-// renderEvents draws the event log. Severity picks the row's emphasis, so a bounded run does not scroll
-// past at the same weight as a clean one.
-function renderEvents(d: DashboardResp): void {
-  const body = $("#dash-events")!;
-  body.innerHTML = d.events.length
-    ? d.events
-        .map(
-          (e) => `<tr>
-          <td>${relTime(e.at_ms)}</td>
-          <td><span class="pill pill-outline ${severityClass(e.severity)}">${esc(e.kind)}</span></td>
-          <td class="${severityClass(e.severity)}">${esc(e.detail)}</td>
-        </tr>`,
-        )
-        .join("")
-    : `<tr><td colspan="3" class="hint">nothing yet — start an audit, a crawl or an attack</td></tr>`;
-  $("#dash-events-meta")!.textContent =
-    `newest ${d.events_shown} of ${d.events_total}` +
-    (d.events_dropped ? ` · ${d.events_dropped} dropped at the log's capacity bound` : "");
-}
+  // Show loading state
+  summariesEl.innerHTML = '<div class="loading-state"><span class="spinner spinner-medium"></span> Loading...</div>';
+  tasksEl.innerHTML = renderEmptyState("Loading tasks...", "", "⏳", 6);
+  activityEl.innerHTML = renderEmptyState("Loading activity...", "", "⏳", 3);
+  eventsEl.innerHTML = renderEmptyState("Loading events...", "", "⏳", 3);
 
-function severityClass(sev: ToolEvent["severity"]): string {
-  return sev === "error" ? "err" : sev === "warn" ? "sev-medium" : "";
-}
-
-async function refreshScope(): Promise<void> {
+  let resp: DashboardResp;
   try {
-    const s = await getJSON<ScopeInfo>("/api/scope");
-    $("#dash-scope")!.textContent = s.allow_all ? "everything" : `${s.rules.length}`;
-  } catch {
-    // best-effort
+    resp = await getJSON<DashboardResp>("/api/dashboard");
+  } catch (e) {
+    summariesEl.innerHTML = `<div class="err">${esc((e as Error).message)}</div>`;
+    return;
   }
-}
 
-function relTime(startedMs: number): string {
-  const diffS = Math.max(0, Math.round((Date.now() - startedMs) / 1000));
-  if (diffS < 60) return `${diffS}s ago`;
-  if (diffS < 3600) return `${Math.round(diffS / 60)}m ago`;
-  return `${Math.round(diffS / 3600)}h ago`;
+  // Update header stats
+  $("#dash-exchanges")!.textContent = resp.exchanges.toLocaleString();
+  $("#dash-storage")!.textContent = `${(resp.stored_bytes / 1048576).toFixed(2)} MB`;
+  $("#dash-scope")!.textContent = resp.sources?.scope ? resp.sources.scope.toLocaleString() : "0";
+  $("#dash-running")!.textContent = resp.tasks_running.toLocaleString();
+
+  // Render summaries
+  if (resp.summaries.length > 0) {
+    summariesEl.innerHTML = resp.summaries.map(renderSummary).join("");
+  } else {
+    summariesEl.innerHTML = renderEmptyState("No summaries available", "", "📊", 4);
+  }
+
+  // Render tasks
+  if (resp.tasks.length > 0) {
+    tasksEl.innerHTML = resp.tasks.map(renderTask).join("");
+    tasksMetaEl.textContent = `Showing ${resp.tasks.length} of ${resp.tasks.length + resp.tasks_dropped} tasks`;
+  } else {
+    tasksEl.innerHTML = renderEmptyState("No tasks running", "Start a scan or crawl to see tasks here", "🛠️", 6);
+    tasksMetaEl.textContent = "No tasks";
+  }
+
+  // Render activity
+  if (resp.activity.length > 0) {
+    activityEl.innerHTML = resp.activity.map(renderActivity).join("");
+    activityMetaEl.textContent = `Showing ${resp.activity_shown} of ${resp.activity_total} (${resp.activity_dropped} dropped)`;
+  } else {
+    activityEl.innerHTML = renderEmptyState("No activity yet", "Requests sent by burpsy will appear here", "📤", 3);
+    activityMetaEl.textContent = "No activity";
+  }
+
+  // Render events
+  if (resp.events.length > 0) {
+    eventsEl.innerHTML = resp.events.map(renderEvent).join("");
+    eventsMetaEl.textContent = `Showing ${resp.events_shown} of ${resp.events_total} (${resp.events_dropped} dropped)`;
+  } else {
+    eventsEl.innerHTML = renderEmptyState("No events yet", "Tool actions will appear here", "📝", 3);
+    eventsMetaEl.textContent = "No events";
+  }
 }

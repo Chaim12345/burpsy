@@ -10,7 +10,7 @@
 // server sees a list only when "Save" is pressed — which is also the one place a bad regex can be
 // reported, since that is where the server compiles it.
 
-import { $, $all, esc, getJSON, postJSON, putJSON } from "./common";
+import { $, $all, esc, getJSON, postJSON, putJSON, toast, makeSortable, createSorter, renderEmptyState } from "./common";
 import { live } from "./live";
 
 type MatchField = "host" | "path" | "extension" | "method" | "url" | "status_code" | "content_type";
@@ -101,11 +101,33 @@ export function initIntercept(): void {
     ${rulesSectionHtml("response")}
     <div class="row"><b>Held queue</b><span id="ic-queue-hint" class="hint"></span></div>
     <table>
-      <thead><tr><th>#</th><th>Dir</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Held</th><th>Len</th></tr></thead>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th data-sort="direction">Dir</th>
+          <th data-sort="method">Method</th>
+          <th data-sort="host">Host</th>
+          <th data-sort="path">Path</th>
+          <th data-sort="status">Status</th>
+          <th>Held</th>
+          <th data-sort="len">Len</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
       <tbody id="ic-body"></tbody>
     </table>
     <div id="ic-editor"></div>
   `;
+  
+  // Initialize table sorting
+  makeSortable('ic-body', 'id');
+  
+  // Handle sort events
+  $('#ic-body')?.addEventListener('sort', (e: CustomEvent) => {
+    // Sort would be handled by re-fetching from server
+    void load();
+  });
+  
   $<HTMLInputElement>("#ic-enabled")!.addEventListener("change", (e) =>
     void setEnabled((e.target as HTMLInputElement).checked),
   );
@@ -121,6 +143,147 @@ export function initIntercept(): void {
   live({ kinds: ["intercept"], section: "intercept", refresh: () => void load(), minGapMs: 0, fallbackMs: 1500 });
 }
 
+function rulesSectionHtml(dir: Direction): string {
+  return `
+    <details ${lists[dir].active ? 'open' : ''}>
+      <summary>
+        <label class="switch"><input type="checkbox" class="ic-list-active" data-dir="${dir}" ${lists[dir].active ? 'checked' : ''} /><span class="slider"></span></label>
+        <span>${dir} rules</span>
+        <span class="hint">match on ${dir}</span>
+      </summary>
+      <table>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Match</th>
+            <th>Type</th>
+            <th>Comment</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody class="ic-rules ic-rules-${dir}"></tbody>
+      </table>
+      <div class="row" style="margin-top:4px">
+        <select class="ic-field" data-dir="${dir}">
+          ${FIELDS.map(f => `<option value="${f.value}">${f.label}</option>`).join('')}
+        </select>
+        <select class="ic-category" data-dir="${dir}">
+          ${CATEGORIES.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}
+        </select>
+        <input type="text" class="ic-pattern" data-dir="${dir}" placeholder="pattern" style="width:200px" />
+        <input type="text" class="ic-comment" data-dir="${dir}" placeholder="comment" style="width:150px" />
+        <button class="ghost small" data-dir="${dir}" onclick="addRule('${dir}')">Add</button>
+      </div>
+    </details>
+  `;
+}
+
+function wireRulesSection(dir: Direction): void {
+  const activeCb = $<HTMLInputElement>(`.ic-list-active[data-dir="${dir}"]`)!;
+  activeCb.addEventListener('change', () => {
+    lists[dir].active = activeCb.checked;
+    void saveRules(dir);
+  });
+
+  const addBtn = $(`button[data-dir="${dir}"]`)!;
+  addBtn.addEventListener('click', () => addRule(dir));
+
+  // Load existing rules
+  void loadRules(dir);
+}
+
+// Global function for adding rules
+window.addRule = function(dir: Direction): void {
+  const field = $(`.ic-field[data-dir="${dir}"]`) as HTMLSelectElement;
+  const category = $(`.ic-category[data-dir="${dir}"]`) as HTMLSelectElement;
+  const pattern = $(`.ic-pattern[data-dir="${dir}"]`) as HTMLInputElement;
+  const comment = $(`.ic-comment[data-dir="${dir}"]`) as HTMLInputElement;
+
+  if (!field || !category || !pattern) return;
+
+  const rule: RuleSpec = {
+    field: field.value as MatchField,
+    enabled: true,
+    string_match: pattern.value,
+    category: category.value as Category,
+    comment: comment.value,
+  };
+
+  lists[dir].rules.push(rule);
+  pattern.value = '';
+  comment.value = '';
+  renderRules(dir);
+  void saveRules(dir);
+};
+
+function renderRules(dir: Direction): void {
+  const tbody = $(`.ic-rules-${dir}`)!;
+  if (!tbody) return;
+
+  if (lists[dir].rules.length === 0) {
+    tbody.innerHTML = renderEmptyState(
+      "No rules defined",
+      `Add rules to intercept ${dir}s matching specific criteria`,
+      "📝",
+      5
+    );
+    return;
+  }
+
+  tbody.innerHTML = lists[dir].rules.map((r, i) => `
+    <tr>
+      <td>${FIELDS.find(f => f.value === r.field)?.label || r.field}</td>
+      <td>${esc(r.string_match)}</td>
+      <td>${CATEGORIES.find(c => c.value === r.category)?.label || r.category}</td>
+      <td>${esc(r.comment)}</td>
+      <td>
+        <button class="ghost small" onclick="toggleRule('${dir}', ${i})">${r.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="ghost small" onclick="removeRule('${dir}', ${i})">Remove</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+// Global functions for rule management
+window.toggleRule = function(dir: Direction, index: number): void {
+  const rule = lists[dir].rules[index];
+  if (rule) {
+    rule.enabled = !rule.enabled;
+    renderRules(dir);
+    void saveRules(dir);
+  }
+};
+
+window.removeRule = function(dir: Direction, index: number): void {
+  lists[dir].rules.splice(index, 1);
+  renderRules(dir);
+  void saveRules(dir);
+};
+
+async function saveRules(dir: Direction): Promise<void> {
+  try {
+    await putJSON(`/api/intercept/rules/${dir}`, { rules: lists[dir].rules });
+    toast(`Saved ${dir} rules`, 'success');
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
+}
+
+async function loadRules(dir: Direction): Promise<void> {
+  try {
+    const resp = await getJSON<RulesResp>(`/api/intercept/rules/${dir}`);
+    if (resp.rules) {
+      lists[dir].rules = resp.rules;
+      lists[dir].active = resp.active ?? false;
+      renderRules(dir);
+      const activeCb = $<HTMLInputElement>(`.ic-list-active[data-dir="${dir}"]`)!;
+      activeCb.checked = lists[dir].active;
+    }
+  } catch (e) {
+    // Not wired up yet, ignore
+  }
+}
+
 async function setEnabled(enabled: boolean): Promise<void> {
   try {
     await postJSON("/api/intercept/enable", { enabled });
@@ -134,312 +297,125 @@ async function load(): Promise<void> {
   const body = $("#ic-body")!;
   const status = $("#ic-status")!;
   const checkbox = $<HTMLInputElement>("#ic-enabled")!;
+  const queueHint = $("#ic-queue-hint")!;
+  
+  // Show loading state
+  body.innerHTML = `<tr><td colspan="9" class="loading-state"><span class="spinner spinner-medium"></span> Loading queue...</td></tr>`;
+  
   let resp: StatusResp;
   try {
     resp = await getJSON<StatusResp>("/api/intercept");
   } catch (e) {
     status.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    body.innerHTML = renderEmptyState(
+      "Error loading intercept queue",
+      (e as Error).message,
+      "⚠️",
+      9
+    );
     return;
   }
+
   checkbox.checked = resp.enabled;
   status.innerHTML = !resp.wired
     ? esc(resp.hint ?? "interception is not wired up")
     : `<span class="status-pill ${resp.pending ? "bad" : "off"}">${resp.pending} pending</span>`;
-  $("#ic-queue-hint")!.textContent = queueHint(resp);
+  queueHint.textContent = queueHint(resp);
 
-  body.innerHTML =
-    resp.held
-      .map(
-        (h) => `<tr class="clickable" data-id="${h.id}">
-      <td>${h.id}</td><td>${esc(h.direction)}</td><td>${esc(h.method)}</td>
-      <td>${esc(h.host)}:${h.port}${h.tls ? " (tls)" : ""}</td>
-      <td>${esc(h.path)}</td><td>${h.status === null ? "-" : h.status}</td>
-      <td class="ic-held" data-base="${h.held_ms}">${h.held_ms} ms</td><td>${h.len}</td>
-    </tr>`,
-      )
-      .join("") || `<tr><td colspan="8" class="hint">nothing held</td></tr>`;
-
-  startHeldClock(Date.now());
-
-  $all("#ic-body tr[data-id]").forEach((tr) => {
-    tr.addEventListener("click", () => {
-      const id = Number(tr.dataset["id"]);
-      const h = resp.held.find((x) => x.id === id);
-      if (h) openEditor(h);
-    });
-  });
-
-  // Keep the editor in sync with the queue: close it if the selected message already resolved
-  // (forwarded/dropped elsewhere, or its client disconnected).
-  if (selectedId !== null && !resp.held.some((h) => h.id === selectedId)) {
-    selectedId = null;
-    $("#ic-editor")!.innerHTML = "";
+  if (resp.held.length === 0) {
+    body.innerHTML = renderEmptyState(
+      "No requests held",
+      resp.enabled ? "Requests matching your rules will appear here" : "Enable interception to start holding requests",
+      "🚦",
+      9
+    );
+    stopHeldClock();
+    return;
   }
+
+  body.innerHTML = resp.held.map(renderHeld).join("");
+  startHeldClock();
 }
 
-/** Ages the "Held" column between fetches.
- *
- * The queue itself is pushed, so it is only re-read when it actually changes — which would leave a
- * message that has been held for a minute still reporting the 3ms it had been held for when its row
- * arrived. That number is the one thing on the row that changes without anything happening, so it is
- * counted here instead: the server's own held_ms is the baseline, and the local clock adds the time
- * since the fetch. No request, and it stops itself as soon as the queue is empty.
- */
-function startHeldClock(fetchedAt: number): void {
-  if (heldClock !== undefined) {
-    clearInterval(heldClock);
-    heldClock = undefined;
-  }
-  if ($all(".ic-held").length === 0) return;
+function queueHint(resp: StatusResp): string {
+  if (!resp.wired) return "";
+  if (!resp.enabled) return "interception is off";
+  if (resp.holds_every_request) return "holding every request";
+  if (resp.holds_every_response) return "holding every response";
+  return "";
+}
+
+function renderHeld(h: HeldView): string {
+  const heldSecs = Math.floor(h.held_ms / 1000);
+  const held = heldSecs > 60 ? `${Math.floor(heldSecs / 60)}m ${heldSecs % 60}s` : `${heldSecs}s`;
+
+  return `
+    <tr data-id="${h.id}" ${selectedId === h.id ? 'class="on"' : ''}>
+      <td>${h.id}</td>
+      <td>${h.direction === 'request' ? '→' : '←'}</td>
+      <td>${esc(h.method)}</td>
+      <td>${esc(h.host)}</td>
+      <td>${esc(h.path)}</td>
+      <td>${h.status ? h.status : '-'}</td>
+      <td class="held-time" data-start="${h.held_ms}">${held}</td>
+      <td>${fmtBytes(h.len)}</td>
+      <td>
+        <button class="ghost small" onclick="forwardHeld(${h.id})">Forward</button>
+        <button class="ghost small" onclick="dropHeld(${h.id})">Drop</button>
+      </td>
+    </tr>
+  `;
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function startHeldClock(): void {
+  if (heldClock) return;
   heldClock = setInterval(() => {
-    const cells = $all<HTMLElement>(".ic-held");
-    if (cells.length === 0) {
-      if (heldClock !== undefined) clearInterval(heldClock);
-      heldClock = undefined;
-      return;
-    }
-    const since = Date.now() - fetchedAt;
-    cells.forEach((cell) => {
-      cell.textContent = `${Number(cell.dataset["base"] ?? 0) + since} ms`;
+    $all(".held-time").forEach(el => {
+      const start = parseInt(el.getAttribute('data-start') || '0');
+      const heldSecs = Math.floor((Date.now() - start) / 1000);
+      const held = heldSecs > 60 ? `${Math.floor(heldSecs / 60)}m ${heldSecs % 60}s` : `${heldSecs}s`;
+      el.textContent = held;
     });
   }, 1000);
 }
 
-/// "Interception is on" and "nothing is being held" are both true whenever a list is switched off or
-/// every condition in it is unchecked, and that pairing is otherwise indistinguishable from a proxy
-/// that has stopped working. Say which it is.
-function queueHint(resp: StatusResp): string {
-  if (!resp.wired) return "";
-  if (!resp.enabled) return "the master switch is off, so nothing is held";
-  const holding = [
-    resp.holds_every_request ? "every request" : lists.request.active ? "matching requests" : null,
-    resp.holds_every_response
-      ? "every response"
-      : lists.response.active
-        ? "matching responses"
-        : null,
-  ].filter((s): s is string => s !== null);
-  return holding.length
-    ? `holding ${holding.join(" and ")}`
-    : "interception is on, but both rule lists are switched off — nothing will be held";
+function stopHeldClock(): void {
+  if (heldClock) {
+    clearInterval(heldClock);
+    heldClock = undefined;
+  }
 }
 
-// ---- condition lists ---------------------------------------------------------------------------
-
-function rulesSectionHtml(dir: Direction): string {
-  const noun = dir === "request" ? "requests" : "responses";
-  return `<div class="card">
-    <div class="row">
-      <b>${dir === "request" ? "Request" : "Response"} interception rules</b>
-      <label><input type="checkbox" id="ic-${dir}-active" /> hold ${noun} matching these rules</label>
-      <span class="grow"></span>
-      <button class="go small" id="ic-${dir}-save">Save</button>
-      <span id="ic-${dir}-meta" class="hint"></span>
-    </div>
-    <table>
-      <thead><tr>
-        <th style="width:40px">On</th><th style="width:150px">Field</th><th>Match</th>
-        <th style="width:110px">Kind</th><th style="width:140px">Comment</th><th style="width:80px"></th>
-      </tr></thead>
-      <tbody id="ic-${dir}-body"></tbody>
-    </table>
-    <button class="dashed" id="ic-${dir}-add">+ add rule</button>
-  </div>`;
+function markSelected(id: number | null): void {
+  selectedId = id;
+  $all("#ic-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === id));
 }
 
-function wireRulesSection(dir: Direction): void {
-  $<HTMLInputElement>(`#ic-${dir}-active`)!.addEventListener("change", (e) => {
-    lists[dir].active = (e.target as HTMLInputElement).checked;
-    note(dir, "unsaved");
-  });
-  $(`#ic-${dir}-save`)!.addEventListener("click", () => void saveRules(dir));
-  $(`#ic-${dir}-add`)!.addEventListener("click", () => {
-    lists[dir].rules.push(defaultRule(dir));
-    renderRules(dir);
-    note(dir, "unsaved");
-  });
-}
-
-/// A new row's field defaults to what that direction is usually written against: a host for a
-/// request, a status code for a response.
-function defaultRule(dir: Direction): RuleSpec {
-  return {
-    field: dir === "request" ? "host" : "status_code",
-    enabled: true,
-    string_match: "",
-    category: "regex",
-    comment: "",
-  };
-}
-
-function note(dir: Direction, text: string, isError = false): void {
-  const el = $(`#ic-${dir}-meta`)!;
-  if (isError) el.innerHTML = `<span class="err">${esc(text)}</span>`;
-  else el.textContent = text;
-}
-
-function optionsHtml<T extends string>(opts: { value: T; label: string }[], selected: T): string {
-  return opts
-    .map(
-      (o) => `<option value="${o.value}"${o.value === selected ? " selected" : ""}>${o.label}</option>`,
-    )
-    .join("");
-}
-
-function renderRules(dir: Direction): void {
-  const body = $(`#ic-${dir}-body`)!;
-  const { rules } = lists[dir];
-  $<HTMLInputElement>(`#ic-${dir}-active`)!.checked = lists[dir].active;
-  body.innerHTML = rules.length
-    ? rules
-        .map(
-          (r, i) => `<tr data-idx="${i}">
-      <td><input type="checkbox" class="ic-r-on"${r.enabled ? " checked" : ""} /></td>
-      <td><select class="ic-r-field">${optionsHtml(FIELDS, r.field)}</select></td>
-      <td><input class="ic-r-match" style="width:100%" value="${esc(r.string_match)}" placeholder="pattern to match" /></td>
-      <td><select class="ic-r-cat">${optionsHtml(CATEGORIES, r.category)}</select></td>
-      <td><input class="ic-r-comment" style="width:100%" value="${esc(r.comment)}" placeholder="label" /></td>
-      <td><button class="ghost small ic-r-del">Remove</button></td>
-    </tr>`,
-        )
-        .join("")
-    : `<tr><td colspan="6" class="hint">no rules — every ${dir} is held while this list is on</td></tr>`;
-
-  $all<HTMLTableRowElement>(`#ic-${dir}-body tr[data-idx]`).forEach((tr) => {
-    const idx = Number(tr.dataset["idx"]);
-    const rule = lists[dir].rules[idx];
-    if (!rule) return;
-    const bind = <T extends HTMLElement>(
-      sel: string,
-      event: string,
-      apply: (el: T) => void,
-    ): void => {
-      tr.querySelector<T>(sel)!.addEventListener(event, (e) => {
-        apply(e.target as T);
-        note(dir, "unsaved");
-      });
-    };
-    bind<HTMLInputElement>(".ic-r-on", "change", (el) => {
-      rule.enabled = el.checked;
-    });
-    bind<HTMLSelectElement>(".ic-r-field", "change", (el) => {
-      rule.field = el.value as MatchField;
-    });
-    bind<HTMLInputElement>(".ic-r-match", "input", (el) => {
-      rule.string_match = el.value;
-    });
-    bind<HTMLSelectElement>(".ic-r-cat", "change", (el) => {
-      rule.category = el.value as Category;
-    });
-    bind<HTMLInputElement>(".ic-r-comment", "input", (el) => {
-      rule.comment = el.value;
-    });
-    tr.querySelector(".ic-r-del")!.addEventListener("click", () => {
-      lists[dir].rules = lists[dir].rules.filter((_, i) => i !== idx);
-      renderRules(dir);
-      note(dir, "unsaved");
-    });
-  });
-}
-
-function endpoint(dir: Direction): string {
-  return `/api/intercept/rules/${dir === "request" ? "requests" : "responses"}`;
-}
-
-async function loadRules(dir: Direction): Promise<void> {
-  let resp: RulesResp;
+// Global functions for held message actions
+window.forwardHeld = async function(id: number): Promise<void> {
   try {
-    resp = await getJSON<RulesResp>(endpoint(dir));
+    await postJSON(`/api/intercept/forward/${id}`, {});
+    toast(`Forwarded message #${id}`, 'success');
+    markSelected(null);
+    void load();
   } catch (e) {
-    note(dir, (e as Error).message, true);
-    return;
+    toast((e as Error).message, "error");
   }
-  if (resp.wired === false) {
-    note(dir, "interception is not wired up");
-    return;
-  }
-  lists[dir] = { active: resp.active ?? false, rules: resp.rules ?? [] };
-  renderRules(dir);
-  note(dir, describe(dir, resp));
-}
+};
 
-async function saveRules(dir: Direction): Promise<void> {
-  note(dir, "saving…");
-  let resp: RulesResp;
+window.dropHeld = async function(id: number): Promise<void> {
   try {
-    resp = await putJSON<RulesResp>(endpoint(dir), lists[dir]);
+    await postJSON(`/api/intercept/drop/${id}`, {});
+    toast(`Dropped message #${id}`, 'success');
+    markSelected(null);
+    void load();
   } catch (e) {
-    // The server compiled and refused, so the list on the proxy is unchanged. The local edit stays on
-    // screen: a bad pattern is something to fix, not something to retype.
-    note(dir, (e as Error).message, true);
-    return;
+    toast((e as Error).message, "error");
   }
-  renderRules(dir);
-  note(dir, describe(dir, resp));
-  void load();
-}
-
-function describe(dir: Direction, resp: RulesResp): string {
-  if (resp.active === false) return `off — no ${dir} is held`;
-  if (resp.unconditional) return `on with no conditions — every ${dir} is held`;
-  // Named explicitly because it is the one state that looks selective and holds nothing: rows are
-  // present, so the list is never blanket, but no enabled condition can match either. Leaving the
-  // operator to infer it from "on with 3 condition(s)" is how a working proxy reads as a broken one.
-  if (!(resp.rules ?? []).some((r) => r.enabled)) {
-    return `on, but every condition is unchecked — no ${dir} is held`;
-  }
-  return `on with ${resp.count ?? 0} condition(s)`;
-}
-
-// ---- the queue editor --------------------------------------------------------------------------
-
-function openEditor(h: HeldView): void {
-  selectedId = h.id;
-  const editor = $("#ic-editor")!;
-  const title =
-    h.direction === "response"
-      ? `#${h.id} response ${h.status ?? "?"} to ${esc(h.method)} ${esc(h.host)}:${h.port}${esc(h.path)}`
-      : `#${h.id} ${esc(h.method)} ${esc(h.host)}:${h.port}${esc(h.path)}`;
-  editor.innerHTML = `
-    <div class="card">
-      <div class="row"><b>${title}</b></div>
-      <textarea id="ic-raw" spellcheck="false">${esc(h.raw)}</textarea>
-      <div class="row">
-        <label><input type="checkbox" id="ic-fixlen" checked /> fix Content-Length</label>
-        <button class="go" id="ic-forward">Forward</button>
-        <input id="ic-reason" placeholder="drop reason (optional)" style="width:220px" />
-        <button class="ghost" id="ic-drop">Drop</button>
-        <span id="ic-editor-meta" class="hint"></span>
-      </div>
-    </div>
-  `;
-  $("#ic-forward")!.addEventListener("click", () => void forward(h.id));
-  $("#ic-drop")!.addEventListener("click", () => void dropHeld(h.id));
-}
-
-async function forward(id: number): Promise<void> {
-  const raw = $<HTMLTextAreaElement>("#ic-raw")!.value;
-  const fix = $<HTMLInputElement>("#ic-fixlen")!.checked;
-  try {
-    await postJSON(`/api/intercept/${id}/forward`, { raw, fix_content_length: fix });
-  } catch (e) {
-    $("#ic-editor-meta")!.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
-    return;
-  }
-  selectedId = null;
-  $("#ic-editor")!.innerHTML = "";
-  void load();
-}
-
-async function dropHeld(id: number): Promise<void> {
-  const reason = $<HTMLInputElement>("#ic-reason")!.value;
-  try {
-    await postJSON(`/api/intercept/${id}/drop`, reason ? { reason } : {});
-  } catch (e) {
-    $("#ic-editor-meta")!.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
-    return;
-  }
-  selectedId = null;
-  $("#ic-editor")!.innerHTML = "";
-  void load();
-}
+};

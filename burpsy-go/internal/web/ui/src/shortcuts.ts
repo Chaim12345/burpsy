@@ -1,311 +1,266 @@
-// Global keyboard shortcuts, plus the cheat sheet that makes them findable. An undiscoverable
-// shortcut is the same complaint as a missing button, so the bindings and the overlay are rendered
-// from one table below: the sheet cannot list a key that is not wired, and a wired key cannot be
-// missing from the sheet.
+// Keyboard shortcuts: one place to bind the global keys, and one place to document them.
 //
-// Ctrl+R and Ctrl+I are Burp's own send-to-Repeater / send-to-Intruder, kept identical because they
-// are muscle memory for anyone arriving from Burp. Cmd is accepted alongside Ctrl for macOS.
+// Two deliberate choices:
 //
-// Tab switching is Ctrl+Shift+Left / Ctrl+Shift+Right rather than Ctrl+1..9. Ctrl+1..9 and Alt+1..9
-// are reserved by Chrome and Firefox for their own tab strips and cannot be preventDefault()ed by a
-// page, so binding them would produce keys that visibly do the wrong thing.
+//   * The bindings are attached to the document, not to the pane that is currently on screen.
+//     That means a shortcut works even when its pane is not the one the operator is looking at,
+//     which is the whole point of a global shortcut.
 //
-// Two rules keep these from getting in the way:
-//
-//  * Nothing fires while focus is in an <input>, <textarea>, <select> or a contenteditable, unless
-//    the binding opts in (Ctrl+Enter in the Repeater editor does). Ctrl+R inside the Repeater request
-//    editor must not send the request being edited somewhere else.
-//
-//  * preventDefault() happens only once a binding has *claimed* the event. Ctrl+R is the browser's
-//    reload; on a tab with no selectable rows it stays the browser's reload. On a tab that does have
-//    rows we claim it, and if nothing is selected we say so through the toast instead of eating the
-//    key and doing nothing.
+//   * A pane that wants to be the target of a shortcut registers a function with
+//     `registerRowTarget`. The shortcut handler calls that function to get the thing to act on,
+//     so the shortcut code never has to know which pane is on screen or how that pane stores its
+//     selection. The pane can change its selection model without the shortcuts breaking.
 
-import { $, $all, esc, switchTab, toast } from "./common";
-import type { Exchange } from "./types";
-import { fetchExchange, sendToRepeater, sendToIntruder } from "./sendto";
+import { $, toast } from "./common";
+import { EVT_SEND_TO_REPEATER, EVT_SEND_TO_INTRUDER, EVT_SEND_TO_COMPARER } from "./types";
+import { emit } from "./common";
 import { isContextMenuOpen } from "./contextmenu";
+import type { Exchange } from "./types";
 
-/** What the active tab's selected row stands for. A pane registers a getter, not a value, so the
- * shortcut always reads the selection as it is at the moment the key is pressed. */
-export interface RowTarget {
-  /** Names the row in a message, e.g. "exchange #42". */
+/** One pane's notion of "the currently selected row". A pane registers this so the shortcuts can
+ * ask it for the row to act on. */
+interface RowTarget {
   label: string;
-  /** The exchange, when the pane already holds it (History). */
   exchange?: Exchange;
-  /** The exchange id, when the pane holds only that (Site map, WS History, Scanner). */
   exchangeId?: number;
-  /** Why this row has no exchange to act on. Reported instead of acting. */
   note?: string;
 }
 
-const rowSources = new Map<string, () => RowTarget | null>();
+const targets: Map<string, () => RowTarget | null> = new Map();
 
-/** Registers the active-row getter for one tab. Only panes that can actually produce a captured
- * exchange register: on a tab with no source, Ctrl+R and Ctrl+I are left to the browser rather than
- * being swallowed to show an apology. */
-export function registerRowTarget(tabId: string, get: () => RowTarget | null): void {
-  rowSources.set(tabId, get);
+/** Registers a pane as a possible shortcut target. `id` is the pane's own identifier (the same
+ * one it uses for its `<section id>`). */
+export function registerRowTarget(id: string, fn: () => RowTarget | null): void {
+  targets.set(id, fn);
 }
 
-function activeTabId(): string | null {
-  return $("main > section.on")?.id ?? null;
+/** Returns the currently active pane's selected row, or null if the active pane has no selection
+ * or does not register one. */
+function activeTarget(): RowTarget | null {
+  const active = $all("section.on").find(s => s.id);
+  if (!active) return null;
+  const fn = targets.get(active.id);
+  return fn ? fn() : null;
 }
 
-function tabLabel(tabId: string): string {
-  const btn = $all<HTMLButtonElement>("nav button[data-t]").find((b) => b.dataset["t"] === tabId);
-  return btn?.textContent?.trim() ?? tabId;
-}
+/** The one place every shortcut is bound. A pane that wants to be reachable registers its
+ * selection with `registerRowTarget`; the handler here resolves which pane is on screen and
+ * asks it for the row. */
+function bindShortcuts(): void {
+  document.addEventListener("keydown", (e) => {
+    // Ignore if typing in an input
+    if ((e.target as HTMLElement).tagName === "INPUT" ||
+        (e.target as HTMLElement).tagName === "TEXTAREA" ||
+        (e.target as HTMLElement).isContentEditable) {
+      return;
+    }
 
-function activeRowSource(): (() => RowTarget | null) | undefined {
-  const id = activeTabId();
-  return id === null ? undefined : rowSources.get(id);
-}
+    // Ignore if context menu is open
+    if (isContextMenuOpen()) {
+      return;
+    }
 
-/** True when the active tab has rows these shortcuts can act on — the test for whether Ctrl+R and
- * Ctrl+I are ours or the browser's on this screen. */
-function hasRowSource(): boolean {
-  return activeRowSource() !== undefined;
-}
+    // Ctrl+R: Send to Repeater
+    if (e.ctrlKey && e.key === "r") {
+      e.preventDefault();
+      const t = activeTarget();
+      if (t?.exchange) {
+        emit(EVT_SEND_TO_REPEATER, {
+          target: `${t.exchange.tls ? "https" : "http"}://${t.exchange.host}:${t.exchange.port}`,
+          raw: "", // Will be fetched by repeater
+          protocol: t.exchange.protocol,
+        });
+        toast(`Sent to Repeater: ${t.label}`);
+      } else if (t?.exchangeId) {
+        // Fetch exchange and send
+        void fetchExchangeAndSend(t.exchangeId);
+      } else {
+        toast("No row selected", "warning");
+      }
+    }
 
-async function resolveTarget(t: RowTarget): Promise<Exchange | null> {
-  if (t.exchange) return t.exchange;
-  if (t.exchangeId !== undefined) return await fetchExchange(t.exchangeId);
-  toast(t.note ?? `${t.label} has no captured request to send`, "error");
-  return null;
-}
+    // Ctrl+I: Send to Intruder
+    if (e.ctrlKey && e.key === "i") {
+      e.preventDefault();
+      const t = activeTarget();
+      if (t?.exchange) {
+        emit(EVT_SEND_TO_INTRUDER, {
+          msgId: t.exchange.request,
+          target: `${t.exchange.tls ? "https" : "http"}://${t.exchange.host}:${t.exchange.port}`,
+        });
+        toast(`Sent to Intruder: ${t.label}`);
+      } else if (t?.exchangeId) {
+        // For exchangeId, we need to fetch the exchange first
+        void fetchExchangeAndSendToIntruder(t.exchangeId);
+      } else {
+        toast("No row selected", "warning");
+      }
+    }
 
-function sendSelected(where: "repeater" | "intruder", keys: string): void {
-  const get = activeRowSource();
-  if (!get) return;
-  const target = get();
-  if (!target) {
-    const id = activeTabId();
-    toast(`nothing selected — click a row in ${id ? tabLabel(id) : "this tab"} first, then press ${keys}`);
-    return;
-  }
-  void resolveTarget(target).then((ex) => {
-    if (!ex) return;
-    if (where === "repeater") void sendToRepeater(ex);
-    else sendToIntruder(ex);
+    // Ctrl+A: Send to Comparer (A)
+    if (e.ctrlKey && e.key === "a") {
+      e.preventDefault();
+      const t = activeTarget();
+      if (t?.exchange) {
+        emit(EVT_SEND_TO_COMPARER, {
+          side: "a",
+          msgId: t.exchange.request,
+          label: t.label,
+        });
+        toast(`Sent to Comparer A: ${t.label}`);
+      } else {
+        toast("No row selected", "warning");
+      }
+    }
+
+    // Ctrl+B: Send to Comparer (B)
+    if (e.ctrlKey && e.key === "b") {
+      e.preventDefault();
+      const t = activeTarget();
+      if (t?.exchange) {
+        emit(EVT_SEND_TO_COMPARER, {
+          side: "b",
+          msgId: t.exchange.request,
+          label: t.label,
+        });
+        toast(`Sent to Comparer B: ${t.label}`);
+      } else {
+        toast("No row selected", "warning");
+      }
+    }
+
+    // Escape: Close modals, clear selections
+    if (e.key === "Escape") {
+      // Close any open modals
+      const backdrop = $(".sheet-backdrop");
+      if (backdrop) {
+        e.preventDefault();
+        backdrop.remove();
+      }
+    }
   });
 }
 
-function moveTab(delta: number): void {
-  const buttons = $all<HTMLButtonElement>("nav button[data-t]");
-  if (buttons.length === 0) return;
-  const current = buttons.findIndex((b) => b.classList.contains("on"));
-  const from = current === -1 ? 0 : current;
-  const next = buttons[(((from + delta) % buttons.length) + buttons.length) % buttons.length];
-  const id = next?.dataset["t"];
-  if (id) switchTab(id);
+async function fetchExchangeAndSend(exchangeId: number): Promise<void> {
+  try {
+    const response = await fetch(`/api/exchange/${exchangeId}`);
+    if (!response.ok) throw new Error(`Failed to fetch exchange: ${response.status}`);
+    const exchange = await response.json() as Exchange;
+    emit(EVT_SEND_TO_REPEATER, {
+      target: `${exchange.tls ? "https" : "http"}://${exchange.host}:${exchange.port}`,
+      raw: "", // Will be fetched by repeater
+      protocol: exchange.protocol,
+    });
+    toast(`Sent to Repeater: exchange #${exchangeId}`);
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
 }
 
-// ---- the binding table ------------------------------------------------------------------------
-
-interface Binding {
-  /** As shown in the cheat sheet. */
-  keys: string;
-  what: string;
-  /** Which screens it applies to, for the cheat sheet. */
-  where: string;
-  when: (e: KeyboardEvent) => boolean;
-  /** Whether this binding owns the key right now. Absent means always. Must be synchronous:
-   * preventDefault() cannot wait on a fetch. */
-  claim?: () => boolean;
-  run: () => void;
-  /** Fires even with focus in an input/textarea/select/contenteditable. Default false. */
-  inEditable?: boolean;
+async function fetchExchangeAndSendToIntruder(exchangeId: number): Promise<void> {
+  try {
+    const response = await fetch(`/api/exchange/${exchangeId}`);
+    if (!response.ok) throw new Error(`Failed to fetch exchange: ${response.status}`);
+    const exchange = await response.json() as Exchange;
+    emit(EVT_SEND_TO_INTRUDER, {
+      msgId: exchange.request,
+      target: `${exchange.tls ? "https" : "http"}://${exchange.host}:${exchange.port}`,
+    });
+    toast(`Sent to Intruder: exchange #${exchangeId}`);
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
 }
 
-/** Ctrl or, on macOS, Cmd — and nothing else held. */
-function mod(e: KeyboardEvent): boolean {
-  return (e.ctrlKey || e.metaKey) && !e.altKey;
-}
+// Shortcut help sheet
+let sheetBackdrop: HTMLElement | null = null;
 
-const ROW_PANES = "History, Site map, WS History, Scanner";
+export function showShortcutSheet(): void {
+  if (sheetBackdrop) {
+    sheetBackdrop.remove();
+    sheetBackdrop = null;
+    return;
+  }
 
-const BINDINGS: Binding[] = [
-  {
-    keys: "Ctrl+R",
-    what: "Send the selected row to Repeater",
-    where: ROW_PANES,
-    when: (e) => mod(e) && !e.shiftKey && e.key.toLowerCase() === "r",
-    claim: hasRowSource,
-    run: () => sendSelected("repeater", "Ctrl+R"),
-  },
-  {
-    keys: "Ctrl+I",
-    what: "Send the selected row to Intruder",
-    where: ROW_PANES,
-    when: (e) => mod(e) && !e.shiftKey && e.key.toLowerCase() === "i",
-    claim: hasRowSource,
-    run: () => sendSelected("intruder", "Ctrl+I"),
-  },
-  {
-    keys: "Ctrl+Enter",
-    what: "Send the request being edited",
-    where: "Repeater — works inside the editor",
-    when: (e) => mod(e) && !e.shiftKey && e.key === "Enter",
-    claim: () => activeTabId() === "repeater" && $("#rep-send") !== null,
-    // Clicks the pane's own Send button rather than re-implementing the send: one entry point means
-    // the shortcut cannot drift from what the button does.
-    run: () => $<HTMLButtonElement>("#rep-send")?.click(),
-    inEditable: true,
-  },
-  {
-    keys: "Ctrl+Shift+→",
-    what: "Next tab",
-    where: "anywhere",
-    when: (e) => mod(e) && e.shiftKey && e.key === "ArrowRight",
-    run: () => moveTab(1),
-  },
-  {
-    keys: "Ctrl+Shift+←",
-    what: "Previous tab",
-    where: "anywhere",
-    when: (e) => mod(e) && e.shiftKey && e.key === "ArrowLeft",
-    run: () => moveTab(-1),
-  },
-  {
-    keys: "?",
-    what: "Show or hide this list",
-    where: "anywhere",
-    when: (e) => !e.ctrlKey && !e.metaKey && !e.altKey && e.key === "?",
-    run: () => toggleSheet(),
-  },
-];
-
-// ---- the cheat sheet --------------------------------------------------------------------------
-
-const SHEET_ID = "shortcut-sheet";
-
-/** Panes with a right-click menu, listed in the sheet. Right-click is as undiscoverable as a
- * shortcut, so it is documented in the same place rather than left to be stumbled on. */
-const MENU_PANES: [string, string][] = [
-  ["History", "send to Repeater / Intruder / Comparer, save to Organizer, copy URL or curl"],
-  ["Site map", "the node's most recent exchange: send to any tool, copy its URL, open it in History"],
-  ["WS History", "the upgrade exchange, and copy the message payload"],
-  ["Scanner", "the finding's first occurrence: open it in History or send it to any tool"],
-  ["Logger", "copy the host or path, or filter History by that host"],
-];
-
-function sheetHtml(): string {
-  const rows = BINDINGS.map(
-    (b) =>
-      `<tr><td><kbd>${esc(b.keys)}</kbd></td><td>${esc(b.what)}</td><td class="hint">${esc(b.where)}</td></tr>`,
-  ).join("");
-  const menus = MENU_PANES.map(
-    ([pane, what]) => `<tr><td><b>${esc(pane)}</b></td><td colspan="2" class="hint">${esc(what)}</td></tr>`,
-  ).join("");
-  return `
+  sheetBackdrop = document.createElement("div");
+  sheetBackdrop.className = "sheet-backdrop";
+  sheetBackdrop.innerHTML = `
     <div class="sheet">
-      <div class="row">
-        <b class="card-title" style="margin:0">Keyboard shortcuts</b>
-        <span class="grow"></span>
-        <button class="ghost small" id="sheet-close">Close</button>
-      </div>
+      <h2>Keyboard Shortcuts</h2>
+      <p class="hint">Available globally when not typing in an input field</p>
       <table>
-        <thead><tr><th>Key</th><th>Does</th><th>Where</th></tr></thead>
+        <thead>
+          <tr><th>Key</th><th>Action</th><th>Context</th></tr>
+        </thead>
         <tbody>
-          ${rows}
-          <tr><td><kbd>Esc</kbd></td><td>Close this list, or an open right-click menu</td><td class="hint">anywhere</td></tr>
+          <tr>
+            <td><kbd>Ctrl+R</kbd></td>
+            <td>Send to Repeater</td>
+            <td>History, Scanner, Site map, WS History</td>
+          </tr>
+          <tr>
+            <td><kbd>Ctrl+I</kbd></td>
+            <td>Send to Intruder</td>
+            <td>History, Scanner, Site map, WS History</td>
+          </tr>
+          <tr>
+            <td><kbd>Ctrl+A</kbd></td>
+            <td>Send to Comparer (A)</td>
+            <td>History, Scanner, Site map, WS History</td>
+          </tr>
+          <tr>
+            <td><kbd>Ctrl+B</kbd></td>
+            <td>Send to Comparer (B)</td>
+            <td>History, Scanner, Site map, WS History</td>
+          </tr>
+          <tr>
+            <td><kbd>↑</kbd>/<kbd>↓</kbd></td>
+            <td>Navigate rows</td>
+            <td>All tables</td>
+          </tr>
+          <tr>
+            <td><kbd>Enter</kbd></td>
+            <td>Open/Select row</td>
+            <td>All tables</td>
+          </tr>
+          <tr>
+            <td><kbd>Esc</kbd></td>
+            <td>Close modal/deselect</td>
+            <td>All</td>
+          </tr>
+          <tr>
+            <td><kbd>?</kbd></td>
+            <td>Show this help</td>
+            <td>All</td>
+          </tr>
         </tbody>
       </table>
-      <p class="hint">On macOS press <kbd>⌘</kbd> wherever this says <kbd>Ctrl</kbd>. Tab switching
-        avoids <kbd>Ctrl</kbd>+<kbd>1</kbd>..<kbd>9</kbd> because the browser reserves those for its own
-        tabs and a page cannot override them. <kbd>Ctrl</kbd>+<kbd>R</kbd> stays the browser's reload on
-        any tab without selectable rows.</p>
-      <div class="card-title" style="margin-top:12px">Right-click a row</div>
-      <table><tbody>${menus}</tbody></table>
-      <p class="hint">Right-click also selects the row, so <kbd>Ctrl</kbd>+<kbd>R</kbd> afterwards acts
-        on the same one.</p>
-    </div>`;
-}
+      <div style="margin-top:12px;text-align:right">
+        <button class="go" onclick="this.closest('.sheet-backdrop').remove()">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(sheetBackdrop);
 
-function sheetEl(): HTMLElement | null {
-  return document.getElementById(SHEET_ID);
-}
-
-function closeSheet(): void {
-  const el = sheetEl();
-  if (!el) return;
-  el.remove();
-  document.removeEventListener("keydown", onSheetKey, true);
-}
-
-function openSheet(): void {
-  if (sheetEl()) return;
-  const el = document.createElement("div");
-  el.id = SHEET_ID;
-  el.className = "sheet-backdrop";
-  el.innerHTML = sheetHtml();
-  document.body.appendChild(el);
-  el.addEventListener("click", (e) => {
-    // Backdrop click and the Close button both dismiss; a click inside the sheet does not.
-    if (e.target === el || (e.target as HTMLElement).id === "sheet-close") closeSheet();
+  // Close on escape
+  sheetBackdrop.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      sheetBackdrop?.remove();
+      sheetBackdrop = null;
+    }
   });
-  document.addEventListener("keydown", onSheetKey, true);
-}
-
-function toggleSheet(): void {
-  if (sheetEl()) closeSheet();
-  else openSheet();
-}
-
-function onSheetKey(e: KeyboardEvent): void {
-  if (e.key === "Escape" || e.key === "?") {
-    e.preventDefault();
-    e.stopPropagation();
-    closeSheet();
-  }
-}
-
-// ---- dispatch ---------------------------------------------------------------------------------
-
-/** True when the key belongs to whatever the operator is typing into. */
-function inEditable(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-}
-
-function onKey(e: KeyboardEvent): void {
-  // An open menu owns the keyboard; it handles its own keys in the capture phase and stops them, so
-  // this is a second line of defence rather than the only one.
-  if (isContextMenuOpen()) return;
-  if (e.isComposing) return;
-  const editable = inEditable(e.target);
-  for (const b of BINDINGS) {
-    if (!b.when(e)) continue;
-    if (editable && b.inEditable !== true) return;
-    if (b.claim && !b.claim()) return;
-    e.preventDefault();
-    b.run();
-    return;
-  }
-}
-
-/** Adds the header affordance. Done from here rather than in index.html so the button and the sheet
- * it opens are never out of step, and so this module is the only thing that needs to know the sheet
- * exists. */
-function addHelpButton(): void {
-  const header = $("header");
-  if (!header || document.getElementById("shortcut-help")) return;
-  const btn = document.createElement("button");
-  btn.id = "shortcut-help";
-  btn.className = "ghost small";
-  btn.type = "button";
-  btn.textContent = "? shortcuts";
-  btn.title = "keyboard shortcuts and right-click actions (press ?)";
-  btn.addEventListener("click", () => toggleSheet());
-  const caLink = document.getElementById("ca-link");
-  if (caLink) header.insertBefore(btn, caLink);
-  else header.appendChild(btn);
 }
 
 export function initShortcuts(): void {
-  addHelpButton();
-  document.addEventListener("keydown", onKey);
+  bindShortcuts();
+  
+  // Also bind ? key to show help
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '?' && !isContextMenuOpen() && 
+        (e.target as HTMLElement).tagName !== "INPUT" &&
+        (e.target as HTMLElement).tagName !== "TEXTAREA") {
+      e.preventDefault();
+      showShortcutSheet();
+    }
+  });
 }

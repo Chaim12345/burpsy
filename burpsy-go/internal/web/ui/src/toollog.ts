@@ -1,154 +1,184 @@
-// Logger tab: every request burpsy's own tools sent (Repeater/Intruder/Scanner/BCheck), kept apart
-// from proxy History by construction — see crates/tools/src/logger.rs.
+// Tool Log tab: a log of every request burpsy's own tools have sent. This is separate from
+// the proxy's History (which is requests *through* burpsy) because tool requests are generated
+// internally and have different semantics: they may be retries, they may be part of a larger
+// operation, and they are always initiated by burpsy itself.
 
-import { $, $all, esc, statusBadge, getJSON, delJSON, emit, switchTab, toast } from "./common";
-import { EVT_FILTER_HISTORY } from "./types";
-import { attachRowContextMenu } from "./contextmenu";
-import type { MenuItem } from "./contextmenu";
-import { copyText } from "./sendto";
-import { live } from "./live";
+import { $, esc, getJSON, makeSortable, renderEmptyState, copyText } from "./common";
 
-export interface LogEntry {
+interface ToolLogEntry {
   id: number;
   tool: string;
-  host: string;
-  port: number;
-  method: string;
-  path: string;
+  request: string;
+  at_ms: number;
   status: number | null;
   response_len: number;
-  started_ms: number;
   duration_ms: number;
-  error: string | null;
-}
-interface LogResp {
-  total: number;
-  shown: number;
-  dropped: number;
-  // Keyed by tool name rather than a fixed set of four. The old shape named a "bcheck" tool that
-  // does not exist (so it read a permanent 0) and had no key for session, sequencer, comparer,
-  // decoder or crawler activity, so those rows were counted into nothing.
-  counts: Record<string, number>;
-  entries: LogEntry[];
 }
 
-/** The rows currently rendered, so the delegated right-click menu can resolve a `<tr>` back to one. */
-let rendered: LogEntry[] = [];
+interface ToolLogState {
+  entries: ToolLogEntry[];
+  total: number;
+  dropped: number;
+}
 
 export function initToolLog(): void {
-  const el = $("#logger");
-  if (!el) return;
-  el.innerHTML = `
+  const section = $("#logger");
+  if (!section) return;
+  section.innerHTML = `
     <div class="row">
-      <select id="log-filter">
-        <option value="">all</option>
-        <option value="repeater">repeater</option>
-        <option value="intruder">intruder</option>
-        <option value="scanner">scanner</option>
-        <option value="bcheck">bcheck</option>
-      </select>
-      <input id="log-search" type="search" placeholder="search host/path/method" class="grow" />
-      <button class="ghost" id="log-clear">Clear</button>
-      <span id="log-meta" class="hint"></span>
+      <span class="hint">Requests sent by burpsy's own tools (scanner, intruder, repeater, etc.)</span>
+      <span class="grow"></span>
+      <button class="ghost" onclick="refreshToolLog()">Refresh</button>
+      <button class="ghost" onclick="clearToolLog()">Clear</button>
     </div>
-    <p class="hint">Right-click a row to copy its host or path, or to filter History by that host.
-      There is no send-to-Repeater here: a logged row records what burpsy sent, not a stored request
-      that could be reloaded, so there is nothing to hand over.</p>
+    <div class="row">
+      <input id="log-search" placeholder="Search requests..." style="width:300px" />
+      <select id="log-tool-filter">
+        <option value="">All tools</option>
+        <option value="repeater">Repeater</option>
+        <option value="intruder">Intruder</option>
+        <option value="scanner">Scanner</option>
+      </select>
+      <button class="ghost" onclick="applyFilter()">Apply</button>
+    </div>
     <table>
-      <thead><tr><th>#</th><th>Tool</th><th>Method</th><th>Host</th><th>Path</th><th>Status</th><th>Len</th><th>ms</th><th>Error</th></tr></thead>
+      <thead>
+        <tr>
+          <th data-sort="at_ms">Time</th>
+          <th data-sort="tool">Tool</th>
+          <th>Request</th>
+          <th data-sort="status">Status</th>
+          <th data-sort="response_len">Len</th>
+          <th data-sort="duration_ms">ms</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
       <tbody id="log-body"></tbody>
     </table>
+    <div id="log-empty" class="hint" style="margin-top:8px"></div>
+    <div id="log-meta" class="hint" style="margin-top:8px"></div>
   `;
-  $("#log-filter")!.addEventListener("change", () => void load());
-  $("#log-clear")!.addEventListener("click", () => void clear());
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
-  $("#log-search")!.addEventListener("input", () => {
-    if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => void load(), 300);
-  });
-  attachRowContextMenu<LogEntry>({
-    container: "#log-body",
-    rowSelector: "tr[data-id]",
-    resolve: (tr) => rendered.find((e) => e.id === Number(tr.dataset["id"])) ?? null,
-    heading: (e) => `${e.tool}: ${e.method} ${e.path}`,
-    select: (e) => $all("#log-body tr").forEach((tr) => tr.classList.toggle("on", Number(tr.dataset["id"]) === e.id)),
-    items: (e) => rowMenuItems(e),
-  });
-  // Every request one of burpsy's own tools sends lands here, so the pane follows the stream rather than
-  // a Refresh button. The filter and the search box are re-applied by load() itself.
-  live({ kinds: ["toollog"], section: "logger", refresh: () => void load() });
-  void load();
+
+  // Initialize table sorting
+  makeSortable('log-body', 'at_ms');
+  
+  // Load initial data
+  void loadToolLog();
+  
+  // Search and filter
+  const searchInput = $("#log-search") as HTMLInputElement;
+  const toolFilter = $("#log-tool-filter") as HTMLSelectElement;
+  
+  searchInput?.addEventListener('input', () => applyFilter());
+  toolFilter?.addEventListener('change', () => applyFilter());
 }
 
-/** A logged row is a request burpsy itself sent, so it is never *in* proxy History and there is no
- * stored message to reload — the tool log carries no message ids and no TLS flag, so this pane cannot
- * honestly build a URL scheme or a raw request from a row. What it can do is point at the same host's
- * captured traffic, which is what the History filter entry does. */
-function rowMenuItems(e: LogEntry): MenuItem[] {
-  const hostPort = `${e.host}:${e.port}`;
-  return [
-    {
-      label: `Filter History by ${e.host}`,
-      run: () => {
-        emit(EVT_FILTER_HISTORY, { search: e.host });
-        switchTab("history");
-      },
-    },
-    {
-      label: `Filter History by ${e.path}`,
-      run: () => {
-        emit(EVT_FILTER_HISTORY, { search: e.path });
-        switchTab("history");
-      },
-    },
-    { separator: true },
-    { label: "Copy host:port", run: () => void copyText(hostPort, hostPort) },
-    { label: "Copy path", run: () => void copyText(e.path, "the path") },
-  ];
-}
+let allEntries: ToolLogEntry[] = [];
 
-async function load(): Promise<void> {
-  const body = $("#log-body")!;
-  const meta = $("#log-meta")!;
-  const tool = $<HTMLSelectElement>("#log-filter")!.value;
-  const q = $<HTMLInputElement>("#log-search")!.value.trim();
-  // "filter" and "tool", "search" and "q": the handler has always read the first of each pair, so
-  // the tab's own filter and search box sent parameters nothing looked at and silently returned the
-  // unfiltered log.
-  const params = new URLSearchParams();
-  if (tool) params.set("filter", tool);
-  if (q) params.set("search", q);
-  const qs = params.toString();
+async function loadToolLog(): Promise<void> {
   try {
-    const resp = await getJSON<LogResp>(`/api/tools/log${qs ? `?${qs}` : ""}`);
-    const active = Object.entries(resp.counts)
-      .filter(([, n]) => n > 0)
-      .map(([name, n]) => `${name} ${n}`);
-    meta.textContent =
-      `${resp.total} total${active.length ? ` (${active.join(", ")})` : ""}` +
-      (resp.dropped ? ` · ${resp.dropped} dropped (capacity)` : "");
-    rendered = resp.entries;
-    body.innerHTML =
-      resp.entries
-        .map(
-          (e) => `<tr data-id="${e.id}">
-        <td>${e.id}</td><td>${esc(e.tool)}</td><td>${esc(e.method)}</td>
-        <td>${esc(e.host)}:${e.port}</td><td>${esc(e.path)}</td>
-        <td>${statusBadge(e.status)}</td><td>${e.response_len}</td><td>${e.duration_ms}</td>
-        <td class="err">${esc(e.error ?? "")}</td>
-      </tr>`,
-        )
-        .join("") || `<tr><td colspan="9" class="hint">nothing logged yet</td></tr>`;
+    const response = await fetch("/api/tools/log?limit=500");
+    if (!response.ok) throw new Error(`Failed to load tool log: ${response.status}`);
+    
+    const state = await response.json() as ToolLogState;
+    allEntries = state.entries;
+    
+    const metaEl = $("#log-meta")!;
+    metaEl.textContent = `Showing ${Math.min(allEntries.length, 500)} of ${state.total.toLocaleString()} (${state.dropped.toLocaleString()} dropped)`;
+    
+    applyFilter();
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="9" class="err">${esc((e as Error).message)}</td></tr>`;
+    const body = $("#log-body")!;
+    body.innerHTML = `<tr><td colspan="7" class="err">${esc((e as Error).message)}</td></tr>`;
   }
 }
 
-async function clear(): Promise<void> {
+function applyFilter(): void {
+  const search = ($("#log-search") as HTMLInputElement)?.value.toLowerCase() || '';
+  const tool = ($("#log-tool-filter") as HTMLSelectElement)?.value || '';
+  
+  let entries = allEntries;
+  
+  if (tool) {
+    entries = entries.filter(e => e.tool === tool);
+  }
+  
+  if (search) {
+    entries = entries.filter(e => 
+      e.request.toLowerCase().includes(search) ||
+      e.tool.toLowerCase().includes(search)
+    );
+  }
+  
+  renderEntries(entries);
+}
+
+function renderEntries(entries: ToolLogEntry[]): void {
+  const tbody = $("#log-body")!;
+  const emptyEl = $("#log-empty")!;
+  
+  if (entries.length === 0) {
+    tbody.innerHTML = '';
+    emptyEl.innerHTML = renderEmptyState(
+      "No tool requests logged yet",
+      "Requests from burpsy's tools will appear here",
+      "📝",
+      7
+    );
+    return;
+  }
+  
+  emptyEl.innerHTML = '';
+  tbody.innerHTML = entries.slice(0, 100).map(e => `
+    <tr>
+      <td>${new Date(e.at_ms).toLocaleTimeString()}</td>
+      <td><span class="tag tag-${esc(e.tool)}">${esc(e.tool)}</span></td>
+      <td>${esc(e.request.slice(0, 60))}${e.request.length > 60 ? '...' : ''}</td>
+      <td>${e.status ? e.status : '-'}</td>
+      <td>${fmtBytes(e.response_len)}</td>
+      <td>${e.duration_ms}</td>
+      <td>
+        <button class="ghost small" onclick="copyRequest(${e.id})">Copy</button>
+      </td>
+    </tr>
+  `).join('');
+  
+  if (entries.length > 100) {
+    tbody.innerHTML += `<tr><td colspan="7" class="hint">Showing 100 of ${entries.length.toLocaleString()} entries</td></tr>`;
+  }
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+// Global functions
+window.refreshToolLog = function(): void {
+  void loadToolLog();
+};
+
+window.clearToolLog = async function(): Promise<void> {
+  if (!confirm("Are you sure you want to clear the entire tool log?")) return;
+  
   try {
-    await delJSON("/api/tools/log");
-    void load();
+    await fetch("/api/tools/log", { method: "DELETE" });
+    toast("Tool log cleared", 'success');
+    void loadToolLog();
   } catch (e) {
     toast((e as Error).message, "error");
   }
-}
+};
+
+window.copyRequest = async function(id: number): Promise<void> {
+  try {
+    const response = await fetch(`/api/tools/log/${id}`);
+    if (!response.ok) throw new Error(`Failed to load request: ${response.status}`);
+    
+    const entry = await response.json() as ToolLogEntry;
+    copyText(entry.request, 'tool request');
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
+};

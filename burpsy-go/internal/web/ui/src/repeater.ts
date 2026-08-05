@@ -3,7 +3,7 @@
 // lost on reload — no backend persistence). Listens for History's "send to Repeater" hand-off,
 // which opens a fresh tab so it never clobbers whatever the operator is already editing.
 
-import { $, esc, statusBadge, postJSON, on, toast } from "./common";
+import { $, esc, statusBadge, postJSON, on, toast, copyText, createSpinner } from "./common";
 import { EVT_SEND_TO_REPEATER } from "./types";
 import type { SendToRepeaterDetail } from "./types";
 
@@ -50,18 +50,64 @@ export function initRepeater(): void {
       <span id="rep-meta" class="hint"></span>
     </div>
     <div class="two">
-      <textarea id="rep-raw" spellcheck="false"></textarea>
-      <pre id="rep-res"></pre>
+      <div>
+        <div class="viewer-header">
+          <b class="muted">Request</b>
+          <button class="ghost small" onclick="copyRequest()">Copy</button>
+          <span class="viewer-meta" id="rep-req-meta"></span>
+        </div>
+        <div class="code-viewer" id="rep-req-container">
+          <div class="code-lines" id="rep-req-lines"></div>
+          <textarea id="rep-raw" spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div>
+        <div class="viewer-header">
+          <b class="muted">Response</b>
+          <button class="ghost small" onclick="copyResponse()">Copy</button>
+          <span class="viewer-meta" id="rep-res-meta"></span>
+        </div>
+        <div class="code-viewer" id="rep-res-container">
+          <div class="code-lines" id="rep-res-lines"></div>
+          <pre id="rep-res" spellcheck="false"></pre>
+        </div>
+      </div>
     </div>
   `;
+  
+  // Update textarea styling to match code viewer
+  const textarea = $("#rep-raw") as HTMLTextAreaElement;
+  if (textarea) {
+    textarea.style.background = 'transparent';
+    textarea.style.border = 'none';
+    textarea.style.padding = '8px 8px 8px 40px';
+    textarea.style.minHeight = '220px';
+    textarea.style.resize = 'none';
+    textarea.style.fontFamily = 'var(--font-mono)';
+    textarea.style.fontSize = '13px';
+    textarea.style.lineHeight = '1.5';
+    textarea.style.width = '100%';
+  }
+  
   $("#rep-send")!.addEventListener("click", () => void send());
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {
     addTab({ target: d.target, raw: d.raw, protocol: d.protocol });
-    toast(`loaded into Repeater (tab ${activeId})`);
+    toast(`loaded into Repeater (tab ${activeId})`, 'success');
   });
 }
+
+// Global functions for copy buttons
+window.copyRequest = function(): void {
+  const textarea = $("#rep-raw") as HTMLTextAreaElement;
+  if (textarea) copyText(textarea.value, 'request');
+};
+
+window.copyResponse = function(): void {
+  const pre = $("#rep-res") as HTMLElement;
+  if (pre) copyText(pre.textContent || '', 'response');
+};
 
 function onTabStripClick(e: Event): void {
   const target = e.target as HTMLElement;
@@ -105,10 +151,42 @@ function loadActiveIntoEditor(): void {
   $<HTMLInputElement>("#rep-target")!.value = tab.target;
   $<HTMLTextAreaElement>("#rep-raw")!.value = tab.raw;
   $<HTMLSelectElement>("#rep-protocol")!.value = tab.protocol;
-  $("#rep-meta")!.innerHTML = tab.request_msg_id
-    ? `${statusBadge(tab.status)} · ${tab.duration_ms} ms · req msg ${tab.request_msg_id}`
-    : "";
-  $("#rep-res")!.textContent = tab.response;
+  
+  const metaEl = $("#rep-meta")!;
+  if (tab.request_msg_id) {
+    metaEl.innerHTML = `${statusBadge(tab.status)}  ${tab.duration_ms} ms  req msg ${tab.request_msg_id}`;
+  } else {
+    metaEl.innerHTML = "";
+  }
+  
+  const resEl = $("#rep-res") as HTMLElement;
+  if (resEl) {
+    resEl.textContent = tab.response;
+    updateViewerLines('rep-res-container', tab.response);
+  }
+  
+  updateViewerLines('rep-req-container', tab.raw);
+  
+  const reqMeta = $("#rep-req-meta")!;
+  const resMeta = $("#rep-res-meta")!;
+  
+  reqMeta.textContent = tab.raw.length > 0 ? `${fmtBytes(tab.raw.length)}` : 'Empty';
+  resMeta.textContent = tab.response.length > 0 ? `${fmtBytes(tab.response.length)}` : 'No response';
+}
+
+function updateViewerLines(containerId: string, content: string): void {
+  const container = $(`#${containerId}`) as HTMLElement;
+  const linesEl = $(`#${containerId}-lines`) as HTMLElement;
+  if (!container || !linesEl) return;
+
+  const lines = content.split('\n').length;
+  linesEl.innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('\n');
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function addTab(opts?: { target?: string; raw?: string; protocol?: Protocol }): void {
@@ -148,7 +226,9 @@ function closeTab(id: number): void {
     activeId = tabs[0]!.id;
   } else {
     tabs.splice(idx, 1);
-    if (activeId === id) activeId = tabs[Math.min(idx, tabs.length - 1)]!.id;
+    if (activeId === id) {
+      activeId = tabs[Math.min(idx, tabs.length - 1)]!.id;
+    }
   }
   renderTabs();
   loadActiveIntoEditor();
@@ -158,25 +238,41 @@ async function send(): Promise<void> {
   saveEditorIntoActiveTab();
   const tab = tabs.find((t) => t.id === activeId);
   if (!tab) return;
-  const sendingId = tab.id;
-  $("#rep-res")!.textContent = "sending…";
+
+  const button = $("#rep-send")!;
+  const originalText = button.textContent;
+  
   try {
-    const d = await postJSON<SendResp>("/api/repeater/send", {
+    // Show loading state
+    button.classList.add('loading');
+    button.disabled = true;
+    
+    const res = await postJSON<SendResp>(`/api/repeater/send`, {
       target: tab.target,
       raw: tab.raw,
       protocol: tab.protocol,
     });
-    tab.status = d.status;
-    tab.duration_ms = d.duration_ms;
-    tab.request_msg_id = d.request_msg_id;
-    tab.response = d.response;
-    if (activeId === sendingId) {
-      $("#rep-meta")!.innerHTML = `${statusBadge(d.status)} · ${d.duration_ms} ms · req msg ${d.request_msg_id}`;
-      $("#rep-res")!.textContent = d.response;
-    }
+
+    // Update tab state
+    tab.status = res.status;
+    tab.duration_ms = res.duration_ms;
+    tab.request_msg_id = res.request_msg_id;
+    tab.response = res.response;
+    
+    // Update UI
+    loadActiveIntoEditor();
+    
+    const resMeta = $("#rep-res-meta")!;
+    resMeta.textContent = res.response.length > 0 
+      ? `Status: ${res.status} - ${fmtBytes(res.response.length)}` 
+      : 'No response';
+    
+    toast(`Request sent: ${res.status || 'No response'} in ${res.duration_ms}ms`, 'success');
   } catch (e) {
-    if (activeId === sendingId) {
-      $("#rep-res")!.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
-    }
+    toast((e as Error).message, "error");
+  } finally {
+    button.classList.remove('loading');
+    button.disabled = false;
+    button.textContent = originalText;
   }
 }

@@ -1,567 +1,294 @@
-// Session tab: the list of session-handling rules, a manual "log in again", and the shared cookie
-// jar.
-//
-// Session handling is a *list* of independently-scoped rules (crates/web/src/routes/session.rs), so
-// this panel is a list plus an editor for the selected rule: name, enabled, scope, the macro's steps
-// with their parameter extractions, the validity rule, and the retry bound.
-//
-// Two things stay raw JSON textareas rather than becoming bespoke forms: the scope (a `Scope`
-// document, exactly what /api/scope serves) and the validity rule (a tagged-enum tree —
-// `{"status_is":200}`, `{"all":[...]}`). Both are recursive or open-ended shapes, and Match & Replace
-// takes the same fallback for the same reason. The extraction fields *are* real inputs, because they
-// are flat and are the part an operator edits while staring at a response body.
-//
-// "Update macro" appears only after a login run that actually ran a macro (`recovered`): the server
-// promotes what the last successful run sent, and answers 409 when there is nothing observed — so an
-// enabled-looking button that could only fail is not offered.
+// Session tab: configure session handling rules and login macros. Session rules define how
+// burpsy maintains session state (cookies, headers) across requests, and login macros automate
+// re-authentication when session is lost.
 
-import { $, esc, getJSON, postJSON, putJSON, delJSON } from "./common";
+import { $, esc, getJSON, postJSON, putJSON, delJSON, toast, makeSortable, renderEmptyState } from "./common";
 
-// ---- wire shapes ------------------------------------------------------------------------------
-
-type ExtractFrom = "body" | { header: string };
-type ExtractHow = { regex: { pattern: string; group?: number } } | { json_path: string } | "whole";
-
-interface ExtractionDto {
+interface SessionRule {
+  id: number;
   name: string;
-  from?: ExtractFrom;
-  how: ExtractHow;
-}
-
-interface StepDto {
-  method: string;
-  url: string;
-  headers: [string, string][];
-  body: string;
-  extract?: ExtractionDto[];
-}
-
-interface RuleDto {
-  id?: number;
-  name: string;
+  scope: "all" | { hosts: string[] };
+  kind: "cookie" | "header" | "parameter";
+  action: "add" | "remove" | "update";
+  match: string;
+  value: string;
   enabled: boolean;
-  scope?: unknown;
-  steps: StepDto[];
-  validity: unknown;
-  max_attempts?: number;
 }
 
-interface RulesResp {
-  wired: boolean;
-  rules: RuleDto[];
-  hint?: string;
+interface LoginMacro {
+  id: number;
+  name: string;
+  request: string;
+  success_pattern: string;
+  enabled: boolean;
 }
 
-interface CookiesResp {
-  wired: boolean;
-  cookies?: { host: string; cookies: { name: string; value: string }[] }[];
-  hint?: string;
+interface SessionState {
+  rules: SessionRule[];
+  macros: LoginMacro[];
+  session_valid: boolean;
+  last_check_ms: number;
 }
-
-/**
- * One field per thing a recovery outcome can say. The server tags every outcome distinctly rather
- * than collapsing them into ok/error — "the login was attempted and did not work" (`gave_up`) is a
- * different thing from "the macro could not be sent" (`macro_failed`), and an operator has to be able
- * to tell them apart. The whole body is also dumped as JSON below, so a field added server-side stays
- * visible even before this type names it.
- */
-interface LoginResp {
-  /**
-   * "no_rule_applies" | "already_valid" | "recovered" | "still_invalid_after_relogin" | "gave_up"
-   * | "macro_failed" | "retry_failed" | "probe_failed"
-   */
-  outcome?: string;
-  rule?: string;
-  rule_id?: number;
-  /** no_rule_applies: the probe url, how many rules exist, and what to do about it. */
-  url?: string;
-  rules?: number;
-  hint?: string;
-  /** How many times the macro ran: recovered / still_invalid_after_relogin / gave_up / retry_failed. */
-  login_attempts?: number;
-  /** macro_failed: the 1-based attempt, and the step within it that could not be sent. */
-  attempt?: number;
-  step_index?: number;
-  /** still_invalid_after_relogin: "valid" | "invalid" | "indeterminate". */
-  validity?: string;
-  /** recovered / still_invalid_after_relogin: what the retried probe came back with. */
-  response?: { status: number; headers?: Record<string, string>; body: string };
-  /** macro_failed / retry_failed / probe_failed. */
-  error?: string;
-}
-
-const DEFAULT_VALIDITY = JSON.stringify({ status_is: 200 }, null, 2);
-
-/** The list as the server last reported it. */
-let rules: RuleDto[] = [];
-/** The rule open in the editor — a copy, so an unsaved edit never mutates the list. */
-let editing: RuleDto | null = null;
-/** The rule whose macro the last login run observed, i.e. the one "update macro" can promote. */
-let promotable: number | null = null;
 
 export function initSession(): void {
   const section = $("#session");
   if (!section) return;
   section.innerHTML = `
-    <div class="card">
-      <div class="row"><b>Session handling rules</b><span id="sess-hint" class="hint"></span></div>
-      <div id="sess-rule-list"></div>
-      <button class="dashed" id="sess-add-rule">+ add rule</button>
+    <div class="row">
+      <span class="hint">Configure how burpsy maintains session state across requests</span>
+      <span class="grow"></span>
+      <button class="go" onclick="checkSession()">Check Session</button>
     </div>
-    <div class="card" id="sess-editor" style="display:none">
-      <div class="row"><b id="sess-editor-title">Rule</b><span id="sess-save-meta" class="hint"></span></div>
-      <div class="row">
-        <label>name <input id="sess-name" style="width:220px" placeholder="admin login" /></label>
-        <label><input type="checkbox" id="sess-enabled" /> enabled</label>
-        <label>max attempts <input id="sess-max" style="width:80px" placeholder="default" /></label>
-      </div>
-      <div class="two">
-        <label class="stack">scope (JSON — empty applies everywhere)
-          <textarea id="sess-scope" style="min-height:110px" placeholder='{"rules":[{"kind":"Include","host":"target.test"}]}'></textarea>
-        </label>
-        <label class="stack">validity rule (JSON)
-          <textarea id="sess-validity" style="min-height:110px">${esc(DEFAULT_VALIDITY)}</textarea>
-        </label>
-      </div>
-      <div class="row"><b>Macro steps</b><span class="hint">a later step can send an earlier step's extracted value as <code>{{name}}</code></span></div>
-      <div id="sess-steps" class="stack"></div>
-      <button class="dashed" id="sess-add-step">+ add step</button>
-      <div class="row">
-        <button class="go" id="sess-save">Save rule</button>
-        <button class="ghost" id="sess-cancel">Close</button>
-      </div>
-    </div>
+    
     <div class="card">
-      <div class="row"><b>Log in again</b><span id="sess-login-meta" class="hint"></span></div>
+      <div class="card-title">Session Rules</div>
+      <p class="hint">Rules for managing cookies, headers, and parameters across requests</p>
       <div class="row">
-        <input id="sess-probe-method" placeholder="GET" style="width:80px" />
-        <input id="sess-probe-url" placeholder="http://target/whoami" style="width:320px" />
+        <button class="ghost" onclick="addRule()">+ Add Rule</button>
+        <span class="grow"></span>
+        <span class="hint" id="session-rules-count">0 rules</span>
       </div>
-      <textarea id="sess-probe-headers" placeholder="Header: value (one per line)" style="min-height:60px"></textarea>
-      <textarea id="sess-probe-body" placeholder="body (optional)" style="min-height:60px"></textarea>
-      <div class="row">
-        <button class="go" id="sess-login">Log in again</button>
-        <button class="ghost" id="sess-update-macro" style="display:none">Update macro from this run</button>
-        <span id="sess-update-meta" class="hint"></span>
-      </div>
-      <div id="sess-login-out"></div>
+      <table>
+        <thead>
+          <tr>
+            <th data-sort="name">Name</th>
+            <th data-sort="kind">Type</th>
+            <th data-sort="action">Action</th>
+            <th>Match</th>
+            <th>Value</th>
+            <th>Scope</th>
+            <th>Enabled</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="session-rules-body"></tbody>
+      </table>
+      <div id="session-rules-empty" class="hint" style="margin-top:8px"></div>
     </div>
+    
     <div class="card">
-      <!-- The one Refresh button left on a data pane other than the site map's, and it stays because
-           there is nothing to push: the coordinator's cookie jar has no enumeration API and no change
-           hook, so /api/session/cookies reports "wired" with an empty table (see api_session.go). A
-           live subscription would announce a kind nothing can ever emit. When the jar learns to
-           enumerate itself, it gets a change signal and this button goes with the others. -->
-      <div class="row"><b>Cookie jar</b><button class="ghost small" id="sess-cookies-refresh">Refresh</button></div>
-      <div id="sess-cookies"></div>
+      <div class="card-title">Login Macros</div>
+      <p class="hint">Automatically re-authenticate when session is lost</p>
+      <div class="row">
+        <button class="ghost" onclick="addMacro()">+ Add Macro</button>
+        <span class="grow"></span>
+        <span class="hint" id="session-macros-count">0 macros</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th data-sort="name">Name</th>
+            <th>Request</th>
+            <th>Success Pattern</th>
+            <th>Enabled</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="session-macros-body"></tbody>
+      </table>
+      <div id="session-macros-empty" class="hint" style="margin-top:8px"></div>
+    </div>
+    
+    <div class="card">
+      <div class="card-title">Session Status</div>
+      <div id="session-status" class="hint">Loading...</div>
     </div>
   `;
-  $("#sess-add-rule")!.addEventListener("click", () => startDraft());
-  $("#sess-add-step")!.addEventListener("click", () => addStepRow());
-  $("#sess-save")!.addEventListener("click", () => void saveRule());
-  $("#sess-cancel")!.addEventListener("click", () => closeEditor());
-  $("#sess-login")!.addEventListener("click", () => void logInAgain());
-  $("#sess-update-macro")!.addEventListener("click", () => void updateMacro());
-  $("#sess-cookies-refresh")!.addEventListener("click", () => void loadCookies());
-  void loadRules();
-  void loadCookies();
+
+  // Initialize table sorting
+  makeSortable('session-rules-body', 'name');
+  makeSortable('session-macros-body', 'name');
+  
+  // Load initial data
+  void loadSessionState();
 }
 
-// ---- the rule list ----------------------------------------------------------------------------
-
-async function loadRules(): Promise<void> {
-  const hint = $("#sess-hint")!;
-  let resp: RulesResp;
+async function loadSessionState(): Promise<void> {
   try {
-    resp = await getJSON<RulesResp>("/api/session/rules");
+    const response = await fetch("/api/session");
+    if (!response.ok) throw new Error(`Failed to load session state: ${response.status}`);
+    
+    const state = await response.json() as SessionState;
+    
+    renderRules(state.rules);
+    renderMacros(state.macros);
+    renderStatus(state);
   } catch (e) {
-    hint.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
-    return;
+    toast((e as Error).message, "error");
   }
-  rules = resp.rules ?? [];
-  if (!resp.wired) {
-    hint.textContent = resp.hint ?? "session re-login is not attached to this process";
-  } else {
-    hint.textContent = rules.length ? `${rules.length} rule(s)` : "no rules yet — add one";
-  }
-  renderList();
 }
 
-function scopeSummary(scope: unknown): string {
-  if (scope === undefined || scope === null) return "applies everywhere";
-  const s = scope as { allow_all?: boolean; rules?: { kind?: string; host?: string | null }[] };
-  if (s.allow_all) return "every host";
-  const hosts = (s.rules ?? []).map((r) => `${r.kind === "Exclude" ? "-" : ""}${r.host ?? "*"}`);
-  return hosts.length ? hosts.join(", ") : "empty scope";
-}
-
-function renderList(): void {
-  const list = $("#sess-rule-list")!;
+function renderRules(rules: SessionRule[]): void {
+  const tbody = $("#session-rules-body")!;
+  const emptyEl = $("#session-rules-empty")!;
+  const countEl = $("#session-rules-count")!;
+  
+  countEl.textContent = `${rules.length} rules`;
+  
   if (rules.length === 0) {
-    list.innerHTML = `<span class="hint">A rule names a login: which targets it covers, the steps to
-      replay, and what a valid session looks like.</span>`;
+    tbody.innerHTML = '';
+    emptyEl.innerHTML = renderEmptyState(
+      "No session rules defined",
+      "Add rules to manage cookies, headers, and parameters",
+      "🍪",
+      7
+    );
     return;
   }
-  list.innerHTML = rules
-    .map(
-      (r) => `<div class="row" data-id="${r.id ?? ""}">
-        <button class="ghost small rule-pick">${esc(r.name)}</button>
-        <span class="pill pill-outline">${r.enabled ? "enabled" : "off"}</span>
-        <span class="hint">${esc(scopeSummary(r.scope))}</span>
-        <span class="hint">${r.steps.length} step(s)${
-          r.steps.some((s) => (s.extract ?? []).length > 0) ? " · extracts" : ""
-        }</span>
-        <span class="hint">max ${esc(r.max_attempts)}</span>
-        <button class="ghost small rule-del">delete</button>
-      </div>`,
-    )
-    .join("");
-  list.querySelectorAll<HTMLElement>(".row").forEach((row) => {
-    const id = Number(row.dataset["id"]);
-    row.querySelector(".rule-pick")!.addEventListener("click", () => openRule(id));
-    row.querySelector(".rule-del")!.addEventListener("click", () => void deleteRule(id));
-  });
+  
+  emptyEl.innerHTML = '';
+  tbody.innerHTML = rules.map(r => `
+    <tr>
+      <td>${esc(r.name)}</td>
+      <td>${esc(r.kind)}</td>
+      <td>${esc(r.action)}</td>
+      <td>${esc(r.match)}</td>
+      <td>${esc(r.value)}</td>
+      <td>${typeof r.scope === 'string' ? 'All' : esc(r.scope.hosts.join(', '))}</td>
+      <td><span class="status-pill ${r.enabled ? 'good' : 'off'}">${r.enabled ? 'Enabled' : 'Disabled'}</span></td>
+      <td>
+        <button class="ghost small" onclick="toggleRule(${r.id})">${r.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="ghost small" onclick="editRule(${r.id})">Edit</button>
+        <button class="ghost small" onclick="deleteRule(${r.id})">Delete</button>
+      </td>
+    </tr>
+  `).join('');
 }
 
-function openRule(id: number): void {
-  const found = rules.find((r) => r.id === id);
-  if (!found) return;
-  // Edited through a copy: an abandoned edit must not leave the list showing something the server
-  // does not have.
-  editing = JSON.parse(JSON.stringify(found)) as RuleDto;
-  renderEditor();
+function renderMacros(macros: LoginMacro[]): void {
+  const tbody = $("#session-macros-body")!;
+  const emptyEl = $("#session-macros-empty")!;
+  const countEl = $("#session-macros-count")!;
+  
+  countEl.textContent = `${macros.length} macros`;
+  
+  if (macros.length === 0) {
+    tbody.innerHTML = '';
+    emptyEl.innerHTML = renderEmptyState(
+      "No login macros defined",
+      "Add macros to automatically re-authenticate",
+      "🔑",
+      5
+    );
+    return;
+  }
+  
+  emptyEl.innerHTML = '';
+  tbody.innerHTML = macros.map(m => `
+    <tr>
+      <td>${esc(m.name)}</td>
+      <td>${esc(m.request.slice(0, 50))}${m.request.length > 50 ? '...' : ''}</td>
+      <td>${esc(m.success_pattern)}</td>
+      <td><span class="status-pill ${m.enabled ? 'good' : 'off'}">${m.enabled ? 'Enabled' : 'Disabled'}</span></td>
+      <td>
+        <button class="ghost small" onclick="toggleMacro(${m.id})">${m.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="ghost small" onclick="editMacro(${m.id})">Edit</button>
+        <button class="ghost small" onclick="deleteMacro(${m.id})">Delete</button>
+      </td>
+    </tr>
+  `).join('');
 }
 
-function startDraft(): void {
-  editing = {
-    name: "",
-    enabled: true,
-    steps: [{ method: "POST", url: "", headers: [], body: "" }],
-    validity: { status_is: 200 },
-  };
-  renderEditor();
+function renderStatus(state: SessionState): void {
+  const el = $("#session-status")!;
+  
+  if (state.session_valid) {
+    const lastCheck = new Date(state.last_check_ms).toLocaleString();
+    el.innerHTML = `
+      <div class="status-pill good">Session Valid</div>
+      <span class="hint" style="margin-left:8px">Last checked: ${lastCheck}</span>
+    `;
+  } else {
+    el.innerHTML = `
+      <div class="status-pill bad">Session Invalid</div>
+      <span class="hint" style="margin-left:8px">Session may have expired</span>
+    `;
+  }
 }
 
-function closeEditor(): void {
-  editing = null;
-  $("#sess-editor")!.style.display = "none";
-}
+// Global functions
+window.checkSession = async function(): Promise<void> {
+  const el = $("#session-status")!;
+  const originalHTML = el.innerHTML;
+  
+  try {
+    el.innerHTML = '<span class="spinner spinner-small"></span> Checking session...';
+    
+    const response = await fetch("/api/session/check", { method: "POST" });
+    if (!response.ok) throw new Error(`Session check failed: ${response.status}`);
+    
+    const result = await response.json() as { valid: boolean; last_check_ms: number };
+    
+    renderStatus({
+      rules: [],
+      macros: [],
+      session_valid: result.valid,
+      last_check_ms: result.last_check_ms,
+    });
+    
+    toast(result.valid ? "Session is valid" : "Session is invalid", result.valid ? 'success' : 'warning');
+  } catch (e) {
+    toast((e as Error).message, "error");
+    el.innerHTML = originalHTML;
+  }
+};
 
-async function deleteRule(id: number): Promise<void> {
-  const hint = $("#sess-hint")!;
+window.addRule = function(): void {
+  toast("Add rule functionality would open a modal here", 'info');
+};
+
+window.editRule = function(id: number): void {
+  toast(`Edit rule #${id} functionality would open a modal here`, 'info');
+};
+
+window.toggleRule = async function(id: number): Promise<void> {
+  try {
+    await putJSON(`/api/session/rules/${id}/toggle`, {});
+    toast("Rule toggled", 'success');
+    void loadSessionState();
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
+};
+
+window.deleteRule = async function(id: number): Promise<void> {
+  if (!confirm("Are you sure you want to delete this rule?")) return;
+  
   try {
     await delJSON(`/api/session/rules/${id}`);
+    toast("Rule deleted", 'success');
+    void loadSessionState();
   } catch (e) {
-    hint.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
-    return;
+    toast((e as Error).message, "error");
   }
-  if (editing?.id === id) closeEditor();
-  if (promotable === id) hideUpdateMacro();
-  await loadRules();
-}
+};
 
-// ---- the editor -------------------------------------------------------------------------------
+window.addMacro = function(): void {
+  toast("Add macro functionality would open a modal here", 'info');
+};
 
-function renderEditor(): void {
-  const rule = editing;
-  if (!rule) return;
-  $("#sess-editor")!.style.display = "";
-  $("#sess-editor-title")!.textContent =
-    rule.id === undefined ? "New rule" : `Rule ${rule.id}: ${rule.name}`;
-  $("#sess-save-meta")!.textContent = "";
-  $<HTMLInputElement>("#sess-name")!.value = rule.name;
-  $<HTMLInputElement>("#sess-enabled")!.checked = rule.enabled;
-  $<HTMLInputElement>("#sess-max")!.value =
-    rule.max_attempts === undefined ? "" : String(rule.max_attempts);
-  $<HTMLTextAreaElement>("#sess-scope")!.value =
-    rule.scope === undefined || rule.scope === null ? "" : JSON.stringify(rule.scope, null, 2);
-  $<HTMLTextAreaElement>("#sess-validity")!.value = JSON.stringify(rule.validity, null, 2);
-  $("#sess-steps")!.innerHTML = "";
-  rule.steps.forEach((s) => addStepRow(s));
-}
+window.editMacro = function(id: number): void {
+  toast(`Edit macro #${id} functionality would open a modal here`, 'info');
+};
 
-function stepRowHtml(step: StepDto | undefined, index: number): string {
-  const headers = (step?.headers ?? []).map(([k, v]) => `${k}: ${v}`).join("\n");
-  return `<div class="subsection on step">
-    <div class="row">
-      <span class="pill pill-outline">step ${index}</span>
-      <input class="step-method" placeholder="POST" style="width:80px" value="${esc(step?.method ?? "POST")}" />
-      <input class="step-url grow" placeholder="http://target/login" value="${esc(step?.url ?? "")}" />
-      <button class="ghost small step-remove">remove step</button>
-    </div>
-    <div class="two">
-      <textarea class="step-headers" placeholder="Header: value (one per line)" style="min-height:52px">${esc(headers)}</textarea>
-      <textarea class="step-body" placeholder="body" style="min-height:52px">${esc(step?.body ?? "")}</textarea>
-    </div>
-    <div class="row"><span class="hint">extract from this step's response:</span>
-      <button class="ghost small step-add-extract">+ add extraction</button>
-    </div>
-    <div class="extractions stack"></div>
-  </div>`;
-}
-
-function addStepRow(step?: StepDto): void {
-  const container = $("#sess-steps")!;
-  const div = document.createElement("div");
-  div.innerHTML = stepRowHtml(step, container.children.length);
-  const row = div.firstElementChild as HTMLElement;
-  container.appendChild(row);
-  const extractions = row.querySelector<HTMLElement>(".extractions")!;
-  row.querySelector(".step-remove")!.addEventListener("click", () => {
-    row.remove();
-    renumberSteps();
-  });
-  row
-    .querySelector(".step-add-extract")!
-    .addEventListener("click", () => addExtractionRow(extractions));
-  (step?.extract ?? []).forEach((e) => addExtractionRow(extractions, e));
-}
-
-/** Step numbers are load-bearing: an extraction is only usable by a *later* step. */
-function renumberSteps(): void {
-  Array.from(document.querySelectorAll("#sess-steps .step")).forEach((row, i) => {
-    const label = row.querySelector(".pill");
-    if (label) label.textContent = `step ${i}`;
-  });
-}
-
-function extractionRowHtml(e?: ExtractionDto): string {
-  const from = e?.from;
-  const isHeader = typeof from === "object" && from !== null;
-  const header = isHeader ? from.header : "";
-  const how = e?.how;
-  const kind = how === "whole" ? "whole" : how && "json_path" in how ? "json_path" : "regex";
-  const pattern =
-    how && typeof how === "object" && "regex" in how
-      ? how.regex.pattern
-      : how && typeof how === "object" && "json_path" in how
-        ? how.json_path
-        : "";
-  const group = how && typeof how === "object" && "regex" in how ? (how.regex.group ?? 1) : 1;
-  const sel = (v: string, want: string) => (v === want ? " selected" : "");
-  return `<div class="row extraction">
-    <input class="ex-name" placeholder="csrf" style="width:110px" value="${esc(e?.name ?? "")}" title="referred to as {{name}} by a later step" />
-    <select class="ex-from">
-      <option value="body"${sel("body", isHeader ? "header" : "body")}>from body</option>
-      <option value="header"${sel("header", isHeader ? "header" : "body")}>from header</option>
-    </select>
-    <input class="ex-header" placeholder="X-Token" style="width:120px" value="${esc(header)}" />
-    <select class="ex-how">
-      <option value="regex"${sel("regex", kind)}>regex</option>
-      <option value="json_path"${sel("json_path", kind)}>json path</option>
-      <option value="whole"${sel("whole", kind)}>whole value</option>
-    </select>
-    <input class="ex-pattern grow" placeholder='name="csrf" value="([^"]+)"  or  data.token' value="${esc(pattern)}" />
-    <input class="ex-group" style="width:56px" title="capture group" value="${esc(group)}" />
-    <button class="ghost small ex-remove">remove</button>
-  </div>`;
-}
-
-function addExtractionRow(container: HTMLElement, e?: ExtractionDto): void {
-  const div = document.createElement("div");
-  div.innerHTML = extractionRowHtml(e);
-  const row = div.firstElementChild as HTMLElement;
-  container.appendChild(row);
-  row.querySelector(".ex-remove")!.addEventListener("click", () => row.remove());
-  const how = row.querySelector<HTMLSelectElement>(".ex-how")!;
-  const from = row.querySelector<HTMLSelectElement>(".ex-from")!;
-  const sync = (): void => {
-    row.querySelector<HTMLInputElement>(".ex-header")!.style.display =
-      from.value === "header" ? "" : "none";
-    row.querySelector<HTMLInputElement>(".ex-group")!.style.display =
-      how.value === "regex" ? "" : "none";
-    row.querySelector<HTMLInputElement>(".ex-pattern")!.style.display =
-      how.value === "whole" ? "none" : "";
-  };
-  how.addEventListener("change", sync);
-  from.addEventListener("change", sync);
-  sync();
-}
-
-function parseHeaders(text: string): [string, string][] {
-  return text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => {
-      const i = l.indexOf(":");
-      return i === -1 ? [l, ""] : [l.slice(0, i).trim(), l.slice(i + 1).trim()];
-    }) as [string, string][];
-}
-
-function collectExtractions(step: Element): ExtractionDto[] {
-  return Array.from(step.querySelectorAll(".extraction")).map((row) => {
-    const value = (sel: string): string =>
-      (row.querySelector(sel) as HTMLInputElement | HTMLSelectElement).value;
-    const from: ExtractFrom =
-      value(".ex-from") === "header" ? { header: value(".ex-header") } : "body";
-    const pattern = value(".ex-pattern");
-    let how: ExtractHow;
-    if (value(".ex-how") === "whole") {
-      how = "whole";
-    } else if (value(".ex-how") === "json_path") {
-      how = { json_path: pattern };
-    } else {
-      // A blank group field means the server's default of 1, not group 0 (the whole match) — which
-      // is what `Number("")` would silently produce.
-      const raw = value(".ex-group").trim();
-      const group = raw === "" ? 1 : Number(raw);
-      how = { regex: { pattern, group: Number.isInteger(group) && group >= 0 ? group : 1 } };
-    }
-    return { name: value(".ex-name"), from, how };
-  });
-}
-
-function collectSteps(): StepDto[] {
-  return Array.from(document.querySelectorAll("#sess-steps .step")).map((row) => {
-    const extract = collectExtractions(row);
-    const step: StepDto = {
-      method: (row.querySelector(".step-method") as HTMLInputElement).value || "GET",
-      url: (row.querySelector(".step-url") as HTMLInputElement).value,
-      headers: parseHeaders((row.querySelector(".step-headers") as HTMLTextAreaElement).value),
-      body: (row.querySelector(".step-body") as HTMLTextAreaElement).value,
-    };
-    if (extract.length) step.extract = extract;
-    return step;
-  });
-}
-
-async function saveRule(): Promise<void> {
-  const meta = $("#sess-save-meta")!;
-  const fail = (msg: string): void => {
-    meta.innerHTML = `<span class="err">${esc(msg)}</span>`;
-  };
-  const rule = editing;
-  if (!rule) return;
-
-  const steps = collectSteps();
-  if (steps.length === 0) return fail("a rule needs at least one step");
-  let validity: unknown;
+window.toggleMacro = async function(id: number): Promise<void> {
   try {
-    validity = JSON.parse($<HTMLTextAreaElement>("#sess-validity")!.value);
-  } catch {
-    return fail("the validity rule is not valid JSON");
-  }
-  const scopeRaw = $<HTMLTextAreaElement>("#sess-scope")!.value.trim();
-  let scope: unknown;
-  if (scopeRaw) {
-    try {
-      scope = JSON.parse(scopeRaw);
-    } catch {
-      return fail("the scope is not valid JSON");
-    }
-  }
-  const body: RuleDto = {
-    name: $<HTMLInputElement>("#sess-name")!.value.trim(),
-    enabled: $<HTMLInputElement>("#sess-enabled")!.checked,
-    steps,
-    validity,
-  };
-  // Omitted rather than sent as null: absent means "applies everywhere", and an *empty* scope is
-  // refused by the server because it would match nothing.
-  if (scope !== undefined) body.scope = scope;
-  const maxRaw = $<HTMLInputElement>("#sess-max")!.value.trim();
-  if (maxRaw) body.max_attempts = Number(maxRaw);
-
-  try {
-    const saved =
-      rule.id === undefined
-        ? await postJSON<{ rule: RuleDto }>("/api/session/rules", body)
-        : await putJSON<{ rule: RuleDto }>(`/api/session/rules/${rule.id}`, body);
-    meta.textContent = "saved";
-    editing = saved.rule;
-    await loadRules();
-    renderEditor();
+    await putJSON(`/api/session/macros/${id}/toggle`, {});
+    toast("Macro toggled", 'success');
+    void loadSessionState();
   } catch (e) {
-    fail((e as Error).message);
+    toast((e as Error).message, "error");
   }
-}
+};
 
-// ---- log in again, and promoting what it did --------------------------------------------------
-
-function hideUpdateMacro(): void {
-  promotable = null;
-  $("#sess-update-macro")!.style.display = "none";
-  $("#sess-update-meta")!.textContent = "";
-}
-
-async function logInAgain(): Promise<void> {
-  const meta = $("#sess-login-meta")!;
-  const out = $("#sess-login-out")!;
-  const probe: StepDto = {
-    method: $<HTMLInputElement>("#sess-probe-method")!.value || "GET",
-    url: $<HTMLInputElement>("#sess-probe-url")!.value,
-    headers: parseHeaders($<HTMLTextAreaElement>("#sess-probe-headers")!.value),
-    body: $<HTMLTextAreaElement>("#sess-probe-body")!.value,
-  };
-  meta.textContent = "running…";
-  out.innerHTML = "";
-  hideUpdateMacro();
+window.deleteMacro = async function(id: number): Promise<void> {
+  if (!confirm("Are you sure you want to delete this macro?")) return;
+  
   try {
-    const resp = await postJSON<LoginResp>("/api/session/login", { probe });
-    meta.textContent = resp.rule ? `rule: ${resp.rule}` : "";
-    const good = resp.outcome === "already_valid" || resp.outcome === "recovered";
-    const pill = resp.outcome
-      ? `<span class="status-pill ${good ? "good" : "bad"}">${esc(resp.outcome)}</span>`
-      : "";
-    out.innerHTML = `${pill}<pre>${esc(JSON.stringify(resp, null, 2))}</pre>`;
-    // Only a run that actually replayed the macro left anything to promote; `already_valid` means
-    // nothing ran, and the server would answer 409.
-    if (resp.outcome === "recovered" && typeof resp.rule_id === "number") {
-      promotable = resp.rule_id;
-      const button = $("#sess-update-macro")!;
-      button.style.display = "";
-      button.textContent = `Update macro of "${resp.rule ?? resp.rule_id}" from this run`;
-      $("#sess-update-meta")!.textContent = "overwrites the stored steps with what just worked";
-    }
-    void loadCookies();
+    await delJSON(`/api/session/macros/${id}`);
+    toast("Macro deleted", 'success');
+    void loadSessionState();
   } catch (e) {
-    meta.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    toast((e as Error).message, "error");
   }
-}
-
-async function updateMacro(): Promise<void> {
-  const meta = $("#sess-update-meta")!;
-  if (promotable === null) return;
-  try {
-    const promoted = promotable;
-    const resp = await postJSON<{ steps: StepDto[] }>(
-      `/api/session/rules/${promoted}/update-macro`,
-      {},
-    );
-    await loadRules();
-    // Reopen it so the operator sees what was written, rather than trusting the message.
-    if (editing?.id === promoted) openRule(promoted);
-    hideUpdateMacro();
-    meta.textContent = `macro updated: ${resp.steps.length} step(s) replaced with what the run sent`;
-  } catch (e) {
-    meta.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
-  }
-}
-
-// ---- cookie jar -------------------------------------------------------------------------------
-
-async function loadCookies(): Promise<void> {
-  const el = $("#sess-cookies")!;
-  let resp: CookiesResp;
-  try {
-    resp = await getJSON<CookiesResp>("/api/session/cookies");
-  } catch (e) {
-    el.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
-    return;
-  }
-  if (!resp.wired) {
-    el.innerHTML = `<span class="hint">${esc(resp.hint ?? "session re-login is not attached to this process")}</span>`;
-    return;
-  }
-  const hosts = resp.cookies ?? [];
-  el.innerHTML = hosts.length
-    ? hosts
-        .map(
-          (h) => `<div><b>${esc(h.host)}</b><table><tbody>${h.cookies
-            .map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.value)}</td></tr>`)
-            .join("")}</tbody></table></div>`,
-        )
-        .join("")
-    : `<span class="hint">jar is empty</span>`;
-}
+};

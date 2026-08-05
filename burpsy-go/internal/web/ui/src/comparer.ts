@@ -1,148 +1,246 @@
-// Comparer tab: byte/word diff between two messages or pasted texts. Listens for History's
-// "send to Comparer" hand-off so a request/response can be loaded by clicking, not by id.
+// Comparer tab: diff two requests or responses side by side. The two sides are independent:
+// each can be loaded from History, or pasted directly. The diff is computed on demand, not stored.
 
-import { $, $all, esc, getJSON, postJSON, on } from "./common";
+import { $, esc, toast, copyText, renderEmptyState } from "./common";
 import { EVT_SEND_TO_COMPARER } from "./types";
+import { on } from "./common";
 import type { SendToComparerDetail } from "./types";
 
-interface OpView {
-  kind: string;
-  a_offset: number;
-  a_len: number;
-  b_offset: number;
-  b_len: number;
-  text?: string;
-}
-interface CompareResp {
-  identical: boolean;
-  deleted_tokens: number;
-  inserted_tokens: number;
-  truncated: boolean;
-  ops_omitted: number;
-  ops: OpView[];
+interface DiffResult {
+  a: string;
+  b: string;
+  diff: { type: "equal" | "delete" | "insert"; text: string }[];
 }
 
-// Hunk navigation state for the currently rendered diff. Reset each time runCompare() re-renders
-// #cmp-output. currentHunk is -1 until the operator jumps to a hunk for the first time.
-let hunkCount = 0;
-let currentHunk = -1;
+// State for both sides
+let left: { msgId: number | null; text: string } = { msgId: null, text: "" };
+let right: { msgId: number | null; text: string } = { msgId: null, text: "" };
 
 export function initComparer(): void {
-  const el = $("#comparer");
-  if (!el) return;
-  el.innerHTML = `
+  const section = $("#comparer");
+  if (!section) return;
+  section.innerHTML = `
     <div class="two">
-      <div class="stack">
-        <div class="hint" id="cmp-a-label">Side A</div>
-        <input id="cmp-a-msg" placeholder="msg id (optional)" style="width:140px" />
-        <textarea id="cmp-a-text" placeholder="text for side A"></textarea>
+      <div>
+        <div class="viewer-header">
+          <b class="muted">Side A</b>
+          <button class="ghost small" onclick="copySide('a')">Copy</button>
+          <button class="ghost small" onclick="clearSide('a')">Clear</button>
+          <span id="comp-a-meta" class="viewer-meta"></span>
+        </div>
+        <div class="code-viewer" id="comp-a-container">
+          <div class="code-lines" id="comp-a-lines"></div>
+          <textarea id="comp-a" placeholder="Paste or send from History..." spellcheck="false"></textarea>
+        </div>
       </div>
-      <div class="stack">
-        <div class="hint" id="cmp-b-label">Side B</div>
-        <input id="cmp-b-msg" placeholder="msg id (optional)" style="width:140px" />
-        <textarea id="cmp-b-text" placeholder="text for side B"></textarea>
+      <div>
+        <div class="viewer-header">
+          <b class="muted">Side B</b>
+          <button class="ghost small" onclick="copySide('b')">Copy</button>
+          <button class="ghost small" onclick="clearSide('b')">Clear</button>
+          <span id="comp-b-meta" class="viewer-meta"></span>
+        </div>
+        <div class="code-viewer" id="comp-b-container">
+          <div class="code-lines" id="comp-b-lines"></div>
+          <textarea id="comp-b" placeholder="Paste or send from History..." spellcheck="false"></textarea>
+        </div>
       </div>
     </div>
-    <div class="row">
-      <select id="cmp-granularity"><option value="word">word</option><option value="byte">byte</option></select>
-      <button class="go" id="cmp-run">Compare</button>
-      <span id="cmp-meta" class="hint"></span>
+    <div class="row" style="margin-top:10px">
+      <button class="go" onclick="computeDiff()">Diff</button>
+      <button class="ghost" onclick="swapSides()">Swap Sides</button>
+      <button class="ghost" onclick="clearBoth()">Clear Both</button>
+      <span class="grow"></span>
+      <span class="hint" id="comp-status"></span>
     </div>
-    <div class="row">
-      <button class="ghost" id="cmp-hunk-prev">◀ Prev</button>
-      <span id="cmp-hunk-counter" class="hint">no hunks</span>
-      <button class="ghost" id="cmp-hunk-next">Next ▶</button>
-    </div>
-    <pre id="cmp-output"></pre>
+    <div id="comp-diff" style="margin-top:10px"></div>
   `;
-  $("#cmp-run")!.addEventListener("click", () => void runCompare());
-  $("#cmp-hunk-prev")!.addEventListener("click", () => jumpHunk(-1));
-  $("#cmp-hunk-next")!.addEventListener("click", () => jumpHunk(1));
-  updateHunkNav();
+
+  // Style textareas to match code viewer
+  [$("#comp-a"), $("#comp-b")].forEach((el) => {
+    if (el) {
+      (el as HTMLTextAreaElement).style.background = 'transparent';
+      (el as HTMLTextAreaElement).style.border = 'none';
+      (el as HTMLTextAreaElement).style.padding = '8px 8px 8px 40px';
+      (el as HTMLTextAreaElement).style.minHeight = '200px';
+      (el as HTMLTextAreaElement).style.resize = 'none';
+      (el as HTMLTextAreaElement).style.fontFamily = 'var(--font-mono)';
+      (el as HTMLTextAreaElement).style.fontSize = '13px';
+      (el as HTMLTextAreaElement).style.lineHeight = '1.5';
+      (el as HTMLTextAreaElement).style.width = '100%';
+    }
+  });
+
+  // Listen for send to comparer events
   on<SendToComparerDetail>(EVT_SEND_TO_COMPARER, (d) => {
-    $<HTMLInputElement>(`#cmp-${d.side}-msg`)!.value = String(d.msgId);
-    $(`#cmp-${d.side}-label`)!.textContent = `Side ${d.side.toUpperCase()}: ${d.label} (msg ${d.msgId})`;
+    if (d.side === "a") {
+      left.msgId = d.msgId;
+      left.text = ""; // Will be loaded
+      $("#comp-a-meta")!.textContent = d.label;
+      void loadMessage(d.msgId, "a");
+      toast(`Loaded ${d.label} into Comparer A`, 'success');
+    } else {
+      right.msgId = d.msgId;
+      right.text = ""; // Will be loaded
+      $("#comp-b-meta")!.textContent = d.label;
+      void loadMessage(d.msgId, "b");
+      toast(`Loaded ${d.label} into Comparer B`, 'success');
+    }
   });
 }
 
-/** Move to the next (delta=1) or previous (delta=-1) hunk, wrapping past either end. */
-function jumpHunk(delta: number): void {
-  if (hunkCount === 0) return;
-  currentHunk =
-    currentHunk === -1 ? (delta > 0 ? 0 : hunkCount - 1) : (currentHunk + delta + hunkCount) % hunkCount;
-  focusHunk(currentHunk);
-}
+// Global functions
+window.copySide = function(side: 'a' | 'b'): void {
+  const el = $(`#comp-${side}`) as HTMLTextAreaElement;
+  if (el) copyText(el.value, `side ${side.toUpperCase()}`);
+};
 
-function focusHunk(n: number): void {
-  const out = $("#cmp-output")!;
-  $all(".diff-hunk-current", out).forEach((e) => e.classList.remove("diff-hunk-current"));
-  const target = document.getElementById(`cmp-hunk-${n}`);
-  target?.classList.add("diff-hunk-current");
-  target?.scrollIntoView({ block: "center", behavior: "smooth" });
-  updateHunkNav();
-}
+window.clearSide = function(side: 'a' | 'b'): void {
+  const el = $(`#comp-${side}`) as HTMLTextAreaElement;
+  if (el) {
+    el.value = '';
+    if (side === 'a') {
+      left.text = '';
+      left.msgId = null;
+      $("#comp-a-meta")!.textContent = '';
+    } else {
+      right.text = '';
+      right.msgId = null;
+      $("#comp-b-meta")!.textContent = '';
+    }
+    updateLineNumbers(side);
+    toast(`Cleared side ${side.toUpperCase()}`, 'success');
+  }
+};
 
-function updateHunkNav(): void {
-  const counter = $("#cmp-hunk-counter")!;
-  const prevBtn = $<HTMLButtonElement>("#cmp-hunk-prev")!;
-  const nextBtn = $<HTMLButtonElement>("#cmp-hunk-next")!;
-  if (hunkCount === 0) {
-    counter.textContent = "no hunks";
-    prevBtn.disabled = true;
-    nextBtn.disabled = true;
+window.clearBoth = function(): void {
+  clearSide('a');
+  clearSide('b');
+  $("#comp-diff")!.innerHTML = '';
+  $("#comp-status")!.textContent = '';
+  toast("Cleared both sides", 'success');
+};
+
+window.swapSides = function(): void {
+  const aEl = $("#comp-a") as HTMLTextAreaElement;
+  const bEl = $("#comp-b") as HTMLTextAreaElement;
+  const aMeta = $("#comp-a-meta")!;
+  const bMeta = $("#comp-b-meta")!;
+
+  if (aEl && bEl) {
+    const tempText = aEl.value;
+    const tempMeta = aMeta.textContent;
+    const tempMsgId = left.msgId;
+
+    aEl.value = bEl.value;
+    left.text = bEl.value;
+    left.msgId = right.msgId;
+    aMeta.textContent = bMeta.textContent;
+
+    bEl.value = tempText;
+    right.text = tempText;
+    right.msgId = tempMsgId;
+    bMeta.textContent = tempMeta;
+
+    updateLineNumbers('a');
+    updateLineNumbers('b');
+    
+    // Recompute diff if both sides have content
+    if (left.text && right.text) {
+      void computeDiff();
+    }
+    
+    toast("Swapped sides", 'success');
+  }
+};
+
+window.computeDiff = async function(): Promise<void> {
+  const aEl = $("#comp-a") as HTMLTextAreaElement;
+  const bEl = $("#comp-b") as HTMLTextAreaElement;
+  const statusEl = $("#comp-status")!;
+  const diffEl = $("#comp-diff")!;
+
+  if (!aEl || !bEl) return;
+
+  if (!aEl.value || !bEl.value) {
+    toast("Please enter text in both sides", "warning");
     return;
   }
-  prevBtn.disabled = false;
-  nextBtn.disabled = false;
-  counter.textContent = currentHunk === -1 ? `${hunkCount} hunk${hunkCount === 1 ? "" : "s"}` : `hunk ${currentHunk + 1} / ${hunkCount}`;
-}
 
-async function resolveSideText(prefix: "a" | "b"): Promise<string> {
-  const msgRaw = $<HTMLInputElement>(`#cmp-${prefix}-msg`)!.value.trim();
-  if (msgRaw) {
-    const m = await getJSON<{ text: string }>(`/api/message/${msgRaw}`);
-    return m.text;
-  }
-  return $<HTMLTextAreaElement>(`#cmp-${prefix}-text`)!.value;
-}
-
-/** Slice by the same byte offsets the server computed, not JS string (UTF-16) offsets. */
-function byteSlice(s: string, offset: number, len: number): string {
-  const bytes = new TextEncoder().encode(s);
-  return new TextDecoder().decode(bytes.slice(offset, offset + len));
-}
-
-async function runCompare(): Promise<void> {
-  const meta = $("#cmp-meta")!;
-  const out = $("#cmp-output")!;
-  meta.textContent = "comparing…";
   try {
-    const [a, b] = await Promise.all([resolveSideText("a"), resolveSideText("b")]);
-    const resp = await postJSON<CompareResp>("/api/tools/compare", {
-      a: { text: a },
-      b: { text: b },
-      granularity: $<HTMLSelectElement>("#cmp-granularity")!.value,
+    statusEl.innerHTML = '<span class="spinner spinner-small"></span> Computing diff...';
+    diffEl.innerHTML = '';
+
+    const response = await fetch("/api/tools/diff", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ a: aEl.value, b: bEl.value }),
     });
-    meta.textContent =
-      (resp.identical ? "identical" : `${resp.deleted_tokens} deleted, ${resp.inserted_tokens} inserted`) +
-      (resp.truncated ? " (truncated)" : "") +
-      (resp.ops_omitted ? ` · ${resp.ops_omitted} ops omitted` : "");
-    let nextHunk = 0;
-    out.innerHTML = resp.ops
-      .map((op) => {
-        if (op.kind === "equal") return esc(byteSlice(a, op.a_offset, op.a_len));
-        const cls = op.kind === "delete" ? "diff-delete" : "diff-insert";
-        const n = nextHunk++;
-        return `<span class="${cls}" data-hunk="${n}" id="cmp-hunk-${n}">${esc(op.text ?? "")}</span>`;
-      })
-      .join("");
-    hunkCount = nextHunk;
-    currentHunk = -1;
-    updateHunkNav();
+
+    if (!response.ok) throw new Error(`Diff failed: ${response.status}`);
+
+    const result = await response.json() as DiffResult;
+
+    statusEl.textContent = `${result.diff.filter(d => d.type === 'delete').length} deletions, ${result.diff.filter(d => d.type === 'insert').length} insertions`;
+    
+    // Render diff
+    diffEl.innerHTML = `
+      <div class="card">
+        <div class="card-title">Diff Result</div>
+        <pre class="diff-viewer">${renderDiff(result.diff)}</pre>
+      </div>
+    `;
+    
+    toast("Diff computed", 'success');
   } catch (e) {
-    meta.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
-    hunkCount = 0;
-    currentHunk = -1;
-    updateHunkNav();
+    toast((e as Error).message, "error");
+    statusEl.textContent = '';
+  }
+};
+
+function renderDiff(diff: { type: string; text: string }[]): string {
+  return diff.map((d) => {
+    switch (d.type) {
+      case 'delete':
+        return `<span class="diff-delete">${esc(d.text)}</span>`;
+      case 'insert':
+        return `<span class="diff-insert">${esc(d.text)}</span>`;
+      default:
+        return esc(d.text);
+    }
+  }).join('');
+}
+
+async function loadMessage(msgId: number, side: 'a' | 'b'): Promise<void> {
+  try {
+    const response = await fetch(`/api/message/${msgId}`);
+    if (!response.ok) throw new Error(`Failed to load message: ${response.status}`);
+    
+    const msg = await response.json() as { id: number; len: number; text: string };
+    
+    const el = $(`#comp-${side}`) as HTMLTextAreaElement;
+    if (el) {
+      el.value = msg.text;
+      if (side === 'a') {
+        left.text = msg.text;
+      } else {
+        right.text = msg.text;
+      }
+      updateLineNumbers(side);
+      $("#comp-status")!.textContent = '';
+      $("#comp-diff")!.innerHTML = '';
+    }
+  } catch (e) {
+    toast((e as Error).message, "error");
+  }
+}
+
+function updateLineNumbers(side: 'a' | 'b'): void {
+  const el = $(`#comp-${side}`) as HTMLTextAreaElement;
+  const linesEl = $(`#comp-${side}-lines`) as HTMLElement;
+  
+  if (el && linesEl) {
+    const lines = el.value.split('\n').length;
+    linesEl.innerHTML = Array.from({length: lines}, (_, i) => i + 1).join('\n');
   }
 }

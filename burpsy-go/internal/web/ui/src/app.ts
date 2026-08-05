@@ -1,7 +1,7 @@
 // Entry point: wires up tab switching and every tab's init(), then keeps the header (stats, scope,
 // CA cert link) refreshed. Bundled by Bun into one app.js — see crates/web/build.rs.
 
-import { initTabs, getJSON, $ } from "./common";
+import { initTabs, getJSON, $, initTheme, toast } from "./common";
 import type { Stats, ScopeInfo } from "./types";
 import { initDashboard } from "./dashboard";
 import { initHistory } from "./history";
@@ -18,11 +18,17 @@ import { initOrganizer } from "./organizer";
 import { initMatchReplace } from "./matchreplace";
 import { initSession } from "./session";
 import { initSequencer } from "./sequencer";
-import { initShortcuts } from "./shortcuts";
-import { initLive, live } from "./live";
+import { initShortcuts, showShortcutSheet } from "./shortcuts";
 import { refreshLiveAudit } from "./liveaudit";
+import { live } from "./live";
 
+// Initialize theme first
+initTheme();
+
+// Initialize tabs
 initTabs();
+
+// Initialize all tab modules
 initDashboard();
 initHistory();
 initWshistory();
@@ -38,6 +44,19 @@ initOrganizer();
 initMatchReplace();
 initSession();
 initSequencer();
+
+// Add shortcut help button to header
+const header = $("header");
+if (header) {
+  const shortcutHelp = document.createElement("button");
+  shortcutHelp.id = "shortcut-help";
+  shortcutHelp.className = "ghost";
+  shortcutHelp.innerHTML = "<kbd>?</kbd>";
+  shortcutHelp.title = "Keyboard Shortcuts";
+  shortcutHelp.onclick = () => showShortcutSheet();
+  header.appendChild(shortcutHelp);
+}
+
 // Last: the bindings act on the selection each pane registered above, so every pane must have had its
 // chance to register before a key can be pressed.
 initShortcuts();
@@ -47,7 +66,7 @@ async function refreshStats(): Promise<void> {
     const s = await getJSON<Stats>("/api/stats");
     const el = $("#stats");
     if (el) {
-      el.textContent = `${s.exchanges} exchanges · ${s.messages} msgs · ${(s.stored_bytes / 1048576).toFixed(2)} MB stored`;
+      el.textContent = `${s.exchanges} exchanges  ${s.messages} msgs  ${(s.stored_bytes / 1048576).toFixed(2)} MB stored`;
     }
   } catch {
     // best-effort; a transient failure here should not spam the console every 4s
@@ -104,4 +123,5 @@ for (const section of ["dashboard", "scanner"]) {
 
 // Last of all: every pane has registered by now, and initLive must not open the stream before the panes
 // that would answer its frames exist.
+import { initLive } from "./live";
 initLive();

@@ -2,6 +2,8 @@
 // Feature-specific shapes (sitemap nodes, findings, tool-log entries, ...) live in their own
 // module rather than here, so no two feature files ever need to touch this one.
 
+export type Protocol = "Http1" | "Http2";
+
 export interface Exchange {
   id: number;
   request: number;
@@ -16,8 +18,13 @@ export interface Exchange {
   started_ms: number;
   duration_ms: number;
   notes: string | null;
-  related: unknown[];
-  protocol: "Http1" | "Http2";
+  related: RelatedItem[];
+  protocol: Protocol;
+}
+
+export interface RelatedItem {
+  kind: string;
+  id: number;
 }
 
 export interface MessageView {
@@ -34,8 +41,15 @@ export interface Stats {
 
 export interface ScopeInfo {
   allow_all: boolean;
-  rules: unknown[];
+  rules: ScopeRule[];
   empty: boolean;
+}
+
+export interface ScopeRule {
+  kind: "include" | "exclude";
+  field: "host" | "path" | "method" | "status" | "mime";
+  pattern: string;
+  enabled: boolean;
 }
 
 /** Cross-tab handoff events, emitted via `emit()` in common.ts and consumed by the target tab. */
@@ -48,7 +62,7 @@ export const EVT_FILTER_HISTORY = "filter-history";
 export interface SendToRepeaterDetail {
   target: string;
   raw: string;
-  protocol: "Http1" | "Http2";
+  protocol: Protocol;
 }
 
 export interface SendToIntruderDetail {
@@ -73,3 +87,12 @@ export interface ShowExchangeDetail {
 export interface FilterHistoryDetail {
   search: string;
 }
+
+// Severity types
+export type Severity = "High" | "Medium" | "Low" | "Information";
+
+// Confidence types
+export type Confidence = "Certain" | "Firm" | "Tentative";
+
+// HTTP method types
+export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" | "CONNECT" | string;

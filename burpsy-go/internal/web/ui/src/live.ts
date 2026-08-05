@@ -99,174 +99,161 @@ export function live(spec: LivePane): void {
   });
 }
 
-/** Opens the stream and starts the fallback that covers the time before the first frame. */
+/** Opens the EventSource and starts the fallback watchdog. Call once, after every pane has
+ * registered. */
 export function initLive(): void {
-  ensureIndicator();
-  watchTabSwitches();
-  connect();
-  // Down until proven otherwise: if /api/events never delivers, the panes must still update.
+  if (stream) return; // already open
+
+  // One indicator for the whole page: a pill in the header that says "live" or "polling".
+  indicator = document.createElement("span");
+  indicator.id = "live-indicator";
+  indicator.className = "status-pill off";
+  indicator.textContent = "polling";
+  indicator.title = "Event stream not connected — falling back to polling";
+
+  const statsEl = $("#stats");
+  if (statsEl) {
+    statsEl.before(indicator);
+  } else {
+    // Fallback if stats element doesn't exist
+    const header = $("header");
+    if (header) {
+      header.appendChild(indicator);
+    }
+  }
+
+  openStream();
+  startWatchdog();
   startFallback();
+}
+
+function openStream(): void {
+  connects++;
+  const url = new URL("/api/events", window.location.href);
+  url.searchParams.set("v", String(connects));
+
+  stream = new EventSource(url);
+
+  stream.onopen = () => {
+    delivering = false; // will be set to true by the first frame
+    if (indicator) {
+      indicator.className = "status-pill off";
+      indicator.textContent = "connecting...";
+      indicator.title = "Event stream connecting...";
+    }
+  };
+
+  stream.onmessage = (e) => {
+    delivering = true;
+    lastFrameAt = Date.now();
+    if (indicator) {
+      indicator.className = "status-pill good";
+      indicator.textContent = "live";
+      indicator.title = "Event stream connected — updates are pushed in real-time";
+    }
+
+    let frame: { kind: string; changes: number };
+    try {
+      frame = JSON.parse(e.data);
+    } catch {
+      return; // ignore malformed frames
+    }
+
+    const kind = frame.kind as LiveKind;
+    const changes = frame.changes;
+
+    // Deliver to every pane that cares about this kind
+    for (const p of panes) {
+      if (p.kinds.includes(kind)) {
+        // If the pane is hidden, mark it stale and accumulate the count
+        const section = $(`#${p.section}`);
+        if (!section || !section.classList.contains("on")) {
+          p.stale = true;
+          p.owed += changes;
+          continue;
+        }
+
+        // If the pane is visible, refresh it if enough time has passed
+        const now = Date.now();
+        if (now - p.lastRun >= p.minGapMs) {
+          p.refresh(p.owed + changes);
+          p.owed = 0;
+          p.lastRun = now;
+          p.stale = false;
+        } else {
+          // Not enough time has passed, accumulate the count
+          p.owed += changes;
+        }
+      }
+    }
+  };
+
+  stream.onerror = () => {
+    if (indicator) {
+      indicator.className = "status-pill bad";
+      indicator.textContent = "reconnecting...";
+      indicator.title = "Event stream disconnected — will retry automatically";
+    }
+    // Let the watchdog reopen
+  };
+}
+
+function startWatchdog(): void {
   setInterval(() => {
-    if (delivering && Date.now() - lastFrameAt > SILENCE_LIMIT_MS) {
-      // Headers came through, frames stopped. Something between here and the server is holding the
-      // response open without passing anything along, and EventSource will not notice on its own.
-      reconnect();
+    // Three missed pings means the stream died without saying so
+    if (Date.now() - lastFrameAt > SILENCE_LIMIT_MS) {
+      if (stream) {
+        stream.close();
+        stream = null;
+      }
+      openStream();
     }
   }, WATCHDOG_TICK_MS);
 }
 
-function connect(): void {
-  if (typeof EventSource === "undefined") {
-    markDown();
-    return;
-  }
-  try {
-    stream = new EventSource("/api/events");
-  } catch {
-    markDown();
-    return;
-  }
-  stream.onmessage = (e: MessageEvent<string>) => onFrame(e.data);
-  stream.onerror = () => {
-    // EventSource reconnects by itself, on the server's `retry:` hint. All that is needed here is to
-    // start polling in the meantime and say so on screen.
-    markDown();
-  };
-}
-
-function reconnect(): void {
-  stream?.close();
-  stream = null;
-  markDown();
-  connect();
-}
-
-function onFrame(data: string): void {
-  lastFrameAt = Date.now();
-  let frame: { kind?: string; changes?: number };
-  try {
-    frame = JSON.parse(data) as { kind?: string; changes?: number };
-  } catch {
-    return;
-  }
-  if (!frame.kind) return;
-  if (frame.kind === "hello") {
-    markUp();
-    // A stream that has just (re)connected may have missed changes while it was down — a server that
-    // restarted has no memory of what this client was told. The first connection is the exception: the
-    // panes have just loaded themselves, so re-reading everything would be a duplicate fetch.
-    if (connects++ > 0) panes.forEach((pane) => markStale(pane, 0));
-    return;
-  }
-  if (frame.kind === "ping") {
-    // Keepalive. Its only job is the timestamp taken above.
-    markUp();
-    return;
-  }
-  markUp();
-  for (const pane of panes) {
-    if (pane.kinds.includes(frame.kind as LiveKind)) markStale(pane, frame.changes ?? 0);
-  }
-}
-
-function markStale(pane: Pane, changes: number): void {
-  pane.stale = true;
-  pane.owed += changes;
-  schedule(pane);
-}
-
-/** Runs a stale pane, respecting its minimum gap. A hidden pane is left stale until its tab is shown. */
-function schedule(pane: Pane): void {
-  if (!pane.stale || pane.timer !== undefined || !visible(pane)) return;
-  const wait = Math.max(0, pane.minGapMs - (Date.now() - pane.lastRun));
-  pane.timer = setTimeout(() => {
-    pane.timer = undefined;
-    if (!pane.stale || !visible(pane)) return;
-    pane.stale = false;
-    pane.lastRun = Date.now();
-    const owed = pane.owed;
-    pane.owed = 0;
-    pane.refresh(owed);
-  }, wait);
-}
-
-function visible(pane: Pane): boolean {
-  if (pane.section === "") return true;
-  return document.getElementById(pane.section)?.classList.contains("on") === true;
-}
-
-/** Re-renders a pane that went stale while its tab was in the background, as the tab comes forward. */
-function watchTabSwitches(): void {
-  const sections = Array.from(document.querySelectorAll("main > section"));
-  if (sections.length === 0) return;
-  // A class observer rather than a click handler on the tab bar: it holds however the class got
-  // toggled, including switchTab() called from a cross-tab hand-off.
-  const observer = new MutationObserver(() => {
-    for (const pane of panes) {
-      if (pane.stale) schedule(pane);
-    }
-  });
-  sections.forEach((s) => observer.observe(s, { attributes: true, attributeFilter: ["class"] }));
-}
-
-// ---- fallback ---------------------------------------------------------------------------------
-
 function startFallback(): void {
-  if (fallbackTimer !== undefined) return;
   fallbackTimer = setInterval(() => {
-    if (delivering) return;
-    const now = Date.now();
-    for (const pane of panes) {
-      if (!visible(pane) || now - pane.lastRun < pane.fallbackMs) continue;
-      pane.stale = false;
-      pane.owed = 0;
-      pane.lastRun = now;
-      // 0 changes: a poll cannot know what changed, only that it is time to look again.
-      pane.refresh(0);
+    if (delivering) return; // stream is working, no fallback needed
+
+    if (indicator) {
+      indicator.className = "status-pill bad";
+      indicator.textContent = "polling";
+      indicator.title = "Event stream not connected — using fallback polling";
+    }
+
+    for (const p of panes) {
+      // Only poll panes that are visible and due
+      const section = $(`#${p.section}`);
+      if (!section || !section.classList.contains("on")) continue;
+
+      const now = Date.now();
+      if (now - p.lastRun >= p.fallbackMs) {
+        p.refresh(0); // 0 because this is a poll, not a frame
+        p.lastRun = now;
+      }
     }
   }, FALLBACK_TICK_MS);
 }
 
-function stopFallback(): void {
-  if (fallbackTimer === undefined) return;
-  clearInterval(fallbackTimer);
-  fallbackTimer = undefined;
-}
+// Tab switch observer: when a tab becomes visible, refresh it if it's stale
+export function observeTabSwitches(): void {
+  const main = $("main");
+  if (!main) return;
 
-function markUp(): void {
-  lastFrameAt = Date.now();
-  if (delivering) return;
-  delivering = true;
-  stopFallback();
-  renderIndicator();
-}
+  const observer = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      if (m.attributeName !== "class") continue;
+      for (const p of panes) {
+        const section = $(`#${p.section}`);
+        if (section && section.classList.contains("on") && p.stale) {
+          p.refresh(p.owed);
+          p.owed = 0;
+          p.lastRun = Date.now();
+          p.stale = false;
+        }
+      }
+    }
+  });
 
-function markDown(): void {
-  if (!delivering && fallbackTimer !== undefined) return;
-  delivering = false;
-  startFallback();
-  renderIndicator();
-}
-
-// ---- the honest indicator ---------------------------------------------------------------------
-
-function ensureIndicator(): void {
-  const stats = $("#stats");
-  if (!stats || indicator) return;
-  // A sibling of #stats rather than part of it: refreshStats() assigns textContent, which would
-  // otherwise wipe this out four times a minute. Built here rather than in index.html so the mode is
-  // reported by the code that knows it.
-  indicator = document.createElement("span");
-  indicator.id = "live-state";
-  indicator.className = "hint";
-  stats.insertAdjacentElement("afterend", indicator);
-  renderIndicator();
-}
-
-function renderIndicator(): void {
-  if (!indicator) return;
-  indicator.textContent = delivering ? "live" : "polling";
-  indicator.title = delivering
-    ? "changes are pushed from the server as they happen (/api/events)"
-    : "the event stream is not delivering, so panes are polled on an interval instead — this is the fallback, not a live view";
+  observer.observe(main, { subtree: true, attributes: true, attributeFilter: ["class"] });
 }
