@@ -55,6 +55,12 @@ export function initRepeater(): void {
     </div>
   `;
   $("#rep-send")!.addEventListener("click", () => void send());
+  $("#rep-raw")!.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      void send();
+    }
+  });
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {

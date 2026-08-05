@@ -94,6 +94,12 @@ export function initDecoder(): void {
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());
+  $("#dec-input")!.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      void runDecode();
+    }
+  });
   $("#enc-run")!.addEventListener("click", () => void runEncode());
   $("#hash-run")!.addEventListener("click", () => void runHash());
   $all<HTMLInputElement>('input[name="dec-view"]').forEach((r) => {
