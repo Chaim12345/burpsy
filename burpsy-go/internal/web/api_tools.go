@@ -65,29 +65,25 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Empty request", http.StatusBadRequest)
 		return
 	}
-	// The repeater sends to whatever target the operator types, so it is gated
-	// by scope for the same reason the intruder is: a scope the operator set to
-	// constrain outbound traffic must not be bypassable by sending raw bytes
-	// here. The request line is not parsed (the operator owns it), so this is a
-	// host-level check, the same first layer the intruder applies.
+	// Two layers, the same as the intruder handler: MayContainHost is a pre-filter over the typed
+	// target only, never an authorisation decision (core/scope.go), so it cannot see a path-scoped
+	// exclude like "/admin" — a rule that leaves the host itself possible. The real decision runs
+	// below, on the exact bytes about to go on the wire, via AuthoriseRaw.
 	if !s.scope.MayContainHost(host, port, tls) {
 		http.Error(w, "refused: "+s.scope.Explain(host, port, "/", tls), http.StatusForbidden)
 		return
 	}
 
-	// SendRaw handles a raw HTTP request (possibly HTTP/1.0-style with Host line) over the wire.
-	// Timed here because SendRaw does not report a duration and the exchange row used to be written with a
-	// hardcoded zero — which, before core.ExchangeDuration existed, was indistinguishable from a
-	// sub-millisecond send, so the repeater's own "duration_ms: 0" reply looked like a measurement.
-	//
-	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
-	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
-	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
-	// replayed captured h2 bytes, and would now be wrong far more often.
+	// AuthorisedSender.Send, not the raw *sender.Sender: Repeater lets the operator retype the
+	// request line freely, so the authority a scope rule must judge is the one in the bytes about
+	// to be sent, not the target string that opened the tab. This is also where the duration and
+	// protocol outcome come from — SendRawOutcome's caller-facing half.
 	ctx := r.Context()
+	auth := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
 	sendStarted := time.Now()
-	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, host, port, tls, []byte(req.Request),
-		sender.ProtocolPreferenceAuto)
+	result, err := auth.Send(ctx, []byte(req.Request))
+	rawResp := result.Raw
+	outcome := result.Outcome
 	elapsed := time.Since(sendStarted)
 	if err != nil {
 		// Surface the dial/parse error to the UI so Repeater is not silently empty.

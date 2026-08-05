@@ -30,7 +30,7 @@ func main() {
 	dbFile := flag.String("db", "", "SQLite database for persistent state (history, findings, scope, rules)")
 	scopeInclude := flag.String("scope-include", "", "include host pattern in scope")
 	scopeExclude := flag.String("scope-exclude", "", "exclude host pattern from scope")
-	interceptTLS := flag.Bool("intercept-tls", false, "enable TLS interception")
+	interceptTLS := flag.Bool("intercept-tls", true, "enable TLS interception (disable with -intercept-tls=false)")
 	caDir := flag.String("ca-dir", proxy.DefaultCADir(), "CA certificate directory")
 	segmentBytes := flag.Uint64("segment-bytes", core.DefaultSegmentTargetBytes, "target bytes per segment file")
 	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files and passively scan responses")

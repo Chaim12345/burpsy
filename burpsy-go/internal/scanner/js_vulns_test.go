@@ -255,6 +255,41 @@ func TestAKnownVulnerableVersionInTheFilenameIsFlaggedAtTheCorpusSeverity(t *tes
 	}
 }
 
+// The false positive HARD-01 finding #5 reproduced: every filename extractor in the corpus is
+// shaped `name-(§§version§§)(\.min)?\.js`, and a greedy version pattern swallowed ".min" into the
+// capture, so jQuery 3.5.0 minified — the release that *fixes* CVE-2020-11022/11023 — parsed as
+// "3.5.0-min", a prerelease of 3.5.0 that both "below 3.5.0" ranges then matched.
+func TestARetireJSMinifiedFilenameAtAFixedVersionIsNotFalselyFlagged(t *testing.T) {
+	c := VendoredJsLibraryCheck()
+	f := c.Scan("/static/js/jquery-3.5.0.min.js", "", nil)
+	if vulns := findingsNamed(f, jsIssue); len(vulns) != 0 {
+		t.Fatalf("jquery 3.5.0.min must not be flagged (it fixes CVE-2020-11022/11023), got: %s", renderFindings(vulns))
+	}
+	cov := c.Coverage()
+	if cov.DetectionsCleared != 1 || cov.DetectionsVulnerable != 0 {
+		t.Errorf("coverage cleared=%d vulnerable=%d, want 1/0 (a false positive means vulnerable=1)",
+			cov.DetectionsCleared, cov.DetectionsVulnerable)
+	}
+}
+
+// The mirror-image false negative from the same finding: the corrupted version's tail sorts
+// *before* the clean release, so a minified asset sitting exactly on an inclusive lower bound
+// (ember 4.0.0, vulnerable to the corpus's prototype-pollution range [4.0.0, 4.4.4)) failed the
+// atOrAbove check and was reported cleared — the house-rule violation, since DetectionsCleared is
+// documented as "the only evidence-backed 'not vulnerable' this check can produce".
+func TestARetireJSMinifiedFilenameOnAnInclusiveLowerBoundIsStillFlagged(t *testing.T) {
+	c := VendoredJsLibraryCheck()
+	f := c.Scan("/js/ember-4.0.0.min.js", "", nil)
+	vulns := findingsNamed(f, jsIssue)
+	if len(vulns) != 1 {
+		t.Fatalf("ember 4.0.0.min sits on an inclusive lower bound and must be flagged, got %d: %s",
+			len(vulns), renderFindings(f))
+	}
+	if !strings.Contains(vulns[0].Description, "ember 4.0.0") {
+		t.Errorf("detail must name the uncorrupted version: %s", vulns[0].Description)
+	}
+}
+
 func TestAPatchedVersionOfTheSameLibraryProducesNoFindingButIsCountedAsCleared(t *testing.T) {
 	c := VendoredJsLibraryCheck()
 	if f := c.Scan("/static/jquery-3.7.1.min.js", "", nil); len(f) != 0 {
