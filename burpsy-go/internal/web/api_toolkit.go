@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -18,19 +20,50 @@ import (
 
 // sitemapNodeView mirrors sitemap.ts's NodeView.
 type sitemapNodeView struct {
-	ID           int               `json:"id"`
-	Segment      string            `json:"segment"`
-	Path         string            `json:"path"`
-	Depth        int               `json:"depth"`
-	Exchanges    int               `json:"exchanges"`
-	Requested    bool              `json:"requested"`
-	SubtreeCount int               `json:"subtree_exchanges"`
-	ChildCount   int               `json:"child_count"`
-	Methods      []string          `json:"methods"`
-	Statuses     []int             `json:"statuses"`
-	Params       []string          `json:"params"`
+	// Key is the node's identity: the host for a host node, host + path for a path node, joined by a
+	// NUL so no host/path split is ambiguous. It replaced an `id` that was a 31-based string hash
+	// folded into an int — a value that could collide, could not be looked up, and meant nothing to
+	// the server that emitted it. The UI had already stopped trusting it and re-derived host+path
+	// itself, with a comment saying so; this makes the identity the UI actually uses the one the
+	// server states.
+	Key          string   `json:"key"`
+	Segment      string   `json:"segment"`
+	Path         string   `json:"path"`
+	Depth        int      `json:"depth"`
+	Exchanges    int      `json:"exchanges"`
+	Requested    bool     `json:"requested"`
+	SubtreeCount int      `json:"subtree_exchanges"`
+	ChildCount   int      `json:"child_count"`
+	Methods      []string `json:"methods"`
+	Statuses     []int    `json:"statuses"`
+	Params       []string `json:"params"`
+	// Issues is the findings recorded at this exact path; SubtreeIssues includes everything beneath
+	// it, and WorstSeverity is the worst of those. Burp marks a collapsed branch with what is inside
+	// it, which is the whole point of a tree over a flat list: it says where to look before it is
+	// expanded. Empty WorstSeverity means the subtree is clean.
+	Issues        int    `json:"issues"`
+	SubtreeIssues int    `json:"subtree_issues"`
+	WorstSeverity string `json:"worst_severity,omitempty"`
+	// InScope is whether the tools are allowed to touch this node. Burp dims out-of-scope branches
+	// because the site map records everything the proxy saw, including third-party hosts the operator
+	// has no authorisation for — and a map that shows an unauthorised host identically to an
+	// authorised one invites someone to right-click it and attack it.
+	//
+	// A path node asks Scope.Contains, the same question the per-request gate asks. A host node is in
+	// scope when its own root is, *or* when anything beneath it is — the truthful question for a
+	// branch is "does this contain something you may touch", and answering it any other way misreads
+	// two real rule shapes in opposite directions. An `include(h)` plus a path-scoped
+	// `exclude(h, "/admin")` must leave the host lit, and an `include(h).with_path_prefix("/v1/")`
+	// must also leave it lit even though `h`'s root is not itself in scope.
+	//
+	// Deliberately not MayContainHost: that is a pre-filter for attacks and is documented as
+	// permissive — only a whole-host exclude flips it, so with include rules present it calls every
+	// unlisted host in scope. Correct there, because the real gate is per-request; wrong here, where
+	// it would light up every third party the proxy ever saw. This value only decides what is greyed;
+	// authorisation stays on the bytes going out.
+	InScope      bool              `json:"in_scope"`
 	LastExchange *int64            `json:"last_exchange"`
-	Recent       []uint64          `json:"recent_exchanges"`
+	Recent       []core.ExchangeID `json:"recent_exchanges"`
 	Children     []sitemapNodeView `json:"children,omitempty"`
 }
 
@@ -60,6 +93,10 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	// already current; rebuilding it on every read would also make a broken subscription invisible,
 	// because the read path would quietly do the subscription's job.
 	exchanges := s.store.Exchanges()
+	// Built once for the whole tree rather than per node: findings are indexed by node key, and
+	// re-walking every finding at every node would be quadratic in a map that only needs building
+	// once.
+	issues := s.issuesByNode()
 	var tree []sitemapNodeView
 	var nodeCount int
 
@@ -67,22 +104,32 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 		if hostFilter != "" && host.Host != hostFilter {
 			continue
 		}
-		children := s.foldPaths(host, pathFilter, &nodeCount)
+		children := s.foldPaths(host, pathFilter, &nodeCount, issues)
 		lastEx := lastExchangeID(exchanges, host.Host)
+		hostIssues, hostWorst := 0, -1
+		for _, c := range children {
+			hostIssues += c.SubtreeIssues
+			if r := severityRankOf(c.WorstSeverity); r > hostWorst {
+				hostWorst = r
+			}
+		}
 		tree = append(tree, sitemapNodeView{
-			ID:           nodeID(host.Host),
-			Segment:      host.Host,
-			Path:         host.Host,
-			Depth:        0,
-			Exchanges:    len(host.Paths),
-			Requested:    true,
-			SubtreeCount: len(host.Paths),
-			ChildCount:   len(children),
-			Methods:      []string{},
-			Statuses:     []int{},
-			LastExchange: lastEx,
-			Recent:       []uint64{},
-			Children:     children,
+			Key:           nodeKey(host.Host, ""),
+			Segment:       host.Host,
+			Path:          host.Host,
+			Depth:         0,
+			Exchanges:     len(host.Paths),
+			Requested:     true,
+			SubtreeCount:  len(host.Paths),
+			ChildCount:    len(children),
+			Methods:       []string{},
+			Statuses:      []int{},
+			LastExchange:  lastEx,
+			Recent:        []core.ExchangeID{},
+			SubtreeIssues: hostIssues,
+			WorstSeverity: severityName(hostWorst),
+			InScope:       s.scope.Contains(host.Host, host.Port, "/", host.TLS) || anyInScope(children),
+			Children:      children,
 		})
 	}
 
@@ -96,82 +143,260 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// sitemapNode is a folded tree node with its parent pointer for prefix nesting.
-type sitemapNode struct {
-	view   sitemapNodeView
-	parent int
+// anyInScope reports whether any node in these subtrees is in scope, so a host stays lit when only
+// some prefix beneath it is authorised. Recursive rather than a scan of the top level: an
+// `include(h).with_path_prefix("/v1/deep/")` puts the only in-scope node several levels down.
+func anyInScope(nodes []sitemapNodeView) bool {
+	for _, n := range nodes {
+		if n.InScope || anyInScope(n.Children) {
+			return true
+		}
+	}
+	return false
 }
 
-// foldPaths turns a host's path map into the depth-limited node tree the UI expects. Each path
-// becomes one node at its segment depth; children nest under the first shared prefix.
-func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount *int) []sitemapNodeView {
-	var roots []sitemapNodeView
-	nodes := map[string]*sitemapNode{}
-	var order []string
+// pathAgg accumulates every captured path that folds onto one tree node.
+//
+// Two requests differing only in query string are one node in Burp's site map and one node here, so
+// the aggregation is keyed on the path alone and the query strings survive as the node's parameter
+// list rather than as tree structure. Keying on the raw path instead produced two visible defects:
+// `/search?q=<script>alert(1)</script>` split on the slash inside `</script>` and rendered a node
+// literally named `script>`, and every distinct query string became its own sibling leaf.
+type pathAgg struct {
+	// requested distinguishes a path something actually asked for from a folder synthesised only to
+	// hold children. Burp greys the latter; the UI needs the same signal.
+	requested bool
+	methods   map[string]int
+	statuses  map[int]int
+	ids       []core.ExchangeID
+	params    map[string]struct{}
+}
 
-	paths := host.PathsSorted()
-	for _, pn := range paths {
+// foldPaths turns a host's path map into the node tree the UI renders. Each *path* becomes one node
+// at its segment depth, query strings are folded into the node's parameter list, and the folders
+// leading to a requested resource are synthesised so the tree nests instead of listing leaves flat.
+func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount *int, issues map[string]*issueAgg) []sitemapNodeView {
+	aggs := map[string]*pathAgg{}
+	ensure := func(p string) *pathAgg {
+		a := aggs[p]
+		if a == nil {
+			a = &pathAgg{methods: map[string]int{}, statuses: map[int]int{}, params: map[string]struct{}{}}
+			aggs[p] = a
+		}
+		return a
+	}
+
+	for _, pn := range host.PathsSorted() {
+		// Filter against the path as captured, query string included, so searching for a parameter
+		// value still finds the node it belongs to even though the node is keyed on the path.
 		if pathFilter != "" && !strings.Contains(pn.Path, pathFilter) {
 			continue
 		}
-		*nodeCount++
-		seg := pn.Path
-		if i := strings.LastIndex(pn.Path, "/"); i >= 0 {
-			seg = pn.Path[i+1:]
+		clean, rawQuery := splitPathQuery(pn.Path)
+		a := ensure(clean)
+		a.requested = true
+		for m, n := range pn.Methods {
+			a.methods[m] += n
 		}
-		lastEx := lastExchangeForPath(host.Host, pn.ExchangeIDs)
-		nodes[pn.Path] = &sitemapNode{view: sitemapNodeView{
-			ID:           nodeID(host.Host + pn.Path),
-			Segment:      seg,
-			Path:         pn.Path,
-			Depth:        strings.Count(pn.Path, "/"),
-			Exchanges:    len(pn.ExchangeIDs),
-			Requested:    true,
-			SubtreeCount: len(pn.ExchangeIDs),
-			ChildCount:   0,
-			Methods:      pn.MethodsSorted(),
-			Statuses:     statusInts(pn.Statuses),
-			Params:       []string{},
-			LastExchange: lastEx,
-			Recent:       lastN(pn.ExchangeIDs, 20),
-			Children:     []sitemapNodeView{},
-		}}
-		order = append(order, pn.Path)
+		for st, n := range pn.Statuses {
+			a.statuses[st] += n
+		}
+		a.ids = append(a.ids, pn.ExchangeIDs...)
+		for _, name := range queryParamNames(rawQuery) {
+			a.params[name] = struct{}{}
+		}
+		// Burp shows the folders on the way to a resource even when nothing requested the folder
+		// itself. Without these, /api/debug has no /api to nest under and surfaces as a root.
+		for _, anc := range ancestorPaths(clean) {
+			ensure(anc)
+		}
 	}
 
-	// Nest by path prefix: /a/b is a child of /a.
+	keys := make([]string, 0, len(aggs))
+	for p := range aggs {
+		keys = append(keys, p)
+	}
+	sort.Strings(keys)
+
+	views := make(map[string]*sitemapNodeView, len(aggs))
 	childOf := map[string][]string{}
-	for _, p := range order {
-		parent := parentPath(p)
-		if parent != "" && nodes[parent] != nil {
+	var roots []string
+	for _, p := range keys {
+		a := aggs[p]
+		sort.Slice(a.ids, func(i, j int) bool { return a.ids[i] < a.ids[j] })
+		a.ids = dedupeExchangeIDs(a.ids)
+		*nodeCount++
+		agg := issues[nodeKey(host.Host, p)]
+		own, ownWorst := 0, -1
+		if agg != nil {
+			own, ownWorst = agg.count, agg.worst
+		}
+		views[p] = &sitemapNodeView{
+			Key:           nodeKey(host.Host, p),
+			Segment:       pathSegment(p),
+			Path:          p,
+			Depth:         strings.Count(p, "/"),
+			Exchanges:     len(a.ids),
+			Requested:     a.requested,
+			Methods:       sortedStringKeys(a.methods),
+			Statuses:      statusInts(a.statuses),
+			Params:        sortedSetKeys(a.params),
+			LastExchange:  lastExchangeForPath(host.Host, a.ids),
+			Recent:        lastN(a.ids, 20),
+			Issues:        own,
+			SubtreeIssues: own,
+			WorstSeverity: severityName(ownWorst),
+			InScope:       s.scope.Contains(host.Host, host.Port, p, host.TLS),
+			Children:      []sitemapNodeView{},
+		}
+		if parent := parentOfPath(p); parent != "" && aggs[parent] != nil {
 			childOf[parent] = append(childOf[parent], p)
+		} else {
+			roots = append(roots, p)
 		}
 	}
-	for _, p := range order {
-		if parent := parentPath(p); parent != "" && nodes[parent] != nil {
-			continue // has a parent; emitted under it
+
+	// Subtree totals are summed on the way back up rather than assigned per node, so a folder that
+	// was never requested still reports the traffic underneath it instead of zero.
+	var assemble func(p string) sitemapNodeView
+	assemble = func(p string) sitemapNodeView {
+		v := *views[p]
+		total := v.Exchanges
+		issueTotal := v.Issues
+		worst := severityRankOf(v.WorstSeverity)
+		for _, c := range childOf[p] {
+			cv := assemble(c)
+			total += cv.SubtreeCount
+			issueTotal += cv.SubtreeIssues
+			if r := severityRankOf(cv.WorstSeverity); r > worst {
+				worst = r
+			}
+			v.Children = append(v.Children, cv)
 		}
-		roots = append(roots, attachChildren(nodes, childOf, p))
+		v.ChildCount = len(v.Children)
+		v.SubtreeCount = total
+		v.SubtreeIssues = issueTotal
+		v.WorstSeverity = severityName(worst)
+		return v
 	}
-	return roots
+	out := make([]sitemapNodeView, 0, len(roots))
+	for _, p := range roots {
+		out = append(out, assemble(p))
+	}
+	return out
 }
 
-// attachChildren recursively attaches a node's children (by path-prefix).
-func attachChildren(nodes map[string]*sitemapNode, childOf map[string][]string, path string) sitemapNodeView {
-	n := nodes[path]
-	for _, c := range childOf[path] {
-		n.view.Children = append(n.view.Children, attachChildren(nodes, childOf, c))
+// splitPathQuery separates the path component from the query string and normalises the path, so the
+// tree is built from path structure alone.
+func splitPathQuery(p string) (string, string) {
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		return normalisePath(p[:i]), p[i+1:]
 	}
-	return n.view
+	return normalisePath(p), ""
 }
 
-// parentPath returns the path prefix one segment up, or "" for a top-level path.
-func parentPath(p string) string {
-	i := strings.LastIndex(p, "/")
+// normalisePath gives every path a leading slash and no trailing one, so `/a`, `/a/` and a stored
+// `a` are the one node an operator reads them as.
+func normalisePath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	if p[0] != '/' {
+		p = "/" + p
+	}
+	for len(p) > 1 && p[len(p)-1] == '/' {
+		p = p[:len(p)-1]
+	}
+	return p
+}
+
+// parentOfPath returns the folder one segment up, or "" for a top-level path.
+//
+// "/" is never a parent: the host node is the tree's root, exactly as in Burp, so `/api` hangs off
+// the host rather than off a synthesised "/" wrapper. A requested "/" is still a node — the root
+// document is real traffic — it is just a sibling of `/api`, not its parent.
+func parentOfPath(p string) string {
+	if p == "" || p == "/" {
+		return ""
+	}
+	i := strings.LastIndexByte(p, '/')
 	if i <= 0 {
 		return ""
 	}
 	return p[:i]
+}
+
+// ancestorPaths lists every folder between p and the host root, nearest first.
+func ancestorPaths(p string) []string {
+	var out []string
+	for cur := parentOfPath(p); cur != ""; cur = parentOfPath(cur) {
+		out = append(out, cur)
+	}
+	return out
+}
+
+// pathSegment is the node's own label: its last path component, or "/" at the root.
+func pathSegment(p string) string {
+	if p == "/" || p == "" {
+		return "/"
+	}
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// queryParamNames lists the parameter names in a raw query string. A name that will not unescape is
+// reported as written rather than dropped — the operator saw it on the wire that way.
+func queryParamNames(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, pair := range strings.Split(raw, "&") {
+		if pair == "" {
+			continue
+		}
+		name := pair
+		if i := strings.IndexByte(pair, '='); i >= 0 {
+			name = pair[:i]
+		}
+		if decoded, err := url.QueryUnescape(name); err == nil {
+			name = decoded
+		}
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func dedupeExchangeIDs(sorted []core.ExchangeID) []core.ExchangeID {
+	out := sorted[:0]
+	for i, v := range sorted {
+		if i == 0 || sorted[i-1] != v {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func sortedStringKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedSetKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func lastExchangeID(exchanges []*core.Exchange, host string) *int64 {
@@ -184,7 +409,7 @@ func lastExchangeID(exchanges []*core.Exchange, host string) *int64 {
 	return nil
 }
 
-func lastExchangeForPath(host string, ids []uint64) *int64 {
+func lastExchangeForPath(host string, ids []core.ExchangeID) *int64 {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -206,23 +431,89 @@ func statusInts(statuses map[int]int) []int {
 	return out
 }
 
-func lastN(ids []uint64, n int) []uint64 {
+func lastN(ids []core.ExchangeID, n int) []core.ExchangeID {
 	if len(ids) <= n {
 		return ids
 	}
 	return ids[len(ids)-n:]
 }
 
-// nodeID is a stable pseudo-id for a tree node (the UI only uses it as a DOM key).
-func nodeID(s string) int {
-	h := 0
-	for _, c := range s {
-		h = h*31 + int(c)
+// issueAgg is the findings recorded at one site-map node.
+type issueAgg struct {
+	count int
+	// worst is a core.Severity rank, or -1 for none. Not a string: the roll-up compares ranks, and
+	// comparing severity names as text would order Critical below Informational.
+	worst int
+}
+
+// issuesByNode indexes findings by the tree node they belong to.
+//
+// Attribution goes through ExchangeByRequest — the same rule as the issues API — so a finding is
+// counted against the URL it was actually found at. The path is normalised exactly as the tree
+// normalises it, query string removed, so a finding on /search?q=1 lands on the /search node rather
+// than on a node that does not exist.
+func (s *Server) issuesByNode() map[string]*issueAgg {
+	out := map[string]*issueAgg{}
+	if s.findings == nil {
+		return out
 	}
-	if h < 0 {
-		h = -h
+	for _, f := range s.findings.All() {
+		rank := int(f.Severity)
+		// One finding seen at three places marks three nodes; that is what "where are my issues" means.
+		for _, occ := range f.Occurrences {
+			ex, err := s.store.ExchangeByRequest(occ.Request)
+			if err != nil {
+				continue // unresolvable: counted nowhere rather than blamed on a guess
+			}
+			clean, _ := splitPathQuery(ex.Path)
+			key := nodeKey(ex.Host, clean)
+			agg := out[key]
+			if agg == nil {
+				agg = &issueAgg{worst: -1}
+				out[key] = agg
+			}
+			agg.count++
+			if rank > agg.worst {
+				agg.worst = rank
+			}
+		}
 	}
-	return h
+	return out
+}
+
+// severityName renders a core.Severity rank, or "" for the -1 that means no finding. The empty
+// string is the signal a node is clean; it is not a severity called "unknown".
+func severityName(rank int) string {
+	if rank < 0 {
+		return ""
+	}
+	return core.Severity(rank).String()
+}
+
+// severityRankOf is severityName's inverse, so a roll-up can compare a child's reported severity
+// against a parent's without either side holding two representations of the same thing.
+func severityRankOf(name string) int {
+	if name == "" {
+		return -1
+	}
+	for r := int(core.SeverityInformational); r <= int(core.SeverityCritical); r++ {
+		if core.Severity(r).String() == name {
+			return r
+		}
+	}
+	return -1
+}
+
+// nodeKey is a tree node's exact identity.
+//
+// The NUL separator is what makes it exact rather than merely usually-right: without it, host "a"
+// with path "/b" and a host literally named "a/b" would produce the same key, and a hostname cannot
+// contain NUL. An empty path means the node is the host itself.
+func nodeKey(host, path string) string {
+	if path == "" {
+		return host
+	}
+	return host + "\x00" + path
 }
 
 // ---- Match & Replace ---------------------------------------------------------------------------
@@ -846,8 +1137,18 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-		if req.Exchange <= 0 {
-			http.Error(w, "A positive exchange id is required", http.StatusBadRequest)
+		// `< 0`, not `<= 0`. Exchange ids are a dense counter from zero, so exchange 0 is the first
+		// request ever captured in a session — and it is the one an operator is most likely to reach
+		// for first. Rejecting it as "not positive" refused a real row, and the message ("A positive
+		// exchange id is required") asserted something about the id space that is not true.
+		if req.Exchange < 0 {
+			http.Error(w, "An exchange id cannot be negative", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.store.GetExchange(core.ExchangeID(req.Exchange)); err != nil {
+			// Checked rather than trusted: the organizer stores the id, and saving one that resolves
+			// to nothing produces an entry whose "open in history" goes nowhere.
+			http.Error(w, fmt.Sprintf("No exchange %d has been captured", req.Exchange), http.StatusNotFound)
 			return
 		}
 		item := s.organizer.Add(req.Exchange)
