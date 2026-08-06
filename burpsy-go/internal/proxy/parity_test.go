@@ -100,6 +100,16 @@ var exchangeFieldRules = map[string]fieldRule{
 	"Notes":    ruleAbsent, // set only when the capture is not verbatim
 	"Related":  ruleAbsent, // WebSocket children hang off a handshake row, not off these
 	"Protocol": ruleIdentical,
+	// Which *run* produced the row, where Source says which kind of surface did. Neither leg of this
+	// test runs under a registry task — the proxy never does, and this crawl is driven directly rather
+	// than through the dashboard — so both are legitimately unset here. ruleAbsent rather than
+	// ruleMayDiffer, because "0 on both sides" is the specific thing that must hold: a producer that
+	// started stamping a task id onto plain proxy traffic would be claiming an owner that does not
+	// exist, and this is the assertion that would catch it.
+	"TaskID": ruleAbsent,
+	// Lineage. A proxied request and a crawled fetch both have no antecedent exchange; only a Repeater
+	// resend, an Intruder payload or a followed redirect does.
+	"ParentID": ruleAbsent,
 }
 
 func TestTheProxyAndTheCrawlerRecordTheSameShapeOfExchange(t *testing.T) {

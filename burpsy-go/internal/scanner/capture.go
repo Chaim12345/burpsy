@@ -68,6 +68,11 @@ type Capture struct {
 	// Unset means core.SourceUnattributed, and Record does not substitute anything for it. See
 	// Record's own note on why that stays a legal, visible value rather than a refusal.
 	Source core.Source
+	// TaskID is the run every exchange and finding recorded through this handle belongs to, or 0 for
+	// a surface no task owns. Carried beside Source for the same reason Source is carried here: a
+	// surface sets it once, so a capture site added later inherits the attribution instead of having
+	// to remember it. A CapturedExchange naming its own TaskID overrides it.
+	TaskID uint64
 }
 
 // CapturedExchange is one completed request/response pair, as bytes, for Record.
@@ -103,6 +108,9 @@ type CapturedExchange struct {
 	// visible and fixable, rather than defaulting to "proxy" and reading as a plausible lie about who
 	// caused the request.
 	Source core.Source
+	// TaskID overrides the handle's default for this one exchange. Zero means "use the handle's",
+	// which is safe because registry task ids start at 1 — see dash.Registry.Start.
+	TaskID uint64
 	// Notes says something about this capture that its bytes cannot say for themselves.
 	//
 	// Carried here rather than assigned to the returned exchange afterwards, because the store's
@@ -205,6 +213,7 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// exchange as something else; otherwise the handle's default applies. Neither is substituted for
 		// the other when both are unset — unattributed is a real answer, see above.
 		Source: sourceOf(x.Source, c.Source),
+		TaskID: taskOf(x.TaskID, c.TaskID),
 	}
 	c.Store.AddExchange(ex)
 	c.ScanExchange(ex)
@@ -234,6 +243,16 @@ func (x CapturedExchange) duration() core.ExchangeDuration {
 // on its own.
 func sourceOf(perExchange, handleDefault core.Source) core.Source {
 	if perExchange.Attributed() {
+		return perExchange
+	}
+	return handleDefault
+}
+
+// taskOf resolves a per-exchange task id against the handle's default, the same precedence sourceOf
+// applies. Zero means "unset" on both sides, which is unambiguous only because registry ids start at
+// 1 — see dash.Registry.Start.
+func taskOf(perExchange, handleDefault uint64) uint64 {
+	if perExchange != 0 {
 		return perExchange
 	}
 	return handleDefault
@@ -296,10 +315,12 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 			Description: f.Description,
 			Remediation: f.Solution,
 		}
+		nf.TaskID = ex.TaskID
 		if ex.Response != nil {
 			nf.Occurrences = []core.Occurrence{{
-				Request:  ex.Request,
-				Response: ex.Response,
+				ExchangeID: ex.ID,
+				Request:    ex.Request,
+				Response:   ex.Response,
 			}}
 		}
 		c.Findings.Add(nf)

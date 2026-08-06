@@ -58,6 +58,7 @@ type exchangeQueryable struct {
 
 func (q exchangeQueryable) Host() string   { return q.ex.Host }
 func (q exchangeQueryable) Method() string { return q.ex.Method }
+func (q exchangeQueryable) Path() string   { return q.ex.Path }
 func (q exchangeQueryable) Status() int {
 	if q.ex.Status != nil {
 		return int(*q.ex.Status)
@@ -220,7 +221,7 @@ func cmdExchange(ctx *cliContext, args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid exchange id %q", raw)
 	}
-	ex, err := ctx.store.GetExchange(id)
+	ex, err := ctx.store.GetExchange(core.ExchangeID(id))
 	if err != nil {
 		return fmt.Errorf("exchange not found: %w", err)
 	}
@@ -267,7 +268,7 @@ type sitemapNode struct {
 
 func buildSitemap(exchanges []*core.Exchange) []*sitemapNode {
 	// Group exchange ids by (host, first-segment). Collation is display-only.
-	seen := map[uint64]bool{}
+	seen := map[core.ExchangeID]bool{}
 	roots := []*sitemapNode{}
 	byPath := map[string]*sitemapNode{}
 	var nextID int

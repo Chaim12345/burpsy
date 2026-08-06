@@ -31,21 +31,26 @@ import (
 // "<1 ms" for a measured zero and an em dash for null. Deliberately not done here — internal/web/ui/ is
 // owned elsewhere, and a JSON field no consumer reads is a shape change bought for nothing.
 type ExchangeView struct {
-	ID          uint64  `json:"id"`
-	Request     uint64  `json:"request"`
-	Response    *uint64 `json:"response"`
-	Host        string  `json:"host"`
-	Port        uint16  `json:"port"`
-	TLS         bool    `json:"tls"`
-	Method      string  `json:"method"`
-	Path        string  `json:"path"`
-	Status      *uint16 `json:"status"`
-	ResponseLen int     `json:"response_len"`
-	StartedMs   uint64  `json:"started_ms"`
-	DurationMs  uint64  `json:"duration_ms"`
-	Notes       *string `json:"notes"`
-	Related     []any   `json:"related"`
-	Protocol    string  `json:"protocol"`
+	ID          core.ExchangeID `json:"id"`
+	Request     uint64          `json:"request"`
+	Response    *uint64         `json:"response"`
+	Host        string          `json:"host"`
+	Port        uint16          `json:"port"`
+	TLS         bool            `json:"tls"`
+	Method      string          `json:"method"`
+	Path        string          `json:"path"`
+	Status      *uint16         `json:"status"`
+	ResponseLen int             `json:"response_len"`
+	StartedMs   uint64          `json:"started_ms"`
+	DurationMs  uint64          `json:"duration_ms"`
+	Notes       *string         `json:"notes"`
+	Related     []any           `json:"related"`
+	Protocol    string          `json:"protocol"`
+	// TaskID is the run that produced this exchange, omitted for traffic no task owns.
+	TaskID uint64 `json:"task_id,omitempty"`
+	// ParentID is the exchange this one was derived from — a Repeater resend's original, an Intruder
+	// payload's base request. Omitted when there is no antecedent.
+	ParentID *core.ExchangeID `json:"parent_id,omitempty"`
 }
 
 // MessageView is the wire shape for a stored message: id, byte length, and a lossy UTF-8 text
@@ -104,6 +109,8 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		Notes:      ex.Notes,
 		Related:    []any{},
 		Protocol:   protocolToken(ex.Protocol),
+		TaskID:     ex.TaskID,
+		ParentID:   ex.ParentID,
 	}
 }
 

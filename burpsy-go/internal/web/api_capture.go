@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/query"
 	"go.uber.org/zap"
@@ -94,7 +95,7 @@ func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
 		return
 	}
-	ex, err := s.store.GetExchange(id)
+	ex, err := s.store.GetExchange(core.ExchangeID(id))
 	if err != nil {
 		http.Error(w, "Exchange not found", http.StatusNotFound)
 		return
@@ -217,9 +218,34 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 
 // issueOccurrenceView mirrors the UI's Occurrence shape.
 type issueOccurrenceView struct {
-	ExchangeID uint64 `json:"exchange_id"`
-	Response   uint64 `json:"response"`
-	Path       string `json:"path"`
+	ExchangeID core.ExchangeID `json:"exchange_id"`
+	Response   uint64          `json:"response"`
+	Path       string          `json:"path"`
+}
+
+// issueAdvisoryView is the catalogue entry attached to a finding.
+//
+// Description and Remediation are HTML fragments from the catalogue, not plain text. They are sent
+// as-is and the UI renders them into a sanitised container — stripping the markup here would collapse
+// multi-paragraph remediation advice into one run-on wall, which is the difference between advice an
+// operator reads and advice they skip.
+//
+// TypicalSeverity is the severity the *class* usually carries and is deliberately separate from the
+// finding's own severity. A catalogue lookup must never restate what the scanner concluded about this
+// particular occurrence.
+type issueAdvisoryView struct {
+	TypeIndex       string              `json:"type_index"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	Remediation     string              `json:"remediation"`
+	TypicalSeverity string              `json:"typical_severity"`
+	References      []issueAdvisoryLink `json:"references,omitempty"`
+	Classifications []issueAdvisoryLink `json:"classifications,omitempty"`
+}
+
+type issueAdvisoryLink struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
 }
 
 // issueFindingView mirrors the UI's Finding shape. check_name is the rule/check that fired;
@@ -235,11 +261,28 @@ type issueFindingView struct {
 	Remediation *string               `json:"remediation"`
 	Occurrences []issueOccurrenceView `json:"occurrences"`
 	TimesSeen   int                   `json:"times_seen"`
+	// Advisory is the catalogue entry for this issue class, when one resolves. Omitted rather than
+	// emptied, so the UI can tell "no catalogue advisory" from "an advisory with blank fields".
+	Advisory *issueAdvisoryView `json:"advisory,omitempty"`
+	// AdvisoryNote explains why there is no advisory, for the checks that deliberately have none.
+	// Empty when the check simply was not considered — those two states are different and the UI
+	// says so rather than showing one blank panel for both.
+	AdvisoryNote string `json:"advisory_note,omitempty"`
+	// TaskID is the run that produced this finding, omitted when nothing tracked it. It is what ties
+	// a coverage summary to the findings that came out of the same run.
+	TaskID uint64 `json:"task_id,omitempty"`
 }
 
 // findingToIssueView converts a stored finding into the UI shape. Host is derived from the first
 // occurrence's request message when the store can resolve it, otherwise the exchange host is left
 // empty rather than guessed.
+//
+// Resolution goes through ExchangeByRequest, never GetExchange. This function previously called
+// GetExchange(uint64(occ.Request)) — an exchange lookup keyed by a *message* id. Because both id
+// spaces are dense counters from zero, that did not fail: it returned a real exchange belonging to
+// some other request, so a finding on /search was reported against /login, and findings whose
+// message id ran past the exchange count lost their host and path entirely. Attribution is the
+// whole value of a finding, so the lookup that cannot silently mismatch is the only one used here.
 func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	v := issueFindingView{
 		ID:          f.ID,
@@ -250,9 +293,23 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		Detail:      strPtr(f.Description),
 		Remediation: strPtr(f.Remediation),
 		TimesSeen:   len(f.Occurrences),
+		TaskID:      f.TaskID,
+	}
+	if def, note := s.advisories.Resolve(f.Name); def != nil {
+		v.Advisory = &issueAdvisoryView{
+			TypeIndex:       def.HexIndex(),
+			Name:            def.Name,
+			Description:     def.Description,
+			Remediation:     def.Remediation,
+			TypicalSeverity: string(def.Severity),
+			References:      advisoryLinks(def.References, nil),
+			Classifications: advisoryLinks(nil, def.Classification),
+		}
+	} else {
+		v.AdvisoryNote = note
 	}
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.GetExchange(uint64(occ.Request))
+		ex, err := s.store.ExchangeByRequest(occ.Request)
 		if err == nil {
 			if v.Host == "" {
 				v.Host = ex.Host
@@ -264,9 +321,12 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 			})
 			continue
 		}
-		// Request not resolvable to an exchange; still surface the occurrence with the raw ids.
+		// The request message is not in the store — a capture that rolled over, or a finding whose
+		// exchange was never recorded. The occurrence is still surfaced, but with the exchange id
+		// the producer recorded rather than a message id dressed up as one, and with no path, since
+		// guessing a path is how a finding ends up blamed on the wrong endpoint.
 		v.Occurrences = append(v.Occurrences, issueOccurrenceView{
-			ExchangeID: uint64(occ.Request),
+			ExchangeID: occ.ExchangeID,
 			Response:   derefMsgID(occ.Response),
 			Path:       "",
 		})
@@ -385,6 +445,7 @@ type filteredExchangeQuery struct {
 
 func (f filteredExchangeQuery) Host() string   { return f.ex.Host }
 func (f filteredExchangeQuery) Method() string { return f.ex.Method }
+func (f filteredExchangeQuery) Path() string   { return f.ex.Path }
 func (f filteredExchangeQuery) Status() int {
 	if f.ex.Status == nil {
 		return 0
@@ -443,4 +504,20 @@ func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write(s.caCertPEM); err != nil {
 		s.logger.Warn("failed to write CA certificate", zap.Error(err))
 	}
+}
+
+// advisoryLinks flattens either link kind into the wire shape. Two source types, one output, because
+// references and classifications differ only in what they point at, and the UI groups them itself.
+func advisoryLinks(refs []advisory.Reference, cls []advisory.Classification) []issueAdvisoryLink {
+	out := make([]issueAdvisoryLink, 0, len(refs)+len(cls))
+	for _, r := range refs {
+		out = append(out, issueAdvisoryLink{Title: r.Title, URL: r.URL})
+	}
+	for _, c := range cls {
+		out = append(out, issueAdvisoryLink{Title: c.Title, URL: c.URL})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

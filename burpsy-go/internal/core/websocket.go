@@ -614,7 +614,7 @@ type WsMessage struct {
 	ID MsgId
 	// The exchange whose 101 response opened this connection. Every message
 	// names its handshake, so history can join a row to a host and path.
-	Exchange uint64
+	Exchange ExchangeID
 	// The payload's handle in the ws-payload index, which stores the bytes
 	// once and hands out handles — a socket that has carried a hundred
 	// thousand messages therefore costs a hundred thousand fixed-size rows.

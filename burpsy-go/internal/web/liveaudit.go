@@ -271,6 +271,7 @@ type auditedExchangeQuery struct {
 
 func (q *auditedExchangeQuery) Host() string   { return q.ex.Host }
 func (q *auditedExchangeQuery) Method() string { return q.ex.Method }
+func (q *auditedExchangeQuery) Path() string   { return q.ex.Path }
 func (q *auditedExchangeQuery) Status() int {
 	if q.ex.Status == nil {
 		return 0
@@ -377,7 +378,7 @@ func liveAuditSeverity(outcome *scanner.SessionOutcome) dash.Severity {
 // liveAuditTarget names the batch for the task list. The first exchange's host stands for the sweep
 // because a batch is walked in id order from one high-water mark, so it is overwhelmingly one host's
 // traffic; the count is appended so a batch spanning several is not misread as one.
-func liveAuditTarget(store *core.TrafficStore, ids []uint64) string {
+func liveAuditTarget(store *core.TrafficStore, ids []core.ExchangeID) string {
 	if len(ids) == 0 {
 		return "no exchanges"
 	}
@@ -486,7 +487,7 @@ func (r *liveAuditRun) auditLedger(state *LiveAuditState, events *dash.EventLog,
 // exact failure this codebase's style exists to prevent, so the wait is now bounded and what it
 // gave up on is counted.
 type liveAuditCursor struct {
-	at uint64
+	at core.ExchangeID
 	// stalls counts consecutive ticks that made no progress from `at`.
 	stalls int
 }
@@ -507,13 +508,13 @@ const liveAuditStallTicks = 10
 func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	cursor := &run.cursor
 	_, total := s.store.Count()
-	ids := make([]uint64, 0, liveAuditBatchSize)
+	ids := make([]core.ExchangeID, 0, liveAuditBatchSize)
 	next := cursor.at
 	// waitingOn is the id the walk stopped at because its response had not landed. Distinct from
 	// "ran out of exchanges": only the former is something the cursor can get permanently stuck on.
-	var waitingOn uint64
+	var waitingOn core.ExchangeID
 	waiting := false
-	for next < uint64(total) && len(ids) < liveAuditBatchSize {
+	for uint64(next) < uint64(total) && len(ids) < liveAuditBatchSize {
 		ex, err := s.store.GetExchange(next)
 		if err != nil {
 			break
@@ -530,7 +531,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// Recorded before any early return, so the backlog is current even on a tick that does no work —
 	// a sweep parked behind a stalled exchange while a crawl races ahead is exactly when an operator
 	// needs to see how far behind it is.
-	s.liveAudit.recordPosition(next, uint64(total))
+	s.liveAudit.recordPosition(uint64(next), uint64(total))
 
 	if next == cursor.at {
 		// No progress. If we are parked on a response that never landed, give it a bounded number of
@@ -538,10 +539,10 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 		// exchange that came back clean. Without this the sweep waits here forever.
 		if waiting {
 			cursor.stalls++
-			s.liveAudit.noteStall(waitingOn, true)
+			s.liveAudit.noteStall(uint64(waitingOn), true)
 			if cursor.stalls >= liveAuditStallTicks {
 				s.logger.Warn("live audit advancing past an exchange whose response never landed",
-					zap.Uint64("exchange", waitingOn),
+					zap.Uint64("exchange", uint64(waitingOn)),
 					zap.Int("ticks_waited", cursor.stalls))
 				s.events.Record(dash.EventLiveAuditSkipped, dash.SeverityWarn, fmt.Sprintf(
 					"exchange %d never recorded a response after %d sweeps; the live audit advanced past it unaudited",
@@ -562,7 +563,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 
 	cursor.at = next
 	cursor.stalls = 0
-	s.liveAudit.noteStall(waitingOn, waiting)
+	s.liveAudit.noteStall(uint64(waitingOn), waiting)
 	if len(ids) == 0 {
 		return
 	}
@@ -592,13 +593,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// dashboard shows it as a run that stopped looking rather than as a clean one.
 	task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
 	for _, f := range findings {
-		s.findings.Add(core.NewFinding{
-			Name:        f.Name,
-			Severity:    core.ParseSeverity(f.Severity),
-			Confidence:  core.ParseConfidence(f.Confidence),
-			Description: f.Description,
-			Remediation: f.Solution,
-		})
+		s.findings.Add(s.activeFinding(f, task.ID()))
 	}
 	s.liveAudit.Record(uint64(len(ids)), uint64(len(findings)))
 	// This used to be a toollog row: Record(ToolScanner, host, port, tls, "LIVE", "/audit", 0, ...) —

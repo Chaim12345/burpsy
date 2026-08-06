@@ -24,9 +24,9 @@ import (
 )
 
 type scannerAuditReq struct {
-	Method     string `json:"method"`
-	Target     string `json:"target"`
-	ExchangeID uint64 `json:"exchange_id,omitempty"`
+	Method     string          `json:"method"`
+	Target     string          `json:"target"`
+	ExchangeID core.ExchangeID `json:"exchange_id,omitempty"`
 	// Config names one of scanner.BuiltInConfigs to run under. Empty means the server default. An
 	// unknown name is refused rather than ignored — see Server.resolveAuditConfig.
 	Config string `json:"config,omitempty"`
@@ -83,12 +83,12 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.runAudit(r.Context(), id, cfg, named))
+	json.NewEncoder(w).Encode(s.runAudit(r.Context(), core.ExchangeID(id), cfg, named))
 }
 
 // auditTarget names one audited exchange for the task list, falling back to the id when the exchange
 // is not readable — an unnamed task is still better than a task that does not appear.
-func auditTarget(store *core.TrafficStore, id uint64) string {
+func auditTarget(store *core.TrafficStore, id core.ExchangeID) string {
 	if ex, err := store.GetExchange(id); err == nil {
 		return fmt.Sprintf("%s %s%s", ex.Method, ex.Host, ex.Path)
 	}
@@ -111,7 +111,7 @@ func auditTarget(store *core.TrafficStore, id uint64) string {
 //
 // scanner.ts renders this by pretty-printing the JSON it gets back, so the richer body needs no
 // change on the TypeScript side — there is no typed audit response to keep in sync.
-func (s *Server) runAudit(ctx context.Context, id uint64, cfg scanner.AuditConfig, named string) map[string]interface{} {
+func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string) map[string]interface{} {
 	if s.scanner == nil {
 		// Built with the engagement scope: an active audit sends real traffic, and the engine refuses
 		// an out-of-scope exchange before it plans any work.
@@ -144,7 +144,7 @@ func (s *Server) runAudit(ctx context.Context, id uint64, cfg scanner.AuditConfi
 	body["breakdown"] = dash.NewSummary("Audit", "findings", "checks",
 		outcome.Breakdown(), outcome.BreakdownReasons()...)
 	if outcome.Error != "" {
-		s.logger.Warn("audit refused", zap.Uint64("exchange_id", id), zap.String("reason", outcome.Error))
+		s.logger.Warn("audit refused", zap.Uint64("exchange_id", uint64(id)), zap.String("reason", outcome.Error))
 		return body
 	}
 	ex, gerr := s.store.GetExchange(id)
@@ -152,13 +152,37 @@ func (s *Server) runAudit(ctx context.Context, id uint64, cfg scanner.AuditConfi
 		s.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, 0, "audit")
 	}
 	for _, f := range findings {
-		s.findings.Add(core.NewFinding{
-			Name:        f.Name,
-			Severity:    core.ParseSeverity(f.Severity),
-			Confidence:  core.ParseConfidence(f.Confidence),
-			Description: f.Description,
-			Remediation: f.Solution,
-		})
+		s.findings.Add(s.activeFinding(f, task.ID()))
 	}
 	return body
+}
+
+// activeFinding converts one active-scanner finding into a store finding, carrying the two links
+// that make it usable: the exchange it was found at, and the run that produced it.
+//
+// Both used to be dropped here. The active paths built a core.NewFinding from the name, severity,
+// confidence, description and remediation and nothing else — so every finding an audit produced
+// reached the store with no occurrences at all, and the issues API, having nothing to resolve,
+// reported it with an empty host and an empty path. A finding that cannot say where it was found is
+// not actionable, and it looked identical to the misattribution bug next door in findingToIssueView.
+func (s *Server) activeFinding(f *scanner.Finding, taskID uint64) core.NewFinding {
+	nf := core.NewFinding{
+		Name:        f.Name,
+		Severity:    core.ParseSeverity(f.Severity),
+		Confidence:  core.ParseConfidence(f.Confidence),
+		Description: f.Description,
+		Remediation: f.Solution,
+		TaskID:      taskID,
+	}
+	// Resolved through the store so the occurrence carries the message ids the issues API reads, not
+	// just an exchange id. An exchange that has since rolled out of the store leaves the occurrence
+	// off rather than half-filled: no location is honest, a partial one is not.
+	if ex, err := s.store.GetExchange(f.ExchangeID); err == nil {
+		nf.Occurrences = []core.Occurrence{{
+			ExchangeID: ex.ID,
+			Request:    ex.Request,
+			Response:   ex.Response,
+		}}
+	}
+	return nf
 }

@@ -90,10 +90,20 @@ func ParseConfidence(v string) Confidence {
 }
 
 // Occurrence represents where a finding was observed.
+//
+// ExchangeID records the exchange directly rather than leaving a reader to re-derive it from
+// Request. The producer always knows it, and re-deriving it downstream is what went wrong before:
+// message ids and exchange ids are both dense counters from zero, so the wrong lookup returns a
+// real but unrelated exchange and the finding is reported against a URL it was never seen at.
+//
+// Zero is ambiguous — it is also a valid exchange id — so it is not a reliable "unset" marker on its
+// own. Readers cross-check against Request via TrafficStore.ExchangeByRequest, which is exact; that
+// is also what keeps findings persisted before this field existed resolving correctly.
 type Occurrence struct {
-	Request  MsgId
-	Response *MsgId
-	Span     Span
+	ExchangeID ExchangeID
+	Request    MsgId
+	Response   *MsgId
+	Span       Span
 }
 
 // Inserted represents inserted payload information.
@@ -112,6 +122,10 @@ type NewFinding struct {
 	Remediation string
 	Occurrences []Occurrence
 	Inserted    *Inserted
+	// TaskID is the run that produced this finding, or 0 when nothing tracked it. Without it a
+	// coverage summary and a finding count cannot be tied together: the dashboard can say an audit
+	// swept 200 exchanges and that 12 findings exist, and nothing relates the two.
+	TaskID uint64
 }
 
 // Finding represents a security finding.
@@ -124,7 +138,9 @@ type Finding struct {
 	Remediation string
 	Occurrences []Occurrence
 	Inserted    *Inserted
-	Timestamp   uint64
+	// TaskID is the run that produced this finding, or 0 when nothing tracked it. See NewFinding.
+	TaskID    uint64
+	Timestamp uint64
 }
 
 // FindingStore stores security findings.
@@ -169,6 +185,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		Remediation: finding.Remediation,
 		Occurrences: finding.Occurrences,
 		Inserted:    finding.Inserted,
+		TaskID:      finding.TaskID,
 		Timestamp:   uint64(getTimestamp()),
 	}
 

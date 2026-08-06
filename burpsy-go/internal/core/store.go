@@ -18,6 +18,20 @@ const DefaultSegmentTargetBytes = 100 * 1024 * 1024 // 100 MB
 // MsgId is a handle to a stored message. Cheap to copy; carries no payload.
 type MsgId uint64
 
+// ExchangeID is a handle to a stored exchange.
+//
+// A distinct type, not a bare uint64, and the reason is a bug this cost us. Messages and exchanges
+// are both dense counters from zero — six proxied requests give messages 0..11 and exchanges 0..5 —
+// so every exchange id is also a valid message id and most message ids are also valid exchange ids.
+// While both were uint64, `GetExchange(uint64(occ.Request))` compiled, and instead of failing it
+// returned a real exchange belonging to an unrelated request: findings on /search were reported
+// against /login, in the issues API and in every exported report. Separate types make that a build
+// error rather than a wrong answer an operator would act on.
+//
+// Note what this does not fix, because no type can: zero is a legitimate value in both spaces, so it
+// is never an "unset" marker. Absence is a pointer or a documented sentinel, never a zero test.
+type ExchangeID uint64
+
 // Span represents a span within a message: the only thing we ever hold instead of bytes.
 type Span struct {
 	Offset int
@@ -277,7 +291,7 @@ func (d ExchangeDuration) String() string {
 
 // Exchange represents one proxied exchange. Holds IDs, never payloads.
 type Exchange struct {
-	ID          uint64
+	ID          ExchangeID
 	Request     MsgId
 	Response    *MsgId
 	Host        string
@@ -297,6 +311,22 @@ type Exchange struct {
 	// Source names the surface that produced this exchange. See the Source type: the zero value is
 	// deliberately *not* proxy.
 	Source Source
+	// TaskID is the dash registry task this exchange was produced by, or 0 for traffic no task
+	// owns — everything the operator's own client sends through the proxy.
+	//
+	// Source and TaskID answer different questions and neither substitutes for the other. Source says
+	// *what kind* of surface sent it ("an intruder attack"); TaskID says *which run* ("attack #7"), so
+	// "show me the traffic this attack produced" is answerable at all. Zero is a safe sentinel here
+	// only because registry ids start at 1 — see dash.Registry.Start, and the same convention on
+	// dash.Event.TaskID.
+	TaskID uint64
+	// ParentID is the exchange this one came from — the request a Repeater resend was built on, the
+	// base request an Intruder payload was substituted into, the hop a redirect was followed from.
+	// Nil for an exchange with no antecedent.
+	//
+	// A pointer rather than a zero sentinel, because exchange 0 is a real exchange and is very often
+	// the first thing an operator sends to Repeater.
+	ParentID *ExchangeID
 }
 
 // Source names the surface an exchange came from.
@@ -369,7 +399,16 @@ type TrafficStore struct {
 	// Index rows therefore never carry payload bytes, and a socket that has
 	// carried a hundred thousand messages touches no payload until a row is
 	// opened.
-	wsPayloads  [][]byte
+	wsPayloads [][]byte
+	// byRequest maps an exchange's request message id back to that exchange.
+	//
+	// Message ids and exchange ids are both dense counters from zero, which makes them trivially
+	// confusable and impossible to tell apart by inspection: passing one where the other belongs
+	// resolves to a real row of the wrong kind rather than failing. That is exactly what the issues
+	// API did — it looked an exchange up by its request *message* id, and reported findings against
+	// whichever unrelated exchange happened to share that number. This index makes the correct
+	// lookup available so callers holding a message id never have to guess.
+	byRequest   map[MsgId]*Exchange
 	bytes       int64
 	nextID      uint64
 	captureDir  string
@@ -503,8 +542,12 @@ func (ts *TrafficStore) AddExchange(ex *Exchange) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
-	ex.ID = uint64(len(ts.exchanges))
+	ex.ID = ExchangeID(len(ts.exchanges))
 	ts.exchanges = append(ts.exchanges, ex)
+	if ts.byRequest == nil {
+		ts.byRequest = make(map[MsgId]*Exchange)
+	}
+	ts.byRequest[ex.Request] = ex
 
 	if ts.onExchange != nil {
 		ts.onExchange(ex)
@@ -587,6 +630,13 @@ func (ts *TrafficStore) Restore(messages []*StoredMessage, exchanges []*Exchange
 	defer ts.mu.Unlock()
 	ts.messages = messages
 	ts.exchanges = exchanges
+	// Rebuilt in lockstep with the exchange slice: a finding restored from the durable mirror holds
+	// a request message id, and without this index its host and path could not be resolved after a
+	// restart even though both were captured.
+	ts.byRequest = make(map[MsgId]*Exchange, len(exchanges))
+	for _, ex := range exchanges {
+		ts.byRequest[ex.Request] = ex
+	}
 	// The locations index is rebuilt from the messages themselves, in lockstep.
 	// A disk-backed message restored from the durable mirror carries the span
 	// its bytes live at, so the index comes back intact and VerifyIndex can
@@ -664,15 +714,31 @@ func (ts *TrafficStore) Get(id MsgId) (*StoredMessage, error) {
 }
 
 // GetExchange retrieves an exchange by ID.
-func (ts *TrafficStore) GetExchange(id uint64) (*Exchange, error) {
+func (ts *TrafficStore) GetExchange(id ExchangeID) (*Exchange, error) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	if id >= uint64(len(ts.exchanges)) {
+	if uint64(id) >= uint64(len(ts.exchanges)) {
 		return nil, fmt.Errorf("exchange not found: %d", id)
 	}
 
 	return ts.exchanges[id], nil
+}
+
+// ExchangeByRequest resolves the exchange whose request is the given message.
+//
+// This is the lookup a caller holding an occurrence needs. GetExchange takes an exchange id, and a
+// message id passed to it silently returns the wrong exchange rather than an error, because both id
+// spaces are dense counters from zero — so "not found" is the rare case and "found, but wrong" is
+// the common one. Anything that starts from a message must come through here.
+func (ts *TrafficStore) ExchangeByRequest(id MsgId) (*Exchange, error) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+
+	if ex, ok := ts.byRequest[id]; ok {
+		return ex, nil
+	}
+	return nil, fmt.Errorf("no exchange has request message %d", id)
 }
 
 // Exchanges returns all exchanges (for history listing).
@@ -767,7 +833,7 @@ func (ts *TrafficStore) WsMessages(offset, limit int) []*WsMessage {
 // a Vec of ids is the shape whose memory the socket's peer gets to choose, and
 // a scan over fixed-size index rows cannot grow a second copy of the truth
 // that could disagree with the first.
-func (ts *TrafficStore) WsMessagesFor(exchange uint64, offset, limit int) []*WsMessage {
+func (ts *TrafficStore) WsMessagesFor(exchange ExchangeID, offset, limit int) []*WsMessage {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
@@ -821,7 +887,7 @@ func (ts *TrafficStore) WsCount() int {
 // WsConnection is one upgraded socket, folded from the ws-message index and
 // joined to its handshake exchange.
 type WsConnection struct {
-	Exchange uint64
+	Exchange ExchangeID
 	Host     string
 	Port     uint16
 	TLS      bool
@@ -872,7 +938,7 @@ func (ts *TrafficStore) WsConnections() []WsConnection {
 		} else {
 			c.Received = 1
 		}
-		if m.Exchange < uint64(len(ts.exchanges)) && ts.exchanges[m.Exchange] != nil {
+		if uint64(m.Exchange) < uint64(len(ts.exchanges)) && ts.exchanges[m.Exchange] != nil {
 			ex := ts.exchanges[m.Exchange]
 			c.Host, c.Port, c.TLS, c.Path = ex.Host, ex.Port, ex.TLS, ex.Path
 		}
@@ -934,7 +1000,7 @@ func (ts *TrafficStore) VerifyIndex() error {
 		}
 	}
 	for i, e := range ts.exchanges {
-		if e.ID != uint64(i) {
+		if uint64(e.ID) != uint64(i) {
 			return fmt.Errorf("exchange at position %d carries id %d — position is not the id", i, e.ID)
 		}
 		for _, child := range e.Related {
@@ -953,7 +1019,7 @@ func (ts *TrafficStore) VerifyIndex() error {
 		if uint64(m.Payload) >= uint64(len(ts.wsPayloads)) {
 			return fmt.Errorf("ws message %d references payload %d which does not exist", i, m.Payload)
 		}
-		if m.Exchange >= uint64(len(ts.exchanges)) {
+		if uint64(m.Exchange) >= uint64(len(ts.exchanges)) {
 			return fmt.Errorf("ws message %d belongs to exchange %d which does not exist", i, m.Exchange)
 		}
 	}
