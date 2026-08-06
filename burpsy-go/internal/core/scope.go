@@ -173,6 +173,47 @@ func (s *Scope) Remove(kind ScopeRuleKind, pattern string) bool {
 	return false
 }
 
+// RemoveScoped removes the rule matching a kind, pattern, path prefix and port exactly.
+//
+// Remove matches on kind and pattern alone, which was unambiguous while every rule was host-only.
+// Once a rule can also carry a path prefix or a port, one host can hold several rules that differ
+// only in those — include(h) alongside exclude(h, "/admin") is the ordinary case — and Remove would
+// delete whichever came first rather than the one named. Deleting the wrong scope rule silently
+// widens or narrows an engagement's authorised surface, so the tuple has to be exact.
+//
+// Nil path and nil port mean "the rule that also has none", not "any": removing the host-wide rule
+// must not take a path-scoped sibling with it.
+func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, rule := range s.rules {
+		if rule.Kind != kind || rule.Pattern != pattern {
+			continue
+		}
+		if !eqStrPtr(rule.PathPrefix, pathPrefix) || !eqPortPtr(rule.Port, port) {
+			continue
+		}
+		s.rules = append(s.rules[:i], s.rules[i+1:]...)
+		return true
+	}
+	return false
+}
+
+func eqStrPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func eqPortPtr(a, b *uint16) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
 // Clear removes all scope rules.
 func (s *Scope) Clear() {
 	s.mu.Lock()

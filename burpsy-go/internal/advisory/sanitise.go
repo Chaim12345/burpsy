@@ -111,3 +111,72 @@ func writeSanitised(b *strings.Builder, n *xhtml.Node) {
 		}
 	}
 }
+
+// PlainParagraphs renders a fragment as plain-text blocks, one per paragraph or list item.
+//
+// The report embeds SanitisedHTML because a downloaded file benefits from real markup. The console
+// takes this instead, so the React side never needs dangerouslySetInnerHTML at all. That is a
+// deliberate asymmetry rather than an inconsistency: the catalogue is trusted and sanitised, so
+// rendering its markup would be defensible — but "defensible" is a weaker property than "structurally
+// impossible", and an XSS in the operator's own console is the one bug this tool least gets to have.
+// The cost is losing inline emphasis and list markers, which is a fair trade for the paragraph breaks
+// that carry the actual readability.
+func PlainParagraphs(fragment string) []string {
+	if strings.TrimSpace(fragment) == "" {
+		return nil
+	}
+	nodes, err := xhtml.ParseFragment(strings.NewReader(fragment), &xhtml.Node{
+		Type: xhtml.ElementNode, Data: "body", DataAtom: atom.Body,
+	})
+	if err != nil {
+		return []string{strings.TrimSpace(fragment)}
+	}
+	var out []string
+	for _, n := range nodes {
+		collectBlocks(n, &out)
+	}
+	// A fragment with no block elements at all is still one paragraph of prose, not nothing.
+	if len(out) == 0 {
+		var b strings.Builder
+		for _, n := range nodes {
+			collectText(n, &b)
+		}
+		if t := squashSpace(b.String()); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// blockElements start a new rendered block. Kept narrow on purpose: these are the ones the catalogue
+// actually uses to separate thoughts.
+var blockElements = map[atom.Atom]bool{atom.P: true, atom.Li: true, atom.H4: true, atom.H5: true, atom.H6: true, atom.Pre: true}
+
+func collectBlocks(n *xhtml.Node, out *[]string) {
+	if n.Type == xhtml.ElementNode && blockElements[n.DataAtom] {
+		var b strings.Builder
+		collectText(n, &b)
+		if t := squashSpace(b.String()); t != "" {
+			*out = append(*out, t)
+		}
+		return
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		collectBlocks(c, out)
+	}
+}
+
+func collectText(n *xhtml.Node, b *strings.Builder) {
+	if n.Type == xhtml.TextNode {
+		b.WriteString(n.Data)
+		return
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		collectText(c, b)
+	}
+}
+
+// squashSpace collapses the source's hard-wrapped whitespace so a paragraph is one line of prose.
+func squashSpace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}

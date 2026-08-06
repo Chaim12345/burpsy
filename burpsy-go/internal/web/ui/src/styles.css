@@ -2857,3 +2857,38 @@ tbody td {
   max-height: clamp(140px, 26vh, 320px);
   margin-top: var(--s2);
 }
+
+/* Repeater's response-history pager. A tab keeps every response it has received, because the method
+   of the tool is "change one thing and compare" and overwriting the previous response destroys the
+   half of the comparison the operator was about to make. */
+.repeater-history {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+/* The issue-definition catalogue entry, below the check's own text. Separated by a rule and a step
+   in from the finding's own detail, because it is a different voice: the check says what it saw
+   here, the catalogue says what this class of issue is generally. Conflating them would let a
+   reader attribute the catalogue's confident prose to this particular observation. */
+.advisory-catalogue {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s3);
+  margin-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.advisory-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  color: var(--accent-strong);
+  font-size: var(--fs-sm);
+  width: fit-content;
+}
+
+.advisory-link:hover {
+  text-decoration: underline;
+}

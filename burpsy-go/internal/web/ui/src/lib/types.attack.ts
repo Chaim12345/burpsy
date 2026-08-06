@@ -5,7 +5,7 @@
  * json tags exactly.
  */
 
-import type { Occurrence } from "./types";
+import type { Advisory, Occurrence } from "./types";
 
 /* --- intercept ------------------------------------------------------------ */
 
@@ -80,6 +80,10 @@ export interface FindingDetail {
   remediation: string | null;
   times_seen: number;
   occurrences: Occurrence[];
+  /** The catalogue entry this check resolved to, when it resolved to one. */
+  advisory?: Advisory | null;
+  /** Present instead when it deliberately resolved to none, explaining why. */
+  advisory_note?: string;
 }
 
 export interface IssuesDetail {

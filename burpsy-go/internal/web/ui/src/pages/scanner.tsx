@@ -13,7 +13,7 @@ import {
 } from "../lib/data.attack";
 import { useApp } from "../lib/store";
 import type { AuditResult, FindingDetail } from "../lib/types.attack";
-import type { Occurrence } from "../lib/types";
+import type { AdvisoryLink, Occurrence } from "../lib/types";
 import { HttpEditor } from "../ui/editor";
 import { LoadingPanel, PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import {
@@ -231,6 +231,73 @@ interface HostGroup {
 
 /** Burp lists an issue under every path it was found at, so one finding with three occurrences is
  * three tree leaves and one advisory — not one leaf that hides where it actually happened. */
+/**
+ * The issue-definition catalogue entry for a finding.
+ *
+ * The catalogue is 183 entries of long-form description, remediation and taxonomy — the thing that
+ * turns a one-line check name into something an operator can act on and put in front of a client. It
+ * was already resolved server-side and served on /api/issues, and then rendered nowhere: this panel
+ * showed only the check's own two lines. This is the missing half.
+ *
+ * Prose arrives pre-split into plain-text paragraphs, so there is no markup to trust here. Links are
+ * separate typed fields, rendered as real anchors from data rather than parsed out of a string.
+ */
+function AdvisoryPanel({ finding }: { finding: FindingDetail }): JSX.Element | null {
+  const advisory = finding.advisory;
+  if (!advisory) {
+    // A deliberate absence is stated. "No catalogue entry, and here is why" and "nothing looked" are
+    // different claims, and a blank panel reads as a loading failure.
+    return finding.advisory_note ? (
+      <div>
+        <h4>Issue definition</h4>
+        <p className="prose cell-dim">{finding.advisory_note}</p>
+      </div>
+    ) : null;
+  }
+  return (
+    <div className="advisory-catalogue">
+      <h4>
+        Issue definition — {advisory.name} <span className="cell-dim">({advisory.type_index})</span>
+      </h4>
+      {advisory.typical_severity ? (
+        <p className="field-hint">This issue class is typically {advisory.typical_severity.toLowerCase()} severity.</p>
+      ) : null}
+      {(advisory.description_paragraphs ?? []).map((text, i) => (
+        <p className="prose" key={`d${i}`}>
+          {text}
+        </p>
+      ))}
+      {(advisory.remediation_paragraphs ?? []).length ? (
+        <>
+          <h4>Recommended remediation</h4>
+          {(advisory.remediation_paragraphs ?? []).map((text, i) => (
+            <p className="prose" key={`r${i}`}>
+              {text}
+            </p>
+          ))}
+        </>
+      ) : null}
+      <AdvisoryLinks label="Classifications" links={advisory.classifications} />
+      <AdvisoryLinks label="References" links={advisory.references} />
+    </div>
+  );
+}
+
+function AdvisoryLinks({ label, links }: { label: string; links?: AdvisoryLink[] }): JSX.Element | null {
+  if (!links || links.length === 0) return null;
+  return (
+    <div className="stack-tight">
+      <span className="eyebrow">{label}</span>
+      {links.map((link) => (
+        <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer" className="advisory-link">
+          {link.title || link.url}
+          <ExternalLink size={11} />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function groupFindings(findings: FindingDetail[]): HostGroup[] {
   const byHost = new Map<string, Map<string, IssueLeaf[]>>();
   for (const finding of findings) {
@@ -507,6 +574,7 @@ export function ScannerPage(): JSX.Element {
             <h4>Remediation</h4>
             <p className="prose">{selected.finding.remediation ?? "no remediation recorded"}</p>
           </div>
+          <AdvisoryPanel finding={selected.finding} />
           {selected.finding.occurrences.length > 1 ? (
             <div>
               <h4>All occurrences ({selected.finding.occurrences.length})</h4>

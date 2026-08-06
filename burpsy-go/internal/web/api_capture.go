@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -126,6 +127,46 @@ type ScopeRequest struct {
 	Action  string `json:"action"` // "include", "exclude", "remove" or "clear"
 	Kind    string `json:"kind"`   // optional rule kind for "remove": "include" or "exclude"
 	Pattern string `json:"pattern"`
+	// Path limits the rule to requests whose path starts with it, and Port to one port. Both optional;
+	// omitted means the rule covers the whole host, which is what every rule meant before these
+	// existed. core.Scope has supported both since it was written — NewScopeRuleWithPath and
+	// NewScopeRuleWithPort — and the site map honours them, but this endpoint only ever built bare
+	// host rules, so neither shape was reachable from the UI. Burp scopes by full URL; this is the
+	// gap that left burpsy unable to say "this host, but not /admin".
+	Path string  `json:"path,omitempty"`
+	Port *uint16 `json:"port,omitempty"`
+}
+
+// normaliseScopePath validates an optional path prefix and returns nil for "no path".
+//
+// A prefix must start with "/", because it is matched with strings.HasPrefix against a request path
+// that always does: accepting "admin" would build a rule that silently matches nothing, which is the
+// worst outcome for a scope rule — the operator believes a restriction is in force and it is not.
+func normaliseScopePath(raw string) (*string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		return nil, fmt.Errorf("A scope path must start with /, so it can match a request path; got %q", trimmed)
+	}
+	return &trimmed, nil
+}
+
+// buildScopeRule turns a request into the narrowest rule it describes.
+func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule, error) {
+	path, err := normaliseScopePath(req.Path)
+	if err != nil {
+		return nil, err
+	}
+	rule := core.NewScopeRule(kind, req.Pattern)
+	if path != nil {
+		rule.PathPrefix = path
+	}
+	if req.Port != nil {
+		rule.Port = req.Port
+	}
+	return rule, nil
 }
 
 func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +185,11 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 type scopeRuleView struct {
 	Kind string  `json:"kind"`
 	Host *string `json:"host"`
+	// Path and Port are omitted for a host-wide rule. Reported so the UI can show what a rule actually
+	// covers, and so it can hand the exact tuple back on remove — two rules on one host differing only
+	// in path are the ordinary case, and removing by host alone would delete the wrong one.
+	Path *string `json:"path,omitempty"`
+	Port *uint16 `json:"port,omitempty"`
 }
 
 func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +201,7 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 			kind = "Exclude"
 		}
 		pattern := rule.Pattern
-		views = append(views, scopeRuleView{Kind: kind, Host: &pattern})
+		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -182,21 +228,34 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Pattern is required", http.StatusBadRequest)
 			return
 		}
-		s.scope.Add(core.NewScopeRule(kind, req.Pattern))
+		rule, err := buildScopeRule(kind, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.scope.Add(rule)
 	case "remove":
 		if req.Pattern == "" {
 			http.Error(w, "Pattern is required", http.StatusBadRequest)
 			return
 		}
-		// Kind is optional and falls back to whichever rule carries the pattern.
+		// Kind is optional and falls back to whichever rule carries the pattern. The path and port are
+		// part of the identity, not a filter: removing include(h) must not take exclude(h, "/admin")
+		// with it, which is exactly what matching on host alone used to do.
+		path, err := normaliseScopePath(req.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		var removed bool
 		switch req.Kind {
 		case "exclude":
-			removed = s.scope.Remove(core.ScopeExclude, req.Pattern)
+			removed = s.scope.RemoveScoped(core.ScopeExclude, req.Pattern, path, req.Port)
 		case "include":
-			removed = s.scope.Remove(core.ScopeInclude, req.Pattern)
+			removed = s.scope.RemoveScoped(core.ScopeInclude, req.Pattern, path, req.Port)
 		default:
-			removed = s.scope.Remove(core.ScopeInclude, req.Pattern) || s.scope.Remove(core.ScopeExclude, req.Pattern)
+			removed = s.scope.RemoveScoped(core.ScopeInclude, req.Pattern, path, req.Port) ||
+				s.scope.RemoveScoped(core.ScopeExclude, req.Pattern, path, req.Port)
 		}
 		if !removed {
 			http.Error(w, "No matching rule found", http.StatusNotFound)
@@ -234,13 +293,19 @@ type issueOccurrenceView struct {
 // finding's own severity. A catalogue lookup must never restate what the scanner concluded about this
 // particular occurrence.
 type issueAdvisoryView struct {
-	TypeIndex       string              `json:"type_index"`
-	Name            string              `json:"name"`
-	Description     string              `json:"description"`
-	Remediation     string              `json:"remediation"`
-	TypicalSeverity string              `json:"typical_severity"`
-	References      []issueAdvisoryLink `json:"references,omitempty"`
-	Classifications []issueAdvisoryLink `json:"classifications,omitempty"`
+	TypeIndex string `json:"type_index"`
+	Name      string `json:"name"`
+	// Description and Remediation are the raw catalogue fragments, kept for any consumer that wants
+	// them; DescriptionParagraphs and RemediationParagraphs are what the console renders. Plain text,
+	// one entry per paragraph or list item, so the React side never needs dangerouslySetInnerHTML —
+	// see advisory.PlainParagraphs for why the console and the report differ here on purpose.
+	Description           string              `json:"description"`
+	Remediation           string              `json:"remediation"`
+	DescriptionParagraphs []string            `json:"description_paragraphs,omitempty"`
+	RemediationParagraphs []string            `json:"remediation_paragraphs,omitempty"`
+	TypicalSeverity       string              `json:"typical_severity"`
+	References            []issueAdvisoryLink `json:"references,omitempty"`
+	Classifications       []issueAdvisoryLink `json:"classifications,omitempty"`
 }
 
 type issueAdvisoryLink struct {
@@ -297,13 +362,15 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	}
 	if def, note := s.advisories.Resolve(f.Name); def != nil {
 		v.Advisory = &issueAdvisoryView{
-			TypeIndex:       def.HexIndex(),
-			Name:            def.Name,
-			Description:     def.Description,
-			Remediation:     def.Remediation,
-			TypicalSeverity: string(def.Severity),
-			References:      advisoryLinks(def.References, nil),
-			Classifications: advisoryLinks(nil, def.Classification),
+			TypeIndex:             def.HexIndex(),
+			Name:                  def.Name,
+			Description:           def.Description,
+			Remediation:           def.Remediation,
+			DescriptionParagraphs: advisory.PlainParagraphs(def.Description),
+			RemediationParagraphs: advisory.PlainParagraphs(def.Remediation),
+			TypicalSeverity:       string(def.Severity),
+			References:            advisoryLinks(def.References, nil),
+			Classifications:       advisoryLinks(nil, def.Classification),
 		}
 	} else {
 		v.AdvisoryNote = note

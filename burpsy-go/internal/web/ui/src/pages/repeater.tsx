@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Columns3, Crosshair, Plus, Send, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns3, Crosshair, Plus, Send, X } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
@@ -33,8 +33,17 @@ export function RepeaterPage(): JSX.Element {
   const setIntruderSeed = useApp((state) => state.setIntruderSeed);
   const setRoute = useApp((state) => state.setRoute);
 
-  // Responses are deliberately not persisted; only the request draft is.
-  const [results, setResults] = useState<Record<string, RepeaterResult>>({});
+  /**
+   * Every response a tab has received, oldest first — not just the latest. Held in memory only;
+   * the store persists the request draft across reloads, deliberately not the responses.
+   *
+   * Burp keeps a per-tab history because the whole method of the tool is "change one thing and
+   * compare": overwriting the previous response destroys the half of the comparison you were about
+   * to make. This kept exactly one response per tab and dropped the rest on every send.
+   */
+  const [history, setHistory] = useState<Record<string, RepeaterResult[]>>({});
+  /** Which entry of the active tab's history is on screen. Null follows the newest. */
+  const [viewing, setViewing] = useState<Record<string, number | null>>({});
   const [handingOff, setHandingOff] = useState(false);
   const [inspector, setInspector] = useState(true);
   const send = useRepeaterSend();
@@ -60,7 +69,11 @@ export function RepeaterPage(): JSX.Element {
       { target: tab.target, request: tab.request, protocol: schemeOf(tab.target), from_exchange: tab.fromExchange },
       {
         onSuccess: (result) => {
-          setResults((current) => ({ ...current, [tab.id]: result }));
+          setHistory((current) => ({ ...current, [tab.id]: [...(current[tab.id] ?? []), result] }));
+          // A new send always snaps the view forward: an operator who had paged back to compare is
+          // still asking "what did this one do", and leaving them on an older entry would answer a
+          // question they stopped asking.
+          setViewing((current) => ({ ...current, [tab.id]: null }));
           toast.success(`${result.status} in ${formatDuration(result.duration_ms)}`);
         },
         onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
@@ -86,13 +99,14 @@ export function RepeaterPage(): JSX.Element {
   const handOffToIntruder = async (tab: RepeaterTab) => {
     setHandingOff(true);
     try {
-      let exchangeId = results[tab.id]?.exchange_id;
+      const known = history[tab.id] ?? [];
+      let exchangeId = known[known.length - 1]?.exchange_id;
       if (!exchangeId) {
         const sent = await api<RepeaterResult>(
           "/api/repeater/send",
           json("POST", { target: tab.target, request: tab.request, protocol: schemeOf(tab.target) }),
         );
-        setResults((current) => ({ ...current, [tab.id]: sent }));
+        setHistory((current) => ({ ...current, [tab.id]: [...(current[tab.id] ?? []), sent] }));
         exchangeId = sent.exchange_id;
       }
       if (!exchangeId) {
@@ -128,7 +142,10 @@ export function RepeaterPage(): JSX.Element {
     );
   }
 
-  const result = results[active.id];
+  // The entry on screen: whichever the operator paged to, else the newest.
+  const activeHistory = history[active.id] ?? [];
+  const viewIndex = viewing[active.id] ?? activeHistory.length - 1;
+  const result = activeHistory[viewIndex];
 
   return (
     <div className="page-fill">
@@ -144,6 +161,38 @@ export function RepeaterPage(): JSX.Element {
                   <Badge>{formatDuration(result.duration_ms)}</Badge>
                   {result.exchange_id ? <Badge>#{result.exchange_id}</Badge> : null}
                 </>
+              ) : null}
+              {activeHistory.length > 1 ? (
+                <span className="repeater-history" role="group" aria-label="Response history">
+                  <IconButton
+                    label="Previous response"
+                    size="small"
+                    disabled={viewIndex <= 0}
+                    onClick={() => setViewing((c) => ({ ...c, [active.id]: Math.max(0, viewIndex - 1) }))}
+                  >
+                    <ChevronLeft size={13} />
+                  </IconButton>
+                  {/* Counts from 1 because it is a position an operator reads aloud, not an index. */}
+                  <span className="cell-num" aria-live="polite">
+                    {viewIndex + 1}/{activeHistory.length}
+                  </span>
+                  <IconButton
+                    label="Next response"
+                    size="small"
+                    disabled={viewIndex >= activeHistory.length - 1}
+                    onClick={() =>
+                      setViewing((c) => {
+                        const next = Math.min(activeHistory.length - 1, viewIndex + 1);
+                        // Landing back on the newest returns the tab to following new sends, rather
+                        // than pinning it to what is currently the last index and silently going
+                        // stale the next time one lands.
+                        return { ...c, [active.id]: next === activeHistory.length - 1 ? null : next };
+                      })
+                    }
+                  >
+                    <ChevronRight size={13} />
+                  </IconButton>
+                </span>
               ) : null}
               <IconButton
                 label={inspector ? "Hide Inspector" : "Show Inspector"}
@@ -186,8 +235,12 @@ export function RepeaterPage(): JSX.Element {
                 onClick={(event) => {
                   event.stopPropagation();
                   closeRepeaterTab(tab.id);
-                  setResults((current) => {
+                  setHistory((current) => {
                     const { [tab.id]: _removed, ...rest } = current;
+                    return rest;
+                  });
+                  setViewing((current) => {
+                    const { [tab.id]: _dropped, ...rest } = current;
                     return rest;
                   });
                 }}

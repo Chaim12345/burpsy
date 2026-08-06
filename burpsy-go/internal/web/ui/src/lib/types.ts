@@ -112,6 +112,28 @@ export interface Occurrence {
   path: string;
 }
 
+/** A titled URL from the issue-definition catalogue: further reading, or a CWE/CAPEC entry. */
+export interface AdvisoryLink {
+  title: string;
+  url: string;
+}
+
+/**
+ * The catalogue entry a finding resolved to. Prose arrives pre-split into plain-text paragraphs
+ * rather than as markup, so the console renders it without dangerouslySetInnerHTML — the catalogue
+ * is trusted and server-sanitised, but "structurally impossible" beats "defensible" for XSS in the
+ * operator's own console. The downloadable report keeps the full markup.
+ */
+export interface Advisory {
+  type_index: string;
+  name: string;
+  typical_severity: string;
+  description_paragraphs?: string[];
+  remediation_paragraphs?: string[];
+  references?: AdvisoryLink[];
+  classifications?: AdvisoryLink[];
+}
+
 export interface Finding {
   check_name?: string;
   issue_name?: string | null;
@@ -122,6 +144,10 @@ export interface Finding {
   remediation: string;
   times_seen: number;
   occurrences: Occurrence[];
+  /** Present when the check resolved to a catalogue entry. */
+  advisory?: Advisory | null;
+  /** Present instead when it deliberately resolved to none, explaining why. */
+  advisory_note?: string;
 }
 
 export interface Issues {
