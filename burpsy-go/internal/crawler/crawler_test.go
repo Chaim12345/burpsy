@@ -671,8 +671,25 @@ func TestDSL03QueryNamingPostFetchFieldsIsRefusedAtConstruction(t *testing.T) {
 		cfg.Query = q
 		if _, err := New(cfg); err == nil {
 			t.Errorf("query %q names a field no frontier URL has and must be refused at construction", q)
-		} else if !strings.Contains(err.Error(), "host and method") {
+		} else if !strings.Contains(err.Error(), "host, method and path") {
 			t.Errorf("query %q: the error should say which fields are available pre-fetch, got %v", q, err)
+		}
+	}
+}
+
+// Path is known before the fetch — it is the same value the scope check reads off the frontier URL —
+// so a crawl-scope query may name it, unlike the response-derived fields above.
+func TestDSL03QueryNamingPathIsAcceptedBecauseAFrontierURLHasOne(t *testing.T) {
+	for _, q := range []string{
+		`path ~ "/admin"`,
+		`host = "example.com" and path ~ "/admin"`,
+		`not path ~ "/logout"`,
+	} {
+		h := newHarness()
+		cfg := h.config("http://example.com/")
+		cfg.Query = q
+		if _, err := New(cfg); err != nil {
+			t.Errorf("query %q names only pre-fetch fields and must be accepted, got %v", q, err)
 		}
 	}
 }

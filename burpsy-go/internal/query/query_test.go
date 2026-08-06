@@ -11,13 +11,15 @@ import (
 type fakeRow struct {
 	host   string
 	method string
-	status int // 0 = absent, as Queryable documents
+	path   string // "" = absent, as Queryable documents
+	status int    // 0 = absent, as Queryable documents
 	mime   string
 	body   []byte
 }
 
 func (f fakeRow) Host() string   { return f.host }
 func (f fakeRow) Method() string { return f.method }
+func (f fakeRow) Path() string   { return f.path }
 func (f fakeRow) Status() int    { return f.status }
 func (f fakeRow) Mime() string   { return f.mime }
 func (f fakeRow) Body() []byte   { return f.body }
@@ -26,6 +28,7 @@ func row() fakeRow {
 	return fakeRow{
 		host:   "Example.com",
 		method: "GET",
+		path:   "/search",
 		status: 200,
 		mime:   "text/html",
 		body:   []byte("<html>hello world</html>"),
@@ -372,6 +375,41 @@ func TestHostAndMimeCompareCaseInsensitivelyAndMethodDoesNot(t *testing.T) {
 	assertMatch(t, `method ~ "e"`, r, false)
 }
 
+// The path component is case-sensitive per RFC 3986 — /Admin and /admin are different resources, so
+// folding case would report a hit on a path the server never served.
+func TestPathComparesCaseSensitivelyAcrossItsThreeOperators(t *testing.T) {
+	r := row() // path "/search"
+	assertMatch(t, `path = "/search"`, r, true)
+	assertMatch(t, `path = "/SEARCH"`, r, false)
+	assertMatch(t, `path != "/login"`, r, true)
+	assertMatch(t, `path ~ "sear"`, r, true)
+	assertMatch(t, `path ~ "SEAR"`, r, false)
+
+	// The site map's "filter history by this path" button emits exactly this shape.
+	assertMatch(t, `host = "example.com" AND path ~ "/search"`, r, true)
+	assertMatch(t, `host = "example.com" AND path ~ "/login"`, r, false)
+}
+
+// A consumer with no path — a match-and-replace candidate, say — reports absent, and absent means
+// every comparison is false, `!=` included. Same rule status and mime already follow.
+func TestAnAbsentPathMatchesNoComparisonOnPath(t *testing.T) {
+	r := row()
+	r.path = ""
+	for _, src := range []string{`path = "/x"`, `path != "/x"`, `path ~ "x"`} {
+		assertMatch(t, src, r, false)
+	}
+	assertMatch(t, `host = "example.com"`, r, true)
+}
+
+// Ordering comparisons are a status-only affordance; a path is not ordered.
+func TestPathRejectsTheOrderingOperators(t *testing.T) {
+	for _, src := range []string{`path > "/a"`, `path <= "/a"`, `path in 1..2`} {
+		if _, err := Parse(src); err == nil {
+			t.Errorf("%q should not parse", src)
+		}
+	}
+}
+
 func TestStatusScalarOperators(t *testing.T) {
 	r := row() // 200
 	assertMatch(t, `status = 200`, r, true)
@@ -450,9 +488,13 @@ func (c ruleCandidate) Host() string {
 	return parts[1]
 }
 func (c ruleCandidate) Method() string { return strings.SplitN(c.requestLine, " ", 2)[0] }
-func (c ruleCandidate) Status() int    { return c.responseCode }
-func (c ruleCandidate) Mime() string   { return c.contentType }
-func (c ruleCandidate) Body() []byte   { return []byte(c.rawBody) }
+
+// This consumer models a match-and-replace candidate, which carries no path — absent, per Queryable.
+func (c ruleCandidate) Path() string { return "" }
+
+func (c ruleCandidate) Status() int  { return c.responseCode }
+func (c ruleCandidate) Mime() string { return c.contentType }
+func (c ruleCandidate) Body() []byte { return []byte(c.rawBody) }
 
 func TestTheSameParsedQueryDrivesTwoUnrelatedConsumers(t *testing.T) {
 	e, err := Parse(`status in 200..299 and (host = "example.com" or host = "other.test") and body ~ "hi"`)

@@ -66,10 +66,12 @@ func TestRequestFingerprintKeepsGenuineDifferences(t *testing.T) {
 	if requestFingerprint("POST", u, nil) == requestFingerprint("POST", u, []byte("a=1")) {
 		t.Error("a body's presence must change the fingerprint")
 	}
-	// The fragment never reaches the server, so it must not be part of the identity.
-	if requestFingerprint("GET", mustURL(t, "http://h/a"), nil) !=
+	// The fragment never reaches the server, so it must not be part of the identity. Both sides of
+	// this comparison used to be the same fragment-free URL, so it asserted only that the function is
+	// deterministic and the property it names went untested.
+	if requestFingerprint("GET", mustURL(t, "http://h/a#top"), nil) !=
 		requestFingerprint("GET", mustURL(t, "http://h/a"), nil) {
-		t.Error("fingerprinting must be deterministic")
+		t.Error("a fragment never reaches the server and must not change the fingerprint")
 	}
 }
 

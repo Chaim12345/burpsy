@@ -37,7 +37,7 @@ type PathNode struct {
 	Path        string
 	Methods     map[string]int // method → count
 	Statuses    map[int]int    // status → count
-	ExchangeIDs []uint64
+	ExchangeIDs []core.ExchangeID
 }
 
 // HostNode groups all paths under one host.
@@ -145,7 +145,7 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 
 // idSlot returns where id belongs in an ascending slice, and whether it is
 // already there.
-func idSlot(ids []uint64, id uint64) (int, bool) {
+func idSlot(ids []core.ExchangeID, id core.ExchangeID) (int, bool) {
 	n := len(ids)
 	if n == 0 || ids[n-1] < id {
 		return n, false
@@ -162,7 +162,7 @@ func idSlot(ids []uint64, id uint64) (int, bool) {
 // covers Follow's backfill, which races its own subscription by design — an
 // exchange arriving mid-backfill is added before the older ones behind it, and
 // without this the site map would report a page's oldest capture as its latest.
-func insertIDAt(pn *PathNode, at int, id uint64) {
+func insertIDAt(pn *PathNode, at int, id core.ExchangeID) {
 	if at == len(pn.ExchangeIDs) {
 		pn.ExchangeIDs = append(pn.ExchangeIDs, id)
 		return
@@ -242,7 +242,7 @@ func (pn *PathNode) clone() *PathNode {
 		Path:        pn.Path,
 		Methods:     make(map[string]int, len(pn.Methods)),
 		Statuses:    make(map[int]int, len(pn.Statuses)),
-		ExchangeIDs: make([]uint64, len(pn.ExchangeIDs)),
+		ExchangeIDs: make([]core.ExchangeID, len(pn.ExchangeIDs)),
 	}
 	for m, n := range pn.Methods {
 		out.Methods[m] = n

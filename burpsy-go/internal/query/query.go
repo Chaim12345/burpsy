@@ -32,7 +32,7 @@
 //	unary-expr := "not" unary-expr | primary
 //	primary    := "(" or-expr ")" | comparison
 //	comparison := field op value
-//	field      := "host" | "status" | "method" | "mime" | "body"
+//	field      := "host" | "status" | "method" | "path" | "mime" | "body"
 //
 // `not` binds tighter than `and`, which binds tighter than `or` — `a or b and c` parses as
 // `a or (b and c)`. Parentheses override both, and `not` needs none of its own: `not host = "x"`
@@ -40,10 +40,11 @@
 //
 // # The field/operator matrix, all of it enforced by Parse
 //
-//   - host, method, mime: `=` (`==`), `!=`, `~` (contains), each with a string value. host and
-//     mime compare case-insensitively (DNS names and MIME type/subtype both are); method does not,
-//     because the HTTP method token is case-sensitive per RFC 7230 — folding case there would
-//     accept a query describing a different wire request than the one actually sent.
+//   - host, method, path, mime: `=` (`==`), `!=`, `~` (contains), each with a string value. host and
+//     mime compare case-insensitively (DNS names and MIME type/subtype both are); method and path do
+//     not, because the HTTP method token is case-sensitive per RFC 7230 and the path component is
+//     case-sensitive per RFC 3986 — folding case in either would accept a query describing a
+//     different wire request than the one actually sent.
 //   - status: `=` (`==`), `!=`, `<`, `<=`, `>`, `>=` with an integer value, or `in low..high` for a
 //     range inclusive of both ends. A literal outside 0-65535 is rejected at parse time.
 //   - body: `~` only, matched case-sensitively against the raw bytes. There is no equality on body:
@@ -97,7 +98,8 @@ import (
 type Queryable interface {
 	Host() string
 	Method() string
-	Status() int // 0 = absent (no response yet)
+	Path() string // "" = absent
+	Status() int  // 0 = absent (no response yet)
 	Mime() string
 	Body() []byte
 }
@@ -135,9 +137,14 @@ type field int
 const (
 	fieldHost field = iota
 	fieldMethod
+	fieldPath
 	fieldMime
 	fieldStatus
 	fieldBody
+	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this, so
+	// adding a field above without extending that array is a compile error rather than a silent
+	// out-of-range panic on the first query that names the new field.
+	fieldCount = iota
 )
 
 func (f field) String() string {
@@ -146,6 +153,8 @@ func (f field) String() string {
 		return "host"
 	case fieldMethod:
 		return "method"
+	case fieldPath:
+		return "path"
 	case fieldMime:
 		return "mime"
 	case fieldStatus:
@@ -402,11 +411,11 @@ func (p *parser) parseCmp() (*Expr, error) {
 	fieldAt := p.pos
 	name := p.consumeIdent()
 	if name == "" {
-		return nil, p.errAt(fieldAt, "expected a field name (host, status, method, mime, body) or '('")
+		return nil, p.errAt(fieldAt, "expected a field name (host, status, method, path, mime, body) or '('")
 	}
 	f, ok := fieldByName(name)
 	if !ok {
-		return nil, p.errAt(fieldAt, "'%s' is not a field this grammar has — the fields are host, status, method, mime and body", name)
+		return nil, p.errAt(fieldAt, "'%s' is not a field this grammar has — the fields are host, status, method, path, mime and body", name)
 	}
 
 	o, opAt, err := p.parseOp(f)
@@ -436,6 +445,8 @@ func fieldByName(name string) (field, bool) {
 		return fieldHost, true
 	case "method":
 		return fieldMethod, true
+	case "path":
+		return fieldPath, true
 	case "mime":
 		return fieldMime, true
 	case "status":
@@ -451,7 +462,7 @@ func fieldByName(name string) (field, bool) {
 // instead of inheriting one.
 func fieldAllows(f field, o op) bool {
 	switch f {
-	case fieldHost, fieldMethod, fieldMime:
+	case fieldHost, fieldMethod, fieldPath, fieldMime:
 		return o == opEq || o == opNe || o == opContains
 	case fieldStatus:
 		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
@@ -697,6 +708,13 @@ func (e *Expr) matchCmp(q Queryable) bool {
 	case fieldMethod:
 		// Case-sensitive per RFC 7230: a server that defines only GET does not also answer `get`.
 		return strOp(e.op, q.Method(), e.str, false)
+	case fieldPath:
+		path := q.Path()
+		if path == "" {
+			return false // absent path: no comparison on it can hold, `!=` included
+		}
+		// Case-sensitive per RFC 3986: /Admin and /admin are different resources.
+		return strOp(e.op, path, e.str, false)
 	case fieldMime:
 		mime := q.Mime()
 		if mime == "" {

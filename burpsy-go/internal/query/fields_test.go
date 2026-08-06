@@ -76,6 +76,7 @@ func TestFieldsIsReadOnly(t *testing.T) {
 type stubRow struct {
 	host   string
 	method string
+	path   string
 	status int
 	mime   string
 	body   []byte
@@ -83,6 +84,7 @@ type stubRow struct {
 
 func (r stubRow) Host() string   { return r.host }
 func (r stubRow) Method() string { return r.method }
+func (r stubRow) Path() string   { return r.path }
 func (r stubRow) Status() int    { return r.status }
 func (r stubRow) Mime() string   { return r.mime }
 func (r stubRow) Body() []byte   { return r.body }

@@ -26,13 +26,13 @@ package query
 // untouched.
 
 // Fields reports the fields this query compares on, in the grammar's own field order (host,
-// method, mime, status, body) and without duplicates. A nil *Expr — "no filter" — names none.
+// method, path, mime, status, body) and without duplicates. A nil *Expr — "no filter" — names none.
 func (e *Expr) Fields() []string {
-	var seen [5]bool
+	var seen [fieldCount]bool
 	e.collectFields(&seen)
 	// Built from the declared field order rather than discovery order, so the result is stable
 	// across two queries that name the same fields in different places.
-	order := [5]field{fieldHost, fieldMethod, fieldMime, fieldStatus, fieldBody}
+	order := [fieldCount]field{fieldHost, fieldMethod, fieldPath, fieldMime, fieldStatus, fieldBody}
 	out := make([]string, 0, len(order))
 	for _, f := range order {
 		if seen[int(f)] {
@@ -45,7 +45,7 @@ func (e *Expr) Fields() []string {
 // collectFields walks the tree. kindNot and the two boolean kinds recurse; only kindCmp names a
 // field. A right child is nil for kindNot, which is why each branch is tested rather than the walk
 // assuming two children.
-func (e *Expr) collectFields(seen *[5]bool) {
+func (e *Expr) collectFields(seen *[fieldCount]bool) {
 	if e == nil {
 		return
 	}

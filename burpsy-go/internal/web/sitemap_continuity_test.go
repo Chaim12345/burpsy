@@ -211,7 +211,7 @@ func TestObserveExchangesPartitionsExistingFromArriving(t *testing.T) {
 	addTraffic(t, store, "a.test", "GET", "/1")
 	addTraffic(t, store, "a.test", "GET", "/2")
 
-	seen := map[uint64]int{}
+	seen := map[core.ExchangeID]int{}
 	existing := store.ObserveExchanges(func(ex *core.Exchange) { seen[ex.ID]++ })
 	if len(existing) != 2 {
 		t.Fatalf("existing = %d, want the 2 already recorded", len(existing))

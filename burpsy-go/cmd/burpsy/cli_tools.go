@@ -275,7 +275,7 @@ func scanAudit(ctx *cliContext, args []string) error {
 	if err != nil || id == 0 {
 		return fmt.Errorf("invalid exchange id %q", *idStr)
 	}
-	ex, err := ctx.store.GetExchange(id)
+	ex, err := ctx.store.GetExchange(core.ExchangeID(id))
 	if err != nil {
 		return err
 	}
@@ -283,7 +283,7 @@ func scanAudit(ctx *cliContext, args []string) error {
 	defer cancel()
 	// AuditWithin rather than Audit: the outcome is what says which checks were *not* dispatched, and
 	// a CLI that printed only findings would report a bounded audit as a clean one.
-	outcome, findings := ctx.scanner.AuditWithin(ctxb, id, ctx.scanner.AuditConfig())
+	outcome, findings := ctx.scanner.AuditWithin(ctxb, core.ExchangeID(id), ctx.scanner.AuditConfig())
 	if outcome.Error != "" {
 		return fmt.Errorf("exchange %d not audited: %s", id, outcome.Error)
 	}

@@ -264,7 +264,7 @@ type Fetch struct {
 	// Status is the response status, or 0 when the response could not be parsed.
 	Status int `json:"status"`
 	// ExchangeID is the store id, so a caller can pull the request and response bytes out of history.
-	ExchangeID uint64 `json:"exchange_id"`
+	ExchangeID core.ExchangeID `json:"exchange_id"`
 	// Depth is how many links from a seed this was. A seed is 0.
 	Depth int `json:"depth"`
 	// Fingerprint is the location fingerprint, empty for a redirect (which is an edge, not a
@@ -513,7 +513,7 @@ func New(cfg Config) (*Crawler, error) {
 		}
 		if bad := unavailablePreFetch(parsed.Fields()); len(bad) > 0 {
 			return nil, fmt.Errorf(
-				"the crawl-scope query names %s, which a frontier URL does not have: the query decides whether to fetch a URL, so it is evaluated before there is a response to ask about. Pre-fetch the query may name host and method only",
+				"the crawl-scope query names %s, which a frontier URL does not have: the query decides whether to fetch a URL, so it is evaluated before there is a response to ask about. Pre-fetch the query may name host, method and path only",
 				strings.Join(bad, " and "),
 			)
 		}
@@ -595,8 +595,10 @@ func unavailablePreFetch(fields []string) []string {
 	var bad []string
 	for _, f := range fields {
 		switch f {
-		case "host", "method":
-			// Both are properties of the request the crawler is about to build, so both are known.
+		case "host", "method", "path":
+			// All three are properties of the request the crawler is about to build, so all three
+			// are known. Path in particular is the same value the scope check one gate over already
+			// reads off the frontier URL.
 		default:
 			bad = append(bad, f)
 		}
@@ -867,7 +869,7 @@ func (c *Crawler) visit(ctx context.Context, item frontierItem, rep *Report, lim
 	// store's. So it is a response-category skip, and the request that produced it still counts as a
 	// fetch.
 	if c.retention != nil && !c.retention.Match(fetchedRow{
-		host: item.url.Hostname(), method: item.method, status: fetch.Status,
+		host: item.url.Hostname(), method: item.method, path: item.url.Path, status: fetch.Status,
 		mime: contentType, body: body,
 	}) {
 		fetch.RetentionExcluded = true
@@ -1201,7 +1203,7 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		})
 		return false
 	}
-	if c.query != nil && !c.query.Match(frontierRow{host: host, method: item.method}) {
+	if c.query != nil && !c.query.Match(frontierRow{host: host, method: item.method, path: item.url.Path}) {
 		c.skips.record(SkipRecord{
 			Reason: SkipQueryExcluded, URL: item.url.String(), Method: item.method,
 			Text: item.text, FoundAt: foundAt, Detail: "crawl-scope query: " + c.cfg.Query,
@@ -1292,19 +1294,21 @@ func (c *Crawler) recordFingerprintBudget(item frontierItem, foundAt string, lim
 
 // frontierRow is what a crawl-scope query is evaluated against (DSL-03).
 //
-// Host and Method are the request the crawler is about to build, and are real answers. Status, Mime
-// and Body report absent, because before the fetch there is no response — and New has already
+// Host, Method and Path are the request the crawler is about to build, and are real answers. Status,
+// Mime and Body report absent, because before the fetch there is no response — and New has already
 // refused any query that names them, so no comparison ever reaches those three. They are implemented
-// as absent rather than left to panic because query.Queryable requires all five, and because a
+// as absent rather than left to panic because query.Queryable requires all six, and because a
 // caller constructing this type directly should get the documented "absent fields are absent"
 // behaviour rather than a crash.
 type frontierRow struct {
 	host   string
 	method string
+	path   string
 }
 
 func (r frontierRow) Host() string   { return r.host }
 func (r frontierRow) Method() string { return r.method }
+func (r frontierRow) Path() string   { return r.path }
 func (r frontierRow) Status() int    { return 0 }
 func (r frontierRow) Mime() string   { return "" }
 func (r frontierRow) Body() []byte   { return nil }
@@ -1315,6 +1319,7 @@ func (r frontierRow) Body() []byte   { return nil }
 type fetchedRow struct {
 	host   string
 	method string
+	path   string
 	status int
 	mime   string
 	body   []byte
@@ -1322,6 +1327,7 @@ type fetchedRow struct {
 
 func (r fetchedRow) Host() string   { return r.host }
 func (r fetchedRow) Method() string { return r.method }
+func (r fetchedRow) Path() string   { return r.path }
 func (r fetchedRow) Status() int    { return r.status }
 func (r fetchedRow) Mime() string   { return r.mime }
 func (r fetchedRow) Body() []byte   { return r.body }
