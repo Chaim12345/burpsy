@@ -76,16 +76,20 @@ func (p *TlsPolicy) AddPassthrough(pattern string) {
 }
 
 // WithEngine sets the TLS engine for interception.
+//
+// `defer p.mu.Unlock()`, not `p.mu.Unlock()`: as written the lock was taken and released before the
+// write, so the assignment ran unsynchronised while readers held the lock — a data race the mutex
+// looked like it was preventing.
 func (p *TlsPolicy) WithEngine(engine *TlsEngine) {
 	p.mu.Lock()
-	p.mu.Unlock()
+	defer p.mu.Unlock()
 	p.engine = engine
 }
 
-// AddPassthroughPort adds a port to passthrough.
+// AddPassthroughPort adds a port to passthrough. Same unlock-before-write defect as WithEngine.
 func (p *TlsPolicy) AddPassthroughPort(port uint16) {
 	p.mu.Lock()
-	p.mu.Unlock()
+	defer p.mu.Unlock()
 	p.passthroughPorts = append(p.passthroughPorts, port)
 }
 
@@ -769,7 +773,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			// exchange 0 is a real id — the first exchange in a fresh store has it
 			// — and testing the id silently dropped that connection's frames.
 			var capture *wsCapture
-			exchangeID := uint64(0)
+			exchangeID := core.ExchangeID(0)
 			if handshake != nil {
 				exchangeID = handshake.ID
 				capture = &wsCapture{scope: s.config.scope, host: reqHost, port: reqPort, tls: true, path: path}

@@ -509,9 +509,9 @@ type DOMAnalysis struct {
 	Skip *DOMSkip `json:"skip,omitempty"`
 	// ExchangeID, URL and Method identify the item, for the findings this analysis produces. Zero
 	// when the analysis was run directly on a body rather than on a stored exchange.
-	ExchangeID uint64 `json:"exchange_id,omitempty"`
-	URL        string `json:"url,omitempty"`
-	Method     string `json:"method,omitempty"`
+	ExchangeID core.ExchangeID `json:"exchange_id,omitempty"`
+	URL        string          `json:"url,omitempty"`
+	Method     string          `json:"method,omitempty"`
 	// Scripts are the bodies actually analysed; SkippedScripts are the bodies present and not
 	// analysed. The two together account for every script found.
 	Scripts        []DOMScriptRef  `json:"scripts,omitempty"`

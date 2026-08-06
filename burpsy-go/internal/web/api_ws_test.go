@@ -22,13 +22,13 @@ func wsTestServer() (*Server, *core.TrafficStore) {
 
 // addWsHandshake records a handshake exchange and returns its id, which is what
 // every message on that connection names.
-func addWsHandshake(store *core.TrafficStore, host string, port uint16, path string) uint64 {
+func addWsHandshake(store *core.TrafficStore, host string, port uint16, path string) core.ExchangeID {
 	ex := &core.Exchange{Host: host, Port: port, Path: path, Method: "GET", Protocol: core.ProtocolHTTP1}
 	store.AddExchange(ex)
 	return ex.ID
 }
 
-func addWsMessage(store *core.TrafficStore, exchange uint64, fromClient bool, opcode core.WsOpcode, payload string, atMs uint64) core.MsgId {
+func addWsMessage(store *core.TrafficStore, exchange core.ExchangeID, fromClient bool, opcode core.WsOpcode, payload string, atMs uint64) core.MsgId {
 	return store.AddWsMessage(&core.WsMessage{
 		Exchange:   exchange,
 		FromClient: fromClient,
@@ -85,7 +85,7 @@ func TestWsHistoryFilteredByConnectionKeepsTheWholeIndexAsTheTotal(t *testing.T)
 	addWsMessage(store, b, true, core.WsOpcodeText, "two", 2000)
 	addWsMessage(store, b, false, core.WsOpcodeText, "three", 3000)
 
-	resp := decodeWsHistory(t, s, "/api/ws/history?exchange="+itoa(b))
+	resp := decodeWsHistory(t, s, "/api/ws/history?exchange="+itoa(uint64(b)))
 	if len(resp.Rows) != 2 {
 		t.Fatalf("rows = %d, want the 2 messages on connection b", len(resp.Rows))
 	}

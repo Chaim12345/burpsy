@@ -30,16 +30,16 @@ func Test_the_audit_endpoint_reports_what_the_engine_did_not_dispatch(t *testing
 	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/shop"}
 	s.store.AddExchange(ex)
 
-	rec := postJSON(t, s, "/api/audit/"+strconv.FormatUint(ex.ID, 10), nil)
+	rec := postJSON(t, s, "/api/audit/"+strconv.FormatUint(uint64(ex.ID), 10), nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST /api/audit/%d: %d", ex.ID, rec.Code)
 	}
 	var body struct {
-		Started       bool   `json:"started"`
-		ExchangeID    uint64 `json:"exchange_id"`
-		ActiveChecks  int    `json:"active_checks"`
-		Unimplemented int    `json:"unimplemented"`
-		Summary       string `json:"summary"`
+		Started       bool            `json:"started"`
+		ExchangeID    core.ExchangeID `json:"exchange_id"`
+		ActiveChecks  int             `json:"active_checks"`
+		Unimplemented int             `json:"unimplemented"`
+		Summary       string          `json:"summary"`
 		Outcome       struct {
 			State   string `json:"state"`
 			Ran     int    `json:"ran"`

@@ -35,13 +35,14 @@ function QueryHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open:
           "status >= 400",
           "method = POST",
           "path ~ /admin",
+          "body ~ password",
           'host = api.example.com AND status >= 400',
           "method = POST OR method = PUT",
         ].join("\n")}
       </div>
       <p className="field-hint">
-        Terms without an operator are treated as a free-text search across host and path. Clear the box to return to the
-        full capture.
+        The fields are host, status, method, path, mime and body — every term needs an operator and a value. host and
+        mime ignore case; method and path do not. Clear the box to return to the full capture.
       </p>
     </Modal>
   );

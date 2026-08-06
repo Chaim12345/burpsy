@@ -10,6 +10,9 @@ export interface RepeaterTab {
   target: string;
   protocol: string;
   request: string;
+  /** The exchange this tab was opened from, sent back as the resend's parent so lineage survives.
+   *  Undefined for a tab the operator started by hand — there is no antecedent to record. */
+  fromExchange?: number;
 }
 
 export interface IntruderSeed {
@@ -46,7 +49,7 @@ interface AppState {
   setPaletteOpen: (open: boolean) => void;
   setShortcutsOpen: (open: boolean) => void;
 
-  openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string }) => string;
+  openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; fromExchange?: number }) => string;
   updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
   closeRepeaterTab: (id: string) => void;
   setActiveRepeaterTab: (id: string) => void;
@@ -78,10 +81,10 @@ export const useApp = create<AppState>()(
       setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
       setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
 
-      openRepeaterTab: ({ name, target, protocol = "https", request }) => {
+      openRepeaterTab: ({ name, target, protocol = "https", request, fromExchange }) => {
         const id = nextId();
         set((state) => ({
-          repeaterTabs: [...state.repeaterTabs, { id, name, target, protocol, request }].slice(-12),
+          repeaterTabs: [...state.repeaterTabs, { id, name, target, protocol, request, fromExchange }].slice(-12),
           activeRepeaterTab: id,
         }));
         return id;

@@ -387,7 +387,9 @@ export function IntruderPage(): JSX.Element {
     [result],
   );
 
-  const canDiscover = msgId.trim() !== "" && Number(msgId) > 0;
+  // `>= 0` and an integer check: message ids count from zero, so message 0 is a real base request —
+  // `> 0` disabled Discover for it, and a decimal typed by accident passed.
+  const canDiscover = msgId.trim() !== "" && Number.isInteger(Number(msgId)) && Number(msgId) >= 0;
   const canRun =
     canDiscover && target.trim() !== "" && selected.length > 0 && setSizes.every((size) => size > 0) && !run.isPending;
 

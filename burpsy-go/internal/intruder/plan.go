@@ -211,8 +211,13 @@ func (p *AttackPlan) IsEmpty() bool { return p.len == 0 }
 func (p *AttackPlan) Combinations() uint64 { return p.combinations }
 
 // CombinationsExact is false when Combinations saturated and is a lower bound.
+//
+// The saturation flag is the whole answer. This also tested `p.combinations <= math.MaxUint64`,
+// which is true of every uint64 that exists — a guard that reads like a bounds check and cannot
+// fail. Removed rather than kept as belt-and-braces, because a condition that can never be false
+// hides whether the real one is doing its job.
 func (p *AttackPlan) CombinationsExact() bool {
-	return !p.saturated && p.combinations <= math.MaxUint64
+	return !p.saturated
 }
 
 // Truncated reports whether the bound cut the attack short.

@@ -160,8 +160,10 @@ export function ComparerPage(): JSX.Element {
   const loadSlot = (slot: "a" | "b") => {
     const raw = slot === "a" ? msgA : msgB;
     const id = Number(raw);
-    if (!Number.isInteger(id) || id <= 0) {
-      toast.error("Give a stored message id");
+    // Message ids count from zero too, so message 0 — the first request body ever stored — is real
+    // and loadable. `<= 0` refused it.
+    if (!Number.isInteger(id) || id < 0) {
+      toast.error("Give a stored message id — a whole number, counting from 0");
       return;
     }
     loadMessage.mutate(id, {

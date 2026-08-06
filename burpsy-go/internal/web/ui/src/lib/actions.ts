@@ -91,6 +91,7 @@ export function useExchangeActions(): {
         target: exchangeAuthority(exchange),
         protocol: schemeOf(exchange),
         request: raw,
+        fromExchange: exchange.id,
       });
       setRoute("repeater");
       toast.success(`Exchange #${exchange.id} sent to Repeater`);

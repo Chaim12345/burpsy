@@ -17,6 +17,23 @@ function taskTone(state: string): "good" | "bad" | "warn" | "info" {
 }
 
 /**
+ * Agrees a server-supplied work unit with its count.
+ *
+ * The server names its units in the plural — "exchanges", "passive check sets", "tasks" — and the
+ * count was interpolated straight in front, so a single one read "1 EXCHANGES WITHOUT A VERDICT".
+ *
+ * Trailing-`s` removal only, and only at exactly one. That is enough for every unit this API emits
+ * and, importantly, it leaves the mass noun alone: "passive scanning work" does not end in `s`, so
+ * it is returned unchanged rather than mangled into "wor". A unit with an irregular plural would
+ * need a real inflector; none exists today, and inventing one for a case that has not arrived would
+ * be the more fragile choice.
+ */
+function unitFor(count: number, unit: string): string {
+  if (count !== 1 || !unit.endsWith("s") || unit.endsWith("ss")) return unit;
+  return unit.slice(0, -1);
+}
+
+/**
  * Coverage is reported as a floor, never as a total: a check that was skipped,
  * errored or gated is accounted for separately so a low finding count is not
  * mistaken for a clean result.
@@ -36,7 +53,7 @@ function CoverageCard({ summary }: { summary: CoverageSummary }): JSX.Element {
       <p className={breakdown.complete ? "summary-verdict good-text" : "summary-verdict warn-text"}>
         {breakdown.complete
           ? "complete"
-          : `${formatCount(breakdown.unaccounted)} ${summary.work_unit} without a verdict`}
+          : `${formatCount(breakdown.unaccounted)} ${unitFor(breakdown.unaccounted, summary.work_unit)} without a verdict`}
       </p>
     </div>
   );

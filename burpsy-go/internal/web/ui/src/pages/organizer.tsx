@@ -74,8 +74,10 @@ export function OrganizerPage(): JSX.Element {
 
   const add = () => {
     const exchange = Number(exchangeId.trim());
-    if (!Number.isInteger(exchange) || exchange <= 0) {
-      toast.error("Enter a positive exchange id");
+    // `< 0`, not `<= 0`. Exchange ids count from zero, so exchange 0 is the first request captured in
+    // a session — the one most likely to be reached for first, and the one this guard used to refuse.
+    if (!Number.isInteger(exchange) || exchange < 0) {
+      toast.error("Enter an exchange id — a whole number, counting from 0");
       return;
     }
     mutations.add.mutate(exchange, {

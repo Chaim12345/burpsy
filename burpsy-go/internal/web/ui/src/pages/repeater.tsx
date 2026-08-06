@@ -57,7 +57,7 @@ export function RepeaterPage(): JSX.Element {
 
   const submit = (tab: RepeaterTab) => {
     send.mutate(
-      { target: tab.target, request: tab.request, protocol: schemeOf(tab.target) },
+      { target: tab.target, request: tab.request, protocol: schemeOf(tab.target), from_exchange: tab.fromExchange },
       {
         onSuccess: (result) => {
           setResults((current) => ({ ...current, [tab.id]: result }));

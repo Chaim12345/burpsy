@@ -491,8 +491,8 @@ func (o AuditOutcome) refuse(state ItemState, why string) AuditOutcome {
 // ItemOutcome is one exchange's outcome inside a session, keeping the exchange id attached — the Go
 // shape of Rust's `(u64, AuditOutcome)` tuple.
 type ItemOutcome struct {
-	ExchangeID uint64       `json:"exchange_id"`
-	Outcome    AuditOutcome `json:"outcome"`
+	ExchangeID core.ExchangeID `json:"exchange_id"`
+	Outcome    AuditOutcome    `json:"outcome"`
 }
 
 // SessionOutcome is what one AuditSession did.
@@ -613,7 +613,7 @@ func (s *ActiveScanner) WithScope(scope *core.Scope) *ActiveScanner {
 // One-shot: a fresh AuditLedger admits everything, so re-auditing the same exchange really
 // re-audits it. Scope collapse belongs to a *session*, not to a single operator-triggered audit — an
 // operator who clicks audit again means it.
-func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID uint64, cfg AuditConfig) (AuditOutcome, []*Finding) {
+func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.ExchangeID, cfg AuditConfig) (AuditOutcome, []*Finding) {
 	run := newAuditRun(cfg)
 	return s.auditItem(ctx, exchangeID, run, enabledChecks(s.config))
 }
@@ -647,7 +647,7 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID uint64, cfg 
 // DispositionAlreadyCovered: in Rust it is always the later one in the given order, here it is
 // whichever worker reaches the admission gate first. The totals are identical either way; only the
 // attribution moves. Items come back in the order requested regardless.
-func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []uint64, cfg AuditConfig) (*SessionOutcome, []*Finding) {
+func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.ExchangeID, cfg AuditConfig) (*SessionOutcome, []*Finding) {
 	checks := enabledChecks(s.config)
 	run := newAuditRun(cfg)
 	breaker := newSessionBreaker(cfg)
@@ -795,7 +795,7 @@ func plan(ex *core.Exchange, checks []activeCheck) (units []dispatchUnit, steps 
 //
 // The findings it returns are also folded into the scanner's own finding list, which is where
 // GetFindings and Export read from — the same contract Audit has always had.
-func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID uint64, run *auditRun, checks []activeCheck) (AuditOutcome, []*Finding) {
+func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeID, run *auditRun, checks []activeCheck) (AuditOutcome, []*Finding) {
 	var o AuditOutcome
 	if len(checks) == 0 {
 		// Nothing was enabled, so nothing was declined either. Audited with zero considered is the
@@ -878,7 +878,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID uint64, run *a
 				if len(verdict) > 0 && s.logger != nil {
 					s.logger.Warn("dropping findings from a check whose probes never went out",
 						zap.String("check", checks[check].name),
-						zap.Uint64("exchange_id", exchangeID),
+						zap.Uint64("exchange_id", uint64(exchangeID)),
 						zap.Int("dropped", len(verdict)))
 				}
 				abandoned = breaker.checkFailed()
@@ -925,7 +925,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID uint64, run *a
 	// silently, or the partition identity stops being something a caller can rely on.
 	if o.Considered() != len(checks) && s.logger != nil {
 		s.logger.Warn("audit outcome does not account for every check",
-			zap.Uint64("exchange_id", exchangeID),
+			zap.Uint64("exchange_id", uint64(exchangeID)),
 			zap.Int("considered", o.Considered()),
 			zap.Int("checks", len(checks)))
 	}

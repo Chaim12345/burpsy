@@ -49,7 +49,7 @@ func walkLikeLiveAudit(t *testing.T, store *core.TrafficStore) (reached int, sta
 	t.Helper()
 	_, total := store.Count()
 	for i := 0; i < total; i++ {
-		ex, err := store.GetExchange(uint64(i))
+		ex, err := store.GetExchange(core.ExchangeID(i))
 		if err != nil {
 			break
 		}

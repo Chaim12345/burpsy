@@ -23,17 +23,17 @@ import (
 
 // wsRowView mirrors wshistory.ts's RowView.
 type wsRowView struct {
-	ID        uint64 `json:"id"`
-	Exchange  uint64 `json:"exchange"`
-	Payload   uint64 `json:"payload"`
-	Direction string `json:"direction"` // "client_to_server" | "server_to_client"
-	Opcode    string `json:"opcode"`
-	Len       int    `json:"len"`
-	Dropped   uint64 `json:"dropped"`
-	Truncated bool   `json:"truncated"`
-	Fragments uint32 `json:"fragments"`
-	AtMs      uint64 `json:"at_ms"`
-	Note      string `json:"note,omitempty"`
+	ID        uint64          `json:"id"`
+	Exchange  core.ExchangeID `json:"exchange"`
+	Payload   uint64          `json:"payload"`
+	Direction string          `json:"direction"` // "client_to_server" | "server_to_client"
+	Opcode    string          `json:"opcode"`
+	Len       int             `json:"len"`
+	Dropped   uint64          `json:"dropped"`
+	Truncated bool            `json:"truncated"`
+	Fragments uint32          `json:"fragments"`
+	AtMs      uint64          `json:"at_ms"`
+	Note      string          `json:"note,omitempty"`
 }
 
 // wsHistoryResp mirrors wshistory.ts's HistoryResp.
@@ -59,15 +59,15 @@ type wsMessageResp struct {
 
 // wsConnectionView mirrors wshistory.ts's ConnectionView.
 type wsConnectionView struct {
-	Exchange uint64 `json:"exchange"`
-	Host     string `json:"host"`
-	Port     uint16 `json:"port"`
-	TLS      bool   `json:"tls"`
-	Path     string `json:"path"`
-	Messages int    `json:"messages"`
-	Sent     int    `json:"sent"`
-	Received int    `json:"received"`
-	LastMs   uint64 `json:"last_ms"`
+	Exchange core.ExchangeID `json:"exchange"`
+	Host     string          `json:"host"`
+	Port     uint16          `json:"port"`
+	TLS      bool            `json:"tls"`
+	Path     string          `json:"path"`
+	Messages int             `json:"messages"`
+	Sent     int             `json:"sent"`
+	Received int             `json:"received"`
+	LastMs   uint64          `json:"last_ms"`
 }
 
 // wsMaxLimit caps a history page. Matches /api/history's cap: the browser is what falls over first.
@@ -148,7 +148,7 @@ func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 	var messages []*core.WsMessage
 	if raw := r.URL.Query().Get("exchange"); raw != "" {
 		if ex, err := strconv.ParseUint(raw, 10, 64); err == nil {
-			messages = s.store.WsMessagesFor(ex, offset, limit)
+			messages = s.store.WsMessagesFor(core.ExchangeID(ex), offset, limit)
 		}
 	}
 	if messages == nil {

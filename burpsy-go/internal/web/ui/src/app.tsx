@@ -23,6 +23,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
 import { formatBytes, formatCount, relativeTime, templateRequest } from "./lib/api";
 import { queryClient, useConnection, useEventStream, useScope, useStats } from "./lib/data";
+import { useCaCert } from "./lib/data.policy";
 import { resolveTheme, useApp } from "./lib/store";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
@@ -174,6 +175,12 @@ function App(): JSX.Element {
 
   const stats = useStats();
   const scope = useScope();
+  // Whether there is a CA to hand out at all. TLS interception is off unless burpsy was started with
+  // -intercept-tls, and /ca.crt answers 404 in that case — so the status bar, the menu and the
+  // palette all used to offer a download that lands on an error page. Settings already gated on this
+  // hook; the shell now does too, and says why instead of failing.
+  const caCert = useCaCert();
+  const caAvailable = caCert.data?.available ?? false;
   const live = useConnection((state) => state.live);
   const lastEventAt = useConnection((state) => state.lastEventAt);
   const eventCount = useConnection((state) => state.eventCount);
@@ -273,11 +280,16 @@ function App(): JSX.Element {
       },
       {
         id: "cmd:ca",
-        label: "Download the CA certificate",
+        // The label states the outcome rather than offering an action that cannot happen. Kept in the
+        // list either way so searching "certificate" explains the situation instead of finding nothing.
+        label: caAvailable ? "Download the CA certificate" : "CA certificate unavailable — TLS interception is off",
         group: "Help",
         keywords: "certificate https tls install",
         icon: ShieldCheck,
-        run: () => window.open("/ca.crt", "_blank"),
+        run: () =>
+          caAvailable
+            ? window.open("/ca.crt", "_blank")
+            : toast.info(caCert.data?.detail ?? "TLS interception is not enabled, so there is no CA to trust."),
       },
       {
         id: "cmd:report",
@@ -333,7 +345,13 @@ function App(): JSX.Element {
         {
           id: "certificate",
           actions: [
-            { id: "ca", label: "Download CA certificate", icon: ShieldCheck, onSelect: () => window.open("/ca.crt", "_blank") },
+            {
+              id: "ca",
+              label: caAvailable ? "Download CA certificate" : "CA certificate unavailable",
+              icon: ShieldCheck,
+              disabled: !caAvailable,
+              onSelect: () => window.open("/ca.crt", "_blank"),
+            },
           ],
         },
       ],
@@ -521,10 +539,17 @@ function App(): JSX.Element {
           </span>
           <span>{formatCount(stats.data?.messages)} messages</span>
           <span>{scope.data?.allow_all ? "scope: everything" : `scope: ${scope.data?.rules.length ?? 0} rules`}</span>
-          <a className="status-link" href="/ca.crt" download>
-            <ShieldCheck size={11} />
-            CA certificate
-          </a>
+          {caAvailable ? (
+            <a className="status-link" href="/ca.crt" download>
+              <ShieldCheck size={11} />
+              CA certificate
+            </a>
+          ) : (
+            <span title={caCert.data?.detail ?? "Checking whether a CA is available…"}>
+              <ShieldCheck size={11} />
+              no CA
+            </span>
+          )}
           <span className="status-push">
             {eventCount > 0 && lastEventAt ? `last event ${relativeTime(lastEventAt)}` : "no events yet"}
           </span>

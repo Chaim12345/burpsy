@@ -19,7 +19,7 @@ import (
 
 // auditTestExchange builds one exchange record the way the Rust test helper does: no store, no
 // messages, just the fields a dispatch unit key is derived from.
-func auditTestExchange(id uint64, host, path string, tls bool) *core.Exchange {
+func auditTestExchange(id core.ExchangeID, host, path string, tls bool) *core.Exchange {
 	port := uint16(80)
 	if tls {
 		port = 443

@@ -73,7 +73,7 @@ type Finding struct {
 	Param       string
 	Evidence    string
 	Solution    string
-	ExchangeID  uint64
+	ExchangeID  core.ExchangeID
 	Timestamp   time.Time
 }
 
@@ -119,7 +119,7 @@ func (s *ActiveScanner) WithSender(snd *sender.Sender) *ActiveScanner {
 // as an error rather than an empty finding list. With two return values there is no other way to
 // keep "audited, found nothing" and "never looked" apart, and collapsing them is the exact defect
 // the engine exists to prevent.
-func (s *ActiveScanner) Audit(ctx context.Context, exchangeID uint64) ([]*Finding, error) {
+func (s *ActiveScanner) Audit(ctx context.Context, exchangeID core.ExchangeID) ([]*Finding, error) {
 	outcome, findings := s.AuditWithin(ctx, exchangeID, s.AuditConfig())
 	if outcome.Error != "" {
 		return nil, errors.New(outcome.Error)
@@ -133,7 +133,7 @@ func (s *ActiveScanner) Audit(ctx context.Context, exchangeID uint64) ([]*Findin
 // A thin wrapper over AuditSession, kept at its original signature. AuditSession is the one to call
 // for the session outcome: the dispatch-unit count, the checks that were never admitted, and
 // whether the failure breaker paused the run.
-func (s *ActiveScanner) AuditMultiple(ctx context.Context, exchangeIDs []uint64) ([]*Finding, error) {
+func (s *ActiveScanner) AuditMultiple(ctx context.Context, exchangeIDs []core.ExchangeID) ([]*Finding, error) {
 	outcome, findings := s.AuditSession(ctx, exchangeIDs, s.AuditConfig())
 	// The outcome now carries every refusal with its reason, but the log line stays: a caller that
 	// only reads stderr must not lose the fact that an exchange was skipped.
@@ -141,7 +141,7 @@ func (s *ActiveScanner) AuditMultiple(ctx context.Context, exchangeIDs []uint64)
 		for _, item := range outcome.Items {
 			if item.Outcome.Error != "" {
 				s.logger.Warn("audit skipped",
-					zap.Uint64("exchange_id", item.ExchangeID),
+					zap.Uint64("exchange_id", uint64(item.ExchangeID)),
 					zap.String("reason", item.Outcome.Error))
 			}
 		}

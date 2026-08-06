@@ -16,7 +16,7 @@ export interface IntruderRunRequest {
 
 export function useRepeaterSend() {
   return useMutation({
-    mutationFn: (body: { target: string; request: string; protocol: string }) =>
+    mutationFn: (body: { target: string; request: string; protocol: string; from_exchange?: number }) =>
       api<RepeaterResult>("/api/repeater/send", json("POST", body)),
   });
 }

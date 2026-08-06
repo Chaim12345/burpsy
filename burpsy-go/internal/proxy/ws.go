@@ -194,7 +194,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 	// of the outage. Frames are only attached when there is a row to attach them
 	// to, so nothing accumulates against an exchange id that does not exist.
 	var capture *wsCapture
-	exchangeID := uint64(0)
+	exchangeID := core.ExchangeID(0)
 	if handshake != nil {
 		exchangeID = handshake.ID
 		capture = &wsCapture{scope: s.config.scope, host: host, port: port, path: path}
@@ -213,7 +213,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 // frames in the same read as its response — and those are the first bytes
 // relayed, because dropping them would lose the opening of every conversation.
 // capture nil means relay without recording, the out-of-scope case.
-func (s *Server) relayWebsocket(exchangeID uint64, clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, host string, port uint16, tls bool, path string, capture *wsCapture) {
+func (s *Server) relayWebsocket(exchangeID core.ExchangeID, clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, host string, port uint16, tls bool, path string, capture *wsCapture) {
 	var stats wsCaptureStats
 	faults := make([]string, 2)
 
@@ -234,7 +234,7 @@ func (s *Server) relayWebsocket(exchangeID uint64, clientConn net.Conn, clientRe
 	// statement to someone checking coverage.
 	s.config.logger.Info("websocket connection closed",
 		zap.String("host", host), zap.Uint16("port", port), zap.String("path", path),
-		zap.Uint64("exchange", exchangeID),
+		zap.Uint64("exchange", uint64(exchangeID)),
 		zap.Int64("messages", stats.messages.Load()),
 		zap.Int64("skipped_out_of_scope", stats.skipped.Load()),
 	)
@@ -249,7 +249,7 @@ func (s *Server) relayWebsocket(exchangeID uint64, clientConn net.Conn, clientRe
 // wsDirection relays one direction until the source or sink gives up, feeding
 // the reassembler and draining completed messages into the store. It returns
 // why capture stopped, if it did; relaying is unaffected either way.
-func (s *Server) wsDirection(exchangeID uint64, src *bufio.Reader, dst net.Conn, fromClient bool, capture *wsCapture, stats *wsCaptureStats) string {
+func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst net.Conn, fromClient bool, capture *wsCapture, stats *wsCaptureStats) string {
 	rs := core.NewWsReassembler(core.DefaultMaxWsMessageBytes)
 	buf := make([]byte, wsRelayChunk)
 	for {
@@ -286,7 +286,7 @@ func (s *Server) wsDirection(exchangeID uint64, src *bufio.Reader, dst net.Conn,
 
 // drainWs writes every completed message to the index, or counts it as skipped
 // when scope excludes this connection right now.
-func (s *Server) drainWs(rs *core.WsReassembler, exchangeID uint64, fromClient bool, capture *wsCapture, stats *wsCaptureStats) {
+func (s *Server) drainWs(rs *core.WsReassembler, exchangeID core.ExchangeID, fromClient bool, capture *wsCapture, stats *wsCaptureStats) {
 	for {
 		ev := rs.Pop()
 		if ev == nil {
@@ -324,7 +324,7 @@ func (s *Server) drainWs(rs *core.WsReassembler, exchangeID uint64, fromClient b
 // qualifying. The frames themselves were relayed unmodified throughout — the
 // note says so, because an operator reading "capture stopped" will otherwise
 // reasonably wonder whether their app broke.
-func (s *Server) recordWsCaptureStopped(exchangeID uint64, host string, port uint16, tls bool, path string, reason string) {
+func (s *Server) recordWsCaptureStopped(exchangeID core.ExchangeID, host string, port uint16, tls bool, path string, reason string) {
 	if exchangeID == 0 {
 		// Out-of-scope connections have no handshake exchange to key a marker
 		// to, and nothing was recorded anyway.

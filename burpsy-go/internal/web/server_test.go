@@ -177,7 +177,13 @@ func TestReportExportsJSONAndSARIF(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("html report: status = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "<html>") {
-		t.Errorf("html report does not contain a document: %q", rec.Body.String())
+	// Matched on the prefix, not on a literal "<html>": the document carries lang="en" (WCAG 3.1.1,
+	// so a screen reader picks the right pronunciation) and a stylesheet, and an assertion that
+	// pinned the exact opening tag would fail the report for getting better.
+	body := rec.Body.String()
+	for _, want := range []string{"<!DOCTYPE html>", "<html lang=", "<style>", "burpsy scan report"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("html report is missing %q; it must be a complete, styled document: %q", want, body)
+		}
 	}
 }

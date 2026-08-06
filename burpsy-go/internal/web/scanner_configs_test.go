@@ -30,7 +30,7 @@ func distinctiveBase() scanner.AuditConfig {
 
 // configuredScannerServer is a server whose audit endpoint runs under a stated base configuration —
 // what -scan-config does at startup.
-func configuredScannerServer(t *testing.T, base scanner.AuditConfig) (*Server, uint64) {
+func configuredScannerServer(t *testing.T, base scanner.AuditConfig) (*Server, core.ExchangeID) {
 	t.Helper()
 	s := newTestServer()
 	s.WithScanner(scanner.NewActiveScanner(s.store, zap.NewNop()).
@@ -145,14 +145,14 @@ func Test_the_listed_scan_configurations_are_generated_from_the_table(t *testing
 // wireAuditResp is the part of the audit reply SCAN-03 adds.
 type wireAuditResp struct {
 	Started    bool            `json:"started"`
-	ExchangeID uint64          `json:"exchange_id"`
+	ExchangeID core.ExchangeID `json:"exchange_id"`
 	ConfigName string          `json:"config_name"`
 	Config     auditConfigView `json:"config"`
 }
 
-func runAuditUnder(t *testing.T, s *Server, id uint64, body any) (int, wireAuditResp) {
+func runAuditUnder(t *testing.T, s *Server, id core.ExchangeID, body any) (int, wireAuditResp) {
 	t.Helper()
-	rec := postJSON(t, s, "/api/audit/"+strconv.FormatUint(id, 10), body)
+	rec := postJSON(t, s, "/api/audit/"+strconv.FormatUint(uint64(id), 10), body)
 	var out wireAuditResp
 	if rec.Code == http.StatusOK {
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
@@ -253,7 +253,7 @@ func Test_an_audit_with_no_named_configuration_runs_under_the_server_default(t *
 func Test_an_unknown_scan_configuration_is_refused_and_names_the_real_ones(t *testing.T) {
 	s, id := configuredScannerServer(t, distinctiveBase())
 
-	rec := postJSON(t, s, "/api/audit/"+strconv.FormatUint(id, 10), map[string]any{"config": "Crawl and Audit - Balnaced"})
+	rec := postJSON(t, s, "/api/audit/"+strconv.FormatUint(uint64(id), 10), map[string]any{"config": "Crawl and Audit - Balnaced"})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: an unknown configuration must not fall back to the default", rec.Code)
 	}

@@ -21,7 +21,7 @@ import (
 
 // seedAuditExchange puts one request/response pair in the store and indexes an exchange over it,
 // returning the exchange id (which is its position, so the first is 0).
-func seedAuditExchange(t *testing.T, store *core.TrafficStore, host string, port uint16, path, body string) uint64 {
+func seedAuditExchange(t *testing.T, store *core.TrafficStore, host string, port uint16, path, body string) core.ExchangeID {
 	t.Helper()
 	reqID, err := store.Put([]byte("GET "+path+" HTTP/1.1\r\nHost: "+host+"\r\n\r\n"), core.DirectionRequest)
 	if err != nil {
@@ -316,7 +316,7 @@ func Test_auditing_two_captures_of_one_url_dispatches_each_per_url_check_once(t 
 		CheckJwtWeak:       true,
 	})
 
-	session, _ := scan.AuditSession(context.Background(), []uint64{first, second}, DefaultAuditConfig())
+	session, _ := scan.AuditSession(context.Background(), []core.ExchangeID{first, second}, DefaultAuditConfig())
 
 	if len(session.Items) != 2 {
 		t.Fatalf("items = %d, want 2", len(session.Items))
@@ -351,7 +351,7 @@ func Test_auditing_two_captures_of_one_url_dispatches_each_per_url_check_once(t 
 // what must be exact; which worker won the admission is not.
 func Test_a_concurrent_session_admits_each_pair_once_however_the_workers_interleave(t *testing.T) {
 	store := core.NewTrafficStore()
-	ids := make([]uint64, 8)
+	ids := make([]core.ExchangeID, 8)
 	for i := range ids {
 		ids[i] = seedAuditExchange(t, store, "h.test", 80, "/shop?id=1", "<html></html>")
 	}
@@ -468,7 +468,7 @@ func Test_findings_from_a_check_whose_probes_never_went_out_are_dropped_and_coun
 func Test_the_session_breaker_pauses_a_run_and_the_remaining_items_say_so(t *testing.T) {
 	store := core.NewTrafficStore()
 	port := deadTarget(t)
-	ids := []uint64{
+	ids := []core.ExchangeID{
 		seedAuditExchange(t, store, "127.0.0.1", port, "/one", "<html></html>"),
 		seedAuditExchange(t, store, "127.0.0.1", port, "/two", "<html></html>"),
 		seedAuditExchange(t, store, "127.0.0.1", port, "/three", "<html></html>"),
@@ -847,7 +847,7 @@ func Test_the_session_summary_names_the_checks_it_did_not_admit(t *testing.T) {
 		CheckSqli:      true,
 	})
 
-	session, _ := scan.AuditSession(context.Background(), []uint64{first, second}, DefaultAuditConfig())
+	session, _ := scan.AuditSession(context.Background(), []core.ExchangeID{first, second}, DefaultAuditConfig())
 	summary := session.Summary()
 	if summary == "" {
 		t.Fatal("a session summary must say something")
