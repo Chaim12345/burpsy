@@ -6,3 +6,4 @@
 # Agent tool state — index/cursor artifacts, not source.
 .codegraph/
 .cursor/
+internal/web/ui/ux-pilot/

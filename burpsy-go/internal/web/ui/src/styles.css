@@ -5,67 +5,17 @@
    single attribute on <html>.
    =========================================================================== */
 
-/* Everything below is fluid: type, spacing and chrome all interpolate with the
-   viewport between a legible floor and a ceiling that stops them ballooning on a
-   4K panel. Nothing in the console is a fixed pixel size except hairlines. */
+/* Design tokens are generated from the burpsy Penpot file — Penpot is
+   canonical, not this repo. See tokens/gen-tokens.mjs (in ../scripts) and
+   tokens/penpot-export.json for how to re-export after a design change.
+   primitives.css carries the fluid type/spacing/chrome scale and the raw
+   colour ramps; semantic.css carries the light/dark role mapping. */
+@import "./tokens/primitives.css";
+@import "./tokens/semantic.css";
+
 :root {
-  --font-sans: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
-
-  /* Fluid type scale. The vw term does the scaling; the clamp bounds keep small
-     screens legible and large screens sane. */
-  --fs-2xs: clamp(8px, 0.52vw, 10px);
-  --fs-xs: clamp(9px, 0.6vw, 12px);
-  --fs-sm: clamp(10px, 0.68vw, 13px);
-  --fs-md: clamp(11px, 0.76vw, 15px);
-  --fs-lg: clamp(12px, 0.85vw, 16px);
-  --fs-xl: clamp(13px, 0.95vw, 18px);
-  --fs-2xl: clamp(18px, 1.5vw, 26px);
-  --fs-3xl: clamp(19px, 1.7vw, 30px);
-  --fs-4xl: clamp(30px, 3.2vw, 54px);
-
-  /* Fluid spacing, keeping the 4/8/12/16/20/32 rhythm at the midpoint. */
-  --s1: clamp(3px, 0.3vw, 6px);
-  --s2: clamp(6px, 0.58vw, 11px);
-  --s3: clamp(9px, 0.85vw, 16px);
-  --s4: clamp(12px, 1.1vw, 21px);
-  --s5: clamp(15px, 1.4vw, 26px);
-  --s6: clamp(18px, 1.7vw, 31px);
-  --s8: clamp(22px, 2.2vw, 40px);
-
-  --gap:var(--s3);
+  --gap: var(--s3);
   --pad-page: var(--s4);
-
-  /* Chrome tracks viewport height so it stays proportionate in landscape and
-     does not eat a short viewport in portrait. */
-  --menubar-h: clamp(21px, 2.6vh, 30px);
-  --toolbar-h: clamp(29px, 3.9vh, 44px);
-  --subtab-h: clamp(24px, 3.1vh, 34px);
-  --statusbar-h: clamp(19px, 2.4vh, 28px);
-
-  /* Control sizes, so inputs and buttons grow with the type around them. The
-     floors are set by WCAG 2.5.8's 24px minimum target size, which binds on short
-     landscape viewports where the vh term would otherwise shrink them further. */
-  --control-h: clamp(26px, 3.1vh, 34px);
-  --control-h-sm: clamp(24px, 2.6vh, 30px);
-  --icon-btn: clamp(26px, 2.9vh, 34px);
-  --row-h: clamp(24px, 3vh, 34px);
-  --row-h-compact: clamp(20px, 2.5vh, 28px);
-
-  /* Widths used by narrow form controls, fluid instead of fixed. */
-  --w-xs: clamp(84px, 9vw, 150px);
-  --w-sm: clamp(104px, 11vw, 180px);
-  --w-md: clamp(130px, 14vw, 230px);
-  --w-lg: clamp(180px, 20vw, 330px);
-
-  /* The only z-index ladder in the app. Components that layer internally use
-     `isolation: isolate` and local indexes instead of joining this scale. */
-  --z-sticky: 2;
-  --z-overlay: 60;
-  --z-dialog: 61;
-  --z-menu: 80;
-  --z-tooltip: 90;
-  --z-skip: 200;
 }
 
 /* --- light: Burp's FlatLaf light chrome ---------------------------------- */
@@ -73,43 +23,19 @@
    greys below are FlatLaf's light values rather than an invented palette, and the
    accent is PortSwigger's orange. `--accent-bright` is the identity orange used
    for chrome accents; `--accent` is darkened enough to carry white button text at
-   WCAG AA, which #ff6633 cannot (2.9:1). */
+   WCAG AA, which #ff6633 cannot (2.9:1).
+
+   The composite/alpha values below have no Penpot token equivalent (rgba
+   opacity, or a pure alias of another semantic token) and are hand-authored
+   here rather than generated — see semantic.css's header comment. */
 :root,
 [data-theme="light"] {
   color-scheme: light;
 
-  --paper: #f2f2f2;
-  --paper-raised: #ffffff;
-  --paper-deep: #e8e8e8;
-  --paper-sunken: #dcdcdc;
-  --line: #c4c4c4;
-  --line-strong: #a6a6a6;
-
-  --ink: #2b2b2b;
-  --text: #1e1e1e;
-  --text-soft: #3c3c3c;
-  --muted: #6e6e6e;
-
-  --accent: #d1490f;
-  --accent-bright: #ff6633;
-  --accent-strong: #a8380a;
   --accent-contrast: #ffffff;
-  --good: #2e7d32;
-  --warn: #96600a;
-  --bad: #c62828;
-  --info: #1565c0;
-
-  --field-bg: #ffffff;
   --overlay: rgb(43 43 43 / 45%);
 
-  --chrome: #e4e4e4;
-  --chrome-hover: #d4d4d4;
-
-  --editor-bg: #ffffff;
-  --editor-fg: #1e1e1e;
   --editor-line: var(--line);
-  --editor-gutter-bg: #f0f0f0;
-  --editor-gutter-fg: #8c8c8c;
   --editor-active-line: rgb(255 102 51 / 7%);
   --editor-selection: #a6d2ff;
   --editor-start: #a8380a;
@@ -125,43 +51,19 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --paper: #3c3f41;
-  --paper-raised: #414547;
-  --paper-deep: #323232;
-  --paper-sunken: #2b2b2b;
-  --line: #4e5254;
-  --line-strong: #646464;
-
-  --ink: #2b2b2b;
-  --text: #bbbbbb;
-  --text-soft: #a9b7c6;
-  --muted: #8c8c8c;
-
-  --accent: #ff6633;
-  --accent-bright: #ff6633;
-  --accent-strong: #ff8659;
   --accent-contrast: #1a1a1a;
-  --good: #6a8759;
-  --warn: #bbb529;
-  --bad: #ff6b68;
-  --info: #6897bb;
-
-  --field-bg: #2b2b2b;
   --overlay: rgb(0 0 0 / 60%);
 
-  --chrome: #313335;
-  --chrome-hover: #4b5052;
-
-  --editor-bg: #2b2b2b;
-  --editor-fg: #a9b7c6;
   --editor-line: #4e5254;
-  --editor-gutter-bg: #313335;
-  --editor-gutter-fg: #606366;
   --editor-active-line: rgb(255 102 51 / 10%);
   --editor-selection: #214283;
+  /* Syntax palette for the message viewer. Darcula's own purple (#9876aa) and green (#6a8759)
+     measure 3.71 and 3.52 against the editor background — below AA, on the request and response
+     bytes, which is the surface this whole tool exists to let someone read. Lifted within the same
+     hue family so the editor still reads as Darcula: 4.99 and 6.09. */
   --editor-start: #ff8659;
-  --editor-header-name: #9876aa;
-  --editor-header-value: #6a8759;
+  --editor-header-name: #b08cc4;
+  --editor-header-value: #8fb573;
   --editor-body: #a9b7c6;
   --editor-match: rgb(187 181 41 / 35%);
   --editor-match-border: rgb(187 181 41 / 70%);
@@ -358,9 +260,11 @@ code {
   display: flex;
   align-items: center;
   gap:var(--s2);
-  padding:0 var(--s3);
+  padding:0 var(--s2);
   cursor: pointer;
-  font-size: var(--fs-md);
+  /* A step below body: these are chrome, and ten of them have to fit beside the brand and the status
+     chips before the strip starts scrolling and hides the last tools. */
+  font-size: var(--fs-sm);
   white-space: nowrap;
   transition:
     background-color 120ms ease,
@@ -524,7 +428,7 @@ main {
   min-width: 0;
 }
 
-.page-header h2 {
+.page-header h1 {
   font-size: var(--fs-xl);
   letter-spacing: -0.01em;
   display: flex;
@@ -567,7 +471,7 @@ main {
   margin-bottom:var(--s2);
 }
 
-.section-heading h3,
+.section-heading h2,
 .detail-panel h3 {
   font-size: var(--fs-lg);
 }
@@ -576,7 +480,7 @@ main {
 .detail-panel > p {
   color: var(--muted);
   font-size: var(--fs-sm);
-  margin-top:2px;
+  margin-top:2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
 }
 
 .eyebrow {
@@ -631,7 +535,7 @@ main {
 
 .button-sm {
   min-height: var(--control-h-sm);
-  padding:2px var(--s2);
+  padding:2px var(--s2); /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
   font-size: var(--fs-sm);
 }
 
@@ -944,7 +848,9 @@ main {
 
 .tooltip {
   background: var(--ink);
-  color: #f2ece0;
+  /* --ink is a fixed near-black in both themes (a tooltip is never "light mode"), so its text is a
+     fixed warm off-white to match rather than a semantic token that would flip with the theme. */
+  color: #f2ece0; /* token-exempt: fixed pairing with --ink, not theme-dependent */
   padding:var(--s1) var(--s2);
   font-size: var(--fs-sm);
   max-width: min(90vw, 40ch);
@@ -983,7 +889,7 @@ main {
   min-height: clamp(54px, 9vh, 92px);
   display: flex;
   flex-direction: column;
-  gap:2px;
+  gap:2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
   border-top: 2px solid var(--line-strong);
   padding:var(--s2) var(--s3);
 }
@@ -1298,8 +1204,20 @@ tbody td {
   height: 100%;
 }
 
+/* CodeMirror's own focus ring is replaced, not removed. This was a bare `outline: none`, which left
+   the message editors — the surface an operator spends the most time in — with no keyboard focus
+   indicator at all (WCAG 2.4.7). Inset by 2px so the ring sits inside the editor's own border
+   instead of overlapping the pane divider. */
 .editor-body .cm-editor.cm-focused {
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* CodeMirror ships #888 for placeholders, which measures 3.99:1 on the dark editor background. The
+   placeholder here is instructional copy — it says what kind of thing to paste — so it has to be
+   readable rather than a hint of a hint. */
+.cm-editor .cm-placeholder {
+  color: #949494; /* token-exempt: WCAG fix for CodeMirror's own built-in placeholder colour */
 }
 
 .editor-grid {
@@ -1439,7 +1357,7 @@ tbody td {
 .dialog-description {
   color: var(--muted);
   font-size: var(--fs-sm);
-  margin-top:2px;
+  margin-top:2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
 }
 
 .palette {
@@ -1544,7 +1462,7 @@ tbody td {
 
 .shortcut-table {
   display: grid;
-  gap:2px;
+  gap:2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
 }
 
 .shortcut-row {
@@ -1779,7 +1697,7 @@ tbody td {
   font: 700 var(--fs-2xs) var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  padding-top:2px;
+  padding-top:2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
 }
 
 .detail-list dd {
@@ -2192,7 +2110,8 @@ tbody td {
 .tree-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto auto;
+  /* toggle | type icon | label | trailing meta (severity, params, counts) */
+  grid-template-columns: 14px 14px minmax(0, 1fr) auto;
   gap:var(--s2);
   align-items: center;
   border: 0;
@@ -2225,6 +2144,127 @@ tbody td {
   display: grid;
   place-items: center;
   color: var(--muted);
+}
+
+.tree-row-icon {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+/* The query-parameter names a path was seen with. Dimmed and truncated: it is context for the
+   label, never a reason for the row to grow wider than the pane. */
+.tree-row-params {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12ch;
+  font-size: var(--fs-xs);
+}
+
+.tree-row-count {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* Out-of-scope traffic stays in the map — it is still evidence of what the target reached for — but
+   it is not a target, so it recedes. Dimming is the Burp convention and the fastest way to read a
+   branch as "not yours"; it is deliberately not the only carrier of that fact, because dimming is a
+   colour cue and colour alone fails 1.4.1. The row's accessible name says "out of scope", the title
+   spells out the consequence, and host rows print it in text. Opacity rather than a flat grey so the
+   severity dot inside a dimmed branch still reads as its own severity instead of all sev colours
+   collapsing to one. */
+.tree-row-out-of-scope {
+  opacity: 0.55;
+}
+
+/* Restored to full strength on hover and when selected: the moment an operator is actually looking
+   at the row, dimming stops being a helpful filter and starts being an obstacle to reading it. */
+.tree-row-out-of-scope:hover,
+.tree-row-out-of-scope.active {
+  opacity: 1;
+}
+
+/* The visible half of the out-of-scope signal, on host rows only. Every path under an out-of-scope
+   host is also out of scope, so repeating it per row would be noise for a fact the parent states. */
+.tree-row-scope {
+  color: var(--muted);
+  font: 700 var(--fs-2xs) var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* One grid cell holding every trailing marker, so a row that gains a severity dot or a parameter
+   list does not shift the column count out from under a row that has neither. */
+.tree-row-meta {
+  display: flex;
+  align-items: center;
+  gap:var(--s2);
+  justify-content: flex-end;
+}
+
+/* ---- Master/detail panes -----------------------------------------------------------------------
+   A pane is a column that fills whatever the split gives it: fixed chrome at the top, one scrolling
+   or nested-split region underneath. min-height:0 on both the pane and its filling child is what
+   stops a long table from pushing the pane past its track instead of scrolling inside it. */
+.pane {
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.pane-toolbar {
+  border-bottom: 1px solid var(--line);
+  padding:var(--s2);
+}
+
+.pane-fill {
+  min-height: 0;
+  min-width: 0;
+}
+
+/* The tree owns the pane's scroll; rows are uniform height so no virtualisation is needed at the
+   sizes a site map reaches before its host count becomes the real problem. */
+.tree-pane {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+/* ---- Issue advisory ----------------------------------------------------------------------------
+   Severity as a small square rather than a badge: at tree density one badge per row competes with
+   the issue name it is meant to qualify. Colour carries the rank, the title/aria-label carries the
+   word — the square is never the only way to know which severity a row is. */
+.sev-dot {
+  width: 8px;
+  height: 8px;
+  display: block;
+  background: var(--muted);
+}
+
+.sev-critical { background: var(--bad); outline: 2px solid color-mix(in srgb, var(--bad) 35%, transparent); outline-offset: 1px; }
+.sev-high { background: var(--bad); }
+.sev-medium { background: var(--warn); }
+.sev-low { background: var(--info); }
+.sev-informational { background: var(--muted); }
+
+/* The advisory prose scrolls; the request/response tabs hand their whole track to the editor. */
+.advisory-body {
+  overflow: auto;
+  scrollbar-width: thin;
+  padding:var(--s3);
+  display: grid;
+  gap:var(--s4);
+  align-content: start;
+}
+
+.advisory-editor {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 /* Sonner toast container inherits the console's flat square look. */
@@ -2333,6 +2373,25 @@ tbody td {
   }
   .page-header p {
     display: none;
+  }
+}
+
+/* Tool labels drop before the strip has to scroll.
+
+   The strip scrolls (overflow-x: auto) and technically still works, but a primary nav that hides
+   Comparer, Logger and Organizer off the right edge with no affordance is not a working nav — the
+   operator cannot see that the tools exist. Ten labelled tabs need about 1100px once the brand and
+   the status chips take their share, so below that the tabs go icon-only. They keep their aria-label
+   and their tooltip, so the name is still available to a screen reader and to a hover.
+
+   Separate from the 760px block below on purpose: that one is about a genuinely small window, and
+   folding these together would strip the menu bar off a 1000px desktop that has room for it. */
+@media (max-width: 1100px) {
+  .tool-tab span {
+    display: none;
+  }
+  .tool-tab {
+    padding:0 var(--s3);
   }
 }
 
@@ -2620,7 +2679,7 @@ tbody td {
   width: 100%;
   height: 100%;
   border: 0;
-  background: #ffffff;
+  background: #ffffff; /* token-exempt: deliberately theme-independent, see comment above */
 }
 
 .editor-note {
@@ -2693,7 +2752,7 @@ tbody td {
   display: grid;
   grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
   gap: var(--s2);
-  padding: 2px var(--s2) 2px var(--s4);
+  padding: 2px var(--s2) 2px var(--s4); /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
   border-top: 1px solid var(--line);
 }
 
@@ -2730,7 +2789,7 @@ tbody td {
 }
 
 .inspector-empty {
-  padding: 2px var(--s2) var(--s1) var(--s4);
+  padding: 2px var(--s2) var(--s1) var(--s4); /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
   color: var(--muted);
   font-size: var(--fs-2xs);
 }

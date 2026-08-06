@@ -22,10 +22,10 @@ export function PageHeader({
   return (
     <div className="page-header">
       <div className="page-header-text">
-        <h2>
+        <h1>
           {title}
           {eyebrow ? <span className="page-header-eyebrow">{eyebrow}</span> : null}
-        </h2>
+        </h1>
         {description ? <p>{description}</p> : null}
       </div>
       {actions ? <div className="page-actions">{actions}</div> : null}
@@ -45,7 +45,7 @@ export function SectionHeading({
   return (
     <div className="section-heading">
       <div>
-        <h3>{title}</h3>
+        <h2>{title}</h2>
         {detail ? <p>{detail}</p> : null}
       </div>
       {actions ? <div className="page-actions">{actions}</div> : null}

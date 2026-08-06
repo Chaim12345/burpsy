@@ -1,0 +1,83 @@
+/* GENERATED FILE — do not hand-edit.
+ * Source of truth: Penpot, set "primitives". Regenerate with
+ * `node scripts/gen-tokens.mjs` after re-exporting src/tokens/penpot-export.json.
+ * Fluid clamp() growth terms and ceilings are hand-maintained in gen-tokens.mjs
+ * (FLUID_WRAP) because Penpot can only store the floor value; see that file's
+ * header comment for why. */
+:root {
+  --grey-900: #1a1a1a;
+  --grey-800: #2b2b2b;
+  --grey-700: #313335;
+  --grey-650: #323232;
+  --grey-600: #3c3f41;
+  --grey-550: #414547;
+  --grey-500: #4b5052;
+  --grey-450: #4e5254;
+  --grey-400: #646464;
+  --grey-350: #8c8c8c;
+  --grey-300: #9ba0a3;
+  --grey-250: #a9b7c6;
+  --grey-200: #b2b2b2;
+  --grey-150: #bbbbbb;
+  --grey-100: #a6a6a6;
+  --grey-90: #c4c4c4;
+  --grey-80: #d4d4d4;
+  --grey-70: #dcdcdc;
+  --grey-60: #e4e4e4;
+  --grey-50: #e8e8e8;
+  --grey-40: #f0f0f0;
+  --grey-30: #f2f2f2;
+  --grey-20: #3c3c3c;
+  --grey-10: #6e6e6e;
+  --grey-0: #1e1e1e;
+  --grey-paper: #ffffff;
+  --orange-bright: #ff6633;
+  --orange-strong-light: #a8380a;
+  --orange-strong-dark: #ff9670;
+  --orange-deep: #d1490f;
+  --green-dark: #9bc47f;
+  --green-light: #2e7d32;
+  --yellow-dark: #c9c33a;
+  --yellow-light: #96600a;
+  --red-dark: #ff9b98;
+  --red-light: #c62828;
+  --blue-dark: #93bde0;
+  --blue-light: #1565c0;
+  --fs-2xs: clamp(11px, 0.52vw, 12px);
+  --fs-xs: clamp(11px, 0.6vw, 13px);
+  --fs-sm: clamp(12px, 0.68vw, 14px);
+  --fs-md: clamp(13px, 0.76vw, 15px);
+  --fs-lg: clamp(14px, 0.85vw, 16px);
+  --fs-xl: clamp(15px, 0.95vw, 18px);
+  --fs-2xl: clamp(19px, 1.5vw, 26px);
+  --fs-3xl: clamp(21px, 1.7vw, 30px);
+  --fs-4xl: clamp(30px, 3.2vw, 54px);
+  --s1: clamp(3px, 0.3vw, 6px);
+  --s2: clamp(6px, 0.58vw, 11px);
+  --s3: clamp(9px, 0.85vw, 16px);
+  --s4: clamp(12px, 1.1vw, 21px);
+  --s5: clamp(15px, 1.4vw, 26px);
+  --s6: clamp(18px, 1.7vw, 31px);
+  --s8: clamp(22px, 2.2vw, 40px);
+  --menubar-h: clamp(21px, 2.6vh, 30px);
+  --toolbar-h: clamp(29px, 3.9vh, 44px);
+  --subtab-h: clamp(24px, 3.1vh, 34px);
+  --statusbar-h: clamp(19px, 2.4vh, 28px);
+  --control-h: clamp(26px, 3.1vh, 34px);
+  --control-h-sm: clamp(24px, 2.6vh, 30px);
+  --icon-btn: clamp(26px, 2.9vh, 34px);
+  --row-h: clamp(24px, 3vh, 34px);
+  --row-h-compact: clamp(20px, 2.5vh, 28px);
+  --w-xs: clamp(84px, 9vw, 150px);
+  --w-sm: clamp(104px, 11vw, 180px);
+  --w-md: clamp(130px, 14vw, 230px);
+  --w-lg: clamp(180px, 20vw, 330px);
+  --z-sticky: 2;
+  --z-overlay: 60;
+  --z-dialog: 61;
+  --z-menu: 80;
+  --z-tooltip: 90;
+  --z-skip: 200;
+  --font-sans: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+}

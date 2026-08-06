@@ -1,0 +1,65 @@
+/* GENERATED FILE — do not hand-edit.
+ * Source of truth: Penpot, sets "semantic/dark" and "semantic/light".
+ * Regenerate with `node scripts/gen-tokens.mjs`.
+ *
+ * Only the token-modelled color roles live here. A handful of composite or
+ * alpha-blended values used by the editor/overlay chrome (--overlay,
+ * --editor-line, --editor-active-line, --editor-selection, --editor-start,
+ * --editor-header-name, --editor-header-value, --editor-body,
+ * --editor-match*, --accent-contrast) are not representable as Penpot color
+ * tokens (rgba opacity, or pure aliases of another semantic token) and stay
+ * hand-authored in styles.css next to the rest of the theme blocks. */
+:root,
+[data-theme="light"] {
+  --paper: var(--grey-30);
+  --paper-raised: var(--grey-paper);
+  --paper-deep: var(--grey-50);
+  --paper-sunken: var(--grey-70);
+  --line: var(--grey-90);
+  --line-strong: var(--grey-100);
+  --ink: var(--grey-20);
+  --text: var(--grey-0);
+  --text-soft: var(--grey-20);
+  --muted: var(--grey-10);
+  --accent: var(--orange-deep);
+  --accent-bright: var(--orange-bright);
+  --accent-strong: var(--orange-strong-light);
+  --good: var(--green-light);
+  --warn: var(--yellow-light);
+  --bad: var(--red-light);
+  --info: var(--blue-light);
+  --field-bg: var(--grey-paper);
+  --chrome: var(--grey-60);
+  --chrome-hover: var(--grey-80);
+  --editor-bg: var(--grey-paper);
+  --editor-fg: var(--grey-0);
+  --editor-gutter-bg: var(--grey-40);
+  --editor-gutter-fg: var(--grey-350);
+}
+
+[data-theme="dark"] {
+  --paper: var(--grey-600);
+  --paper-raised: var(--grey-550);
+  --paper-deep: var(--grey-650);
+  --paper-sunken: var(--grey-800);
+  --line: var(--grey-450);
+  --line-strong: var(--grey-400);
+  --ink: var(--grey-800);
+  --text: var(--grey-150);
+  --text-soft: var(--grey-250);
+  --muted: var(--grey-200);
+  --accent: var(--orange-bright);
+  --accent-bright: var(--orange-bright);
+  --accent-strong: var(--orange-strong-dark);
+  --good: var(--green-dark);
+  --warn: var(--yellow-dark);
+  --bad: var(--red-dark);
+  --info: var(--blue-dark);
+  --field-bg: var(--grey-800);
+  --chrome: var(--grey-700);
+  --chrome-hover: var(--grey-500);
+  --editor-bg: var(--grey-800);
+  --editor-fg: var(--grey-250);
+  --editor-gutter-bg: var(--grey-700);
+  --editor-gutter-fg: var(--grey-300);
+}
