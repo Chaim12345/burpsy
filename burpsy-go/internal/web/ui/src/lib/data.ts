@@ -45,6 +45,7 @@ export const keys = {
   issues: ["issues"] as const,
   intercept: ["intercept"] as const,
   sitemap: ["sitemap"] as const,
+  crawls: ["crawls"] as const,
   wsConnections: ["ws", "connections"] as const,
   wsHistory: (exchange: number) => ["ws", "history", exchange] as const,
   wsMessage: (id: number) => ["ws", "message", id] as const,
@@ -219,8 +220,12 @@ export const useWsConnections = () => useResource<WsConnection[]>(keys.wsConnect
 export const useHistory = (q: string, limit = 500) =>
   useResource<Exchange[]>(keys.history(q, limit), `/api/history${query({ limit, q })}`);
 
+// `id >= 0`, not `id > 0`: the stores are position-is-the-id counters from zero, so message 0,
+// exchange 0 and ws message 0 are all real rows. Guarding on `> 0` disabled the fetch for the
+// first thing ever captured, and the editor rendered "No request bytes captured" for a message
+// the server would have served — visible on the very first exchange of a fresh session.
 export const useMessage = (id: number | null | undefined) =>
-  useResource<MessageView>(keys.message(id ?? -1), `/api/message/${id ?? 0}`, typeof id === "number" && id > 0);
+  useResource<MessageView>(keys.message(id ?? -1), `/api/message/${id ?? 0}`, typeof id === "number" && id >= 0);
 
 export const useWsHistory = (exchange: number | null | undefined, limit = 500) =>
   useResource<WsHistory>(
@@ -230,7 +235,7 @@ export const useWsHistory = (exchange: number | null | undefined, limit = 500) =
   );
 
 export const useWsMessage = (id: number | null | undefined) =>
-  useResource<WsMessage>(keys.wsMessage(id ?? -1), `/api/ws/message/${id ?? 0}`, typeof id === "number" && id > 0);
+  useResource<WsMessage>(keys.wsMessage(id ?? -1), `/api/ws/message/${id ?? 0}`, typeof id === "number" && id >= 0);
 
 export const useToolLog = (filter: string, search: string, limit = 300) =>
   useResource<ToolLog>(keys.toolLog(filter, search), `/api/tools/log${query({ limit, filter, search })}`);
@@ -251,7 +256,7 @@ export function useIntercept(pollMs = 1_500): UseQueryResult<InterceptState> {
 /* --- writes -------------------------------------------------------------- */
 
 /** Invalidate by key prefix after a mutation lands. */
-function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
+export function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
   const client = useQueryClient();
   return (prefixes) => {
     for (const prefix of prefixes) void client.invalidateQueries({ queryKey: prefix });

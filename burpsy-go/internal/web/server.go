@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intercept"
@@ -20,14 +21,18 @@ import (
 
 // Server represents the web API server.
 type Server struct {
-	store              *core.TrafficStore
-	scope              *core.Scope
-	logger             *zap.Logger
-	mux                *http.ServeMux
-	sender             *sender.Sender
-	scanner            *scanner.ActiveScanner
-	passiveScanner     *scanner.PassiveScanner
-	findings           *core.FindingStore
+	store          *core.TrafficStore
+	scope          *core.Scope
+	logger         *zap.Logger
+	mux            *http.ServeMux
+	sender         *sender.Sender
+	scanner        *scanner.ActiveScanner
+	passiveScanner *scanner.PassiveScanner
+	findings       *core.FindingStore
+	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
+	// falls back to its own description and remediation — the catalogue enriches findings, it is
+	// never required to render one.
+	advisories         *advisory.Catalogue
 	sitemap            *sitemap.SiteMap
 	sessionCoordinator *session.Coordinator
 	matchReplace       *matchreplace.RuleSet
@@ -38,6 +43,9 @@ type Server struct {
 	persist            *persist.Store
 	liveAudit          *LiveAuditState
 	tasks              *dash.Registry
+	// crawls retains recent crawl reports, keyed by the task id that produced them, so the dashboard
+	// row and the coverage report are one identity rather than two numbers to correlate by hand.
+	crawls *crawlRuns
 	// events is the DASH-02 event log: what the tool *did*, as opposed to toolLog's what-it-*sent*.
 	// Two logs because they count different things — see internal/dash/events.go.
 	events *dash.EventLog
@@ -66,6 +74,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		mux:                http.NewServeMux(),
 		sender:             sender.NewSender(sender.DefaultSenderConfig()),
 		findings:           core.NewFindingStore(),
+		advisories:         loadAdvisories(),
 		sitemap:            sitemap.New(),
 		sessionCoordinator: session.NewCoordinator(zap.NewNop()),
 		matchReplace:       matchreplace.NewRuleSet(),
@@ -74,6 +83,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		loginRuns:          newSessionLoginRuns(),
 		intercept:          intercept.NewEngine(),
 		tasks:              dash.NewRegistry(),
+		crawls:             newCrawlRuns(),
 		events:             dash.NewEventLog(),
 		live:               newEventHub(),
 	}
@@ -342,6 +352,7 @@ func (s *Server) setupRoutes() {
 
 	// Site map
 	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
+	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
 
 	// Dashboard: running tasks, the activity log, and every summary count with its
 	// found/skipped/errored/gated breakdown.
@@ -403,4 +414,18 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 	// Serve the static web UI, embedded at build time.
 	uiHandler(w, r)
+}
+
+// loadAdvisories loads the issue-definition catalogue, or returns nil.
+//
+// Nil rather than an error, and no log line at construction: a server that cannot enrich findings is
+// still a working server, and NewServer has no logger yet at the point this runs. The consequence is
+// visible where it matters instead — GET /api/issues reports the catalogue size, so an operator
+// seeing plain findings can tell "no catalogue loaded" from "this check has no definition".
+func loadAdvisories() *advisory.Catalogue {
+	c, err := advisory.Load()
+	if err != nil {
+		return nil
+	}
+	return c
 }
