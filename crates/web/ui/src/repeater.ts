@@ -56,6 +56,12 @@ export function initRepeater(): void {
   `;
   $("#rep-send")!.addEventListener("click", () => void send());
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
+  $("#rep-tabs")!.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onTabStripClick(e);
+    }
+  });
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {
     addTab({ target: d.target, raw: d.raw, protocol: d.protocol });
@@ -86,9 +92,9 @@ function renderTabs(): void {
       .map(
         (t) =>
           `<div class="tab-item${t.id === activeId ? " on" : ""}" data-id="${t.id}">${t.id}` +
-          `<span class="tab-close" data-close="${t.id}" title="close tab">&times;</span></div>`,
+          `<span class="tab-close" role="button" tabindex="0" data-close="${t.id}" title="Close tab ${t.id}" aria-label="Close tab ${t.id}">&times;</span></div>`,
       )
-      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab">+</button>`;
+      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab" aria-label="New tab">+</button>`;
 }
 
 function saveEditorIntoActiveTab(): void {

@@ -9,43 +9,43 @@
   <body>
     <header>
       <h1>burpsy</h1>
-      <nav>
-        <button class="on" data-t="dashboard">Dashboard</button>
-        <button data-t="history">History</button>
-        <button data-t="wshistory">WS History</button>
-        <button data-t="sitemap">Site map</button>
-        <button data-t="repeater">Repeater</button>
-        <button data-t="intruder">Intruder</button>
-        <button data-t="intercept">Intercept</button>
-        <button data-t="scanner">Scanner</button>
-        <button data-t="decoder">Decoder</button>
-        <button data-t="comparer">Comparer</button>
-        <button data-t="logger">Logger</button>
-        <button data-t="organizer">Organizer</button>
-        <button data-t="matchreplace">Match/Replace</button>
-        <button data-t="session">Session</button>
-        <button data-t="sequencer">Sequencer</button>
+      <nav role="tablist">
+        <button id="tab-dashboard" role="tab" aria-selected="true" aria-controls="dashboard" class="on" data-t="dashboard">Dashboard</button>
+        <button id="tab-history" role="tab" aria-selected="false" aria-controls="history" data-t="history">History</button>
+        <button id="tab-wshistory" role="tab" aria-selected="false" aria-controls="wshistory" data-t="wshistory">WS History</button>
+        <button id="tab-sitemap" role="tab" aria-selected="false" aria-controls="sitemap" data-t="sitemap">Site map</button>
+        <button id="tab-repeater" role="tab" aria-selected="false" aria-controls="repeater" data-t="repeater">Repeater</button>
+        <button id="tab-intruder" role="tab" aria-selected="false" aria-controls="intruder" data-t="intruder">Intruder</button>
+        <button id="tab-intercept" role="tab" aria-selected="false" aria-controls="intercept" data-t="intercept">Intercept</button>
+        <button id="tab-scanner" role="tab" aria-selected="false" aria-controls="scanner" data-t="scanner">Scanner</button>
+        <button id="tab-decoder" role="tab" aria-selected="false" aria-controls="decoder" data-t="decoder">Decoder</button>
+        <button id="tab-comparer" role="tab" aria-selected="false" aria-controls="comparer" data-t="comparer">Comparer</button>
+        <button id="tab-logger" role="tab" aria-selected="false" aria-controls="logger" data-t="logger">Logger</button>
+        <button id="tab-organizer" role="tab" aria-selected="false" aria-controls="organizer" data-t="organizer">Organizer</button>
+        <button id="tab-matchreplace" role="tab" aria-selected="false" aria-controls="matchreplace" data-t="matchreplace">Match/Replace</button>
+        <button id="tab-session" role="tab" aria-selected="false" aria-controls="session" data-t="session">Session</button>
+        <button id="tab-sequencer" role="tab" aria-selected="false" aria-controls="sequencer" data-t="sequencer">Sequencer</button>
       </nav>
       <a id="ca-link" href="/ca.crt" download style="display: none">CA cert</a>
       <span id="scope-badge" class="badge" title=""></span>
       <div id="stats"></div>
     </header>
     <main>
-      <section id="dashboard" class="on"></section>
-      <section id="history"></section>
-      <section id="wshistory"></section>
-      <section id="sitemap"></section>
-      <section id="repeater"></section>
-      <section id="intruder"></section>
-      <section id="intercept"></section>
-      <section id="scanner"></section>
-      <section id="decoder"></section>
-      <section id="comparer"></section>
-      <section id="logger"></section>
-      <section id="organizer"></section>
-      <section id="matchreplace"></section>
-      <section id="session"></section>
-      <section id="sequencer"></section>
+      <section id="dashboard" role="tabpanel" aria-labelledby="tab-dashboard" class="on"></section>
+      <section id="history" role="tabpanel" aria-labelledby="tab-history"></section>
+      <section id="wshistory" role="tabpanel" aria-labelledby="tab-wshistory"></section>
+      <section id="sitemap" role="tabpanel" aria-labelledby="tab-sitemap"></section>
+      <section id="repeater" role="tabpanel" aria-labelledby="tab-repeater"></section>
+      <section id="intruder" role="tabpanel" aria-labelledby="tab-intruder"></section>
+      <section id="intercept" role="tabpanel" aria-labelledby="tab-intercept"></section>
+      <section id="scanner" role="tabpanel" aria-labelledby="tab-scanner"></section>
+      <section id="decoder" role="tabpanel" aria-labelledby="tab-decoder"></section>
+      <section id="comparer" role="tabpanel" aria-labelledby="tab-comparer"></section>
+      <section id="logger" role="tabpanel" aria-labelledby="tab-logger"></section>
+      <section id="organizer" role="tabpanel" aria-labelledby="tab-organizer"></section>
+      <section id="matchreplace" role="tabpanel" aria-labelledby="tab-matchreplace"></section>
+      <section id="session" role="tabpanel" aria-labelledby="tab-session"></section>
+      <section id="sequencer" role="tabpanel" aria-labelledby="tab-sequencer"></section>
     </main>
     <script type="module" src="/app.js"></script>
   </body>
