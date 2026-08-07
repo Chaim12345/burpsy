@@ -1,6 +1,6 @@
 // Decoder tab: smart multi-layer decode, explicit "decode as", encode, and hash.
 
-import { $, $all, esc, postJSON } from "./common";
+import { $, $all, esc, postJSON, toast } from "./common";
 
 interface BytesView {
   text: string;
@@ -56,15 +56,18 @@ let lastDecode: SmartResp | ExplicitResp | null = null;
  */
 let paneShowsDecode = false;
 
+/** The clean raw output text of the last operation (decode/encode/hash), for easy copying. */
+let lastOutputText: string | null = null;
+
 export function initDecoder(): void {
   const el = $("#decoder");
   if (!el) return;
   el.innerHTML = `
     <div class="two">
       <div class="stack">
-        <textarea id="dec-input" placeholder="paste text to decode / encode / hash"></textarea>
+        <textarea id="dec-input" aria-label="Text to decode, encode, or hash" placeholder="paste text to decode / encode / hash"></textarea>
         <div class="row">
-          <select id="dec-encoding">
+          <select id="dec-encoding" aria-label="Decoding format">
             <option value="smart">smart</option>
             ${LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
@@ -77,30 +80,64 @@ export function initDecoder(): void {
           <label><input type="radio" name="dec-view" value="hex" /> Hex</label>
         </div>
         <div class="row">
-          <select id="enc-encoding">
+          <select id="enc-encoding" aria-label="Encoding format">
             ${ENCODABLE_LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
           <button class="go" id="enc-run">Encode</button>
         </div>
         <div class="row">
-          <select id="hash-algorithm">
+          <select id="hash-algorithm" aria-label="Hash algorithm">
             ${HASH_ALGORITHMS.map((a) => `<option value="${a}">${a}</option>`).join("")}
           </select>
           <button class="go" id="hash-run">Hash</button>
           <span class="hint">one-way — there is no decode back</span>
         </div>
       </div>
-      <div><pre id="dec-output"></pre></div>
+      <div class="stack">
+        <div class="row" style="justify-content: flex-end; gap: 8px;">
+          <button class="ghost small" id="dec-clear-btn" title="Clear input and output text" aria-label="Clear input and output text">Clear All</button>
+          <button class="ghost small" id="dec-copy-btn" disabled title="Copy output text to clipboard" aria-label="Copy output text to clipboard">Copy Output</button>
+        </div>
+        <pre id="dec-output" style="flex: 1;"></pre>
+      </div>
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());
   $("#enc-run")!.addEventListener("click", () => void runEncode());
   $("#hash-run")!.addEventListener("click", () => void runHash());
+  $("#dec-clear-btn")!.addEventListener("click", () => clearAll());
+  $("#dec-copy-btn")!.addEventListener("click", () => void copyOutput());
   $all<HTMLInputElement>('input[name="dec-view"]').forEach((r) => {
     r.addEventListener("change", () => {
       if (paneShowsDecode && lastDecode) $("#dec-output")!.innerHTML = renderDecodeResp(lastDecode);
     });
   });
+}
+
+function updateCopyButtonState(): void {
+  const btn = $<HTMLButtonElement>("#dec-copy-btn");
+  if (btn) {
+    btn.disabled = !lastOutputText;
+  }
+}
+
+function clearAll(): void {
+  $<HTMLTextAreaElement>("#dec-input")!.value = "";
+  $("#dec-output")!.textContent = "";
+  lastDecode = null;
+  lastOutputText = null;
+  paneShowsDecode = false;
+  updateCopyButtonState();
+}
+
+async function copyOutput(): Promise<void> {
+  if (!lastOutputText) return;
+  try {
+    await navigator.clipboard.writeText(lastOutputText);
+    toast("Copied output to clipboard");
+  } catch {
+    toast("Failed to copy to clipboard", "error");
+  }
 }
 
 function viewMode(): ViewMode {
@@ -193,10 +230,14 @@ async function runDecode(): Promise<void> {
     });
     lastDecode = resp;
     paneShowsDecode = true;
+    lastOutputText = resp.output.text;
     out.innerHTML = renderDecodeResp(resp);
   } catch (e) {
     paneShowsDecode = false;
+    lastOutputText = null;
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+  } finally {
+    updateCopyButtonState();
   }
 }
 
@@ -208,9 +249,13 @@ async function runEncode(): Promise<void> {
   out.textContent = "encoding…";
   try {
     const resp = await postJSON<EncodeResp>("/api/tools/encode", { input, encoding });
+    lastOutputText = resp.output.text;
     out.innerHTML = `<b>${esc(resp.encoding)}:</b>\n${bytesLine(resp.output)}`;
   } catch (e) {
+    lastOutputText = null;
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+  } finally {
+    updateCopyButtonState();
   }
 }
 
@@ -224,9 +269,13 @@ async function runHash(): Promise<void> {
   out.textContent = "hashing…";
   try {
     const resp = await postJSON<HashResp>("/api/tools/hash", { input, algorithm });
+    lastOutputText = resp.output.text;
     const bytes = resp.output.len / 2;
     out.innerHTML = `<b>${esc(resp.algorithm)}:</b>\n${esc(resp.output.text)}\n<span class="hint">(${bytes} bytes, hex)</span>`;
   } catch (e) {
+    lastOutputText = null;
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+  } finally {
+    updateCopyButtonState();
   }
 }
