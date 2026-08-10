@@ -1,0 +1,24 @@
+
+  burpsy is running
+  ─────────────────────────────────────────────────────────
+  Web UI      http://localhost:8081
+              http://192.168.0.2:8081     (if localhost forwarding is off)
+  Proxy       127.0.0.1:8080   (or 192.168.0.2:8080)
+  Demo app    http://127.0.0.1:8099   — reachable through the proxy
+
+  Seeded      {"exchanges":9,"messages":18,"stored_bytes":3312}
+
+  Try:
+    History   click any row to see raw request + response
+    Repeater  target http://127.0.0.1:8099
+              GET /search?q=test&lang=en HTTP/1.1
+              Host: 127.0.0.1:8099
+              Connection: close
+    Intruder  msg id from a /login POST row, target http://127.0.0.1:8099
+              Find points -> pick the 'user' body param -> Attack
+              payloads:  admin,admin',",../../etc/passwd,{{7*7}}
+              the demo app 500s on a quote, so you should see it stand out
+
+  logs        tail -f /tmp/burpsy-serve.log
+  stop        pkill -f target/debug/burpsy ; pkill -f burpsy-demo-target
+  ─────────────────────────────────────────────────────────
