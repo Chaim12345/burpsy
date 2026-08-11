@@ -8,6 +8,8 @@ import type {
   HashResponse,
   SequencerAnalysis,
   SequencerCapture,
+  StopCaptureResult,
+  TokenLocation,
   ToolLogView,
   TransformKind,
   TransformResult,
@@ -78,10 +80,31 @@ export function useSequencerCapture(id: string, pollMs = 1_000): UseQueryResult<
   });
 }
 
+/** The body POST /api/sequencer/capture takes. `count` defaults to 100 server-side. */
+export interface SequencerCaptureRequest {
+  target: string;
+  protocol?: "http" | "https";
+  request: string;
+  count?: number;
+  /** Milliseconds between sends. A capture is the one tool that deliberately hammers one endpoint,
+   *  so this is how an operator stays under a rate limit. */
+  delay_ms?: number;
+  location: TokenLocation;
+}
+
+/** Start a real capture: N sends of one request, one token extracted per response. */
+export function useStartSequencerCapture() {
+  const client = useQueryClient();
+  return useMutation<SequencerCapture, Error, SequencerCaptureRequest>({
+    mutationFn: (body) => api<SequencerCapture>("/api/sequencer/capture", json("POST", body)),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["sequencer", "capture"] }),
+  });
+}
+
 export function useStopSequencerCapture() {
   const client = useQueryClient();
-  return useMutation<{ stopped?: boolean }, Error, void>({
-    mutationFn: () => api<{ stopped?: boolean }>("/api/sequencer/capture/stop", json("POST", {})),
+  return useMutation<StopCaptureResult, Error, void>({
+    mutationFn: () => api<StopCaptureResult>("/api/sequencer/capture/stop", json("POST", {})),
     onSuccess: () => void client.invalidateQueries({ queryKey: ["sequencer", "capture"] }),
   });
 }

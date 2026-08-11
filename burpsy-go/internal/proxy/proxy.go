@@ -951,6 +951,19 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// Read full request
 	requestData := readFullRequest(requestLine, reader)
 
+	// A client speaking to a proxy sends absolute-form — `GET http://host/path HTTP/1.1` (RFC 9112
+	// §3.2.2) — but an origin server must be sent origin-form, `GET /path HTTP/1.1` (§3.2.1). This
+	// request line was being forwarded verbatim, so the target saw the whole absolute URI as its
+	// path. Some servers tolerate it; many route on the path and 404, and any application that
+	// inspects its own path sees a different string than the one the operator sent. e2e-go.sh caught
+	// it as a mismatch against Rust's behaviour on the very first proxied request.
+	//
+	// Rewritten here, before intercept and before the store, for the reason the comment further down
+	// gives about the WebSocket strip: what history shows and what the operator edits must be the
+	// bytes upstream receives. The tunnelled path (handleTunnel, below) needs none of this — requests
+	// inside a CONNECT tunnel already arrive in origin-form.
+	requestData = toOriginForm(requestData, target, path)
+
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
 	// connection without reaching upstream.
@@ -1139,6 +1152,42 @@ func (s *Server) capture() scanner.Capture {
 		Logger:   s.config.logger,
 		Source:   core.SourceProxy,
 	}
+}
+
+// toOriginForm rewrites an absolute-form request line to origin-form, leaving everything else byte
+// for byte alone.
+//
+// `target` is the request-target as the client sent it and `path` is what parseTarget resolved it
+// to, so a target with no scheme was already origin-form and the request is returned untouched —
+// this must not "helpfully" rewrite anything else, including the asterisk-form target of an OPTIONS
+// request. Only the first line is considered: the target string is replaced positionally within it
+// rather than by re-serialising the line, so an unusual amount of whitespace between the method and
+// the target survives, which matters for a tool whose job includes showing exactly what was sent.
+func toOriginForm(requestData []byte, target, path string) []byte {
+	if target == "" || path == "" || target == path {
+		return requestData
+	}
+	// Only absolute-form is rewritten. parseTarget returns path == target for origin-form, caught
+	// above; anything else without a scheme is left alone rather than guessed at.
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		return requestData
+	}
+	end := bytes.IndexByte(requestData, '\n')
+	if end < 0 {
+		return requestData
+	}
+	line := requestData[:end]
+	at := bytes.Index(line, []byte(target))
+	if at < 0 {
+		// The first line does not contain the target the caller parsed out of it. Nothing to do that
+		// would not be a guess, and a wrong guess here corrupts the request.
+		return requestData
+	}
+	out := make([]byte, 0, len(requestData)-len(target)+len(path))
+	out = append(out, line[:at]...)
+	out = append(out, path...)
+	out = append(out, line[at+len(target):]...)
+	return append(out, requestData[end:]...)
 }
 
 func parseTarget(target string) (host string, port uint16, path string) {

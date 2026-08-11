@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -58,6 +59,11 @@ type Server struct {
 	// be told to trust it. Nil when interception is off, and then the route reports that rather than
 	// serving an empty file — see handleCACert.
 	caCertPEM []byte
+	// captures holds sequencer capture runs, built on first use by captureSet(). Lazy rather than in
+	// NewServer because a session that never runs a capture should not allocate the table, and because
+	// every existing test constructs a Server directly — see api_sequencer_capture.go.
+	captures    *sequencerCaptures
+	captureOnce sync.Once
 	// live is the change-event hub behind /api/events: every store the UI reads signals it, and it
 	// coalesces those signals into "this kind changed" frames the browser refetches on. See events.go
 	// for why the frames carry no data and why the producer side is atomics only.
@@ -352,6 +358,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	s.mux.HandleFunc("/api/audit/", s.handleAuditByPath)
 	s.mux.HandleFunc("/api/sequencer/analyse", s.handleSequencerAnalyse)
+	// Two patterns, because they are two operations: the exact path starts a capture, the subtree
+	// reads one and stops one. Registered exact-first for readability only — ServeMux picks the
+	// longest matching pattern regardless of registration order.
+	s.mux.HandleFunc("/api/sequencer/capture", s.handleSequencerCaptureStart)
 	s.mux.HandleFunc("/api/sequencer/capture/", s.handleSequencerCapture)
 
 	// Session
@@ -389,7 +399,14 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/tools/organizer", s.handleOrganizer)
 	s.mux.HandleFunc("/api/tools/organizer/", s.handleOrganizerItem)
 
-	// WebSocket capture surface (empty while the Go proxy has no WS relay)
+	// WebSocket capture surface. The parenthetical here used to read "empty while the Go proxy has no
+	// WS relay", which stopped being true when internal/proxy/ws.go landed: handleWebSocketUpgrade
+	// and relayWebsocket relay frames in both directions and record them through wsCapture, so these
+	// routes serve real captures. An operator who read the comment would have concluded that an empty
+	// WebSockets history meant "unimplemented" rather than "no WebSocket traffic yet" — the same
+	// misreading in the opposite direction from the honesty defects this phase is clearing.
+	//
+	// What is still partial is interception and edit-and-resend of frames (WS-02), which is Phase 6.
 	s.mux.HandleFunc("/api/ws/connections", s.handleWSConnections)
 	s.mux.HandleFunc("/api/ws/history", s.handleWSHistory)
 	s.mux.HandleFunc("/api/ws/message/", s.handleWSMessage)

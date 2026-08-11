@@ -537,8 +537,15 @@ export function SessionPage(): JSX.Element {
 
   const cookieRows = useMemo(
     () =>
-      (cookiesQuery.data?.cookies ?? []).flatMap((host) =>
-        host.cookies.map((cookie) => ({ host: host.host, name: cookie.name, value: cookie.value })),
+      (cookiesQuery.data?.cookies ?? []).flatMap((jar) =>
+        jar.cookies.map((cookie) => ({
+          host: jar.host,
+          // The scheme is what distinguishes two jars for the same host:port, so it is shown rather
+          // than left to be inferred from the port — 8443 over plain HTTP is a real configuration.
+          scheme: jar.tls ? "https" : "http",
+          name: cookie.name,
+          value: cookie.value,
+        })),
       ),
     [cookiesQuery.data],
   );
@@ -972,13 +979,19 @@ export function SessionPage(): JSX.Element {
         ) : cookieRows.length === 0 ? (
           <Empty
             title="No cookies to show"
-            detail="The coordinator's jar has no enumeration API in this build, so it reports as attached with an empty table rather than inventing entries."
+            detail={
+              cookiesQuery.data?.hint ??
+              "The jar is attached and empty: no Set-Cookie has been absorbed yet. Run a login macro, or send authenticated traffic through the proxy."
+            }
           />
         ) : (
-          <SimpleTable headers={["Host", "Name", "Value"]}>
+          <SimpleTable headers={["Authority", "Name", "Value"]}>
             {cookieRows.map((row, index) => (
-              <tr key={`${row.host}-${row.name}-${index}`}>
-                <td>{row.host}</td>
+              <tr key={`${row.scheme}-${row.host}-${row.name}-${index}`}>
+                <td>
+                  {row.host}
+                  <span className="cell-dim"> · {row.scheme}</span>
+                </td>
                 <td>
                   <code>{row.name}</code>
                 </td>

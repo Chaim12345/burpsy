@@ -1,6 +1,7 @@
 package dash
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -52,6 +53,10 @@ const (
 	// KindCrawl is one crawl from a seed URL. Named here rather than in the crawler so the crawler
 	// depends on this package and not the other way round.
 	KindCrawl Kind = "crawl"
+	// KindSequencerCapture is one sequencer capture: N requests sent to accumulate N session tokens.
+	// The first consumer of Handle.WithCancel, because "stop the capture" is a button an operator
+	// reaches for and the route behind it used to answer `{"stopped": true}` without a loop to stop.
+	KindSequencerCapture Kind = "sequencer-capture"
 )
 
 // TaskState is where a task ended up, or that it has not ended.
@@ -110,7 +115,22 @@ type Task struct {
 	// Result is what the work found, with its caveats. A finished task always carries one, so a
 	// task cannot report a count on the dashboard without reporting what it did not look at.
 	Result Breakdown `json:"result"`
+
+	// cancel stops the work, when its author asked for that by calling Handle.WithCancel. Unexported,
+	// so it never reaches the wire; Cancellable is what the dashboard reads.
+	//
+	// The registry deliberately still does not own goroutines. It holds a function the caller handed
+	// it and calls that function when asked — the caller's own select on ctx.Done() is what actually
+	// stops the work, and a caller that ignores its context is a task that reports cancellable and
+	// keeps running. That is why Registry.Cancel reports what it found rather than what it achieved.
+	cancel func()
 }
+
+// Cancellable reports whether this task registered a cancel function. Read by the dashboard so a
+// stop button appears only where it can do something: a button that silently does nothing is worse
+// than no button, and this package's whole purpose is not showing an operator a state that is not
+// real.
+func (t Task) Cancellable() bool { return t.cancel != nil }
 
 // Fraction is progress in [0,1], and whether it is known at all. Two return values rather than a
 // sentinel: a task whose total is not yet known is at an unknown fraction, not at zero, and a
@@ -172,6 +192,7 @@ func (t Task) MarshalJSON() ([]byte, error) {
 		FractionKnown bool    `json:"fraction_known"`
 		Progress      string  `json:"progress"`
 		Complete      bool    `json:"complete"`
+		Cancellable   bool    `json:"cancellable"`
 	}{
 		plain:         plain(t),
 		ElapsedMs:     elapsed,
@@ -179,6 +200,7 @@ func (t Task) MarshalJSON() ([]byte, error) {
 		FractionKnown: known,
 		Progress:      t.ProgressLabel(),
 		Complete:      t.Complete(),
+		Cancellable:   t.Cancellable(),
 	})
 }
 
@@ -451,6 +473,99 @@ func (h *Handle) update(fn func(*Task)) {
 	}
 }
 
+// WithCancel derives a cancellable context from parent and registers its cancel function against
+// this task, returning the derived context and its cancel.
+//
+// This is the one cancellation primitive in the process, and it has three consumers — sequencer
+// capture, audit-task cancel, and intruder attack stop. Each of those had to answer "stop" somehow,
+// and without a primitive each answered it separately and wrongly: the sequencer's /stop returned
+// `{"stopped": true}` for a loop that did not exist.
+//
+// The caller must still `defer cancel()`, exactly as with context.WithCancel: the returned function
+// is the real one, not a wrapper, and the registry holding a copy of it is not a substitute for
+// releasing the context when the work ends. Finish/Stop/Fail also call it, so a task that ends
+// normally does not leave a derived context attached to its parent — but that is belt-and-braces, not
+// a licence to drop the defer.
+//
+// A nil handle returns a cancellable context anyway rather than the parent unchanged: the caller's
+// select on ctx.Done() must compile and behave the same whether or not a registry is wired, which is
+// the same reason every other method here is nil-safe.
+func (h *Handle) WithCancel(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	h.update(func(t *Task) { t.cancel = cancel })
+	return ctx, cancel
+}
+
+// Cancel asks the task with this id to stop, and reports whether there was a running cancellable
+// task to ask.
+//
+// The three return-ish states are deliberately distinguishable by the caller through this bool plus
+// its own lookup, because they are three different answers to "did my stop button work": no such
+// task, a task that already finished, and a task that never registered a cancel function. A route
+// that collapsed them into `{"stopped": true}` is precisely the defect this primitive exists to
+// remove.
+//
+// Cancelling does not itself move the task to TaskStopped. The work does that, by noticing its
+// context and calling Handle.Stop with what it had found — a partial result from a cancelled run is
+// real, and the registry marking it stopped from out here would have to invent the breakdown.
+func (r *Registry) Cancel(id uint64) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	var cancel func()
+	if t := r.findLocked(id); t != nil && t.Running() {
+		cancel = t.cancel
+	}
+	r.mu.Unlock()
+	// Called with no lock held. context's cancel closes a channel and returns without blocking, so
+	// holding mu would be safe today — but the goroutine it wakes will call Handle.Stop, which takes
+	// mu, and keeping the two unorderable is worth more than one saved unlock.
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
+}
+
+// CancelKind asks every running cancellable task of this kind to stop, and returns how many it
+// asked. Zero means there was nothing running to stop — which is the honest answer a "stop the
+// capture" route needs in order to say so.
+func (r *Registry) CancelKind(kind Kind) int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	var cancels []func()
+	for _, t := range r.tasks {
+		if t.Kind == kind && t.Running() && t.cancel != nil {
+			cancels = append(cancels, t.cancel)
+		}
+	}
+	r.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	return len(cancels)
+}
+
+// RunningOfKind returns the ids of running tasks of this kind, newest last. Lets a route report which
+// run it is talking about instead of asserting that one exists.
+func (r *Registry) RunningOfKind(kind Kind) []uint64 {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []uint64
+	for _, t := range r.tasks {
+		if t.Kind == kind && t.Running() {
+			out = append(out, t.ID)
+		}
+	}
+	return out
+}
+
 // Advance adds n to the task's completed count.
 func (h *Handle) Advance(n uint64) { h.update(func(t *Task) { t.Done += n }) }
 
@@ -469,6 +584,7 @@ func (h *Handle) SetNote(note string) { h.update(func(t *Task) { t.Note = note }
 // about how a run ended.
 func (h *Handle) finish(state TaskState, result Breakdown, note string) {
 	var finished *Task
+	var release func()
 	h.update(func(t *Task) {
 		if !t.Running() {
 			return
@@ -481,7 +597,15 @@ func (h *Handle) finish(state TaskState, result Breakdown, note string) {
 		t.EndedMs = uint64(time.Now().UnixMilli())
 		snapshot := *t
 		finished = &snapshot
+		// A derived context stays attached to its parent until cancelled, so a finished task holding
+		// an uncalled cancel is a leak for as long as the parent lives — and for an audit that is the
+		// whole process. Cleared as well as called, so Cancellable() stops claiming a finished task
+		// can be stopped.
+		release, t.cancel = t.cancel, nil
 	})
+	if release != nil {
+		release()
+	}
 	if finished == nil {
 		return
 	}

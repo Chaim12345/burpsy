@@ -464,10 +464,76 @@ type MacroStep struct {
 
 type cookieJar struct {
 	sync.RWMutex
-	m map[string]string
+	// The authority this jar belongs to, kept alongside the cookies rather than recovered from the
+	// map key. The key is `fmt.Sprintf("%s:%d_%v", host, port, tls)` and splitting it back apart is
+	// lossy: an IPv6 literal host contains colons of its own, so `[::1]:8080_true` has no unambiguous
+	// last-colon rule that also survives a hostname. Storing the tuple once, when it is still three
+	// typed values, means enumeration never has to guess.
+	host string
+	port uint16
+	tls  bool
+	m    map[string]string
 }
 
-func newCookieJar() *cookieJar { return &cookieJar{m: make(map[string]string)} }
+func newCookieJar(host string, port uint16, tls bool) *cookieJar {
+	return &cookieJar{host: host, port: port, tls: tls, m: make(map[string]string)}
+}
+
+// CookieJarEntry is one authority's jar, flattened for reporting.
+type CookieJarEntry struct {
+	Host    string
+	Port    uint16
+	TLS     bool
+	Cookies map[string]string
+}
+
+// Jars returns every jar that holds at least one cookie, sorted by authority.
+//
+// This exists because /api/session/cookies had no way to ask. It answered `{"wired": true,
+// "cookies": []}` unconditionally, which is a true statement before any authenticated flow and a
+// false one after: the coordinator had absorbed cookies and was attaching them to outgoing requests
+// while the operator's cookie table said there were none. "Wired with nothing in it" and "wired and
+// hiding what is in it" are indistinguishable to the reader, and the second is the one that hides a
+// live session from the person responsible for it.
+//
+// Empty jars are omitted: a jar is created on the first Set-Cookie for an authority and may end up
+// empty if the header carried no name=value pair, and an authority listed with no cookies under it
+// reads as a claim about that authority rather than an artefact of how jars are allocated.
+func (cjm *CookieJarManager) Jars() []CookieJarEntry {
+	cjm.mu.RLock()
+	jars := make([]*cookieJar, 0, len(cjm.jars))
+	for _, jar := range cjm.jars {
+		jars = append(jars, jar)
+	}
+	cjm.mu.RUnlock()
+
+	out := make([]CookieJarEntry, 0, len(jars))
+	for _, jar := range jars {
+		// Copied under the jar's own lock: handing the caller the live map would let a concurrent
+		// absorb() race a JSON encoder walking it.
+		jar.RLock()
+		if len(jar.m) > 0 {
+			cookies := make(map[string]string, len(jar.m))
+			for name, value := range jar.m {
+				cookies[name] = value
+			}
+			out = append(out, CookieJarEntry{Host: jar.host, Port: jar.port, TLS: jar.tls, Cookies: cookies})
+		}
+		jar.RUnlock()
+	}
+	// Deterministic order, because map iteration is not and a cookie table that reshuffles itself on
+	// every refresh is unreadable.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		if out[i].Port != out[j].Port {
+			return out[i].Port < out[j].Port
+		}
+		return !out[i].TLS && out[j].TLS
+	})
+	return out
+}
 
 func (j *cookieJar) cookieHeader() string {
 	j.RLock()
@@ -487,15 +553,35 @@ func (j *cookieJar) cookieHeader() string {
 	return strings.Join(parts, "; ")
 }
 
+// absorb takes one Set-Cookie header value.
+//
+// A Set-Cookie header is `name=value` followed by *attributes* — `Path`, `Domain`, `Expires`,
+// `Max-Age`, `SameSite`, `Secure`, `HttpOnly` — separated by semicolons (RFC 6265 §4.1.1). Only the
+// first pair is a cookie. This used to loop over every semicolon-separated chunk and store each
+// `k=v` it found, so `Set-Cookie: SESSION=abc; Path=/; SameSite=Lax` deposited three "cookies", and
+// cookieHeader() then sent `Path=/; SameSite=Lax; SESSION=abc` back to the server on every
+// subsequent request. Nothing reported it, because nothing could enumerate the jar; the honesty fix
+// that made the jar readable is what made this visible.
+//
+// Attributes are dropped rather than modelled: nothing in this port acts on Path, Domain or Expires
+// yet, and a jar that stored them would imply a scoping and expiry policy it does not enforce.
+// Cookies therefore persist for the life of the process, which is wrong in the same direction Burp's
+// own session-handling cookie jar is wrong, and is stated here rather than implied.
 func (j *cookieJar) absorb(val string) {
+	first, _, _ := strings.Cut(val, ";")
+	name, value, ok := strings.Cut(first, "=")
+	if !ok {
+		// `Set-Cookie: HttpOnly` and friends carry no pair at all. Storing nothing is the whole
+		// response; an empty-named cookie would be worse than the header being ignored.
+		return
+	}
+	name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+	if name == "" {
+		return
+	}
 	j.Lock()
 	defer j.Unlock()
-	for _, chunk := range strings.Split(val, ";") {
-		chunk = strings.TrimSpace(chunk)
-		if idx := strings.IndexByte(chunk, '='); idx >= 0 {
-			j.m[strings.TrimSpace(chunk[:idx])] = strings.TrimSpace(chunk[idx+1:])
-		}
-	}
+	j.m[name] = value
 }
 
 type CookieJarManager struct {
@@ -523,7 +609,7 @@ func (cjm *CookieJarManager) AbsorbSetCookie(host string, port uint16, tls bool,
 	cjm.mu.Lock()
 	jar := cjm.jars[key]
 	if jar == nil {
-		jar = newCookieJar()
+		jar = newCookieJar(host, port, tls)
 		cjm.jars[key] = jar
 	}
 	cjm.mu.Unlock()
@@ -647,6 +733,11 @@ func NewCoordinator(logger *zap.Logger) *Coordinator {
 		observed: make(map[RuleID][]MacroStep),
 	}
 }
+
+// Cookies reports every cookie the coordinator is holding, per authority. The jar manager is
+// private, so this is how /api/session/cookies asks — see CookieJarManager.Jars for why the route
+// could not previously answer honestly.
+func (c *Coordinator) Cookies() []CookieJarEntry { return c.jarMgr.Jars() }
 
 // ErrNoSuchRule is what UpdateRule returns for an id the coordinator does not hold, so a caller can
 // tell "the rule you edited is gone" (a 404) from "the edit is not a valid rule" (a 400) without

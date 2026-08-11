@@ -128,7 +128,12 @@ export interface SessionCookiePair {
 }
 
 export interface SessionHostCookies {
+  /** The full authority ("example.com:443"). A jar is keyed by host, port and TLS, so two jars can
+   *  share a hostname — showing the bare name would render them as duplicate rows. */
   host: string;
+  port: number;
+  /** Whether this jar's authority is the TLS one. Two jars for the same host:port differ only here. */
+  tls: boolean;
   cookies: SessionCookiePair[];
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -199,7 +200,12 @@ type sessionCookiesResp struct {
 }
 
 type sessionHostCookies struct {
+	// Host carries the full authority ("example.com:443"), not the bare hostname. A jar is keyed by
+	// (host, port, tls), so two jars can share a hostname; rendering only the name would show two
+	// rows that look like duplicates of each other while holding different cookies.
 	Host    string              `json:"host"`
+	Port    uint16              `json:"port"`
+	TLS     bool                `json:"tls"`
 	Cookies []sessionCookiePair `json:"cookies"`
 }
 
@@ -947,9 +953,49 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// The coordinator's cookie jar has no enumeration API, so the UI's cookie table is served from
-	// what the coordinator reports per-authority — which it only does on request. Report wired with
-	// an empty table rather than inventing cookies.
+	// This used to answer `{"wired": true, "cookies": []}` unconditionally, explaining that the jar
+	// had no enumeration API. That was accurate about the code and wrong about the session: after any
+	// authenticated flow the coordinator holds cookies and attaches them to outgoing requests, so the
+	// operator's cookie table asserted "no cookies" about a live session. The jar now enumerates
+	// (session.CookieJarManager.Jars), so the honest answer is available and is given.
+	//
+	// Wired is no longer a constant either. It reports whether a coordinator is attached at all,
+	// which is the question the UI's "the cookie jar is not attached to this process" state asks; a
+	// hardcoded true answered it wrongly for every server built without one.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sessionCookiesResp{Wired: true, Cookies: []sessionHostCookies{}})
+	if s.sessionCoordinator == nil {
+		json.NewEncoder(w).Encode(sessionCookiesResp{
+			Wired: false,
+			Hint:  "No session coordinator is attached to this server, so no cookie jar exists to read.",
+		})
+		return
+	}
+	entries := s.sessionCoordinator.Cookies()
+	out := make([]sessionHostCookies, 0, len(entries))
+	for _, entry := range entries {
+		names := make([]string, 0, len(entry.Cookies))
+		for name := range entry.Cookies {
+			names = append(names, name)
+		}
+		// Sorted, because map order is not stable and a table that reorders itself on every refresh
+		// cannot be scanned for the one cookie an operator is looking for.
+		sort.Strings(names)
+		pairs := make([]sessionCookiePair, 0, len(names))
+		for _, name := range names {
+			pairs = append(pairs, sessionCookiePair{Name: name, Value: entry.Cookies[name]})
+		}
+		out = append(out, sessionHostCookies{
+			Host:    net.JoinHostPort(entry.Host, strconv.Itoa(int(entry.Port))),
+			Port:    entry.Port,
+			TLS:     entry.TLS,
+			Cookies: pairs,
+		})
+	}
+	resp := sessionCookiesResp{Wired: true, Cookies: out}
+	if len(out) == 0 {
+		// An empty table and an unreadable one look the same on screen, so the empty case says which
+		// it is. This is now a claim the server can actually stand behind.
+		resp.Hint = "The cookie jar is attached and empty: no Set-Cookie has been absorbed yet."
+	}
+	json.NewEncoder(w).Encode(resp)
 }

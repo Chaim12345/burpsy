@@ -196,6 +196,14 @@ type PointView struct {
 // handleIntruderPoints inspects a stored request for attack insertion points. The UI sends the
 // message id it just captured; this answers with the Rust PointView shape.
 func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
+	// Every other route in this file guards its verb; these two did not, so a GET reached the body
+	// decoder, failed on an empty body and answered "Invalid request body" — a complaint about the
+	// payload for what is really a wrong-method call. Phase 1's move to Go 1.22 `"POST /api/..."`
+	// patterns makes the whole class unrepresentable; until then it is spelled out.
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req intruderPointsReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -752,29 +760,6 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(sequencer.AnalyseAs(tokens, encoding))
 }
 
-// handleSequencerCapture serves the token lists accumulated by the sequencer capture phase.
-func (s *Server) handleSequencerCapture(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/sequencer/capture/")
-	if path == "stop" {
-		// The UI calls this to halt a live capture; the Go port has no live capture loop.
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]bool{"stopped": true})
-		return
-	}
-	if path != "" {
-		// Per-token-list detail: the Go engine exposes the shared capture list.
-		tokens := s.captureTokens()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"total":  len(tokens),
-			"tokens": tokens,
-		})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"capturing": false, "total": 0})
-}
-
 // helpers ----------------------------------------------------------------------------------------
 
 func parseResponseStatus(raw []byte) *uint16 {
@@ -858,11 +843,6 @@ func intOrZero(p *uint16) int {
 		return 0
 	}
 	return int(*p)
-}
-
-// captureTokens is the shared sequencer capture accumulator; empty unless a capture ran.
-func (s *Server) captureTokens() []string {
-	return nil
 }
 
 // validParent returns id when it names an exchange that exists, and nil otherwise.

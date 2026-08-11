@@ -94,6 +94,71 @@ else
   ok "$NPASS tests passing"
 fi
 
+# ---------------------------------------------------------------------------------------------
+# The Go tree.
+#
+# Until this block existed, verify.sh ran `cargo` only and every e2e script launched
+# ./target/debug/burpsy — the Rust binary. AGENTS.md says "verify.sh is the definition of done",
+# which made that claim VACUOUS for burpsy-go/, the tree that actually ships the web UI: a Go
+# compile error, a failing Go test, or an unformatted Go file all printed VERIFIED. That is the
+# same defect class as the honesty bugs the Go tree is being cleaned of — a partial result looking
+# complete — so it is fixed here first, before anything it is meant to verify.
+#
+# Warnings are fatal on this side too, but Go spells them differently: `go build` has no warning
+# category, so `go vet` is the equivalent bar and ANY vet output fails. gofmt is included because
+# an unformatted file is the one defect a reviewer should never spend attention on.
+if [ -d burpsy-go ] && command -v go >/dev/null 2>&1; then
+  step "go build (burpsy-go)"
+  GOBUILD=$(cd burpsy-go && go build ./... 2>&1)
+  if [ -n "$GOBUILD" ]; then
+    no "go build errors"
+    head -20 <<<"$GOBUILD"
+  else
+    ok "clean go build"
+  fi
+
+  step "go vet (burpsy-go)"
+  # `go vet` writes diagnostics to stderr and says nothing at all when clean, so non-empty output
+  # IS the failure. Its own "# package" header lines are counted out so the number reported is
+  # findings, not findings plus headers.
+  GOVET=$(cd burpsy-go && go vet ./... 2>&1)
+  if [ -n "$GOVET" ]; then
+    VN=$(grep -vc '^#' <<<"$GOVET")
+    no "$VN go vet finding(s)"
+    head -20 <<<"$GOVET"
+  else
+    ok "go vet clean"
+  fi
+
+  step "gofmt (burpsy-go)"
+  GOFMT=$(cd burpsy-go && gofmt -l . 2>&1)
+  if [ -n "$GOFMT" ]; then
+    no "$(wc -l <<<"$GOFMT") unformatted Go file(s)"
+    head -20 <<<"$GOFMT"
+  else
+    ok "gofmt clean"
+  fi
+
+  step "go tests (burpsy-go)"
+  GOTEST=$(cd burpsy-go && go test ./... 2>&1)
+  GFAIL=$(grep -cE '^(--- )?FAIL' <<<"$GOTEST")
+  GPKG=$(grep -cE '^ok  ' <<<"$GOTEST")
+  if [ "$GFAIL" -gt 0 ]; then
+    no "$GFAIL Go test failure(s)"
+    grep -E '^(--- )?FAIL|panic:' -A3 <<<"$GOTEST" | head -30
+  else
+    # Package count, not test count: `go test` prints per-package results and only enumerates
+    # individual tests under -v. Reporting "N packages ok" is what the output actually supports.
+    ok "$GPKG Go packages ok, 0 failures"
+  fi
+else
+  if [ ! -d burpsy-go ]; then
+    skip "the Go tree did not build/vet/test: burpsy-go/ is absent from this checkout"
+  else
+    skip "the Go tree did not build/vet/test: no go toolchain on PATH — burpsy-go/ is UNVERIFIED on this machine"
+  fi
+fi
+
 step "BCheck corpus conformance"
 if [ -d /tmp/BChecks ]; then
   CONF=$(cargo run -q --bin conform 2>&1)
@@ -122,6 +187,12 @@ else
     # check reports as a failure" bug this script exists to rule out, just for a different check.
     if [ "$s" = "e2e-scan.sh" ] && [ ! -d /tmp/BChecks ]; then
       skip "$s did not run: /tmp/BChecks absent (same corpus as the BCheck conformance check above)"
+      continue
+    fi
+    # e2e-go.sh drives the Go binary, so it needs the Go toolchain the four Rust suites do not.
+    # Skipping it here rather than inside the script keeps the reason in the summary a human reads.
+    if [ "$s" = "e2e-go.sh" ] && ! command -v go >/dev/null 2>&1; then
+      skip "$s did not run: no go toolchain on PATH — the Go wiring is UNVERIFIED on this machine"
       continue
     fi
     R=$(./"$s" 2>&1 | tail -3 | grep -oE '[0-9]+ passed, [0-9]+ failed')

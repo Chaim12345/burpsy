@@ -43,10 +43,13 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.ExchangeID == 0 {
-		http.Error(w, "exchange_id is required", http.StatusBadRequest)
-		return
-	}
+	// No id guard at all, and deliberately so. Exchange ids are a dense counter from zero
+	// (core.ExchangeID is a uint64 handed out by an incrementing store), so exchange 0 is the first
+	// request captured in a session and the one an operator reaches for first; rejecting it as
+	// "exchange_id is required" refused a real row and reported a missing field for an id that had
+	// been supplied. Nor is existence checked here: an id that names no capture is already answered
+	// honestly one layer down, as outcome.state "unauditable" carrying the reason — a richer reply
+	// than a bare 404, and through the same shape every other audit uses.
 	cfg, named, cerr := s.resolveAuditConfig(req.Config)
 	if cerr != nil {
 		http.Error(w, cerr.Error(), http.StatusBadRequest)
@@ -64,7 +67,13 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 	}
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/audit/")
 	id, err := strconv.ParseUint(strings.TrimSuffix(idStr, "/"), 10, 64)
-	if err != nil || id == 0 {
+	// `err != nil` only — a parse failure, nothing else. Zero is a valid exchange id, not a sentinel:
+	// ids are a dense counter from zero, so /api/audit/0 names the first captured exchange of the
+	// session. Rejecting it as "Invalid exchange id" made the very first row in HTTP history the one
+	// row that could not be audited, and called a well-formed real id malformed. An id that names no
+	// capture is not this handler's complaint: the engine answers it as outcome.state "unauditable"
+	// with the reason on the wire.
+	if err != nil {
 		http.Error(w, "Invalid exchange id", http.StatusBadRequest)
 		return
 	}

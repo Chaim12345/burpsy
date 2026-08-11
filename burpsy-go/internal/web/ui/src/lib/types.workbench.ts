@@ -182,13 +182,60 @@ export interface SequencerAnalysis {
   warnings: string[] | null;
 }
 
+/** Where in a response the token lives. The operator declares it; the server never guesses. */
+export type TokenLocationKind = "cookie" | "header" | "body_regex";
+
+export interface TokenLocation {
+  kind: TokenLocationKind;
+  /** The cookie or header name, for those two kinds. Matched case-insensitively. */
+  name?: string;
+  /** An RE2 pattern for body_regex. Capture group 1 is the token when the pattern has one. */
+  pattern?: string;
+}
+
+/** One response that carried no token at the declared location, with why. */
+export interface CaptureMiss {
+  attempt: number;
+  reason: string;
+}
+
 /**
- * GET /api/sequencer/capture/{id}. The Go port answers the shared capture
- * accumulator, which is empty until a capture loop exists to fill it.
+ * GET /api/sequencer/capture/{id}, and the reply to starting one.
+ *
+ * `requested` against `total` is the point of this shape: "40 tokens" alone cannot say whether the
+ * sample is 40 of 40 or 40 of 200, and an entropy verdict over the two is not the same claim. Before
+ * the capture loop existed this endpoint answered `{total: 0, tokens: []}` for everything, which
+ * read as "this application's tokens could not be analysed" when nothing had ever been sent.
  */
 export interface SequencerCapture {
+  id: number;
+  task_id: number;
+  target: string;
+  /** The token location, as one line — "cookie SESSIONID", "body /csrf=([a-f0-9]+)/". */
+  location: string;
+  capturing: boolean;
+  requested: number;
+  /** Requests sent, as distinct from tokens collected. */
+  attempts: number;
   total: number;
   tokens: string[] | null;
+  /** Responses that carried no token. Non-zero is the difference between a sparse token and a
+   *  misspelled location, and `miss_examples` is what tells those apart. */
+  misses: number;
+  miss_examples?: CaptureMiss[];
+  misses_truncated: boolean;
+  started_ms: number;
+  ended_ms?: number;
+  /** Why a short capture is short: stopped by the operator, or gave up on the location. */
+  stop_reason?: string;
+}
+
+/** POST /api/sequencer/capture/stop. Honest about whether there was anything to stop. */
+export interface StopCaptureResult {
+  stopped: boolean;
+  signalled: number;
+  captures: SequencerCapture[];
+  note: string;
 }
 
 /* --- tool log ------------------------------------------------------------- */

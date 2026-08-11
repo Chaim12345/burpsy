@@ -6,9 +6,16 @@ import {
   useSequencerAnalyse,
   useSequencerAnalyseTokens,
   useSequencerCapture,
+  useStartSequencerCapture,
   useStopSequencerCapture,
 } from "../lib/data.workbench";
-import type { CharacterAnalysis, SequencerAnalysis } from "../lib/types.workbench";
+import type {
+  CharacterAnalysis,
+  SequencerAnalysis,
+  SequencerCapture,
+  TokenLocation,
+  TokenLocationKind,
+} from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
 import { DetailList } from "../ui/json";
 import { PageHeader, SectionHeading } from "../ui/layout";
@@ -218,6 +225,61 @@ function Report({ report }: { report: SequencerAnalysis }): JSX.Element {
   );
 }
 
+/**
+ * A capture in flight, or the one that just ended.
+ *
+ * Every number here is on screen because leaving it off made two situations look the same.
+ * `attempts` against `requested` says how far a capture got; `total` against `attempts` says how
+ * many of those sends yielded a token; `misses` with its reasons is what distinguishes a token the
+ * application only sets sometimes from a location name that is simply wrong. The old surface showed
+ * one number — the token count — and a count of zero read as a verdict about the application.
+ */
+function CaptureProgress({ capture }: { capture: SequencerCapture }): JSX.Element {
+  const shortfall = capture.requested - capture.total;
+  return (
+    <Card>
+      <SectionHeading
+        title={capture.capturing ? `Capture ${capture.id} running` : `Capture ${capture.id} finished`}
+        detail={`${capture.target} · ${capture.location}`}
+      />
+      <div className="metric-grid">
+        <Metric label="Tokens" value={capture.total.toLocaleString()} />
+        <Metric label="Requests sent" value={`${capture.attempts.toLocaleString()} of ${capture.requested.toLocaleString()}`} />
+        {/* tone only when there is something to flag: `metric-neutral` has no rule behind it, so
+            passing it would emit a class that styles nothing. */}
+        <Metric label="No token" value={capture.misses.toLocaleString()} {...(capture.misses > 0 ? { tone: "warn" as const } : {})} />
+      </div>
+      {/* Said out loud rather than left to be inferred from two numbers: an entropy verdict over 40
+          tokens is a different claim from one over the 200 that were asked for, and the grade alone
+          does not carry the difference. */}
+      {!capture.capturing && shortfall > 0 ? (
+        <div className="notice notice-warn">
+          This sample is {capture.total.toLocaleString()} of the {capture.requested.toLocaleString()} tokens asked for.
+          {capture.stop_reason ? ` ${capture.stop_reason}.` : ""} Any verdict below describes these tokens only.
+        </div>
+      ) : null}
+      {capture.miss_examples?.length ? (
+        <SimpleTable headers={["Attempt", "Why no token"]}>
+          {capture.miss_examples.map((miss) => (
+            <tr key={`${miss.attempt}-${miss.reason}`}>
+              <td className="cell-num">{miss.attempt}</td>
+              <td className="cell-dim">{miss.reason}</td>
+            </tr>
+          ))}
+          {capture.misses_truncated ? (
+            <tr>
+              <td className="cell-dim" colSpan={2}>
+                …and {(capture.misses - capture.miss_examples.length).toLocaleString()} more. The count is exact; the
+                examples are a sample.
+              </td>
+            </tr>
+          ) : null}
+        </SimpleTable>
+      ) : null}
+    </Card>
+  );
+}
+
 export function SequencerPage(): JSX.Element {
   const [source, setSource] = useState("paste");
   const [encoding, setEncoding] = useState("");
@@ -225,9 +287,18 @@ export function SequencerPage(): JSX.Element {
   const [captureId, setCaptureId] = useState("");
   const [attached, setAttached] = useState("");
 
+  const [captureTarget, setCaptureTarget] = useState("");
+  const [captureRequest, setCaptureRequest] = useState("");
+  const [captureCount, setCaptureCount] = useState("100");
+  const [captureDelay, setCaptureDelay] = useState("0");
+  const [locationKind, setLocationKind] = useState<TokenLocationKind>("cookie");
+  const [locationName, setLocationName] = useState("");
+  const [locationPattern, setLocationPattern] = useState("");
+
   const analysePaste = useSequencerAnalyse();
   const analyseTokens = useSequencerAnalyseTokens();
   const capture = useSequencerCapture(attached);
+  const startCapture = useStartSequencerCapture();
   const stopCapture = useStopSequencerCapture();
 
   // Both mutations write the same report; whichever ran last is what is on screen.
@@ -246,6 +317,48 @@ export function SequencerPage(): JSX.Element {
         onError: (cause) => toast.error(`Analysis failed: ${cause.message}`),
       },
     );
+
+  const startCaptureRun = () => {
+    const target = captureTarget.trim();
+    if (!target) {
+      toast.error("Give the target the request goes to");
+      return;
+    }
+    if (!captureRequest.trim()) {
+      toast.error("Give the request to repeat");
+      return;
+    }
+    // Validated here as well as server-side so the operator is told before a request is sent, not
+    // after: the server refuses an unusable location with a 400 rather than guessing, and being told
+    // "give the cookie name" is more useful than a round trip that ends in the same sentence.
+    const location: TokenLocation =
+      locationKind === "body_regex" ? { kind: locationKind, pattern: locationPattern } : { kind: locationKind, name: locationName };
+    if (locationKind === "body_regex" ? !locationPattern.trim() : !locationName.trim()) {
+      toast.error(locationKind === "body_regex" ? "Give the pattern the token matches" : "Give the name to read the token from");
+      return;
+    }
+    const count = Number.parseInt(captureCount, 10);
+    const delay = Number.parseInt(captureDelay, 10);
+    startCapture.mutate(
+      {
+        target,
+        request: captureRequest,
+        location,
+        ...(Number.isFinite(count) && count > 0 ? { count } : {}),
+        ...(Number.isFinite(delay) && delay > 0 ? { delay_ms: delay } : {}),
+      },
+      {
+        onSuccess: (started) => {
+          // Follow the capture that was just started, so progress appears without the operator
+          // having to copy an id back into the attach field.
+          setAttached(String(started.id));
+          setCaptureId(String(started.id));
+          toast.success(`Capture ${started.id} started: ${started.requested.toLocaleString()} requests`);
+        },
+        onError: (cause) => toast.error(`Could not start the capture: ${cause.message}`),
+      },
+    );
+  };
 
   const runCaptured = () =>
     analyseTokens.mutate(
@@ -304,21 +417,112 @@ export function SequencerPage(): JSX.Element {
           />
         </TabsContent>
         <TabsContent value="live">
-          {/* Honest state of the backend: the Go port serves the capture accumulator
-              (GET /api/sequencer/capture/{id}) but has no loop that fills it, and no
-              route to start one, so attaching reports an empty list. */}
-          <div className="notice notice-warn">
-            This build has no capture loop. The server answers the accumulator for a capture id and accepts a stop, but
-            nothing fills it yet, so attaching will honestly report zero tokens until the backend grows a capture phase.
-            Until then, drive the tokens out with Repeater or Intruder and paste them into the other tab.
+          <div className="field-hint" style={{ marginBottom: 8 }}>
+            Send one request repeatedly and pull a token out of every response. The token location is declared, not
+            guessed: a heuristic that picked the wrong cookie would produce a confident verdict about the wrong string.
           </div>
+
+          <div className="two-col">
+            <HttpEditor
+              views={false}
+              label="Request to repeat"
+              value={captureRequest}
+              onChange={setCaptureRequest}
+              height="170px"
+              filename="sequencer-capture-request.txt"
+              placeholder={"GET /login HTTP/1.1\r\nHost: app.example\r\nConnection: close\r\n\r\n"}
+            />
+            <div>
+              <label className="field">
+                <span>Target</span>
+                <Input
+                  value={captureTarget}
+                  onChange={(event) => setCaptureTarget(event.target.value)}
+                  placeholder="https://app.example:443"
+                />
+              </label>
+              <label className="field">
+                <span>Token location</span>
+                <Select value={locationKind} onChange={(event) => setLocationKind(event.target.value as TokenLocationKind)}>
+                  <option value="cookie">Set-Cookie value</option>
+                  <option value="header">Response header value</option>
+                  <option value="body_regex">Body, by pattern</option>
+                </Select>
+              </label>
+              {locationKind === "body_regex" ? (
+                <label className="field">
+                  <span>Pattern</span>
+                  <Input
+                    value={locationPattern}
+                    onChange={(event) => setLocationPattern(event.target.value)}
+                    placeholder={'csrf"\\s*:\\s*"([^"]+)"'}
+                  />
+                  <span className="field-hint">RE2. Capture group 1 is the token when the pattern has one.</span>
+                </label>
+              ) : (
+                <label className="field">
+                  <span>{locationKind === "cookie" ? "Cookie name" : "Header name"}</span>
+                  <Input
+                    value={locationName}
+                    onChange={(event) => setLocationName(event.target.value)}
+                    placeholder={locationKind === "cookie" ? "SESSIONID" : "X-Csrf-Token"}
+                  />
+                </label>
+              )}
+              <Toolbar>
+                <label className="field" style={{ maxWidth: "var(--w-xs)" }}>
+                  <span>Requests</span>
+                  <Input
+                    value={captureCount}
+                    inputMode="numeric"
+                    onChange={(event) => setCaptureCount(event.target.value)}
+                    placeholder="100"
+                  />
+                </label>
+                <label className="field" style={{ maxWidth: "var(--w-xs)" }}>
+                  <span>Delay (ms)</span>
+                  <Input
+                    value={captureDelay}
+                    inputMode="numeric"
+                    onChange={(event) => setCaptureDelay(event.target.value)}
+                    placeholder="0"
+                  />
+                </label>
+                <Button onClick={startCaptureRun} disabled={startCapture.isPending}>
+                  <Radio size={14} />
+                  {startCapture.isPending ? "Starting…" : "Start capture"}
+                </Button>
+                <Button
+                  variant="danger"
+                  disabled={stopCapture.isPending || !capture.data?.capturing}
+                  onClick={() =>
+                    stopCapture.mutate(undefined, {
+                      // The reply says whether anything was actually stopped, so the toast says so
+                      // too. It used to report success unconditionally, for a loop that did not exist.
+                      onSuccess: (result) =>
+                        result.stopped
+                          ? toast.success(`Stopped ${result.signalled} capture(s)`)
+                          : toast.message(result.note),
+                      onError: (cause) => toast.error(`Could not stop the capture: ${cause.message}`),
+                    })
+                  }
+                >
+                  <CircleStop size={14} />
+                  Stop capture
+                </Button>
+              </Toolbar>
+            </div>
+          </div>
+
+          {startCapture.error ? <ErrorNotice error={startCapture.error} onRetry={startCaptureRun} /> : null}
+
           <Toolbar>
             <Input
-              aria-label="Capture id to attach to"
+              aria-label="Follow an existing capture by id"
               value={captureId}
               inputMode="numeric"
               onChange={(event) => setCaptureId(event.target.value)}
-              placeholder="capture id"
+              placeholder="or follow capture id"
               style={{ maxWidth: "var(--w-sm)" }}
             />
             <Button
@@ -336,35 +540,17 @@ export function SequencerPage(): JSX.Element {
               <Radio size={14} />
               {attached ? "Re-attach" : "Attach"}
             </Button>
-            <Button
-              variant="danger"
-              disabled={captured.length === 0 || stopCapture.isPending}
-              onClick={() =>
-                stopCapture.mutate(undefined, {
-                  onSuccess: () => toast.success("Capture stopped"),
-                  onError: (cause) => toast.error(`Could not stop the capture: ${cause.message}`),
-                })
-              }
-            >
-              <CircleStop size={14} />
-              Stop capture
-            </Button>
-            {attached ? (
-              <>
-                <Badge tone={capture.isFetching ? "info" : "neutral"}>
-                  {capture.isFetching ? "polling" : "idle"}
-                </Badge>
-                <Badge>{(capture.data?.total ?? 0).toLocaleString()} accumulated</Badge>
-              </>
-            ) : (
-              <span className="field-hint">Not following a capture.</span>
-            )}
           </Toolbar>
+
           {capture.error ? <ErrorNotice error={capture.error} onRetry={() => void capture.refetch()} /> : null}
-          {attached && captured.length === 0 && !capture.isLoading ? (
+          {capture.data ? <CaptureProgress capture={capture.data} /> : null}
+          {attached && !capture.data && !capture.isLoading && !capture.error ? (
+            <Empty title="Nothing to follow" detail={`No capture ${attached} is known to this session.`} />
+          ) : null}
+          {!attached && !capture.data ? (
             <Empty
-              title="No tokens accumulated"
-              detail={`Capture ${attached} is being polled once a second and has produced nothing yet.`}
+              title="No capture running"
+              detail="Start one above, or paste a sample into the other tab. A hundred tokens is the conventional floor for a verdict."
             />
           ) : null}
         </TabsContent>
