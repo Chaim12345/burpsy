@@ -1,0 +1,1301 @@
+id	file	section	route	type	source
+COMPARER-001	04-workbench-shell-uat.md	COMPARER Page	User opens Comparer page	happy-path	04-workbench-shell-uat.md:54
+COMPARER-002	04-workbench-shell-uat.md	COMPARER Page	User pastes text into side A	happy-path	04-workbench-shell-uat.md:55
+COMPARER-003	04-workbench-shell-uat.md	COMPARER Page	User pastes text into side B	happy-path	04-workbench-shell-uat.md:56
+COMPARER-004	04-workbench-shell-uat.md	COMPARER Page	User compares identical inputs	happy-path	04-workbench-shell-uat.md:57
+COMPARER-005	04-workbench-shell-uat.md	COMPARER Page	User compares different inputs	happy-path	04-workbench-shell-uat.md:58
+COMPARER-006	04-workbench-shell-uat.md	COMPARER Page	User enters message ID in slot A	happy-path	04-workbench-shell-uat.md:59
+COMPARER-007	04-workbench-shell-uat.md	COMPARER Page	User enters message ID in slot B	happy-path	04-workbench-shell-uat.md:60
+COMPARER-008	04-workbench-shell-uat.md	COMPARER Page	User swaps sides	happy-path	04-workbench-shell-uat.md:61
+COMPARER-009	04-workbench-shell-uat.md	COMPARER Page	User navigates to next hunk	happy-path	04-workbench-shell-uat.md:62
+COMPARER-010	04-workbench-shell-uat.md	COMPARER Page	User navigates to previous hunk	happy-path	04-workbench-shell-uat.md:63
+COMPARER-011	04-workbench-shell-uat.md	COMPARER Page	User wraps hunk navigation forward	boundary	04-workbench-shell-uat.md:64
+COMPARER-012	04-workbench-shell-uat.md	COMPARER Page	User wraps hunk navigation backward	boundary	04-workbench-shell-uat.md:65
+COMPARER-013	04-workbench-shell-uat.md	COMPARER Page	Swap button disabled when both empty	disabled-state	04-workbench-shell-uat.md:66
+COMPARER-014	04-workbench-shell-uat.md	COMPARER Page	Swap button enabled when A has content	enabled-state	04-workbench-shell-uat.md:67
+COMPARER-015	04-workbench-shell-uat.md	COMPARER Page	Compare button disabled when both empty	disabled-state	04-workbench-shell-uat.md:68
+COMPARER-016	04-workbench-shell-uat.md	COMPARER Page	Compare button disabled while comparing	loading	04-workbench-shell-uat.md:69
+COMPARER-017	04-workbench-shell-uat.md	COMPARER Page	Load button disabled while loading message	loading	04-workbench-shell-uat.md:70
+COMPARER-018	04-workbench-shell-uat.md	COMPARER Page	Invalid message ID rejected (negative)	boundary	04-workbench-shell-uat.md:71
+COMPARER-019	04-workbench-shell-uat.md	COMPARER Page	Invalid message ID rejected (non-integer)	boundary	04-workbench-shell-uat.md:72
+COMPARER-020	04-workbench-shell-uat.md	COMPARER Page	Invalid message ID rejected (float)	boundary	04-workbench-shell-uat.md:73
+COMPARER-021	04-workbench-shell-uat.md	COMPARER Page	Message load error	error	04-workbench-shell-uat.md:74
+COMPARER-022	04-workbench-shell-uat.md	COMPARER Page	Comparison error	error	04-workbench-shell-uat.md:75
+COMPARER-023	04-workbench-shell-uat.md	COMPARER Page	Hunk navigation disabled when no hunks	disabled-state	04-workbench-shell-uat.md:76
+COMPARER-024	04-workbench-shell-uat.md	COMPARER Page	Hunk text shows count and current	happy-path	04-workbench-shell-uat.md:77
+COMPARER-025	04-workbench-shell-uat.md	COMPARER Page	Hunk text shows "no hunk focused"	empty-state	04-workbench-shell-uat.md:78
+COMPARER-026	04-workbench-shell-uat.md	COMPARER Page	Comparison reset after swap	happy-path	04-workbench-shell-uat.md:79
+COMPARER-027	04-workbench-shell-uat.md	COMPARER Page	Hunk focus reset after compare	happy-path	04-workbench-shell-uat.md:80
+COMPARER-028	04-workbench-shell-uat.md	COMPARER Page	Truncation warning shown	warning	04-workbench-shell-uat.md:81
+COMPARER-029	04-workbench-shell-uat.md	COMPARER Page	Omitted runs warning shown	warning	04-workbench-shell-uat.md:82
+COMPARER-030	04-workbench-shell-uat.md	COMPARER Page	Message ID 0 is valid	boundary	04-workbench-shell-uat.md:83
+COMPARER-031	04-workbench-shell-uat.md	COMPARER Page	Byte slicing works correctly	happy-path	04-workbench-shell-uat.md:84
+DASHBOARD-001	04-workbench-shell-uat.md	DASHBOARD Page	User opens Dashboard page	happy-path	04-workbench-shell-uat.md:185
+DASHBOARD-002	04-workbench-shell-uat.md	DASHBOARD Page	User clicks "Open HTTP history"	happy-path	04-workbench-shell-uat.md:186
+DASHBOARD-003	04-workbench-shell-uat.md	DASHBOARD Page	Dashboard displays traffic sources	happy-path	04-workbench-shell-uat.md:187
+DASHBOARD-004	04-workbench-shell-uat.md	DASHBOARD Page	Dashboard shows coverage cards	happy-path	04-workbench-shell-uat.md:188
+DASHBOARD-005	04-workbench-shell-uat.md	DASHBOARD Page	Dashboard shows activity table	happy-path	04-workbench-shell-uat.md:189
+DASHBOARD-006	04-workbench-shell-uat.md	DASHBOARD Page	Dashboard shows events list	happy-path	04-workbench-shell-uat.md:190
+DASHBOARD-007	04-workbench-shell-uat.md	DASHBOARD Page	Dashboard shows tasks table	happy-path	04-workbench-shell-uat.md:191
+DASHBOARD-008	04-workbench-shell-uat.md	DASHBOARD Page	Coverage gaps warning shown	warning	04-workbench-shell-uat.md:192
+DASHBOARD-009	04-workbench-shell-uat.md	DASHBOARD Page	No traffic yet state	empty-state	04-workbench-shell-uat.md:193
+DASHBOARD-010	04-workbench-shell-uat.md	DASHBOARD Page	No coverage reported state	empty-state	04-workbench-shell-uat.md:194
+DASHBOARD-011	04-workbench-shell-uat.md	DASHBOARD Page	No tasks state	empty-state	04-workbench-shell-uat.md:195
+DASHBOARD-012	04-workbench-shell-uat.md	DASHBOARD Page	No events state	empty-state	04-workbench-shell-uat.md:196
+DASHBOARD-013	04-workbench-shell-uat.md	DASHBOARD Page	Nothing captured notice	empty-state	04-workbench-shell-uat.md:197
+DECODER-001	04-workbench-shell-uat.md	DECODER Page	User opens Decoder page	happy-path	04-workbench-shell-uat.md:13
+DECODER-002	04-workbench-shell-uat.md	DECODER Page	User adds a Decode step	happy-path	04-workbench-shell-uat.md:14
+DECODER-003	04-workbench-shell-uat.md	DECODER Page	User adds an Encode step	happy-path	04-workbench-shell-uat.md:15
+DECODER-004	04-workbench-shell-uat.md	DECODER Page	User adds a Hash step	happy-path	04-workbench-shell-uat.md:16
+DECODER-005	04-workbench-shell-uat.md	DECODER Page	User pastes input and runs pipeline	happy-path	04-workbench-shell-uat.md:17
+DECODER-006	04-workbench-shell-uat.md	DECODER Page	User changes step operation	happy-path	04-workbench-shell-uat.md:18
+DECODER-007	04-workbench-shell-uat.md	DECODER Page	User changes step encoding/algorithm	happy-path	04-workbench-shell-uat.md:19
+DECODER-008	04-workbench-shell-uat.md	DECODER Page	User toggles guess checkbox	happy-path	04-workbench-shell-uat.md:20
+DECODER-009	04-workbench-shell-uat.md	DECODER Page	User unchecks guess checkbox	happy-path	04-workbench-shell-uat.md:21
+DECODER-010	04-workbench-shell-uat.md	DECODER Page	User moves step up (from position 2 to 1)	happy-path	04-workbench-shell-uat.md:22
+DECODER-011	04-workbench-shell-uat.md	DECODER Page	User moves step down (from position 1 to 2)	happy-path	04-workbench-shell-uat.md:23
+DECODER-012	04-workbench-shell-uat.md	DECODER Page	User removes a step	happy-path	04-workbench-shell-uat.md:24
+DECODER-013	04-workbench-shell-uat.md	DECODER Page	User copies result output	happy-path	04-workbench-shell-uat.md:25
+DECODER-014	04-workbench-shell-uat.md	DECODER Page	User switches to Hex view	happy-path	04-workbench-shell-uat.md:26
+DECODER-015	04-workbench-shell-uat.md	DECODER Page	User switches back to Text view	happy-path	04-workbench-shell-uat.md:27
+DECODER-016	04-workbench-shell-uat.md	DECODER Page	Hex dump exceeds MAX_HEX_BYTES	boundary	04-workbench-shell-uat.md:28
+DECODER-017	04-workbench-shell-uat.md	DECODER Page	Non-UTF-8 output in hex view	boundary	04-workbench-shell-uat.md:29
+DECODER-018	04-workbench-shell-uat.md	DECODER Page	Empty output after step	empty-state	04-workbench-shell-uat.md:30
+DECODER-019	04-workbench-shell-uat.md	DECODER Page	Smart detect finds nothing	empty-state	04-workbench-shell-uat.md:31
+DECODER-020	04-workbench-shell-uat.md	DECODER Page	Partial decompression detected	warning	04-workbench-shell-uat.md:32
+DECODER-021	04-workbench-shell-uat.md	DECODER Page	Hash in middle of pipeline	warning	04-workbench-shell-uat.md:33
+DECODER-022	04-workbench-shell-uat.md	DECODER Page	Step fails mid-pipeline	error	04-workbench-shell-uat.md:34
+DECODER-023	04-workbench-shell-uat.md	DECODER Page	Run pipeline disabled when no steps	disabled-state	04-workbench-shell-uat.md:35
+DECODER-024	04-workbench-shell-uat.md	DECODER Page	Run pipeline disabled when empty input	disabled-state	04-workbench-shell-uat.md:36
+DECODER-025	04-workbench-shell-uat.md	DECODER Page	Run pipeline disabled while running	loading	04-workbench-shell-uat.md:37
+DECODER-026	04-workbench-shell-uat.md	DECODER Page	Move up button disabled on first step	disabled-state	04-workbench-shell-uat.md:38
+DECODER-027	04-workbench-shell-uat.md	DECODER Page	Move down button disabled on last step	disabled-state	04-workbench-shell-uat.md:39
+DECODER-028	04-workbench-shell-uat.md	DECODER Page	Guess checkbox hidden for non-auto-decode	hidden	04-workbench-shell-uat.md:40
+DECODER-029	04-workbench-shell-uat.md	DECODER Page	Guess checkbox hidden for non-auto value	hidden	04-workbench-shell-uat.md:41
+DECODER-030	04-workbench-shell-uat.md	DECODER Page	Pipeline error displays toast	error	04-workbench-shell-uat.md:42
+DECODER-031	04-workbench-shell-uat.md	DECODER Page	Empty input edge case	boundary	04-workbench-shell-uat.md:43
+DECODER-032	04-workbench-shell-uat.md	DECODER Page	Step value select options change by kind	happy-path	04-workbench-shell-uat.md:44
+DECODER-033	04-workbench-shell-uat.md	DECODER Page	Byte count shown in HttpEditor header	happy-path	04-workbench-shell-uat.md:45
+DECODER-034	04-workbench-shell-uat.md	DECODER Page	Result byte count shown on card	happy-path	04-workbench-shell-uat.md:46
+EDITOR-001	04-workbench-shell-uat.md	EDITOR Shared Component	Raw view shows editable content	happy-path	04-workbench-shell-uat.md:458
+EDITOR-002	04-workbench-shell-uat.md	EDITOR Shared Component	Pretty view shows formatted content	happy-path	04-workbench-shell-uat.md:459
+EDITOR-003	04-workbench-shell-uat.md	EDITOR Shared Component	Hex view shows byte dump	happy-path	04-workbench-shell-uat.md:460
+EDITOR-004	04-workbench-shell-uat.md	EDITOR Shared Component	Render view displays response HTML	happy-path	04-workbench-shell-uat.md:461
+EDITOR-005	04-workbench-shell-uat.md	EDITOR Shared Component	Pretty tab only shown if different from raw	happy-path	04-workbench-shell-uat.md:462
+EDITOR-006	04-workbench-shell-uat.md	EDITOR Shared Component	Render tab only shown for responses	happy-path	04-workbench-shell-uat.md:463
+EDITOR-007	04-workbench-shell-uat.md	EDITOR Shared Component	Wrap toggle available in non-render views	happy-path	04-workbench-shell-uat.md:464
+EDITOR-008	04-workbench-shell-uat.md	EDITOR Shared Component	Wrap toggle hidden in render view	happy-path	04-workbench-shell-uat.md:465
+EDITOR-009	04-workbench-shell-uat.md	EDITOR Shared Component	User toggles wrap	happy-path	04-workbench-shell-uat.md:466
+EDITOR-010	04-workbench-shell-uat.md	EDITOR Shared Component	Byte count shown in header	happy-path	04-workbench-shell-uat.md:467
+EDITOR-011	04-workbench-shell-uat.md	EDITOR Shared Component	User copies message	happy-path	04-workbench-shell-uat.md:468
+EDITOR-012	04-workbench-shell-uat.md	EDITOR Shared Component	User saves to file	happy-path	04-workbench-shell-uat.md:469
+EDITOR-013	04-workbench-shell-uat.md	EDITOR Shared Component	Save filename defaults to message.txt	happy-path	04-workbench-shell-uat.md:470
+EDITOR-014	04-workbench-shell-uat.md	EDITOR Shared Component	User opens search with Mod+S	keyboard	04-workbench-shell-uat.md:471
+EDITOR-015	04-workbench-shell-uat.md	EDITOR Shared Component	User encodes selection with Mod+U	keyboard	04-workbench-shell-uat.md:472
+EDITOR-016	04-workbench-shell-uat.md	EDITOR Shared Component	User decodes selection with Mod+Shift+U	keyboard	04-workbench-shell-uat.md:473
+EDITOR-017	04-workbench-shell-uat.md	EDITOR Shared Component	User encodes selection with Mod+H	keyboard	04-workbench-shell-uat.md:474
+EDITOR-018	04-workbench-shell-uat.md	EDITOR Shared Component	User decodes selection with Mod+Shift+H	keyboard	04-workbench-shell-uat.md:475
+EDITOR-019	04-workbench-shell-uat.md	EDITOR Shared Component	User encodes selection with Mod+B	keyboard	04-workbench-shell-uat.md:476
+EDITOR-020	04-workbench-shell-uat.md	EDITOR Shared Component	User decodes selection with Mod+Shift+B	keyboard	04-workbench-shell-uat.md:477
+EDITOR-021	04-workbench-shell-uat.md	EDITOR Shared Component	Transform hotkeys only work with selection	boundary	04-workbench-shell-uat.md:478
+EDITOR-022	04-workbench-shell-uat.md	EDITOR Shared Component	ReadOnly mode prevents edits	happy-path	04-workbench-shell-uat.md:479
+EDITOR-023	04-workbench-shell-uat.md	EDITOR Shared Component	Pretty view always read-only	happy-path	04-workbench-shell-uat.md:480
+EDITOR-024	04-workbench-shell-uat.md	EDITOR Shared Component	Hex view always read-only	happy-path	04-workbench-shell-uat.md:481
+EDITOR-025	04-workbench-shell-uat.md	EDITOR Shared Component	Render view always read-only	happy-path	04-workbench-shell-uat.md:482
+EDITOR-026	04-workbench-shell-uat.md	EDITOR Shared Component	Editor shows placeholder when empty	happy-path	04-workbench-shell-uat.md:483
+EDITOR-027	04-workbench-shell-uat.md	EDITOR Shared Component	Custom height CSS applied	happy-path	04-workbench-shell-uat.md:484
+EDITOR-028	04-workbench-shell-uat.md	EDITOR Shared Component	Custom label shown in header	happy-path	04-workbench-shell-uat.md:485
+EDITOR-029	04-workbench-shell-uat.md	EDITOR Shared Component	Editor syntax highlighting applied	happy-path	04-workbench-shell-uat.md:486
+EDITOR-030	04-workbench-shell-uat.md	EDITOR Shared Component	Editor line numbers shown	happy-path	04-workbench-shell-uat.md:487
+EDITOR-031	04-workbench-shell-uat.md	EDITOR Shared Component	Editor active line highlighted	happy-path	04-workbench-shell-uat.md:488
+EDITOR-032	04-workbench-shell-uat.md	EDITOR Shared Component	HTTP-aware theming uses CSS vars	happy-path	04-workbench-shell-uat.md:489
+EDITOR-033	04-workbench-shell-uat.md	EDITOR Shared Component	Transform selection works mid-message	happy-path	04-workbench-shell-uat.md:490
+EDITOR-034	04-workbench-shell-uat.md	EDITOR Shared Component	Case-insensitive transform hotkeys	keyboard	04-workbench-shell-uat.md:491
+EDITOR-035	04-workbench-shell-uat.md	EDITOR Shared Component	Shift+/Ctrl modifier distinction for transforms	keyboard	04-workbench-shell-uat.md:492
+EDITOR-036	04-workbench-shell-uat.md	EDITOR Shared Component	Copy button shows tooltip	happy-path	04-workbench-shell-uat.md:493
+EDITOR-037	04-workbench-shell-uat.md	EDITOR Shared Component	Save button shows tooltip	happy-path	04-workbench-shell-uat.md:494
+EDITOR-038	04-workbench-shell-uat.md	EDITOR Shared Component	Actions toolbar provided	happy-path	04-workbench-shell-uat.md:495
+EDITOR-039	04-workbench-shell-uat.md	EDITOR View Modes — Detailed	Raw view is source of truth	happy-path	04-workbench-shell-uat.md:503
+EDITOR-040	04-workbench-shell-uat.md	EDITOR View Modes — Detailed	Pretty view reflects raw changes	happy-path	04-workbench-shell-uat.md:504
+EDITOR-041	04-workbench-shell-uat.md	EDITOR View Modes — Detailed	Hex view reflects raw changes	happy-path	04-workbench-shell-uat.md:505
+EDITOR-042	04-workbench-shell-uat.md	EDITOR View Modes — Detailed	Render view only in response context	happy-path	04-workbench-shell-uat.md:506
+EDITOR-043	04-workbench-shell-uat.md	EDITOR View Modes — Detailed	Render view sandboxed	happy-path	04-workbench-shell-uat.md:507
+EDITOR-044	04-workbench-shell-uat.md	EDITOR View Modes — Detailed	Large message renders efficiently	happy-path	04-workbench-shell-uat.md:508
+HISTORY-001	02-proxy-uat.md	History Page Tests	Filter input → type query	happy	02-proxy-uat.md:91
+HISTORY-002	02-proxy-uat.md	History Page Tests	Filter input → debounce	happy	02-proxy-uat.md:92
+HISTORY-003	02-proxy-uat.md	History Page Tests	Filter input → immediate visual feedback	happy	02-proxy-uat.md:93
+HISTORY-004	02-proxy-uat.md	History Page Tests	Clear filter button	happy	02-proxy-uat.md:94
+HISTORY-005	02-proxy-uat.md	History Page Tests	Clear filter button disabled	happy	02-proxy-uat.md:95
+HISTORY-006	02-proxy-uat.md	History Page Tests	Filter syntax help modal → open	happy	02-proxy-uat.md:96
+HISTORY-007	02-proxy-uat.md	History Page Tests	Filter syntax help modal → close	happy	02-proxy-uat.md:97
+HISTORY-008	02-proxy-uat.md	History Page Tests	Filter DSL → host equals	happy	02-proxy-uat.md:98
+HISTORY-009	02-proxy-uat.md	History Page Tests	Filter DSL → host contains	happy	02-proxy-uat.md:99
+HISTORY-010	02-proxy-uat.md	History Page Tests	Filter DSL → status equals	happy	02-proxy-uat.md:100
+HISTORY-011	02-proxy-uat.md	History Page Tests	Filter DSL → status greater-or-equal	happy	02-proxy-uat.md:101
+HISTORY-012	02-proxy-uat.md	History Page Tests	Filter DSL → status less-than	happy	02-proxy-uat.md:102
+HISTORY-013	02-proxy-uat.md	History Page Tests	Filter DSL → method equals	happy	02-proxy-uat.md:103
+HISTORY-014	02-proxy-uat.md	History Page Tests	Filter DSL → path contains	happy	02-proxy-uat.md:104
+HISTORY-015	02-proxy-uat.md	History Page Tests	Filter DSL → body contains	happy	02-proxy-uat.md:105
+HISTORY-016	02-proxy-uat.md	History Page Tests	Filter DSL → mime type	happy	02-proxy-uat.md:106
+HISTORY-017	02-proxy-uat.md	History Page Tests	Filter DSL → AND operator	happy	02-proxy-uat.md:107
+HISTORY-018	02-proxy-uat.md	History Page Tests	Filter DSL → OR operator	happy	02-proxy-uat.md:108
+HISTORY-019	02-proxy-uat.md	History Page Tests	Filter DSL → combined AND/OR	happy	02-proxy-uat.md:109
+HISTORY-020	02-proxy-uat.md	History Page Tests	Filter DSL → unknown field	error	02-proxy-uat.md:110
+HISTORY-021	02-proxy-uat.md	History Page Tests	Filter DSL → operator the field does not take	boundary	02-proxy-uat.md:111
+HISTORY-022	02-proxy-uat.md	History Page Tests	Filter DSL → single quote is not a string delimiter	boundary	02-proxy-uat.md:112
+HISTORY-023	02-proxy-uat.md	History Page Tests	Filter DSL → unbalanced parenthesis	error	02-proxy-uat.md:113
+HISTORY-023b	02-proxy-uat.md	History Page Tests	Filter DSL → wrong-typed comparison	error	02-proxy-uat.md:114
+HISTORY-023c	02-proxy-uat.md	History Page Tests	Filter DSL → path field	happy	02-proxy-uat.md:115
+HISTORY-024	02-proxy-uat.md	History Page Tests	Filter DSL → empty query	happy	02-proxy-uat.md:116
+HISTORY-025	02-proxy-uat.md	History Page Tests	Filter DSL → whitespace only	boundary	02-proxy-uat.md:117
+HISTORY-026	02-proxy-uat.md	History Page Tests	Filter DSL → quoted string with special chars	happy	02-proxy-uat.md:118
+HISTORY-027	02-proxy-uat.md	History Page Tests	Filter DSL → case sensitivity host	happy	02-proxy-uat.md:119
+HISTORY-028	02-proxy-uat.md	History Page Tests	Filter DSL → case sensitivity method	boundary	02-proxy-uat.md:120
+HISTORY-029	02-proxy-uat.md	History Page Tests	Filter persist on cross-page return	happy	02-proxy-uat.md:121
+HISTORY-030	02-proxy-uat.md	History Page Tests	Status filter select → all	happy	02-proxy-uat.md:122
+HISTORY-031	02-proxy-uat.md	History Page Tests	Status filter select → 2xx	happy	02-proxy-uat.md:123
+HISTORY-032	02-proxy-uat.md	History Page Tests	Status filter select → 3xx	happy	02-proxy-uat.md:124
+HISTORY-033	02-proxy-uat.md	History Page Tests	Status filter select → 4xx	happy	02-proxy-uat.md:125
+HISTORY-034	02-proxy-uat.md	History Page Tests	Status filter select → 5xx	happy	02-proxy-uat.md:126
+HISTORY-035	02-proxy-uat.md	History Page Tests	Status filter select → none	happy	02-proxy-uat.md:127
+HISTORY-036	02-proxy-uat.md	History Page Tests	Method filter select → all	happy	02-proxy-uat.md:128
+HISTORY-037	02-proxy-uat.md	History Page Tests	Method filter select → GET	happy	02-proxy-uat.md:129
+HISTORY-038	02-proxy-uat.md	History Page Tests	Method filter select → POST	happy	02-proxy-uat.md:130
+HISTORY-039	02-proxy-uat.md	History Page Tests	Method filter select → other methods	happy	02-proxy-uat.md:131
+HISTORY-040	02-proxy-uat.md	History Page Tests	Row limit select → 200	happy	02-proxy-uat.md:132
+HISTORY-041	02-proxy-uat.md	History Page Tests	Row limit select → 500	happy	02-proxy-uat.md:133
+HISTORY-042	02-proxy-uat.md	History Page Tests	Row limit select → 1000	happy	02-proxy-uat.md:134
+HISTORY-043	02-proxy-uat.md	History Page Tests	Row limit select → 5000	happy	02-proxy-uat.md:135
+HISTORY-044	02-proxy-uat.md	History Page Tests	Refresh button click	happy	02-proxy-uat.md:136
+HISTORY-045	02-proxy-uat.md	History Page Tests	Exchanges table columns	happy	02-proxy-uat.md:137
+HISTORY-046	02-proxy-uat.md	History Page Tests	Table row click → select	happy	02-proxy-uat.md:138
+HISTORY-047	02-proxy-uat.md	History Page Tests	Table row highlight	happy	02-proxy-uat.md:139
+HISTORY-048	02-proxy-uat.md	History Page Tests	Select and scroll to exchange	happy	02-proxy-uat.md:140
+HISTORY-049	02-proxy-uat.md	History Page Tests	Selection context → exchange focus from another page	happy	02-proxy-uat.md:141
+HISTORY-050	02-proxy-uat.md	History Page Tests	Row styling → 5xx error	happy	02-proxy-uat.md:142
+HISTORY-051	02-proxy-uat.md	History Page Tests	Row styling → 4xx error	happy	02-proxy-uat.md:143
+HISTORY-052	02-proxy-uat.md	History Page Tests	Row styling → 2xx success	happy	02-proxy-uat.md:144
+HISTORY-053	02-proxy-uat.md	History Page Tests	Row styling → pending (no response)	happy	02-proxy-uat.md:145
+HISTORY-054	02-proxy-uat.md	History Page Tests	Empty state → no filter, no capture	empty-state	02-proxy-uat.md:146
+HISTORY-055	02-proxy-uat.md	History Page Tests	Empty state → filter with no results	empty-state	02-proxy-uat.md:147
+HISTORY-056	02-proxy-uat.md	History Page Tests	Badge display → rows vs total	happy	02-proxy-uat.md:148
+HISTORY-057	02-proxy-uat.md	History Page Tests	Badge display → all rows match filter	happy	02-proxy-uat.md:149
+HISTORY-058	02-proxy-uat.md	History Page Tests	Loading state	happy	02-proxy-uat.md:150
+HISTORY-059	02-proxy-uat.md	History Page Tests	Error state	error	02-proxy-uat.md:151
+HISTORY-060	02-proxy-uat.md	History Page Tests	Select exchange → detail view	happy	02-proxy-uat.md:152
+HISTORY-061	02-proxy-uat.md	History Page Tests	Request editor → displays bytes	happy	02-proxy-uat.md:153
+HISTORY-062	02-proxy-uat.md	History Page Tests	Request editor → loading	happy	02-proxy-uat.md:154
+HISTORY-063	02-proxy-uat.md	History Page Tests	Request editor → no bytes	happy	02-proxy-uat.md:155
+HISTORY-064	02-proxy-uat.md	History Page Tests	Response editor → displays bytes	happy	02-proxy-uat.md:156
+HISTORY-065	02-proxy-uat.md	History Page Tests	Response editor → loading	happy	02-proxy-uat.md:157
+HISTORY-066	02-proxy-uat.md	History Page Tests	Response editor → no bytes	happy	02-proxy-uat.md:158
+HISTORY-067	02-proxy-uat.md	History Page Tests	Response editor → no response (null)	happy	02-proxy-uat.md:159
+HISTORY-068	02-proxy-uat.md	History Page Tests	Repeater button click	happy	02-proxy-uat.md:160
+HISTORY-069	02-proxy-uat.md	History Page Tests	Repeater button disabled	happy	02-proxy-uat.md:161
+HISTORY-070	02-proxy-uat.md	History Page Tests	Ctrl+R keyboard shortcut	keyboard	02-proxy-uat.md:162
+HISTORY-071	02-proxy-uat.md	History Page Tests	Ctrl+R when no selection	keyboard	02-proxy-uat.md:163
+HISTORY-072	02-proxy-uat.md	History Page Tests	Intruder button click	happy	02-proxy-uat.md:164
+HISTORY-073	02-proxy-uat.md	History Page Tests	Intruder button disabled	happy	02-proxy-uat.md:165
+HISTORY-074	02-proxy-uat.md	History Page Tests	Ctrl+I keyboard shortcut	keyboard	02-proxy-uat.md:166
+HISTORY-075	02-proxy-uat.md	History Page Tests	Ctrl+I when no selection	keyboard	02-proxy-uat.md:167
+HISTORY-076	02-proxy-uat.md	History Page Tests	Compare button click	happy	02-proxy-uat.md:168
+HISTORY-077	02-proxy-uat.md	History Page Tests	Compare button disabled	happy	02-proxy-uat.md:169
+HISTORY-078	02-proxy-uat.md	History Page Tests	Inspector toggle on	happy	02-proxy-uat.md:170
+HISTORY-079	02-proxy-uat.md	History Page Tests	Inspector toggle off	happy	02-proxy-uat.md:171
+HISTORY-080	02-proxy-uat.md	History Page Tests	Inspector aria-pressed	a11y	02-proxy-uat.md:172
+HISTORY-081	02-proxy-uat.md	History Page Tests	Inspector aria-pressed	a11y	02-proxy-uat.md:173
+HISTORY-082	02-proxy-uat.md	History Page Tests	Inspector label → show	a11y	02-proxy-uat.md:174
+HISTORY-083	02-proxy-uat.md	History Page Tests	Inspector label → hide	a11y	02-proxy-uat.md:175
+HISTORY-084	02-proxy-uat.md	History Page Tests	Inspector panel content	happy	02-proxy-uat.md:176
+HISTORY-085	02-proxy-uat.md	History Page Tests	Clear selection button	happy	02-proxy-uat.md:177
+HISTORY-086	02-proxy-uat.md	History Page Tests	No exchange selected empty	empty-state	02-proxy-uat.md:178
+HISTORY-087	02-proxy-uat.md	History Page Tests	Exchange URL construction	happy	02-proxy-uat.md:179
+HISTORY-088	02-proxy-uat.md	History Page Tests	Right-click context menu	happy	02-proxy-uat.md:180
+HISTORY-089	02-proxy-uat.md	History Page Tests	Menu action → copy response bytes no response	error	02-proxy-uat.md:181
+HISTORY-090	02-proxy-uat.md	History Page Tests	Menu action → copy response bytes with response	happy	02-proxy-uat.md:182
+HISTORY-091	02-proxy-uat.md	History Page Tests	Selection persists across filter change	happy	02-proxy-uat.md:183
+HISTORY-092	02-proxy-uat.md	History Page Tests	Selection clears on filter mismatch	happy	02-proxy-uat.md:184
+HISTORY-093	02-proxy-uat.md	History Page Tests	Method all → shows all methods	happy	02-proxy-uat.md:185
+INTEGRATION-001	04-workbench-shell-uat.md	Integration Tests — Multi-Component Flows	User decodes, compares results	happy-path	04-workbench-shell-uat.md:516
+INTEGRATION-002	04-workbench-shell-uat.md	Integration Tests — Multi-Component Flows	User organizes decoded findings	happy-path	04-workbench-shell-uat.md:517
+INTEGRATION-003	04-workbench-shell-uat.md	Integration Tests — Multi-Component Flows	User themes toggle persists across navigation	happy-path	04-workbench-shell-uat.md:518
+INTEGRATION-004	04-workbench-shell-uat.md	Integration Tests — Multi-Component Flows	User density toggle persists across navigation	happy-path	04-workbench-shell-uat.md:519
+INTEGRATION-005	04-workbench-shell-uat.md	Integration Tests — Multi-Component Flows	User navigates with hotkeys and URL	happy-path	04-workbench-shell-uat.md:520
+INTEGRATION-006	04-workbench-shell-uat.md	Integration Tests — Multi-Component Flows	User command palette action navigates	happy-path	04-workbench-shell-uat.md:521
+INTEGRATION-007	04-workbench-shell-uat.md	Integration Tests — Multi-Component Flows	User menu actions navigate	happy-path	04-workbench-shell-uat.md:522
+INTEGRATION-008	04-workbench-shell-uat.md	Integration Tests — Multi-Component Flows	User scope rules affect all tools	happy-path	04-workbench-shell-uat.md:523
+INTERCEPT-001	02-proxy-uat.md	Intercept Page Tests	Switch → toggle on	happy	02-proxy-uat.md:11
+INTERCEPT-002	02-proxy-uat.md	Intercept Page Tests	Switch → toggle off	happy	02-proxy-uat.md:12
+INTERCEPT-003	02-proxy-uat.md	Intercept Page Tests	Alt+T keyboard shortcut	keyboard	02-proxy-uat.md:13
+INTERCEPT-004	02-proxy-uat.md	Intercept Page Tests	Alt+T when not wired	error	02-proxy-uat.md:14
+INTERCEPT-005	02-proxy-uat.md	Intercept Page Tests	Switch → error response	error	02-proxy-uat.md:15
+INTERCEPT-006	02-proxy-uat.md	Intercept Page Tests	Switch when wired=false	error	02-proxy-uat.md:16
+INTERCEPT-007	02-proxy-uat.md	Intercept Page Tests	Rules tab → Queue tab	happy	02-proxy-uat.md:17
+INTERCEPT-008	02-proxy-uat.md	Intercept Page Tests	Queue tab → Rules tab	happy	02-proxy-uat.md:18
+INTERCEPT-009	02-proxy-uat.md	Intercept Page Tests	Add rule (requests)	happy	02-proxy-uat.md:19
+INTERCEPT-010	02-proxy-uat.md	Intercept Page Tests	Add rule (responses)	happy	02-proxy-uat.md:20
+INTERCEPT-011	02-proxy-uat.md	Intercept Page Tests	Add rule count	happy	02-proxy-uat.md:21
+INTERCEPT-012	02-proxy-uat.md	Intercept Page Tests	Rule enabled checkbox → toggle	happy	02-proxy-uat.md:22
+INTERCEPT-013	02-proxy-uat.md	Intercept Page Tests	Rule enabled checkbox → all disabled	happy	02-proxy-uat.md:23
+INTERCEPT-014	02-proxy-uat.md	Intercept Page Tests	Field select change	happy	02-proxy-uat.md:24
+INTERCEPT-015	02-proxy-uat.md	Intercept Page Tests	Field select cycle through	happy	02-proxy-uat.md:25
+INTERCEPT-016	02-proxy-uat.md	Intercept Page Tests	Match pattern input	happy	02-proxy-uat.md:26
+INTERCEPT-017	02-proxy-uat.md	Intercept Page Tests	Match pattern → empty	happy	02-proxy-uat.md:27
+INTERCEPT-018	02-proxy-uat.md	Intercept Page Tests	Match pattern → boundary (very long)	boundary	02-proxy-uat.md:28
+INTERCEPT-019	02-proxy-uat.md	Intercept Page Tests	Match pattern → regex with special chars	boundary	02-proxy-uat.md:29
+INTERCEPT-020	02-proxy-uat.md	Intercept Page Tests	Match pattern → unicode	boundary	02-proxy-uat.md:30
+INTERCEPT-021	02-proxy-uat.md	Intercept Page Tests	Match kind select → regex	happy	02-proxy-uat.md:31
+INTERCEPT-022	02-proxy-uat.md	Intercept Page Tests	Match kind select → literal	happy	02-proxy-uat.md:32
+INTERCEPT-023	02-proxy-uat.md	Intercept Page Tests	Comment input	happy	02-proxy-uat.md:33
+INTERCEPT-024	02-proxy-uat.md	Intercept Page Tests	Comment input → empty	happy	02-proxy-uat.md:34
+INTERCEPT-025	02-proxy-uat.md	Intercept Page Tests	Delete rule button	happy	02-proxy-uat.md:35
+INTERCEPT-026	02-proxy-uat.md	Intercept Page Tests	Delete rule → last remaining	happy	02-proxy-uat.md:36
+INTERCEPT-027	02-proxy-uat.md	Intercept Page Tests	Save rules → success	happy	02-proxy-uat.md:37
+INTERCEPT-028	02-proxy-uat.md	Intercept Page Tests	Save rules → error	error	02-proxy-uat.md:38
+INTERCEPT-029	02-proxy-uat.md	Intercept Page Tests	Save rules → validation error	error	02-proxy-uat.md:39
+INTERCEPT-030	02-proxy-uat.md	Intercept Page Tests	Save button disabled when clean	happy	02-proxy-uat.md:40
+INTERCEPT-031	02-proxy-uat.md	Intercept Page Tests	Save button disabled while pending	happy	02-proxy-uat.md:41
+INTERCEPT-032	02-proxy-uat.md	Intercept Page Tests	Field hint → off state	happy	02-proxy-uat.md:42
+INTERCEPT-033	02-proxy-uat.md	Intercept Page Tests	Field hint → on no conditions	happy	02-proxy-uat.md:43
+INTERCEPT-034	02-proxy-uat.md	Intercept Page Tests	Field hint → on all disabled	happy	02-proxy-uat.md:44
+INTERCEPT-035	02-proxy-uat.md	Intercept Page Tests	Field hint → on with N conditions	happy	02-proxy-uat.md:45
+INTERCEPT-036	02-proxy-uat.md	Intercept Page Tests	Status badge → wired	happy	02-proxy-uat.md:46
+INTERCEPT-037	02-proxy-uat.md	Intercept Page Tests	Status badge → not wired	happy	02-proxy-uat.md:47
+INTERCEPT-038	02-proxy-uat.md	Intercept Page Tests	Metrics display	happy	02-proxy-uat.md:48
+INTERCEPT-039	02-proxy-uat.md	Intercept Page Tests	Queue table columns	happy	02-proxy-uat.md:49
+INTERCEPT-040	02-proxy-uat.md	Intercept Page Tests	Queue table empty state	empty-state	02-proxy-uat.md:50
+INTERCEPT-041	02-proxy-uat.md	Intercept Page Tests	Queue table empty state (disabled)	empty-state	02-proxy-uat.md:51
+INTERCEPT-042	02-proxy-uat.md	Intercept Page Tests	Select message from table	happy	02-proxy-uat.md:52
+INTERCEPT-043	02-proxy-uat.md	Intercept Page Tests	Message detail header	happy	02-proxy-uat.md:53
+INTERCEPT-044	02-proxy-uat.md	Intercept Page Tests	Message detail header (response)	happy	02-proxy-uat.md:54
+INTERCEPT-045	02-proxy-uat.md	Intercept Page Tests	Clear selection button	happy	02-proxy-uat.md:55
+INTERCEPT-046	02-proxy-uat.md	Intercept Page Tests	HttpEditor loads raw bytes	happy	02-proxy-uat.md:56
+INTERCEPT-047	02-proxy-uat.md	Intercept Page Tests	HttpEditor edit bytes	happy	02-proxy-uat.md:57
+INTERCEPT-048	02-proxy-uat.md	Intercept Page Tests	HttpEditor → very long content	boundary	02-proxy-uat.md:58
+INTERCEPT-049	02-proxy-uat.md	Intercept Page Tests	Fix Content-Length checkbox	happy	02-proxy-uat.md:59
+INTERCEPT-050	02-proxy-uat.md	Intercept Page Tests	Forward button → success	happy	02-proxy-uat.md:60
+INTERCEPT-051	02-proxy-uat.md	Intercept Page Tests	Forward button → error	error	02-proxy-uat.md:61
+INTERCEPT-052	02-proxy-uat.md	Intercept Page Tests	Forward button disabled	happy	02-proxy-uat.md:62
+INTERCEPT-053	02-proxy-uat.md	Intercept Page Tests	Forward button disabled while pending	happy	02-proxy-uat.md:63
+INTERCEPT-054	02-proxy-uat.md	Intercept Page Tests	Ctrl+F keyboard shortcut	keyboard	02-proxy-uat.md:64
+INTERCEPT-055	02-proxy-uat.md	Intercept Page Tests	Ctrl+F when no selection	keyboard	02-proxy-uat.md:65
+INTERCEPT-056	02-proxy-uat.md	Intercept Page Tests	Drop button → success	happy	02-proxy-uat.md:66
+INTERCEPT-057	02-proxy-uat.md	Intercept Page Tests	Drop button → error	error	02-proxy-uat.md:67
+INTERCEPT-058	02-proxy-uat.md	Intercept Page Tests	Drop button disabled	happy	02-proxy-uat.md:68
+INTERCEPT-059	02-proxy-uat.md	Intercept Page Tests	Drop button disabled while pending	happy	02-proxy-uat.md:69
+INTERCEPT-060	02-proxy-uat.md	Intercept Page Tests	Nothing selected empty state	empty-state	02-proxy-uat.md:70
+INTERCEPT-061	02-proxy-uat.md	Intercept Page Tests	Selection drops on background refresh	happy	02-proxy-uat.md:71
+INTERCEPT-062	02-proxy-uat.md	Intercept Page Tests	Error in useInterceptDetailed	error	02-proxy-uat.md:72
+INTERCEPT-063	02-proxy-uat.md	Intercept Page Tests	Loading state	happy	02-proxy-uat.md:73
+INTERCEPT-064	02-proxy-uat.md	Intercept Page Tests	Not wired warning → requests	happy	02-proxy-uat.md:74
+INTERCEPT-065	02-proxy-uat.md	Intercept Page Tests	Not wired warning → responses	happy	02-proxy-uat.md:75
+INTERCEPT-066	02-proxy-uat.md	Intercept Page Tests	No rules empty message (request)	empty-state	02-proxy-uat.md:76
+INTERCEPT-067	02-proxy-uat.md	Intercept Page Tests	No rules empty message (response)	empty-state	02-proxy-uat.md:77
+INTERCEPT-068	02-proxy-uat.md	Intercept Page Tests	Data sync effect → prevents re-sync while dirty	happy	02-proxy-uat.md:78
+INTERCEPT-069	02-proxy-uat.md	Intercept Page Tests	Data sync effect → blocks sync while dirty	happy	02-proxy-uat.md:79
+INTERCEPT-070	02-proxy-uat.md	Intercept Page Tests	Selection persists across table refresh	happy	02-proxy-uat.md:80
+INTERCEPT-071	02-proxy-uat.md	Intercept Page Tests	Exchange id boundary → 0	boundary	02-proxy-uat.md:81
+INTERCEPT-072	02-proxy-uat.md	Intercept Page Tests	Exchange id boundary → negative	boundary	02-proxy-uat.md:82
+INTERCEPT-073	02-proxy-uat.md	Intercept Page Tests	Exchange id boundary → very large	boundary	02-proxy-uat.md:83
+INTRUDER-001	03-attack-uat.md	Positions Tab	Discover insertion points (happy path)	happy	03-attack-uat.md:13
+INTRUDER-002	03-attack-uat.md	Positions Tab	Discover with zero positions returned	empty-state	03-attack-uat.md:14
+INTRUDER-003	03-attack-uat.md	Positions Tab	Discover returns error	error	03-attack-uat.md:15
+INTRUDER-004	03-attack-uat.md	Positions Tab	Cannot discover with msgId empty	boundary	03-attack-uat.md:16
+INTRUDER-005	03-attack-uat.md	Positions Tab	Cannot discover with non-integer msgId	boundary	03-attack-uat.md:17
+INTRUDER-006	03-attack-uat.md	Positions Tab	Cannot discover with negative msgId (legacy)	boundary	03-attack-uat.md:18
+INTRUDER-007	03-attack-uat.md	Positions Tab	Message ID input clears points when changed	boundary	03-attack-uat.md:19
+INTRUDER-008	03-attack-uat.md	Positions Tab	Select positions (single)	happy	03-attack-uat.md:20
+INTRUDER-009	03-attack-uat.md	Positions Tab	Select positions (multiple)	happy	03-attack-uat.md:21
+INTRUDER-010	03-attack-uat.md	Positions Tab	Deselect position	happy	03-attack-uat.md:22
+INTRUDER-011	03-attack-uat.md	Positions Tab	Position labels show metadata	happy	03-attack-uat.md:23
+INTRUDER-012	03-attack-uat.md	Positions Tab	All-points toggle clears selection	boundary	03-attack-uat.md:24
+INTRUDER-013	03-attack-uat.md	Positions Tab	All-points toggle changes allPoints flag	happy	03-attack-uat.md:25
+INTRUDER-014	03-attack-uat.md	Positions Tab	Base request viewer loads when msgId set	happy	03-attack-uat.md:26
+INTRUDER-015	03-attack-uat.md	Positions Tab	Base request shows loading state	loading	03-attack-uat.md:27
+INTRUDER-016	03-attack-uat.md	Positions Tab	Base request shows error when fetch fails	error	03-attack-uat.md:28
+INTRUDER-017	03-attack-uat.md	Positions Tab	Base request shows empty when no bytes	empty-state	03-attack-uat.md:29
+INTRUDER-018	03-attack-uat.md	Positions Tab	No base request empty state (initial)	empty-state	03-attack-uat.md:30
+INTRUDER-019	03-attack-uat.md	Positions Tab	Attack type select changes mode	happy	03-attack-uat.md:31
+INTRUDER-020	03-attack-uat.md	Positions Tab	Attack type detail text updates	happy	03-attack-uat.md:32
+INTRUDER-021	03-attack-uat.md	Payloads Tab	Payloads textarea shows default text	happy	03-attack-uat.md:38
+INTRUDER-022	03-attack-uat.md	Payloads Tab	Edit payload set (single set, sniper mode)	happy	03-attack-uat.md:39
+INTRUDER-023	03-attack-uat.md	Payloads Tab	Payload count updates in header	happy	03-attack-uat.md:40
+INTRUDER-024	03-attack-uat.md	Payloads Tab	Empty payload set	boundary	03-attack-uat.md:41
+INTRUDER-025	03-attack-uat.md	Payloads Tab	Whitespace-only payloads not counted	boundary	03-attack-uat.md:42
+INTRUDER-026	03-attack-uat.md	Payloads Tab	Multiple payload sets per pitchfork mode	happy	03-attack-uat.md:43
+INTRUDER-027	03-attack-uat.md	Payloads Tab	Payload sets scale when mode changes	happy	03-attack-uat.md:44
+INTRUDER-028	03-attack-uat.md	Payloads Tab	Payload sets scale when selection changes	happy	03-attack-uat.md:45
+INTRUDER-029	03-attack-uat.md	Payloads Tab	Payload sets shrink when selection reduces	happy	03-attack-uat.md:46
+INTRUDER-030	03-attack-uat.md	Payloads Tab	Add rule button appends add_prefix rule	happy	03-attack-uat.md:47
+INTRUDER-031	03-attack-uat.md	Payloads Tab	Rule operation select changes rule type	happy	03-attack-uat.md:48
+INTRUDER-032	03-attack-uat.md	Payloads Tab	Rule text field for add_prefix	happy	03-attack-uat.md:49
+INTRUDER-033	03-attack-uat.md	Payloads Tab	Rule pattern field for match_replace	happy	03-attack-uat.md:50
+INTRUDER-034	03-attack-uat.md	Payloads Tab	Rule replacement field for match_replace	happy	03-attack-uat.md:51
+INTRUDER-035	03-attack-uat.md	Payloads Tab	Rule layer/codec select for encode	happy	03-attack-uat.md:52
+INTRUDER-036	03-attack-uat.md	Payloads Tab	Rule algorithm select for hash	happy	03-attack-uat.md:53
+INTRUDER-037	03-attack-uat.md	Payloads Tab	Rule "every match" checkbox	happy	03-attack-uat.md:54
+INTRUDER-038	03-attack-uat.md	Payloads Tab	Remove rule icon button	happy	03-attack-uat.md:55
+INTRUDER-039	03-attack-uat.md	Payloads Tab	Invalid regex deferred to server	error	03-attack-uat.md:56
+INTRUDER-040	03-attack-uat.md	Payloads Tab	Rule row shows rule index	happy	03-attack-uat.md:57
+INTRUDER-041	03-attack-uat.md	Resource Pool Tab	Max requests default 1000	happy	03-attack-uat.md:63
+INTRUDER-042	03-attack-uat.md	Resource Pool Tab	Max requests input changes value	happy	03-attack-uat.md:64
+INTRUDER-043	03-attack-uat.md	Resource Pool Tab	Max concurrent requests default 8	happy	03-attack-uat.md:65
+INTRUDER-044	03-attack-uat.md	Resource Pool Tab	Max concurrent requests input changes	happy	03-attack-uat.md:66
+INTRUDER-045	03-attack-uat.md	Resource Pool Tab	RPS input blank means unlimited	happy	03-attack-uat.md:67
+INTRUDER-046	03-attack-uat.md	Resource Pool Tab	RPS input with value	happy	03-attack-uat.md:68
+INTRUDER-047	03-attack-uat.md	Resource Pool Tab	Max requests boundary zero	boundary	03-attack-uat.md:69
+INTRUDER-048	03-attack-uat.md	Resource Pool Tab	Max concurrent boundary zero	boundary	03-attack-uat.md:70
+INTRUDER-049	03-attack-uat.md	Resource Pool Tab	RPS negative value allowed in input	boundary	03-attack-uat.md:71
+INTRUDER-050	03-attack-uat.md	Settings Tab	Grep match input accepts string	happy	03-attack-uat.md:77
+INTRUDER-051	03-attack-uat.md	Settings Tab	Grep extract input accepts string	happy	03-attack-uat.md:78
+INTRUDER-052	03-attack-uat.md	Settings Tab	Grep match empty means not sent	happy	03-attack-uat.md:79
+INTRUDER-053	03-attack-uat.md	Settings Tab	Grep extract empty means not sent	happy	03-attack-uat.md:80
+INTRUDER-054	03-attack-uat.md	Settings Tab	Grep match with leading/trailing whitespace	boundary	03-attack-uat.md:81
+INTRUDER-055	03-attack-uat.md	Settings Tab	Grep extract with special characters	happy	03-attack-uat.md:82
+INTRUDER-056	03-attack-uat.md	Results Tab	Results tab shows sent count in label	happy	03-attack-uat.md:88
+INTRUDER-057	03-attack-uat.md	Results Tab	Results tab empty state (no attack run yet)	empty-state	03-attack-uat.md:89
+INTRUDER-058	03-attack-uat.md	Results Tab	Attack result with modern RunView	happy	03-attack-uat.md:90
+INTRUDER-059	03-attack-uat.md	Results Tab	Attack result with legacy format	happy	03-attack-uat.md:91
+INTRUDER-060	03-attack-uat.md	Results Tab	Results tab auto-switches on success	happy	03-attack-uat.md:92
+INTRUDER-061	03-attack-uat.md	Results Tab	Error notice in Results tab	error	03-attack-uat.md:93
+INTRUDER-062	03-attack-uat.md	Results Tab	Attack metric grid displays	happy	03-attack-uat.md:94
+INTRUDER-063	03-attack-uat.md	Results Tab	Caveats notice appears when bounds applied	happy	03-attack-uat.md:95
+INTRUDER-064	03-attack-uat.md	Results Tab	Result buckets table renders	happy	03-attack-uat.md:96
+INTRUDER-065	03-attack-uat.md	Results Tab	Result buckets empty state	empty-state	03-attack-uat.md:97
+INTRUDER-066	03-attack-uat.md	Results Tab	Errors table rendered	happy	03-attack-uat.md:98
+INTRUDER-067	03-attack-uat.md	Results Tab	Errors table not rendered	empty-state	03-attack-uat.md:99
+INTRUDER-068	03-attack-uat.md	Results Tab	Payload set accounting table	happy	03-attack-uat.md:100
+INTRUDER-069	03-attack-uat.md	Results Tab	Payload set accounting empty state	empty-state	03-attack-uat.md:101
+INTRUDER-070	03-attack-uat.md	Results Tab	Attempts detail table	happy	03-attack-uat.md:102
+INTRUDER-071	03-attack-uat.md	Cross-tab Flows & Launch Attack	Switch Positions → Payloads → Pool → Settings → Results	happy	03-attack-uat.md:108
+INTRUDER-072	03-attack-uat.md	Cross-tab Flows & Launch Attack	Mid-configuration tab switch	happy	03-attack-uat.md:109
+INTRUDER-073	03-attack-uat.md	Cross-tab Flows & Launch Attack	Cannot launch with no base request	boundary	03-attack-uat.md:110
+INTRUDER-074	03-attack-uat.md	Cross-tab Flows & Launch Attack	Cannot launch with empty target	boundary	03-attack-uat.md:111
+INTRUDER-075	03-attack-uat.md	Cross-tab Flows & Launch Attack	Cannot launch with no positions selected	boundary	03-attack-uat.md:112
+INTRUDER-076	03-attack-uat.md	Cross-tab Flows & Launch Attack	Cannot launch with zero-count payload set	boundary	03-attack-uat.md:113
+INTRUDER-077	03-attack-uat.md	Cross-tab Flows & Launch Attack	Launch attack with all conditions met (happy path)	happy	03-attack-uat.md:114
+INTRUDER-078	03-attack-uat.md	Cross-tab Flows & Launch Attack	Launch attack with rules	happy	03-attack-uat.md:115
+INTRUDER-079	03-attack-uat.md	Cross-tab Flows & Launch Attack	Launch attack without rules	happy	03-attack-uat.md:116
+INTRUDER-080	03-attack-uat.md	Cross-tab Flows & Launch Attack	Launch attack success toast	happy	03-attack-uat.md:117
+INTRUDER-081	03-attack-uat.md	Cross-tab Flows & Launch Attack	Launch attack error toast	error	03-attack-uat.md:118
+INTRUDER-082	03-attack-uat.md	Cross-tab Flows & Launch Attack	Budget warning badge and notice	boundary	03-attack-uat.md:119
+INTRUDER-083	03-attack-uat.md	Cross-tab Flows & Launch Attack	Estimate updates on position/payload change	happy	03-attack-uat.md:120
+INTRUDER-084	03-attack-uat.md	Cross-tab Flows & Launch Attack	Estimate calculation sniper mode	happy	03-attack-uat.md:121
+INTRUDER-085	03-attack-uat.md	Cross-tab Flows & Launch Attack	Estimate calculation battering_ram mode	happy	03-attack-uat.md:122
+INTRUDER-086	03-attack-uat.md	Cross-tab Flows & Launch Attack	Estimate calculation pitchfork mode	happy	03-attack-uat.md:123
+INTRUDER-087	03-attack-uat.md	Cross-tab Flows & Launch Attack	Estimate calculation cluster_bomb mode	happy	03-attack-uat.md:124
+INTRUDER-088	03-attack-uat.md	Intruder Seed Handoff (from Repeater/History)	Seed from Repeater handoff	alternate-entry	03-attack-uat.md:130
+INTRUDER-089	03-attack-uat.md	Intruder Seed Handoff (from Repeater/History)	Seed with null msgId	alternate-entry	03-attack-uat.md:131
+INTRUDER-090	03-attack-uat.md	Page Header & Estimate Badge	Page header title	happy	03-attack-uat.md:137
+INTRUDER-091	03-attack-uat.md	Page Header & Estimate Badge	Page header description (default)	happy	03-attack-uat.md:138
+INTRUDER-092	03-attack-uat.md	Page Header & Estimate Badge	Page header description (from seed)	happy	03-attack-uat.md:139
+INTRUDER-093	03-attack-uat.md	Page Header & Estimate Badge	Estimate badge tone normal	happy	03-attack-uat.md:140
+INTRUDER-094	03-attack-uat.md	Page Header & Estimate Badge	Estimate badge tone warning	boundary	03-attack-uat.md:141
+INTRUDER-095	03-attack-uat.md	Page Header & Estimate Badge	Launch attack button enabled condition	happy	03-attack-uat.md:142
+INTRUDER-096	03-attack-uat.md	Page Header & Estimate Badge	Launch attack button disabled tooltip	boundary	03-attack-uat.md:143
+LOGGER-001	04-workbench-shell-uat.md	LOGGER Page	User opens Logger page	happy-path	04-workbench-shell-uat.md:133
+LOGGER-002	04-workbench-shell-uat.md	LOGGER Page	User searches tool log	happy-path	04-workbench-shell-uat.md:134
+LOGGER-003	04-workbench-shell-uat.md	LOGGER Page	User clears search	happy-path	04-workbench-shell-uat.md:135
+LOGGER-004	04-workbench-shell-uat.md	LOGGER Page	User filters by tool	happy-path	04-workbench-shell-uat.md:136
+LOGGER-004b	04-workbench-shell-uat.md	LOGGER Page	User resets tool filter	happy-path	04-workbench-shell-uat.md:137
+LOGGER-005	04-workbench-shell-uat.md	LOGGER Page	User selects a log row	happy-path	04-workbench-shell-uat.md:138
+LOGGER-006	04-workbench-shell-uat.md	LOGGER Page	User copies URL from context menu	happy-path	04-workbench-shell-uat.md:139
+LOGGER-007	04-workbench-shell-uat.md	LOGGER Page	User copies curl command from context menu	happy-path	04-workbench-shell-uat.md:140
+LOGGER-008	04-workbench-shell-uat.md	LOGGER Page	User shows row's host in HTTP history	happy-path	04-workbench-shell-uat.md:141
+LOGGER-009	04-workbench-shell-uat.md	LOGGER Page	User shows row's host and path in HTTP history	happy-path	04-workbench-shell-uat.md:142
+LOGGER-010	04-workbench-shell-uat.md	LOGGER Page	User clears entire log	happy-path	04-workbench-shell-uat.md:143
+LOGGER-011	04-workbench-shell-uat.md	LOGGER Page	User confirms clear log	happy-path	04-workbench-shell-uat.md:144
+LOGGER-012	04-workbench-shell-uat.md	LOGGER Page	User cancels clear log	happy-path	04-workbench-shell-uat.md:145
+LOGGER-013	04-workbench-shell-uat.md	LOGGER Page	User shows entry in history from detail	happy-path	04-workbench-shell-uat.md:146
+LOGGER-014	04-workbench-shell-uat.md	LOGGER Page	User clears selection	happy-path	04-workbench-shell-uat.md:147
+LOGGER-015	04-workbench-shell-uat.md	LOGGER Page	Clear log button disabled when empty	disabled-state	04-workbench-shell-uat.md:148
+LOGGER-016	04-workbench-shell-uat.md	LOGGER Page	No matches state when search narrows to zero	empty-state	04-workbench-shell-uat.md:149
+LOGGER-017	04-workbench-shell-uat.md	LOGGER Page	No row selected state	empty-state	04-workbench-shell-uat.md:150
+LOGGER-018	04-workbench-shell-uat.md	LOGGER Page	Search debouncedTerm delay	happy-path	04-workbench-shell-uat.md:151
+LOGGER-019	04-workbench-shell-uat.md	LOGGER Page	Row selection by ID survives refetch	happy-path	04-workbench-shell-uat.md:152
+LOGGER-020	04-workbench-shell-uat.md	LOGGER Page	Table shows count badges	happy-path	04-workbench-shell-uat.md:153
+LOGGER-021	04-workbench-shell-uat.md	LOGGER Page	Dropped count shows warning tone	warning	04-workbench-shell-uat.md:154
+LOGGER-022	04-workbench-shell-uat.md	LOGGER Page	Dropped count shows neutral tone	happy-path	04-workbench-shell-uat.md:155
+LOGGER-023	04-workbench-shell-uat.md	LOGGER Page	Refresh button refetches log	happy-path	04-workbench-shell-uat.md:156
+LOGGER-024	04-workbench-shell-uat.md	LOGGER Page	Tool filter populated from server	happy-path	04-workbench-shell-uat.md:157
+LOGGER-025	04-workbench-shell-uat.md	LOGGER Page	Status badge tone based on HTTP status	happy-path	04-workbench-shell-uat.md:158
+LOGGER-026	04-workbench-shell-uat.md	LOGGER Page	Error shows "no response"	empty-state	04-workbench-shell-uat.md:159
+LOGGER-027	04-workbench-shell-uat.md	LOGGER Page	Context menu groups separate actions	happy-path	04-workbench-shell-uat.md:160
+LOGGER-028	04-workbench-shell-uat.md	LOGGER Page	URL inference uses port 443 for HTTPS	happy-path	04-workbench-shell-uat.md:161
+LOGGER-029	04-workbench-shell-uat.md	LOGGER Page	URL inference uses port 80 for HTTP	happy-path	04-workbench-shell-uat.md:162
+LOGGER-030	04-workbench-shell-uat.md	LOGGER Page	URL includes non-standard port	happy-path	04-workbench-shell-uat.md:163
+LOGGER-031	04-workbench-shell-uat.md	LOGGER Page	curl uses X flag for non-GET methods	happy-path	04-workbench-shell-uat.md:164
+LOGGER-032	04-workbench-shell-uat.md	LOGGER Page	curl omits headers and body from log	happy-path	04-workbench-shell-uat.md:165
+LOGGER-033	04-workbench-shell-uat.md	LOGGER Page	Table sorting by column	happy-path	04-workbench-shell-uat.md:166
+LOGGER-034	04-workbench-shell-uat.md	LOGGER Page	Table sorting toggle direction	happy-path	04-workbench-shell-uat.md:167
+MATCHREP-001	02-proxy-uat.md	Match / Replace Page Tests	Add rule → first rule	happy	02-proxy-uat.md:240
+MATCHREP-002	02-proxy-uat.md	Match / Replace Page Tests	Add rule → response direction	happy	02-proxy-uat.md:241
+MATCHREP-003	02-proxy-uat.md	Match / Replace Page Tests	Add rule → with existing	happy	02-proxy-uat.md:242
+MATCHREP-004	02-proxy-uat.md	Match / Replace Page Tests	Rule table columns	happy	02-proxy-uat.md:243
+MATCHREP-005	02-proxy-uat.md	Match / Replace Page Tests	Rule enabled checkbox → toggle	happy	02-proxy-uat.md:244
+MATCHREP-006	02-proxy-uat.md	Match / Replace Page Tests	Rule enabled count badge	happy	02-proxy-uat.md:245
+MATCHREP-007	02-proxy-uat.md	Match / Replace Page Tests	Saved affects badge → requests yes	happy	02-proxy-uat.md:246
+MATCHREP-008	02-proxy-uat.md	Match / Replace Page Tests	Saved affects badge → requests no	happy	02-proxy-uat.md:247
+MATCHREP-009	02-proxy-uat.md	Match / Replace Page Tests	Saved affects badge → responses yes	happy	02-proxy-uat.md:248
+MATCHREP-010	02-proxy-uat.md	Match / Replace Page Tests	Saved affects badge → responses no	happy	02-proxy-uat.md:249
+MATCHREP-011	02-proxy-uat.md	Match / Replace Page Tests	Draft affects badge → visible when dirty	happy	02-proxy-uat.md:250
+MATCHREP-012	02-proxy-uat.md	Match / Replace Page Tests	Draft affects badge → hidden when clean	happy	02-proxy-uat.md:251
+MATCHREP-013	02-proxy-uat.md	Match / Replace Page Tests	Rule target select → cycle	happy	02-proxy-uat.md:252
+MATCHREP-014	02-proxy-uat.md	Match / Replace Page Tests	Rule target select → response body	happy	02-proxy-uat.md:253
+MATCHREP-015	02-proxy-uat.md	Match / Replace Page Tests	Rule match kind select → regex	happy	02-proxy-uat.md:254
+MATCHREP-016	02-proxy-uat.md	Match / Replace Page Tests	Rule match kind select → literal	happy	02-proxy-uat.md:255
+MATCHREP-017	02-proxy-uat.md	Match / Replace Page Tests	Rule match input	happy	02-proxy-uat.md:256
+MATCHREP-018	02-proxy-uat.md	Match / Replace Page Tests	Rule match input → empty	happy	02-proxy-uat.md:257
+MATCHREP-019	02-proxy-uat.md	Match / Replace Page Tests	Rule match input → placeholder	happy	02-proxy-uat.md:258
+MATCHREP-020	02-proxy-uat.md	Match / Replace Page Tests	Rule replace input	happy	02-proxy-uat.md:259
+MATCHREP-021	02-proxy-uat.md	Match / Replace Page Tests	Rule replace input → empty	happy	02-proxy-uat.md:260
+MATCHREP-022	02-proxy-uat.md	Match / Replace Page Tests	Rule replace input → placeholder	happy	02-proxy-uat.md:261
+MATCHREP-023	02-proxy-uat.md	Match / Replace Page Tests	Rule comment input	happy	02-proxy-uat.md:262
+MATCHREP-024	02-proxy-uat.md	Match / Replace Page Tests	Rule comment input → placeholder	happy	02-proxy-uat.md:263
+MATCHREP-025	02-proxy-uat.md	Match / Replace Page Tests	Move rule up → success	happy	02-proxy-uat.md:264
+MATCHREP-026	02-proxy-uat.md	Match / Replace Page Tests	Move rule up → first rule disabled	happy	02-proxy-uat.md:265
+MATCHREP-027	02-proxy-uat.md	Match / Replace Page Tests	Move rule down → success	happy	02-proxy-uat.md:266
+MATCHREP-028	02-proxy-uat.md	Match / Replace Page Tests	Move rule down → last rule disabled	happy	02-proxy-uat.md:267
+MATCHREP-029	02-proxy-uat.md	Match / Replace Page Tests	Duplicate rule → creates copy	happy	02-proxy-uat.md:268
+MATCHREP-030	02-proxy-uat.md	Match / Replace Page Tests	Duplicate rule → copy is independent	happy	02-proxy-uat.md:269
+MATCHREP-031	02-proxy-uat.md	Match / Replace Page Tests	Delete rule button → opens modal	happy	02-proxy-uat.md:270
+MATCHREP-032	02-proxy-uat.md	Match / Replace Page Tests	Delete confirmation modal → keep it	happy	02-proxy-uat.md:271
+MATCHREP-033	02-proxy-uat.md	Match / Replace Page Tests	Delete confirmation modal → delete	happy	02-proxy-uat.md:272
+MATCHREP-034	02-proxy-uat.md	Match / Replace Page Tests	Delete rule → single rule	happy	02-proxy-uat.md:273
+MATCHREP-035	02-proxy-uat.md	Match / Replace Page Tests	Update Content-Length switch → on	happy	02-proxy-uat.md:274
+MATCHREP-036	02-proxy-uat.md	Match / Replace Page Tests	Update Content-Length switch → off	happy	02-proxy-uat.md:275
+MATCHREP-037	02-proxy-uat.md	Match / Replace Page Tests	Save rules → success	happy	02-proxy-uat.md:276
+MATCHREP-038	02-proxy-uat.md	Match / Replace Page Tests	Save rules → singular	happy	02-proxy-uat.md:277
+MATCHREP-039	02-proxy-uat.md	Match / Replace Page Tests	Save rules → error	error	02-proxy-uat.md:278
+MATCHREP-040	02-proxy-uat.md	Match / Replace Page Tests	Save button disabled when clean	happy	02-proxy-uat.md:279
+MATCHREP-041	02-proxy-uat.md	Match / Replace Page Tests	Save button disabled while pending	happy	02-proxy-uat.md:280
+MATCHREP-042	02-proxy-uat.md	Match / Replace Page Tests	Revert button → success	happy	02-proxy-uat.md:281
+MATCHREP-043	02-proxy-uat.md	Match / Replace Page Tests	Revert button disabled	happy	02-proxy-uat.md:282
+MATCHREP-044	02-proxy-uat.md	Match / Replace Page Tests	Refresh button click	happy	02-proxy-uat.md:283
+MATCHREP-045	02-proxy-uat.md	Match / Replace Page Tests	Dirty status badge	happy	02-proxy-uat.md:284
+MATCHREP-046	02-proxy-uat.md	Match / Replace Page Tests	Dirty status badge → unsaved	happy	02-proxy-uat.md:285
+MATCHREP-047	02-proxy-uat.md	Match / Replace Page Tests	Test direction select → request	happy	02-proxy-uat.md:286
+MATCHREP-048	02-proxy-uat.md	Match / Replace Page Tests	Test direction select → response	happy	02-proxy-uat.md:287
+MATCHREP-049	02-proxy-uat.md	Match / Replace Page Tests	Sample input editor	happy	02-proxy-uat.md:288
+MATCHREP-050	02-proxy-uat.md	Match / Replace Page Tests	Sample input placeholder	happy	02-proxy-uat.md:289
+MATCHREP-051	02-proxy-uat.md	Match / Replace Page Tests	Test draft button → requires sample	happy	02-proxy-uat.md:290
+MATCHREP-052	02-proxy-uat.md	Match / Replace Page Tests	Test draft button → disabled while testing	happy	02-proxy-uat.md:291
+MATCHREP-053	02-proxy-uat.md	Match / Replace Page Tests	Test draft success → request	happy	02-proxy-uat.md:292
+MATCHREP-054	02-proxy-uat.md	Match / Replace Page Tests	Test draft success → response	happy	02-proxy-uat.md:293
+MATCHREP-055	02-proxy-uat.md	Match / Replace Page Tests	Test draft error	error	02-proxy-uat.md:294
+MATCHREP-056	02-proxy-uat.md	Match / Replace Page Tests	Output editor value → changed	happy	02-proxy-uat.md:295
+MATCHREP-057	02-proxy-uat.md	Match / Replace Page Tests	Output editor value → no change	happy	02-proxy-uat.md:296
+MATCHREP-058	02-proxy-uat.md	Match / Replace Page Tests	Output editor value → before test	happy	02-proxy-uat.md:297
+MATCHREP-059	02-proxy-uat.md	Match / Replace Page Tests	Output editor readonly	happy	02-proxy-uat.md:298
+MATCHREP-060	02-proxy-uat.md	Match / Replace Page Tests	Empty state → no rules	empty-state	02-proxy-uat.md:299
+MATCHREP-061	02-proxy-uat.md	Match / Replace Page Tests	Loading state	happy	02-proxy-uat.md:300
+MATCHREP-062	02-proxy-uat.md	Match / Replace Page Tests	Error state	error	02-proxy-uat.md:301
+MATCHREP-063	02-proxy-uat.md	Match / Replace Page Tests	Wired rules warning → scope	happy	02-proxy-uat.md:302
+MATCHREP-064	02-proxy-uat.md	Match / Replace Page Tests	Wired rules warning → query	happy	02-proxy-uat.md:303
+MATCHREP-065	02-proxy-uat.md	Match / Replace Page Tests	Wired rules warning → hidden when clean	happy	02-proxy-uat.md:304
+MATCHREP-066	02-proxy-uat.md	Match / Replace Page Tests	Data sync effect → initial load	happy	02-proxy-uat.md:305
+MATCHREP-067	02-proxy-uat.md	Match / Replace Page Tests	Data sync effect → blocks on dirty	happy	02-proxy-uat.md:306
+MATCHREP-068	02-proxy-uat.md	Match / Replace Page Tests	Dirty check → baseline comparison	happy	02-proxy-uat.md:307
+MATCHREP-069	02-proxy-uat.md	Match / Replace Page Tests	Dirty check → after first edit	happy	02-proxy-uat.md:308
+MATCHREP-070	02-proxy-uat.md	Match / Replace Page Tests	Draft affects memo → request	happy	02-proxy-uat.md:309
+MATCHREP-071	02-proxy-uat.md	Match / Replace Page Tests	Draft affects memo → response	happy	02-proxy-uat.md:310
+MATCHREP-072	02-proxy-uat.md	Match / Replace Page Tests	Draft affects memo → both	happy	02-proxy-uat.md:311
+MATCHREP-073	02-proxy-uat.md	Match / Replace Page Tests	Draft affects memo → ignores disabled	happy	02-proxy-uat.md:312
+MATCHREP-074	02-proxy-uat.md	Match / Replace Page Tests	Target field conversion → unknown	boundary	02-proxy-uat.md:313
+MATCHREP-075	02-proxy-uat.md	Match / Replace Page Tests	Category field conversion → unknown	boundary	02-proxy-uat.md:314
+MATCHREP-076	02-proxy-uat.md	Match / Replace Page Tests	Move rule bounds → move first up	boundary	02-proxy-uat.md:315
+MATCHREP-077	02-proxy-uat.md	Match / Replace Page Tests	Move rule bounds → move last down	boundary	02-proxy-uat.md:316
+MATCHREP-078	02-proxy-uat.md	Match / Replace Page Tests	Rule index in loop → identity	happy	02-proxy-uat.md:317
+MATCHREP-079	02-proxy-uat.md	Match / Replace Page Tests	Duplicate rule → independent mutations	happy	02-proxy-uat.md:318
+MATCHREP-080	02-proxy-uat.md	Match / Replace Page Tests	Sample input boundary → empty	boundary	02-proxy-uat.md:319
+MATCHREP-081	02-proxy-uat.md	Match / Replace Page Tests	Sample input boundary → very large	boundary	02-proxy-uat.md:320
+MATCHREP-082	02-proxy-uat.md	Match / Replace Page Tests	Match pattern boundary → regex invalid	boundary	02-proxy-uat.md:321
+MATCHREP-083	02-proxy-uat.md	Match / Replace Page Tests	Match pattern boundary → unicode	boundary	02-proxy-uat.md:322
+MATCHREP-084	02-proxy-uat.md	Match / Replace Page Tests	Replace string boundary → empty	boundary	02-proxy-uat.md:323
+MATCHREP-085	02-proxy-uat.md	Match / Replace Page Tests	Replace string boundary → backreferences	boundary	02-proxy-uat.md:324
+MATCHREP-086	02-proxy-uat.md	Match / Replace Page Tests	Replace string boundary → very long	boundary	02-proxy-uat.md:325
+ORGANIZER-001	04-workbench-shell-uat.md	ORGANIZER Page	User opens Organizer page	happy-path	04-workbench-shell-uat.md:92
+ORGANIZER-002	04-workbench-shell-uat.md	ORGANIZER Page	User enters exchange ID and saves	happy-path	04-workbench-shell-uat.md:93
+ORGANIZER-003	04-workbench-shell-uat.md	ORGANIZER Page	User presses Enter to add exchange	happy-path	04-workbench-shell-uat.md:94
+ORGANIZER-004	04-workbench-shell-uat.md	ORGANIZER Page	User selects an item from table	happy-path	04-workbench-shell-uat.md:95
+ORGANIZER-005	04-workbench-shell-uat.md	ORGANIZER Page	User edits title field	happy-path	04-workbench-shell-uat.md:96
+ORGANIZER-006	04-workbench-shell-uat.md	ORGANIZER Page	User edits note textarea	happy-path	04-workbench-shell-uat.md:97
+ORGANIZER-007	04-workbench-shell-uat.md	ORGANIZER Page	User changes highlight color	happy-path	04-workbench-shell-uat.md:98
+ORGANIZER-008	04-workbench-shell-uat.md	ORGANIZER Page	User saves changes	happy-path	04-workbench-shell-uat.md:99
+ORGANIZER-009	04-workbench-shell-uat.md	ORGANIZER Page	User reverts unsaved changes	happy-path	04-workbench-shell-uat.md:100
+ORGANIZER-010	04-workbench-shell-uat.md	ORGANIZER Page	User removes item via delete icon on row	happy-path	04-workbench-shell-uat.md:101
+ORGANIZER-011	04-workbench-shell-uat.md	ORGANIZER Page	User confirms delete in modal	happy-path	04-workbench-shell-uat.md:102
+ORGANIZER-012	04-workbench-shell-uat.md	ORGANIZER Page	User cancels delete in modal	happy-path	04-workbench-shell-uat.md:103
+ORGANIZER-013	04-workbench-shell-uat.md	ORGANIZER Page	User removes item via Remove button in detail	happy-path	04-workbench-shell-uat.md:104
+ORGANIZER-014	04-workbench-shell-uat.md	ORGANIZER Page	User opens exchange in HTTP history	happy-path	04-workbench-shell-uat.md:105
+ORGANIZER-015	04-workbench-shell-uat.md	ORGANIZER Page	User opens exchange via detail button	happy-path	04-workbench-shell-uat.md:106
+ORGANIZER-016	04-workbench-shell-uat.md	ORGANIZER Page	Save button disabled with no changes	disabled-state	04-workbench-shell-uat.md:107
+ORGANIZER-017	04-workbench-shell-uat.md	ORGANIZER Page	Revert button disabled with no changes	disabled-state	04-workbench-shell-uat.md:108
+ORGANIZER-018	04-workbench-shell-uat.md	ORGANIZER Page	Save button disabled while saving	loading	04-workbench-shell-uat.md:109
+ORGANIZER-019	04-workbench-shell-uat.md	ORGANIZER Page	Add button disabled with empty input	disabled-state	04-workbench-shell-uat.md:110
+ORGANIZER-020	04-workbench-shell-uat.md	ORGANIZER Page	Add button disabled with whitespace-only	boundary	04-workbench-shell-uat.md:111
+ORGANIZER-021	04-workbench-shell-uat.md	ORGANIZER Page	Invalid exchange ID rejected (negative)	boundary	04-workbench-shell-uat.md:112
+ORGANIZER-022	04-workbench-shell-uat.md	ORGANIZER Page	Invalid exchange ID rejected (non-integer)	boundary	04-workbench-shell-uat.md:113
+ORGANIZER-023	04-workbench-shell-uat.md	ORGANIZER Page	Exchange ID 0 is valid	boundary	04-workbench-shell-uat.md:114
+ORGANIZER-024	04-workbench-shell-uat.md	ORGANIZER Page	Save error handled	error	04-workbench-shell-uat.md:115
+ORGANIZER-025	04-workbench-shell-uat.md	ORGANIZER Page	Add error handled	error	04-workbench-shell-uat.md:116
+ORGANIZER-026	04-workbench-shell-uat.md	ORGANIZER Page	Delete error handled	error	04-workbench-shell-uat.md:117
+ORGANIZER-027	04-workbench-shell-uat.md	ORGANIZER Page	No item selected state	empty-state	04-workbench-shell-uat.md:118
+ORGANIZER-028	04-workbench-shell-uat.md	ORGANIZER Page	Title displays as "untitled" when empty	empty-state	04-workbench-shell-uat.md:119
+ORGANIZER-029	04-workbench-shell-uat.md	ORGANIZER Page	Note displays as "no note" when empty	empty-state	04-workbench-shell-uat.md:120
+ORGANIZER-030	04-workbench-shell-uat.md	ORGANIZER Page	Highlight displays as "—" when not set	empty-state	04-workbench-shell-uat.md:121
+ORGANIZER-031	04-workbench-shell-uat.md	ORGANIZER Page	"None" highlight option stores empty string	happy-path	04-workbench-shell-uat.md:122
+ORGANIZER-032	04-workbench-shell-uat.md	ORGANIZER Page	Refresh button refetches list	happy-path	04-workbench-shell-uat.md:123
+ORGANIZER-033	04-workbench-shell-uat.md	ORGANIZER Page	Unsaved changes persist across selection change	happy-path	04-workbench-shell-uat.md:124
+ORGANIZER-034	04-workbench-shell-uat.md	ORGANIZER Page	Selection cleared after successful delete	happy-path	04-workbench-shell-uat.md:125
+ORGANIZER-035	04-workbench-shell-uat.md	ORGANIZER-ORGANIZER (additional advanced scenarios)	Field hint shows highlight colors available	happy-path	04-workbench-shell-uat.md:175
+ORGANIZER-036	04-workbench-shell-uat.md	ORGANIZER-ORGANIZER (additional advanced scenarios)	Badge tone matches highlight color	happy-path	04-workbench-shell-uat.md:176
+ORGANIZER-037	04-workbench-shell-uat.md	ORGANIZER-ORGANIZER (additional advanced scenarios)	Badge tone green for green highlight	happy-path	04-workbench-shell-uat.md:177
+REPEATER-001	03-attack-uat.md	Tab Management & Navigation	New request button creates tab	happy	03-attack-uat.md:153
+REPEATER-002	03-attack-uat.md	Tab Management & Navigation	Second new request tab increments number	happy	03-attack-uat.md:154
+REPEATER-003	03-attack-uat.md	Tab Management & Navigation	Click tab row to activate	happy	03-attack-uat.md:155
+REPEATER-004	03-attack-uat.md	Tab Management & Navigation	Tab row keyboard Enter key activates	keyboard	03-attack-uat.md:156
+REPEATER-005	03-attack-uat.md	Tab Management & Navigation	Tab row keyboard Space key activates	keyboard	03-attack-uat.md:157
+REPEATER-006	03-attack-uat.md	Tab Management & Navigation	Tab close button removes tab	happy	03-attack-uat.md:158
+REPEATER-007	03-attack-uat.md	Tab Management & Navigation	Close active tab updates activeId	happy	03-attack-uat.md:159
+REPEATER-008	03-attack-uat.md	Tab Management & Navigation	Close button has correct label	a11y	03-attack-uat.md:160
+REPEATER-009	03-attack-uat.md	Tab Management & Navigation	Tab row has correct title	a11y	03-attack-uat.md:161
+REPEATER-010	03-attack-uat.md	Tab Management & Navigation	Tab row role and state	a11y	03-attack-uat.md:162
+REPEATER-011	03-attack-uat.md	Tab Management & Navigation	Tablist has aria-label	a11y	03-attack-uat.md:163
+REPEATER-012	03-attack-uat.md	Tab Management & Navigation	No tabs shows empty state	empty-state	03-attack-uat.md:164
+REPEATER-013	03-attack-uat.md	Tab Management & Navigation	Empty state has New request button	empty-state	03-attack-uat.md:165
+REPEATER-014	03-attack-uat.md	Request & Response Editors	Request editor shows active.request	happy	03-attack-uat.md:171
+REPEATER-015	03-attack-uat.md	Request & Response Editors	Request editor onChange updates store	happy	03-attack-uat.md:172
+REPEATER-016	03-attack-uat.md	Request & Response Editors	Response editor readonly	happy	03-attack-uat.md:173
+REPEATER-017	03-attack-uat.md	Request & Response Editors	Response editor shows result.response	happy	03-attack-uat.md:174
+REPEATER-018	03-attack-uat.md	Request & Response Editors	Response editor waiting message	loading	03-attack-uat.md:175
+REPEATER-019	03-attack-uat.md	Request & Response Editors	Response editor no-result message	empty-state	03-attack-uat.md:176
+REPEATER-020	03-attack-uat.md	Request & Response Editors	Request editor keyboard Ctrl+Enter sends	keyboard	03-attack-uat.md:177
+REPEATER-021	03-attack-uat.md	Request & Response Editors	Request editor keyboard Cmd+Enter sends (Mac)	keyboard	03-attack-uat.md:178
+REPEATER-022	03-attack-uat.md	Request & Response Editors	Request editor filename export	happy	03-attack-uat.md:179
+REPEATER-023	03-attack-uat.md	Request & Response Editors	Response editor filename export	happy	03-attack-uat.md:180
+REPEATER-024	03-attack-uat.md	Target & Tab Name Inputs	Target input changes active.target	happy	03-attack-uat.md:186
+REPEATER-025	03-attack-uat.md	Target & Tab Name Inputs	Target input updates protocol (https)	happy	03-attack-uat.md:187
+REPEATER-026	03-attack-uat.md	Target & Tab Name Inputs	Target input updates protocol (http)	happy	03-attack-uat.md:188
+REPEATER-027	03-attack-uat.md	Target & Tab Name Inputs	Target input preserves scheme on change	happy	03-attack-uat.md:189
+REPEATER-028	03-attack-uat.md	Target & Tab Name Inputs	Tab name input changes active.name	happy	03-attack-uat.md:190
+REPEATER-029	03-attack-uat.md	Target & Tab Name Inputs	Tab name input appears in tab row	happy	03-attack-uat.md:191
+REPEATER-030	03-attack-uat.md	Target & Tab Name Inputs	Target input has placeholder	happy	03-attack-uat.md:192
+REPEATER-031	03-attack-uat.md	Target & Tab Name Inputs	Tab name input placeholder	happy	03-attack-uat.md:193
+REPEATER-032	03-attack-uat.md	Inspector	Inspector toggle shows/hides	happy	03-attack-uat.md:199
+REPEATER-033	03-attack-uat.md	Inspector	Inspector icon button aria-pressed	a11y	03-attack-uat.md:200
+REPEATER-034	03-attack-uat.md	Inspector	Inspector icon button aria-pressed false	a11y	03-attack-uat.md:201
+REPEATER-035	03-attack-uat.md	Inspector	Inspector label on request	happy	03-attack-uat.md:202
+REPEATER-036	03-attack-uat.md	Inspector	Inspector toggle label (hide)	happy	03-attack-uat.md:203
+REPEATER-037	03-attack-uat.md	Inspector	Inspector toggle label (show)	happy	03-attack-uat.md:204
+REPEATER-038	03-attack-uat.md	Send Button & Status Badges	Send button sends request	happy	03-attack-uat.md:210
+REPEATER-039	03-attack-uat.md	Send Button & Status Badges	Send button disabled while pending	loading	03-attack-uat.md:211
+REPEATER-040	03-attack-uat.md	Send Button & Status Badges	Send button has Ctrl+Enter tooltip	happy	03-attack-uat.md:212
+REPEATER-041	03-attack-uat.md	Send Button & Status Badges	Status badge shows HTTP status	happy	03-attack-uat.md:213
+REPEATER-042	03-attack-uat.md	Send Button & Status Badges	Status badge bad tone (5xx)	happy	03-attack-uat.md:214
+REPEATER-043	03-attack-uat.md	Send Button & Status Badges	Status badge warn tone (4xx)	happy	03-attack-uat.md:215
+REPEATER-044	03-attack-uat.md	Send Button & Status Badges	Duration badge shown	happy	03-attack-uat.md:216
+REPEATER-045	03-attack-uat.md	Send Button & Status Badges	Exchange ID badge shown	happy	03-attack-uat.md:217
+REPEATER-046	03-attack-uat.md	Send Button & Status Badges	Exchange ID badge absent	happy	03-attack-uat.md:218
+REPEATER-047	03-attack-uat.md	Send Button & Status Badges	Scheme badge https	happy	03-attack-uat.md:219
+REPEATER-048	03-attack-uat.md	Send Button & Status Badges	Scheme badge http	happy	03-attack-uat.md:220
+REPEATER-049	03-attack-uat.md	To Intruder Handoff	To Intruder with existing result	happy	03-attack-uat.md:226
+REPEATER-050	03-attack-uat.md	To Intruder Handoff	To Intruder without prior send	happy	03-attack-uat.md:227
+REPEATER-051	03-attack-uat.md	To Intruder Handoff	To Intruder send fails	error	03-attack-uat.md:228
+REPEATER-052	03-attack-uat.md	To Intruder Handoff	To Intruder no exchange_id	error	03-attack-uat.md:229
+REPEATER-053	03-attack-uat.md	To Intruder Handoff	To Intruder fetch exchange fails	error	03-attack-uat.md:230
+REPEATER-054	03-attack-uat.md	To Intruder Handoff	To Intruder success	happy	03-attack-uat.md:231
+REPEATER-055	03-attack-uat.md	To Intruder Handoff	To Intruder button disabled during handoff	loading	03-attack-uat.md:232
+REPEATER-056	03-attack-uat.md	To Intruder Handoff	To Intruder button has correct label	happy	03-attack-uat.md:233
+REPEATER-057	03-attack-uat.md	Send Error & Retry	Send error notice displayed	error	03-attack-uat.md:239
+REPEATER-058	03-attack-uat.md	Send Error & Retry	Retry button re-sends	error	03-attack-uat.md:240
+REPEATER-059	03-attack-uat.md	Page Header & Empty State	Page header title (with tabs)	happy	03-attack-uat.md:246
+REPEATER-060	03-attack-uat.md	Page Header & Empty State	Page header title (no tabs)	happy	03-attack-uat.md:247
+REPEATER-061	03-attack-uat.md	Page Header & Empty State	Empty state title	empty-state	03-attack-uat.md:248
+REPEATER-062	03-attack-uat.md	Page Header & Empty State	Empty state detail	empty-state	03-attack-uat.md:249
+REPEATER-063	03-attack-uat.md	Persistence & State	Tabs persist across reload	happy	03-attack-uat.md:255
+REPEATER-064	03-attack-uat.md	Persistence & State	Responses not persisted	happy	03-attack-uat.md:256
+REPEATER-065	03-attack-uat.md	Tab Closure Edge Cases	Close only remaining tab	happy	03-attack-uat.md:262
+REPEATER-066	03-attack-uat.md	Tab Closure Edge Cases	Close non-active tab	happy	03-attack-uat.md:263
+REPEATER-067	03-attack-uat.md	Tab Closure Edge Cases	Multiple tabs tab management (up to 12+)	happy	03-attack-uat.md:264
+SCANNER-001	01-target-uat.md	Scanner page (scanner.tsx)	Filter input — by check name	happy	01-target-uat.md:83
+SCANNER-002	01-target-uat.md	Scanner page (scanner.tsx)	Filter input — by issue name	happy	01-target-uat.md:84
+SCANNER-003	01-target-uat.md	Scanner page (scanner.tsx)	Filter input — by host	happy	01-target-uat.md:85
+SCANNER-004	01-target-uat.md	Scanner page (scanner.tsx)	Filter input — by detail text	happy	01-target-uat.md:86
+SCANNER-005	01-target-uat.md	Scanner page (scanner.tsx)	Filter input — case insensitive	boundary	01-target-uat.md:87
+SCANNER-006	01-target-uat.md	Scanner page (scanner.tsx)	Severity filter select — all severities	happy	01-target-uat.md:88
+SCANNER-007	01-target-uat.md	Scanner page (scanner.tsx)	Severity filter select — critical only	happy	01-target-uat.md:89
+SCANNER-008	01-target-uat.md	Scanner page (scanner.tsx)	Severity filter select — combinations	happy	01-target-uat.md:90
+SCANNER-009	01-target-uat.md	Scanner page (scanner.tsx)	Confidence filter select — all	happy	01-target-uat.md:91
+SCANNER-010	01-target-uat.md	Scanner page (scanner.tsx)	Confidence filter select — certain only	happy	01-target-uat.md:92
+SCANNER-011	01-target-uat.md	Scanner page (scanner.tsx)	Confidence filter select — combinations	happy	01-target-uat.md:93
+SCANNER-012	01-target-uat.md	Scanner page (scanner.tsx)	Combined filters — severity + confidence	happy	01-target-uat.md:94
+SCANNER-013	01-target-uat.md	Scanner page (scanner.tsx)	Combined filters — text + severity + confidence	happy	01-target-uat.md:95
+SCANNER-014	01-target-uat.md	Scanner page (scanner.tsx)	Host tree row — click to toggle	happy	01-target-uat.md:96
+SCANNER-015	01-target-uat.md	Scanner page (scanner.tsx)	Host tree row — toggle button click	happy	01-target-uat.md:97
+SCANNER-016	01-target-uat.md	Scanner page (scanner.tsx)	Host tree row — collapse	happy	01-target-uat.md:98
+SCANNER-017	01-target-uat.md	Scanner page (scanner.tsx)	Host tree row — count metadata	a11y	01-target-uat.md:99
+SCANNER-018	01-target-uat.md	Scanner page (scanner.tsx)	Path tree row — click to toggle	happy	01-target-uat.md:100
+SCANNER-019	01-target-uat.md	Scanner page (scanner.tsx)	Path tree row — toggle button	happy	01-target-uat.md:101
+SCANNER-020	01-target-uat.md	Scanner page (scanner.tsx)	Path tree row — collapse	happy	01-target-uat.md:102
+SCANNER-021	01-target-uat.md	Scanner page (scanner.tsx)	Path tree row — count metadata	a11y	01-target-uat.md:103
+SCANNER-022	01-target-uat.md	Scanner page (scanner.tsx)	Finding leaf — click to select	happy	01-target-uat.md:104
+SCANNER-023	01-target-uat.md	Scanner page (scanner.tsx)	Finding leaf — severity dot	a11y	01-target-uat.md:105
+SCANNER-024	01-target-uat.md	Scanner page (scanner.tsx)	Finding leaf — confidence metadata	happy	01-target-uat.md:106
+SCANNER-025	01-target-uat.md	Scanner page (scanner.tsx)	Advisory tab — default selection	happy	01-target-uat.md:107
+SCANNER-026	01-target-uat.md	Scanner page (scanner.tsx)	Advisory tab — detail list	happy	01-target-uat.md:108
+SCANNER-027	01-target-uat.md	Scanner page (scanner.tsx)	Advisory tab — issue detail section	happy	01-target-uat.md:109
+SCANNER-028	01-target-uat.md	Scanner page (scanner.tsx)	Advisory tab — remediation section	happy	01-target-uat.md:110
+SCANNER-029	01-target-uat.md	Scanner page (scanner.tsx)	Advisory tab — occurrences buttons	happy	01-target-uat.md:111
+SCANNER-030	01-target-uat.md	Scanner page (scanner.tsx)	Occurrence button — navigate to exchange	happy	01-target-uat.md:112
+SCANNER-031	01-target-uat.md	Scanner page (scanner.tsx)	Request tab — no occurrence	empty-state	01-target-uat.md:113
+SCANNER-032	01-target-uat.md	Scanner page (scanner.tsx)	Request tab — exchange not in history	empty-state	01-target-uat.md:114
+SCANNER-033	01-target-uat.md	Scanner page (scanner.tsx)	Request tab — loading	empty-state	01-target-uat.md:115
+SCANNER-034	01-target-uat.md	Scanner page (scanner.tsx)	Request tab — display content	happy	01-target-uat.md:116
+SCANNER-035	01-target-uat.md	Scanner page (scanner.tsx)	Response tab — no occurrence	empty-state	01-target-uat.md:117
+SCANNER-036	01-target-uat.md	Scanner page (scanner.tsx)	Response tab — exchange not in history	empty-state	01-target-uat.md:118
+SCANNER-037	01-target-uat.md	Scanner page (scanner.tsx)	Response tab — no response captured	empty-state	01-target-uat.md:119
+SCANNER-038	01-target-uat.md	Scanner page (scanner.tsx)	Response tab — loading	empty-state	01-target-uat.md:120
+SCANNER-039	01-target-uat.md	Scanner page (scanner.tsx)	Response tab — display content	happy	01-target-uat.md:121
+SCANNER-040	01-target-uat.md	Scanner page (scanner.tsx)	Severity badge in advisory	a11y	01-target-uat.md:122
+SCANNER-041	01-target-uat.md	Scanner page (scanner.tsx)	Confidence badge in advisory	a11y	01-target-uat.md:123
+SCANNER-042	01-target-uat.md	Scanner page (scanner.tsx)	In history button — with occurrence	happy	01-target-uat.md:124
+SCANNER-043	01-target-uat.md	Scanner page (scanner.tsx)	In history button — without occurrence	boundary	01-target-uat.md:125
+SCANNER-044	01-target-uat.md	Scanner page (scanner.tsx)	In history button — click	happy	01-target-uat.md:126
+SCANNER-045	01-target-uat.md	Scanner page (scanner.tsx)	Audit settings button — open modal	happy	01-target-uat.md:127
+SCANNER-046	01-target-uat.md	Scanner page (scanner.tsx)	Audit settings modal — close	happy	01-target-uat.md:128
+SCANNER-047	01-target-uat.md	Scanner page (scanner.tsx)	Live audit card — title and description	happy	01-target-uat.md:129
+SCANNER-048	01-target-uat.md	Scanner page (scanner.tsx)	Live audit switch — enable	happy	01-target-uat.md:130
+SCANNER-049	01-target-uat.md	Scanner page (scanner.tsx)	Live audit switch — disable	happy	01-target-uat.md:131
+SCANNER-050	01-target-uat.md	Scanner page (scanner.tsx)	Live audit switch — not wired error	error	01-target-uat.md:132
+SCANNER-051	01-target-uat.md	Scanner page (scanner.tsx)	Live audit card — not wired notice	empty-state	01-target-uat.md:133
+SCANNER-052	01-target-uat.md	Scanner page (scanner.tsx)	Live audit metrics — swept and findings	happy	01-target-uat.md:134
+SCANNER-053	01-target-uat.md	Scanner page (scanner.tsx)	Live audit badges — not swept yet	happy	01-target-uat.md:135
+SCANNER-054	01-target-uat.md	Scanner page (scanner.tsx)	Live audit badges — given up on	happy	01-target-uat.md:136
+SCANNER-055	01-target-uat.md	Scanner page (scanner.tsx)	Live audit badges — stalled	happy	01-target-uat.md:137
+SCANNER-056	01-target-uat.md	Scanner page (scanner.tsx)	Live audit badges — already covered	happy	01-target-uat.md:138
+SCANNER-057	01-target-uat.md	Scanner page (scanner.tsx)	Live audit badges — ledger resets	happy	01-target-uat.md:139
+SCANNER-058	01-target-uat.md	Scanner page (scanner.tsx)	Live audit field hint — complete	happy	01-target-uat.md:140
+SCANNER-059	01-target-uat.md	Scanner page (scanner.tsx)	Live audit field hint — with gaps	happy	01-target-uat.md:141
+SCANNER-060	01-target-uat.md	Scanner page (scanner.tsx)	Live audit field hint — filtered query	happy	01-target-uat.md:142
+SCANNER-061	01-target-uat.md	Scanner page (scanner.tsx)	Coverage card — title	happy	01-target-uat.md:143
+SCANNER-062	01-target-uat.md	Scanner page (scanner.tsx)	Coverage card — not enabled notice	empty-state	01-target-uat.md:144
+SCANNER-063	01-target-uat.md	Scanner page (scanner.tsx)	Coverage card — partition badges	happy	01-target-uat.md:145
+SCANNER-064	01-target-uat.md	Scanner page (scanner.tsx)	Coverage card — checks table	happy	01-target-uat.md:146
+SCANNER-065	01-target-uat.md	Scanner page (scanner.tsx)	Coverage card — check row state badge	happy	01-target-uat.md:147
+SCANNER-066	01-target-uat.md	Scanner page (scanner.tsx)	Coverage card — check row state badge (good)	happy	01-target-uat.md:148
+SCANNER-067	01-target-uat.md	Scanner page (scanner.tsx)	Scan config select — server default	happy	01-target-uat.md:149
+SCANNER-068	01-target-uat.md	Scanner page (scanner.tsx)	Scan config select — load configs	happy	01-target-uat.md:150
+SCANNER-069	01-target-uat.md	Scanner page (scanner.tsx)	Scan config select — change value	happy	01-target-uat.md:151
+SCANNER-070	01-target-uat.md	Scanner page (scanner.tsx)	Exchange ID input — type number	happy	01-target-uat.md:152
+SCANNER-071	01-target-uat.md	Scanner page (scanner.tsx)	Exchange ID input — empty	happy	01-target-uat.md:153
+SCANNER-072	01-target-uat.md	Scanner page (scanner.tsx)	Audit button — enabled	happy	01-target-uat.md:154
+SCANNER-073	01-target-uat.md	Scanner page (scanner.tsx)	Audit button — disabled (no exchange)	boundary	01-target-uat.md:155
+SCANNER-074	01-target-uat.md	Scanner page (scanner.tsx)	Audit button — disabled (pending)	happy	01-target-uat.md:156
+SCANNER-075	01-target-uat.md	Scanner page (scanner.tsx)	Audit button click — valid exchange	happy	01-target-uat.md:157
+SCANNER-076	01-target-uat.md	Scanner page (scanner.tsx)	Audit button — validation (non-numeric)	boundary	01-target-uat.md:158
+SCANNER-077	01-target-uat.md	Scanner page (scanner.tsx)	Audit button — validation (negative)	boundary	01-target-uat.md:159
+SCANNER-078	01-target-uat.md	Scanner page (scanner.tsx)	Audit button — validation (decimal)	boundary	01-target-uat.md:160
+SCANNER-079	01-target-uat.md	Scanner page (scanner.tsx)	Audit button — exchange zero valid	boundary	01-target-uat.md:161
+SCANNER-080	01-target-uat.md	Scanner page (scanner.tsx)	Audit result card — on success	happy	01-target-uat.md:162
+SCANNER-081	01-target-uat.md	Scanner page (scanner.tsx)	Audit result card — error badge	happy	01-target-uat.md:163
+SCANNER-082	01-target-uat.md	Scanner page (scanner.tsx)	Audit result card — success badge	happy	01-target-uat.md:164
+SCANNER-083	01-target-uat.md	Scanner page (scanner.tsx)	Audit result detail list	happy	01-target-uat.md:165
+SCANNER-084	01-target-uat.md	Scanner page (scanner.tsx)	Audit result breakdown	happy	01-target-uat.md:166
+SCANNER-085	01-target-uat.md	Scanner page (scanner.tsx)	Audit result outcome	happy	01-target-uat.md:167
+SCANNER-086	01-target-uat.md	Scanner page (scanner.tsx)	Audit result dispositions	happy	01-target-uat.md:168
+SCANNER-087	01-target-uat.md	Scanner page (scanner.tsx)	Report download — HTML	happy	01-target-uat.md:169
+SCANNER-088	01-target-uat.md	Scanner page (scanner.tsx)	Report download — JSON	happy	01-target-uat.md:170
+SCANNER-089	01-target-uat.md	Scanner page (scanner.tsx)	Report download — SARIF	happy	01-target-uat.md:171
+SCANNER-090	01-target-uat.md	Scanner page (scanner.tsx)	Refresh button click	happy	01-target-uat.md:172
+SCANNER-091	01-target-uat.md	Scanner page (scanner.tsx)	Refresh button loading state	happy	01-target-uat.md:173
+SCANNER-092	01-target-uat.md	Scanner page (scanner.tsx)	Empty state — loading	empty-state	01-target-uat.md:174
+SCANNER-093	01-target-uat.md	Scanner page (scanner.tsx)	Empty state — no findings (no filters)	empty-state	01-target-uat.md:175
+SCANNER-094	01-target-uat.md	Scanner page (scanner.tsx)	Empty state — filter no matches	empty-state	01-target-uat.md:176
+SCANNER-095	01-target-uat.md	Scanner page (scanner.tsx)	Empty state — no finding selected	empty-state	01-target-uat.md:177
+SCANNER-096	01-target-uat.md	Scanner page (scanner.tsx)	Passive scanning disabled notice	empty-state	01-target-uat.md:178
+SCANNER-097	01-target-uat.md	Scanner page (scanner.tsx)	API error — fetch findings	error	01-target-uat.md:179
+SCANNER-098	01-target-uat.md	Scanner page (scanner.tsx)	API error — retry findings	error	01-target-uat.md:180
+SCANNER-099	01-target-uat.md	Scanner page (scanner.tsx)	Severity counts in header	happy	01-target-uat.md:181
+SCANNER-100	01-target-uat.md	Scanner page (scanner.tsx)	Filter persistence across selections	happy	01-target-uat.md:182
+SCOPE-001	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Scope rule kind select — include	happy	01-target-uat.md:188
+SCOPE-002	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Scope rule kind select — exclude	happy	01-target-uat.md:189
+SCOPE-003	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Scope rule kind select — default	happy	01-target-uat.md:190
+SCOPE-004	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Host pattern input — type	happy	01-target-uat.md:191
+SCOPE-005	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Host pattern input — empty	happy	01-target-uat.md:192
+SCOPE-006	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Host pattern input — wildcard syntax	happy	01-target-uat.md:193
+SCOPE-007	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Host pattern input — whitespace only	boundary	01-target-uat.md:194
+SCOPE-008	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule button — enabled	happy	01-target-uat.md:195
+SCOPE-009	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule button — disabled (empty pattern)	boundary	01-target-uat.md:196
+SCOPE-010	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule button — disabled (whitespace only)	boundary	01-target-uat.md:197
+SCOPE-011	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule button — disabled (pending)	happy	01-target-uat.md:198
+SCOPE-012	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule button click — include rule	happy	01-target-uat.md:199
+SCOPE-013	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule button click — exclude rule	happy	01-target-uat.md:200
+SCOPE-014	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule — trimmed pattern	boundary	01-target-uat.md:201
+SCOPE-015	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule — Enter key	keyboard	01-target-uat.md:202
+SCOPE-016	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule error — API failure	error	01-target-uat.md:203
+SCOPE-017	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Add rule success — toast	happy	01-target-uat.md:204
+SCOPE-018	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Remove rule button — enabled	happy	01-target-uat.md:205
+SCOPE-019	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Remove rule button — disabled (wildcard)	boundary	01-target-uat.md:206
+SCOPE-020	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Remove rule button — disabled (pending)	happy	01-target-uat.md:207
+SCOPE-021	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Remove rule button click	happy	01-target-uat.md:208
+SCOPE-022	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Remove rule error	error	01-target-uat.md:209
+SCOPE-023	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Clear scope button — enabled	happy	01-target-uat.md:210
+SCOPE-024	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Clear scope button — disabled (no rules)	boundary	01-target-uat.md:211
+SCOPE-025	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Clear scope button click — open modal	happy	01-target-uat.md:212
+SCOPE-026	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Confirmation modal — cancel button	happy	01-target-uat.md:213
+SCOPE-027	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Confirmation modal — clear button	happy	01-target-uat.md:214
+SCOPE-028	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Confirmation modal — Escape key	keyboard	01-target-uat.md:215
+SCOPE-029	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Clear scope error	error	01-target-uat.md:216
+SCOPE-030	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Refresh button click	happy	01-target-uat.md:217
+SCOPE-031	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Refresh button loading state	happy	01-target-uat.md:218
+SCOPE-032	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Empty state — no rules	empty-state	01-target-uat.md:219
+SCOPE-033	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Empty state — loading	empty-state	01-target-uat.md:220
+SCOPE-034	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Scope badge — everything in scope	a11y	01-target-uat.md:221
+SCOPE-035	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Scope badge — restricted	a11y	01-target-uat.md:222
+SCOPE-036	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Info notice — always visible	happy	01-target-uat.md:223
+SCOPE-037	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	API error — fetch scope	error	01-target-uat.md:224
+SCOPE-038	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	API error — retry scope	error	01-target-uat.md:225
+SCOPE-039	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Rules table — columns	happy	01-target-uat.md:226
+SCOPE-040	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Rules table — row per rule	happy	01-target-uat.md:227
+SCOPE-041	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Rules table — kind badge	happy	01-target-uat.md:228
+SCOPE-042	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Rules persistence across operations	happy	01-target-uat.md:229
+SCOPE-043	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Wildcard rule display	happy	01-target-uat.md:230
+SCOPE-044	01-target-uat.md	Scope page (scope.tsx via ScopeSection)	Multiple hosts mixed include/exclude	happy	01-target-uat.md:231
+SEQ-001	03-attack-uat.md	Paste Tab	Paste tokens in textarea	happy	03-attack-uat.md:274
+SEQ-002	03-attack-uat.md	Paste Tab	Analyse button calculates count	happy	03-attack-uat.md:275
+SEQ-003	03-attack-uat.md	Paste Tab	Analyse button disabled when empty	boundary	03-attack-uat.md:276
+SEQ-004	03-attack-uat.md	Paste Tab	Analyse button disabled when only whitespace	boundary	03-attack-uat.md:277
+SEQ-005	03-attack-uat.md	Paste Tab	Analyse tokens (paste tab)	happy	03-attack-uat.md:278
+SEQ-006	03-attack-uat.md	Paste Tab	Analyse success (paste tab)	happy	03-attack-uat.md:279
+SEQ-007	03-attack-uat.md	Paste Tab	Analyse error (paste tab)	error	03-attack-uat.md:280
+SEQ-008	03-attack-uat.md	Paste Tab	Encoding select auto-detect (default)	happy	03-attack-uat.md:281
+SEQ-009	03-attack-uat.md	Paste Tab	Encoding select raw	happy	03-attack-uat.md:282
+SEQ-010	03-attack-uat.md	Paste Tab	Encoding select base64	happy	03-attack-uat.md:283
+SEQ-011	03-attack-uat.md	Paste Tab	Tokens textarea placeholder	happy	03-attack-uat.md:284
+SEQ-012	03-attack-uat.md	Paste Tab	Tokens textarea label	happy	03-attack-uat.md:285
+SEQ-013	03-attack-uat.md	Live Capture Tab	Capture id input	happy	03-attack-uat.md:291
+SEQ-014	03-attack-uat.md	Live Capture Tab	Attach button disabled when captureId empty	boundary	03-attack-uat.md:292
+SEQ-015	03-attack-uat.md	Live Capture Tab	Attach button enabled when captureId filled	happy	03-attack-uat.md:293
+SEQ-016	03-attack-uat.md	Live Capture Tab	Attach button attaches to capture	happy	03-attack-uat.md:294
+SEQ-017	03-attack-uat.md	Live Capture Tab	Attach button shows "Re-attach" when already attached	happy	03-attack-uat.md:295
+SEQ-018	03-attack-uat.md	Live Capture Tab	Attach button shows "Attach" when not attached	happy	03-attack-uat.md:296
+SEQ-019	03-attack-uat.md	Live Capture Tab	Empty capture id error toast	error	03-attack-uat.md:297
+SEQ-020	03-attack-uat.md	Live Capture Tab	Stop capture button disabled until tokens	boundary	03-attack-uat.md:298
+SEQ-021	03-attack-uat.md	Live Capture Tab	Stop capture button enabled when attached	happy	03-attack-uat.md:299
+SEQ-022	03-attack-uat.md	Live Capture Tab	Stop capture button disabled while pending	loading	03-attack-uat.md:300
+SEQ-023	03-attack-uat.md	Live Capture Tab	Stop capture mutates	happy	03-attack-uat.md:301
+SEQ-024	03-attack-uat.md	Live Capture Tab	Stop capture error	error	03-attack-uat.md:302
+SEQ-025	03-attack-uat.md	Live Capture Tab	Polling badge shows polling	happy	03-attack-uat.md:303
+SEQ-026	03-attack-uat.md	Live Capture Tab	Polling badge shows idle	happy	03-attack-uat.md:304
+SEQ-027	03-attack-uat.md	Live Capture Tab	Accumulated count badge	happy	03-attack-uat.md:305
+SEQ-028	03-attack-uat.md	Live Capture Tab	Accumulated count badge zero	happy	03-attack-uat.md:306
+SEQ-029	03-attack-uat.md	Live Capture Tab	Not following capture hint	empty-state	03-attack-uat.md:307
+SEQ-030	03-attack-uat.md	Live Capture Tab	No tokens accumulated empty state	empty-state	03-attack-uat.md:308
+SEQ-031	03-attack-uat.md	Live Capture Tab	Capture error notice	error	03-attack-uat.md:309
+SEQ-032	03-attack-uat.md	Live Capture Tab	Capture warning notice (Go port)	happy	03-attack-uat.md:310
+SEQ-033	03-attack-uat.md	Live Capture Tab	Analyse tokens (capture tab)	happy	03-attack-uat.md:311
+SEQ-034	03-attack-uat.md	Live Capture Tab	Analyse captured success	happy	03-attack-uat.md:312
+SEQ-035	03-attack-uat.md	Encoding Select	Encoding select rendered in header	happy	03-attack-uat.md:318
+SEQ-036	03-attack-uat.md	Encoding Select	Encoding affects both tabs	happy	03-attack-uat.md:319
+SEQ-037	03-attack-uat.md	Analysis Report	Report renders on success	happy	03-attack-uat.md:325
+SEQ-038	03-attack-uat.md	Analysis Report	No analysis empty state	empty-state	03-attack-uat.md:326
+SEQ-039	03-attack-uat.md	Analysis Report	Analysis pending (button state)	loading	03-attack-uat.md:327
+SEQ-040	03-attack-uat.md	Analysis Report	Analysis error notice	error	03-attack-uat.md:328
+SEQ-041	03-attack-uat.md	Analysis Report	Grade display (pass)	happy	03-attack-uat.md:329
+SEQ-042	03-attack-uat.md	Analysis Report	Grade display (fail)	happy	03-attack-uat.md:330
+SEQ-043	03-attack-uat.md	Analysis Report	Grade display (insufficient)	happy	03-attack-uat.md:331
+SEQ-044	03-attack-uat.md	Analysis Report	Verdict text displayed	happy	03-attack-uat.md:332
+SEQ-045	03-attack-uat.md	Analysis Report	Warnings section (with caveats)	happy	03-attack-uat.md:333
+SEQ-046	03-attack-uat.md	Analysis Report	Warnings section (no caveats, insufficient)	happy	03-attack-uat.md:334
+SEQ-047	03-attack-uat.md	Analysis Report	Metric grid displayed	happy	03-attack-uat.md:335
+SEQ-048	03-attack-uat.md	Analysis Report	FIPS tests run	happy	03-attack-uat.md:336
+SEQ-049	03-attack-uat.md	Analysis Report	FIPS tests not run (short sample)	happy	03-attack-uat.md:337
+SEQ-050	03-attack-uat.md	Analysis Report	Positions section rendered	happy	03-attack-uat.md:338
+SEQ-051	03-attack-uat.md	Analysis Report	Positions empty state	empty-state	03-attack-uat.md:339
+SEQ-052	03-attack-uat.md	Analysis Report	Show all positions button	happy	03-attack-uat.md:340
+SEQ-053	03-attack-uat.md	Analysis Report	Show all positions expansion	happy	03-attack-uat.md:341
+SEQ-054	03-attack-uat.md	Analysis Report	Positions truncated warning	happy	03-attack-uat.md:342
+SEQ-055	03-attack-uat.md	Analysis Report	Dead position highlighting	happy	03-attack-uat.md:343
+SEQ-056	03-attack-uat.md	Analysis Report	Position distribution chips	happy	03-attack-uat.md:344
+SEQ-057	03-attack-uat.md	Cross-tab & Badge	Badge shows pasted count	happy	03-attack-uat.md:350
+SEQ-058	03-attack-uat.md	Cross-tab & Badge	Badge shows captured count	happy	03-attack-uat.md:351
+SEQ-059	03-attack-uat.md	Cross-tab & Badge	Source tab switch	happy	03-attack-uat.md:352
+SEQ-060	03-attack-uat.md	Cross-tab & Badge	Analyse button respects source	happy	03-attack-uat.md:353
+SESSION-001	03-attack-uat.md	Login Rules List & Top Section	Page header title	happy	03-attack-uat.md:363
+SESSION-002	03-attack-uat.md	Login Rules List & Top Section	Page header description	happy	03-attack-uat.md:364
+SESSION-003	03-attack-uat.md	Login Rules List & Top Section	Wired badge good	happy	03-attack-uat.md:365
+SESSION-004	03-attack-uat.md	Login Rules List & Top Section	Wired badge warn	happy	03-attack-uat.md:366
+SESSION-005	03-attack-uat.md	Login Rules List & Top Section	New rule button enabled	happy	03-attack-uat.md:367
+SESSION-006	03-attack-uat.md	Login Rules List & Top Section	New rule button disabled	happy	03-attack-uat.md:368
+SESSION-007	03-attack-uat.md	Login Rules List & Top Section	Refresh button (rules)	happy	03-attack-uat.md:369
+SESSION-008	03-attack-uat.md	Login Rules List & Top Section	Not wired notice	happy	03-attack-uat.md:370
+SESSION-009	03-attack-uat.md	Login Rules List & Top Section	Rules list empty state	empty-state	03-attack-uat.md:371
+SESSION-010	03-attack-uat.md	Login Rules List & Top Section	Rules list empty state action button	empty-state	03-attack-uat.md:372
+SESSION-011	03-attack-uat.md	Login Rules List & Top Section	Rules loading	loading	03-attack-uat.md:373
+SESSION-012	03-attack-uat.md	Login Rules List & Top Section	Rules error	error	03-attack-uat.md:374
+SESSION-013	03-attack-uat.md	Login Rules List & Top Section	Rules table renders	happy	03-attack-uat.md:375
+SESSION-014	03-attack-uat.md	Login Rules List & Top Section	Rules table row (enabled switch)	happy	03-attack-uat.md:376
+SESSION-015	03-attack-uat.md	Login Rules List & Top Section	Rules table row (disabled rule)	happy	03-attack-uat.md:377
+SESSION-016	03-attack-uat.md	Login Rules List & Top Section	Rules table row name	happy	03-attack-uat.md:378
+SESSION-017	03-attack-uat.md	Login Rules List & Top Section	Rules table row name (empty)	happy	03-attack-uat.md:379
+SESSION-018	03-attack-uat.md	Login Rules List & Top Section	Rules table row scope	happy	03-attack-uat.md:380
+SESSION-019	03-attack-uat.md	Login Rules List & Top Section	Rules table row scope (applies everywhere)	happy	03-attack-uat.md:381
+SESSION-020	03-attack-uat.md	Login Rules List & Top Section	Rules table row steps count	happy	03-attack-uat.md:382
+SESSION-021	03-attack-uat.md	Login Rules List & Top Section	Rules table row extractions count	happy	03-attack-uat.md:383
+SESSION-022	03-attack-uat.md	Login Rules List & Top Section	Rules table row max attempts	happy	03-attack-uat.md:384
+SESSION-023	03-attack-uat.md	Login Rules List & Top Section	Rules table row max attempts default	happy	03-attack-uat.md:385
+SESSION-024	03-attack-uat.md	Login Rules List & Top Section	Rules table row edit button	happy	03-attack-uat.md:386
+SESSION-025	03-attack-uat.md	Login Rules List & Top Section	Rules table row delete button enabled	happy	03-attack-uat.md:387
+SESSION-026	03-attack-uat.md	Login Rules List & Top Section	Rules table row delete button disabled	happy	03-attack-uat.md:388
+SESSION-027	03-attack-uat.md	Login Rules List & Top Section	Rules table row selected highlight	happy	03-attack-uat.md:389
+SESSION-028	03-attack-uat.md	Login Rules List & Top Section	Enable/disable toggle success	happy	03-attack-uat.md:390
+SESSION-029	03-attack-uat.md	Login Rules List & Top Section	Enable/disable toggle error	error	03-attack-uat.md:391
+SESSION-030	03-attack-uat.md	Rule Editor (Create/Edit)	New rule creates empty draft	happy	03-attack-uat.md:397
+SESSION-031	03-attack-uat.md	Rule Editor (Create/Edit)	Edit rule loads existing	happy	03-attack-uat.md:398
+SESSION-032	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor card title (new)	happy	03-attack-uat.md:399
+SESSION-033	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor card title (existing)	happy	03-attack-uat.md:400
+SESSION-034	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor dirty badge (unsaved)	happy	03-attack-uat.md:401
+SESSION-035	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor saved badge (unchanged)	happy	03-attack-uat.md:402
+SESSION-036	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor close button	happy	03-attack-uat.md:403
+SESSION-037	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor revert button disabled	boundary	03-attack-uat.md:404
+SESSION-038	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor revert button enabled	happy	03-attack-uat.md:405
+SESSION-039	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor revert restores baseline	happy	03-attack-uat.md:406
+SESSION-040	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor save disabled	boundary	03-attack-uat.md:407
+SESSION-041	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor save pending	loading	03-attack-uat.md:408
+SESSION-042	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor save requires name	error	03-attack-uat.md:409
+SESSION-043	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor save requires steps	error	03-attack-uat.md:410
+SESSION-044	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor save success (new)	happy	03-attack-uat.md:411
+SESSION-045	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor save success (existing)	happy	03-attack-uat.md:412
+SESSION-046	03-attack-uat.md	Rule Editor (Create/Edit)	Rule editor save error	error	03-attack-uat.md:413
+SESSION-047	03-attack-uat.md	Rule Editor (Create/Edit)	Re-adopt server changes (not dirty)	happy	03-attack-uat.md:414
+SESSION-048	03-attack-uat.md	Rule Editor (Create/Edit)	Don't re-adopt server changes (dirty)	happy	03-attack-uat.md:415
+SESSION-049	03-attack-uat.md	Rule Editor - Basic Fields	Rule name input	happy	03-attack-uat.md:421
+SESSION-050	03-attack-uat.md	Rule Editor - Basic Fields	Rule name disabled when not wired	happy	03-attack-uat.md:422
+SESSION-051	03-attack-uat.md	Rule Editor - Basic Fields	Rule enabled switch	happy	03-attack-uat.md:423
+SESSION-052	03-attack-uat.md	Rule Editor - Basic Fields	Rule enabled switch disabled when not wired	happy	03-attack-uat.md:424
+SESSION-053	03-attack-uat.md	Rule Editor - Basic Fields	Max attempts input	happy	03-attack-uat.md:425
+SESSION-054	03-attack-uat.md	Rule Editor - Basic Fields	Max attempts input disabled when not wired	happy	03-attack-uat.md:426
+SESSION-055	03-attack-uat.md	Rule Editor - Basic Fields	Max attempts blank means default	happy	03-attack-uat.md:427
+SESSION-056	03-attack-uat.md	Rule Editor - Basic Fields	Max attempts invalid (non-numeric)	boundary	03-attack-uat.md:428
+SESSION-057	03-attack-uat.md	Rule Editor - Basic Fields	Max attempts invalid (negative)	boundary	03-attack-uat.md:429
+SESSION-058	03-attack-uat.md	Rule Editor - Basic Fields	Max attempts valid (zero)	boundary	03-attack-uat.md:430
+SESSION-059	03-attack-uat.md	Rule Editor - Scope Hosts	No scope hosts initially	empty-state	03-attack-uat.md:436
+SESSION-060	03-attack-uat.md	Rule Editor - Scope Hosts	Scope host inline edit	happy	03-attack-uat.md:437
+SESSION-061	03-attack-uat.md	Rule Editor - Scope Hosts	Remove scope host	happy	03-attack-uat.md:438
+SESSION-062	03-attack-uat.md	Rule Editor - Scope Hosts	Scope host disabled when not wired	happy	03-attack-uat.md:439
+SESSION-063	03-attack-uat.md	Rule Editor - Scope Hosts	Add host button disabled (empty input)	boundary	03-attack-uat.md:440
+SESSION-064	03-attack-uat.md	Rule Editor - Scope Hosts	Add host button enabled (text entered)	happy	03-attack-uat.md:441
+SESSION-065	03-attack-uat.md	Rule Editor - Scope Hosts	Add host appends to list	happy	03-attack-uat.md:442
+SESSION-066	03-attack-uat.md	Rule Editor - Scope Hosts	Add host with whitespace	happy	03-attack-uat.md:443
+SESSION-067	03-attack-uat.md	Rule Editor - Scope Hosts	New host input disabled when not wired	happy	03-attack-uat.md:444
+SESSION-068	03-attack-uat.md	Rule Editor - Scope Hosts	Add host button disabled when not wired	happy	03-attack-uat.md:445
+SESSION-069	03-attack-uat.md	Rule Editor - Validity Check	Validity section visible	happy	03-attack-uat.md:451
+SESSION-070	03-attack-uat.md	Rule Editor - Validity Check	Status is input (numeric)	happy	03-attack-uat.md:452
+SESSION-071	03-attack-uat.md	Rule Editor - Validity Check	Status is input (blank means undefined)	happy	03-attack-uat.md:453
+SESSION-072	03-attack-uat.md	Rule Editor - Validity Check	Status is input (edit)	happy	03-attack-uat.md:454
+SESSION-073	03-attack-uat.md	Rule Editor - Validity Check	Status is input (invalid non-numeric)	boundary	03-attack-uat.md:455
+SESSION-074	03-attack-uat.md	Rule Editor - Validity Check	Body contains input	happy	03-attack-uat.md:456
+SESSION-075	03-attack-uat.md	Rule Editor - Validity Check	Body contains edit	happy	03-attack-uat.md:457
+SESSION-076	03-attack-uat.md	Rule Editor - Validity Check	Body not contains input	happy	03-attack-uat.md:458
+SESSION-077	03-attack-uat.md	Rule Editor - Validity Check	Body not contains edit	happy	03-attack-uat.md:459
+SESSION-078	03-attack-uat.md	Rule Editor - Validity Check	Header present input	happy	03-attack-uat.md:460
+SESSION-079	03-attack-uat.md	Rule Editor - Validity Check	Header absent input	happy	03-attack-uat.md:461
+SESSION-080	03-attack-uat.md	Rule Editor - Validity Check	Validity disabled when not wired	happy	03-attack-uat.md:462
+SESSION-081	03-attack-uat.md	Rule Editor - Validity Check	Nested validity notice	happy	03-attack-uat.md:463
+SESSION-082	03-attack-uat.md	Rule Editor - Validity Check	Nested validity notice hidden	happy	03-attack-uat.md:464
+SESSION-083	03-attack-uat.md	Rule Editor - Macro Steps	Add step button	happy	03-attack-uat.md:470
+SESSION-084	03-attack-uat.md	Rule Editor - Macro Steps	Add step button disabled when not wired	happy	03-attack-uat.md:471
+SESSION-085	03-attack-uat.md	Rule Editor - Macro Steps	Step card renders	happy	03-attack-uat.md:472
+SESSION-086	03-attack-uat.md	Rule Editor - Macro Steps	Step index badge	happy	03-attack-uat.md:473
+SESSION-087	03-attack-uat.md	Rule Editor - Macro Steps	Step method input	happy	03-attack-uat.md:474
+SESSION-088	03-attack-uat.md	Rule Editor - Macro Steps	Step method edit	happy	03-attack-uat.md:475
+SESSION-089	03-attack-uat.md	Rule Editor - Macro Steps	Step URL input	happy	03-attack-uat.md:476
+SESSION-090	03-attack-uat.md	Rule Editor - Macro Steps	Step URL edit	happy	03-attack-uat.md:477
+SESSION-091	03-attack-uat.md	Rule Editor - Macro Steps	Move step up button (first step)	boundary	03-attack-uat.md:478
+SESSION-092	03-attack-uat.md	Rule Editor - Macro Steps	Move step up button (middle step)	happy	03-attack-uat.md:479
+SESSION-093	03-attack-uat.md	Rule Editor - Macro Steps	Move step down button (last step)	boundary	03-attack-uat.md:480
+SESSION-094	03-attack-uat.md	Rule Editor - Macro Steps	Move step down button (middle step)	happy	03-attack-uat.md:481
+SESSION-095	03-attack-uat.md	Rule Editor - Macro Steps	Remove step button	happy	03-attack-uat.md:482
+SESSION-096	03-attack-uat.md	Rule Editor - Macro Steps	Step body textarea	happy	03-attack-uat.md:483
+SESSION-097	03-attack-uat.md	Rule Editor - Macro Steps	Step body edit	happy	03-attack-uat.md:484
+SESSION-098	03-attack-uat.md	Rule Editor - Macro Steps	Step disabled when not wired	happy	03-attack-uat.md:485
+SESSION-099	03-attack-uat.md	Rule Editor - Macro Steps	Multiple steps render independently	happy	03-attack-uat.md:486
+SESSION-100	03-attack-uat.md	Rule Editor - Headers (Steps)	Headers section "No headers" hint	empty-state	03-attack-uat.md:492
+SESSION-101	03-attack-uat.md	Rule Editor - Headers (Steps)	Header pair row renders	happy	03-attack-uat.md:493
+SESSION-102	03-attack-uat.md	Rule Editor - Headers (Steps)	Header name input edit	happy	03-attack-uat.md:494
+SESSION-103	03-attack-uat.md	Rule Editor - Headers (Steps)	Header value input edit	happy	03-attack-uat.md:495
+SESSION-104	03-attack-uat.md	Rule Editor - Headers (Steps)	Remove header button	happy	03-attack-uat.md:496
+SESSION-105	03-attack-uat.md	Rule Editor - Headers (Steps)	Add header button (empty)	happy	03-attack-uat.md:497
+SESSION-106	03-attack-uat.md	Rule Editor - Headers (Steps)	Add header button (append)	happy	03-attack-uat.md:498
+SESSION-107	03-attack-uat.md	Rule Editor - Headers (Steps)	Headers disabled when not wired	happy	03-attack-uat.md:499
+SESSION-108	03-attack-uat.md	Rule Editor - Headers (Steps)	Header section scope label	happy	03-attack-uat.md:500
+SESSION-109	03-attack-uat.md	Rule Editor - Headers (Steps)	Header placeholders	happy	03-attack-uat.md:501
+SESSION-110	03-attack-uat.md	Rule Editor - Extractions	Extractions section hint (empty)	empty-state	03-attack-uat.md:507
+SESSION-111	03-attack-uat.md	Rule Editor - Extractions	Extraction row renders	happy	03-attack-uat.md:508
+SESSION-112	03-attack-uat.md	Rule Editor - Extractions	Extraction name input	happy	03-attack-uat.md:509
+SESSION-113	03-attack-uat.md	Rule Editor - Extractions	Extraction name edit	happy	03-attack-uat.md:510
+SESSION-114	03-attack-uat.md	Rule Editor - Extractions	Extraction source select (body)	happy	03-attack-uat.md:511
+SESSION-115	03-attack-uat.md	Rule Editor - Extractions	Extraction source select (header)	happy	03-attack-uat.md:512
+SESSION-116	03-attack-uat.md	Rule Editor - Extractions	Extraction source change body to header	happy	03-attack-uat.md:513
+SESSION-117	03-attack-uat.md	Rule Editor - Extractions	Extraction header name input	happy	03-attack-uat.md:514
+SESSION-118	03-attack-uat.md	Rule Editor - Extractions	Extraction header name only when header source	boundary	03-attack-uat.md:515
+SESSION-119	03-attack-uat.md	Rule Editor - Extractions	Extraction method select (regex)	happy	03-attack-uat.md:516
+SESSION-120	03-attack-uat.md	Rule Editor - Extractions	Extraction method select (json_path)	happy	03-attack-uat.md:517
+SESSION-121	03-attack-uat.md	Rule Editor - Extractions	Extraction method select (whole)	happy	03-attack-uat.md:518
+SESSION-122	03-attack-uat.md	Rule Editor - Extractions	Extraction pattern input (regex)	happy	03-attack-uat.md:519
+SESSION-123	03-attack-uat.md	Rule Editor - Extractions	Extraction pattern input (json_path)	happy	03-attack-uat.md:520
+SESSION-124	03-attack-uat.md	Rule Editor - Extractions	Extraction pattern disabled (whole)	boundary	03-attack-uat.md:521
+SESSION-125	03-attack-uat.md	Rule Editor - Extractions	Extraction capture group input (regex)	happy	03-attack-uat.md:522
+SESSION-126	03-attack-uat.md	Rule Editor - Extractions	Extraction capture group disabled (non-regex)	boundary	03-attack-uat.md:523
+SESSION-127	03-attack-uat.md	Rule Editor - Extractions	Extraction capture group edit	happy	03-attack-uat.md:524
+SESSION-128	03-attack-uat.md	Rule Editor - Extractions	Remove extraction button	happy	03-attack-uat.md:525
+SESSION-129	03-attack-uat.md	Rule Editor - Extractions	Add extraction button (empty)	happy	03-attack-uat.md:526
+SESSION-130	03-attack-uat.md	Rule Editor - Extractions	Add extraction button (append)	happy	03-attack-uat.md:527
+SESSION-131	03-attack-uat.md	Rule Editor - Extractions	Extractions disabled when not wired	happy	03-attack-uat.md:528
+SESSION-132	03-attack-uat.md	Rule Editor - Extractions	Extraction name required to include in output	boundary	03-attack-uat.md:529
+SESSION-133	03-attack-uat.md	Login Probe Section	Probe section visible	happy	03-attack-uat.md:535
+SESSION-134	03-attack-uat.md	Login Probe Section	Probe method input	happy	03-attack-uat.md:536
+SESSION-135	03-attack-uat.md	Login Probe Section	Probe method edit	happy	03-attack-uat.md:537
+SESSION-136	03-attack-uat.md	Login Probe Section	Probe URL input	happy	03-attack-uat.md:538
+SESSION-137	03-attack-uat.md	Login Probe Section	Probe URL edit	happy	03-attack-uat.md:539
+SESSION-138	03-attack-uat.md	Login Probe Section	Probe body textarea	happy	03-attack-uat.md:540
+SESSION-139	03-attack-uat.md	Login Probe Section	Probe body edit	happy	03-attack-uat.md:541
+SESSION-140	03-attack-uat.md	Login Probe Section	Probe headers section	happy	03-attack-uat.md:542
+SESSION-141	03-attack-uat.md	Login Probe Section	Probe disabled when not wired	happy	03-attack-uat.md:543
+SESSION-142	03-attack-uat.md	Login Probe Section	Run login button	happy	03-attack-uat.md:544
+SESSION-143	03-attack-uat.md	Login Probe Section	Run login disabled when not wired	boundary	03-attack-uat.md:545
+SESSION-144	03-attack-uat.md	Login Probe Section	Run login button pending	loading	03-attack-uat.md:546
+SESSION-145	03-attack-uat.md	Login Probe Section	Run login requires URL	error	03-attack-uat.md:547
+SESSION-146	03-attack-uat.md	Login Probe Section	Run login success (good outcome)	happy	03-attack-uat.md:548
+SESSION-147	03-attack-uat.md	Login Probe Section	Run login success (recovered outcome)	happy	03-attack-uat.md:549
+SESSION-148	03-attack-uat.md	Login Probe Section	Run login success (bad outcome)	happy	03-attack-uat.md:550
+SESSION-149	03-attack-uat.md	Login Probe Section	Run login error	error	03-attack-uat.md:551
+SESSION-150	03-attack-uat.md	Login Probe Section	LoginResult detail list displays	happy	03-attack-uat.md:552
+SESSION-151	03-attack-uat.md	Login Probe Section	Loginresult empty state	empty-state	03-attack-uat.md:553
+SESSION-152	03-attack-uat.md	Login Probe Section	Probe response shown	happy	03-attack-uat.md:554
+SESSION-153	03-attack-uat.md	Login Probe Section	Probe response absent	empty-state	03-attack-uat.md:555
+SESSION-154	03-attack-uat.md	Login Probe Section	Update macro button appears	happy	03-attack-uat.md:556
+SESSION-155	03-attack-uat.md	Login Probe Section	Update macro button disappears	empty-state	03-attack-uat.md:557
+SESSION-156	03-attack-uat.md	Login Probe Section	Update macro button pending	loading	03-attack-uat.md:558
+SESSION-157	03-attack-uat.md	Login Probe Section	Update macro success	happy	03-attack-uat.md:559
+SESSION-158	03-attack-uat.md	Login Probe Section	Update macro error	error	03-attack-uat.md:560
+SESSION-159	03-attack-uat.md	Cookie Jar Section	Cookie jar visible	happy	03-attack-uat.md:566
+SESSION-160	03-attack-uat.md	Cookie Jar Section	Cookie jar description	happy	03-attack-uat.md:567
+SESSION-161	03-attack-uat.md	Cookie Jar Section	Refresh button visible	happy	03-attack-uat.md:568
+SESSION-162	03-attack-uat.md	Cookie Jar Section	Refresh button calls refetch	happy	03-attack-uat.md:569
+SESSION-163	03-attack-uat.md	Cookie Jar Section	Cookie table renders	happy	03-attack-uat.md:570
+SESSION-164	03-attack-uat.md	Cookie Jar Section	Cookie table empty state	empty-state	03-attack-uat.md:571
+SESSION-165	03-attack-uat.md	Cookie Jar Section	Cookie row data	happy	03-attack-uat.md:572
+SESSION-166	03-attack-uat.md	Cookie Jar Section	Cookie jar error	error	03-attack-uat.md:573
+SESSION-167	03-attack-uat.md	Cookie Jar Section	Cookie jar not wired	happy	03-attack-uat.md:574
+SESSION-168	03-attack-uat.md	Cookie Jar Section	Cookie jar loading	loading	03-attack-uat.md:575
+SESSION-169	03-attack-uat.md	Delete Confirmation Modal	Delete modal not shown	happy	03-attack-uat.md:581
+SESSION-170	03-attack-uat.md	Delete Confirmation Modal	Delete modal shown	happy	03-attack-uat.md:582
+SESSION-171	03-attack-uat.md	Delete Confirmation Modal	Delete modal description	happy	03-attack-uat.md:583
+SESSION-172	03-attack-uat.md	Delete Confirmation Modal	Keep it button	happy	03-attack-uat.md:584
+SESSION-173	03-attack-uat.md	Delete Confirmation Modal	Delete rule button enabled	happy	03-attack-uat.md:585
+SESSION-174	03-attack-uat.md	Delete Confirmation Modal	Delete rule button pending	loading	03-attack-uat.md:586
+SESSION-175	03-attack-uat.md	Delete Confirmation Modal	Delete rule button disabled variant	happy	03-attack-uat.md:587
+SESSION-176	03-attack-uat.md	Delete Confirmation Modal	Delete rule execution	happy	03-attack-uat.md:588
+SESSION-177	03-attack-uat.md	Delete Confirmation Modal	Delete closes rule editor (if open)	happy	03-attack-uat.md:589
+SESSION-178	03-attack-uat.md	Delete Confirmation Modal	Delete clears promotable (if open)	happy	03-attack-uat.md:590
+SESSION-179	03-attack-uat.md	Delete Confirmation Modal	Delete success toast	happy	03-attack-uat.md:591
+SESSION-180	03-attack-uat.md	Delete Confirmation Modal	Delete error toast	error	03-attack-uat.md:592
+SESSION-181	03-attack-uat.md	Page-level Flows & Edge Cases	Create new rule (start to save)	happy	03-attack-uat.md:598
+SESSION-182	03-attack-uat.md	Page-level Flows & Edge Cases	Edit existing rule without changes	happy	03-attack-uat.md:599
+SESSION-183	03-attack-uat.md	Page-level Flows & Edge Cases	Edit and revert changes	happy	03-attack-uat.md:600
+SESSION-184	03-attack-uat.md	Page-level Flows & Edge Cases	Edit and save changes	happy	03-attack-uat.md:601
+SESSION-185	03-attack-uat.md	Page-level Flows & Edge Cases	Delete while editing	happy	03-attack-uat.md:602
+SESSION-186	03-attack-uat.md	Page-level Flows & Edge Cases	Multiple rules toggle in sequence	happy	03-attack-uat.md:603
+SESSION-187	03-attack-uat.md	Page-level Flows & Edge Cases	Add multiple steps to one rule	happy	03-attack-uat.md:604
+SESSION-188	03-attack-uat.md	Page-level Flows & Edge Cases	Move step up and down	happy	03-attack-uat.md:605
+SESSION-189	03-attack-uat.md	Page-level Flows & Edge Cases	Add and remove headers within step	happy	03-attack-uat.md:606
+SESSION-190	03-attack-uat.md	Page-level Flows & Edge Cases	Add and remove extractions within step	happy	03-attack-uat.md:607
+SETTINGS-001	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	User opens Settings page	happy-path	04-workbench-shell-uat.md:205
+SETTINGS-002	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	User adds include scope rule	happy-path	04-workbench-shell-uat.md:206
+SETTINGS-003	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	User adds exclude scope rule	happy-path	04-workbench-shell-uat.md:207
+SETTINGS-004	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	User presses Enter to add rule	happy-path	04-workbench-shell-uat.md:208
+SETTINGS-005	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	User removes scope rule	happy-path	04-workbench-shell-uat.md:209
+SETTINGS-006	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	User clears all scope rules	happy-path	04-workbench-shell-uat.md:210
+SETTINGS-007	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	User confirms clear scope	happy-path	04-workbench-shell-uat.md:211
+SETTINGS-008	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	User cancels clear scope	happy-path	04-workbench-shell-uat.md:212
+SETTINGS-009	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Add rule button disabled with empty input	disabled-state	04-workbench-shell-uat.md:213
+SETTINGS-010	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Add rule button disabled with whitespace	boundary	04-workbench-shell-uat.md:214
+SETTINGS-011	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Add rule button disabled while adding	loading	04-workbench-shell-uat.md:215
+SETTINGS-012	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Add rule disabled when pattern.trim() empty	happy-path	04-workbench-shell-uat.md:216
+SETTINGS-013	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Remove rule button disabled for null host	disabled-state	04-workbench-shell-uat.md:217
+SETTINGS-014	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Clear scope button disabled when empty	disabled-state	04-workbench-shell-uat.md:218
+SETTINGS-015	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Clear scope button disabled while clearing	loading	04-workbench-shell-uat.md:219
+SETTINGS-016	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Scope warning notice displayed	info	04-workbench-shell-uat.md:220
+SETTINGS-017	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Scope rules table shows all rules	happy-path	04-workbench-shell-uat.md:221
+SETTINGS-018	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Scope badge shows "everything in scope"	happy-path	04-workbench-shell-uat.md:222
+SETTINGS-019	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Scope badge shows "restricted"	happy-path	04-workbench-shell-uat.md:223
+SETTINGS-020	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	No scope rules state	empty-state	04-workbench-shell-uat.md:224
+SETTINGS-021	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Scope error handled	error	04-workbench-shell-uat.md:225
+SETTINGS-022	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Scope loading state	loading	04-workbench-shell-uat.md:226
+SETTINGS-023	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Scope refresh button	happy-path	04-workbench-shell-uat.md:227
+SETTINGS-024	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Rule kind badge tone good for Include	happy-path	04-workbench-shell-uat.md:228
+SETTINGS-025	04-workbench-shell-uat.md	SETTINGS Page — Scope Section	Rule kind badge tone bad for Exclude	happy-path	04-workbench-shell-uat.md:229
+SETTINGS-026	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	User probes protocol negotiation	happy-path	04-workbench-shell-uat.md:237
+SETTINGS-027	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	User probes without TLS	happy-path	04-workbench-shell-uat.md:238
+SETTINGS-028	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Probe button disabled with empty host	disabled-state	04-workbench-shell-uat.md:239
+SETTINGS-029	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Probe button disabled with invalid port	disabled-state	04-workbench-shell-uat.md:240
+SETTINGS-030	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Probe button disabled with port ≤ 0	disabled-state	04-workbench-shell-uat.md:241
+SETTINGS-031	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Probe error — invalid inputs	boundary	04-workbench-shell-uat.md:242
+SETTINGS-032	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Probe result shows negotiated protocol	happy-path	04-workbench-shell-uat.md:243
+SETTINGS-033	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Probe result shows frames table	happy-path	04-workbench-shell-uat.md:244
+SETTINGS-034	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Probe result shows violations	warning	04-workbench-shell-uat.md:245
+SETTINGS-035	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Probe result shows refusals	error	04-workbench-shell-uat.md:246
+SETTINGS-036	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	No frames in probe reply	empty-state	04-workbench-shell-uat.md:247
+SETTINGS-037	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	No downgrades recorded	empty-state	04-workbench-shell-uat.md:248
+SETTINGS-038	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	No authority has been probed	empty-state	04-workbench-shell-uat.md:249
+SETTINGS-039	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Protocols not enabled	warning	04-workbench-shell-uat.md:250
+SETTINGS-040	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Protocol loading state	loading	04-workbench-shell-uat.md:251
+SETTINGS-041	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Protocol error handled	error	04-workbench-shell-uat.md:252
+SETTINGS-042	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	Port input defaults to 443	happy-path	04-workbench-shell-uat.md:253
+SETTINGS-043	04-workbench-shell-uat.md	SETTINGS Page — Protocol Section	TLS toggle defaults to true	happy-path	04-workbench-shell-uat.md:254
+SETTINGS-044	04-workbench-shell-uat.md	SETTINGS Page — Appearance Section	User changes theme to Light	happy-path	04-workbench-shell-uat.md:262
+SETTINGS-045	04-workbench-shell-uat.md	SETTINGS Page — Appearance Section	User changes theme to Dark	happy-path	04-workbench-shell-uat.md:263
+SETTINGS-046	04-workbench-shell-uat.md	SETTINGS Page — Appearance Section	User sets theme to System	happy-path	04-workbench-shell-uat.md:264
+SETTINGS-047	04-workbench-shell-uat.md	SETTINGS Page — Appearance Section	User changes table density to Compact	happy-path	04-workbench-shell-uat.md:265
+SETTINGS-048	04-workbench-shell-uat.md	SETTINGS Page — Appearance Section	User changes table density to Comfortable	happy-path	04-workbench-shell-uat.md:266
+SETTINGS-049	04-workbench-shell-uat.md	SETTINGS Page — Appearance Section	Density change affects table layout	happy-path	04-workbench-shell-uat.md:267
+SETTINGS-050	04-workbench-shell-uat.md	SETTINGS Page — Appearance Section	Follow system option disabled when already system	disabled-state	04-workbench-shell-uat.md:268
+SETTINGS-051	04-workbench-shell-uat.md	SETTINGS Page — Certificate Section	User downloads CA certificate	happy-path	04-workbench-shell-uat.md:276
+SETTINGS-052	04-workbench-shell-uat.md	SETTINGS Page — Certificate Section	CA certificate link shown when available	happy-path	04-workbench-shell-uat.md:277
+SETTINGS-053	04-workbench-shell-uat.md	SETTINGS Page — Certificate Section	CA certificate warning shown when unavailable	warning	04-workbench-shell-uat.md:278
+SETTINGS-054	04-workbench-shell-uat.md	SETTINGS Page — Certificate Section	CA certificate download link is HTML <a> element	happy-path	04-workbench-shell-uat.md:279
+SHELL-001	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	User navigates via URL hash	happy-path	04-workbench-shell-uat.md:287
+SHELL-002	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	User navigates via tool tab	happy-path	04-workbench-shell-uat.md:288
+SHELL-003	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	User navigates via Alt+7 hotkey	keyboard	04-workbench-shell-uat.md:289
+SHELL-004	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	User navigates via Alt+8 hotkey	keyboard	04-workbench-shell-uat.md:290
+SHELL-005	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	User navigates via Alt+9 hotkey	keyboard	04-workbench-shell-uat.md:291
+SHELL-006	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	User navigates via Alt+0 hotkey	keyboard	04-workbench-shell-uat.md:292
+SHELL-007	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	User navigates via Alt+1 hotkey	keyboard	04-workbench-shell-uat.md:293
+SHELL-008	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	Unknown hash silently ignored	boundary	04-workbench-shell-uat.md:294
+SHELL-009	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	Empty hash uses first leaf fallback	happy-path	04-workbench-shell-uat.md:295
+SHELL-010	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	Hash updated when route changes	happy-path	04-workbench-shell-uat.md:296
+SHELL-011	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	Tool with multiple leaves shows sub-tabs	happy-path	04-workbench-shell-uat.md:297
+SHELL-012	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	Sub-tab click navigates to leaf	happy-path	04-workbench-shell-uat.md:298
+SHELL-013	04-workbench-shell-uat.md	SHELL Page — Navigation & Routing	Sub-tabs not shown for single-leaf tools	happy-path	04-workbench-shell-uat.md:299
+SHELL-014	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens Burpsy menu	happy-path	04-workbench-shell-uat.md:307
+SHELL-015	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User navigates to Settings via menu	happy-path	04-workbench-shell-uat.md:308
+SHELL-016	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens command palette via menu	happy-path	04-workbench-shell-uat.md:309
+SHELL-017	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens shortcuts help via menu	happy-path	04-workbench-shell-uat.md:310
+SHELL-018	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens Project menu	happy-path	04-workbench-shell-uat.md:311
+SHELL-019	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User exports report as HTML	happy-path	04-workbench-shell-uat.md:312
+SHELL-020	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User exports report as JSON	happy-path	04-workbench-shell-uat.md:313
+SHELL-021	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User exports report as SARIF	happy-path	04-workbench-shell-uat.md:314
+SHELL-022	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User downloads CA cert via menu	happy-path	04-workbench-shell-uat.md:315
+SHELL-023	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens Repeater menu	happy-path	04-workbench-shell-uat.md:316
+SHELL-024	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User creates new repeater tab	happy-path	04-workbench-shell-uat.md:317
+SHELL-025	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User goes to Repeater via menu	happy-path	04-workbench-shell-uat.md:318
+SHELL-026	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens View menu	happy-path	04-workbench-shell-uat.md:319
+SHELL-027	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User toggles light theme via menu	happy-path	04-workbench-shell-uat.md:320
+SHELL-028	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User toggles dark theme via menu	happy-path	04-workbench-shell-uat.md:321
+SHELL-029	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User sets system theme via menu	happy-path	04-workbench-shell-uat.md:322
+SHELL-030	04-workbench-shell-uat.md	SHELL Page — Menu Bar	System theme option disabled when active	disabled-state	04-workbench-shell-uat.md:323
+SHELL-031	04-workbench-shell-uat.md	SHELL Page — Menu Bar	Density toggle via menu	happy-path	04-workbench-shell-uat.md:324
+SHELL-032	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens Help menu	happy-path	04-workbench-shell-uat.md:325
+SHELL-033	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens Help via Help menu	happy-path	04-workbench-shell-uat.md:326
+SHELL-034	04-workbench-shell-uat.md	SHELL Page — Menu Bar	User opens command palette via Help	happy-path	04-workbench-shell-uat.md:327
+SHELL-035	04-workbench-shell-uat.md	SHELL Page — Menu Bar	Menu icon appears for each action	happy-path	04-workbench-shell-uat.md:328
+SHELL-036	04-workbench-shell-uat.md	SHELL Page — Menu Bar	Menu shortcut hints displayed	happy-path	04-workbench-shell-uat.md:329
+SHELL-037	04-workbench-shell-uat.md	SHELL Page — Command Palette	User opens command palette with Mod+K	keyboard	04-workbench-shell-uat.md:337
+SHELL-038	04-workbench-shell-uat.md	SHELL Page — Command Palette	User opens command palette via menu	happy-path	04-workbench-shell-uat.md:338
+SHELL-039	04-workbench-shell-uat.md	SHELL Page — Command Palette	User searches actions in palette	happy-path	04-workbench-shell-uat.md:339
+SHELL-040	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette shows all navigation actions	happy-path	04-workbench-shell-uat.md:340
+SHELL-041	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette shows all command actions	happy-path	04-workbench-shell-uat.md:341
+SHELL-042	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette search uses scoring	happy-path	04-workbench-shell-uat.md:342
+SHELL-043	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette search biases word starts	happy-path	04-workbench-shell-uat.md:343
+SHELL-044	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette results limited to top 60	boundary	04-workbench-shell-uat.md:344
+SHELL-045	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette empty state when no matches	empty-state	04-workbench-shell-uat.md:345
+SHELL-046	04-workbench-shell-uat.md	SHELL Page — Command Palette	User selects action with Enter	happy-path	04-workbench-shell-uat.md:346
+SHELL-047	04-workbench-shell-uat.md	SHELL Page — Command Palette	User selects action by clicking	happy-path	04-workbench-shell-uat.md:347
+SHELL-048	04-workbench-shell-uat.md	SHELL Page — Command Palette	User navigates results with arrow keys	keyboard	04-workbench-shell-uat.md:348
+SHELL-049	04-workbench-shell-uat.md	SHELL Page — Command Palette	User closes palette with Escape	keyboard	04-workbench-shell-uat.md:349
+SHELL-050	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette action includes icon	happy-path	04-workbench-shell-uat.md:350
+SHELL-051	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette action includes hint	happy-path	04-workbench-shell-uat.md:351
+SHELL-052	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette action includes shortcut	happy-path	04-workbench-shell-uat.md:352
+SHELL-053	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette groups actions visually	happy-path	04-workbench-shell-uat.md:353
+SHELL-054	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette search queries label + group + keywords	happy-path	04-workbench-shell-uat.md:354
+SHELL-055	04-workbench-shell-uat.md	SHELL Page — Command Palette	Palette defaults to all actions empty query	happy-path	04-workbench-shell-uat.md:355
+SHELL-056	04-workbench-shell-uat.md	SHELL Page — Keyboard Shortcuts Help	User opens shortcuts help with ?	keyboard	04-workbench-shell-uat.md:363
+SHELL-057	04-workbench-shell-uat.md	SHELL Page — Keyboard Shortcuts Help	User opens shortcuts help via menu	happy-path	04-workbench-shell-uat.md:364
+SHELL-058	04-workbench-shell-uat.md	SHELL Page — Keyboard Shortcuts Help	Help modal shows all shortcut groups	happy-path	04-workbench-shell-uat.md:365
+SHELL-059	04-workbench-shell-uat.md	SHELL Page — Keyboard Shortcuts Help	Help modal shows shortcut notes	info	04-workbench-shell-uat.md:366
+SHELL-060	04-workbench-shell-uat.md	SHELL Page — Keyboard Shortcuts Help	Help modal shows alt+1…0 note	info	04-workbench-shell-uat.md:367
+SHELL-061	04-workbench-shell-uat.md	SHELL Page — Keyboard Shortcuts Help	User closes help modal	happy-path	04-workbench-shell-uat.md:368
+SHELL-062	04-workbench-shell-uat.md	SHELL Page — Keyboard Shortcuts Help	Shortcut keys display as Kbd elements	happy-path	04-workbench-shell-uat.md:369
+SHELL-063	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Mod+K opens command palette	keyboard	04-workbench-shell-uat.md:377
+SHELL-064	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Mod+Shift+L toggles theme	keyboard	04-workbench-shell-uat.md:378
+SHELL-065	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	? shows shortcuts help	keyboard	04-workbench-shell-uat.md:379
+SHELL-066	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+1 navigates to Dashboard	keyboard	04-workbench-shell-uat.md:380
+SHELL-067	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+2 navigates to Target	keyboard	04-workbench-shell-uat.md:381
+SHELL-068	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+3 navigates to Proxy	keyboard	04-workbench-shell-uat.md:382
+SHELL-069	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+4 navigates to Intruder	keyboard	04-workbench-shell-uat.md:383
+SHELL-070	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+5 navigates to Repeater	keyboard	04-workbench-shell-uat.md:384
+SHELL-071	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+6 navigates to Sequencer	keyboard	04-workbench-shell-uat.md:385
+SHELL-072	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+7 navigates to Decoder	keyboard	04-workbench-shell-uat.md:386
+SHELL-073	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+8 navigates to Comparer	keyboard	04-workbench-shell-uat.md:387
+SHELL-074	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+9 navigates to Logger	keyboard	04-workbench-shell-uat.md:388
+SHELL-075	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Alt+0 navigates to Organizer	keyboard	04-workbench-shell-uat.md:389
+SHELL-076	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Hotkeys enabled on form tags	keyboard	04-workbench-shell-uat.md:390
+SHELL-077	04-workbench-shell-uat.md	SHELL Page — Global Hotkeys	Theme hotkey works on any page	keyboard	04-workbench-shell-uat.md:391
+SHELL-078	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Connection badge shows "live"	happy-path	04-workbench-shell-uat.md:399
+SHELL-079	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Connection badge shows "offline"	warning	04-workbench-shell-uat.md:400
+SHELL-080	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Data stored shows byte count	happy-path	04-workbench-shell-uat.md:401
+SHELL-081	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Exchange count displayed	happy-path	04-workbench-shell-uat.md:402
+SHELL-082	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Message count displayed	happy-path	04-workbench-shell-uat.md:403
+SHELL-083	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Scope status displays	happy-path	04-workbench-shell-uat.md:404
+SHELL-084	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	CA cert download link in status bar	happy-path	04-workbench-shell-uat.md:405
+SHELL-085	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Last event timestamp shown	happy-path	04-workbench-shell-uat.md:406
+SHELL-086	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	"No events yet" shown when no events	empty-state	04-workbench-shell-uat.md:407
+SHELL-087	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Theme toggle button in toolbar	happy-path	04-workbench-shell-uat.md:408
+SHELL-088	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Command palette button in toolbar	happy-path	04-workbench-shell-uat.md:409
+SHELL-089	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Shortcuts button in toolbar	happy-path	04-workbench-shell-uat.md:410
+SHELL-090	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Brand "b/" logo in toolbar	happy-path	04-workbench-shell-uat.md:411
+SHELL-091	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Tool tabs show all tools	happy-path	04-workbench-shell-uat.md:412
+SHELL-092	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Tool tab shows hotkey in title	happy-path	04-workbench-shell-uat.md:413
+SHELL-093	04-workbench-shell-uat.md	SHELL Page — Toolbar & Status Bar	Active tool tab highlighted	happy-path	04-workbench-shell-uat.md:414
+SITEMAP-001	01-target-uat.md	SiteMap page (sitemap.tsx)	Filter input → tree filtered	happy	01-target-uat.md:7
+SITEMAP-002	01-target-uat.md	SiteMap page (sitemap.tsx)	Filter input → partial match with ancestors	happy	01-target-uat.md:8
+SITEMAP-003	01-target-uat.md	SiteMap page (sitemap.tsx)	Filter input → case-insensitive	boundary	01-target-uat.md:9
+SITEMAP-004	01-target-uat.md	SiteMap page (sitemap.tsx)	Clear filter button → reset filter	happy	01-target-uat.md:10
+SITEMAP-005	01-target-uat.md	SiteMap page (sitemap.tsx)	Clear filter button disabled when empty	boundary	01-target-uat.md:11
+SITEMAP-006	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree toggle button → expand node	happy	01-target-uat.md:12
+SITEMAP-007	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree toggle button → collapse node	happy	01-target-uat.md:13
+SITEMAP-008	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree toggle button absent on leaf	boundary	01-target-uat.md:14
+SITEMAP-009	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree row click → select node	happy	01-target-uat.md:15
+SITEMAP-010	01-target-uat.md	SiteMap page (sitemap.tsx)	Keyboard ArrowDown → cursor navigation	keyboard	01-target-uat.md:16
+SITEMAP-011	01-target-uat.md	SiteMap page (sitemap.tsx)	Keyboard ArrowUp → cursor navigation	keyboard	01-target-uat.md:17
+SITEMAP-012	01-target-uat.md	SiteMap page (sitemap.tsx)	Keyboard ArrowRight on collapsed node → expand	keyboard	01-target-uat.md:18
+SITEMAP-013	01-target-uat.md	SiteMap page (sitemap.tsx)	Keyboard ArrowRight on leaf → move down	keyboard	01-target-uat.md:19
+SITEMAP-014	01-target-uat.md	SiteMap page (sitemap.tsx)	Keyboard ArrowLeft on expanded node → collapse	keyboard	01-target-uat.md:20
+SITEMAP-015	01-target-uat.md	SiteMap page (sitemap.tsx)	Keyboard ArrowLeft on child → jump to parent	keyboard	01-target-uat.md:21
+SITEMAP-016	01-target-uat.md	SiteMap page (sitemap.tsx)	Keyboard Enter → select at cursor	keyboard	01-target-uat.md:22
+SITEMAP-017	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree focus → auto-initialize cursor	keyboard	01-target-uat.md:23
+SITEMAP-018	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange table row click → select exchange	happy	01-target-uat.md:24
+SITEMAP-019	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange table row double-click → send to Repeater	alternate-entry	01-target-uat.md:25
+SITEMAP-020	01-target-uat.md	SiteMap page (sitemap.tsx)	Send to Repeater button click	happy	01-target-uat.md:26
+SITEMAP-021	01-target-uat.md	SiteMap page (sitemap.tsx)	Send to Repeater button disabled	boundary	01-target-uat.md:27
+SITEMAP-022	01-target-uat.md	SiteMap page (sitemap.tsx)	Send to Intruder button click	happy	01-target-uat.md:28
+SITEMAP-023	01-target-uat.md	SiteMap page (sitemap.tsx)	Send to Intruder button disabled	boundary	01-target-uat.md:29
+SITEMAP-024	01-target-uat.md	SiteMap page (sitemap.tsx)	Send to Comparer button click	happy	01-target-uat.md:30
+SITEMAP-025	01-target-uat.md	SiteMap page (sitemap.tsx)	Send to Comparer button disabled	boundary	01-target-uat.md:31
+SITEMAP-026	01-target-uat.md	SiteMap page (sitemap.tsx)	Inspector toggle → show	happy	01-target-uat.md:32
+SITEMAP-027	01-target-uat.md	SiteMap page (sitemap.tsx)	Inspector toggle → hide	happy	01-target-uat.md:33
+SITEMAP-028	01-target-uat.md	SiteMap page (sitemap.tsx)	Inspector button disabled	boundary	01-target-uat.md:34
+SITEMAP-029	01-target-uat.md	SiteMap page (sitemap.tsx)	Inspector button aria-pressed state	a11y	01-target-uat.md:35
+SITEMAP-030	01-target-uat.md	SiteMap page (sitemap.tsx)	Filter history button click → navigate	happy	01-target-uat.md:36
+SITEMAP-031	01-target-uat.md	SiteMap page (sitemap.tsx)	Filter history button disabled	boundary	01-target-uat.md:37
+SITEMAP-032	01-target-uat.md	SiteMap page (sitemap.tsx)	Filter history button → escape special chars	boundary	01-target-uat.md:38
+SITEMAP-033	01-target-uat.md	SiteMap page (sitemap.tsx)	Page refresh button click	happy	01-target-uat.md:39
+SITEMAP-034	01-target-uat.md	SiteMap page (sitemap.tsx)	Page refresh loading state	happy	01-target-uat.md:40
+SITEMAP-035	01-target-uat.md	SiteMap page (sitemap.tsx)	Empty state — initial load	empty-state	01-target-uat.md:41
+SITEMAP-036	01-target-uat.md	SiteMap page (sitemap.tsx)	Empty state — no traffic captured	empty-state	01-target-uat.md:42
+SITEMAP-037	01-target-uat.md	SiteMap page (sitemap.tsx)	Empty state — filter no matches	empty-state	01-target-uat.md:43
+SITEMAP-038	01-target-uat.md	SiteMap page (sitemap.tsx)	Empty state — no node selected	empty-state	01-target-uat.md:44
+SITEMAP-039	01-target-uat.md	SiteMap page (sitemap.tsx)	Empty state — no exchanges under node	empty-state	01-target-uat.md:45
+SITEMAP-040	01-target-uat.md	SiteMap page (sitemap.tsx)	Empty state — node.requested=true, no history	empty-state	01-target-uat.md:46
+SITEMAP-041	01-target-uat.md	SiteMap page (sitemap.tsx)	Empty state — node.requested=false, no history	empty-state	01-target-uat.md:47
+SITEMAP-042	01-target-uat.md	SiteMap page (sitemap.tsx)	Empty state — no exchange in table selection	empty-state	01-target-uat.md:48
+SITEMAP-043	01-target-uat.md	SiteMap page (sitemap.tsx)	Request editor loading state	empty-state	01-target-uat.md:49
+SITEMAP-044	01-target-uat.md	SiteMap page (sitemap.tsx)	Request editor no bytes	empty-state	01-target-uat.md:50
+SITEMAP-045	01-target-uat.md	SiteMap page (sitemap.tsx)	Response editor no response	empty-state	01-target-uat.md:51
+SITEMAP-046	01-target-uat.md	SiteMap page (sitemap.tsx)	Response editor loading state	empty-state	01-target-uat.md:52
+SITEMAP-047	01-target-uat.md	SiteMap page (sitemap.tsx)	Response editor no bytes	empty-state	01-target-uat.md:53
+SITEMAP-048	01-target-uat.md	SiteMap page (sitemap.tsx)	API error — fetch failure	error	01-target-uat.md:54
+SITEMAP-049	01-target-uat.md	SiteMap page (sitemap.tsx)	API error — retry action	error	01-target-uat.md:55
+SITEMAP-050	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange ID boundary — zero	boundary	01-target-uat.md:56
+SITEMAP-051	01-target-uat.md	SiteMap page (sitemap.tsx)	Node key consistency — server-provided	boundary	01-target-uat.md:57
+SITEMAP-052	01-target-uat.md	SiteMap page (sitemap.tsx)	Filter debounce timing	happy	01-target-uat.md:58
+SITEMAP-053	01-target-uat.md	SiteMap page (sitemap.tsx)	Multi-level tree expansion with keyboard	keyboard	01-target-uat.md:59
+SITEMAP-054	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree node metadata display — params	a11y	01-target-uat.md:60
+SITEMAP-055	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree node metadata display — issues	a11y	01-target-uat.md:61
+SITEMAP-056	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree node metadata display — exchange count	happy	01-target-uat.md:62
+SITEMAP-057	01-target-uat.md	SiteMap page (sitemap.tsx)	Tree row styling — inferred node	a11y	01-target-uat.md:63
+SITEMAP-058	01-target-uat.md	SiteMap page (sitemap.tsx)	Host node icon	a11y	01-target-uat.md:64
+SITEMAP-059	01-target-uat.md	SiteMap page (sitemap.tsx)	Path node icon — folder (expanded)	a11y	01-target-uat.md:65
+SITEMAP-060	01-target-uat.md	SiteMap page (sitemap.tsx)	Path node icon — folder (collapsed)	a11y	01-target-uat.md:66
+SITEMAP-061	01-target-uat.md	SiteMap page (sitemap.tsx)	Path node icon — leaf	a11y	01-target-uat.md:67
+SITEMAP-062	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange table columns — all present	happy	01-target-uat.md:68
+SITEMAP-063	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange table cell formatting — status	a11y	01-target-uat.md:69
+SITEMAP-064	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange table cell formatting — MIME	happy	01-target-uat.md:70
+SITEMAP-065	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange table cell formatting — bytes	happy	01-target-uat.md:71
+SITEMAP-066	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange table cell formatting — duration	happy	01-target-uat.md:72
+SITEMAP-067	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange table cell formatting — age	happy	01-target-uat.md:73
+SITEMAP-068	01-target-uat.md	SiteMap page (sitemap.tsx)	Detail pane split position persistence	happy	01-target-uat.md:74
+SITEMAP-069	01-target-uat.md	SiteMap page (sitemap.tsx)	Main split position persistence	happy	01-target-uat.md:75
+SITEMAP-070	01-target-uat.md	SiteMap page (sitemap.tsx)	Node selection across filter changes	happy	01-target-uat.md:76
+SITEMAP-071	01-target-uat.md	SiteMap page (sitemap.tsx)	Exchange selection clears on node change	happy	01-target-uat.md:77
+TABLE-001	04-workbench-shell-uat.md	TABLE Shared Component	User clicks table header to sort	happy-path	04-workbench-shell-uat.md:422
+TABLE-002	04-workbench-shell-uat.md	TABLE Shared Component	User clicks sorted header to reverse	happy-path	04-workbench-shell-uat.md:423
+TABLE-003	04-workbench-shell-uat.md	TABLE Shared Component	User selects table row by click	happy-path	04-workbench-shell-uat.md:424
+TABLE-004	04-workbench-shell-uat.md	TABLE Shared Component	User navigates rows with arrow keys	keyboard	04-workbench-shell-uat.md:425
+TABLE-005	04-workbench-shell-uat.md	TABLE Shared Component	User navigates rows up with arrow	keyboard	04-workbench-shell-uat.md:426
+TABLE-006	04-workbench-shell-uat.md	TABLE Shared Component	User jumps page with PageDown	keyboard	04-workbench-shell-uat.md:427
+TABLE-007	04-workbench-shell-uat.md	TABLE Shared Component	User jumps page with PageUp	keyboard	04-workbench-shell-uat.md:428
+TABLE-008	04-workbench-shell-uat.md	TABLE Shared Component	User goes to first row with Home	keyboard	04-workbench-shell-uat.md:429
+TABLE-009	04-workbench-shell-uat.md	TABLE Shared Component	User goes to last row with End	keyboard	04-workbench-shell-uat.md:430
+TABLE-010	04-workbench-shell-uat.md	TABLE Shared Component	User activates row with Enter	keyboard	04-workbench-shell-uat.md:431
+TABLE-011	04-workbench-shell-uat.md	TABLE Shared Component	User activates row with double-click	happy-path	04-workbench-shell-uat.md:432
+TABLE-012	04-workbench-shell-uat.md	TABLE Shared Component	User right-clicks row to open context menu	happy-path	04-workbench-shell-uat.md:433
+TABLE-013	04-workbench-shell-uat.md	TABLE Shared Component	User presses context menu key to open menu	keyboard	04-workbench-shell-uat.md:434
+TABLE-014	04-workbench-shell-uat.md	TABLE Shared Component	Column resize by dragging	happy-path	04-workbench-shell-uat.md:435
+TABLE-015	04-workbench-shell-uat.md	TABLE Shared Component	Column resize double-click to reset	happy-path	04-workbench-shell-uat.md:436
+TABLE-016	04-workbench-shell-uat.md	TABLE Shared Component	Column resize works on touch	happy-path	04-workbench-shell-uat.md:437
+TABLE-017	04-workbench-shell-uat.md	TABLE Shared Component	Table virtualization with many rows	happy-path	04-workbench-shell-uat.md:438
+TABLE-018	04-workbench-shell-uat.md	TABLE Shared Component	Table scroll position auto-managed	happy-path	04-workbench-shell-uat.md:439
+TABLE-019	04-workbench-shell-uat.md	TABLE Shared Component	Empty state shown when no rows	empty-state	04-workbench-shell-uat.md:440
+TABLE-020	04-workbench-shell-uat.md	TABLE Shared Component	Loading state shows spinner	loading	04-workbench-shell-uat.md:441
+TABLE-021	04-workbench-shell-uat.md	TABLE Shared Component	Density compact makes rows smaller	happy-path	04-workbench-shell-uat.md:442
+TABLE-022	04-workbench-shell-uat.md	TABLE Shared Component	Density comfortable makes rows larger	happy-path	04-workbench-shell-uat.md:443
+TABLE-023	04-workbench-shell-uat.md	TABLE Shared Component	Row className applied to row styling	happy-path	04-workbench-shell-uat.md:444
+TABLE-024	04-workbench-shell-uat.md	TABLE Shared Component	Menu groups rendered on right-click	happy-path	04-workbench-shell-uat.md:445
+TABLE-025	04-workbench-shell-uat.md	TABLE Shared Component	Selected row stays visible on refetch	happy-path	04-workbench-shell-uat.md:446
+TABLE-026	04-workbench-shell-uat.md	TABLE Shared Component	Sort state persists across selection	happy-path	04-workbench-shell-uat.md:447
+TABLE-027	04-workbench-shell-uat.md	TABLE Shared Component	Table shows correct row count	happy-path	04-workbench-shell-uat.md:448
+TABLE-028	04-workbench-shell-uat.md	TABLE Shared Component	Selection clears when data empties	happy-path	04-workbench-shell-uat.md:449
+TABLE-029	04-workbench-shell-uat.md	TABLE Shared Component	initialSort applies on mount	happy-path	04-workbench-shell-uat.md:450
+WSHIST-001	02-proxy-uat.md	WebSocket History Page Tests	Connection row click → select	happy	02-proxy-uat.md:193
+WSHIST-002	02-proxy-uat.md	WebSocket History Page Tests	Connection row → frame table load	happy	02-proxy-uat.md:194
+WSHIST-003	02-proxy-uat.md	WebSocket History Page Tests	Connection styling → active	happy	02-proxy-uat.md:195
+WSHIST-004	02-proxy-uat.md	WebSocket History Page Tests	Connection row displays info	happy	02-proxy-uat.md:196
+WSHIST-005	02-proxy-uat.md	WebSocket History Page Tests	Connection row title attribute	happy	02-proxy-uat.md:197
+WSHIST-006	02-proxy-uat.md	WebSocket History Page Tests	Frame table columns	happy	02-proxy-uat.md:198
+WSHIST-007	02-proxy-uat.md	WebSocket History Page Tests	Frame direction badge → client_to_server	happy	02-proxy-uat.md:199
+WSHIST-008	02-proxy-uat.md	WebSocket History Page Tests	Frame direction badge → server_to_client	happy	02-proxy-uat.md:200
+WSHIST-009	02-proxy-uat.md	WebSocket History Page Tests	Frame truncated badge	happy	02-proxy-uat.md:201
+WSHIST-010	02-proxy-uat.md	WebSocket History Page Tests	Frame select from table	happy	02-proxy-uat.md:202
+WSHIST-011	02-proxy-uat.md	WebSocket History Page Tests	Frame detail header	happy	02-proxy-uat.md:203
+WSHIST-012	02-proxy-uat.md	WebSocket History Page Tests	Frame detail header close frame	happy	02-proxy-uat.md:204
+WSHIST-013	02-proxy-uat.md	WebSocket History Page Tests	Frame clear selection button	happy	02-proxy-uat.md:205
+WSHIST-014	02-proxy-uat.md	WebSocket History Page Tests	Payload view → text opcode	happy	02-proxy-uat.md:206
+WSHIST-015	02-proxy-uat.md	WebSocket History Page Tests	Payload view → hex opcode	happy	02-proxy-uat.md:207
+WSHIST-016	02-proxy-uat.md	WebSocket History Page Tests	Payload view → close frame	happy	02-proxy-uat.md:208
+WSHIST-017	02-proxy-uat.md	WebSocket History Page Tests	Payload view → close frame no reason	happy	02-proxy-uat.md:209
+WSHIST-018	02-proxy-uat.md	WebSocket History Page Tests	Payload view → truncated warning	happy	02-proxy-uat.md:210
+WSHIST-019	02-proxy-uat.md	WebSocket History Page Tests	Payload view → truncated hex	happy	02-proxy-uat.md:211
+WSHIST-020	02-proxy-uat.md	WebSocket History Page Tests	Frame loading state	happy	02-proxy-uat.md:212
+WSHIST-021	02-proxy-uat.md	WebSocket History Page Tests	No frame selected empty	empty-state	02-proxy-uat.md:213
+WSHIST-022	02-proxy-uat.md	WebSocket History Page Tests	No upgrades empty state	empty-state	02-proxy-uat.md:214
+WSHIST-023	02-proxy-uat.md	WebSocket History Page Tests	No frames empty (no selection)	empty-state	02-proxy-uat.md:215
+WSHIST-024	02-proxy-uat.md	WebSocket History Page Tests	No frames empty (selected, no frames)	empty-state	02-proxy-uat.md:216
+WSHIST-025	02-proxy-uat.md	WebSocket History Page Tests	Refresh button click	happy	02-proxy-uat.md:217
+WSHIST-026	02-proxy-uat.md	WebSocket History Page Tests	Metrics display	happy	02-proxy-uat.md:218
+WSHIST-027	02-proxy-uat.md	WebSocket History Page Tests	Context menu → minimal (not loaded)	happy	02-proxy-uat.md:219
+WSHIST-028	02-proxy-uat.md	WebSocket History Page Tests	Context menu → full (loaded)	happy	02-proxy-uat.md:220
+WSHIST-029	02-proxy-uat.md	WebSocket History Page Tests	Context menu copy id	happy	02-proxy-uat.md:221
+WSHIST-030	02-proxy-uat.md	WebSocket History Page Tests	Context menu show in history	happy	02-proxy-uat.md:222
+WSHIST-031	02-proxy-uat.md	WebSocket History Page Tests	Context menu send to repeater	happy	02-proxy-uat.md:223
+WSHIST-032	02-proxy-uat.md	WebSocket History Page Tests	Context menu send to intruder	happy	02-proxy-uat.md:224
+WSHIST-033	02-proxy-uat.md	WebSocket History Page Tests	Context menu send to comparer	happy	02-proxy-uat.md:225
+WSHIST-034	02-proxy-uat.md	WebSocket History Page Tests	Error in useWsConnections	error	02-proxy-uat.md:226
+WSHIST-035	02-proxy-uat.md	WebSocket History Page Tests	Error in useWsHistory	error	02-proxy-uat.md:227
+WSHIST-036	02-proxy-uat.md	WebSocket History Page Tests	Frame table loading	happy	02-proxy-uat.md:228
+WSHIST-037	02-proxy-uat.md	WebSocket History Page Tests	Frame row truncated styling	happy	02-proxy-uat.md:229
+WSHIST-038	02-proxy-uat.md	WebSocket History Page Tests	Frame row normal styling	happy	02-proxy-uat.md:230
+WSHIST-039	02-proxy-uat.md	WebSocket History Page Tests	Exchange preload on select	happy	02-proxy-uat.md:231
+WSHIST-040	02-proxy-uat.md	WebSocket History Page Tests	Cross-page effect → history tab highlight	happy	02-proxy-uat.md:232

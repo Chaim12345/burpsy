@@ -5,6 +5,31 @@ Feature inventory taken from the Burp 2026.7.1 teardown, not from marketing page
 scopes / 8 insertion-point types / 5 scan phases / 183 `burp.Zcot` issue types, and the shipped data
 resources (`KnowledgeBase/Issues`, `BuiltInConfigs`, `PayloadStrings`, `RetireJS`).
 
+## What "Montoya coverage" means here, and what it does not
+
+`MontoyaApi` is used throughout this document as the **feature inventory** — it is the most complete
+public enumeration of what Burp can do, and counting its methods per subsystem is how the size of each
+area is estimated. It is not an interface being implemented.
+
+Stated once, plainly, because leaving it implied invites the wrong expectation:
+
+- **No Montoya jar will ever load into burpsy.** There is no JVM, and nothing here is binary- or
+  source-compatible with `MontoyaApi`. A Burp extension cannot be pointed at this tool.
+- What is being built is a **functional analogue over HTTP + JSON-RPC**: the same capabilities,
+  reachable over the JSON API the operator console already uses, plus a JSON-RPC child-process
+  protocol for plugins. Where a Montoya method has an honest web analogue, it gets one. Where it does
+  not, it is listed under WONT with the reason.
+- The method counts in the tables below (`montoya/http` (52), `montoya/utilities` (36), …) are the
+  size of the *problem*, not a checklist of signatures to match. "36 of 36" is not a goal and would
+  not be a meaningful claim.
+
+The clearest case is `userInterface()`: 10 of its 13 registration points contribute **Swing objects**
+(`registerSuiteTab`, `applyThemeToComponent`, `swingUtils`, `currentDisplayFont`, menu-bar component
+insertion). There is no honest web analogue for a Swing component, and a "component" JSON schema whose
+only consumer is the thing that defined it is a fiction. So three of the thirteen get built — context
+menu items, message-editor tabs, menu actions — and the other ten are declared WONT rather than
+counted as coverage.
+
 Status legend: **DONE** · **PART** partial · **TODO** · **WONT** deliberately out of scope.
 
 ---
@@ -167,6 +192,13 @@ counted instead.
 | Recompiling/patching Burp itself | only ~53% of the decompiled tree compiles, and it would be a derivative build |
 | Porting Burp's Java scan-check code | derivative work. Implement from the **specs and public BCheck/Montoya contracts** instead |
 | Enterprise/CI features | `Names are not supported in the desktop product - this is an Enterprise-only feature` |
+| Loading Burp extensions | no JVM, and no binary or source compatibility with `MontoyaApi`. See the note at the top |
+| `userInterface()`'s 10 Swing registration points | `registerSuiteTab`, `applyThemeToComponent`, `swingUtils`, `currentDisplayFont`, menu-bar component insertion. No honest web analogue; a component schema with one consumer is a fiction. The three declarative points — context-menu items, message-editor tabs, menu actions — are in scope |
+| `registerHttpRequestEditorProvider` | looks portable and is not fully: Burp exposes caret position and live selection to the plugin, which a stateless HTTP call cannot |
+| `burpSuite().exportProjectFileAndExit()` / `loadProjectFile()` / `restart()` | all three presuppose Burp project files. burpsy's durable state is an mmap-backed capture directory plus a SQLite mirror, which is a different object |
+| `project().name()` | no analogue, and the tempting fallback is the harmful one. A name derived from the `-db` filename would end up in report headers as if the operator had chosen it. The route returns `name: null` |
+| `importBambda(String)` | takes **Java source**. The filter substrate here is a closed typed grammar (`internal/query`), deliberately not a scripting engine, so this cannot be honoured. The route answers 400 with a grammar reference — never `{"imported": true}` for something that was never executed |
+| Hosting a Collaborator server | the client is in scope (Interactsh-compatible); running the DNS/HTTP interaction infrastructure is not. Unconfigured, OOB checks are **gated and counted**, never silently skipped — 26 corpus checks depend on it, and a returning stub would convert all 26 into false negatives |
 
 ---
 
