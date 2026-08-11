@@ -738,8 +738,20 @@ func (c *Crawler) Run(ctx context.Context) Report {
 // visit sends one frontier item, captures and scans the response through the shared seam, and folds
 // whatever it discovered back into the frontier.
 func (c *Crawler) visit(ctx context.Context, item frontierItem, rep *Report, lim *LimitReport) {
+	c.perform(ctx, item, c.buildRequest(item), rep, lim)
+}
+
+// perform sends one request's raw bytes through the chokepoint, captures and scans the response
+// through the shared seam (CRAWL-02), and folds whatever it discovered back into the frontier.
+//
+// raw is a parameter rather than rebuilt here because the session-recovery retry (handleExpired)
+// re-enters through this same function with the request rebuilt to carry a refreshed cookie — one
+// pipeline, so a retried request is captured, scanned and traversed exactly like a first attempt,
+// and re-authorised against scope by the same AuthorisedSender. A crawl with no SessionCoordinator
+// never reaches that retry: detectExpired short-circuits, so this function is byte-for-byte the old
+// visit for the static-Headers case.
+func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, rep *Report, lim *LimitReport) {
 	as := c.senderFor(item.url)
-	raw := c.buildRequest(item)
 
 	refusedBefore := as.Refused()
 	// Two limiters, in a fixed order. The global one bounds the aggregate rate so that discovering
@@ -849,6 +861,32 @@ func (c *Crawler) visit(ctx context.Context, item frontierItem, rep *Report, lim
 	}
 	contentType := string(msg.Header("Content-Type"))
 	body := msg.Body()
+
+	// Session expiry (Phase 6, Gap A). Checked here — after CRAWL-02 has captured and scanned the
+	// bytes, before the robots/redirect/content branches — so a login *redirect* (a template that was
+	// 200 now answering 3xx toward /login) or a 401 is recognised as a lost session rather than
+	// followed as an ordinary edge, and a login page served at 200 is caught by the pattern rule. The
+	// whole block is inert without a coordinator: detectExpired returns "not expired" and templateOK
+	// is never consulted, so the static-Headers crawl behaves exactly as before. The robots probe
+	// carries no session and is skipped. See session_gate.go.
+	if c.cfg.SessionCoordinator != nil && !item.robots {
+		template := urlTemplate(item.method, item.url, item.fieldNames)
+		if verdict := c.detectExpired(template, fetch.Status, body); verdict.yes {
+			// The expired response is real traffic and stays in history as a Fetch, but it is a login
+			// page, not application content: it is not fingerprinted and its links are not followed.
+			// Recovery re-sends the original request with a refreshed cookie through this same
+			// function, appending the retry's own Fetch in chronological order after this one.
+			rep.Fetches = append(rep.Fetches, fetch)
+			c.handleExpired(ctx, item, verdict, rep, lim)
+			return
+		}
+		// Record that this template has legitimately answered 200, so a later non-200 for the same
+		// template reads as a session that was lost rather than as a page that never worked. Set after
+		// detection, so the verdict above always reflects prior visits, never this one.
+		if fetch.Status == 200 {
+			c.templateOK[template] = true
+		}
+	}
 
 	// robots.txt is captured and scanned like everything else — it has already been, above — and then
 	// read as a path list rather than as a location. It is deliberately not fingerprinted as a

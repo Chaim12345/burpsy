@@ -100,31 +100,51 @@ func (c *Crawler) detectExpired(template string, status int, body []byte) logged
 	return loggedOut{yes: false}
 }
 
+// recoverResult is the outcome of one recovery attempt. It is an enum rather than a
+// bool so the caller can record the right skip reason — a spent budget and a failed
+// macro read very differently in a report — without inspecting a detail string.
+type recoverResult int
+
+const (
+	// recovered means the login macro succeeded and raw is the request rebuilt to carry
+	// the refreshed cookie, ready to retry through the chokepoint.
+	recovered recoverResult = iota
+	// reloginBudgetSpent means MaxRelogins attempts are already used; no macro was run
+	// this time and StopReloginBudget has been recorded. The crawl is truncated.
+	reloginBudgetSpent
+	// reloginFailed means a recovery was attempted and could not restore the session:
+	// no rule covers the host, the macro failed, or it succeeded but the jar stayed
+	// empty. Nothing was refused — a recovery was tried and did not take.
+	reloginFailed
+)
+
 // recoverSession restores the session for one item and rebuilds the request to retry.
 //
-// It returns the rebuilt request bytes, which the caller sends through the same
-// AuthorisedSender as the original — the retried bytes are re-authorised like any
-// other request, so a refreshed cookie cannot widen the crawl's scope.
+// On recovered it returns the rebuilt request bytes, which the caller sends through the
+// same AuthorisedSender as the original — the retried bytes are re-authorised like any
+// other request, so a refreshed cookie cannot widen the crawl's scope. On the two
+// failure results raw is nil and detail is the one-line reason for the skip ledger.
 //
-// ok is false when nothing can be retried: no rule covers the host, the login macro
-// did not succeed, or the re-login budget is spent. Every false return is recorded by
-// the caller — the budget case also records the StopReloginBudget stop, so a crawl
-// that runs out of relogins reports as truncated, never as quietly unauthenticated.
-func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *LimitReport) (raw []byte, ok bool, detail string) {
+// The budget is checked, and the attempt counted, before the macro runs: the counter
+// is a generation counter (Crawler.relogins), so sequential waves of expiry — login
+// dies, relogin, dies again — draw down the same MaxRelogins budget as concurrent ones
+// would, and running out records StopReloginBudget so the crawl reports as truncated
+// rather than as quietly unauthenticated.
+func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *LimitReport) (raw []byte, result recoverResult, detail string) {
 	host := item.url.Hostname()
 	rule := c.cfg.SessionCoordinator.MatchingRule(host)
 	if rule == nil {
-		return nil, false, "no session rule covers host " + host
+		return nil, reloginFailed, "no session rule covers host " + host
 	}
 	if c.relogins >= c.limits.MaxRelogins {
 		lim.record(StopReloginBudget)
-		return nil, false, fmt.Sprintf(
+		return nil, reloginBudgetSpent, fmt.Sprintf(
 			"the re-login budget of %d is spent; this request cannot be retried with a fresh session", c.limits.MaxRelogins)
 	}
 	c.relogins++
 	outcome := c.cfg.SessionCoordinator.EnsureLoggedIn(rule, c.crawlSessionRunner(ctx))
 	if outcome.Kind != session.LoginSucceeded {
-		return nil, false, "the session-login macro did not succeed: " + describeLogin(outcome)
+		return nil, reloginFailed, "the session-login macro did not succeed: " + describeLogin(outcome)
 	}
 
 	tls := strings.EqualFold(item.url.Scheme, "https")
@@ -133,10 +153,42 @@ func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *Li
 		// The login ran and the jar came back empty: the macro completed without
 		// establishing anything the request could use. Retrying with no cookie is
 		// retrying a request that just failed; reporting is better than looping.
-		return nil, false, "the login macro completed but the cookie jar holds no cookie for " + host
+		return nil, reloginFailed, "the login macro completed but the cookie jar holds no cookie for " + host
 	}
 	rebuilt := c.buildRequestWithCookie(item, cookie)
-	return rebuilt, true, ""
+	return rebuilt, recovered, ""
+}
+
+// handleExpired reacts to a captured response the detector judged to be a login page.
+//
+// It attempts one recovery and, on success, re-sends the original request with the
+// refreshed cookie through the ordinary pipeline (perform), where the retry is captured,
+// scanned, fingerprinted and traversed like any first attempt. If the retry is itself a
+// login page — the session died again the instant it was restored — detection fires once
+// more inside that perform call and draws down the same re-login budget, so a target that
+// keeps logging the crawl out is bounded by MaxRelogins rather than looping.
+//
+// On the two give-up results nothing is retried and the login page's links stay
+// unfollowed: a spent budget is SkipSessionExpired (the crawl is now unauthenticated and
+// StopReloginBudget already names the truncation), and a failed recovery is
+// SkipReloginFailed (a macro-level reason the operator can act on). Every path records
+// exactly one skip, so a login page is never silently dropped.
+func (c *Crawler) handleExpired(ctx context.Context, item frontierItem, verdict loggedOut, rep *Report, lim *LimitReport) {
+	rebuilt, result, detail := c.recoverSession(ctx, item, lim)
+	switch result {
+	case recovered:
+		c.perform(ctx, item, rebuilt, rep, lim)
+	case reloginBudgetSpent:
+		c.skips.record(SkipRecord{
+			Reason: SkipSessionExpired, URL: item.url.String(), Method: item.method,
+			Text: item.text, FoundAt: item.foundAt, Detail: verdict.reason + "; " + detail,
+		})
+	case reloginFailed:
+		c.skips.record(SkipRecord{
+			Reason: SkipReloginFailed, URL: item.url.String(), Method: item.method,
+			Text: item.text, FoundAt: item.foundAt, Detail: verdict.reason + "; " + detail,
+		})
+	}
 }
 
 // describeLogin renders a LoginOutcome as one line for the skip ledger.
