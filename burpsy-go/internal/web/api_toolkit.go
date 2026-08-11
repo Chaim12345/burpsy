@@ -715,14 +715,18 @@ func bytesEqual(a, b []byte) bool {
 
 // toolLogEntry mirrors toollog.ts's LogEntry.
 type toolLogEntry struct {
-	ID          uint64 `json:"id"`
-	Tool        string `json:"tool"`
-	Host        string `json:"host"`
-	Port        uint16 `json:"port"`
-	Method      string `json:"method"`
-	Path        string `json:"path"`
-	Status      *int   `json:"status"`
-	ResponseLen int    `json:"response_len"`
+	ID     uint64 `json:"id"`
+	Tool   string `json:"tool"`
+	Host   string `json:"host"`
+	Port   uint16 `json:"port"`
+	Method string `json:"method"`
+	Path   string `json:"path"`
+	Status *int   `json:"status"`
+	// ResponseLen is null when no response was received, for the same reason Status is: a row that
+	// reported 0 bytes for a send that failed would be claiming a measurement it never made. See
+	// toollog.Entry.ResponseLen. Both /api/tools/log and /api/dashboard project through
+	// toolLogEntryView, so neither can drift back to a hardcoded zero on its own.
+	ResponseLen *int `json:"response_len"`
 	// StartedMs is when the request went out, in Unix milliseconds. The UI's Dashboard pane has
 	// always rendered a relative time from this field; until now the wire shape did not carry it, so
 	// every row read "NaNs ago". Part of DASH-02: an event log with no times on it is not one.

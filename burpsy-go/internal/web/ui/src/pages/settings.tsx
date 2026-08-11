@@ -72,19 +72,22 @@ export function ScopeSection(): JSX.Element {
 
       <Toolbar>
         <Field label="Rule kind" hint="Excludes win over includes.">
-          <Select
-            aria-label="Scope rule kind"
-            value={kind}
-            onChange={(event) => setKind(event.target.value === "exclude" ? "exclude" : "include")}
-            style={{ maxWidth: "var(--w-sm)" }}
-          >
-            <option value="include">Include</option>
-            <option value="exclude">Exclude</option>
-          </Select>
+          {(id) => (
+            <Select
+              id={id}
+              value={kind}
+              onChange={(event) => setKind(event.target.value === "exclude" ? "exclude" : "include")}
+              style={{ maxWidth: "var(--w-sm)" }}
+            >
+              <option value="include">Include</option>
+              <option value="exclude">Exclude</option>
+            </Select>
+          )}
         </Field>
         <Field label="Host pattern" hint="For example api.example.com or *.example.com.">
+          {(id) => (
           <Input
-            aria-label="Scope host pattern"
+            id={id}
             value={pattern}
             placeholder="api.example.com"
             onChange={(event) => setPattern(event.target.value)}
@@ -94,6 +97,7 @@ export function ScopeSection(): JSX.Element {
               setPattern("");
             }}
           />
+          )}
         </Field>
         <Button
           disabled={!pattern.trim() || update.isPending}
@@ -274,16 +278,18 @@ function ProtocolSection(): JSX.Element {
       />
       <Toolbar>
         <Field label="Host">
-          <Input aria-label="Probe host" value={host} placeholder="api.example.com" onChange={(event) => setHost(event.target.value)} />
+          {(id) => <Input id={id} value={host} placeholder="api.example.com" onChange={(event) => setHost(event.target.value)} />}
         </Field>
         <Field label="Port">
-          <Input
-            aria-label="Probe port"
-            value={port}
-            inputMode="numeric"
-            onChange={(event) => setPort(event.target.value)}
-            style={{ maxWidth: "var(--w-xs)" }}
-          />
+          {(id) => (
+            <Input
+              id={id}
+              value={port}
+              inputMode="numeric"
+              onChange={(event) => setPort(event.target.value)}
+              style={{ maxWidth: "var(--w-xs)" }}
+            />
+          )}
         </Field>
         <Field label="TLS" htmlFor="protocol-probe-tls">
           <Switch id="protocol-probe-tls" label="Use TLS for the probe" checked={tls} onCheckedChange={setTls} />
@@ -351,22 +357,26 @@ function AppearanceSection(): JSX.Element {
       <SectionHeading title="Appearance" detail="Stored in this browser; it does not travel with the capture." />
       <div className="form-grid">
         <Field label="Theme" hint="System follows the operating system's light or dark preference.">
-          <Select aria-label="Theme" value={theme} onChange={(event) => setTheme(event.target.value as Theme)}>
-            {THEMES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
+          {(id) => (
+            <Select id={id} value={theme} onChange={(event) => setTheme(event.target.value as Theme)}>
+              {THEMES.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          )}
         </Field>
         <Field label="Table density" hint="Compact fits roughly a quarter more rows on screen.">
-          <Select aria-label="Table density" value={density} onChange={(event) => setDensity(event.target.value as Density)}>
-            {DENSITIES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
+          {(id) => (
+            <Select id={id} value={density} onChange={(event) => setDensity(event.target.value as Density)}>
+              {DENSITIES.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          )}
         </Field>
       </div>
     </Card>

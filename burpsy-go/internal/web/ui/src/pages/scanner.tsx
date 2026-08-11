@@ -117,7 +117,7 @@ function LiveAuditCard(): JSX.Element {
     <Card>
       <div className="section-heading">
         <div>
-          <h3>Live active audit</h3>
+          <h2>Live active audit</h2>
           <p>Audits new in-scope traffic as it is captured. Active checks are never sent automatically while this is off.</p>
         </div>
         <Switch checked={data?.enabled ?? false} onCheckedChange={toggle} label="Live active audit" />
@@ -168,7 +168,7 @@ function CoverageCard(): JSX.Element {
     <Card>
       <div className="section-heading">
         <div>
-          <h3>Passive check coverage</h3>
+          <h2>Passive check coverage</h2>
           <p>{data ? (data.summary ?? `${data.loaded ?? 0} BCheck(s) loaded`) : "How much of the captured traffic each passive check has actually run against."}</p>
         </div>
       </div>
@@ -249,16 +249,16 @@ function AdvisoryPanel({ finding }: { finding: FindingDetail }): JSX.Element | n
     // different claims, and a blank panel reads as a loading failure.
     return finding.advisory_note ? (
       <div>
-        <h4>Issue definition</h4>
+        <h3>Issue definition</h3>
         <p className="prose cell-dim">{finding.advisory_note}</p>
       </div>
     ) : null;
   }
   return (
     <div className="advisory-catalogue">
-      <h4>
+      <h3>
         Issue definition — {advisory.name} <span className="cell-dim">({advisory.type_index})</span>
-      </h4>
+      </h3>
       {advisory.typical_severity ? (
         <p className="field-hint">This issue class is typically {advisory.typical_severity.toLowerCase()} severity.</p>
       ) : null}
@@ -269,7 +269,7 @@ function AdvisoryPanel({ finding }: { finding: FindingDetail }): JSX.Element | n
       ))}
       {(advisory.remediation_paragraphs ?? []).length ? (
         <>
-          <h4>Recommended remediation</h4>
+          <h3>Recommended remediation</h3>
           {(advisory.remediation_paragraphs ?? []).map((text, i) => (
             <p className="prose" key={`r${i}`}>
               {text}
@@ -419,6 +419,7 @@ export function ScannerPage(): JSX.Element {
       <Toolbar className="pane-toolbar">
         <Input
           aria-label="Filter findings"
+          title="Filter findings"
           value={term}
           onChange={(event) => setTerm(event.target.value)}
           placeholder="Filter by check, issue, host or detail"
@@ -528,7 +529,13 @@ export function ScannerPage(): JSX.Element {
             {selected.finding.host}
             {selected.occurrence ? selected.occurrence.path : ""}
           </span>
-          <h3>{findingName(selected.finding)}</h3>
+          {/* The advisory pane's own heading, and the parent of the h3 sections inside it. It was
+              an h3 sitting directly under the page's h1 with nothing at h2, which reads to a
+              screen reader as a level gone missing. The <strong> keeps the console's pane-title
+              treatment, which `.detail-head-title strong` already defines. */}
+          <h2>
+            <strong>{findingName(selected.finding)}</strong>
+          </h2>
         </div>
         <div className="detail-actions">
           <Badge tone={severityTone(selected.finding.severity)}>{selected.finding.severity}</Badge>
@@ -573,17 +580,17 @@ export function ScannerPage(): JSX.Element {
             ]}
           />
           <div>
-            <h4>Issue detail</h4>
+            <h3>Issue detail</h3>
             <p className="prose">{selected.finding.detail ?? "no detail recorded"}</p>
           </div>
           <div>
-            <h4>Remediation</h4>
+            <h3>Remediation</h3>
             <p className="prose">{selected.finding.remediation ?? "no remediation recorded"}</p>
           </div>
           <AdvisoryPanel finding={selected.finding} />
           {selected.finding.occurrences.length > 1 ? (
             <div>
-              <h4>All occurrences ({selected.finding.occurrences.length})</h4>
+              <h3>All occurrences ({selected.finding.occurrences.length})</h3>
               <div className="actions">
                 {selected.finding.occurrences.map((occurrence, index) => (
                   <Button
@@ -678,7 +685,7 @@ export function ScannerPage(): JSX.Element {
           }
         />
         <Toolbar style={{ marginTop: 8 }}>
-          <Select aria-label="Severity filter" value={severity} onChange={(event) => setSeverity(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
+          <Select aria-label="Severity filter" title="Severity filter" value={severity} onChange={(event) => setSeverity(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
             <option value="all">All severities</option>
             {SEVERITIES.map((s) => (
               <option key={s} value={s}>
@@ -686,7 +693,7 @@ export function ScannerPage(): JSX.Element {
               </option>
             ))}
           </Select>
-          <Select aria-label="Confidence filter" value={confidence} onChange={(event) => setConfidence(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
+          <Select aria-label="Confidence filter" title="Confidence filter" value={confidence} onChange={(event) => setConfidence(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
             <option value="all">All confidence</option>
             {CONFIDENCES.map((c) => (
               <option key={c} value={c}>
@@ -714,7 +721,7 @@ export function ScannerPage(): JSX.Element {
                 <small>Run the configured checks against one captured exchange.</small>
               </span>
             </div>
-            <Select aria-label="Scan configuration" value={configName} onChange={(event) => setConfigName(event.target.value)}>
+            <Select aria-label="Scan configuration" title="Scan configuration" value={configName} onChange={(event) => setConfigName(event.target.value)}>
               <option value="">server default</option>
               {(configsQuery.data?.configs ?? []).map((c) => (
                 <option key={c.name} value={c.name}>
@@ -727,6 +734,7 @@ export function ScannerPage(): JSX.Element {
               value={exchangeId}
               onChange={(event) => setExchangeId(event.target.value)}
               aria-label="Exchange ID"
+              title="Exchange ID"
               placeholder="Exchange ID"
               style={{ maxWidth: "var(--w-xs)" }}
             />
@@ -739,7 +747,7 @@ export function ScannerPage(): JSX.Element {
             <Card>
               <div className="section-heading">
                 <div>
-                  <h3>Audit result — exchange #{auditResult.exchange_id}</h3>
+                  <h2>Audit result — exchange #{auditResult.exchange_id}</h2>
                   <p>{auditResult.summary ?? (auditResult.error ? "refused" : "completed")}</p>
                 </div>
                 <Badge tone={auditResult.error ? "bad" : "good"}>{auditResult.config_name || "server default"}</Badge>

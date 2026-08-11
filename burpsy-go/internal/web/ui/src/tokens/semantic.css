@@ -2,13 +2,41 @@
  * Source of truth: Penpot, sets "semantic/dark" and "semantic/light".
  * Regenerate with `node scripts/gen-tokens.mjs`.
  *
- * Only the token-modelled color roles live here. A handful of composite or
+ * Only the token-modelled roles live here. A handful of composite or
  * alpha-blended values used by the editor/overlay chrome (--overlay,
  * --editor-line, --editor-active-line, --editor-selection, --editor-start,
  * --editor-header-name, --editor-header-value, --editor-body,
  * --editor-match*, --accent-contrast) are not representable as Penpot color
- * tokens (rgba opacity, or pure aliases of another semantic token) and stay
- * hand-authored in styles.css next to the rest of the theme blocks. */
+ * tokens — rgba opacity, a syntax palette with no semantic role, or a pure
+ * alias of another semantic token — and stay hand-authored in styles.css next
+ * to the rest of the theme blocks. */
+
+/* Theme-independent semantic tokens, emitted once because both semantic sets
+ * hold them identically. gen-tokens.mjs checks that each time it runs and
+ * theme-splits these automatically if a future export makes them diverge. */
+:root {
+  --text-2xs: var(--fs-2xs);
+  --text-xs: var(--fs-xs);
+  --text-sm: var(--fs-sm);
+  --text-md: var(--fs-md);
+  --text-lg: var(--fs-lg);
+  --text-xl: var(--fs-xl);
+  --text-2xl: var(--fs-2xl);
+  --text-3xl: var(--fs-3xl);
+  --text-4xl: var(--fs-4xl);
+  --gap-xs: var(--s1);
+  --gap-sm: var(--s2);
+  --gap-md: var(--s3);
+  --gap: var(--s3);
+  --gap-lg: var(--s4);
+  --gap-xl: var(--s5);
+  --gap-2xl: var(--s6);
+  --gap-3xl: var(--s8);
+  --pad-page: var(--s4);
+  --font-body: var(--font-sans);
+  --font-code: var(--font-mono);
+}
+
 :root,
 [data-theme="light"] {
   --paper: var(--grey-30);

@@ -792,7 +792,8 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 		}
 		resp, err := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls).SendRequest(ctx, req)
 		if err != nil {
-			s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, 0, err.Error())
+			// nil: the step never got a response to measure.
+			s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, nil, 0, err.Error())
 			return nil, err
 		}
 		hdrs := make(map[string]string, len(resp.Headers))
@@ -802,7 +803,13 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 				s.sessionCoordinator.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
 			}
 		}
-		s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode, uint64(resp.Duration.Milliseconds()), "")
+		// The body's length, because a session step goes out through SendRequest, which returns a parsed
+		// sender.Response and keeps no raw form: the header block's bytes were never retained and cannot
+		// be re-derived without inventing them. So this is a real count of received bytes that
+		// understates the wire by the headers — narrower than a repeater row's, and still a measurement,
+		// which nil would not be.
+		s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode,
+			toollog.Bytes(len(resp.Body)), uint64(resp.Duration.Milliseconds()), "")
 		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil
 	}
 }

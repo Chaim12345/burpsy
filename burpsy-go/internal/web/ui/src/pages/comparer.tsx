@@ -207,6 +207,7 @@ export function ComparerPage(): JSX.Element {
           <Badge tone={slot === "a" ? "info" : "accent"}>slot {slot.toUpperCase()}</Badge>
           <Input
             aria-label={`Stored message id for slot ${slot.toUpperCase()}`}
+            title={`Stored message id for slot ${slot.toUpperCase()}`}
             value={msg}
             inputMode="numeric"
             onChange={(event) => setMsg(event.target.value)}

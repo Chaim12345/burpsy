@@ -1,0 +1,37 @@
+/* GENERATED FILE — do not hand-edit.
+ * NOT EXPORTED FROM PENPOT. This is the one token file where this repo, not
+ * Penpot, is currently the source of truth — deliberately and temporarily.
+ *
+ * These are values the app already uses (read out of styles.css) expressed in
+ * the shape Penpot's borderWidth / borderRadius / shadow / fontWeights /
+ * letterSpacing / textCase / opacity / typography token types require, so
+ * that someone with the Penpot plugin open can create them in one pass. Once
+ * they exist in Penpot and have been re-exported they move into the
+ * primitives/semantic sets and this file goes away.
+ *
+ * Until then: do not treat anything here as a design decision Penpot has
+ * ratified. Edit the values in src/tokens/penpot-export.json's
+ * _pendingPenpot block, not here. */
+:root {
+  --border-hairline: 1px;
+  --border-strong: 2px;
+  --border-status: 3px;
+  --radius-none: 0;
+  --weight-regular: 400;
+  --weight-bold: 700;
+  --tracking-tight: -0.03em;
+  --tracking-normal: 0em;
+  --tracking-caps: 0.08em;
+  --tracking-caps-loose: 0.12em;
+  --case-upper: uppercase;
+  --case-none: none;
+  --opacity-disabled: 0.45;
+  --opacity-faint: 0.55;
+  --shadow-scrim-menu: #00000029;
+  --shadow-scrim-dialog: #00000042;
+  --shadow-menu: 0 6px 20px var(--shadow-scrim-menu);
+  --shadow-dialog: 0 16px 44px var(--shadow-scrim-dialog);
+  --type-eyebrow: var(--weight-bold) var(--text-2xs)/1.5 var(--font-code);
+  --type-eyebrow-tracking: var(--tracking-caps-loose);
+  --type-eyebrow-case: var(--case-upper);
+}

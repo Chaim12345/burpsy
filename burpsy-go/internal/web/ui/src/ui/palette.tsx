@@ -97,6 +97,11 @@ export function CommandPalette({
           <Dialog.Title className="sr-only">Command palette</Dialog.Title>
           <div className="palette-input">
             <Search size={16} />
+            {/* A raw input rather than the Input primitive: `.palette-input input` strips the
+                border and background the primitive brings, and the palette is one search box in
+                a dialog that already announces itself. It carries its own aria-label — the type
+                system can only require a name on the primitive, so the handful of raw inputs
+                left in the console have to supply one by hand. */}
             <input
               autoFocus
               value={term}

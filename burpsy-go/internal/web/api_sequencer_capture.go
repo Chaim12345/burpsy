@@ -485,7 +485,9 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 		if err != nil {
 			// A transport failure is a miss with a reason, not a token. Logged through the tool log so
 			// the request appears in Logger like every other egress this process performs.
-			s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", 0,
+			// nil rather than len(sent.Raw): on a transport failure there is no response, and the zero
+			// bytes sitting in Raw are the absence of one, not a measurement of one.
+			s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", 0, nil,
 				uint64(elapsed.Milliseconds()), err.Error())
 			capture.miss(attempt, "send failed: "+err.Error())
 			consecutive++
@@ -501,7 +503,7 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 			statusCode = *sent.Status
 		}
 		s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", statusCode,
-			uint64(elapsed.Milliseconds()), "")
+			toollog.Bytes(len(response)), uint64(elapsed.Milliseconds()), "")
 
 		token, err := capture.location.extract(response)
 		if err != nil {

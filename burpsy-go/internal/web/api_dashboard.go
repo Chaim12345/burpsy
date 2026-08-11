@@ -311,14 +311,18 @@ func toolLogEntryView(e *toollog.Entry) toolLogEntry {
 		status = &st
 	}
 	return toolLogEntry{
-		ID:          e.ID,
-		Tool:        e.Tool.String(),
-		Host:        e.Host,
-		Port:        e.Port,
-		Method:      e.Method,
-		Path:        e.Path,
-		Status:      status,
-		ResponseLen: 0,
+		ID:     e.ID,
+		Tool:   e.Tool.String(),
+		Host:   e.Host,
+		Port:   e.Port,
+		Method: e.Method,
+		Path:   e.Path,
+		Status: status,
+		// Passed through, not synthesised. This used to be a literal 0 on every row of both routes,
+		// because toollog.Entry had no length on it to pass through: the projection could only invent a
+		// number, and the number it invented said every response was empty. The entry now carries the
+		// measurement, or nil where there was nothing to measure, and both travel as they are.
+		ResponseLen: e.ResponseLen,
 		StartedMs:   e.StartedMs,
 		DurationMs:  e.DurationMs,
 		Error:       strPtrIf(e.Note != "", e.Note),

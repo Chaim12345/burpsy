@@ -205,6 +205,15 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("findings", "param", "TEXT"); err != nil {
 		return err
 	}
+	// tool_log gained response_len so a restored row can say how many response bytes came back. The
+	// column is nullable and every other column on this table is NOT NULL deliberately: NULL means no
+	// response was measured — a send that failed, a row standing for a whole run — which is a different
+	// fact from a response of zero bytes, and the distinction is the whole point of the field (see
+	// toollog.Entry.ResponseLen). A row written by an older build has no length at all, so it reads back
+	// as NULL, which is exactly the truth about it: unknown, not empty.
+	if err := s.addColumn("tool_log", "response_len", "INTEGER"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -946,21 +955,31 @@ func (s *Store) LoadOrganizer() ([]organizer.Item, error) {
 
 // SaveToolLog mirrors one tool log entry.
 func (s *Store) SaveToolLog(e *toollog.Entry) {
+	// nil stays NULL rather than becoming 0, so the durable row keeps the distinction the in-memory
+	// entry makes between a response of no bytes and no response at all.
+	var responseLen any
+	if e.ResponseLen != nil {
+		responseLen = int64(*e.ResponseLen)
+	}
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO tool_log
-		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, int(e.Tool), e.Host, int(e.Port), boolInt(e.TLS), e.Method, e.Path,
-		int(e.Status), e.StartedMs, e.DurationMs, e.Note)
+		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen)
 	if err != nil {
 		s.log("tool_log", err)
 	}
 }
 
 // LoadToolLog restores the tool log in id order.
+//
+// A NULL response_len restores as nil, which covers both the rows written that way on purpose and
+// every row in a database written before the column existed. Defaulting those to zero would resurrect
+// the exact claim this field was added to stop making: that the response was empty.
 func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note
+		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len
 		 FROM tool_log ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -970,13 +989,18 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	for rows.Next() {
 		e := &toollog.Entry{}
 		var tool, port, tls, status int
-		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note); err != nil {
+		var responseLen sql.NullInt64
+		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen); err != nil {
 			return nil, err
 		}
 		e.Tool = toollog.Tool(tool)
 		e.Port = uint16(port)
 		e.TLS = tls != 0
 		e.Status = status
+		if responseLen.Valid {
+			n := int(responseLen.Int64)
+			e.ResponseLen = &n
+		}
 		out = append(out, e)
 	}
 	return out, rows.Err()

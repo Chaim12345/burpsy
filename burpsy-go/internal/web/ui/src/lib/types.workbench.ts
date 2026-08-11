@@ -252,7 +252,15 @@ export interface ToolLogRow {
   method: string;
   path: string;
   status: number | null;
-  response_len: number;
+  /**
+   * How many response bytes came back, or null when no response was received —
+   * a send that failed at the transport, or a row standing for a whole run
+   * rather than one exchange. Nullable for the same reason `status` is, and it
+   * has to be rendered as "no response", never as 0: the server used to send a
+   * hardcoded 0 on every row, which made the Length column read as though every
+   * response had been empty.
+   */
+  response_len: number | null;
   started_ms: number;
   duration_ms: number;
   error: string | null;

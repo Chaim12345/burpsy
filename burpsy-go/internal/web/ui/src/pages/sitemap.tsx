@@ -355,7 +355,7 @@ export function SiteMapPage(): JSX.Element {
       <Toolbar className="pane-toolbar">
         <div className="search-field">
           <Search size={15} />
-          <Input aria-label="Filter site map" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter by segment or path" />
+          <Input aria-label="Filter site map" title="Filter site map" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter by segment or path" />
           {filter ? (
             <IconButton label="Clear filter" size="small" onClick={() => setFilter("")}>
               <X size={13} />
@@ -401,9 +401,14 @@ export function SiteMapPage(): JSX.Element {
       <div className="detail-head">
         <div className="detail-head-title">
           <span className="eyebrow">#{activeExchange.id}</span>
+          {/* Nested one level under the node heading below, because this pane lives inside that
+              one. The <strong> is what carries the type: `.detail-head-title strong` is the
+              console's pane-title treatment, and every other detail head in the app uses it. */}
           <h3>
-            {activeExchange.tls ? "https" : "http"}://{activeExchange.host}:{activeExchange.port}
-            {activeExchange.path}
+            <strong>
+              {activeExchange.tls ? "https" : "http"}://{activeExchange.host}:{activeExchange.port}
+              {activeExchange.path}
+            </strong>
           </h3>
         </div>
         <div className="detail-actions">
@@ -465,10 +470,15 @@ export function SiteMapPage(): JSX.Element {
       <div className="detail-head">
         <div className="detail-head-title">
           <span className="eyebrow">{selected.depth === 0 ? "host" : selected.node.requested ? "path" : "folder (never requested directly)"}</span>
-          <h3>
-            {selected.host}
-            {selected.depth === 0 ? "" : selected.node.path}
-          </h3>
+          {/* Was an <h3> directly under the page's <h1>, skipping h2 — a heading outline that
+              tells a screen-reader user there is a missing level between the page and this pane.
+              This is the pane's own heading, so it is the h2. */}
+          <h2>
+            <strong>
+              {selected.host}
+              {selected.depth === 0 ? "" : selected.node.path}
+            </strong>
+          </h2>
         </div>
         <div className="detail-actions">
           {(selected.node.methods ?? []).map((m) => (

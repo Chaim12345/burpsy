@@ -59,22 +59,25 @@ export function CrawlLauncher(): JSX.Element {
             label="Seed URLs"
             hint="One per line, or comma separated. Each must be an absolute http or https URL. Only hosts in scope will be fetched."
           >
-            <Input
-              value={seeds}
-              placeholder="https://target.test/"
-              onChange={(event) => setSeeds(event.target.value)}
-            />
+            {(id) => (
+              <Input
+                id={id}
+                value={seeds}
+                placeholder="https://target.test/"
+                onChange={(event) => setSeeds(event.target.value)}
+              />
+            )}
           </Field>
 
           <div className="form-grid">
             <Field label="Max requests" hint="The bound that actually governs cost.">
-              <Input type="number" min={1} value={maxRequests} onChange={(event) => setMaxRequests(event.target.value)} />
+              {(id) => <Input id={id} type="number" min={1} value={maxRequests} onChange={(event) => setMaxRequests(event.target.value)} />}
             </Field>
             <Field label="Max depth" hint="Links from a seed. A seed is depth 0.">
-              <Input type="number" min={1} value={maxDepth} onChange={(event) => setMaxDepth(event.target.value)} />
+              {(id) => <Input id={id} type="number" min={1} value={maxDepth} onChange={(event) => setMaxDepth(event.target.value)} />}
             </Field>
             <Field label="Requests per second" hint="Blank or 0 takes the engine default.">
-              <Input type="number" min={0} step="0.5" value={rps} onChange={(event) => setRps(event.target.value)} />
+              {(id) => <Input id={id} type="number" min={0} step="0.5" value={rps} onChange={(event) => setRps(event.target.value)} />}
             </Field>
           </div>
 

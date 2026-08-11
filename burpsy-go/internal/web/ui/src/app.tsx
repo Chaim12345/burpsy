@@ -134,6 +134,33 @@ function useThemeEffect(): void {
   }, [theme]);
 }
 
+/**
+ * Name the browser tab after the tool on screen.
+ *
+ * Burp users navigate by tool name, and this console is a single-page app whose tab
+ * said only "burpsy" no matter where you were — so two windows open on two different
+ * tools were indistinguishable in the taskbar, and the browser's own history read as
+ * a column of identical entries. The tool comes first because that is the part a
+ * truncated tab label keeps.
+ *
+ * Deliberately not paired with a meta description. An audit rule asked for one, but
+ * that rule exists to control how a search engine renders a result snippet, and this
+ * page is served by a proxy on localhost that no crawler can reach and no operator
+ * would want indexed. A description tag here would be decoration that implies a
+ * search presence this tool does not have.
+ */
+function useDocumentTitle(): void {
+  const route = useApp((state) => state.route);
+  useEffect(() => {
+    const leaf = findLeaf(route);
+    const tool = toolOf(route);
+    // Sub-views repeat their tool name ("Proxy · HTTP history"); a tool that owns one
+    // view would otherwise say the same word twice.
+    const name = tool.leaves.length > 1 ? `${tool.label} · ${leaf.label}` : leaf.label;
+    document.title = `${name} — burpsy`;
+  }, [route]);
+}
+
 /** Keep the URL hash and the store's route in sync in both directions. */
 function useHashRoute(): void {
   const route = useApp((state) => state.route);
@@ -170,6 +197,7 @@ function App(): JSX.Element {
   const setShortcutsOpen = useApp((state) => state.setShortcutsOpen);
 
   useThemeEffect();
+  useDocumentTitle();
   useHashRoute();
   useEventStream();
 

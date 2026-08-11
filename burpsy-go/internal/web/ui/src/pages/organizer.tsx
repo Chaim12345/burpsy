@@ -160,6 +160,7 @@ export function OrganizerPage(): JSX.Element {
           <div className="inline-add">
             <Input
               aria-label="Exchange id to save"
+              title="Exchange id to save"
               value={exchangeId}
               inputMode="numeric"
               placeholder="exchange id"
@@ -276,15 +277,19 @@ export function OrganizerPage(): JSX.Element {
             <div className="stack">
               <div className="form-grid">
                 <Field label="Title" hint="What this exchange is, in a few words.">
-                  <Input
-                    value={draft.title}
-                    placeholder="admin panel exposes user list"
-                    onChange={(event) => setDraft({ ...draft, title: event.target.value })}
-                  />
+                  {(id) => (
+                    <Input
+                      id={id}
+                      value={draft.title}
+                      placeholder="admin panel exposes user list"
+                      onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+                    />
+                  )}
                 </Field>
                 <Field label="Highlight" hint="Matches the colour vocabulary used across the console.">
+                  {(id) => (
                   <Select
-                    aria-label="Highlight colour"
+                    id={id}
                     value={draft.highlight}
                     onChange={(event) => setDraft({ ...draft, highlight: event.target.value })}
                   >
@@ -294,15 +299,19 @@ export function OrganizerPage(): JSX.Element {
                       </option>
                     ))}
                   </Select>
+                  )}
                 </Field>
               </div>
               <Field label="Investigation note" hint="Saved explicitly; a background refresh will not overwrite an edit in progress.">
-                <Textarea
-                  value={draft.note}
-                  rows={8}
-                  placeholder="What was observed, what to try next, and which request reproduces it."
-                  onChange={(event) => setDraft({ ...draft, note: event.target.value })}
-                />
+                {(id) => (
+                  <Textarea
+                    id={id}
+                    value={draft.note}
+                    rows={8}
+                    placeholder="What was observed, what to try next, and which request reproduces it."
+                    onChange={(event) => setDraft({ ...draft, note: event.target.value })}
+                  />
+                )}
               </Field>
             </div>
           </>

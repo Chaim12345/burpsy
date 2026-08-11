@@ -264,6 +264,7 @@ export function HistoryPage(): JSX.Element {
             <Search size={15} />
             <Input
               aria-label="Filter history"
+              title="Filter history"
               value={term}
               onChange={(event) => setTerm(event.target.value)}
               placeholder="host = api.example AND status >= 400"
@@ -279,14 +280,14 @@ export function HistoryPage(): JSX.Element {
               </button>
             </Tooltip>
           </div>
-          <Select aria-label="Status filter" value={status} onChange={(event) => setStatus(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
+          <Select aria-label="Status filter" title="Status filter" value={status} onChange={(event) => setStatus(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
             {STATUS_BUCKETS.map((bucket) => (
               <option key={bucket.value} value={bucket.value}>
                 {bucket.label}
               </option>
             ))}
           </Select>
-          <Select aria-label="Method filter" value={method} onChange={(event) => setMethod(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+          <Select aria-label="Method filter" title="Method filter" value={method} onChange={(event) => setMethod(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
             <option value="all">All methods</option>
             {METHODS.map((name) => (
               <option key={name} value={name}>
@@ -296,6 +297,7 @@ export function HistoryPage(): JSX.Element {
           </Select>
           <Select
             aria-label="Row limit"
+            title="Row limit"
             value={String(limit)}
             onChange={(event) => setLimit(Number(event.target.value))}
             style={{ maxWidth: "var(--w-xs)" }}

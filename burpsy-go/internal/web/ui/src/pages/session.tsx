@@ -191,6 +191,7 @@ function HeaderPairs({
         <div className="kv-row" key={index}>
           <Input
             aria-label={`${scope} header ${index + 1} name`}
+            title={`${scope} header ${index + 1} name`}
             value={name}
             placeholder="Content-Type"
             disabled={disabled}
@@ -198,6 +199,7 @@ function HeaderPairs({
           />
           <Input
             aria-label={`${scope} header ${index + 1} value`}
+            title={`${scope} header ${index + 1} value`}
             value={value}
             placeholder="application/x-www-form-urlencoded"
             disabled={disabled}
@@ -249,6 +251,7 @@ function ExtractionRows({
         <div className="ex-row" key={position}>
           <Input
             aria-label={`Step ${index + 1} extraction ${position + 1} name`}
+            title={`Step ${index + 1} extraction ${position + 1} name`}
             value={entry.name}
             placeholder="csrf"
             disabled={disabled}
@@ -256,6 +259,7 @@ function ExtractionRows({
           />
           <Select
             aria-label={`Step ${index + 1} extraction ${position + 1} source`}
+            title={`Step ${index + 1} extraction ${position + 1} source`}
             value={entry.fromKind}
             disabled={disabled}
             onChange={(event) => patch(position, { fromKind: event.target.value === "header" ? "header" : "body" })}
@@ -265,6 +269,7 @@ function ExtractionRows({
           </Select>
           <Input
             aria-label={`Step ${index + 1} extraction ${position + 1} header name`}
+            title={`Step ${index + 1} extraction ${position + 1} header name`}
             value={entry.header}
             placeholder="X-Token"
             disabled={disabled || entry.fromKind !== "header"}
@@ -272,6 +277,7 @@ function ExtractionRows({
           />
           <Select
             aria-label={`Step ${index + 1} extraction ${position + 1} method`}
+            title={`Step ${index + 1} extraction ${position + 1} method`}
             value={entry.how}
             disabled={disabled}
             onChange={(event) => {
@@ -285,6 +291,7 @@ function ExtractionRows({
           </Select>
           <Input
             aria-label={`Step ${index + 1} extraction ${position + 1} pattern`}
+            title={`Step ${index + 1} extraction ${position + 1} pattern`}
             value={entry.pattern}
             placeholder={entry.how === "json_path" ? "data.token" : 'name="csrf" value="([^"]+)"'}
             disabled={disabled || entry.how === "whole"}
@@ -292,6 +299,7 @@ function ExtractionRows({
           />
           <Input
             aria-label={`Step ${index + 1} extraction ${position + 1} capture group`}
+            title={`Step ${index + 1} extraction ${position + 1} capture group`}
             value={entry.group}
             placeholder="1"
             disabled={disabled || entry.how !== "regex"}
@@ -346,6 +354,7 @@ function StepCard({
         <Badge tone="info">step {index + 1}</Badge>
         <Input
           aria-label={`Step ${index + 1} method`}
+          title={`Step ${index + 1} method`}
           value={step.method}
           placeholder="POST"
           disabled={disabled}
@@ -354,6 +363,7 @@ function StepCard({
         />
         <Input
           aria-label={`Step ${index + 1} URL`}
+          title={`Step ${index + 1} URL`}
           value={step.url}
           placeholder="https://target.test/login"
           disabled={disabled}
@@ -381,12 +391,15 @@ function StepCard({
         onChange={(headers) => onChange({ ...step, headers })}
       />
       <Field label={`Step ${index + 1} body`} hint="Sent verbatim; {{name}} is replaced by an earlier extraction.">
-        <Textarea
-          value={step.body}
-          placeholder="user=admin&password={{password}}"
-          disabled={disabled}
-          onChange={(event) => onChange({ ...step, body: event.target.value })}
-        />
+        {(id) => (
+          <Textarea
+            id={id}
+            value={step.body}
+            placeholder="user=admin&password={{password}}"
+            disabled={disabled}
+            onChange={(event) => onChange({ ...step, body: event.target.value })}
+          />
+        )}
       </Field>
       <ExtractionRows step={step} index={index} disabled={disabled} onChange={(extract) => onChange({ ...step, extract })} />
     </div>
@@ -726,12 +739,15 @@ export function SessionPage(): JSX.Element {
           <div className="stack">
             <div className="form-grid">
               <Field label="Name" hint="Shown in the rule list and in login outcomes.">
-                <Input
-                  value={editing.name}
-                  placeholder="admin login"
-                  disabled={!wired}
-                  onChange={(event) => setEditing({ ...editing, name: event.target.value })}
-                />
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={editing.name}
+                    placeholder="admin login"
+                    disabled={!wired}
+                    onChange={(event) => setEditing({ ...editing, name: event.target.value })}
+                  />
+                )}
               </Field>
               <Field label="Enabled" htmlFor="session-rule-enabled">
                 <Switch
@@ -742,13 +758,16 @@ export function SessionPage(): JSX.Element {
                 />
               </Field>
               <Field label="Max attempts" hint="Blank uses the server default (3).">
-                <Input
-                  value={editing.maxAttempts}
-                  placeholder="default"
-                  inputMode="numeric"
-                  disabled={!wired}
-                  onChange={(event) => setEditing({ ...editing, maxAttempts: event.target.value })}
-                />
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={editing.maxAttempts}
+                    placeholder="default"
+                    inputMode="numeric"
+                    disabled={!wired}
+                    onChange={(event) => setEditing({ ...editing, maxAttempts: event.target.value })}
+                  />
+                )}
               </Field>
             </div>
 
@@ -761,6 +780,7 @@ export function SessionPage(): JSX.Element {
                 <div className="kv-row" key={index}>
                   <Input
                     aria-label={`Scope host ${index + 1}`}
+                    title={`Scope host ${index + 1}`}
                     value={host}
                     disabled={!wired}
                     onChange={(event) =>
@@ -781,6 +801,7 @@ export function SessionPage(): JSX.Element {
               <div className="inline-add">
                 <Input
                   aria-label="New scope host"
+                  title="New scope host"
                   value={newHost}
                   placeholder="target.test"
                   disabled={!wired}
@@ -808,36 +829,42 @@ export function SessionPage(): JSX.Element {
               </small>
               <div className="form-grid">
                 <Field label="Status is" hint="Blank means status is not checked.">
-                  <Input
-                    value={editing.validity.status_is === undefined ? "" : String(editing.validity.status_is)}
-                    placeholder="200"
-                    inputMode="numeric"
-                    disabled={!wired}
-                    onChange={(event) => {
-                      const raw = event.target.value.trim();
-                      const parsed = Number(raw);
-                      setEditing({
-                        ...editing,
-                        validity: {
-                          ...editing.validity,
-                          status_is: raw === "" || !Number.isInteger(parsed) ? undefined : parsed,
-                        },
-                      });
-                    }}
-                  />
+                  {(id) => (
+                    <Input
+                      id={id}
+                      value={editing.validity.status_is === undefined ? "" : String(editing.validity.status_is)}
+                      placeholder="200"
+                      inputMode="numeric"
+                      disabled={!wired}
+                      onChange={(event) => {
+                        const raw = event.target.value.trim();
+                        const parsed = Number(raw);
+                        setEditing({
+                          ...editing,
+                          validity: {
+                            ...editing.validity,
+                            status_is: raw === "" || !Number.isInteger(parsed) ? undefined : parsed,
+                          },
+                        });
+                      }}
+                    />
+                  )}
                 </Field>
                 {VALIDITY_FIELDS.map((field) => (
                   <Field key={field.key} label={field.label} hint={field.hint}>
-                    <Input
-                      value={editing.validity[field.key] ?? ""}
-                      disabled={!wired}
-                      onChange={(event) =>
-                        setEditing({
-                          ...editing,
-                          validity: { ...editing.validity, [field.key]: event.target.value || undefined },
-                        })
-                      }
-                    />
+                    {(id) => (
+                      <Input
+                        id={id}
+                        value={editing.validity[field.key] ?? ""}
+                        disabled={!wired}
+                        onChange={(event) =>
+                          setEditing({
+                            ...editing,
+                            validity: { ...editing.validity, [field.key]: event.target.value || undefined },
+                          })
+                        }
+                      />
+                    )}
                   </Field>
                 ))}
               </div>
@@ -922,28 +949,38 @@ export function SessionPage(): JSX.Element {
         />
         <div className="stack">
           <div className="form-grid">
+            {/* These two carried an aria-label repeating the Field's own label text. An
+                aria-label wins over the visible label, so the two could drift apart and
+                only the invisible one would be announced. The generated id makes the
+                visible label the accessible name, with nothing to keep in sync. */}
             <Field label="Probe method">
-              <Input
-                aria-label="Probe method"
-                value={probe.method}
-                placeholder="GET"
-                disabled={!wired}
-                onChange={(event) => setProbe({ ...probe, method: event.target.value })}
-              />
+              {(id) => (
+                <Input
+                  id={id}
+                  value={probe.method}
+                  placeholder="GET"
+                  disabled={!wired}
+                  onChange={(event) => setProbe({ ...probe, method: event.target.value })}
+                />
+              )}
             </Field>
             <Field label="Probe URL" hint="A request whose response proves whether the session is still valid.">
-              <Input
-                aria-label="Probe URL"
-                value={probe.url}
-                placeholder="https://target.test/whoami"
-                disabled={!wired}
-                onChange={(event) => setProbe({ ...probe, url: event.target.value })}
-              />
+              {(id) => (
+                <Input
+                  id={id}
+                  value={probe.url}
+                  placeholder="https://target.test/whoami"
+                  disabled={!wired}
+                  onChange={(event) => setProbe({ ...probe, url: event.target.value })}
+                />
+              )}
             </Field>
           </div>
           <HeaderPairs headers={probe.headers} scope="Probe" disabled={!wired} onChange={(headers) => setProbe({ ...probe, headers })} />
           <Field label="Probe body" hint="Optional.">
-            <Textarea value={probe.body} disabled={!wired} onChange={(event) => setProbe({ ...probe, body: event.target.value })} />
+            {(id) => (
+              <Textarea id={id} value={probe.body} disabled={!wired} onChange={(event) => setProbe({ ...probe, body: event.target.value })} />
+            )}
           </Field>
           <div>
             <Button onClick={runLogin} disabled={!wired || login.isPending}>

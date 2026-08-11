@@ -9,7 +9,7 @@ import type { Exchange, RepeaterResult } from "../lib/types";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader } from "../ui/layout";
-import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Tooltip } from "../ui/primitives";
+import { Badge, Button, Empty, ErrorNotice, Field, IconButton, Input, Tooltip } from "../ui/primitives";
 
 const DEFAULT_TARGET = "https://example.com:443";
 
@@ -255,24 +255,34 @@ export function RepeaterPage(): JSX.Element {
         </div>
 
         <div className="toolbar" style={{ marginTop: 10 }}>
-          <label className="field" style={{ flex: 1, minWidth: "var(--w-lg)" }}>
-            <span>Target</span>
-            <Input
-              value={active.target}
-              onChange={(event) => {
-                // The URL is the single source of truth for the transport. A separate
-                // dropdown could contradict the scheme, which silently produced TLS
-                // handshake failures against plain-HTTP targets.
-                const next = event.target.value;
-                updateRepeaterTab(active.id, { target: next, protocol: schemeOf(next) });
-              }}
-              placeholder="https://host:443"
-            />
-          </label>
-          <label className="field" style={{ maxWidth: "var(--w-md)" }}>
-            <span>Tab name</span>
-            <Input value={active.name} onChange={(event) => updateRepeaterTab(active.id, { name: event.target.value })} />
-          </label>
+          <Field label="Target" style={{ flex: 1, minWidth: "var(--w-lg)" }}>
+            {(id) => (
+              <Input
+                id={id}
+                value={active.target}
+                onChange={(event) => {
+                  // The URL is the single source of truth for the transport. A separate
+                  // dropdown could contradict the scheme, which silently produced TLS
+                  // handshake failures against plain-HTTP targets.
+                  const next = event.target.value;
+                  updateRepeaterTab(active.id, { target: next, protocol: schemeOf(next) });
+                }}
+                // Enter in a lone text field means "do the thing" everywhere else in the
+                // console. Here it was swallowed — no form to submit — so typing a target
+                // and pressing Enter looked like a broken Send. mod+Enter still works from
+                // the editor; this makes the plain key do the obvious thing from the field.
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  submit(active);
+                }}
+                placeholder="https://host:443"
+              />
+            )}
+          </Field>
+          <Field label="Tab name" style={{ maxWidth: "var(--w-md)" }}>
+            {(id) => <Input id={id} value={active.name} onChange={(event) => updateRepeaterTab(active.id, { name: event.target.value })} />}
+          </Field>
           <Button variant="outline" onClick={() => void handOffToIntruder(active)} disabled={handingOff}>
             <Crosshair size={14} />
             {handingOff ? "Preparing…" : "To Intruder"}

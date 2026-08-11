@@ -94,7 +94,15 @@ export function LoggerPage(): JSX.Element {
         accessorKey: "response_len",
         header: "Length",
         size: 84,
-        cell: (info) => <span className="cell-num">{formatBytes(info.getValue<number>())}</span>,
+        // A row with no response gets an em dash, the same mark the Error column
+        // uses for "nothing to report". It must not be formatted as 0 B: this
+        // column showed "0 B" on every row until the server started sending a
+        // real count, and a column of zeroes reads as "every response was
+        // empty" rather than as an unimplemented field.
+        cell: (info) => {
+          const value = info.getValue<number | null>();
+          return value === null ? <span className="cell-dim">—</span> : <span className="cell-num">{formatBytes(value)}</span>;
+        },
       },
       {
         accessorKey: "duration_ms",
@@ -142,7 +150,10 @@ export function LoggerPage(): JSX.Element {
           { label: "Authority", value: `${selected.host}:${selected.port}` },
           { label: "Path", value: <code>{selected.path}</code> },
           { label: "Duration", value: formatDuration(selected.duration_ms) },
-          { label: "Response length", value: formatBytes(selected.response_len) },
+          {
+            label: "Response length",
+            value: selected.response_len === null ? "no response received" : formatBytes(selected.response_len),
+          },
           {
             label: "Error",
             value: selected.error ? <span className="bad-text">{selected.error}</span> : "none reported",

@@ -332,7 +332,8 @@ func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 		defer cancel()
 		resp, err := sender.NewAuthorisedSender(ctx.scope, ctx.sender, host, port, tls).SendRequest(c, req)
 		if err != nil {
-			ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, 0, err.Error())
+			// nil: the step never got a response to measure.
+			ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, nil, 0, err.Error())
 			return nil, err
 		}
 		hdrs := make(map[string]string, len(resp.Headers))
@@ -342,7 +343,10 @@ func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 				ctx.sess.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
 			}
 		}
-		ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode, uint64(resp.Duration.Milliseconds()), "")
+		// The body's length only — see the same record in internal/web/api_session.go for why a session
+		// step has no raw response to count.
+		ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode,
+			toollog.Bytes(len(resp.Body)), uint64(resp.Duration.Milliseconds()), "")
 		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil
 	}
 }

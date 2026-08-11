@@ -1,0 +1,17 @@
+{
+  "//": "The parent ui/tsconfig.json includes src only, so without this the suite is transpiled by playwright and never type-checked. Run: bunx tsc --noEmit -p .",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["harness", "specs", "playwright.config.ts"]
+}

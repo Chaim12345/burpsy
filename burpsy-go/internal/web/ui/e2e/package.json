@@ -1,0 +1,20 @@
+{
+  "//": "Deliberately a separate package from ../package.json. Playwright and its browser download are an order of magnitude larger than the whole UI dependency tree and belong nowhere near the bundle's install; keeping them here also means `bun install` for the app never pulls them.",
+  "name": "burpsy-ui-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit -p .",
+    "browsers": "playwright install chromium"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.62.1",
+    "axe-core": "^4.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  }
+}

@@ -25,6 +25,7 @@ import {
   Card,
   Empty,
   ErrorNotice,
+  Field,
   Input,
   Metric,
   Select,
@@ -378,6 +379,7 @@ export function SequencerPage(): JSX.Element {
             <Badge tone="info">{source === "paste" ? `${pastedCount} pasted` : `${captured.length} captured`}</Badge>
             <Select
               aria-label="Read token bits as"
+              title="Read token bits as"
               value={encoding}
               onChange={(event) => setEncoding(event.target.value)}
               style={{ maxWidth: "var(--w-sm)" }}
@@ -433,61 +435,71 @@ export function SequencerPage(): JSX.Element {
               placeholder={"GET /login HTTP/1.1\r\nHost: app.example\r\nConnection: close\r\n\r\n"}
             />
             <div>
-              <label className="field">
-                <span>Target</span>
-                <Input
-                  value={captureTarget}
-                  onChange={(event) => setCaptureTarget(event.target.value)}
-                  placeholder="https://app.example:443"
-                />
-              </label>
-              <label className="field">
-                <span>Token location</span>
-                <Select value={locationKind} onChange={(event) => setLocationKind(event.target.value as TokenLocationKind)}>
-                  <option value="cookie">Set-Cookie value</option>
-                  <option value="header">Response header value</option>
-                  <option value="body_regex">Body, by pattern</option>
-                </Select>
-              </label>
+              <Field label="Target">
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={captureTarget}
+                    onChange={(event) => setCaptureTarget(event.target.value)}
+                    placeholder="https://app.example:443"
+                  />
+                )}
+              </Field>
+              <Field label="Token location">
+                {(id) => (
+                  <Select id={id} value={locationKind} onChange={(event) => setLocationKind(event.target.value as TokenLocationKind)}>
+                    <option value="cookie">Set-Cookie value</option>
+                    <option value="header">Response header value</option>
+                    <option value="body_regex">Body, by pattern</option>
+                  </Select>
+                )}
+              </Field>
               {locationKind === "body_regex" ? (
-                <label className="field">
-                  <span>Pattern</span>
-                  <Input
-                    value={locationPattern}
-                    onChange={(event) => setLocationPattern(event.target.value)}
-                    placeholder={'csrf"\\s*:\\s*"([^"]+)"'}
-                  />
-                  <span className="field-hint">RE2. Capture group 1 is the token when the pattern has one.</span>
-                </label>
+                <Field label="Pattern" hint="RE2. Capture group 1 is the token when the pattern has one.">
+                  {(id) => (
+                    <Input
+                      id={id}
+                      value={locationPattern}
+                      onChange={(event) => setLocationPattern(event.target.value)}
+                      placeholder={'csrf"\\s*:\\s*"([^"]+)"'}
+                    />
+                  )}
+                </Field>
               ) : (
-                <label className="field">
-                  <span>{locationKind === "cookie" ? "Cookie name" : "Header name"}</span>
-                  <Input
-                    value={locationName}
-                    onChange={(event) => setLocationName(event.target.value)}
-                    placeholder={locationKind === "cookie" ? "SESSIONID" : "X-Csrf-Token"}
-                  />
-                </label>
+                <Field label={locationKind === "cookie" ? "Cookie name" : "Header name"}>
+                  {(id) => (
+                    <Input
+                      id={id}
+                      value={locationName}
+                      onChange={(event) => setLocationName(event.target.value)}
+                      placeholder={locationKind === "cookie" ? "SESSIONID" : "X-Csrf-Token"}
+                    />
+                  )}
+                </Field>
               )}
               <Toolbar>
-                <label className="field" style={{ maxWidth: "var(--w-xs)" }}>
-                  <span>Requests</span>
-                  <Input
-                    value={captureCount}
-                    inputMode="numeric"
-                    onChange={(event) => setCaptureCount(event.target.value)}
-                    placeholder="100"
-                  />
-                </label>
-                <label className="field" style={{ maxWidth: "var(--w-xs)" }}>
-                  <span>Delay (ms)</span>
-                  <Input
-                    value={captureDelay}
-                    inputMode="numeric"
-                    onChange={(event) => setCaptureDelay(event.target.value)}
-                    placeholder="0"
-                  />
-                </label>
+                <Field label="Requests" style={{ maxWidth: "var(--w-xs)" }}>
+                  {(id) => (
+                    <Input
+                      id={id}
+                      value={captureCount}
+                      inputMode="numeric"
+                      onChange={(event) => setCaptureCount(event.target.value)}
+                      placeholder="100"
+                    />
+                  )}
+                </Field>
+                <Field label="Delay (ms)" style={{ maxWidth: "var(--w-xs)" }}>
+                  {(id) => (
+                    <Input
+                      id={id}
+                      value={captureDelay}
+                      inputMode="numeric"
+                      onChange={(event) => setCaptureDelay(event.target.value)}
+                      placeholder="0"
+                    />
+                  )}
+                </Field>
                 <Button onClick={startCaptureRun} disabled={startCapture.isPending}>
                   <Radio size={14} />
                   {startCapture.isPending ? "Starting…" : "Start capture"}
@@ -519,6 +531,7 @@ export function SequencerPage(): JSX.Element {
           <Toolbar>
             <Input
               aria-label="Follow an existing capture by id"
+              title="Follow an existing capture by id"
               value={captureId}
               inputMode="numeric"
               onChange={(event) => setCaptureId(event.target.value)}

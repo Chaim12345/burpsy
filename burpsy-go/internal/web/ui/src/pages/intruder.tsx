@@ -501,29 +501,34 @@ export function IntruderPage(): JSX.Element {
             />
             <div className="form-grid">
               <Field label="Stored message id">
-                <Input
-                  type="number"
-                  min={1}
-                  value={msgId}
-                  onChange={(event) => {
-                    setMsgId(event.target.value);
-                    setPoints([]);
-                    setSelected([]);
-                  }}
-                  placeholder="e.g. 42"
-                />
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={1}
+                    value={msgId}
+                    onChange={(event) => {
+                      setMsgId(event.target.value);
+                      setPoints([]);
+                      setSelected([]);
+                    }}
+                    placeholder="e.g. 42"
+                  />
+                )}
               </Field>
               <Field label="Target authority">
-                <Input value={target} onChange={(event) => setTarget(event.target.value)} placeholder="https://host:443" />
+                {(id) => <Input id={id} value={target} onChange={(event) => setTarget(event.target.value)} placeholder="https://host:443" />}
               </Field>
               <Field label="Attack type">
-                <Select value={mode} onChange={(event) => setMode(event.target.value as AttackMode)}>
-                  {ATTACK_MODES.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.label}
-                    </option>
-                  ))}
-                </Select>
+                {(id) => (
+                  <Select id={id} value={mode} onChange={(event) => setMode(event.target.value as AttackMode)}>
+                    {ATTACK_MODES.map((entry) => (
+                      <option key={entry.value} value={entry.value}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </Select>
+                )}
               </Field>
             </div>
             <p className="field-hint">{ATTACK_MODES.find((entry) => entry.value === mode)?.detail}</p>
@@ -634,15 +639,18 @@ export function IntruderPage(): JSX.Element {
                       : `Set ${index + 1} (${setSizes[index] ?? 0})`
                   }
                 >
-                  <Textarea
-                    value={text}
-                    onChange={(event) =>
-                      setPayloadTexts((current) =>
-                        current.map((value, position) => (position === index ? event.target.value : value)),
-                      )
-                    }
-                    placeholder={index === 0 ? DEFAULT_PAYLOADS : "one payload per line"}
-                  />
+                  {(id) => (
+                    <Textarea
+                      id={id}
+                      value={text}
+                      onChange={(event) =>
+                        setPayloadTexts((current) =>
+                          current.map((value, position) => (position === index ? event.target.value : value)),
+                        )
+                      }
+                      placeholder={index === 0 ? DEFAULT_PAYLOADS : "one payload per line"}
+                    />
+                  )}
                 </Field>
               ))}
             </div>
@@ -689,30 +697,39 @@ export function IntruderPage(): JSX.Element {
             />
             <div className="form-grid">
               <Field label="Max requests">
-                <Input
-                  type="number"
-                  min={1}
-                  value={maxRequests}
-                  onChange={(event) => setMaxRequests(Number(event.target.value) || 1)}
-                />
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={1}
+                    value={maxRequests}
+                    onChange={(event) => setMaxRequests(Number(event.target.value) || 1)}
+                  />
+                )}
               </Field>
               <Field label="Max concurrent requests">
-                <Input
-                  type="number"
-                  min={1}
-                  value={maxInFlight}
-                  onChange={(event) => setMaxInFlight(Number(event.target.value) || 1)}
-                />
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={1}
+                    value={maxInFlight}
+                    onChange={(event) => setMaxInFlight(Number(event.target.value) || 1)}
+                  />
+                )}
               </Field>
               <Field label="Requests per second" hint="Blank leaves it unthrottled.">
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.5"
-                  value={rps}
-                  onChange={(event) => setRps(event.target.value)}
-                  placeholder="unlimited"
-                />
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    step="0.5"
+                    value={rps}
+                    onChange={(event) => setRps(event.target.value)}
+                    placeholder="unlimited"
+                  />
+                )}
               </Field>
             </div>
           </Card>
@@ -726,14 +743,17 @@ export function IntruderPage(): JSX.Element {
             />
             <div className="form-grid">
               <Field label="Grep match" hint="Counts responses containing this string.">
-                <Input
-                  value={grepMatch}
-                  onChange={(event) => setGrepMatch(event.target.value)}
-                  placeholder="error, root:, welcome"
-                />
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={grepMatch}
+                    onChange={(event) => setGrepMatch(event.target.value)}
+                    placeholder="error, root:, welcome"
+                  />
+                )}
               </Field>
               <Field label="Grep extract" hint="Captures the text after this marker.">
-                <Input value={grepExtract} onChange={(event) => setGrepExtract(event.target.value)} placeholder="token=" />
+                {(id) => <Input id={id} value={grepExtract} onChange={(event) => setGrepExtract(event.target.value)} placeholder="token=" />}
               </Field>
             </div>
           </Card>

@@ -157,7 +157,7 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 
 	tl := toollog.New()
 	tl.SetPersistenceSink(p.SaveToolLog)
-	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/", 200, 5, "")
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/", 200, toollog.Bytes(64), 5, "")
 
 	restoredScope := core.NewScope()
 	restoredMR := matchreplace.NewRuleSet()

@@ -66,18 +66,33 @@ func (t Tool) String() string {
 
 // Entry is one record in the tool log.
 type Entry struct {
-	ID         uint64
-	Tool       Tool
-	Host       string
-	Port       uint16
-	TLS        bool
-	Method     string
-	Path       string
-	Status     int
-	StartedMs  uint64
-	DurationMs uint64
-	Note       string
+	ID     uint64
+	Tool   Tool
+	Host   string
+	Port   uint16
+	TLS    bool
+	Method string
+	Path   string
+	Status int
+	// ResponseLen is how many response bytes came back, or nil when this row has no single response to
+	// measure: a send that failed at the transport received nothing, and a row that stands for a whole
+	// run (an intruder attack, an audit) does not correspond to one response at all.
+	//
+	// A pointer because 0 and "there wasn't one" are different facts. The field did not exist until
+	// now, and the wire projection filled it with a hardcoded 0 for every row, so Logger's Length
+	// column read as "every response was empty" — the single worst reading for the pane an operator
+	// uses to reconcile what a tool sent against what came back. Never widen this back to a plain int:
+	// the zero is precisely the lie being removed.
+	ResponseLen *int
+	StartedMs   uint64
+	DurationMs  uint64
+	Note        string
 }
+
+// Bytes wraps a measured response length for Record's respLen argument. Callers that received no
+// response pass nil instead, and keeping that spelling visible at every call site is the point — see
+// Entry.ResponseLen.
+func Bytes(n int) *int { return &n }
 
 // ToolLog is a bounded, oldest-first-evicting log of tool activity.
 type ToolLog struct {
@@ -109,21 +124,31 @@ func (l *ToolLog) WithCapacity(c int) *ToolLog {
 	return l
 }
 
-// Record adds one entry and returns its ID.
-func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, path string, status int, durMs uint64, note string) uint64 {
+// Record adds one entry and returns its ID. respLen is the response's byte count, or nil when no
+// response was received — see Entry.ResponseLen for why the caller must choose between the two rather
+// than defaulting to zero.
+func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, path string, status int, respLen *int, durMs uint64, note string) uint64 {
 	id := atomic.AddUint64(&l.nextID, 1)
+	// Copied rather than aliased: the length belongs to the caller, who is free to reuse or overwrite
+	// it once this returns, and a logged row whose value changed after it was recorded is not a log.
+	var length *int
+	if respLen != nil {
+		n := *respLen
+		length = &n
+	}
 	e := &Entry{
-		ID:         id,
-		Tool:       tool,
-		Host:       host,
-		Port:       port,
-		TLS:        tls,
-		Method:     method,
-		Path:       path,
-		Status:     status,
-		StartedMs:  uint64(time.Now().UnixMilli()),
-		DurationMs: durMs,
-		Note:       note,
+		ID:          id,
+		Tool:        tool,
+		Host:        host,
+		Port:        port,
+		TLS:         tls,
+		Method:      method,
+		Path:        path,
+		Status:      status,
+		ResponseLen: length,
+		StartedMs:   uint64(time.Now().UnixMilli()),
+		DurationMs:  durMs,
+		Note:        note,
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()

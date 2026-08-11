@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Braces, Copy, Hash, Play, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Braces, Copy, Eraser, Hash, Play, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, formatBytes } from "../lib/api";
 import {
@@ -73,6 +73,7 @@ function StepRow({
       <Badge tone="info">step {index + 1}</Badge>
       <Select
         aria-label={`Step ${index + 1} operation`}
+        title={`Step ${index + 1} operation`}
         value={step.kind}
         onChange={(event) => {
           const kind = event.target.value as TransformKind;
@@ -88,6 +89,7 @@ function StepRow({
       </Select>
       <Select
         aria-label={`Step ${index + 1} ${step.kind === "hash" ? "algorithm" : "encoding"}`}
+        title={`Step ${index + 1} ${step.kind === "hash" ? "algorithm" : "encoding"}`}
         value={step.value}
         onChange={(event) => onChange({ value: event.target.value })}
         style={{ maxWidth: "var(--w-sm)" }}
@@ -275,6 +277,22 @@ export function DecoderPage(): JSX.Element {
               <Hash size={13} />
               Hex
             </Button>
+            {/* Input and output are cleared together. The editor's own controls and a fresh run
+                each clear only one of the two, which left a stale output sitting under a new
+                input — output that still looked like the answer to what was now on screen. */}
+            <Button
+              variant="outline"
+              size="small"
+              disabled={!input && !run && !pipeline.error}
+              onClick={() => {
+                setInput("");
+                pipeline.reset();
+                toast.success("Input and output cleared");
+              }}
+            >
+              <Eraser size={13} />
+              Clear all
+            </Button>
             <Button onClick={execute} disabled={!input || steps.length === 0 || pipeline.isPending}>
               <Play size={14} />
               {pipeline.isPending ? "Running…" : "Run pipeline"}
@@ -336,30 +354,38 @@ export function DecoderPage(): JSX.Element {
         ) : null}
       </Card>
 
-      {pipeline.error ? <ErrorNotice error={pipeline.error} onRetry={execute} /> : null}
+      {/* One live region around the whole result pane, always mounted — a live region has to
+          already be in the document when its contents change, so announcing the results by
+          marking up each card as it appears would not work. Running the pipeline replaces what
+          is in here without moving focus, which is exactly the change a screen reader would
+          otherwise never mention. Polite, not assertive: an operator mid-sentence in the input
+          should not be interrupted by their own decode landing. */}
+      <div className="stack" aria-live="polite">
+        {pipeline.error ? <ErrorNotice error={pipeline.error} onRetry={execute} /> : null}
 
-      {run ? (
-        <>
-          {run.failedAt !== null ? (
-            <div className="notice notice-warn">
-              Step {run.failedAt + 1} failed and the chain stopped there: {run.message ?? "no detail was returned"}. The
-              steps below are the ones that did run.
-            </div>
-          ) : null}
-          {run.results.length ? (
-            run.results.map((result, index) => (
-              <ResultCard key={result.stepId} result={result} index={index} view={view} />
-            ))
-          ) : (
-            <Empty title="No output" detail="The first step failed, so nothing was produced." />
-          )}
-        </>
-      ) : (
-        <Empty
-          title="Nothing run yet"
-          detail="Paste an input, arrange the steps, then run the pipeline to see each layer come off in turn."
-        />
-      )}
+        {run ? (
+          <>
+            {run.failedAt !== null ? (
+              <div className="notice notice-warn">
+                Step {run.failedAt + 1} failed and the chain stopped there: {run.message ?? "no detail was returned"}. The
+                steps below are the ones that did run.
+              </div>
+            ) : null}
+            {run.results.length ? (
+              run.results.map((result, index) => (
+                <ResultCard key={result.stepId} result={result} index={index} view={view} />
+              ))
+            ) : (
+              <Empty title="No output" detail="The first step failed, so nothing was produced." />
+            )}
+          </>
+        ) : (
+          <Empty
+            title="Nothing run yet"
+            detail="Paste an input, arrange the steps, then run the pipeline to see each layer come off in turn."
+          />
+        )}
+      </div>
     </div>
   );
 }

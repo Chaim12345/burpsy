@@ -1,5 +1,90 @@
 {
-  "_provenance": "Exported from the burpsy Penpot design file (sets: primitives, semantic/dark, semantic/light) via mcp__penpot__execute_code. Penpot is canonical for these values; re-export by re-running the three set dumps in the penpot-mcp skill's execute_code tool and pasting the token arrays back into the matching keys below. Do not hand-edit values here — edit them in Penpot and re-export.",
+  "_provenance": {
+    "what": "A snapshot of the burpsy Penpot design file's token sets. Penpot is canonical for every value in the `primitives`, `semantic.dark` and `semantic.light` arrays. Re-export by re-running the three set dumps in the penpot-mcp skill's execute_code tool and pasting the token arrays back into the matching keys below. Do not hand-edit values here — edit them in Penpot and re-export.",
+    "file": {
+      "name": "New File 1",
+      "id": "81f57451-85cc-819d-8008-712303b37e30",
+      "url": "https://design.penpot.app/#/workspace?file-id=81f57451-85cc-819d-8008-712303b37e30"
+    },
+    "exportedAt": "2026-08-11",
+    "setHashes": {
+      "primitives": "7c48b6eded5cc8ef",
+      "semantic.dark": "9c769233099946ec",
+      "semantic.light": "7ceff2a5b4dce1d0"
+    },
+    "hashesProve": "RECENCY, NOT CORRECTNESS. gen-tokens.mjs recomputes these and fails if an array was edited since the recorded export. It cannot check that an array matches the Penpot file, because nothing in this repo can reach Penpot — only a human re-running the export can establish that. Treat a passing hash as 'nobody has hand-edited this since the last export', never as 'this matches the design'.",
+    "unverifiedInThisSnapshot": {
+      "url": "The instance host is assumed to be Penpot's hosted design.penpot.app; the file id is verified but the host is not. Correct it if the file lives on a self-hosted instance.",
+      "names": "The 20 non-colour semantic tokens (text.*, space.gap-*, space.pad-page, font.family.body|code) were added from a partial read of the Penpot token panel. Confirmed exactly: text.md = {font.size.md}, space.gap-lg = {space.4}, space.gap-default, space.pad-page, font.family.body, font.family.code. The remaining names and reference targets are inferred from the regular structure of the sets — 9 text.* mirroring the 9 font.size.*, 7 named gap steps mirroring the 7 space.N primitives plus gap-default and pad-page — and the arithmetic closes at 44 per set, which is corroboration but not proof. A human with the plugin open should confirm each name and reference target in one pass; anything wrong here shows up as a --text-*/--gap-* alias pointing at the wrong primitive."
+    },
+    "outOfScope": [
+      "Motion durations and easings. Penpot has no motion token type at all — its `Animation` is a property of a prototype interaction, not a reusable value — so the transition timings in styles.css cannot be modelled here and are not pretended to be. They stay hand-authored.",
+      "Breakpoints. The @media widths in styles.css have no Penpot equivalent; Penpot's responsive story is per-board, not a shared scale.",
+      "Grid track templates. grid-template-columns strings (e.g. the menu item's `18px minmax(0, 1fr) auto`) are layout structure, not values; Penpot's grid layout holds tracks per board and does not expose them as tokens.",
+      "The 50% border-radius on the switch knob. A Penpot borderRadius token resolves to a number of pixels, so a percentage radius — which is the only way to say 'always a circle regardless of size' — cannot be expressed. Left as a literal with radius.none covering the squared-off chrome that the design actually systematises.",
+      "The fluid clamp() growth terms and ceilings. Penpot stores one number per dimension token and its export treats that number as the floor of the fluid scale. The vw/vh growth term and the ceiling are hand-maintained in gen-tokens.mjs's FLUID_WRAP and are the one place that script is not a pure transform of this file."
+    ],
+    "pendingPenpotEdits": [
+      "font.size.2xs is 11px, the same as font.size.xs, which makes the two indistinguishable to anyone binding a shape in Penpot. Neither is dead in the app (16 and 18 call sites) and they do differ in the generated CSS, because FLUID_WRAP ceils them at 12px and 13px — but that distinction lives only in this repo, in the layer Penpot cannot see. Proposed fix, which is a design decision: set font.size.2xs to 10px so the scale has a real step. It shrinks 16 call sites by 1px at the narrow end, so it needs sign-off rather than a unilateral edit. gen-tokens.mjs fails on any unacknowledged duplicate floor; this pair is listed in its ACKNOWLEDGED_DUPLICATE_FLOORS with the same reasoning.",
+      "Create the _pendingPenpot tokens below in Penpot, then move them into the primitives/semantic arrays and delete src/tokens/pending.css.",
+      "Zero of the file's 970 shapes have a token binding, so the design file cannot verify its own system. Not this file's problem to fix, but worth recording next to the provenance.",
+      "File hygiene, all of which needs a human with the plugin open: rename the file from `New File 1` to `burpsy design system`; delete the empty `Page 1` and the stray `positions-panel`; disconnect the stray `Locofy Lightning` shared library."
+    ]
+  },
+  "_pendingPenpot": {
+    "_what": "Token types Penpot supports that this design does not yet use. These values were read out of src/styles.css — they are what the app already does — and are expressed here in the shape Penpot's token types require so that someone with the plugin open can create them in one pass. THIS BLOCK IS NOT EXPORTED DESIGN DATA: it is the one place the repo, not Penpot, is currently canonical. gen-tokens.mjs emits it to src/tokens/pending.css with a header saying so. Once the tokens exist in Penpot and have been re-exported, they move into the arrays above and this block empties.",
+    "_shadowAlphaNote": "Penpot's shadow token carries exactly color, inset, offsetX, offsetY, spread and blur (see tokens_lib.cljc, which select-keys's those six) — there is no alpha field, so a shadow's transparency has to come from the colour it references. It can: Penpot's colour tokens DO accept 8-digit #RRGGBBAA. The plugin API typedoc claims a colour token value is 'a rgb color or a reference', but that is a docs simplification — the resolver validates colours through tinycolor, whose wrapper has alpha/set-alpha and explicitly handles the `hex8` format, and the StyleDictionary transform group includes `ts/color/css/hexrgba`. So each shadow gets one scrim colour token carrying its own alpha, which is both simpler than splitting hue from opacity and the only version that renders correctly on the Penpot canvas — a shadow token pointing at an opaque hue would draw a solid black shadow there. Note the alpha is now quantised to a byte: 0x29/255 = 0.1608 where the hand-authored CSS said 16%, and 0x42/255 = 0.2588 where it said 26%. Both are under a tenth of a percent off and Penpot is canonical for them now. The remaining `opacity` tokens below are for genuine element opacity, not shadows.",
+    "_borderWidthNote": "Three stroke widths, named for what they do rather than for one of the places they appear. 2px was going to be called border.focus-ring, but of the 15 sites that use it only three are focus rings — the rest are active/selected tab indicators and the spinner ring — and a token whose name describes one twelfth of its call sites is the same synonym trap the semantic alias layer is careful to avoid. border.status is the 3px severity stripe down the left edge of a notice, which is a distinct role, not a thicker version of border.strong.",
+    "_trackingNote": "Penpot's letterSpacing token is px-only — its value is documented as 'a number or a reference' with a numeric resolvedValue, so there is nowhere to put a unit. Fixed px tracking is wrong under a fluid type scale: it stays put while the glyphs grow, so one token reads correctly at one viewport and loose at another. styles.css had 11 distinct em tracking values, which is a scale nobody chose; they are cut to the 4 roles below, the em figure is stored as a plain `number` token so Penpot stays canonical for it, and gen-tokens.mjs supplies the `em`. The consolidation is a real rendering change, not a pure refactor, so here is the whole of it: -0.04 and -0.01 -> tracking.tight (-0.03); 0.02, 0.06, 0.07 and 0.1 -> tracking.caps (0.08); 0.13 and 0.16 -> tracking.caps-loose (0.12); -0.03, 0.08 and 0.12 were already exact. Every delta is 0.02em or less except 0.02 -> 0.08 on the tool tabs and 0.16 -> 0.12 on two uppercase mono labels; at the 11-14px sizes involved that is a shift of roughly a half pixel at the widest, and in every case the old value and the new one were serving the same role.",
+    "tokens": [
+      { "name": "border.hairline", "type": "borderWidth", "value": "1px" },
+      { "name": "border.strong", "type": "borderWidth", "value": "2px" },
+      { "name": "border.status", "type": "borderWidth", "value": "3px" },
+
+      { "name": "radius.none", "type": "borderRadius", "value": "0" },
+
+      { "name": "weight.regular", "type": "fontWeights", "value": "400" },
+      { "name": "weight.bold", "type": "fontWeights", "value": "700" },
+
+      { "name": "tracking.tight", "type": "number", "cssUnit": "em", "value": "-0.03" },
+      { "name": "tracking.normal", "type": "number", "cssUnit": "em", "value": "0" },
+      { "name": "tracking.caps", "type": "number", "cssUnit": "em", "value": "0.08" },
+      { "name": "tracking.caps-loose", "type": "number", "cssUnit": "em", "value": "0.12" },
+
+      { "name": "case.upper", "type": "textCase", "value": "uppercase" },
+      { "name": "case.none", "type": "textCase", "value": "none" },
+
+      { "name": "opacity.disabled", "type": "opacity", "value": "0.45" },
+      { "name": "opacity.faint", "type": "opacity", "value": "0.55" },
+
+      { "name": "shadow.scrim-menu", "type": "color", "value": "#00000029" },
+      { "name": "shadow.scrim-dialog", "type": "color", "value": "#00000042" },
+      {
+        "name": "shadow.menu",
+        "type": "shadow",
+        "value": { "offsetX": "0", "offsetY": "6", "blur": "20", "spread": "0", "inset": "false", "color": "{shadow.scrim-menu}" }
+      },
+      {
+        "name": "shadow.dialog",
+        "type": "shadow",
+        "value": { "offsetX": "0", "offsetY": "16", "blur": "44", "spread": "0", "inset": "false", "color": "{shadow.scrim-dialog}" }
+      },
+
+      {
+        "name": "type.eyebrow",
+        "type": "typography",
+        "value": {
+          "fontFamilies": "{font.family.code}",
+          "fontSizes": "{text.2xs}",
+          "fontWeight": "{weight.bold}",
+          "lineHeight": "1.5",
+          "letterSpacing": "{tracking.caps-loose}",
+          "textCase": "{case.upper}",
+          "textDecoration": "none"
+        }
+      }
+    ]
+  },
   "primitives": [
     { "name": "grey.900", "type": "color", "value": "#1a1a1a" },
     { "name": "grey.800", "type": "color", "value": "#2b2b2b" },
@@ -101,7 +186,27 @@
     { "name": "color.editor-bg", "type": "color", "value": "{grey.800}" },
     { "name": "color.editor-fg", "type": "color", "value": "{grey.250}" },
     { "name": "color.editor-gutter-bg", "type": "color", "value": "{grey.700}" },
-    { "name": "color.editor-gutter-fg", "type": "color", "value": "{grey.300}" }
+    { "name": "color.editor-gutter-fg", "type": "color", "value": "{grey.300}" },
+    { "name": "text.2xs", "type": "dimension", "value": "{font.size.2xs}" },
+    { "name": "text.xs", "type": "dimension", "value": "{font.size.xs}" },
+    { "name": "text.sm", "type": "dimension", "value": "{font.size.sm}" },
+    { "name": "text.md", "type": "dimension", "value": "{font.size.md}" },
+    { "name": "text.lg", "type": "dimension", "value": "{font.size.lg}" },
+    { "name": "text.xl", "type": "dimension", "value": "{font.size.xl}" },
+    { "name": "text.2xl", "type": "dimension", "value": "{font.size.2xl}" },
+    { "name": "text.3xl", "type": "dimension", "value": "{font.size.3xl}" },
+    { "name": "text.4xl", "type": "dimension", "value": "{font.size.4xl}" },
+    { "name": "space.gap-xs", "type": "spacing", "value": "{space.1}" },
+    { "name": "space.gap-sm", "type": "spacing", "value": "{space.2}" },
+    { "name": "space.gap-md", "type": "spacing", "value": "{space.3}" },
+    { "name": "space.gap-default", "type": "spacing", "value": "{space.3}" },
+    { "name": "space.gap-lg", "type": "spacing", "value": "{space.4}" },
+    { "name": "space.gap-xl", "type": "spacing", "value": "{space.5}" },
+    { "name": "space.gap-2xl", "type": "spacing", "value": "{space.6}" },
+    { "name": "space.gap-3xl", "type": "spacing", "value": "{space.8}" },
+    { "name": "space.pad-page", "type": "spacing", "value": "{space.4}" },
+    { "name": "font.family.body", "type": "fontFamilies", "value": "{font.family.sans}" },
+    { "name": "font.family.code", "type": "fontFamilies", "value": "{font.family.mono}" }
   ],
   "semantic.light": [
     { "name": "color.paper", "type": "color", "value": "{grey.30}" },
@@ -127,6 +232,26 @@
     { "name": "color.editor-bg", "type": "color", "value": "{grey.paper}" },
     { "name": "color.editor-fg", "type": "color", "value": "{grey.0}" },
     { "name": "color.editor-gutter-bg", "type": "color", "value": "{grey.40}" },
-    { "name": "color.editor-gutter-fg", "type": "color", "value": "{grey.350}" }
+    { "name": "color.editor-gutter-fg", "type": "color", "value": "{grey.350}" },
+    { "name": "text.2xs", "type": "dimension", "value": "{font.size.2xs}" },
+    { "name": "text.xs", "type": "dimension", "value": "{font.size.xs}" },
+    { "name": "text.sm", "type": "dimension", "value": "{font.size.sm}" },
+    { "name": "text.md", "type": "dimension", "value": "{font.size.md}" },
+    { "name": "text.lg", "type": "dimension", "value": "{font.size.lg}" },
+    { "name": "text.xl", "type": "dimension", "value": "{font.size.xl}" },
+    { "name": "text.2xl", "type": "dimension", "value": "{font.size.2xl}" },
+    { "name": "text.3xl", "type": "dimension", "value": "{font.size.3xl}" },
+    { "name": "text.4xl", "type": "dimension", "value": "{font.size.4xl}" },
+    { "name": "space.gap-xs", "type": "spacing", "value": "{space.1}" },
+    { "name": "space.gap-sm", "type": "spacing", "value": "{space.2}" },
+    { "name": "space.gap-md", "type": "spacing", "value": "{space.3}" },
+    { "name": "space.gap-default", "type": "spacing", "value": "{space.3}" },
+    { "name": "space.gap-lg", "type": "spacing", "value": "{space.4}" },
+    { "name": "space.gap-xl", "type": "spacing", "value": "{space.5}" },
+    { "name": "space.gap-2xl", "type": "spacing", "value": "{space.6}" },
+    { "name": "space.gap-3xl", "type": "spacing", "value": "{space.8}" },
+    { "name": "space.pad-page", "type": "spacing", "value": "{space.4}" },
+    { "name": "font.family.body", "type": "fontFamilies", "value": "{font.family.sans}" },
+    { "name": "font.family.code", "type": "fontFamilies", "value": "{font.family.mono}" }
   ]
 }

@@ -7,8 +7,8 @@
     "check:tokens": "node scripts/check-closed-tokens.mjs",
     "build:js": "bun build src/app.tsx --outdir dist --minify",
     "build:css": "bun build src/styles.css --outfile style.css --minify",
-    "build": "bun run build:js && bun run build:css",
-    "check": "tsc --noEmit && bun run check:tokens"
+    "build": "bun run gen:tokens && bun run build:js && bun run build:css",
+    "check": "tsc --noEmit && node scripts/gen-tokens.mjs --check && bun run check:tokens"
   },
   "dependencies": {
     "@codemirror/language": "^6",
