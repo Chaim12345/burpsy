@@ -213,3 +213,26 @@ Token-level debts with their own homes, so they are not duplicated here:
 - The token types Penpot supports that the design does not yet use (beyond the
   seven applied above) live in `penpot-export.json`'s `_pendingPenpot` block and
   generate `pending.css`.
+
+## Near-duplicate greys, found via a second tool (OpenPencil, on a Figma
+## round-trip of the same file), worth folding in when Phase C rebinds tokens
+
+A structural `.fig`/`.pen` export of the live file (`/root/burpsy.fig`,
+`/root/burpsy-roundtrip.pen`) round-tripped all 970 shapes with full geometry
+fidelity — confirmed against this repo's own direct Penpot measurements
+(chrome/menubar 24px, toolbar 38px, statusbar 22px, panel radius 3px, all
+matched exactly). It carries zero token bindings and zero auto-layout, for the
+same reason the live Penpot file does: there was never anything to round-trip.
+So this is not a second source of truth, only a second read of the same one —
+but its colour-clustering pass caught three near-duplicate greys worth folding
+into one token each, rather than three, when Phase C rebinds the library:
+
+| Cluster | Colours in use | Total uses | Canonical |
+| --- | --- | --- | --- |
+| dark surfaces | `#323232`, `#313335`, `#2b2b2b` | 98 | `#323232` |
+| raised panels | `#414547`, `#3c3f41` | 107 | `#414547` |
+| chrome-hover | `#4e5254`, `#4b5052` | 45 | `#4e5254` |
+
+Not applied here — like the rest of this file, a colour merge is a design
+decision for Phase C, not a value to patch unattended. Recorded so it isn't
+rediscovered from scratch.
