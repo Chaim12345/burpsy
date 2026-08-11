@@ -377,11 +377,11 @@ func TestInsertionPointCheckWithNowhereToInjectIsClean(t *testing.T) {
 }
 
 func TestADeclinedBodyIsUnsupportedWhenItIsTheOnlyPoint(t *testing.T) {
-	// A `given body insertion point` check against a multipart form has
+	// A `given body insertion point` check against a plain-text body has
 	// somewhere to inject that the enumerator refuses to splice into. That is
 	// skipped, never "tested, found nothing".
 	ctx := activeCtx()
-	ctx.Request = []byte("POST /f HTTP/1.1\r\nHost: x.test\r\nContent-Type: multipart/form-data; boundary=B\r\n\r\n--B\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nv\r\n--B--\r\n")
+	ctx.Request = []byte("POST /f HTTP/1.1\r\nHost: x.test\r\nContent-Type: text/plain\r\n\r\njust some text")
 	m := &mockSink{}
 	_, err := RunActive(parseCheck(`given body insertion point then
   send payload:
@@ -408,12 +408,12 @@ func TestADeclinedBodyIsUnsupportedWhenItIsTheOnlyPoint(t *testing.T) {
 }
 
 func TestADeclinedBodyIsRecordedAlongsideRealPoints(t *testing.T) {
-	// A multipart body next to real headers: the headers run, the body's
+	// A plain-text body next to real headers: the headers run, the body's
 	// refusal is recorded on the context rather than failing the check.
-	// No query string, so the only real point is the X-Probe header: the body is
-	// declined, the header runs.
+	// No query string, so the only real points are the two non-reserved
+	// headers: the body is declined, the headers run.
 	ctx := activeCtx()
-	ctx.Request = []byte("POST /f HTTP/1.1\r\nHost: x.test\r\nContent-Type: multipart/form-data; boundary=B\r\nX-Probe: yes\r\n\r\n--B\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nv\r\n--B--\r\n")
+	ctx.Request = []byte("POST /f HTTP/1.1\r\nHost: x.test\r\nContent-Type: text/plain\r\nX-Probe: yes\r\n\r\njust some text")
 	m := &mockSink{replies: []mockReply{{body: ok200("x")}}}
 	f, err := RunActive(parseCheck(`given any insertion point then
   send payload:

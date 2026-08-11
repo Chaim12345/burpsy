@@ -21,9 +21,14 @@ Burp uses to make its checks reach more code:
    are no longer skipped at load but dispatch when the operator attaches it.
 2. **Browser-powered crawling** — absent; static-HTML-only frontier crawl misses
    JS/SPA apps entirely (named Gap B in `CRAWLER_UPGRADE_PLAN.md`).
-3. **Insertion-point breadth** — 4 of Burp's 8 types; XML/multipart/non-UTF-8
-   bodies, parameter names, URL path parts, entire-body, payload relocation and
-   nested encoding are all missing.
+3. **Insertion-point breadth** — 4 of Burp's 8 types are DSL-namable and
+   dispatched (query/header/cookie/body); XML and multipart bodies are now
+   modelled containers (2026-08-11), and `param-name` / `path-folder` /
+   `path-filename` / `body-whole` are enumerable via the public API but not
+   reachable from BCheck grammar (`any` never expands to them); payload
+   relocation exists as `Relocations()` but is not wired into dispatch;
+   nested encoding and base64 detection are still missing. Non-UTF-8 and
+   plain-text bodies stay declined (recorded as skipped, never silently empty).
 4. **JS analysis depth** — static lexical one-var taint vs Burp's AST taint +
    headless-browser dynamic confirmation.
 5. **Audit prioritization + session maintenance during audit** — no
@@ -179,7 +184,7 @@ DOM, and the gaps below are gaps of the whole project, not port drift.]
 | Active audit engine | 7 dispatch scopes, 9 dispositions, budgets + circuit breakers, ledger; BCheck active checks (`given host/path/request/insertion point`) ride the same machinery; every probe egresses through `AuthorisedSender` | `scanner/audit.go`, `scanner/audit_engine.go`, `scanner/bcheck_runner.go` |
 | BCheck active evaluator | M2 `send request`, M3 `given insertion point` / `send payload` with per-point `latest` isolation and `Finding.Param` attribution end-to-end (landed 2026-08-09) | `bcheck/active.go`, `bcheck/insertion.go`, `gaps.md:396-414` |
 | Tool runner | Allowlist-gated `run tool` exec, 5-min timeout, 1 MiB output cap, no shell | `scanner/toolrunner.go` |
-| Insertion points | query / header / cookie / body (`any`); JSON and form-body splice; **XML, multipart, non-UTF-8 bodies declined** | `bcheck/insertion.go` |
+| Insertion points | query / header / cookie / body (`any`); JSON, form, XML (text+attr+CDATA) and multipart (values+filenames) splice; `param-name`/`path-folder`/`path-filename`/`body-whole` enumerable non-DSL families; `Relocations()` for URL↔body↔cookie; **non-UTF-8 and plain-text bodies declined** | `bcheck/insertion.go` |
 | DOM | Static lexical taint analysis, one-var-deep: sources→sinks→sanitizers, budgeted (DOM-01/02/03) | `scanner/dom.go`, `scanner/dom_data.go` |
 | Native checks | SQLi, XSS, path traversal (hand-rolled payload/error lists); retire.js (76 components / 683 vulns, real version arithmetic); JWT weak-HMAC (51-word wordlist); **SSRF and XXE are deliberate stubs → `DispositionUnsupported`** | `scanner/scanner.go`, `scanner/js_vulns.go`, `scanner/jwt_weak.go`, `scanner/scanner_checks.go` |
 | Crawler | Static-HTML frontier crawler: content-based location fingerprinting, volatile-param URL normalisation, id-shaped segment quota for infinite apps, destructive-action refusal (29-category skip ledger), robots read-not-obeyed; **no JS execution, no subresource fetching, no state-machine re-navigation** | `crawler/crawler.go`, `crawler/fingerprint.go`, `crawler/destructive.go`, `crawler/skip.go` |
@@ -217,10 +222,10 @@ Legend: ✅ aligned · 🟡 partial (named sub-gap) · ❌ absent.
 | 8 | **Audit intensity tiers** (light/medium/intrusive) | ✅ selectable | ❌ uniform; 6-of-29 built-in configs | policy control, safer live scans |
 | 9 | **JS analysis: static AST taint** | ✅ AST parse | 🟡 lexical one-var-deep taint | fewer false negatives, real data flow |
 | 10 | **JS analysis: dynamic confirmation** | ✅ headless browser | ❌ | static findings confirmed; FP reduction |
-| 11 | **Insertion points: breadth** | ✅ 8 types | 🟡 4 kinds; XML/multipart/non-UTF-8 declined | the 9 insertion-point corpus checks + M3 dispatch reach more code |
-| 12 | **Insertion points: parameter names / entire body / URL path filename / URL path folders** | ✅ | ❌ | server-side-log injection, path-based routing bugs |
-| 13 | **Insertion points: encoding + nesting + base64 detection** | ✅ | 🟡 per-type splice only | multi-layer-encoded data (base64→JSON) |
-| 14 | **Insertion points: payload relocation** (URL↔body↔cookie) | ✅ 6 rules | ❌ | WAF/per-parameter-validation bypass |
+| 11 | **Insertion points: breadth** | ✅ 8 types | 🟡 4 DSL kinds dispatched; XML+multipart modelled; 4 more families enumerable | the 9 insertion-point corpus checks + M3 dispatch reach more code |
+| 12 | **Insertion points: parameter names / entire body / URL path filename / URL path folders** | ✅ | 🟡 enumerable via `Enumerate`, not reachable from BCheck grammar | server-side-log injection, path-based routing bugs |
+| 13 | **Insertion points: encoding + nesting + base64 detection** | ✅ | 🟡 per-type splice + XML/path escaping; no nesting/base64 | multi-layer-encoded data (base64→JSON) |
+| 14 | **Insertion points: payload relocation** (URL↔body↔cookie) | ✅ 6 rules | 🟡 `Relocations()` exposed, not wired into dispatch | WAF/per-parameter-validation bypass |
 | 15 | **Insertion points: frequent-IP lightweight audit** | ✅ | 🟡 budgets exist, no lightweight heuristic | redundant-work reduction |
 | 16 | **Audit prioritization** (80/20 exposure/interest) | ✅ dynamic queue | ❌ | right items first in long scans |
 | 17 | **Session maintenance during audit** (path replay, checkpoint/rollback) | ✅ | ❌ | audited requests stay in-session (single-use tokens) |

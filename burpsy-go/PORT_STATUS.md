@@ -12,6 +12,45 @@
 
 ## Recent Work — verified
 
+### 2026-08-11 — BCheck insertion-point breadth: XML, multipart, names, paths, whole body, relocation
+
+Built on the 08-03 enumeration port. `internal/bcheck/insertion.go`:
+
+- **XML bodies are modelled**: text nodes and attribute values are spliceable
+  points (path-addressable, repeated elements get `[0]`/`[1]` ordinals like JSON
+  arrays); CDATA is a raw-text point (escaping would hand the app a different
+  payload than written); comments/DOCTYPE/PIs are skipped as inert. Text and
+  attribute payloads are escaped (`& < >` always, `" '` in attributes only) —
+  only the bytes that decide parsing.
+- **Multipart bodies are modelled**: each part's value is a point, file parts
+  also yield a `filename=` point; values are opaque octets (codingRaw) because
+  the only framing decider is the boundary, which the splice never touches.
+  The boundary is parsed case-preserved; a multipart body with no boundary is
+  still declined (framing unknowable). The CRLF before a delimiter belongs to
+  the delimiter line, not the value.
+- **Four new families, enumerable but not DSL-namable**: `param-name` (query
+  names → form names → JSON keys), `path-folder`, `path-filename`, `body-whole`
+  (declines non-UTF-8 bodies). `any` never expands to them — a check that named
+  one position must not report findings from another. The DSL still names only
+  the four Burp-visible kinds; the engine enumerates more for native-engine and
+  operator consumers.
+- **`Relocations(req)`** returns same-named sibling points across
+  query/body/cookie containers — the payload-relocation rule set, exposed as
+  capability. Deliberately not wired into BCheck dispatch (a check must not
+  silently test a position it did not ask for).
+- **Container detection order** JSON → XML → multipart → form → plain-text
+  decline. XML precedes the form heuristic because an XML declaration carries
+  `="` pairs and would be mis-detected as a form on a missing Content-Type.
+- Honest counting unchanged: non-UTF-8 and plain-text bodies are **declined**
+  (recorded as skipped), never silently empty; unparseable requests too.
+
+**Verified:** full `go build ./...`, `go vet ./...`, `go test ./...` green;
+tests added for multipart values/filenames/boundary-refusal, XML text/attr/CDATA
+points + escape-on-splice, param-name across containers, path folders/file,
+body-whole, and Relocations. The multipart/XML decline tests from 08-03 were
+rewritten to assert the now-modelled behaviour; decline coverage moved to
+plain-text and boundaryless-multipart bodies, which still refuse.
+
 ### 2026-08-03 — BCheck insertion-point enumeration (Go)
 
 Ported `crates/bcheck/src/insertion.rs` (722 lines) to `internal/bcheck/insertion.go`:
@@ -29,8 +68,10 @@ Ported `crates/bcheck/src/insertion.rs` (722 lines) to `internal/bcheck/insertio
   (percent-escape for form containers, JSON-escape inside string literals,
   nothing for header values). The base value is never re-encoded — that would
   rewrite bytes the check did not ask to change.
-- Honest counting: a multipart, XML or non-UTF-8 body is **declined** (recorded
+- Honest counting: a non-UTF-8 or plain-text body is **declined** (recorded
   as skipped), never silently empty. An unparseable request is also declined.
+  (Multipart and XML were declined then too; both are modelled now — see
+  2026-08-11 above.)
 - 22 tests in `insertion_test.go` mirroring the Rust suite word for word
   (fixed order, no-`=` clauses skipped, JSON string-only points, reserved
   headers, mid-codepoint splice flooring, Content-Length following the body).
