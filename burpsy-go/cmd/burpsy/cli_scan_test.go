@@ -33,11 +33,11 @@ given request then
 		t.Fatal(err)
 	}
 
-	plain, err := newCLIContext("", 1<<20, "*", "", "", "", "")
+	plain, err := newCLIContext("", 1<<20, "*", "", "", "", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("newCLIContext (no corpus): %v", err)
 	}
-	wired, err := newCLIContext("", 1<<20, "*", "", "", dir, "")
+	wired, err := newCLIContext("", 1<<20, "*", "", "", dir, "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("newCLIContext (corpus): %v", err)
 	}

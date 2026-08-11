@@ -124,6 +124,9 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 		if s.toolRunner != nil {
 			active = active.WithToolRunner(s.toolRunner)
 		}
+		if s.collaborator != nil {
+			active = active.WithCollaborator(s.collaborator)
+		}
 		s.scanner = active
 	}
 	body := map[string]interface{}{

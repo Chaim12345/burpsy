@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -341,7 +342,8 @@ func containsSend(stmts []Statement) bool {
 }
 
 // containsInteractions walks conditions for a `<type> interactions` construct.
-// The parser represents it as an equality with the right operand "interactions".
+// The parser represents it with Operator "interactions" and the polled kind
+// (any|dns|http|smtp) as the left operand's string value.
 func containsInteractions(stmts []Statement) bool {
 	for _, s := range stmts {
 		switch t := s.(type) {
@@ -364,10 +366,11 @@ func exprHasInteractions(e BoolExpr) bool {
 		return (e.LHS != nil && exprHasInteractions(*e.LHS)) ||
 			(e.RHS != nil && exprHasInteractions(*e.RHS))
 	}
-	// A bare `<type> interactions` parses as a comparison with operator "is" and
-	// right operand "interactions" (e.g. `http interactions`).
-	return strings.EqualFold(e.Operator, "is") &&
-		strings.EqualFold(e.Right.StringVal, "interactions")
+	// `<type> interactions` parses with Operator "interactions" and the kind as
+	// the left operand's string value (e.g. `http interactions` — see
+	// parser.go's `<type> interactions` case). Anything else is a comparison the
+	// evaluator evaluates, not an interaction poll.
+	return strings.EqualFold(e.Operator, "interactions")
 }
 
 // Context holds the execution context.
@@ -400,6 +403,17 @@ type Context struct {
 	// runTool hands it to the runner so a hung tool is killed with the audit
 	// that spawned it. Nil defers to the runner's own timeout.
 	toolCtx context.Context
+	// collaborator is the interaction-server seam `<type> interactions`
+	// conditions and `{generate_collaborator_address()}` dispatch through. Nil
+	// means no server was attached — a check that needs one is refused as
+	// ActiveUnsupported rather than run against nothing, exactly like a `run
+	// tool` check without a runner.
+	collaborator Collaborator
+	// collabAddrs records every address `{generate_collaborator_address()}`
+	// resolved for this run. The `interactions` condition polls exactly these
+	// addresses, so attribution never bleeds between checks or targets even
+	// though the server is shared process-wide.
+	collabAddrs []string
 	// tools records every tool run in order; the `called` name addresses its own entry. Always
 	// a fresh list per point and per `run for each` iteration, like sent — a later iteration
 	// must not see an earlier one's `{probe.stdout}`.
@@ -440,6 +454,14 @@ func NewContext() *Context {
 // nothing.
 func (ctx *Context) SetToolRunner(r ToolRunner) {
 	ctx.toolRunner = r
+}
+
+// SetCollaborator attaches the interaction server `{generate_collaborator_address()}`
+// and `<type> interactions` dispatch through. The active scanner calls this
+// alongside setting the sink; without it a collaborator check is refused
+// (NeedsCollaborator + nil seam) rather than run against nothing.
+func (ctx *Context) SetCollaborator(c Collaborator) {
+	ctx.collaborator = c
 }
 
 // SetToolContext attaches the caller's context to the tool seam, so a tool
@@ -589,6 +611,19 @@ func (ctx *Context) resolveRef(name string) string {
 		}
 		ctx.ensureRNG()
 		return randomStr(&ctx.rng, n)
+	case name == "generate_collaborator_address()":
+		// Zero-argument builtin: Burp returns a fresh, unique address under the
+		// collaborator base. A nil seam renders empty, matching Burp's rendering
+		// of an absent binding — but such a check is refused before evaluation
+		// via NeedsCollaborator, so this only fires when a caller miswired the
+		// seam.
+		if ctx.collaborator == nil {
+			ctx.recordUnresolved(name)
+			return ""
+		}
+		addr := ctx.collaborator.NewAddress()
+		ctx.collabAddrs = append(ctx.collabAddrs, addr)
+		return addr
 	}
 	s, ok := ctx.resolvePathOpt(name)
 	if !ok {
@@ -1548,6 +1583,14 @@ func evalBoolExpr(expr BoolExpr, ctx *Context) bool {
 			return false
 		}
 		return re.MatchString(l)
+	case "interactions":
+		// `<type> interactions` — the parser stores the type (any|dns|http|
+		// smtp) as the left operand's string value. Absence of a seam is
+		// absence of evidence: false, never true.
+		if ctx.collaborator == nil {
+			return false
+		}
+		return ctx.pollInteractions(expr.Left.StringVal)
 	}
 	return false
 }
@@ -1556,4 +1599,44 @@ func contains(s, substr string) bool {
 	// strings.Contains uses a tuned search (Rabin-Karp for long needles); the
 	// hand-rolled O(n*m) loop it replaced was the slow path for large bodies.
 	return strings.Contains(s, substr)
+}
+
+// InteractionSettleTimeout bounds how long an `<type> interactions` condition
+// waits for traffic the probed target triggers *asynchronously* — a proxy that
+// forwards an injected header, say, or a mail server that relays after the
+// probe response was already read. Synchronous interactions (the target
+// fetches the injected URL before answering) are recorded by the first poll,
+// so the wait only costs when the interaction is late or never comes. Burp
+// has the same race and no wait at all; the settle window is a deliberate
+// improvement, and it is a variable so operators can tune it or zero it.
+var InteractionSettleTimeout = 300 * time.Millisecond
+
+// interactionPollInterval is how often the settle window re-asks the server.
+const interactionPollInterval = 50 * time.Millisecond
+
+// pollInteractions waits briefly for an interaction matching kind and reports
+// it. kind is "any", "dns", "http" or "smtp" as parsed from the condition.
+func (ctx *Context) pollInteractions(kind string) bool {
+	if len(ctx.collabAddrs) == 0 {
+		return false
+	}
+	deadline := time.Now().Add(InteractionSettleTimeout)
+	for {
+		dns, http, smtp := ctx.collaborator.Interactions(ctx.collabAddrs)
+		var hit bool
+		switch kind {
+		case "dns":
+			hit = dns
+		case "http":
+			hit = http
+		case "smtp":
+			hit = smtp
+		default: // "any"
+			hit = dns || http || smtp
+		}
+		if hit || time.Now().After(deadline) {
+			return hit
+		}
+		time.Sleep(interactionPollInterval)
+	}
 }

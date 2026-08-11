@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/collaborator"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/persist"
@@ -39,6 +40,17 @@ func main() {
 	// that invokes a tool not named here is refused — the same gate as the egress chokepoint.
 	// Tool execution is operator policy because it runs arbitrary external binaries.
 	toolsFlag := flag.String("tools", "", "allowlist external tools for `run tool` bchecks: sqlmap=/usr/bin/sqlmap,jwt_tool=/path (comma-separated name=path)")
+	// Interaction server (Burp Collaborator in miniature): enabled by naming a
+	// base domain. No flag, no server, and corpus checks whose verdict needs
+	// `<type> interactions` stay counted-but-excluded — the same operator
+	// policy as -tools. The DNS listener answers A queries for the base and
+	// points at the HTTP listener; a real deployment points a wildcard DNS
+	// record for the base at this host and binds :53/:80. Empty listener
+	// addresses disable that protocol.
+	collabBase := flag.String("collab-base", "", "enable the interaction server; issued addresses are <token>.<base>")
+	collabHTTP := flag.String("collab-http", "127.0.0.1:18888", "interaction server HTTP listener (\"\" disables)")
+	collabDNS := flag.String("collab-dns", "127.0.0.1:15353", "interaction server DNS listener (\"\" disables)")
+	collabSMTP := flag.String("collab-smtp", "127.0.0.1:12525", "interaction server SMTP listener (\"\" disables)")
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
@@ -64,7 +76,7 @@ func main() {
 	// engines directly (no HTTP) and exit. Global flags above still parse, so
 	// `burpsy -db data.db history` reads the same database the proxy writes.
 	if flag.NArg() > 0 {
-		os.Exit(runCLI(flag.Arg(0), flag.Args()[1:], *captureDir, *segmentBytes, *scopeInclude, *scopeExclude, *dbFile, *bchecksDir, *toolsFlag))
+		os.Exit(runCLI(flag.Arg(0), flag.Args()[1:], *captureDir, *segmentBytes, *scopeInclude, *scopeExclude, *dbFile, *bchecksDir, *toolsFlag, *collabBase, *collabHTTP, *collabDNS, *collabSMTP))
 	}
 
 	// Handle store verify subcommand
@@ -206,6 +218,27 @@ func main() {
 	if toolAllowlist != nil {
 		toolRunner = scanner.NewToolRunner(scanner.ToolRunnerConfig{Tools: toolAllowlist})
 	}
+	// The interaction server is operator policy like the -tools allowlist: no
+	// flag, no server, and collaborator checks stay counted-but-excluded. A
+	// listener that cannot bind is a construction error — refusing to start
+	// under a half-wired oracle is the honest alternative to checks that
+	// silently cannot verdict.
+	var collab bcheck.Collaborator
+	if *collabBase != "" {
+		srv, cerr := collaborator.New(collaborator.Config{
+			Base: *collabBase, HTTP: *collabHTTP, DNS: *collabDNS, SMTP: *collabSMTP,
+		})
+		if cerr != nil {
+			log.Fatalf("Failed to start interaction server: %v", cerr)
+		}
+		collab = srv
+		logger.Info("interaction server listening",
+			zap.String("base", srv.Base()),
+			zap.String("http", srv.HTTPAddr()),
+			zap.String("dns", srv.DNSAddr()),
+			zap.String("smtp", srv.SMTPAddr()))
+		defer srv.Close()
+	}
 	if *bchecksDir != "" {
 		ps, err := scanner.LoadDir(*bchecksDir, store, scope, logger)
 		if err != nil {
@@ -267,6 +300,7 @@ func main() {
 			WithScope(scope).
 			WithCorpusChecks(passiveScanner.ActiveChecks()).
 			WithToolRunner(toolRunner).
+			WithCollaborator(collab).
 			WithAuditConfig(auditConfig)).
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/collaborator"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
@@ -62,6 +63,9 @@ type cliContext struct {
 	// the open handle, nil when dbPath is empty.
 	dbPath  string
 	persist *persist.Store
+	// collab is the interaction server this CLI run started, nil when the
+	// -collab-base flag was not given. Closed when the command returns.
+	collab *collaborator.Server
 }
 
 // cliCommands is the dispatch table. main() routes here when the first
@@ -82,7 +86,7 @@ func registerCLI(cmds ...*cliCommand) {
 // same passive set the proxy would run. tools is the -tools allowlist (name=path,
 // comma-separated) for `run tool` statements; empty keeps tool checks counted
 // but excluded from the audit set.
-func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) (*cliContext, error) {
+func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, collabBase, collabHTTP, collabDNS, collabSMTP string) (*cliContext, error) {
 	logger := zap.NewNop()
 	var store *core.TrafficStore
 	var err error
@@ -128,6 +132,21 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 	if toolAllowlist != nil {
 		toolRunner = scanner.NewToolRunner(scanner.ToolRunnerConfig{Tools: toolAllowlist})
 	}
+	// The interaction server is operator policy like -tools: enabled only by a
+	// -collab-base flag. A listener that cannot bind is a construction error,
+	// and nil keeps collaborator checks counted-but-excluded (see
+	// scanner.corpusActiveChecks).
+	var collab bcheck.Collaborator
+	var collabSrv *collaborator.Server
+	if collabBase != "" {
+		srv, cerr := collaborator.New(collaborator.Config{
+			Base: collabBase, HTTP: collabHTTP, DNS: collabDNS, SMTP: collabSMTP,
+		})
+		if cerr != nil {
+			return nil, cerr
+		}
+		collab, collabSrv = srv, srv
+	}
 	ctx := &cliContext{
 		store:    store,
 		scope:    scope,
@@ -155,7 +174,8 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 			WithSender(sender.NewSender(senderCfg)).
 			WithScope(scope).
 			WithCorpusChecks(corpusChecks).
-			WithToolRunner(toolRunner),
+			WithToolRunner(toolRunner).
+			WithCollaborator(collab),
 		mr:        matchreplace.NewRuleSet(),
 		toolLog:   toollog.New(),
 		organizer: organizer.New(),
@@ -163,6 +183,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		sender:    sender.NewSender(senderCfg),
 		out:       os.Stdout,
 		dbPath:    dbFile,
+		collab:    collabSrv,
 	}
 	if err := ctx.loadState(); err != nil {
 		return nil, err
@@ -171,7 +192,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 }
 
 // runCLI dispatches to a subcommand and exits. Returns the process exit code.
-func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) int {
+func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, collabBase, collabHTTP, collabDNS, collabSMTP string) int {
 	if name == "help" || name == "-h" || name == "--help" {
 		printCLIHelp()
 		return 0
@@ -181,10 +202,13 @@ func runCLI(name string, args []string, captureDir string, segmentBytes uint64, 
 		fmt.Fprintf(os.Stderr, "burpsy: unknown command %q (see \"burpsy help\")\n", name)
 		return 2
 	}
-	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools)
+	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, collabBase, collabHTTP, collabDNS, collabSMTP)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "burpsy: %v\n", err)
 		return 1
+	}
+	if ctx.collab != nil {
+		defer ctx.collab.Close()
 	}
 	if err := cmd.run(ctx, args); err != nil {
 		fmt.Fprintf(os.Stderr, "burpsy %s: %v\n", name, err)
@@ -199,7 +223,7 @@ func printCLIHelp() {
 	fmt.Println("Server mode (default, no command): run the proxy and web UI.")
 	fmt.Println("Server flags: -proxy -web -capture-dir -scope-include -scope-exclude",
 		"-intercept-tls -ca-dir -segment-bytes -tls-passthrough -tls-passthrough-port",
-		"-tls-defaults -store-verify -bchecks -tools")
+		"-tls-defaults -store-verify -bchecks -tools -collab-base -collab-http -collab-dns -collab-smtp")
 	fmt.Println()
 	fmt.Println("Commands (drive engines directly, no HTTP):")
 	fmt.Println()

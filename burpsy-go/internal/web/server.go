@@ -33,7 +33,11 @@ type Server struct {
 	// on the lazily built audit scanner. Nil means tool execution is disabled;
 	// corpus checks that need a tool are counted at load and never admitted.
 	toolRunner bcheck.ToolRunner
-	findings   *core.FindingStore
+	// collaborator is the interaction server blind checks dispatch through on
+	// the lazily built audit scanner. Nil means interactions are disabled;
+	// corpus checks that need one are counted at load and never admitted.
+	collaborator bcheck.Collaborator
+	findings     *core.FindingStore
 	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
 	// falls back to its own description and remediation — the catalogue enriches findings, it is
 	// never required to render one.
@@ -151,6 +155,17 @@ func (s *Server) WithSender(snd *sender.Sender) *Server {
 // corpus itself.
 func (s *Server) WithToolRunner(r bcheck.ToolRunner) *Server {
 	s.toolRunner = r
+	return s
+}
+
+// WithCollaborator attaches the interaction server blind checks dispatch
+// through, for the lazily built audit scanner. Without one, corpus checks
+// whose verdict needs `<type> interactions` are counted at load and never
+// admitted — see scanner.corpusActiveChecks. The server never builds a server
+// of its own; interaction serving is operator policy, supplied from the
+// command line like the corpus itself.
+func (s *Server) WithCollaborator(c bcheck.Collaborator) *Server {
+	s.collaborator = c
 	return s
 }
 

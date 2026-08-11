@@ -92,7 +92,11 @@ func (s *ActiveScanner) corpusActiveChecks() []activeCheck {
 		// go — dispatch would fail it as ActiveNeedsPoint on every run. Left out rather than
 		// dispatched, and still counted as NeedsInsertionPoint by the load report, which is the
 		// honest place for a check the engine structurally cannot verdict.
-		if scope != DispatchScopePerInsertionPoint && !c.M2Runnable() {
+		//
+		// NeedsCollaborator is the exception: its checks are non-M2 by definition (M2Runnable
+		// negates it), but they dispatch fine in a normal scope once the operator attaches an
+		// interaction server — the seam gate below is the only thing that should exclude them.
+		if scope != DispatchScopePerInsertionPoint && !c.M2Runnable() && !c.NeedsCollaborator() {
 			continue
 		}
 		// A check that needs an external tool cannot run without the allowlist
@@ -100,6 +104,13 @@ func (s *ActiveScanner) corpusActiveChecks() []activeCheck {
 		// at load time — rather than admitted and failed as ActiveUnsupported on
 		// every exchange, which would log the same refusal per item.
 		if c.NeedsTool() && s.toolRunner == nil {
+			continue
+		}
+		// A check whose verdict needs `<type> interactions` cannot run without
+		// the operator's interaction server. Same policy as the tool runner:
+		// left out of the dispatch set (LoadReport.Collaborator) rather than
+		// admitted and refused per exchange.
+		if c.NeedsCollaborator() && s.collaborator == nil {
 			continue
 		}
 		cc := c
@@ -145,6 +156,7 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 	// pre-tool behaviour — a check that somehow reaches `run tool` without one
 	// is refused by the evaluator, never skipped.
 	bctx.SetToolRunner(s.toolRunner)
+	bctx.SetCollaborator(s.collaborator)
 	findings, rerr := bcheck.RunActive(check, bctx, sink, &bcheck.Target{
 		Host: ex.Host,
 		Port: ex.Port,

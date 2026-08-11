@@ -39,6 +39,11 @@ type ActiveScanner struct {
 	// that need a tool are counted at load (LoadReport.Tools) and excluded
 	// from the dispatch set, never run against nothing.
 	toolRunner bcheck.ToolRunner
+	// collaborator is the interaction server blind corpus checks dispatch
+	// through. Nil keeps them counted-but-excluded (see corpusActiveChecks):
+	// dispatched only when the operator attaches one, exactly like the tool
+	// runner.
+	collaborator bcheck.Collaborator
 	// jsLib and jwtWeak are the two native checks (SCAN-01 in js_vulns.go, SCAN-02 in jwt_weak.go).
 	// Each carries its own dataset and coverage counters, so they are built once per scanner and
 	// reused across audits rather than rebuilt per exchange — re-parsing the 514 KB retire.js corpus
@@ -129,6 +134,15 @@ func (s *ActiveScanner) WithSender(snd *sender.Sender) *ActiveScanner {
 // built, not when the corpus was loaded.
 func (s *ActiveScanner) WithToolRunner(r bcheck.ToolRunner) *ActiveScanner {
 	s.toolRunner = r
+	return s
+}
+
+// WithCollaborator attaches the interaction server blind checks dispatch
+// through. Without it, a check whose verdict needs `<type> interactions` is
+// left out of the dispatch set (LoadReport.Collaborator) rather than failed on
+// every exchange — the same counted-but-excluded policy as the tool runner.
+func (s *ActiveScanner) WithCollaborator(c bcheck.Collaborator) *ActiveScanner {
+	s.collaborator = c
 	return s
 }
 
@@ -527,9 +541,15 @@ type PassiveScanner struct {
 	// tools holds the checks that invoke an external tool via `run tool`. Never
 	// passive; dispatchable only when the ActiveScanner has a runner — see
 	// ActiveChecks and scanner's corpusActiveChecks.
-	tools    []*bcheck.Check
-	report   LoadReport
-	coverage *CoverageTracker
+	tools []*bcheck.Check
+	// collaborators holds the checks whose verdict needs `<type> interactions`.
+	// Never passive; dispatchable only when the ActiveScanner has an
+	// interaction server — see ActiveChecks and scanner's corpusActiveChecks.
+	// They used to be counted and dropped; they are now counted *and* kept, so
+	// a scan with -collab-base runs them instead of silently losing them.
+	collaborators []*bcheck.Check
+	report        LoadReport
+	coverage      *CoverageTracker
 
 	findings   []*Finding
 	findingsMu sync.RWMutex

@@ -107,6 +107,25 @@ type ToolResult struct {
 	ExitCode int
 }
 
+// Collaborator is the interaction-server seam `<type> interactions` conditions
+// and `{generate_collaborator_address()}` dispatch through. An interface rather
+// than a concrete service so the evaluator is testable without a network, and
+// so the caller owns the server, its listeners and its lifetime — a check
+// names an interaction address, never a socket, exactly as a send names bytes,
+// never a connection. Nil means no server was attached: such a check is
+// refused (NeedsCollaborator + nil seam) rather than run against nothing.
+type Collaborator interface {
+	// NewAddress issues a fresh, unique interaction address (a bare hostname
+	// under the server's base domain, with no scheme — the corpus wraps it in
+	// `http://`, `rmi://` and header values itself). Each address carries its
+	// own token so concurrent checks never share attribution.
+	NewAddress() string
+
+	// Interactions reports which interaction kinds any of the given addresses
+	// have attracted. The addresses are exactly the values NewAddress returned.
+	Interactions(addrs []string) (dns, http, smtp bool)
+}
+
 // Bound is one request/response pair a check can reference: `base`, `latest`,
 // or a named send.
 type Bound struct {
@@ -300,7 +319,7 @@ func (e *ActiveError) Error() string {
 // point gets its own `latest`, its own named bindings and its own
 // `insertion_point_base_value`.
 func RunActive(check *Check, ctx *Context, sink Sink, target *Target) ([]Finding, error) {
-	if check.NeedsCollaborator() {
+	if check.NeedsCollaborator() && ctx.collaborator == nil {
 		return nil, &ActiveError{Kind: ActiveUnsupported, Detail: "needs a collaborator interaction server"}
 	}
 	// A check that invokes an external tool cannot run without the caller's

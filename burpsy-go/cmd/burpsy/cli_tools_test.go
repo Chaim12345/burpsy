@@ -27,11 +27,11 @@ given request then
 		t.Fatal(err)
 	}
 
-	noTools, err := newCLIContext("", 1<<20, "*", "", "", dir, "")
+	noTools, err := newCLIContext("", 1<<20, "*", "", "", dir, "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("newCLIContext (no -tools): %v", err)
 	}
-	withTools, err := newCLIContext("", 1<<20, "*", "", "", dir, "sqlmap=/usr/bin/sqlmap")
+	withTools, err := newCLIContext("", 1<<20, "*", "", "", dir, "sqlmap=/usr/bin/sqlmap", "", "", "", "")
 	if err != nil {
 		t.Fatalf("newCLIContext (with -tools): %v", err)
 	}

@@ -88,10 +88,20 @@ func buildPassiveScanner(store *core.TrafficStore, scope *core.Scope, logger *za
 	active := make([]*bcheck.Check, 0)
 	insertion := make([]*bcheck.Check, 0)
 	tools := make([]*bcheck.Check, 0)
+	collaborators := make([]*bcheck.Check, 0)
 	for _, c := range checks {
 		switch {
 		case c.NeedsCollaborator():
+			// Never passive — it needs a live oracle — and active only when a
+			// caller attaches an interaction server. Counted here regardless,
+			// and kept for ActiveChecks so the active engine can dispatch it
+			// under the operator's server. The scanner's corpusActiveChecks
+			// applies the nil-server gate; this bucket is the honest load-time
+			// count. They used to be dropped at load, which made the dispatch
+			// gate unreachable: a scan with -collab-base silently ran without
+			// them.
 			report.Collaborator++
+			collaborators = append(collaborators, c)
 		case c.NeedsTool():
 			// Never passive — it executes an external process — and active only
 			// when a caller attaches a tool runner. Counted here regardless, and
@@ -115,15 +125,16 @@ func buildPassiveScanner(store *core.TrafficStore, scope *core.Scope, logger *za
 		}
 	}
 	return &PassiveScanner{
-		store:     store,
-		logger:    logger,
-		scope:     scope,
-		passive:   passive,
-		active:    active,
-		insertion: insertion,
-		tools:     tools,
-		report:    report,
-		coverage:  newCoverageTracker(passive),
+		store:         store,
+		logger:        logger,
+		scope:         scope,
+		passive:       passive,
+		active:        active,
+		insertion:     insertion,
+		tools:         tools,
+		collaborators: collaborators,
+		report:        report,
+		coverage:      newCoverageTracker(passive),
 	}
 }
 
@@ -140,18 +151,20 @@ func (s *PassiveScanner) ActiveLoaded() int {
 // ActiveChecks returns the corpus checks the active audit engine can dispatch,
 // in load order: the M2-runnable set (`given host` / `path` / `request`) plus
 // the insertion-point set (`given insertion point`, or any check carrying
-// `send payload`), plus the tool set (`run tool`, which the ActiveScanner
-// gates on its configured runner). Passive and collaborator checks are
-// excluded here — the passive set is this scanner's own, and a collaborator
-// check cannot run without an interaction server.
+// `send payload`), plus the tool set (`run tool`) and the collaborator set
+// (`<type> interactions`). The latter two are gated by the ActiveScanner on
+// its configured runner and interaction server respectively — without them
+// they are counted at load and excluded from the dispatch set. Passive checks
+// are excluded here: the passive set is this scanner's own.
 //
 // A fresh slice each call: the caller (the ActiveScanner) must be free to hold
 // it without this scanner's later loads mutating it under it.
 func (s *PassiveScanner) ActiveChecks() []*bcheck.Check {
-	out := make([]*bcheck.Check, 0, len(s.active)+len(s.insertion)+len(s.tools))
+	out := make([]*bcheck.Check, 0, len(s.active)+len(s.insertion)+len(s.tools)+len(s.collaborators))
 	out = append(out, s.active...)
 	out = append(out, s.insertion...)
 	out = append(out, s.tools...)
+	out = append(out, s.collaborators...)
 	return out
 }
 
