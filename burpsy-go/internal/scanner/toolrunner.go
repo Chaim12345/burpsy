@@ -71,7 +71,11 @@ type execToolRunner struct {
 
 // Run executes one `run tool`: resolve the name against the allowlist, run the
 // mapped binary with the args directly (no shell), capture bounded output.
-func (r *execToolRunner) Run(tool string, args []string) (bcheck.ToolResult, error) {
+//
+// The audit's context bounds the run when one was handed over, so a hung tool
+// dies with the audit that spawned it rather than running on; the runner's own
+// timeout is the backstop either way, and a nil ctx still times out.
+func (r *execToolRunner) Run(ctx context.Context, tool string, args []string) (bcheck.ToolResult, error) {
 	bin, ok := r.cfg.Tools[tool]
 	if !ok {
 		return bcheck.ToolResult{}, fmt.Errorf("tool %q is not in the configured allowlist", tool)
@@ -81,16 +85,19 @@ func (r *execToolRunner) Run(tool string, args []string) (bcheck.ToolResult, err
 	if bin == "" {
 		return bcheck.ToolResult{}, fmt.Errorf("tool %q maps to an empty path", tool)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.Timeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithTimeout(ctx, r.cfg.Timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.CommandContext(runCtx, bin, args...)
 	var stdout, stderr cappedBuffer
 	stdout.limit = r.cfg.MaxOutputBytes
 	stderr.limit = r.cfg.MaxOutputBytes
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
-	if ctx.Err() == context.DeadlineExceeded {
+	if runCtx.Err() == context.DeadlineExceeded {
 		return bcheck.ToolResult{}, fmt.Errorf("tool %q timed out after %s", tool, r.cfg.Timeout)
 	}
 	// A launch failure (binary missing, not executable) is an error: the check

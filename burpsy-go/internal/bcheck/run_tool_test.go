@@ -1,6 +1,7 @@
 package bcheck
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -18,7 +19,7 @@ type mockToolRun struct {
 	args []string
 }
 
-func (m *mockToolRunner) Run(tool string, args []string) (ToolResult, error) {
+func (m *mockToolRunner) Run(ctx context.Context, tool string, args []string) (ToolResult, error) {
 	m.runs = append(m.runs, mockToolRun{tool: tool, args: args})
 	if m.err != nil {
 		return ToolResult{}, m.err

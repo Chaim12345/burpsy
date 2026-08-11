@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 // The runner refuses a tool that is not on the allowlist — the whole gate.
 func TestExecToolRunnerRefusesUnlistedTool(t *testing.T) {
 	r := NewToolRunner(ToolRunnerConfig{Tools: map[string]string{"sqlmap": "/bin/true"}})
-	_, err := r.Run("jwt_tool", nil)
+	_, err := r.Run(context.Background(), "jwt_tool", nil)
 	if err == nil {
 		t.Fatal("Run succeeded for a tool that is not allowlisted")
 	}
@@ -22,7 +23,7 @@ func TestExecToolRunnerRefusesUnlistedTool(t *testing.T) {
 // stdout, and reports the exit code as data.
 func TestExecToolRunnerRunsAllowlistedTool(t *testing.T) {
 	r := NewToolRunner(ToolRunnerConfig{Tools: map[string]string{"echo": "/bin/echo"}})
-	res, err := r.Run("echo", []string{"hello from the check"})
+	res, err := r.Run(context.Background(), "echo", []string{"hello from the check"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestExecToolRunnerRunsAllowlistedTool(t *testing.T) {
 // check compares against.
 func TestExecToolRunnerNonZeroExitIsNotAnError(t *testing.T) {
 	r := NewToolRunner(ToolRunnerConfig{Tools: map[string]string{"sh": "/bin/sh"}})
-	res, err := r.Run("sh", []string{"-c", "exit 3"})
+	res, err := r.Run(context.Background(), "sh", []string{"-c", "exit 3"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestExecToolRunnerNonZeroExitIsNotAnError(t *testing.T) {
 // see the tool it asked for.
 func TestExecToolRunnerLaunchFailureIsAnError(t *testing.T) {
 	r := NewToolRunner(ToolRunnerConfig{Tools: map[string]string{"ghost": "/nonexistent/binary"}})
-	_, err := r.Run("ghost", nil)
+	_, err := r.Run(context.Background(), "ghost", nil)
 	if err == nil {
 		t.Fatal("Run succeeded for a binary that does not exist")
 	}
@@ -64,7 +65,7 @@ func TestExecToolRunnerCapsOutput(t *testing.T) {
 		Tools:          map[string]string{"sh": "/bin/sh"},
 		MaxOutputBytes: 16,
 	})
-	res, err := r.Run("sh", []string{"-c", "printf 'abcdefghijklmnopqrstuvwxyz'"})
+	res, err := r.Run(context.Background(), "sh", []string{"-c", "printf 'abcdefghijklmnopqrstuvwxyz'"})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestExecToolRunnerTimesOut(t *testing.T) {
 		Tools:   map[string]string{"sh": "/bin/sh"},
 		Timeout: 50 * time.Millisecond,
 	})
-	_, err := r.Run("sh", []string{"-c", "sleep 5"})
+	_, err := r.Run(context.Background(), "sh", []string{"-c", "sleep 5"})
 	if err == nil {
 		t.Fatal("Run succeeded for a tool that should have timed out")
 	}
