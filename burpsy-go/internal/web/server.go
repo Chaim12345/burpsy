@@ -324,6 +324,11 @@ func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 }
 
 func (s *Server) setupRoutes() {
+	// Health endpoints stay dependency-free so supervisors can distinguish a
+	// process that is listening from one that is serving the application.
+	s.mux.HandleFunc("/healthz", s.handleHealth)
+	s.mux.HandleFunc("/readyz", s.handleHealth)
+
 	// Capture + stats
 	s.mux.HandleFunc("/api/history", s.handleHistory)
 	s.mux.HandleFunc("/api/message/", s.handleMessage)
@@ -425,6 +430,19 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write([]byte("ok\n"))
+	}
 }
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
