@@ -314,6 +314,7 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 			Confidence:  core.ParseConfidence(f.Confidence),
 			Description: f.Description,
 			Remediation: f.Solution,
+			Param:       f.Param,
 		}
 		nf.TaskID = ex.TaskID
 		if ex.Response != nil {

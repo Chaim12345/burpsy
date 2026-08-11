@@ -9,12 +9,13 @@
 //
 // # What the check set is here
 //
-// Rust dispatches a parsed BCheck corpus: `PassiveScanner.active` is a `Vec<Check>` and a check's
-// `given` clause names its dispatch scope. Go's ActiveScanner has no BCheck evaluator for active
-// checks yet — it has seven ScanConfig switches in front of five hand-written implementations. So
-// activeCheckSet is that table, made explicit: one entry per switch, each with the dispatch scope
-// its answer is keyed at and the function that runs it. The engine above it is scope-agnostic, so
-// swapping in a bcheck-driven set later is a change to this table and nothing else.
+// Two sources, both dispatched by this engine. First, the built-in table: seven ScanConfig
+// switches in front of five hand-written implementations, made explicit as activeCheckSet — one
+// entry per switch, each with the dispatch scope its answer is keyed at and the function that
+// runs it. Second, the loaded BCheck corpus's active checks (`given host/path/request`, plus the
+// insertion-point set), which enter as activeCheck entries built by corpusActiveChecks from the
+// checks WithCorpusChecks supplied. The engine above the table is scope-agnostic, which is what
+// lets the corpus entries ride the same plan/ledger/disposition machinery as the built-ins.
 //
 // Two of the seven switches — CheckSSRF and CheckXXE — have no implementation behind them. They are
 // in the table with a nil runner and dispatch as DispositionUnsupported, which is the honest answer:
@@ -25,6 +26,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -44,7 +46,13 @@ type activeCheck struct {
 	name    string
 	scope   DispatchScope
 	enabled func(*ScanConfig) bool
-	run     func(*ActiveScanner, context.Context, *core.Exchange) []*Finding
+	// run executes the check. The error is the evaluator's refusal, not a transport detail: a
+	// check the evaluator cannot run at all returns errCheckUnsupported so the audit engine
+	// counts it DispositionUnsupported (Skipped) rather than a clean miss, and any other error
+	// — a failed send, an impossible payload placement — counts as DispositionSendFailed.
+	// A nil run stays the table's honest "configurable but not implemented" marker: counted as
+	// undispatchable, never admitted.
+	run func(*ActiveScanner, context.Context, *core.Exchange) ([]*Finding, error)
 }
 
 // activeCheckSet is the built-in active check set, in table order.
@@ -66,24 +74,24 @@ var activeCheckSet = []activeCheck{
 		name:    "SQL injection",
 		scope:   DispatchScopePerUrl,
 		enabled: func(c *ScanConfig) bool { return c.CheckSqli },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
-			return s.checkSQLi(ctx, ex)
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
+			return s.checkSQLi(ctx, ex), nil
 		},
 	},
 	{
 		name:    "Cross-site scripting (reflected)",
 		scope:   DispatchScopePerUrl,
 		enabled: func(c *ScanConfig) bool { return c.CheckXss },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
-			return s.checkXSS(ctx, ex)
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
+			return s.checkXSS(ctx, ex), nil
 		},
 	},
 	{
 		name:    "Path traversal",
 		scope:   DispatchScopePerUrl,
 		enabled: func(c *ScanConfig) bool { return c.CheckPathTraversal },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
-			return s.checkPathTraversal(ctx, ex)
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
+			return s.checkPathTraversal(ctx, ex), nil
 		},
 	},
 	// Configurable, and on by default, with nothing behind it. Dispatches as
@@ -104,42 +112,47 @@ var activeCheckSet = []activeCheck{
 		name:    "JWT weak secret",
 		scope:   DispatchScopePerRequest,
 		enabled: func(c *ScanConfig) bool { return c.CheckJwtWeak },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
-			return s.checkJWTWeak(ctx, ex)
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
+			return s.checkJWTWeak(ctx, ex), nil
 		},
 	},
 	{
 		name:    "Vulnerable JavaScript library",
 		scope:   DispatchScopePerRequest,
 		enabled: func(c *ScanConfig) bool { return c.CheckJSVulns },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) []*Finding {
-			return s.checkJSVulns(ctx, ex)
+		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
+			return s.checkJSVulns(ctx, ex), nil
 		},
 	},
 }
 
-// enabledChecks is the check set one run dispatches: the table entries whose ScanConfig switch is
-// on, in table order.
+// enabledChecks is the check set one run dispatches: the built-in table entries whose ScanConfig
+// switch is on, in table order, followed by the loaded corpus's active checks when the corpus
+// switch is on.
 //
 // Snapshotted once per run, because a check's position in this slice is its identity in the
 // AuditLedger. A set that changed size between two items of one session would make the ledger's
-// bits describe different checks for different items.
-func enabledChecks(cfg *ScanConfig) []activeCheck {
-	if cfg == nil {
+// bits describe different checks for different items. That also fixes the snapshot point for the
+// corpus: a corpus loaded mid-session joins the next run, never a run already in flight.
+func (s *ActiveScanner) enabledChecks() []activeCheck {
+	if s == nil || s.config == nil {
 		return nil
 	}
-	out := make([]activeCheck, 0, len(activeCheckSet))
+	out := make([]activeCheck, 0, len(activeCheckSet)+len(s.corpus))
 	for _, c := range activeCheckSet {
-		if c.enabled(cfg) {
+		if c.enabled(s.config) {
 			out = append(out, c)
 		}
+	}
+	if s.config.CheckCorpus {
+		out = append(out, s.corpusActiveChecks()...)
 	}
 	return out
 }
 
 // ActiveCheckCount reports how many checks are in the set this scanner would dispatch — the figure
 // AuditOutcome.Considered must equal for a dispatched item.
-func (s *ActiveScanner) ActiveCheckCount() int { return len(enabledChecks(s.config)) }
+func (s *ActiveScanner) ActiveCheckCount() int { return len(s.enabledChecks()) }
 
 // UnimplementedCheckCount reports how many of those checks have no implementation behind them and
 // can therefore only ever come back DispositionUnsupported.
@@ -148,7 +161,7 @@ func (s *ActiveScanner) ActiveCheckCount() int { return len(enabledChecks(s.conf
 // checks can produce a verdict".
 func (s *ActiveScanner) UnimplementedCheckCount() int {
 	n := 0
-	for _, c := range enabledChecks(s.config) {
+	for _, c := range s.enabledChecks() {
 		if c.run == nil {
 			n++
 		}
@@ -615,7 +628,7 @@ func (s *ActiveScanner) WithScope(scope *core.Scope) *ActiveScanner {
 // operator who clicks audit again means it.
 func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.ExchangeID, cfg AuditConfig) (AuditOutcome, []*Finding) {
 	run := newAuditRun(cfg)
-	return s.auditItem(ctx, exchangeID, run, enabledChecks(s.config))
+	return s.auditItem(ctx, exchangeID, run, s.enabledChecks())
 }
 
 // AuditSession audits a batch of exchanges under one shared budget, ledger and set of circuit
@@ -648,7 +661,7 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.Exchang
 // whichever worker reaches the admission gate first. The totals are identical either way; only the
 // attribution moves. Items come back in the order requested regardless.
 func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.ExchangeID, cfg AuditConfig) (*SessionOutcome, []*Finding) {
-	checks := enabledChecks(s.config)
+	checks := s.enabledChecks()
 	run := newAuditRun(cfg)
 	breaker := newSessionBreaker(cfg)
 	out := &SessionOutcome{Items: make([]ItemOutcome, len(exchangeIDs))}
@@ -865,8 +878,39 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			}
 
 			before := meter.snapshot()
-			verdict := checks[check].run(s, ictx, ex)
+			verdict, runErr := checks[check].run(s, ictx, ex)
 			d := meter.since(before)
+
+			// A check the evaluator declined is in the same position as one with no implementation:
+			// nothing ran and nothing proved. Counted as Skipped (DispositionUnsupported) so the
+			// check set still partitions and a clean outcome cannot be read as a clean bill of
+			// health for this check.
+			if errors.Is(runErr, errCheckUnsupported) {
+				o.Skipped++
+				if s.logger != nil {
+					s.logger.Warn("active check could not run",
+						zap.String("check", checks[check].name),
+						zap.Uint64("exchange_id", uint64(exchangeID)),
+						zap.Error(runErr))
+				}
+				continue
+			}
+			// A check that failed mid-way — a send failed, or payload placement was impossible —
+			// produced no verdict. Whatever probes went out are already metered; the check itself
+			// is a send failure, and findings it may have produced before the failure are dropped:
+			// a finding about a probe that never completed is not evidence.
+			if runErr != nil {
+				o.SendFailures++
+				o.FindingsDropped += len(verdict)
+				if s.logger != nil {
+					s.logger.Warn("active check failed before a verdict",
+						zap.String("check", checks[check].name),
+						zap.Uint64("exchange_id", uint64(exchangeID)),
+						zap.Error(runErr))
+				}
+				abandoned = breaker.checkFailed()
+				continue
+			}
 
 			// A check that attempted probes and had every one of them fail or be refused saw no
 			// evidence of its own. Its verdict came from the stored response instead, which says

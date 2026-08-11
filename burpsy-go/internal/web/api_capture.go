@@ -316,14 +316,18 @@ type issueAdvisoryLink struct {
 // issueFindingView mirrors the UI's Finding shape. check_name is the rule/check that fired;
 // issue_name the human title; occurrences carry the exchange ids the check saw.
 type issueFindingView struct {
-	ID          uint64                `json:"id"`
-	CheckName   string                `json:"check_name"`
-	IssueName   *string               `json:"issue_name"`
-	Severity    string                `json:"severity"`
-	Confidence  string                `json:"confidence"`
-	Host        string                `json:"host"`
-	Detail      *string               `json:"detail"`
-	Remediation *string               `json:"remediation"`
+	ID          uint64  `json:"id"`
+	CheckName   string  `json:"check_name"`
+	IssueName   *string `json:"issue_name"`
+	Severity    string  `json:"severity"`
+	Confidence  string  `json:"confidence"`
+	Host        string  `json:"host"`
+	Detail      *string `json:"detail"`
+	Remediation *string `json:"remediation"`
+	// Param is the parameter this finding was observed at, omitted when the finding is about a
+	// resource rather than one of its inputs. An insertion-point BCheck or a DOM sink names it;
+	// everything else stays absent so the UI renders an em dash, not an empty cell.
+	Param       string                `json:"param,omitempty"`
 	Occurrences []issueOccurrenceView `json:"occurrences"`
 	TimesSeen   int                   `json:"times_seen"`
 	// Advisory is the catalogue entry for this issue class, when one resolves. Omitted rather than
@@ -357,6 +361,7 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		Confidence:  f.Confidence.String(),
 		Detail:      strPtr(f.Description),
 		Remediation: strPtr(f.Remediation),
+		Param:       f.Param,
 		TimesSeen:   len(f.Occurrences),
 		TaskID:      f.TaskID,
 	}
@@ -467,6 +472,7 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 			Severity:    f.Severity.String(),
 			Confidence:  f.Confidence.String(),
 			Description: f.Description,
+			Param:       f.Param,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

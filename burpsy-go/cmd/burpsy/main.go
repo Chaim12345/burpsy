@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/persist"
@@ -34,6 +35,10 @@ func main() {
 	caDir := flag.String("ca-dir", proxy.DefaultCADir(), "CA certificate directory")
 	segmentBytes := flag.Uint64("segment-bytes", core.DefaultSegmentTargetBytes, "target bytes per segment file")
 	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files and passively scan responses")
+	// Allowlist for the bcheck `run tool` statement: name=path pairs, comma-separated. A check
+	// that invokes a tool not named here is refused — the same gate as the egress chokepoint.
+	// Tool execution is operator policy because it runs arbitrary external binaries.
+	toolsFlag := flag.String("tools", "", "allowlist external tools for `run tool` bchecks: sqlmap=/usr/bin/sqlmap,jwt_tool=/path (comma-separated name=path)")
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
@@ -59,7 +64,7 @@ func main() {
 	// engines directly (no HTTP) and exit. Global flags above still parse, so
 	// `burpsy -db data.db history` reads the same database the proxy writes.
 	if flag.NArg() > 0 {
-		os.Exit(runCLI(flag.Arg(0), flag.Args()[1:], *captureDir, *segmentBytes, *scopeInclude, *scopeExclude, *dbFile))
+		os.Exit(runCLI(flag.Arg(0), flag.Args()[1:], *captureDir, *segmentBytes, *scopeInclude, *scopeExclude, *dbFile, *bchecksDir, *toolsFlag))
 	}
 
 	// Handle store verify subcommand
@@ -190,6 +195,17 @@ func main() {
 	// it the built-in header/cookie checks still run so existing tests keep their
 	// expectations.
 	var passiveScanner *scanner.PassiveScanner
+	// The -tools allowlist becomes a runner only if something was configured. A
+	// malformed entry is a construction error here, before any server starts —
+	// a typo must not surface mid-scan as checks that silently cannot run.
+	toolAllowlist, terr := parseToolAllowlist(*toolsFlag)
+	if terr != nil {
+		log.Fatal(terr)
+	}
+	var toolRunner bcheck.ToolRunner
+	if toolAllowlist != nil {
+		toolRunner = scanner.NewToolRunner(scanner.ToolRunnerConfig{Tools: toolAllowlist})
+	}
 	if *bchecksDir != "" {
 		ps, err := scanner.LoadDir(*bchecksDir, store, scope, logger)
 		if err != nil {
@@ -239,9 +255,18 @@ func main() {
 		// uses. The web server only builds a scoped one of its own when none was attached, so leaving it
 		// off here meant the flag-configured engagement scope silently did not apply to active probes.
 		// WithAuditConfig carries -scan-config, so the endpoint's default is the one the operator named.
+		// The active scanner dispatches the corpus's active checks (`given host/path/request` and
+		// the insertion-point set) alongside the built-in table. The checks come from the same
+		// LoadDir that built the passive scanner, so the two scanners can never disagree about
+		// which corpus is loaded. ActiveChecks() is empty when no corpus was loaded, and
+		// WithCorpusChecks leaves the built-in set alone then. WithToolRunner carries the -tools
+		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
+		// checks counted-but-excluded.
 		WithScanner(scanner.NewActiveScanner(store, logger).
 			WithSender(sender.NewSender(sender.DefaultSenderConfig())).
 			WithScope(scope).
+			WithCorpusChecks(passiveScanner.ActiveChecks()).
+			WithToolRunner(toolRunner).
 			WithAuditConfig(auditConfig)).
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).

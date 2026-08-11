@@ -100,6 +100,14 @@ type Limits struct {
 	// the stop's Detail names *which* table filled, and LimitReport.Fingerprints and .Templates report
 	// both sizes on every crawl whether or not the bound was reached.
 	MaxFingerprints int
+	// MaxRelogins caps how many times this crawl may attempt to restore an expired session
+	// (Gap A). Every attempt costs the target a login macro and every failure costs repeated
+	// login-page fetches, so both are bounded by one number. Unlike some bounds this is not a
+	// request-exactness bound: it is spoken of per attempt, because the measure that matters is
+	// how many times the crawl asked the target for a session it could have asked for once.
+	// Sequential waves of expiry — login expires, relogin, expires again — count the same as
+	// concurrent ones: the counter is a generation counter, not a concurrent-request counter.
+	MaxRelogins int
 }
 
 // DefaultLimits is the bound used when a caller does not supply one.
@@ -134,6 +142,12 @@ func DefaultLimits() Limits {
 		// stated ceiling for the crawl whose other bounds were raised, and for the template table, which
 		// grows even while the crawl fetches nothing new.
 		MaxFingerprints: 50_000,
+		// Relogin is cheap when the macro is short and expensive when it is not, and it is always
+		// a burst of traffic the operator did not explicitly ask for. Five is enough for the
+		// common wave — session dies once, recovers — while still truncating the crawl that keeps
+		// losing its session, which is a target- or macro-problem the crawl should report rather
+		// than hammer.
+		MaxRelogins: 5,
 	}
 }
 
@@ -168,6 +182,9 @@ func (l Limits) normalise() Limits {
 	}
 	if l.MaxFingerprints <= 0 {
 		l.MaxFingerprints = d.MaxFingerprints
+	}
+	if l.MaxRelogins <= 0 {
+		l.MaxRelogins = d.MaxRelogins
 	}
 	return l
 }
@@ -227,10 +244,17 @@ const (
 	// Complete() is false and Caveat names it. The residual cost is stated rather than hidden: a crawl
 	// that reaches this keeps fetching what is already queued and stops discovering, and it says so.
 	StopFingerprintBudget
+	// StopReloginBudget means the crawl tried to restore an expired session MaxRelogins times and
+	// every attempt is spent, with the frontier still non-empty. Recorded by recoverSession when the
+	// budget is checked before a login macro runs, so the stop fires exactly when the re-login
+	// budget is the thing in the way — the crawl is authenticating with a cookie from a session the
+	// application no longer honours, and the rest of the crawl is unauthenticated whether it knows
+	// it or not.
+	StopReloginBudget
 )
 
 // CrawlStopAll is every stop, so a caller can render a legend without hard-coding the set.
-var CrawlStopAll = [11]CrawlStop{
+var CrawlStopAll = [12]CrawlStop{
 	StopRequestBudget,
 	StopDuration,
 	StopLocationBudget,
@@ -242,6 +266,7 @@ var CrawlStopAll = [11]CrawlStop{
 	StopTemplateQuota,
 	StopCaptureBytes,
 	StopFingerprintBudget,
+	StopReloginBudget,
 }
 
 func (s CrawlStop) String() string {
@@ -268,6 +293,8 @@ func (s CrawlStop) String() string {
 		return "capture-bytes"
 	case StopFingerprintBudget:
 		return "fingerprint-budget"
+	case StopReloginBudget:
+		return "relogin-budget"
 	}
 	return "unknown"
 }
@@ -297,6 +324,8 @@ func (s CrawlStop) Explanation() string {
 		return "a response was larger than the capture bound, so it was neither stored nor scanned"
 	case StopFingerprintBudget:
 		return "a request-identity table reached its bound, so URLs the crawl had never seen were refused rather than remembered; the application is larger than this crawl can keep track of"
+	case StopReloginBudget:
+		return "the re-login budget was spent while URLs were still queued; anything beyond the last re-login was crawled unauthenticated"
 	}
 	return "unknown stop"
 }

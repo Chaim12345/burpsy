@@ -198,6 +198,13 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("exchanges", "duration_us", "INTEGER"); err != nil {
 		return err
 	}
+	// findings gained param so a finding can say which parameter it was observed at. Empty means
+	// the finding is about a resource, not one of its inputs — NULL reads back as empty, so a
+	// legacy row and a resource finding are indistinguishable, which is correct because they mean
+	// the same thing on the wire.
+	if err := s.addColumn("findings", "param", "TEXT"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -490,10 +497,10 @@ func (s *Store) SaveFinding(f *core.Finding) {
 	}
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO findings
-		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
-		f.Remediation, occ, ins, f.Timestamp)
+		f.Remediation, occ, ins, f.Timestamp, f.Param)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -502,7 +509,7 @@ func (s *Store) SaveFinding(f *core.Finding) {
 // LoadFindings restores every finding.
 func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp
+		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -513,7 +520,7 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		f := &core.Finding{}
 		var sev, conf, ts int
 		var occ, ins []byte
-		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param); err != nil {
 			return nil, err
 		}
 		f.Severity = core.Severity(sev)

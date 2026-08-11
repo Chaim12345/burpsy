@@ -517,3 +517,28 @@ cd /tmp/BChecks && java -jar BCheckChecker-1.9.jar     # validates every .bcheck
 Drop probe files into a directory and run the jar there — it recurses and reports
 `BCheckParseException{encounteredString=…, lineNo=…, colNo=…}`. That is the cheapest possible
 conformance oracle for our parser: run both over the corpus and diff accept/reject.
+
+---
+
+## 10. Go extension: `run tool`
+
+PortSwigger's grammar has no statement for invoking an external binary, so
+`run tool` is a burpsy **extension**, not a ported construct. `INFERRED` (no
+PortSwigger grammar to consult):
+
+```bcheck
+run tool sqlmap called probe:
+  args: "-u", {base.request.url}, "--batch"
+```
+
+- The tool name resolves against a caller-supplied allowlist (`-tools name=path`);
+  the check never names a binary.
+- Args are ordinary values — references, literals, templates — resolved at
+  execute time, passed **without a shell**.
+- The result binds under `called` as `{<name>.stdout}`, `{<name>.stderr}` and
+  `{<name>.exit_code}` (int; non-zero is data, not an error).
+- A check carrying `run tool` is never passive; without a configured runner it
+  is counted at load (`LoadReport.Tools`) and refused, never silently skipped.
+
+See `gaps.md` "Go extension: `run tool`" for the full design and the honest-
+counting rules.

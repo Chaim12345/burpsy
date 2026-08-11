@@ -2,12 +2,16 @@
 package bcheck
 
 import (
+	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 // maxForEachDim bounds a single `run for each` list. A check loaded from an
@@ -108,8 +112,15 @@ func (DefineStatement) isStatement() {}
 
 // SendRequestStatement represents a send request statement.
 type SendRequestStatement struct {
+	// Template is the raw-request form (`send request: `GET / …`). Mutually exclusive with
+	// Modifiers: a check that names a raw request has no modifier clauses, and a check that
+	// names clauses has no raw request.
 	Template string
-	StoreAs  string
+	// Modifiers are the structural form's clauses — `path:`, `method:`, `replacing headers:` —
+	// in source order, applied to a fresh copy of the base request in that order. See
+	// buildRequest in active.go.
+	Modifiers []RequestModifier
+	StoreAs   string
 }
 
 func (SendRequestStatement) isStatement() {}
@@ -122,6 +133,26 @@ type SendPayloadStatement struct {
 }
 
 func (SendPayloadStatement) isStatement() {}
+
+// RunToolStatement represents a run tool statement: an outbound call to an
+// external security tool (sqlmap, jwt_tool, …), allowlisted by the caller.
+// The tool name and every arg resolve at execute time like any other value, so
+// a check can pass `{base.request.url}` to a tool. The result binds under
+// StoreAs and is read back as `{<name>.stdout}`, `{<name>.stderr}` and
+// `{<name>.exit_code}`.
+type RunToolStatement struct {
+	// Tool is the tool name as written in the check — `sqlmap`, not a path. The
+	// caller maps it to an executable through its allowlist; the check never
+	// names a binary. Refused, not resolved, when the caller has no runner.
+	Tool Value
+	// StoreAs is the binding name the result is addressable as, from the
+	// `called <name>` clause.
+	StoreAs string
+	// Args are the command-line arguments, resolved at execute time.
+	Args []Value
+}
+
+func (RunToolStatement) isStatement() {}
 
 // RunForEachStatement represents a run for each statement.
 type RunForEachStatement struct {
@@ -213,13 +244,21 @@ type Finding struct {
 	Description string
 	Remediation string
 	RequestID   uint64
+	// Param is the name of the insertion point this finding fired at, when it
+	// fired inside a `given insertion point` check. Empty outside one — a
+	// per-host or per-request finding is about a resource, not a parameter, and
+	// saying so is what keeps a report's Parameter column from lying.
+	Param string
 }
 
 // IsPassive reports whether the check needs no outbound traffic — it binds to
 // the response and never sends. Only these checks can run in a passive scan;
 // everything else is counted and reported, never silently run as if passive.
+//
+// A `run tool` statement is outbound activity too — it executes an external
+// process — so a check carrying one is never passive.
 func (c *Check) IsPassive() bool {
-	return c.Given == "response" && !containsSend(c.Statements)
+	return c.Given == "response" && !containsSend(c.Statements) && !containsTool(c.Statements)
 }
 
 // NeedsCollaborator reports whether the check requires an interaction server.
@@ -227,6 +266,14 @@ func (c *Check) IsPassive() bool {
 // and are counted as such at load time rather than run against nothing.
 func (c *Check) NeedsCollaborator() bool {
 	return containsInteractions(c.Statements)
+}
+
+// NeedsTool reports whether the check invokes an external tool via `run tool`.
+// Such a check needs a caller-configured tool runner; without one it is counted
+// at load time (LoadReport.Tools) and refused, never run against nothing — the
+// same honest bucket as NeedsCollaborator.
+func (c *Check) NeedsTool() bool {
+	return containsTool(c.Statements)
 }
 
 // M2Runnable reports whether the evaluator can run this check with a sender but
@@ -248,6 +295,25 @@ func containsSendPayload(stmts []Statement) bool {
 			}
 		case *RunForEachStatement:
 			if containsSendPayload(t.Body) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// containsTool walks the statement tree for any `run tool` statement.
+func containsTool(stmts []Statement) bool {
+	for _, s := range stmts {
+		switch t := s.(type) {
+		case *RunToolStatement:
+			return true
+		case *IfStatement:
+			if containsTool(t.Then) || containsTool(t.Else) {
+				return true
+			}
+		case *RunForEachStatement:
+			if containsTool(t.Body) {
 				return true
 			}
 		}
@@ -314,6 +380,44 @@ type Context struct {
 	TLS       bool
 	Path      string
 
+	// sink performs the outbound half of `send request` and `send payload`. Nil means the check
+	// is being evaluated passively, where a send is a no-op — RunPassive never sets it, RunActive
+	// always does.
+	sink Sink
+	// target is the one authority every send goes to: the scanned exchange's own. The check
+	// chooses the bytes; it never chooses the connection.
+	target *Target
+	// point is the insertion point `send payload` may write, for a `given insertion point` run.
+	// Nil everywhere else, which is what makes `send payload` outside such a check an error
+	// rather than a no-op.
+	point *InsertionPoint
+	// toolRunner executes the outbound half of `run tool`. Nil means the caller
+	// supplied no tool allowlist — a `run tool` statement is then refused as
+	// ActiveUnsupported rather than skipped, exactly as a check that needs a
+	// Collaborator is refused rather than run against nothing.
+	toolRunner ToolRunner
+	// toolCtx is the caller's context for the tool seam, when one was attached.
+	// runTool hands it to the runner so a hung tool is killed with the audit
+	// that spawned it. Nil defers to the runner's own timeout.
+	toolCtx context.Context
+	// tools records every tool run in order; the `called` name addresses its own entry. Always
+	// a fresh list per point and per `run for each` iteration, like sent — a later iteration
+	// must not see an earlier one's `{probe.stdout}`.
+	tools []boundTool
+	// sent records every send in order; the last is `latest.*` and a `called` name addresses its
+	// own entry. Always a fresh list per point and per `run for each` iteration — a later
+	// iteration must not see an earlier one's `{check.response}`.
+	sent []boundSend
+	// baseReq is the parsed base request, cached on first use.
+	baseReq *core.RequestEdit
+	// unresolved records `{…}` paths the check referenced that this context could not supply. A
+	// non-empty set is a check written against data this engine does not expose — a bug to fix,
+	// not a finding.
+	unresolved map[string]bool
+	// declined records insertion places the enumerator refused to splice into while real points
+	// still ran. The check ran; it just did not run everywhere. See RunActive.
+	declined []string
+
 	respFields *messageFields
 	reqFields  *messageFields
 	// rng is the `random_str` state, seeded from the message so probes are
@@ -330,6 +434,22 @@ func NewContext() *Context {
 	}
 }
 
+// SetToolRunner attaches the allowlist runner `run tool` statements execute
+// through. The active scanner calls this alongside setting the sink; without
+// it a tool check is refused (NeedsTool + nil runner) rather than run against
+// nothing.
+func (ctx *Context) SetToolRunner(r ToolRunner) {
+	ctx.toolRunner = r
+}
+
+// SetToolContext attaches the caller's context to the tool seam, so a tool
+// run is cancelled with the audit that spawned it — a hung allowlisted tool
+// must not outlive the scan that asked for it. Nil means the runner bounds the
+// run with its own timeout alone.
+func (ctx *Context) SetToolContext(c context.Context) {
+	ctx.toolCtx = c
+}
+
 // messageFields is the parsed view of a raw HTTP message, extracted once and
 // cached so resolving `{latest.response.body}` a hundred times in one check
 // does not re-split the bytes each time.
@@ -342,11 +462,13 @@ type messageFields struct {
 	headers string
 	// byName maps lowercased header names to their values.
 	byName map[string]string
+	// raw is the whole message as received — what `{x.response}` (no field) resolves to.
+	raw string
 }
 
 func parseMessage(raw []byte) *messageFields {
-	f := &messageFields{byName: make(map[string]string)}
 	s := string(raw)
+	f := &messageFields{byName: make(map[string]string), raw: s}
 	// Split the start line from the header block, then the header block from the
 	// body, at the first blank line.
 	headEnd := strings.Index(s, "\r\n\r\n")
@@ -468,7 +590,15 @@ func (ctx *Context) resolveRef(name string) string {
 		ctx.ensureRNG()
 		return randomStr(&ctx.rng, n)
 	}
-	return ctx.resolvePath(name)
+	s, ok := ctx.resolvePathOpt(name)
+	if !ok {
+		// An absent binding renders empty in message text, matching Burp — but it is still
+		// recorded, so a check that keeps referencing a path this engine cannot supply is a
+		// diagnosable gap rather than a silent comparison against nothing.
+		ctx.recordUnresolved(name)
+		return ""
+	}
+	return s
 }
 
 // innerCall returns the argument text of a call of the form `name(arg)`.
@@ -685,44 +815,170 @@ func randomStr(state *uint64, n int) string {
 	return out.String()
 }
 
-// resolvePath resolves a dotted path: a binding (`base`/`latest`/`check`), the
-// side (`response`/`request`), and the field chain. Passive checks only ever
-// name the base exchange, so every binding resolves to the same pair.
-func (ctx *Context) resolvePath(p string) string {
+// resolvePathOpt resolves a dotted path: a binding (`base`/`latest`/a named send), the side
+// (`response`/`request`), and the field chain. ok is false when the context cannot supply the
+// path at all — an unknown binding, a side it has no data for — which is what makes a
+// comparison against it false rather than a comparison against the empty string.
+//
+// Bare `response.*` / `request.*` mean the base exchange, as does `check.*` (the Go port's
+// historical alias). A passive context has no sends, so `latest` resolves to base there too.
+func (ctx *Context) resolvePathOpt(p string) (string, bool) {
+	p = strings.TrimSpace(p)
+	if v, ok := ctx.Variables[p]; ok {
+		return ctx.resolveValue(v), true
+	}
 	parts := strings.Split(p, ".")
 	switch parts[0] {
 	case "host":
 		if len(parts) == 1 {
-			return ctx.Host
+			return ctx.Host, true
 		}
+		return "", false
 	case "path":
 		if len(parts) == 1 {
-			return ctx.Path
+			return ctx.Path, true
+		}
+		return "", false
+	}
+	// A tool binding is `{<called>.stdout|stderr|exit_code}` — the run recorded
+	// under that name. Only the three tool fields take this branch: a send and a
+	// tool may share a `called` name in one check, and `{probe.response}` must
+	// still reach the send-binding logic below rather than be shadowed by the
+	// tool run. A name with no matching component falls through and resolves
+	// false at the bottom, exactly as it would without the tool branch.
+	if len(parts) >= 2 && (parts[1] == "stdout" || parts[1] == "stderr" || parts[1] == "exit_code") {
+		if t := ctx.boundTool(parts[0]); t != nil {
+			switch parts[1] {
+			case "stdout":
+				return t.stdout, true
+			case "stderr":
+				return t.stderr, true
+			case "exit_code":
+				return strconv.Itoa(t.exitCode), true
+			}
 		}
 	}
-	if len(parts) < 2 {
-		return ""
+
+	var bind, side string
+	switch parts[0] {
+	case "response", "request", "check":
+		bind, side = "base", parts[0]
+	default:
+		if len(parts) < 2 {
+			return "", false
+		}
+		bind, side = parts[0], parts[1]
 	}
-	// Bindings `base`, `latest`, `check` and any named send all refer to the
-	// base exchange until a send exists — passive evaluation never sends, so
-	// there is no latest distinct from base.
-	binding := parts[0]
-	side := parts[1]
-	if binding != "base" && binding != "latest" && binding != "check" && side != "response" && side != "request" {
-		return ""
+	if side != "response" && side != "request" {
+		return "", false
 	}
 	rest := parts[2:]
-	switch side {
-	case "response":
-		return ctx.responseField(rest)
-	case "request":
-		return ctx.requestField(rest)
+	if bind == "base" {
+		switch side {
+		case "response":
+			return ctx.baseResponseField(rest), true
+		case "request":
+			return ctx.baseRequestField(rest), true
+		}
 	}
-	return ""
+	b := ctx.bound(bind)
+	if b == nil {
+		return "", false
+	}
+	return b.field(side, rest)
 }
 
-// responseField resolves `<binding>.response.<rest…>` against the base response.
-func (ctx *Context) responseField(rest []string) string {
+// boundTool resolves a tool binding by its `called` name: the most recent run
+// that was named it. A name that never ran resolves to nil — absent, which
+// makes a comparison false, never an empty string.
+func (ctx *Context) boundTool(name string) *boundTool {
+	for i := len(ctx.tools) - 1; i >= 0; i-- {
+		if ctx.tools[i].name == name {
+			return &ctx.tools[i]
+		}
+	}
+	return nil
+}
+
+// bound resolves a send binding by name: `base` is the exchange the scan started from, `latest`
+// is the most recent send (or the base exchange before the first), and any other name is the
+// most recent send that was `called` it. A name that was never sent resolves to nil — absent,
+// which makes a comparison false, never an empty string.
+func (ctx *Context) bound(name string) *Bound {
+	switch name {
+	case "base", "check":
+		return &Bound{request: ctx.baseRequest(), response: ctx.responseFields()}
+	case "latest":
+		if n := len(ctx.sent); n > 0 {
+			return &ctx.sent[n-1].bound
+		}
+		return &Bound{request: ctx.baseRequest(), response: ctx.responseFields()}
+	default:
+		for i := len(ctx.sent) - 1; i >= 0; i-- {
+			if ctx.sent[i].name == name {
+				return &ctx.sent[i].bound
+			}
+		}
+		return nil
+	}
+}
+
+// baseRequest returns the parsed base request, cached on first use. Nil when the stored bytes
+// cannot be parsed as a request — an exchange with a response but no usable request has no
+// request side to bind.
+func (ctx *Context) baseRequest() *core.RequestEdit {
+	if ctx.baseReq != nil {
+		return ctx.baseReq
+	}
+	if len(ctx.Request) == 0 {
+		return nil
+	}
+	e, err := core.ParseRequestEdit(ctx.Request)
+	if err != nil {
+		return nil
+	}
+	ctx.baseReq = e
+	return e
+}
+
+// recordUnresolved notes a path this context could not supply, for Unresolved.
+func (ctx *Context) recordUnresolved(p string) {
+	if ctx.unresolved == nil {
+		ctx.unresolved = make(map[string]bool)
+	}
+	ctx.unresolved[p] = true
+}
+
+// mergeUnresolved folds a child context's unresolved paths into this one — a diagnostic that
+// only existed on a per-point or per-iteration temporary is no diagnostic at all.
+func (ctx *Context) mergeUnresolved(child *Context) {
+	for p := range child.unresolved {
+		ctx.recordUnresolved(p)
+	}
+}
+
+// Unresolved lists the `{…}` paths the check referenced that this context could not supply,
+// sorted for stable output.
+func (ctx *Context) Unresolved() []string {
+	if len(ctx.unresolved) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ctx.unresolved))
+	for p := range ctx.unresolved {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Declined lists the insertion places the enumerator refused to splice into while real points
+// still ran — see RunActive and insertion.go's Declined. Nil when nothing was declined.
+func (ctx *Context) Declined() []string {
+	return ctx.declined
+}
+
+// baseResponseField resolves `<binding>.response.<rest…>` against the base response.
+func (ctx *Context) baseResponseField(rest []string) string {
 	if len(rest) == 0 {
 		return string(ctx.Response)
 	}
@@ -738,7 +994,7 @@ func (ctx *Context) responseField(rest []string) string {
 		}
 		return f.headers
 	case "url":
-		return ctx.urlField(rest[1:])
+		return ctx.baseURLField(rest[1:])
 	case "method":
 		// Not meaningful for a response, but harmless to answer.
 		return f.first
@@ -746,8 +1002,8 @@ func (ctx *Context) responseField(rest []string) string {
 	return ""
 }
 
-// requestField resolves `<binding>.request.<rest…>` against the base request.
-func (ctx *Context) requestField(rest []string) string {
+// baseRequestField resolves `<binding>.request.<rest…>` against the base request.
+func (ctx *Context) baseRequestField(rest []string) string {
 	if len(rest) == 0 {
 		return string(ctx.Request)
 	}
@@ -773,14 +1029,14 @@ func (ctx *Context) requestField(rest []string) string {
 	case "path":
 		return ctx.Path
 	case "url":
-		return ctx.urlField(rest[1:])
+		return ctx.baseURLField(rest[1:])
 	}
 	return ""
 }
 
-// urlField resolves `<binding>.(request|response).url.<rest…>`. With no rest it
+// baseURLField resolves `<binding>.(request|response).url.<rest…>`. With no rest it
 // is the full URL the request was issued to; with a field it is that component.
-func (ctx *Context) urlField(rest []string) string {
+func (ctx *Context) baseURLField(rest []string) string {
 	scheme := "http"
 	if ctx.TLS {
 		scheme = "https"
@@ -923,6 +1179,33 @@ func (ctx *Context) resolveValue(v Value) string {
 	}
 }
 
+// resolveValueOpt resolves a Value to its string form, reporting whether the context could
+// supply it at all. A comparison operand that cannot be supplied makes the comparison false —
+// see evalBoolExpr — while resolveValue (report text, sends) renders absence as "" exactly as
+// Burp does.
+func (ctx *Context) resolveValueOpt(v Value) (string, bool) {
+	switch v.Type {
+	case "var":
+		s, ok := ctx.resolvePathOpt(v.StringVal)
+		if !ok {
+			ctx.recordUnresolved(v.StringVal)
+			return "", false
+		}
+		return s, true
+	case "tpl":
+		return ctx.interpolate(v.StringVal), true
+	case "bool":
+		if v.BoolVal {
+			return "true", true
+		}
+		return "false", true
+	case "int":
+		return strconv.Itoa(v.IntVal), true
+	default:
+		return v.StringVal, true
+	}
+}
+
 // execOutcome is what executing a statement or a block produced.
 //
 // The evaluator used to signal "stop" by returning a non-nil *Finding, which
@@ -949,12 +1232,21 @@ type execOutcome struct {
 // are derived purely from Request/Response, which no statement can modify, so
 // sharing them is both correct and what keeps a large cartesian product from
 // re-splitting the same response bytes on every combination.
+//
+// For the active evaluator, a fork also starts with an empty send list — an
+// iteration must not see the previous iteration's `{check.response}` — and an
+// empty unresolved set, which the caller folds back with mergeUnresolved. The
+// insertion point, sink and target survive the fork: a `run for each` inside a
+// point still writes to that point.
 func (ctx *Context) fork() *Context {
 	c := *ctx
 	c.Variables = make(map[string]Value, len(ctx.Variables))
 	for k, v := range ctx.Variables {
 		c.Variables[k] = v
 	}
+	c.sent = nil
+	c.tools = nil
+	c.unresolved = nil
 	return &c
 }
 
@@ -963,12 +1255,17 @@ func RunPassive(check *Check, ctx *Context) ([]Finding, error) {
 	if check.Given != "response" {
 		return nil, nil
 	}
+	return runCheckBody(check, ctx)
+}
 
+// runCheckBody executes a check's body against ctx: `define:` bindings, the `run for each`
+// product, then the statements. Shared by the passive and active evaluators so a statement's
+// meaning cannot diverge between them.
+func runCheckBody(check *Check, ctx *Context) ([]Finding, error) {
 	statements := prependDefines(check.Defines, check.Statements)
 	if len(check.ForEach) > 0 {
 		return runForEachProduct(check, ctx, statements)
 	}
-
 	out, err := executeBlock(statements, ctx)
 	if err != nil {
 		return nil, err
@@ -1026,6 +1323,11 @@ func runForEachProduct(check *Check, base *Context, statements []Statement) ([]F
 			iter.Variables[fe.Iterator] = Value{Type: "str", StringVal: iter.resolveValue(fe.Values[idx[i]])}
 		}
 		out, err := executeBlock(statements, iter)
+		// Fold the iteration's diagnostics and RNG state back into the shared context: a
+		// cache-busting nonce must advance across iterations, and an unresolved path that only
+		// existed inside a temporary is no diagnostic at all.
+		base.rng = iter.rng
+		base.mergeUnresolved(iter)
 		if err != nil {
 			return nil, err
 		}
@@ -1088,22 +1390,58 @@ func executeStatement(stmt Statement, ctx *Context) (execOutcome, error) {
 		// per surviving value. That turns one finding into n and makes a report
 		// count meaningless, which is exactly the failure this project refuses.
 		// A check that genuinely wants a finding per value says `and continue`.
+		f := Finding{
+			IssueName:   ctx.resolveValue(s.IssueName),
+			Severity:    Severity(s.Severity),
+			Confidence:  Confidence(s.Confidence),
+			Description: ctx.resolveValue(s.Description),
+			Remediation: ctx.resolveValue(s.Remediation),
+		}
+		// A `given insertion point` check runs once per point with its own
+		// context, so at report time ctx.point *is* the point this finding was
+		// produced for. Naming it here is what makes the finding attributable to
+		// one parameter — the entire reason the construct exists.
+		if ctx.point != nil {
+			f.Param = ctx.point.Name
+		}
 		return execOutcome{
-			findings: []Finding{{
-				IssueName:   ctx.resolveValue(s.IssueName),
-				Severity:    Severity(s.Severity),
-				Confidence:  Confidence(s.Confidence),
-				Description: ctx.resolveValue(s.Description),
-				Remediation: ctx.resolveValue(s.Remediation),
-			}},
-			halt: !s.Continue,
+			findings: []Finding{f},
+			halt:     !s.Continue,
 		}, nil
 	case *DefineStatement:
 		// Resolve at bind time so a template define is usable as a plain string
 		// by every later reference.
 		ctx.Variables[s.Name] = Value{Type: "str", StringVal: ctx.resolveValue(s.Value)}
-	case *SendRequestStatement, *SendPayloadStatement:
-		// Would send in active checks; the passive evaluator never sends.
+	case *SendRequestStatement:
+		// The passive evaluator never sends: a check that reaches a send with no sink on its
+		// context is being run without outbound traffic, and the send is a no-op, exactly as
+		// before. RunActive supplies the sink, at which point the send really goes out through
+		// the caller's chokepoint and the result is bound as `latest` / `StoreAs`.
+		if ctx.sink == nil {
+			return execOutcome{}, nil
+		}
+		if err := ctx.sendRequest(s); err != nil {
+			return execOutcome{}, err
+		}
+		return execOutcome{}, nil
+	case *SendPayloadStatement:
+		if ctx.sink == nil {
+			return execOutcome{}, nil
+		}
+		if err := ctx.sendPayload(s); err != nil {
+			return execOutcome{}, err
+		}
+		return execOutcome{}, nil
+	case *RunToolStatement:
+		// Tool execution is never a no-op: unlike a send in the passive
+		// evaluator, a tool run with no runner is refused rather than skipped,
+		// because a check whose tool never ran must not look clean. RunActive
+		// already refuses whole tool checks up front; this is the defence for a
+		// tool statement reached on a context that lost its runner.
+		if err := ctx.runTool(s); err != nil {
+			return execOutcome{}, err
+		}
+		return execOutcome{}, nil
 	case *RunForEachStatement:
 		return executeForEach(s, ctx)
 	}
@@ -1120,6 +1458,8 @@ func executeForEach(s *RunForEachStatement, ctx *Context) (execOutcome, error) {
 		iter := ctx.fork()
 		iter.Variables[s.Iterator] = Value{Type: "str", StringVal: iter.resolveValue(v)}
 		o, err := executeBlock(s.Body, iter)
+		ctx.rng = iter.rng
+		ctx.mergeUnresolved(iter)
 		if err != nil {
 			return out, err
 		}
@@ -1162,27 +1502,52 @@ func evalBoolExpr(expr BoolExpr, ctx *Context) bool {
 		return !evalBoolExpr(*expr.LHS, ctx)
 	}
 
-	left := ctx.resolveValue(expr.Left)
-	right := ctx.resolveValue(expr.Right)
-
+	// An operand this context cannot supply makes a comparison false, never true: absence is not
+	// evidence. Coercing an absent binding to "" would make `{typo.response.body} in
+	// {latest.response}` fire on every response — a check reporting a vulnerability it never
+	// observed. This is the Rust evaluator's value_opt distinction, ported.
 	switch expr.Operator {
 	case "eq", "is":
-		return left == right
+		l, lok := ctx.resolveValueOpt(expr.Left)
+		r, rok := ctx.resolveValueOpt(expr.Right)
+		if !lok || !rok {
+			return false
+		}
+		return l == r
 	case "ne":
-		return left != right
+		l, lok := ctx.resolveValueOpt(expr.Left)
+		r, rok := ctx.resolveValueOpt(expr.Right)
+		if !lok || !rok {
+			return false
+		}
+		return l != r
 	case "contains":
-		return contains(left, right)
+		l, lok := ctx.resolveValueOpt(expr.Left)
+		r, rok := ctx.resolveValueOpt(expr.Right)
+		if !lok || !rok {
+			return false
+		}
+		return contains(l, r)
 	case "in":
 		// `x in y` — containment with the needle on the LEFT.
-		return contains(right, left)
+		l, lok := ctx.resolveValueOpt(expr.Left)
+		r, rok := ctx.resolveValueOpt(expr.Right)
+		if !lok || !rok {
+			return false
+		}
+		return contains(r, l)
 	case "matches":
 		// The pattern is taken raw, never interpolated — this is what lets a
 		// literal regex keep its braces (`"oy2[a-z0-9]{43}"`).
+		l, lok := ctx.resolveValueOpt(expr.Left)
+		if !lok {
+			return false
+		}
 		re, err := compileRegex(expr.Right.StringVal)
 		if err != nil {
 			return false
 		}
-		return re.MatchString(left)
+		return re.MatchString(l)
 	}
 	return false
 }

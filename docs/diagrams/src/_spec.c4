@@ -1,0 +1,66 @@
+specification {
+
+  element actor {
+    notation "Person"
+    style {
+      shape person
+      color green
+    }
+  }
+
+  element user {
+    notation "User"
+    style {
+      shape person
+      color amber
+    }
+  }
+
+  element system {
+    notation "Software System"
+  }
+
+  element external-system {
+    notation "External System"
+    style {
+      color muted
+    }
+  }
+
+  element container {
+    notation "Container (crate)"
+  }
+
+  element component {
+    notation "Component"
+    style {
+      opacity 20%
+    }
+  }
+
+  element database {
+    notation "Store"
+    style {
+      shape storage
+    }
+  }
+
+  // The real Cargo dependency edge between two crates — dotted, so the
+  // runtime flow arrows (solid) are never confused with structural ones.
+  relationship depends-on {
+    line dotted
+  }
+
+  tag root {
+    color rgb(46 125 50)
+  }
+  tag chokepoint {
+    color rgb(255 160 0)
+  }
+  tag leaf {
+    color rgb(120 120 120)
+  }
+  tag dev {
+    color rgb(120 120 120)
+  }
+}

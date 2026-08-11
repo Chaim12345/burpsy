@@ -1,0 +1,336 @@
+views {
+
+  view index {
+    title 'System Landscape'
+    description "burpsy sits between the researcher's browser and the engagement targets: it intercepts traffic, stores every byte once, and sends constructed requests through a single authorising path."
+
+    include
+      *
+
+    style burpsy {
+      size large
+    }
+    style target {
+      size md
+    }
+  }
+
+  view burpsy of burpsy {
+    title 'burpsy — containers (crates)'
+    description "The thirteen workspace crates. Dotted edges are the real Cargo dependency edges, verified from the manifests; solid edges are runtime flows. The spine runs core → bcheck → scanner → proxy → web → cli. core is the root (green), sender is the one authorising path to a socket (amber)."
+
+    include
+      *,
+      researcher,
+      browser,
+      target
+
+    style core {
+      color green
+    }
+    style sender {
+      color amber
+    }
+    style cli {
+      color green
+    }
+  }
+
+  view core of burpsy.core {
+    title 'core — message model, store, scope'
+    description "The root of the graph. Spans, not strings; position is the id; one SharedScope handle reaches every subsystem. Every crate depends on it — the hub the diagram shows is the dependency structure, not noise."
+
+    include
+      *,
+      burpsy.query,
+      burpsy.bcheck,
+      burpsy.scanner,
+      burpsy.sender,
+      burpsy.proxy,
+      burpsy.intruder,
+      burpsy.sequencer,
+      burpsy.tools,
+      burpsy.session,
+      burpsy.web,
+      burpsy.cli
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style core._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view bcheck of burpsy.bcheck {
+    title 'bcheck — the BCheck interpreter'
+    description "Parser and evaluator for PortSwigger's BCheck DSL. A pure interpreter: it owns the Sender trait, but nothing that opens a socket."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.scanner,
+      burpsy.sender,
+      burpsy.proxy,
+      burpsy.web
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style bcheck._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view scanner of burpsy.scanner {
+    title 'scanner — passive scan, active audit, catalog'
+    description "Scanning happens off the proxy's hot path; bounding is admission-side and every refusal is counted with a Disposition naming why."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.bcheck,
+      burpsy.proxy,
+      burpsy.sender,
+      burpsy.web,
+      burpsy.cli
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style scanner._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view sender of burpsy.sender {
+    title 'sender — the one authorising path to a socket'
+    description "AuthorisedSender checks Scope against the actual outbound bytes and only then reaches a transport, which it owns as a private field. The egress scan fails the build if a new connect call appears anywhere else."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.bcheck,
+      burpsy.http2,
+      burpsy.web,
+      burpsy.intruder,
+      burpsy.sequencer,
+      burpsy.scanner,
+      burpsy.cli,
+      burpsy.proxy
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style sender._ {
+      color amber
+      opacity 100%
+    }
+  }
+
+  view proxy of burpsy.proxy {
+    title 'proxy — the intercepting proxy'
+    description "The thing a browser is actually pointed at. Holds requests for operator editing, terminates TLS with a locally generated CA, relays h2 and WebSockets, and captures everything into the shared store."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.bcheck,
+      burpsy.scanner,
+      burpsy.tools,
+      burpsy.http2,
+      burpsy.web,
+      burpsy.sender,
+      burpsy.cli,
+      browser,
+      target
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style proxy._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view intruder of burpsy.intruder {
+    title 'intruder — insertion points and payload attacks'
+    description "An insertion point is a Span plus a kind — no allocation. The engine has no concept of engagement scope and must not grow one: authorisation belongs to the AuthorisedSender the caller injects."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.tools,
+      burpsy.sender,
+      burpsy.web
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style intruder._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view sequencer of burpsy.sequencer {
+    title 'sequencer — token randomness analysis'
+    description "Character-level view and the FIPS 140-2 battery. A verdict is only printed where the test it comes from applies; the network is not this crate's to touch."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.sender,
+      burpsy.web
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style sequencer._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view tools of burpsy.tools {
+    title 'tools — Decoder, Comparer, Logger, Organizer, Match & Replace'
+    description "Pure transformations over bytes, deliberately free of any I/O so they can be exercised directly in tests and reused by the proxy, the UI and a future MCP server alike."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.query,
+      burpsy.proxy,
+      burpsy.intruder,
+      burpsy.web,
+      burpsy.cli
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style tools._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view session of burpsy.session {
+    title 'session — recorded-login re-authentication'
+    description "A rule list, not one always-on macro: scoped per target, bounded, collapsed, and honest about giving up. Sending is a trait (MacroSender); the HARD-03 wiring lives in cli/web."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.web
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style session._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view web of burpsy.web {
+    title 'web — JSON API and single-page UI'
+    description "History endpoints return index rows; message bytes are fetched only when a specific message is opened. The router builders are a deliberate ladder, each adding one capability."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.sender,
+      burpsy.intruder,
+      burpsy.tools,
+      burpsy.proxy,
+      burpsy.session,
+      burpsy.sequencer,
+      burpsy.query,
+      burpsy.cli,
+      researcher
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style web._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view cli of burpsy.cli {
+    title 'cli — the binary that wires everything'
+    description "Owns all the wiring: one shared TrafficStore behind the proxy and the web UI. The only crate that constructs concrete implementations for the traits the layers declared."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.proxy,
+      burpsy.web,
+      burpsy.scanner,
+      burpsy.sender,
+      burpsy.tools
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style cli._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view http2 of burpsy.http2 {
+    title 'http2 — framing, HPACK, normalisation'
+    description "A leaf crate with no burpsy dependencies. Pure functions over bytes; emitting a frame the spec forbids is a requirement here, and malformed::audit names every rule a program breaks."
+
+    include
+      *,
+      burpsy.sender,
+      burpsy.proxy
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style http2._ {
+      color green
+      opacity 100%
+    }
+  }
+
+  view query of burpsy.query {
+    title 'query — the typed filter grammar'
+    description "A closed, typed grammar evaluated against a trait, not a concrete type. status > \"abc\" is a parse-time error, never false. Zero dependencies by construction."
+
+    include
+      *,
+      burpsy.core,
+      burpsy.tools,
+      burpsy.web
+
+    style * {
+      color secondary
+      opacity 20%
+    }
+    style query._ {
+      color green
+      opacity 100%
+    }
+  }
+}

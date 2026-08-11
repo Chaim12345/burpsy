@@ -142,6 +142,8 @@ export interface Finding {
   host: string;
   detail: string;
   remediation: string;
+  /** The parameter this finding was observed at; absent for resource-level findings. */
+  param?: string;
   times_seen: number;
   occurrences: Occurrence[];
   /** Present when the check resolved to a catalogue entry. */

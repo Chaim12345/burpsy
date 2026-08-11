@@ -114,8 +114,17 @@ func auditTarget(store *core.TrafficStore, id core.ExchangeID) string {
 func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string) map[string]interface{} {
 	if s.scanner == nil {
 		// Built with the engagement scope: an active audit sends real traffic, and the engine refuses
-		// an out-of-scope exchange before it plans any work.
-		s.scanner = scanner.NewActiveScanner(s.store, s.logger).WithScope(s.scope)
+		// an out-of-scope exchange before it plans any work. The corpus's active checks ride along
+		// when a passive scanner (loaded via --bchecks) is attached — the same source main.go wires
+		// explicitly, so an unwired server and a wired one cannot disagree about which checks run.
+		active := scanner.NewActiveScanner(s.store, s.logger).WithScope(s.scope)
+		if s.passiveScanner != nil {
+			active = active.WithCorpusChecks(s.passiveScanner.ActiveChecks())
+		}
+		if s.toolRunner != nil {
+			active = active.WithToolRunner(s.toolRunner)
+		}
+		s.scanner = active
 	}
 	body := map[string]interface{}{
 		"started":       true,
@@ -173,6 +182,7 @@ func (s *Server) activeFinding(f *scanner.Finding, taskID uint64) core.NewFindin
 		Description: f.Description,
 		Remediation: f.Solution,
 		TaskID:      taskID,
+		Param:       f.Param,
 	}
 	// Resolved through the store so the occurrence carries the message ids the issues API reads, not
 	// just an exchange id. An exchange that has since rolled out of the store leaves the occurrence

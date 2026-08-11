@@ -58,3 +58,17 @@ Descriptive only — nothing in `crates/` reads these files at build or run time
 None.
 
 <!-- MANUAL: -->
+
+## Diagrams
+
+`diagrams/` is a LikeC4 workspace: the architecture model (`src/model.c4`, `src/views.c4`) and
+rendered PNGs (`out/src/*.png`, one per view: system landscape, containers, and each crate's
+components). The dotted `depends-on` edges mirror the real Cargo edges from the crate manifests;
+regenerate after adding or moving a dependency edge:
+
+```bash
+cd docs/diagrams
+npm install            # first time; installs likec4 CLI
+npx likec4 validate    # must stay green
+unset ANTHROPIC_API_KEY && npx likec4 export png -o out   # env var otherwise triggers an AI-package install
+```

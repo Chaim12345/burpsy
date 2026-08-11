@@ -126,6 +126,10 @@ type NewFinding struct {
 	// coverage summary and a finding count cannot be tied together: the dashboard can say an audit
 	// swept 200 exchanges and that 12 findings exist, and nothing relates the two.
 	TaskID uint64
+	// Param is the name of the parameter, header or cookie the finding was observed at, empty when
+	// the finding is about a resource rather than one of its inputs — a DOM sink's source
+	// expression, or an insertion point a BCheck fired at.
+	Param string
 }
 
 // Finding represents a security finding.
@@ -141,6 +145,9 @@ type Finding struct {
 	// TaskID is the run that produced this finding, or 0 when nothing tracked it. See NewFinding.
 	TaskID    uint64
 	Timestamp uint64
+	// Param names the parameter the finding was observed at, empty when it is about a resource.
+	// See NewFinding.Param.
+	Param string
 }
 
 // FindingStore stores security findings.
@@ -187,6 +194,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		Inserted:    finding.Inserted,
 		TaskID:      finding.TaskID,
 		Timestamp:   uint64(getTimestamp()),
+		Param:       finding.Param,
 	}
 
 	fs.findings = append(fs.findings, f)

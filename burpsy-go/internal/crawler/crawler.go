@@ -164,6 +164,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -244,11 +245,21 @@ type Config struct {
 	RequestsPerSecond float64
 	// UserAgent is the User-Agent header sent. Empty takes DefaultUserAgent.
 	UserAgent string
-	// Headers are extra request headers, sent on every request — a Cookie header from a recorded
-	// login is what makes an authenticated crawl authenticated. Host, Content-Length and
+	// Headers are extra request headers, sent on every request — a Cookie header from a
+	// recorded login is what makes an authenticated crawl authenticated. Host, Content-Length and
 	// Content-Type are refused here because they are framing the crawler computes per request, and
 	// a name or value carrying CR or LF is refused because that is request splitting.
 	Headers map[string]string
+	// SessionCoordinator is the optional re-login seam. nil keeps the static-Headers
+	// behaviour exactly: a session that dies stays dead, and the crawl honestly maps the
+	// login page from then on. Set it and an expired session is detected and restored
+	// within the re-login budget. See session_gate.go.
+	SessionCoordinator SessionCoordinator
+	// LoginPagePattern is a regex, matched against a response body, that identifies the
+	// application's login page — the second signal (besides a 200→non-200 template flip)
+	// that the session is gone. Empty (the default) disables this signal and keeps the
+	// status-flip rule. Compiled in New; a malformed pattern is a construction error.
+	LoginPagePattern string
 	// MaxSkipRecords bounds the sampled refusal detail. Zero takes DefaultMaxSkipRecords; a negative
 	// value keeps counts only.
 	MaxSkipRecords int
@@ -455,6 +466,17 @@ type Crawler struct {
 	// Limits.MaxFingerprints as well: an entry is created for every template not seen before, including
 	// for links dropped at a full frontier, so this one grows even while the crawl fetches nothing new.
 	templates map[string]int
+	// templateOK remembers the URL templates this crawl has seen return 200, so the session
+	// expiry detector can tell a template that flipped from one that simply never worked. Set at
+	// most per template, like the quota table; an entry is removed when a template stops matching.
+	templateOK map[string]bool
+	// relogins counts every attempt to restore the session (re-login budget generation counter).
+	// Bounded by Limits.MaxRelogins. Counted per attempt, so concurrent and sequential waves of
+	// expiry share one budget. Success or failure moves the counter; see session_gate.go.
+	relogins int
+	// loginPage is the compiled LoginPagePattern, nil when none was given. The regex is compiled
+	// in New so a malformed pattern is a construction error, never a per-URL surprise.
+	loginPage *regexp.Regexp
 	// robotsSeeded records the authorities whose robots.txt has already been read, so it is read once
 	// per authority and never in a loop.
 	robotsSeeded map[string]bool
@@ -538,6 +560,18 @@ func New(cfg Config) (*Crawler, error) {
 		}
 	}
 
+	// The login-page pattern decides whether a captured response means the session is gone.
+	// Compiled here so a malformed one is a construction error like every other misconfiguration,
+	// not a per-URL surprise that surfaces mid-crawl.
+	var loginPage *regexp.Regexp
+	if strings.TrimSpace(cfg.LoginPagePattern) != "" {
+		re, err := regexp.Compile(cfg.LoginPagePattern)
+		if err != nil {
+			return nil, fmt.Errorf("login-page pattern is not a valid regex: %w", err)
+		}
+		loginPage = re
+	}
+
 	rps := cfg.RequestsPerSecond
 	if rps <= 0 {
 		rps = DefaultRequestsPerSecond
@@ -569,10 +603,12 @@ func New(cfg Config) (*Crawler, error) {
 		queued:            make(map[string]bool),
 		locations:         make(map[string]string),
 		templates:         make(map[string]int),
+		templateOK:        make(map[string]bool),
 		hostLimiters:      make(map[string]*intruder.RateLimiter),
 		robotsSeeded:      make(map[string]bool),
 		requestsPer:       rps,
 		retention:         retention,
+		loginPage:         loginPage,
 	}
 	// Seeds enter through the same admission gates as any discovered link, minus the destructive
 	// check — see destructive.go for why the operator's own instruction is not second-guessed. They

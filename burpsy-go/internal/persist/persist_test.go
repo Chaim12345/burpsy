@@ -84,6 +84,13 @@ func TestRestore_RoundTripsFindingsAndOrganizer(t *testing.T) {
 		Name: "SQL injection", Severity: core.SeverityHigh, Confidence: core.ConfidenceFirm,
 		Description: "Payload matched.", Remediation: "Parameterise.",
 	})
+	// The param column round-trips like any other: an insertion-point finding must come back
+	// naming the parameter it was observed at, and a resource finding must come back with none —
+	// the distinction is the whole point of the column.
+	findings.Add(core.NewFinding{
+		Name: "Reflected input", Severity: core.SeverityMedium, Confidence: core.ConfidenceCertain,
+		Description: "Value echoed.", Remediation: "Encode output.", Param: "q",
+	})
 
 	org := organizer.New()
 	it := org.Add(42)
@@ -95,12 +102,18 @@ func TestRestore_RoundTripsFindingsAndOrganizer(t *testing.T) {
 	if err := p.Restore(nil, restoredF, nil, nil, nil, restoredOrg, nil); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if restoredF.Count() != 1 {
-		t.Fatalf("findings = %d, want 1", restoredF.Count())
+	if restoredF.Count() != 2 {
+		t.Fatalf("findings = %d, want 2", restoredF.Count())
 	}
-	f := restoredF.All()[0]
-	if f.Name != "SQL injection" || f.Severity != core.SeverityHigh || f.Description != "Payload matched." {
-		t.Fatalf("finding = %+v", f)
+	all := restoredF.All()
+	if all[0].Name != "SQL injection" || all[0].Severity != core.SeverityHigh || all[0].Description != "Payload matched." {
+		t.Fatalf("finding = %+v", all[0])
+	}
+	if all[0].Param != "" {
+		t.Fatalf("resource finding param = %q, want empty", all[0].Param)
+	}
+	if all[1].Name != "Reflected input" || all[1].Param != "q" {
+		t.Fatalf("finding = %+v, want param %q", all[1], "q")
 	}
 	items := restoredOrg.List()
 	if len(items) != 1 || items[0].Exchange != 42 || items[0].Title != "Title" || items[0].Highlight != "yellow" {

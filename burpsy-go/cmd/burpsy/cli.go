@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
@@ -75,8 +76,13 @@ func registerCLI(cmds ...*cliCommand) {
 
 // newCLIContext wires the engines a subcommand can touch. captureDir drives
 // the store the same way the proxy's -capture-dir flag does; scope starts from
-// any -scope-include/-scope-exclude given at launch.
-func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile string) (*cliContext, error) {
+// any -scope-include/-scope-exclude given at launch. bchecksDir, when set,
+// loads the corpus the same way the server path does, so `burpsy -bchecks DIR
+// scan audit` dispatches the corpus's active checks and `scan live` sees the
+// same passive set the proxy would run. tools is the -tools allowlist (name=path,
+// comma-separated) for `run tool` statements; empty keeps tool checks counted
+// but excluded from the audit set.
+func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) (*cliContext, error) {
 	logger := zap.NewNop()
 	var store *core.TrafficStore
 	var err error
@@ -95,7 +101,33 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 	if scopeExclude != "" {
 		scope.AddExclude(scopeExclude)
 	}
+	// The corpus is loaded here, before the context literal, so a -bchecks
+	// directory that will not load is a construction error — the CLI refuses to
+	// run a scan under half its checks, exactly as the server path refuses to
+	// start. The web path wires the same LoadDir's ActiveChecks, so the two
+	// surfaces cannot disagree about which corpus is in force.
+	var corpusChecks []*bcheck.Check
+	if bchecksDir != "" {
+		ps, lerr := scanner.LoadDir(bchecksDir, store, scope, logger)
+		if lerr != nil {
+			return nil, fmt.Errorf("load bchecks from %s: %w", bchecksDir, lerr)
+		}
+		corpusChecks = ps.ActiveChecks()
+		logger.Info("bchecks loaded", zap.String("dir", bchecksDir), zap.String("report", ps.Report().Summary()))
+	}
 	senderCfg := sender.DefaultSenderConfig()
+	// The -tools allowlist becomes a runner only if something was configured. A malformed entry
+	// refuses construction here, before any scan — a typo must not surface mid-scan as checks
+	// that silently cannot run. Nil keeps tool checks counted-but-excluded (see
+	// scanner.corpusActiveChecks).
+	toolAllowlist, terr := parseToolAllowlist(tools)
+	if terr != nil {
+		return nil, terr
+	}
+	var toolRunner bcheck.ToolRunner
+	if toolAllowlist != nil {
+		toolRunner = scanner.NewToolRunner(scanner.ToolRunnerConfig{Tools: toolAllowlist})
+	}
 	ctx := &cliContext{
 		store:    store,
 		scope:    scope,
@@ -116,10 +148,14 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 				return sent.Raw, nil
 			}),
 		// WithScope, so the audit engine refuses an out-of-scope exchange before it plans any work
-		// and refuses any probe whose own URL leaves the engagement.
+		// and refuses any probe whose own URL leaves the engagement. WithCorpusChecks is a no-op
+		// when no corpus was loaded, so the built-in table is the whole set then. WithToolRunner
+		// carries the -tools allowlist; a nil runner keeps tool checks counted-but-excluded.
 		scanner: scanner.NewActiveScanner(store, logger).
 			WithSender(sender.NewSender(senderCfg)).
-			WithScope(scope),
+			WithScope(scope).
+			WithCorpusChecks(corpusChecks).
+			WithToolRunner(toolRunner),
 		mr:        matchreplace.NewRuleSet(),
 		toolLog:   toollog.New(),
 		organizer: organizer.New(),
@@ -135,7 +171,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 }
 
 // runCLI dispatches to a subcommand and exits. Returns the process exit code.
-func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile string) int {
+func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) int {
 	if name == "help" || name == "-h" || name == "--help" {
 		printCLIHelp()
 		return 0
@@ -145,7 +181,7 @@ func runCLI(name string, args []string, captureDir string, segmentBytes uint64, 
 		fmt.Fprintf(os.Stderr, "burpsy: unknown command %q (see \"burpsy help\")\n", name)
 		return 2
 	}
-	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile)
+	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "burpsy: %v\n", err)
 		return 1
@@ -163,7 +199,7 @@ func printCLIHelp() {
 	fmt.Println("Server mode (default, no command): run the proxy and web UI.")
 	fmt.Println("Server flags: -proxy -web -capture-dir -scope-include -scope-exclude",
 		"-intercept-tls -ca-dir -segment-bytes -tls-passthrough -tls-passthrough-port",
-		"-tls-defaults -store-verify")
+		"-tls-defaults -store-verify -bchecks -tools")
 	fmt.Println()
 	fmt.Println("Commands (drive engines directly, no HTTP):")
 	fmt.Println()
@@ -183,6 +219,34 @@ func sortedCLINames() []string {
 		}
 	}
 	return names
+}
+
+// parseToolAllowlist turns the -tools flag value (name=path,name=path) into the
+// allowlist map the scanner's runner gates `run tool` against. Empty string
+// yields nil (no runner). A malformed entry is an error — a typo in a name or
+// path must refuse construction, not surface mid-scan as a tool that never ran.
+func parseToolAllowlist(s string) (map[string]string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	out := make(map[string]string)
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		name, path, ok := strings.Cut(pair, "=")
+		name, path = strings.TrimSpace(name), strings.TrimSpace(path)
+		if !ok || name == "" || path == "" {
+			return nil, fmt.Errorf("bad -tools entry %q: want name=path", pair)
+		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("duplicate -tools entry %q", name)
+		}
+		out[name] = path
+	}
+	return out, nil
 }
 
 // newFlagSet is a tiny wrapper so commands can parse their own flags.

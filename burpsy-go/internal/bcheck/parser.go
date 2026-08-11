@@ -547,6 +547,9 @@ func (p *parser) statement() (Statement, error) {
 	if p.isPhrase("send", "payload") {
 		return p.sendPayload()
 	}
+	if p.isPhrase("run", "tool") {
+		return p.runTool()
+	}
 	return nil, p.errf("unexpected statement start %q", p.peek().text)
 }
 
@@ -722,8 +725,14 @@ func normalizeConfidence(v string) (string, error) {
 	return "", fmt.Errorf("unknown confidence %q", v)
 }
 
-// sendRequest parses `send request [called name]: ...` structurally so M1
-// never rejects an active check, even though M1 performs no outbound traffic.
+// sendRequest parses `send request [called name]:` into a raw-request form or a list of
+// modifier clauses, kept on the AST so the active evaluator can actually send.
+//
+// The raw form is a single literal or template string. The structural form is a sequence of
+// clauses, each an optional `replacing`/`appending` prefix, a target word (`method`, `path`,
+// `query_string`, `queries`, `headers`, `body`), a colon, then a value — a comma-separated
+// list for `queries`, and `"Name": value` pairs for `headers`. A statement keyword where
+// the target would sit ends the block.
 func (p *parser) sendRequest() (Statement, error) {
 	p.bump() // send
 	p.bump() // request
@@ -735,64 +744,125 @@ func (p *parser) sendRequest() (Statement, error) {
 	if err := p.expectColon(); err != nil {
 		return nil, err
 	}
-	// Raw request string, or modifier clauses — consumed structurally so active
-	// checks parse and can be counted. Mirror the reference grammar: an optional
-	// `replacing`/`appending` prefix, a target word, a colon, then a value
-	// (optionally a comma-separated list for headers/queries). A statement
-	// keyword where the target would sit ends the block.
 	if p.peek().kind == tokLitStr || p.peek().kind == tokTemplate {
 		stmt.Template = p.bump().text
-	} else {
-		for {
-			opOff := 0
-			if p.peek().kind == tokWord {
-				lw := strings.ToLower(p.peek().text)
-				if (lw == "replacing" || lw == "appending") && p.at(1).kind == tokWord {
-					opOff = 1
-				}
+		return stmt, nil
+	}
+	for {
+		op := ModReplace
+		opOff := 0
+		if p.peek().kind == tokWord {
+			switch strings.ToLower(p.peek().text) {
+			case "replacing":
+				op, opOff = ModReplace, 1
+			case "appending":
+				op, opOff = ModAppend, 1
 			}
-			if p.at(opOff).kind != tokWord || p.at(opOff+1).kind != tokColon {
-				break
-			}
-			target := strings.ToLower(p.at(opOff).text)
-			if target == "if" || target == "end" || target == "else" || target == "report" || target == "send" {
-				break
-			}
-			for i := 0; i <= opOff+1; i++ {
-				p.bump()
-			}
-			if p.peek().kind == tokEquals {
-				p.bump()
-			}
-			if target == "headers" || target == "header" {
-				// `"Name": value` pairs, comma-separated.
-				for {
-					if _, err := p.value(); err != nil {
-						return nil, err
-					}
-					if p.peek().kind != tokColon {
-						break
-					}
-					p.bump()
-					if _, err := p.value(); err != nil {
-						return nil, err
-					}
-					if p.peek().kind != tokComma {
-						break
-					}
-					p.bump()
-				}
-			} else {
-				if _, err := p.value(); err != nil {
+		}
+		if p.at(opOff).kind != tokWord || p.at(opOff+1).kind != tokColon {
+			break
+		}
+		target := strings.ToLower(p.at(opOff).text)
+		if target == "if" || target == "end" || target == "else" || target == "report" || target == "send" {
+			break
+		}
+		for i := 0; i <= opOff+1; i++ {
+			p.bump()
+		}
+		if p.peek().kind == tokEquals {
+			p.bump()
+		}
+		mod := RequestModifier{Target: target, Op: op}
+		if target == "headers" || target == "header" {
+			// `"Name": value` pairs, comma-separated — stored flat as
+			// [name, value, name, value, …] so the evaluator applies them in
+			// source order.
+			for {
+				n, err := p.value()
+				if err != nil {
 					return nil, err
 				}
-				for p.peek().kind == tokComma {
-					p.bump()
-					if _, err := p.value(); err != nil {
-						return nil, err
-					}
+				if p.peek().kind != tokColon {
+					return nil, p.errf("expected ':' in headers modifier")
 				}
+				p.bump()
+				v, err := p.value()
+				if err != nil {
+					return nil, err
+				}
+				mod.Values = append(mod.Values, n, v)
+				if p.peek().kind != tokComma {
+					break
+				}
+				p.bump()
 			}
+		} else {
+			for {
+				v, err := p.value()
+				if err != nil {
+					return nil, err
+				}
+				mod.Values = append(mod.Values, v)
+				if p.peek().kind != tokComma {
+					break
+				}
+				p.bump()
+			}
+		}
+		stmt.Modifiers = append(stmt.Modifiers, mod)
+	}
+	return stmt, nil
+}
+
+// runTool parses `run tool <tool> [called <name>]: args: v1, v2, ...`.
+//
+// The tool name is a value (usually a bare word — `sqlmap`), resolved against
+// the caller's allowlist at execute time. `args:` is the one clause; each arg
+// is a value, resolved like any other. A statement keyword where the next
+// clause would sit ends the block, matching sendRequest.
+func (p *parser) runTool() (Statement, error) {
+	p.bump() // run
+	p.bump() // tool
+	stmt := &RunToolStatement{}
+	tv, err := p.value()
+	if err != nil {
+		return nil, err
+	}
+	stmt.Tool = tv
+	if p.eatWord("called") {
+		t := p.bump()
+		stmt.StoreAs = t.text
+	}
+	if err := p.expectColon(); err != nil {
+		return nil, err
+	}
+	for {
+		t := p.peek()
+		if t.kind != tokWord || p.at(1).kind != tokColon {
+			break
+		}
+		if strings.EqualFold(t.text, "if") || strings.EqualFold(t.text, "end") ||
+			strings.EqualFold(t.text, "else") || strings.EqualFold(t.text, "report") ||
+			strings.EqualFold(t.text, "send") || strings.EqualFold(t.text, "run") {
+			break
+		}
+		p.bump()
+		p.bump() // colon
+		switch strings.ToLower(t.text) {
+		case "args":
+			for {
+				v, err := p.value()
+				if err != nil {
+					return nil, err
+				}
+				stmt.Args = append(stmt.Args, v)
+				if p.peek().kind != tokComma {
+					break
+				}
+				p.bump()
+			}
+		default:
+			return nil, p.errf("unknown run tool field %q", t.text)
 		}
 	}
 	return stmt, nil

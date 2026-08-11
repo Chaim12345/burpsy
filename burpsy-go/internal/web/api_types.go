@@ -76,6 +76,8 @@ type FindingView struct {
 	Severity    string `json:"severity"`
 	Confidence  string `json:"confidence"`
 	Description string `json:"description"`
+	// Param is the parameter this finding was observed at, empty for resource findings.
+	Param string `json:"param,omitempty"`
 }
 
 func protocolToken(p core.Protocol) string {

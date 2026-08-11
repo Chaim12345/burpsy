@@ -249,23 +249,19 @@ given response then
 	}
 }
 
-func TestForEachIterationsDoNotLeakBindings(t *testing.T) {
-	// `seen` is defined inside the body on the first iteration only. Under a
-	// shared context it would still be bound on the second, and the else branch
-	// would never run.
+// An absent binding makes a comparison false, never true. Before this rule the
+// operands were coerced to "", so `{typo.response.body} in {latest.response}`
+// fired on every response — a check reporting a vulnerability it never
+// observed. This pins the absence guard (the Rust evaluator's value_opt).
+func TestAnAbsentBindingNeverMakesAComparisonTrue(t *testing.T) {
 	src := `
 metadata:
-  name: "leak check"
-
-run for each:
-  path = "/a", "/b"
-
+  name: "absence check"
 given response then
-  if {seen} is "" then
-      report issue and continue:
-          severity: low
-          confidence: firm
-          detail: ` + "`unbound at {path}`" + `
+  if "anything" in {typo.response.body} then
+      report issue:
+          severity: high
+          confidence: certain
   end if
 `
 	c, err := Parse(src)
@@ -273,14 +269,23 @@ given response then
 		t.Fatalf("parse failed: %v", err)
 	}
 	ctx := NewContext()
-	ctx.Response = []byte("body")
+	ctx.Response = []byte("anything")
 	findings, err := RunPassive(c, ctx)
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
-	if len(findings) != 2 {
-		t.Errorf("findings = %d, want 2: each iteration must start from the "+
-			"parent's bindings, not from what the previous iteration left behind", len(findings))
+	if len(findings) != 0 {
+		t.Errorf("findings = %d, want 0: a misnamed binding must not read as "+
+			"the base response (it used to resolve to the base body)", len(findings))
+	}
+	found := false
+	for _, u := range ctx.Unresolved() {
+		if strings.Contains(u, "typo") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the typo was never reported as unresolved; got %v", ctx.Unresolved())
 	}
 }
 
@@ -410,7 +415,10 @@ given response then
 func TestResponseBodyHasNoLeadingBlankLine(t *testing.T) {
 	ctx := NewContext()
 	ctx.Response = []byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello world")
-	got := ctx.resolvePath("base.response.body")
+	got, ok := ctx.resolvePathOpt("base.response.body")
+	if !ok {
+		t.Fatal("resolvePathOpt could not supply the body")
+	}
 	if got != "hello world" {
 		t.Errorf("body = %q, want %q (the header/body separator must be skipped whole)", got, "hello world")
 	}

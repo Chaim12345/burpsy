@@ -1,0 +1,13 @@
+{
+  "name": "burpsy-diagrams",
+  "private": true,
+  "description": "LikeC4 architecture diagrams for burpsy",
+  "scripts": {
+    "dev": "likec4 start",
+    "build": "likec4 build -o dist",
+    "export:png": "likec4 export png -o out"
+  },
+  "devDependencies": {
+    "likec4": "^1.59.2"
+  }
+}

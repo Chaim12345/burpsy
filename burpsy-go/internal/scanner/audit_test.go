@@ -59,7 +59,7 @@ func Test_bcheck_given_clauses_reach_four_of_the_seven_dispatch_scopes(t *testin
 	}
 }
 
-func Test_the_three_unreachable_scopes_yield_no_dispatch_unit(t *testing.T) {
+func Test_the_two_unreachable_scopes_yield_no_dispatch_unit(t *testing.T) {
 	ex := auditTestExchange(1, "a.test", "/x", true)
 	reachable := 0
 	for _, s := range DispatchScopeAll {
@@ -67,8 +67,12 @@ func Test_the_three_unreachable_scopes_yield_no_dispatch_unit(t *testing.T) {
 			reachable++
 		}
 	}
-	if reachable != 4 {
-		t.Errorf("reachable scopes = %d, want 4 of seven wired up", reachable)
+	// Per-insertion-point became reachable with the corpus wiring: the check's run covers every
+	// point of one request internally (bcheck.Enumerate), so one admission per request admits the
+	// whole point set. In-session-per-request and stored-per-insertion-point have no bound corpus
+	// check and stay unreachable.
+	if reachable != 5 {
+		t.Errorf("reachable scopes = %d, want 5 of seven wired up", reachable)
 	}
 	for _, s := range DispatchScopeAll {
 		// Nothing can be admitted to a scope with no key, so an unreachable scope cannot quietly
@@ -104,6 +108,12 @@ func Test_dispatch_unit_keys_nest_from_host_down_to_request(t *testing.T) {
 	}
 	if key(DispatchScopePerRequest, a) == key(DispatchScopePerRequest, b) {
 		t.Error("a different capture is a different request")
+	}
+	// A per-insertion-point unit keys on the request itself: one request's point set is one unit,
+	// because the check's run covers every point of it internally. Two captures of one request are
+	// identical work; two captures of different requests are different point sets.
+	if key(DispatchScopePerInsertionPoint, a) == key(DispatchScopePerInsertionPoint, b) {
+		t.Error("a different capture is a different insertion-point unit")
 	}
 
 	if got, want := key(DispatchScopePerHost, a), "https://a.test:443"; got != want {

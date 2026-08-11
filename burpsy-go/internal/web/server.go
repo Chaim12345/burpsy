@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intercept"
@@ -28,7 +29,11 @@ type Server struct {
 	sender         *sender.Sender
 	scanner        *scanner.ActiveScanner
 	passiveScanner *scanner.PassiveScanner
-	findings       *core.FindingStore
+	// toolRunner is the allowlist runner `run tool` statements dispatch through
+	// on the lazily built audit scanner. Nil means tool execution is disabled;
+	// corpus checks that need a tool are counted at load and never admitted.
+	toolRunner bcheck.ToolRunner
+	findings   *core.FindingStore
 	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
 	// falls back to its own description and remediation — the catalogue enriches findings, it is
 	// never required to render one.
@@ -135,6 +140,17 @@ func (s *Server) WithLogger(logger *zap.Logger) *Server {
 // and states its own weaker host-level check where it makes it.
 func (s *Server) WithSender(snd *sender.Sender) *Server {
 	s.sender = snd
+	return s
+}
+
+// WithToolRunner attaches the allowlist runner `run tool` statements dispatch
+// through, for the lazily built audit scanner. Without one, corpus checks that
+// need a tool are counted at load and never admitted — see
+// scanner.corpusActiveChecks. The server never builds a runner of its own;
+// tool execution is operator policy, supplied from the command line like the
+// corpus itself.
+func (s *Server) WithToolRunner(r bcheck.ToolRunner) *Server {
+	s.toolRunner = r
 	return s
 }
 

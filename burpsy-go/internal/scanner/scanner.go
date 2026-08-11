@@ -29,6 +29,16 @@ type ActiveScanner struct {
 	// auditCfg is the budget/breaker configuration, when an operator set one explicitly. Nil defers
 	// to AuditConfig, which derives it from ScanConfig.
 	auditCfg *AuditConfig
+	// corpus holds the loaded BCheck corpus's active checks (given host/path/request/insertion
+	// point), dispatched by the audit engine exactly like the built-in table entries. Nil until
+	// WithCorpusChecks supplies one — a process without --bchecks audits the built-ins only, so
+	// old behaviour is preserved.
+	corpus []*bcheck.Check
+	// toolRunner executes the `run tool` statements of corpus checks, through
+	// the operator's allowlist. Nil means tool execution is disabled: checks
+	// that need a tool are counted at load (LoadReport.Tools) and excluded
+	// from the dispatch set, never run against nothing.
+	toolRunner bcheck.ToolRunner
 	// jsLib and jwtWeak are the two native checks (SCAN-01 in js_vulns.go, SCAN-02 in jwt_weak.go).
 	// Each carries its own dataset and coverage counters, so they are built once per scanner and
 	// reused across audits rather than rebuilt per exchange — re-parsing the 514 KB retire.js corpus
@@ -58,7 +68,11 @@ type ScanConfig struct {
 	CheckXXE           bool
 	CheckJwtWeak       bool
 	CheckJSVulns       bool
-	CustomPayloads     []string
+	// CheckCorpus admits the loaded BCheck corpus's active checks into the audit set. Set by
+	// WithCorpusChecks when a corpus is loaded; WithConfig can switch it off. Off with a corpus
+	// loaded audits the built-ins alone, which is the honest opt-out.
+	CheckCorpus    bool
+	CustomPayloads []string
 }
 
 // Finding represents a security finding.
@@ -105,6 +119,32 @@ func (s *ActiveScanner) WithConfig(config *ScanConfig) *ActiveScanner {
 // Without a sender, checks fall back to inspecting the stored exchange response.
 func (s *ActiveScanner) WithSender(snd *sender.Sender) *ActiveScanner {
 	s.sender = snd
+	return s
+}
+
+// WithToolRunner attaches the allowlist runner `run tool` statements dispatch
+// through. Without one, corpus checks that need a tool are counted at load and
+// excluded from the dispatch set — see corpusActiveChecks. Attaching a runner
+// after WithCorpusChecks is fine: the gate is read when the dispatch set is
+// built, not when the corpus was loaded.
+func (s *ActiveScanner) WithToolRunner(r bcheck.ToolRunner) *ActiveScanner {
+	s.toolRunner = r
+	return s
+}
+
+// WithCorpusChecks supplies the loaded BCheck corpus's active checks (given host/path/request/
+// insertion point) for the audit engine to dispatch alongside the built-in table. Loading a
+// corpus switches its active checks on (ScanConfig.CheckCorpus); WithConfig can turn the switch
+// back off. A nil or empty slice leaves the built-in set alone — including the switch, so a
+// process with no corpus does not quietly turn a knob that gates nothing.
+//
+// The checks come from the same LoadDir that built the passive scanner — the audit engine and
+// the passive scanner must never disagree about which corpus is loaded.
+func (s *ActiveScanner) WithCorpusChecks(checks []*bcheck.Check) *ActiveScanner {
+	s.corpus = checks
+	if s.config != nil && len(checks) > 0 {
+		s.config.CheckCorpus = true
+	}
 	return s
 }
 
@@ -474,11 +514,20 @@ func (s *ActiveScanner) ClearFindings() {
 // loaded it runs the built-in header/cookie checks; after LoadDir it runs the
 // parsed passive BCheck set instead.
 type PassiveScanner struct {
-	store    *core.TrafficStore
-	logger   *zap.Logger
-	scope    *core.Scope
-	passive  []*bcheck.Check
-	active   []*bcheck.Check
+	store   *core.TrafficStore
+	logger  *zap.Logger
+	scope   *core.Scope
+	passive []*bcheck.Check
+	active  []*bcheck.Check
+	// insertion holds the checks the active engine can dispatch once insertion
+	// points exist (`given insertion point`, or any check carrying `send
+	// payload`). They used to be counted and dropped; they are now counted *and*
+	// kept for the active scanner — see ActiveChecks.
+	insertion []*bcheck.Check
+	// tools holds the checks that invoke an external tool via `run tool`. Never
+	// passive; dispatchable only when the ActiveScanner has a runner — see
+	// ActiveChecks and scanner's corpusActiveChecks.
+	tools    []*bcheck.Check
 	report   LoadReport
 	coverage *CoverageTracker
 

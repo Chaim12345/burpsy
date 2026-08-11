@@ -562,6 +562,12 @@ export function ScannerPage(): JSX.Element {
               { label: "Check", value: selected.finding.check_name ?? "—" },
               { label: "Host", value: selected.finding.host || "—" },
               { label: "Path", value: selected.occurrence?.path ?? "—" },
+              // Only rendered when the finding names a parameter: an insertion-point BCheck or a
+              // DOM sink is attributable to one input, a resource-level finding is not, and a row
+              // that can only ever say "—" is noise.
+              ...(selected.finding.param
+                ? [{ label: "Parameter", value: selected.finding.param }]
+                : []),
               { label: "Times seen", value: selected.finding.times_seen },
               { label: "Occurrences", value: selected.finding.occurrences.length },
             ]}

@@ -1,0 +1,601 @@
+// burpsy — LikeC4 architecture model.
+//
+// Hierarchy: system `burpsy` -> 13 container crates -> component internals.
+// The dotted `-[depends-on]->` edges mirror the real Cargo dependency graph,
+// verified from the crate manifests; solid arrows are runtime flows.
+// The arrow direction is the dependency direction (a -[depends-on]-> b means
+// "a depends on b"), matching the graph in the root AGENTS.md.
+
+model {
+
+  // ---- actors and external systems ------------------------------------
+
+  researcher = actor 'Security Researcher' {
+    description "The operator running burpsy against an engagement target."
+    -> burpsy.web 'drives the UI'
+    -> burpsy.proxy 'points the browser at'
+  }
+
+  browser = user 'Browser' {
+    description "The researcher's browser, configured to use burpsy as its HTTP/HTTPS proxy."
+    technology 'Chrome / Firefox'
+    -> burpsy.proxy 'browses through'
+  }
+
+  target = external-system 'Engagement Targets' {
+    description "The applications under test: hosts the operator has placed in scope."
+    technology 'HTTP/1.1 + HTTP/2'
+  }
+
+  // ---- burpsy -----------------------------------------------------------
+
+  burpsy = system 'burpsy' {
+    description '''
+      A memory-frugal HTTP testing proxy. Raw bytes are written once and never
+      copied: every subsystem holds a MsgId plus (offset, len) spans, so the
+      resident set does not scale with work in flight, and the audit engine
+      bounds by backpressure rather than dropping findings (Burp's
+      LIMIT_EXCEEDED).
+    '''
+
+    // ---- core -----------------------------------------------------------
+
+    core = container 'core' {
+      #root
+      technology 'Rust'
+      description "HTTP message model, append-only traffic store, engagement authorisation. The root of the dependency graph — it depends on no burpsy crate except query."
+
+      message = component 'Message model' {
+        technology 'Rust'
+        description 'MsgId, Span, Direction, StoredMessage, parse. Spans, not strings: a parsed message costs a fixed ~100 bytes regardless of body size.'
+      }
+
+      store = component 'TrafficStore' {
+        technology 'Rust'
+        description 'Append-only store; position is the id. In-memory or disk-backed sealed segments; slice() hands out refcounted Bytes, never a copy.'
+      }
+
+      segment = component 'SegmentLog' {
+        technology 'Rust'
+        description 'Sealed, mmap-backed segment storage. Two-state rule: buffered writer XOR read-only mapping, never both; per-record CRC.'
+      }
+
+      scope = component 'Scope' {
+        technology 'Rust'
+        description 'Engagement authorisation — which hosts and paths may be touched. SharedScope: the handle every subsystem clones, so an operator edit reaches all of them.'
+      }
+
+      sitemap = component 'Sitemap' {
+        technology 'Rust'
+        description 'Host → path tree folded from the traffic index. A view over the store, never a second copy.'
+      }
+
+      findings = component 'Findings' {
+        technology 'Rust'
+        description 'Finding storage and deduplication — dedup belongs to storage, not display.'
+      }
+
+      edit = component 'RequestEdit' {
+        technology 'Rust'
+        description 'Editable requests layered over immutable stored bytes.'
+      }
+
+      ws = component 'WebSocket index' {
+        technology 'Rust'
+        description 'RFC 6455 framing, Reassembler, unmask. A third index over the same store, not a fourth store.'
+      }
+
+      store -> segment 'appends sealed records'
+      sitemap -> store 'folded from the index'
+      ws -> store 'add_ws_message'
+      message -> store 'StoredMessage + spans'
+    }
+
+    // ---- bcheck ----------------------------------------------------------
+
+    bcheck = container 'bcheck' {
+      technology 'Rust'
+      description "Parser and evaluator for PortSwigger's BCheck DSL — the corpus is data, not code. A pure interpreter: no transport of its own, on purpose."
+
+      lexer = component 'Lexer' {
+        technology 'Rust'
+        description 'Tokeniser. Whitespace and newlines are insignificant — a whole check on one line parses.'
+      }
+
+      parser = component 'Parser' {
+        technology 'Rust'
+        description 'Recursive-descent parser. One v2 parser accepts 100% of the published corpus (v2-beta is a strict superset of v1-beta).'
+      }
+
+      ast = component 'AST' {
+        technology 'Rust'
+        description 'The M1 (passive) subset, with shape already reserved for M2/M3.'
+      }
+
+      eval = component 'Evaluator' {
+        technology 'Rust'
+        description 'Deliberately synchronous and recursive evaluator. Owns the Sender trait and Target — the seam between a check that wants to send and whatever actually does.'
+      }
+
+      funcs = component 'Functions' {
+        technology 'Rust'
+        description 'Expressions inside braces.'
+      }
+
+      insertion = component 'Insertion points' {
+        technology 'Rust'
+        description 'Where in a request a payload can be placed.'
+      }
+
+      conform = component 'Conformance runner' {
+        technology 'Rust'
+        description 'bin/conform: parse a corpus tree and report acceptance — the measure, not unit tests alone.'
+      }
+
+      parser -> lexer 'consumes tokens'
+      parser -> ast 'builds'
+      eval -> ast 'walks'
+      eval -> insertion 'places payloads'
+      conform -> parser 'parses corpus'
+    }
+
+    // ---- scanner ----------------------------------------------------------
+
+    scanner = container 'scanner' {
+      technology 'Rust'
+      description "Passive BCheck scanning, the active audit engine, Burp's issue catalog. Off the proxy hot path; bounding is admission-side and counted, never silent. No tokio dependency."
+
+      passive = component 'PassiveScanner' {
+        technology 'Rust'
+        description 'Runs checks off the hot path: the proxy hands over (exchange_id, response_id) and returns to serving traffic.'
+      }
+
+      audit = component 'Audit engine' {
+        technology 'Rust'
+        description 'Seven dispatch scopes, the item state machine, admission-side bounding. Budgets are session-wide; every skipped item comes back with its whole check set attributed to a reason.'
+      }
+
+      catalog = component 'Issue catalog' {
+        technology 'Rust'
+        description "Burp's shipped issue catalog — the 183 definitions behind burp.Zcot. catalog_data.rs is generated, never hand-edited."
+      }
+
+      native = component 'Native checks' {
+        technology 'Rust'
+        description 'SCAN-01 vulnerable JS libraries, SCAN-02 weak JWT HMAC. Not expressible in the BCheck DSL; off by default; unavailable/undetermined/truncated are reported, never guessed.'
+      }
+
+      coverage = component 'Coverage report' {
+        technology 'Rust'
+        description 'Three paths reported separately (passive BChecks, active audit, native). Every refusal carries a Disposition naming why.'
+      }
+
+      passive -> catalog 'enriches findings'
+      passive -> native 'dispatches'
+      passive -> coverage 'reports'
+      audit -> coverage 'attributes refusals'
+      audit -> native 'bounds native checks'
+    }
+
+    // ---- sender ------------------------------------------------------------
+
+    sender = container 'sender' {
+      #chokepoint
+      technology 'Rust'
+      description "The one authorising path from a constructed request to a socket. AuthorisedSender checks Scope against the actual outbound bytes; transports are pub(crate)."
+
+      authorised = component 'AuthorisedSender' {
+        technology 'Rust'
+        description 'One private authorise() decision per send; holds the SharedScope handle so an operator edit changes what an already-built sender will send. Counters are AtomicU32.'
+      }
+
+      blocking = component 'Blocking transport' {
+        technology 'Rust'
+        description 'NetSender: std::net + rustls with a keep-alive connection pool. Serves the synchronous BCheck evaluator.'
+      }
+
+      async_t = component 'Async transport' {
+        technology 'Rust'
+        description 'tokio + tokio-rustls; the h2 client encodes the same field list the authorisation read (h2req.rs).'
+      }
+
+      tls = component 'Outbound TLS config' {
+        technology 'Rust'
+        description 'The single no-verify client config, shared by both transports.'
+      }
+
+      egress = component 'Egress scan' {
+        technology 'Rust'
+        description 'tests/no_alternate_egress.rs: a workspace-wide source scan that fails the build if a new connect call appears outside this crate. A test, not a compile error — the docs say so.'
+      }
+
+      authorised -> blocking 'delegates'
+      authorised -> async_t 'delegates'
+      blocking -> tls 'uses'
+      async_t -> tls 'uses'
+    }
+
+    // ---- proxy ------------------------------------------------------------
+
+    proxy = container 'proxy' {
+      technology 'Rust'
+      description "The intercepting HTTP/HTTPS proxy — the thing a browser is actually pointed at. Captures into the shared store, optionally holds requests, optionally terminates TLS with a locally generated CA."
+
+      accept = component 'Accept/forward loop' {
+        technology 'Rust'
+        description 'CONNECT handling, HTTP/1 forwarding and MITM. Failed CONNECTs are recorded in history rather than dropped; connection reuse is measurable.'
+      }
+
+      interceptor = component 'Interceptor' {
+        technology 'Rust'
+        description 'Verdict / HeldView. Ordered condition lists (InterceptRules) decide what is held; response holding is decided before the response arrives, and buffering is chosen before a byte is written.'
+      }
+
+      tls = component 'TLS engine' {
+        technology 'Rust'
+        description 'CertAuthority, TlsEngine, load_or_generate_ca. CA material is written only when interception is requested; on-demand leaf signing, SNI resolution.'
+      }
+
+      policy = component 'TlsPolicy' {
+        technology 'Rust'
+        description 'Which hosts get intercepted and which are tunnelled blind. Passthrough exists because MITM genuinely breaks things; decisions are annotated in history, never silent.'
+      }
+
+      wsrelay = component 'WebSocket relay' {
+        technology 'Rust'
+        description 'Frame pump that takes over after a 101. Relay before capture, always; desynchronisation stops the index, never the connection.'
+      }
+
+      h2 = component 'h2 relay' {
+        technology 'Rust'
+        description 'Streams relayed via the h2 crate; each round trip recorded as an Exchange. Interception switches the ALPN offer to http/1.1 — the downgrade an operator caused and can see.'
+      }
+
+      accept -> interceptor 'may_hold_request / may_hold_response'
+      accept -> tls 'terminates TLS on the MITM leg'
+      accept -> policy 'decides passthrough'
+      accept -> wsrelay 'hands off after 101'
+      accept -> h2 'relays negotiated h2'
+      policy -> tls 'selects interception'
+    }
+
+    // ---- intruder -----------------------------------------------------------
+
+    intruder = container 'intruder' {
+      technology 'Rust'
+      description 'Insertion-point discovery and payload attacks. An insertion point is a Span plus a kind — no allocation. Has no concept of engagement scope, and must not grow one.'
+
+      find = component 'Insertion-point discovery' {
+        technology 'Rust'
+        description 'find_points / InsertionPoint. The taxonomy mirrors Burp, recovered from its own method names.'
+      }
+
+      engine = component 'Attack engine' {
+        technology 'Rust'
+        description 'Bounded concurrency via JoinSet. A summary AttackReport, not a pile of bodies: responses are recorded into the store via RecordFn and referenced, never held.'
+      }
+
+      plan = component 'AttackPlan' {
+        technology 'Rust'
+        description 'Attack shapes generated lazily; ordinal → assignment reconstructed on demand into a caller-supplied buffer.'
+      }
+
+      payload = component 'Payload sources' {
+        technology 'Rust'
+        description 'Numbers, dates, brute forcer, custom iterator, null → PayloadSet. Generators resolve before the attack; truncated is reported next to total, never silent.'
+      }
+
+      process = component 'Processing chain' {
+        technology 'Rust'
+        description 'RuleSpec / Chain: match-replace, skip-if-matches, hash, encode — applied at resolve time, so plan.len() is still the number of requests.'
+      }
+
+      limit = component 'Rate limiting' {
+        technology 'Rust'
+        description 'RateLimit / AutoThrottle over a Semaphore. Auto-throttle is opt-in — a safety property, not a convenience.'
+      }
+
+      engine -> plan 'assigns lazily'
+      engine -> payload 'resolved sets'
+      engine -> process 'applies rules'
+      engine -> limit 'bounds concurrency'
+      find -> burpsy.core.message 'spans into stored bytes'
+      process -> payload 'rewrites the set in place'
+    }
+
+    // ---- sequencer ------------------------------------------------------------
+
+    sequencer = container 'sequencer' {
+      technology 'Rust'
+      description "Statistical randomness analysis of captured session tokens: a character-level view and the bit-level FIPS 140-2 battery. A verdict is only printed where the test it comes from applies."
+
+      analyse = component 'Analysis' {
+        technology 'Rust'
+        description 'SequencerReport / Grade / analyse / analyse_as. Encoding is detected before testing — hex read as ASCII fails monobit for reasons about hex, not the generator.'
+      }
+
+      fips = component 'FIPS 140-2' {
+        technology 'Rust'
+        description 'The four statistical tests over whole 20,000-bit blocks; the remainder is reported as untested. Every threshold quoted with its spec section.'
+      }
+
+      chars = component 'Character analysis' {
+        technology 'Rust'
+        description 'Alphabet, per-position distribution, Shannon entropy, and an explicit assumes_positional_independence flag.'
+      }
+
+      capture = component 'Live capture' {
+        technology 'Rust'
+        description 'Extractor loop. MAX_CONSECUTIVE_FAILURES aborts a misconfigured extractor before it spends the whole 20,000-request budget.'
+      }
+
+      analyse -> fips 'bit-level tests'
+      analyse -> chars 'character-level view'
+      capture -> analyse 'feeds tokens'
+    }
+
+    // ---- tools ----------------------------------------------------------------
+
+    tools = container 'tools' {
+      technology 'Rust'
+      description 'Decoder, Comparer, Logger, Organizer, match-and-replace. Pure transformations over bytes — no clock, no filesystem, no sockets, and that is the point.'
+
+      decoder = component 'Decoder' {
+        technology 'Rust'
+        description 'Encode/decode chains over bytes — the largest module here.'
+      }
+
+      hash = component 'Hash' {
+        technology 'Rust'
+        description 'MD5 / SHA-1 / SHA-256 / SHA-512. One-way, deliberately not a Layer.'
+      }
+
+      matchreplace = component 'Match & Replace' {
+        technology 'Rust'
+        description 'Rewrite rules over requests and responses. Rules carry their own scope filter; an operator edit takes effect on the next message.'
+      }
+
+      comparer = component 'Comparer' {
+        technology 'Rust'
+        description 'Diffing two messages.'
+      }
+
+      logger = component 'Logger' {
+        technology 'Rust'
+        description 'Request/response logging views. Timestamps are parameters, not reads of SystemTime.'
+      }
+
+      organizer = component 'Organizer' {
+        technology 'Rust'
+        description 'Grouping and annotating captured items.'
+      }
+
+      decoder -> hash 'Hash action'
+    }
+
+    // ---- session ------------------------------------------------------------
+
+    session = container 'session' {
+      technology 'Rust'
+      description "Recorded-login re-authentication as a rule list: scoped per target, bounded, collapsed, and honest about giving up. No transport — sending is the trait's business."
+
+      coordinator = component 'ReloginCoordinator' {
+        technology 'Rust'
+        description 'Bounding, collapsing concurrent session drops, update_macro repair. First enabled rule whose scope covers a request handles it; nothing covered is NoRuleApplies, never somebody else\'s login.'
+      }
+
+      rule = component 'SessionRule' {
+        technology 'Rust'
+        description 'Name, optional Scope selector, macro, ValidityRule, retry bound. A per-rule scope is a selector, never an authorisation.'
+      }
+
+      validity = component 'ValidityRule' {
+        technology 'Rust'
+        description "The operator's stated definition of a valid session. Indeterminate is never treated as Valid."
+      }
+
+      cookie = component 'CookieJar' {
+        technology 'Rust'
+        description 'Set-Cookie carry-over between macro steps, per host.'
+      }
+
+      extract = component 'Extraction' {
+        technology 'Rust'
+        description 'Regex capture, dotted JSON path, or whole header → {{name}} substitution. Deliberately not a template language.'
+      }
+
+      macrosender = component 'MacroSender' {
+        technology 'Rust'
+        description 'The trait this crate sends through. The real implementation lives in cli/web over an AuthorisedSender — the HARD-03 chokepoint wiring stays out of the policy crate.'
+      }
+
+      coordinator -> rule 'selects the matching rule'
+      coordinator -> validity 'evaluates responses'
+      coordinator -> cookie 'carries state'
+      coordinator -> extract 'substitutes values'
+      coordinator -> macrosender 'sends steps'
+    }
+
+    // ---- web -------------------------------------------------------------------
+
+    web = container 'web' {
+      technology 'Rust / TypeScript'
+      description 'The JSON API and a single-page UI. History endpoints return index rows; message bytes are fetched only when a specific message is opened — listing 100k exchanges never touches a body.'
+
+      appstate = component 'AppState' {
+        technology 'Rust'
+        description 'Shared store, SharedScope handle, findings, AuditHook, intercept state. Every subsystem gets a clone of the same scope handle.'
+      }
+
+      router = component 'Router ladder' {
+        technology 'Rust'
+        description 'router → router_with_ca → router_full → router_all → router_audit → router_export → router_session → router_intercept; each adds one capability and delegates.'
+      }
+
+      routes = component 'Route modules' {
+        technology 'Rust'
+        description 'One module per feature area: history, message, repeater, intruder, scope, issues, audit, intercept, sitemap, websockets, tools, session, sequencer, report.'
+      }
+
+      ui = component 'Web UI' {
+        technology 'TypeScript'
+        description 'Single-page UI, one module per tab, bundled by Bun; served via include_str! and OUT_DIR.'
+      }
+
+      hook = component 'AuditHook' {
+        technology 'Rust'
+        description 'A closure — given an exchange id, audit it. Keeps web free of a scanner dependency; the binary owns that wiring.'
+      }
+
+      router -> appstate 'extracts'
+      routes -> appstate 'read / write'
+      appstate -> hook 'audits on demand'
+      ui -> routes 'fetches JSON'
+    }
+
+    // ---- cli ---------------------------------------------------------------------
+
+    cli = container 'cli' {
+      technology 'Rust'
+      description 'The burpsy binary. Owns all the wiring: one shared TrafficStore behind the proxy and the web UI. The only crate that constructs concrete implementations for the traits the layers declared.'
+
+      main = component 'main' {
+        technology 'Rust'
+        description 'Flag parsing, subcommands, store/CA/scanner/proxy/web wiring, and the --help text — the only user-facing documentation of the tool surface.'
+      }
+
+      verify = component 'store verify' {
+        technology 'Rust'
+        description 'Read-only offline segment check, dispatched before logging initialises. Exits non-zero on any fault, so scripts can use it.'
+      }
+
+      main -> verify 'offline check'
+    }
+
+    // ---- http2 ------------------------------------------------------------------
+
+    http2 = container 'http2' {
+      #leaf
+      technology 'Rust'
+      description 'HTTP/2 framing, HPACK, and HTTP/1 normalisation — three jobs that live together because all three are pure functions over bytes, and a compliant library is incapable of any of them. No sockets.'
+
+      frame = component 'Frame layer' {
+        technology 'Rust'
+        description 'FrameHeader, RawFrame, read_frames — a frame layer that corrects nothing.'
+      }
+
+      hpack = component 'HPACK' {
+        technology 'Rust'
+        description 'Decoder / Encoder. A compliant library resets the stream before malformed header octets reach you; this one shows them.'
+      }
+
+      malformed = component 'Malformed' {
+        technology 'Rust'
+        description 'Malformation / Violation / audit — names every rule a program breaks, with the RFC section. Emitting a frame the spec forbids is a requirement here.'
+      }
+
+      normalise = component 'Normalisation' {
+        technology 'Rust'
+        description 'HTTP/1-shaped serialisation both ways, so an h2 exchange sits in history in the same shape as an HTTP/1 one.'
+      }
+
+      malformed -> frame 'audits violations'
+      hpack -> frame 'header blocks inside frames'
+      normalise -> frame 'renders HTTP/1 shape'
+    }
+
+    // ---- query -------------------------------------------------------------------
+
+    query = container 'query' {
+      #leaf
+      technology 'Rust'
+      description 'A typed filter grammar over proxy history, evaluated against a trait, not a concrete type. Zero dependencies — a closed grammar needs no JSON layer of its own.'
+
+      lexer = component 'Lexer' {
+        technology 'Rust'
+        description 'Tokenisation, including string escapes.'
+      }
+
+      parser = component 'Parser' {
+        technology 'Rust'
+        description 'Recursive-descent parser; precedence and per-field operators checked here. status > "abc" is a parse error, never false.'
+      }
+
+      ast = component 'AST' {
+        technology 'Rust'
+        description 'The closed AST.'
+      }
+
+      eval = component 'Evaluator' {
+        technology 'Rust'
+        description 'Evaluates against Queryable; absent fields make comparisons false, never true.'
+      }
+
+      error = component 'Errors' {
+        technology 'Rust'
+        description 'QueryError / render — where and why a parse failed, caret included (DSL-04).'
+      }
+
+      parser -> lexer 'consumes tokens'
+      parser -> ast 'builds'
+      eval -> ast 'walks'
+      eval -> error 'reports'
+    }
+  }
+
+  // ---- dependency edges (real Cargo edges, from the crate manifests) -------
+
+  burpsy.core -[depends-on]-> burpsy.query 'Queryable for history filters (DSL-01)'
+  burpsy.bcheck -[depends-on]-> burpsy.core 'message model: MsgId, Span, StoredMessage'
+  burpsy.scanner -[depends-on]-> burpsy.core 'store, Scope, findings'
+  burpsy.scanner -[depends-on]-> burpsy.bcheck 'check parser/evaluator, Sender trait'
+  burpsy.sender -[depends-on]-> burpsy.core 'Scope for the decision'
+  burpsy.sender -[depends-on]-> burpsy.bcheck 'Sender trait, Target'
+  burpsy.sender -[depends-on]-> burpsy.http2 'h2 normalisation + framing for egress'
+  burpsy.proxy -[depends-on]-> burpsy.core 'store, scope, message model'
+  burpsy.proxy -[depends-on]-> burpsy.bcheck 'check types on the scan handoff'
+  burpsy.proxy -[depends-on]-> burpsy.scanner 'passive scanning off the hot path'
+  burpsy.proxy -[depends-on]-> burpsy.tools 'match-and-replace rules'
+  burpsy.proxy -[depends-on]-> burpsy.http2 'h2 relay framing / HPACK'
+  burpsy.intruder -[depends-on]-> burpsy.core 'Span, StoredMessage, bytes to splice'
+  burpsy.intruder -[depends-on]-> burpsy.tools 'decoder codecs for payload processing'
+  burpsy.sequencer -[depends-on]-> burpsy.core 'Span / parse for token location'
+  burpsy.sequencer -[depends-on]-> burpsy.sender 'AuthorisedSender — the only way out'
+  burpsy.tools -[depends-on]-> burpsy.core 'StoredMessage, Span'
+  burpsy.tools -[depends-on]-> burpsy.query 'match-and-replace rule selection (DSL-02)'
+  burpsy.web -[depends-on]-> burpsy.core 'store, scope, findings'
+  burpsy.web -[depends-on]-> burpsy.sender 'AuthorisedSender, parse_target'
+  burpsy.web -[depends-on]-> burpsy.intruder 'attack planning and execution'
+  burpsy.web -[depends-on]-> burpsy.tools 'decoder / comparer / logger / organizer endpoints'
+  burpsy.web -[depends-on]-> burpsy.proxy 'interception state for the intercept routes'
+  burpsy.web -[depends-on]-> burpsy.session 're-login policy wiring'
+  burpsy.web -[depends-on]-> burpsy.sequencer 'token randomness endpoints'
+  burpsy.web -[depends-on]-> burpsy.query 'history filters (DSL-01)'
+  burpsy.cli -[depends-on]-> burpsy.core 'owns the store and scope'
+  burpsy.cli -[depends-on]-> burpsy.proxy 'launches proxy, CA, TLS policy'
+  burpsy.cli -[depends-on]-> burpsy.web 'serves the API and UI'
+  burpsy.cli -[depends-on]-> burpsy.scanner 'drives passive scanning and audit'
+  burpsy.cli -[depends-on]-> burpsy.sender 'AuthorisedSender for the audit hook'
+  burpsy.cli -[depends-on]-> burpsy.tools 'match-and-replace rules, tool log'
+
+  // Dev-only edge: cargo permits the proxy ↔ web cycle because it is dev-only,
+  // and it exists so the proxy's integration tests can drive the real HTTP API.
+  burpsy.proxy -[depends-on]-> burpsy.web 'dev-dependency for integration tests' #dev
+
+  // ---- runtime flows ---------------------------------------------------------
+
+  burpsy.proxy -> target 'relays / intercepts / MITMs'
+  burpsy.sender -> target 'constructed requests: Repeater, Intruder, audit, capture'
+  burpsy.proxy -> burpsy.core 'captures exchanges'
+  burpsy.web -> burpsy.core 'reads history, messages, sitemap'
+  burpsy.scanner -> burpsy.core 'records findings'
+  burpsy.web -> burpsy.sender 'repeater / intruder sends'
+  burpsy.intruder -> burpsy.sender 'injected SendFn: AuthorisedSender'
+  burpsy.sequencer -> burpsy.sender 'capture requests'
+  burpsy.scanner -> burpsy.sender 'audit traffic'
+  burpsy.web -> burpsy.session 'drives re-login'
+  burpsy.proxy -> burpsy.tools 'applies match-and-replace'
+  burpsy.intruder -> burpsy.tools 'payload codecs'
+  burpsy.web -> burpsy.sequencer 'capture / analyse endpoints'
+  burpsy.web -> burpsy.intruder 'runs attacks'
+}

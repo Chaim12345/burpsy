@@ -23,7 +23,12 @@ type LoadReport struct {
 	Active              int
 	Collaborator        int
 	NeedsInsertionPoint int
-	Errors              []LoadError
+	// Tools counts checks that invoke an external tool via `run tool`. Such
+	// checks are never passive and are only dispatchable when the caller
+	// attached a tool runner; without one they are counted here and refused,
+	// exactly like the Collaborator bucket.
+	Tools  int
+	Errors []LoadError
 }
 
 // LoadError names one file the parser refused.
@@ -35,8 +40,8 @@ type LoadError struct {
 // Summary formats the report the way the Rust CLI logs at startup.
 func (r LoadReport) Summary() string {
 	return fmt.Sprintf(
-		"%d files: %d passive, %d active, %d collaborator, %d need insertion point, %d parse errors",
-		r.Files, r.Passive, r.Active, r.Collaborator, r.NeedsInsertionPoint, len(r.Errors),
+		"%d files: %d passive, %d active, %d collaborator, %d need insertion point, %d need tools, %d parse errors",
+		r.Files, r.Passive, r.Active, r.Collaborator, r.NeedsInsertionPoint, r.Tools, len(r.Errors),
 	)
 }
 
@@ -81,10 +86,20 @@ func LoadDir(dir string, store *core.TrafficStore, scope *core.Scope, logger *za
 func buildPassiveScanner(store *core.TrafficStore, scope *core.Scope, logger *zap.Logger, checks []*bcheck.Check, report LoadReport) *PassiveScanner {
 	passive := make([]*bcheck.Check, 0, len(checks))
 	active := make([]*bcheck.Check, 0)
+	insertion := make([]*bcheck.Check, 0)
+	tools := make([]*bcheck.Check, 0)
 	for _, c := range checks {
 		switch {
 		case c.NeedsCollaborator():
 			report.Collaborator++
+		case c.NeedsTool():
+			// Never passive — it executes an external process — and active only
+			// when a caller attaches a tool runner. Counted here regardless, and
+			// kept for ActiveChecks so the active engine can dispatch it under
+			// the runner's allowlist. The scanner's corpusActiveChecks applies
+			// the nil-runner gate; this bucket is the honest load-time count.
+			report.Tools++
+			tools = append(tools, c)
 		case c.IsPassive():
 			report.Passive++
 			passive = append(passive, c)
@@ -92,17 +107,23 @@ func buildPassiveScanner(store *core.TrafficStore, scope *core.Scope, logger *za
 			report.Active++
 			active = append(active, c)
 		default:
+			// Active but not M2-runnable: `given insertion point`, or any check
+			// carrying `send payload`. Counted as before, and now also kept for
+			// the active engine — see ActiveChecks.
 			report.NeedsInsertionPoint++
+			insertion = append(insertion, c)
 		}
 	}
 	return &PassiveScanner{
-		store:    store,
-		logger:   logger,
-		scope:    scope,
-		passive:  passive,
-		active:   active,
-		report:   report,
-		coverage: newCoverageTracker(passive),
+		store:     store,
+		logger:    logger,
+		scope:     scope,
+		passive:   passive,
+		active:    active,
+		insertion: insertion,
+		tools:     tools,
+		report:    report,
+		coverage:  newCoverageTracker(passive),
 	}
 }
 
@@ -114,6 +135,24 @@ func (s *PassiveScanner) Loaded() int {
 // ActiveLoaded returns how many active checks were classified at load time.
 func (s *PassiveScanner) ActiveLoaded() int {
 	return len(s.active)
+}
+
+// ActiveChecks returns the corpus checks the active audit engine can dispatch,
+// in load order: the M2-runnable set (`given host` / `path` / `request`) plus
+// the insertion-point set (`given insertion point`, or any check carrying
+// `send payload`), plus the tool set (`run tool`, which the ActiveScanner
+// gates on its configured runner). Passive and collaborator checks are
+// excluded here — the passive set is this scanner's own, and a collaborator
+// check cannot run without an interaction server.
+//
+// A fresh slice each call: the caller (the ActiveScanner) must be free to hold
+// it without this scanner's later loads mutating it under it.
+func (s *PassiveScanner) ActiveChecks() []*bcheck.Check {
+	out := make([]*bcheck.Check, 0, len(s.active)+len(s.insertion)+len(s.tools))
+	out = append(out, s.active...)
+	out = append(out, s.insertion...)
+	out = append(out, s.tools...)
+	return out
 }
 
 // Report returns the startup classification for this scanner.
@@ -212,6 +251,7 @@ func bcheckFindingToScannerFinding(f bcheck.Finding, exchange *core.Exchange) *F
 		Confidence:  mapBCheckConfidence(f.Confidence),
 		Description: f.Description,
 		Solution:    f.Remediation,
+		Param:       f.Param,
 		ExchangeID:  exchange.ID,
 		Timestamp:   time.Now(),
 	}

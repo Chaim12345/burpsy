@@ -160,11 +160,22 @@ const (
 	// scope sense would make the crawl's request counts disagree with the store's. What the retention
 	// query gates is traversal, and this reason says exactly that.
 	SkipRetentionExcluded
+	// SkipSessionExpired means the response's contents say the session the crawl authenticates with is
+	// gone (a template that flipped 200→non-200, or the configured login-page pattern). The response was
+	// captured and scanned like any other — CRAWL-02 does not un-store bytes — but it is a login redirect, not
+	// application content, so its links are not followed. Seen when recovery failed or the budget is spent.
+	SkipSessionExpired
+	// SkipReloginFailed means the session-expiry detector fired and the session-login macro could not restore the
+	// session (no rule covers the host, the macro failed, or it succeeded but the jar stayed empty), so
+	// the request was not retried with a fresh cookie. Its own skip rather than SkipSendRefused: nothing
+	// was refused, a recovery was attempted and did not succeed, and the two read very differently in a
+	// report.
+	SkipReloginFailed
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [27]Skip{
+var SkipAll = [29]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -192,6 +203,8 @@ var SkipAll = [27]Skip{
 	SkipResponseUnreadable,
 	SkipResponseTooLarge,
 	SkipRetentionExcluded,
+	SkipSessionExpired,
+	SkipReloginFailed,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -253,6 +266,10 @@ func (s Skip) slot() int {
 		return 25
 	case SkipRetentionExcluded:
 		return 26
+	case SkipSessionExpired:
+		return 27
+	case SkipReloginFailed:
+		return 28
 	}
 	panic("unknown Skip")
 }
@@ -314,6 +331,10 @@ func (s Skip) String() string {
 		return "response-too-large"
 	case SkipRetentionExcluded:
 		return "retention-excluded"
+	case SkipSessionExpired:
+		return "session-expired"
+	case SkipReloginFailed:
+		return "relogin-failed"
 	}
 	return "unknown"
 }
@@ -375,6 +396,10 @@ func (s Skip) Explanation() string {
 		return "the response was larger than the capture bound, so it was neither stored nor scanned"
 	case SkipRetentionExcluded:
 		return "the response was captured and scanned, and the crawl-retention query does not match it, so its links were not followed"
+	case SkipSessionExpired:
+		return "the response is a login page or a template that flipped from 200, so its links were not followed: the session was gone and its links are not the application"
+	case SkipReloginFailed:
+		return "session expiry was detected and the login macro could not restore the session, so the request was not retried with a fresh cookie"
 	}
 	return "unknown skip"
 }
@@ -451,7 +476,7 @@ func (s Skip) Category() SkipCategory {
 	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget:
 		return CategoryLimit
 	case SkipNotHTML, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
-		SkipResponseTooLarge, SkipRetentionExcluded:
+		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed:
 		return CategoryResponse
 	}
 	panic("unknown Skip")
@@ -587,7 +612,7 @@ func (r SkipReport) Summary() string {
 // would be a data race whether or not it produced a wrong number.
 type skipLedger struct {
 	mu         sync.Mutex
-	counts     [27]uint64
+	counts     [29]uint64
 	records    []SkipRecord
 	dropped    int
 	maxRecords int

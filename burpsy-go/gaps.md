@@ -391,7 +391,29 @@ that would go red have not been written.
 `coverage.go`'s `native` field, previously documented as a deliberate omission
 because Go had no native check set, is now populated.
 
-**Decline path:** none; closed.
+**Insertion-point dispatch landed 2026-08-09** — the one scope this section
+called complete before its wiring existed. `DispatchScopePerInsertionPoint` is
+now reachable: a `given insertion point` / `send payload` (M3) check runs once
+per point of one request with isolated `latest`, named bindings and
+`insertion_point_base_value`, so a finding is attributable to one parameter —
+and now carries that parameter with it, end to end, as `Finding.Param` through
+the store (persisted as `findings.param`), the issues API and the UI's detail
+panel. The corpus's active checks (`given host`/`path`/`request` plus the
+insertion-point set) ride the same plan/ledger/disposition machinery as the
+built-in table, wired from the same `LoadDir` by the server (`main.go` + the
+web layer's lazy fallback) and the CLI (`newCLIContext`), so the two surfaces
+cannot disagree about which corpus is in force. Every probe passes through
+`AuthorisedSender` and the request budget, with send failures counted as
+`DispositionSendFailed` rather than a clean miss.
+
+Covered by `corpus_dispatch_test.go` (insertion-point dispatch against a live
+target, the corpus switch, duplicate-capture collapse), the web fallback test
+in `internal/web/corpus_audit_fallback_test.go`, and the CLI wiring test in
+`cmd/burpsy/cli_scan_test.go`.
+
+**Decline path:** checks that need a Collaborator interaction server (26 of the
+loaded corpus) still count as *skipped* at load time — they need an interaction
+service this engine does not have. Everything else now dispatches.
 
 ### 4. JS vulnerability checks — COMPLETE (landed 2026-08-04)
 
@@ -1016,6 +1038,62 @@ These were suspected during review and confirmed **present** in Go:
   wiring landed).
 - **Persist (SQLite mirror)** — `internal/persist`; no Rust crate counterpart
   (Go extra, documented in the port).
+
+## Go extension: `run tool` (external security tools)
+
+Landed 2026-08-10. Beyond Burp parity: PortSwigger's BCheck grammar has no way to
+invoke an external scanner, so this is an **extension**, not a ported feature —
+and it is built to the same refusal-by-default discipline as the rest of the
+corpus engine.
+
+**Grammar** (`internal/bcheck/parser.go`):
+
+```bcheck
+given request then
+  run tool sqlmap called probe:
+    args: "-u", {base.request.url}, "--batch"
+  if {probe.exit_code} is "0" and {probe.stdout} contains "vulnerable" then
+    report issue:
+      name: "SQL injection"
+      severity: "high"
+      confidence: "firm"
+  end if
+```
+
+The result binds under the `called` name as `{<name>.stdout}`, `{<name>.stderr}`
+and `{<name>.exit_code}` (int). A non-zero exit is **data**, not an error — the
+check decides via `{<name>.exit_code}`, exactly as it decides via a status code.
+
+**The gate is the allowlist** (`internal/scanner/toolrunner.go`). A check names a
+tool — `sqlmap`, not `/usr/bin/sqlmap` — and the caller maps names to binaries:
+
+```
+burpsy -bchecks DIR -tools sqlmap=/usr/bin/sqlmap,jwt_tool=/opt/jwt/jwt_tool scan audit -id 1
+```
+
+- A tool not on the allowlist is refused; the run is an error and the check
+  abandons (nothing proved, nothing executed).
+- The binary runs with the resolved args directly — **no shell** — so an arg
+  that happens to contain shell metacharacters is data, not injection.
+- Each run is bounded: `Timeout` (default 5m) kills a hung tool, and
+  `MaxOutputBytes` (default 1 MiB) caps captured stdout/stderr so a noisy tool
+  cannot balloon the process.
+- Executing arbitrary binaries is operator policy, so tool execution is off by
+  default and only the `-tools` flag (CLI or server) turns it on.
+
+**Honest counting** (`internal/scanner/passive.go`). A check carrying `run tool`
+is never passive — it executes an external process — and is counted at load in
+its own bucket (`LoadReport.Tools`, printed in the `Summary` as "N need tools").
+Without a configured runner the ActiveScanner's `corpusActiveChecks` excludes it
+from the dispatch set rather than failing it on every exchange; with a runner it
+dispatches and the allowlist decides each tool by name. A whole tool check run
+directly without a runner is refused as `ActiveUnsupported` — the same bucket as
+a check that needs a Collaborator.
+
+**Files touched:** `internal/bcheck/{bcheck,parser,active}.go` (AST, parser,
+evaluator, `ToolRunner` interface), `internal/scanner/{toolrunner,passive,
+bcheck_runner,scanner}.go` (runner, load bucket, dispatch gate), `internal/web`
+(`WithToolRunner`), `cmd/burpsy` (`-tools` flag).
 
 ## Honest-counting guarantees
 

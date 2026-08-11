@@ -295,9 +295,14 @@ func scanAudit(ctx *cliContext, args []string) error {
 			Confidence:  core.ParseConfidence(f.Confidence),
 			Description: f.Description,
 			Remediation: f.Solution,
+			Param:       f.Param,
 		}
 		ctx.findings.Add(nf)
-		fmt.Fprintf(ctx.out, "%-8s %-10s %s\n", nf.Severity, nf.Confidence, nf.Name)
+		line := fmt.Sprintf("%-8s %-10s %s", nf.Severity, nf.Confidence, nf.Name)
+		if nf.Param != "" {
+			line += fmt.Sprintf(" (parameter %s)", nf.Param)
+		}
+		fmt.Fprintln(ctx.out, line)
 	}
 	fmt.Fprintf(ctx.out, "\n%d finding(s) from exchange %d\n", len(findings), id)
 	// Printed unconditionally, including for a clean audit: "0 findings" means nothing without the

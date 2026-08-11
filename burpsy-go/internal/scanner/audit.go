@@ -120,9 +120,11 @@ var DispatchScopeAll = [7]DispatchScope{
 // the check is passive.
 //
 // BCheck's grammar reaches four of the seven. DispatchScopePerUrl has no `given` form;
-// DispatchScopeInSessionPerRequest needs session handling this package does not have; the two
-// insertion-point scopes need payload placement, which lives in the bcheck evaluator.
-// DispatchScope.IsReachable states that gap rather than leaving it implied.
+// DispatchScopeInSessionPerRequest needs session handling this package does not have;
+// DispatchScopePerInsertionPoint needs payload placement, which the bcheck evaluator now
+// provides (the scope is reachable — see IsReachable); DispatchScopeStoredPerInsertionPoint has
+// no `given` form either. DispatchScope.IsReachable states that gap rather than leaving it
+// implied.
 //
 // The argument is Check.Given — the Go parser's record of the same five forms Rust's `Frequency`
 // enum carries, so `given response` is the passive scanner and not an active dispatch scope at all.
@@ -143,12 +145,17 @@ func DispatchScopeForGiven(given string) (DispatchScope, bool) {
 
 // IsReachable reports whether this engine can actually dispatch the scope today.
 //
-// The three unreachable scopes are defined because they are part of the recovered `Zcud` model and
-// a reimplementation that silently omitted them would misrepresent its coverage. Nothing pretends
-// to dispatch them: UnitKey reports false, so no work is ever admitted to them.
+// DispatchScopePerInsertionPoint became reachable when the corpus's active checks were wired in:
+// the check's run covers every point of one request internally (Enumerate), so one admission per
+// request admits the whole point set. DispatchScopeStoredPerInsertionPoint — second-order checks
+// threading a stored request — has no corpus check bound to it and stays unreachable: the scope
+// is part of the recovered `Zcud` model, and a reimplementation that silently omitted it would
+// misrepresent its coverage. Nothing pretends to dispatch it: UnitKey reports false, so no work
+// is ever admitted to it.
 func (s DispatchScope) IsReachable() bool {
 	switch s {
-	case DispatchScopePerHost, DispatchScopePerPath, DispatchScopePerUrl, DispatchScopePerRequest:
+	case DispatchScopePerHost, DispatchScopePerPath, DispatchScopePerUrl, DispatchScopePerRequest,
+		DispatchScopePerInsertionPoint:
 		return true
 	}
 	return false
@@ -183,6 +190,13 @@ func (s DispatchScope) UnitKey(ex *core.Exchange) (string, bool) {
 	case DispatchScopePerUrl:
 		return origin + ex.Path, true
 	case DispatchScopePerRequest:
+		return fmt.Sprintf("%s#%d", origin, ex.ID), true
+	case DispatchScopePerInsertionPoint:
+		// One request's point set is one unit: the check's run covers every point of this request
+		// internally (bcheck.Enumerate), and a second capture of the same request carries the same
+		// points and the same base values, so the answer cannot differ. Finer than per-request
+		// keying would buy nothing — the ledger exists to collapse identical work, and two
+		// captures of one request are identical work.
 		return fmt.Sprintf("%s#%d", origin, ex.ID), true
 	}
 	return "", false
