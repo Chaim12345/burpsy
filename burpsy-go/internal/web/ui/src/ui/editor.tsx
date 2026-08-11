@@ -210,10 +210,17 @@ export function HttpEditor({
 
   const editable = !readOnly && Boolean(onChange);
   const extensions = useMemo<Extension[]>(() => {
-    const base: Extension[] = [httpHighlight, burpEditorKeys];
+    // CodeMirror's content element renders with role="textbox" but nothing in @uiw/react-codemirror's
+    // own props reaches it — the wrapper spreads unknown props onto its outer container, not the
+    // content DOM node CM6 owns internally. contentAttributes is CM6's own mechanism for setting
+    // attributes on that exact element, so this is the only place `label` (already a required prop,
+    // used nowhere else for accessibility) actually becomes the textbox's accessible name. Found by
+    // the e2e a11y suite's first real run: every route with an HttpEditor failed "aria-label attribute
+    // does not exist" on this element, because every route has at least one.
+    const base: Extension[] = [httpHighlight, burpEditorKeys, EditorView.contentAttributes.of({ "aria-label": label })];
     if (wrap) base.push(EditorView.lineWrapping);
     return base;
-  }, [wrap]);
+  }, [wrap, label]);
 
   const bytes = useMemo(() => new TextEncoder().encode(value).length, [value]);
   const response = useMemo(() => isResponse(value), [value]);

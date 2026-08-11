@@ -84,7 +84,11 @@ test.describe("axe — transient surfaces", () => {
   test("the shortcut sheet", async ({ page }) => {
     await pinTheme(page, "dark");
     await gotoApp(page);
-    await page.keyboard.press("?");
+    // The app binds this with useHotkeys("shift+slash", ...) — the physical chord, not the character
+    // it produces. press("?") sends the "?" character, which react-hotkeys-hook's key matcher never
+    // sees as shift+slash, so the sheet never opened and every route in this describe block failed on
+    // a missing .dialog-title. press("Shift+Slash") sends the actual chord the binding listens for.
+    await page.keyboard.press("Shift+Slash");
     await expect(page.locator(".dialog-title")).toHaveText("Keyboard shortcuts");
 
     const results = await new AxeBuilder({ page }).withTags(TAGS).analyze();

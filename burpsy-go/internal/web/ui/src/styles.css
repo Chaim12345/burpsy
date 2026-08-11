@@ -35,7 +35,13 @@
   --overlay: rgb(43 43 43 / 45%);
 
   --editor-line: var(--line);
-  --editor-active-line: rgb(255 102 51 / 7%);
+  /* Was 7%. Composited over --editor-bg (white) this pushes .cm-placeholder's fixed grey (#949494,
+     see the rule below) down to 2.81:1, and normal editor text isn't much better — the tint alone was
+     eating the contrast budget on the theme with the least room to spare, since white starts with the
+     smallest gap to any grey. 2% keeps a visible active-line highlight while giving the placeholder
+     fix below (and every other colour rendered on an active line) room to actually pass. Found by the
+     e2e a11y suite's first real run (axe-core). */
+  --editor-active-line: rgb(255 102 51 / 2%);
   --editor-selection: #a6d2ff;
   --editor-start: #a8380a;
   --editor-header-name: #0033b3;
@@ -54,7 +60,11 @@
   --overlay: rgb(0 0 0 / 60%);
 
   --editor-line: var(--line);
-  --editor-active-line: rgb(255 102 51 / 10%);
+  /* Was 10%. Composited over --editor-bg (#2b2b2b) this produces #40312c, on which
+     .cm-placeholder's #949494 measures 4.09:1 — under the 4.5:1 it needs. 2% keeps the active-line
+     highlight visible while giving that placeholder rule (and the line's normal text) real margin.
+     Found by the e2e a11y suite's first real run (axe-core). */
+  --editor-active-line: rgb(255 102 51 / 2%);
   --editor-selection: #214283;
   /* Syntax palette for the message viewer. Darcula's own purple (#9876aa) and green (#6a8759)
      measure 3.71 and 3.52 against the editor background — below AA, on the request and response
@@ -231,7 +241,11 @@ code {
   flex: none;
   display: grid;
   place-items: center;
-  background: var(--accent-bright);
+  /* --accent, not --accent-bright: this file's own header comment explains --accent exists
+     specifically because --accent-bright (#ff6633) cannot carry white text at WCAG AA (2.9:1) — see
+     the --accent contrast fix further down this file for why the token itself, not a component
+     override, is where that fix ended up living. */
+  background: var(--accent);
   color: var(--accent-contrast);
   font: var(--weight-bold) var(--fs-sm) var(--font-mono);
 }
@@ -750,28 +764,37 @@ main {
   text-transform: uppercase;
 }
 
+/* The four badge-tone backgrounds used an 11% color-mix, which is a hand-authored constant here —
+   not a Penpot token, so this is a plain bug fix, not a pending design decision. At 11% every one of
+   the 8 tone/theme combinations (4 tones × dark/light) failed WCAG AA: axe found dark good/warn/bad/
+   info all between 4.0 and 4.3:1 and light good at 4.44:1, all needing 4.5:1. It is a formula problem,
+   not a per-colour one — text on a background tinted 11% toward its own colour is inherently low
+   contrast regardless of which hue — so a single shared change fixes all eight rather than eight
+   individual token edits: 3% mix clears every combination with real margin (dark: 4.54–4.94:1, light:
+   4.93–5.50:1), using the original, unmodified semantic colours. Found by the e2e a11y suite's first
+   real run (axe-core). */
 .badge-good {
   color: var(--good);
   border-color: color-mix(in srgb, var(--good) 42%, var(--line));
-  background: color-mix(in srgb, var(--good) 11%, var(--paper-raised));
+  background: color-mix(in srgb, var(--good) 3%, var(--paper-raised));
 }
 
 .badge-warn {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 42%, var(--line));
-  background: color-mix(in srgb, var(--warn) 11%, var(--paper-raised));
+  background: color-mix(in srgb, var(--warn) 3%, var(--paper-raised));
 }
 
 .badge-bad {
   color: var(--bad);
   border-color: color-mix(in srgb, var(--bad) 42%, var(--line));
-  background: color-mix(in srgb, var(--bad) 11%, var(--paper-raised));
+  background: color-mix(in srgb, var(--bad) 3%, var(--paper-raised));
 }
 
 .badge-info {
   color: var(--info);
   border-color: color-mix(in srgb, var(--info) 42%, var(--line));
-  background: color-mix(in srgb, var(--info) 11%, var(--paper-raised));
+  background: color-mix(in srgb, var(--info) 3%, var(--paper-raised));
 }
 
 .badge-accent {
@@ -1226,9 +1249,21 @@ tbody td {
 
 /* CodeMirror ships #888 for placeholders, which measures 3.99:1 on the dark editor background. The
    placeholder here is instructional copy — it says what kind of thing to paste — so it has to be
-   readable rather than a hint of a hint. */
-.cm-editor .cm-placeholder {
+   readable rather than a hint of a hint.
+
+   The original fix applied one grey to both themes, which is why light theme was never actually
+   checked: #949494 reads fine on the dark editor's #2b2b2b (4.09:1 even before the active-line tint
+   fix above) but measures 2.81:1 on light theme's near-white editor — a mid grey is much further from
+   white than it is from a dark charcoal. Split per theme; light reuses #646464, the same value
+   --muted already settled on for the identical "readable but de-emphasised" role against light
+   backgrounds, rather than inventing a second grey with the same job. Found by the e2e a11y suite's
+   first real run (axe-core). */
+[data-theme="dark"] .cm-editor .cm-placeholder {
   color: #949494; /* token-exempt: WCAG fix for CodeMirror's own built-in placeholder colour */
+}
+
+[data-theme="light"] .cm-editor .cm-placeholder {
+  color: #646464; /* token-exempt: WCAG fix for CodeMirror's own built-in placeholder colour, light-theme value */
 }
 
 .editor-grid {
@@ -1451,17 +1486,43 @@ tbody td {
   color: inherit;
 }
 
+/* .kbd's own background never changed for the active row: it kept --paper-deep unconditionally while
+   its text inherited --accent-contrast (meant for the orange highlight), so the active row's shortcut
+   chip rendered #1a1a1a on #323232 — 1.35:1, found by the e2e a11y suite's first real run (axe-core).
+   The first fix tinted the background with 20% of the inherited text colour, which was itself a
+   second bug: dark theme's near-black accent-contrast at 20% muddies the orange down to 4.24:1
+   (needs 4.5), and light theme's white accent-contrast has essentially NO room at all — the mix drops
+   below 4.5 past about 1%, because white text on the already-fairly-light orange starts with barely
+   any margin to spend. The two themes' safe ranges do not overlap, so no shared percentage works.
+   Transparent leaves the chip sitting directly on --accent, which is exactly what --accent-contrast
+   was already computed to read against — the same pairing every other --accent-contrast consumer in
+   this file relies on — and the border alone (a non-text boundary, not subject to the 4.5:1 text rule)
+   keeps the chip visually distinct from the row around it. */
+.palette-item-active .kbd {
+  background: transparent;
+  border-color: color-mix(in srgb, currentcolor 45%, transparent);
+}
+
 .palette-item-label {
   min-width: 0;
   display: grid;
 }
 
+/* Specificity-tied with .palette-item-active small above (one class + one tag, either order), so
+   source order alone decided the winner — and this rule came later, silently overriding "inherit"
+   back to --muted even on the active row: #b2b2b2 on --accent's orange measured 1.37:1, found by the
+   same axe run. The extra .palette-item-label ancestor in the active selector below outranks this
+   rule on specificity rather than depending on staying below it in the file. */
 .palette-item-label small {
   color: var(--muted);
   font-size: var(--fs-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.palette-item-active .palette-item-label small {
+  color: inherit;
 }
 
 .palette-empty {
@@ -1594,10 +1655,18 @@ tbody td {
   word-break: break-word;
 }
 
+/* Same defect class as the badge-tone fix above, and the same kind of bug: a hand-authored mix
+   percentage, not a Penpot token, so no design sign-off is needed to fix it. Unlike badges, .notice's
+   text is the fixed --text-soft rather than the tone colour itself, so dark theme's --text-soft
+   (#a9b7c6) on either tinted background failed WCAG AA — 4.19:1 at info's 7% and 4.09:1 at warn's 8%,
+   both needing 4.5:1. Light theme was never close to failing (--text-soft there is a near-black grey
+   with a huge margin over any of these mixes), so only dark theme's numbers drove the fix. 1% clears
+   dark theme with real margin (4.65:1) while keeping the same visual family the design intended —
+   found by the e2e a11y suite's first real run (axe-core). */
 .notice {
   border: 1px solid var(--line);
   border-left: var(--border-status) solid var(--info);
-  background: color-mix(in srgb, var(--info) 7%, var(--paper-raised));
+  background: color-mix(in srgb, var(--info) 1%, var(--paper-raised));
   padding:var(--s2) var(--s3);
   display: flex;
   gap:var(--s2);
@@ -1608,13 +1677,16 @@ tbody td {
 
 .notice-warn {
   border-left-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 8%, var(--paper-raised));
+  background: color-mix(in srgb, var(--warn) 1%, var(--paper-raised));
 }
 
+/* Same badge-tone defect: --bad as its own text on a 7%-mix background failed dark theme at 4.26:1.
+   3% clears both themes with real margin (dark 4.54:1, light 5.38:1), same fix and same margin as the
+   badge-tone rules above — found by the e2e a11y suite's first real run (axe-core). */
 .crash-panel {
   margin:var(--pad-page);
   border: 1px solid var(--bad);
-  background: color-mix(in srgb, var(--bad) 7%, var(--paper-raised));
+  background: color-mix(in srgb, var(--bad) 3%, var(--paper-raised));
   padding:var(--s4);
   display: flex;
   align-items: center;
@@ -2902,4 +2974,50 @@ tbody td {
 
 .advisory-link:hover {
   text-decoration: underline;
+}
+
+/* --- accessibility overrides: WCAG AA color-contrast ---------------------------------------------
+
+   Both found by the e2e a11y suite's first real run (axe-core), not invented. The badge-tone family
+   (the third contrast bug this same run found) turned out not to need an override at all — see the
+   comment on .badge-good above; it was a hand-authored formula bug fixed directly at the source.
+
+   --muted IS a Penpot-value bug — the token itself fails in normal use — so the correct home for that
+   fix is the primitive token in Penpot, not a CSS override. That edit is proposed and documented in
+   penpot-export.json's _provenance.pendingPenpotEdits (with the exact replacement value and
+   recomputed contrast ratio) rather than applied here unattended, because the MCP plugin changing a
+   colour's exact shade is a design decision, even one required for compliance. The .brand-symbol rule
+   below it is a genuine component bug with no Penpot counterpart to fix — see its own comment.
+
+   Both rules are meant to stay reviewable rather than permanent: --muted's is a stopgap, meant to be
+   DELETED once the Penpot value lands and is re-fetched; re-run e2e-ui.sh's axe checks afterward to
+   confirm the token fix alone still clears it. .brand-symbol's is a real fix, not a stopgap, and stays.
+
+   Both values carry real margin over 4.5:1, not a bare pass — the first attempt at .brand-symbol's fix
+   scraped in at a computed 4.50 that rounded down to 4.49 in axe's own arithmetic, which is why margin
+   matters here specifically. */
+
+[data-theme="light"] {
+  /* var(--muted) is grey.10 = #6e6e6e. On --chrome (grey.60 = #e4e4e4, the statusbar) it is 4.01:1;
+     the SAME token is also the nav tool-tabs' label colour on the same chrome background
+     (header.toolbar-row span), so this is genuinely the token failing broadly, not one component —
+     confirmed by axe failing both .statusbar and every unselected tool-tab label on every route.
+     Overridden at the custom-property level for exactly that reason: a component-scoped fix would
+     have to be rediscovered at every other place --muted is read (61 call sites in this file).
+     #646464 on #e4e4e4 is 4.65:1. */
+  --muted: #646464; /* token-exempt: WCAG AA contrast stopgap, not a token value — see the comment above this section; delete once the Penpot-side fix lands */
+}
+
+[data-theme="light"] {
+  /* --accent (--orange-deep, #d1490f) is what this file's own header comment says exists specifically
+     so buttons and other white-text surfaces can carry AA contrast where --accent-bright cannot
+     (2.9:1). It almost does: #d1490f on white computed to 4.49 — a rounding whisker under 4.5:1,
+     because axe holds bold text below 14px to the full ratio rather than the 3:1 "large text"
+     threshold. This was first caught on .brand-symbol (12px bold) and fixed there alone, on the
+     reasoning that --accent had no other consumer — that was wrong: .button-primary's background is
+     also var(--accent), at 13px bold, and failed the identical way. Two consumers hitting the same
+     rounding boundary is the token failing, not either component, so the fix moved here: #ce480f has
+     real margin (4.61:1) and every consumer of --accent gets it at once, including any future one.
+     Found by the e2e a11y suite's first real run (axe-core). */
+  --accent: #ce480f; /* token-exempt: WCAG AA contrast stopgap, not a token value — see the comment above this section; delete once the Penpot-side fix lands */
 }

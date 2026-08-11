@@ -40,13 +40,21 @@ test.describe("shell behaviour", () => {
   test("the theme survives a reload", async ({ page }) => {
     // zustand persists theme under burpsy.workspace and partialize keeps it. An operator who picks
     // light and gets dark back on the next page load will not pick it twice.
-    await pinTheme(page, "dark");
+    //
+    // Deliberately NOT using pinTheme here: addInitScript runs on EVERY document load, reloads
+    // included, so it would rewrite localStorage back to its own value before the app boots and the
+    // test would report a persistence bug that does not exist. The starting theme comes from the
+    // emulated colour scheme instead, and the assertion is only that the toggle's choice survives.
+    await page.emulateMedia({ colorScheme: "light" });
     await gotoApp(page);
-    await page.getByRole("button", { name: "Use light theme" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
+    await page.getByRole("button", { name: "Use dark theme" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    // Reloaded with the OS preference still saying light: only the persisted choice can keep it dark.
     await page.reload();
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   });
 
   test("mod+K opens the command palette, and it navigates", async ({ page, consoleErrors }) => {
@@ -82,7 +90,17 @@ test.describe("shell behaviour", () => {
 
   test("? opens the shortcut sheet", async ({ page, consoleErrors }) => {
     await gotoApp(page);
-    await page.keyboard.press("?");
+
+    // Wait for the app to be interactive before pressing, and not as superstition: useHotkeys binds
+    // its listener in an effect, a keypress that lands before that is silently dropped, and
+    // toBeVisible retries the ASSERTION but never the press — so an early press fails after the full
+    // ten-second timeout and reads exactly like a broken shortcut. The status bar showing a real byte
+    // count means a server round-trip has completed, which is well after effects have run.
+    await expect(page.locator(".statusbar")).not.toContainText("— stored");
+
+    // The app binds this with useHotkeys("shift+slash", ...) — the physical chord, not the "?"
+    // character press("?") sends, which the hotkey matcher never recognises as shift+slash.
+    await page.keyboard.press("Shift+Slash");
 
     const dialog = page.locator(".dialog-content", { has: page.locator(".dialog-title") });
     await expect(dialog).toBeVisible();
@@ -102,12 +120,28 @@ test.describe("shell behaviour", () => {
 test.describe("data views", () => {
   test("HTTP history shows the seeded traffic", async ({ page, consoleErrors }) => {
     await gotoRoute(page, route("history"));
-    const rows = page.locator("tr.data-row");
-    // The harness proxies five distinct paths before any test runs. Fewer than that means either the
-    // proxy did not capture them or the table is not reading /api/history.
-    await expect(rows).toHaveCount(5);
-    await expect(page.locator("tr.data-row", { hasText: "/mango/deep/path" })).toHaveCount(1);
+    // Each of the five proxied paths, exactly once. Asserted per path rather than as a total count,
+    // because a total says only "some number of rows arrived" and would pass with five copies of one
+    // exchange — and because the total here is six, for the reason the next test is about.
+    for (const path of ["/zebra", "/alpha?q=1", "/mango/deep/path", "/beta", "/quokka?size=8"]) {
+      await expect(page.locator("tr.data-row", { hasText: path })).toHaveCount(1);
+    }
     expect(consoleErrors).toEqual([]);
+  });
+
+  test("Proxy HTTP history holds proxy traffic only", async ({ page }) => {
+    // EXPECTED TO FAIL — a real finding, left failing on purpose.
+    //
+    // The harness sends exactly one request through Repeater, and it shows up here as a sixth row.
+    // In Burp, Proxy › HTTP history is proxy traffic; a Repeater send appears in Logger, which is the
+    // view whose whole subject is "requests the tool itself made". burpsy has both views, and the
+    // sibling test below already proves Logger holds the Repeater send — so this row makes the two
+    // views the same list with different columns, and makes "how many requests did I proxy" a
+    // question HTTP history answers wrongly.
+    //
+    // Kept as its own test so the five assertions above still report independently of it.
+    await gotoRoute(page, route("history"));
+    await expect(page.locator("tr.data-row", { hasText: "/repeated" })).toHaveCount(0);
   });
 
   test("a table header sorts, and reorders the rows", async ({ page, consoleErrors }) => {
@@ -216,9 +250,14 @@ test.describe("Intruder tabs", () => {
 
 test.describe("preferences reach the rendered UI", () => {
   test("the density command changes the table's row class", async ({ page, consoleErrors }) => {
-    // Density is a preference set in one place (the palette, or the View menu) and consumed in
-    // another (every table). That crossing is where a preference quietly stops being read — the
-    // control still toggles, the toast still appears, and nothing on screen gets denser.
+    // EXPECTED TO FAIL — a real finding, left failing on purpose.
+    //
+    // Density is a preference set in one place and consumed in another, and that crossing is exactly
+    // where a preference quietly stops being read. It has: the store holds `density`, Settings offers
+    // a Select for it, the palette and the View menu each offer a toggle, and the toggle fires a
+    // success toast — but `density={...}` is passed to none of the 24 VirtualTable/SimpleTable call
+    // sites, so every table renders at the component's own default and nothing on screen ever gets
+    // denser. Four controls and a confirmation for a value no table reads.
     await gotoRoute(page, route("history"));
     await expect(page.locator(".table-frame")).toHaveClass(/density-comfortable/);
 

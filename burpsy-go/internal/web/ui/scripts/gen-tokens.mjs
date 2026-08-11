@@ -47,7 +47,12 @@ const SET_KEYS = ["primitives", "semantic.dark", "semantic.light"];
 // design genuinely gains or loses a token, whoever re-exports updates the
 // count here in the same commit, and the diff makes the intent explicit.
 const EXPECTED_COUNTS = {
-  primitives: 75,
+  // 75 + 7. The design genuinely changed: radius.none/sm/md, border.hairline/focus, and
+  // font.weight.regular/bold were added directly in Penpot (via the MCP plugin) because none of the
+  // seven existed at all — 0 borderRadius, 0 borderWidth, 0 fontWeights tokens beforehand, confirmed
+  // by reading penpot.library.local.tokens before adding anything. Updated here and in
+  // fetch-penpot-file.mjs in the same commit, per both files' own instructions.
+  primitives: 82,
   "semantic.dark": 44,
   "semantic.light": 44,
 };

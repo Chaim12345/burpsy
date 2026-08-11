@@ -102,21 +102,47 @@ function goModuleRoot(): string {
 }
 
 /**
- * A port that is free right now. The preferred number is tried first so logs and tcpdumps stay
- * recognisable across runs; if something else holds it we walk forward rather than fail, because a
- * suite that cannot start is indistinguishable from a suite that found a bug.
+ * Ports this process has already handed out.
+ *
+ * freePort proves a port is free by binding a probe socket and then *closing* it, so between the
+ * probe and burpsy actually binding, the port is free again — and a second freePort call will happily
+ * return the same number. That is not a rare race, it is the deterministic case: all three ports are
+ * allocated up front and bound afterwards.
+ *
+ * It really happened. With 18280 and 18281 both held by something else, the walk-forward gave
+ * `proxy=18282 web=18282`, burpsy bound the proxy and then died with
+ * `listen tcp 127.0.0.1:18282: bind: address already in use`, and the whole suite reported as one
+ * failure with no tests run. Claiming each port as it is issued is what stops the allocator handing
+ * out a number it has already promised.
+ */
+const claimed = new Set<number>();
+
+/**
+ * A port that is free right now and has not already been issued by this process. The preferred number
+ * is tried first so logs and tcpdumps stay recognisable across runs; if something else holds it we
+ * walk forward rather than fail, because a suite that cannot start is indistinguishable from a suite
+ * that found a bug.
+ *
+ * The walk is bounded to 15 rather than 40 because the preferred numbers are only 19 apart
+ * (18280/18281/18299) and a 40-wide window let the proxy's search wander onto the target's preferred
+ * port — a second way for two services to be told to share one number.
  */
 async function freePort(preferred: number): Promise<number> {
-  for (let port = preferred; port < preferred + 40; port += 1) {
+  const span = 15;
+  for (let port = preferred; port < preferred + span; port += 1) {
+    if (claimed.has(port)) continue;
     const free = await new Promise<boolean>((done) => {
       const probe = createServer();
       probe.once("error", () => done(false));
       probe.once("listening", () => probe.close(() => done(true)));
       probe.listen(port, "127.0.0.1");
     });
-    if (free) return port;
+    if (free) {
+      claimed.add(port);
+      return port;
+    }
   }
-  throw new Error(`no free port in [${preferred}, ${preferred + 40})`);
+  throw new Error(`no free port in [${preferred}, ${preferred + span}) not already claimed by this run`);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -272,10 +298,18 @@ export async function start(): Promise<Harness> {
   // sweep that removes it would take out the origin's `import` at any later restart.
   const targetScript = join(artifactsDir(), "origin.mjs");
   writeFileSync(targetScript, ORIGIN_SOURCE);
+  // detached: true puts each child in its OWN process group, and it is load-bearing.
+  //
+  // Playwright runs globalSetup in a process of its own and tears that process's group down when it
+  // is finished with it, which sent burpsy a SIGTERM roughly a minute into the run. burpsy logged a
+  // tidy "Shutting down..." and every test from that point on failed with a flat
+  // ERR_CONNECTION_REFUSED — 40 failures whose real cause was one signal nobody meant to send.
+  // Detached, these two outlive setup, and stop() kills them explicitly by pid instead.
   const target = spawn(process.execPath, [targetScript, String(targetPort)], {
     stdio: "ignore",
-    detached: false,
+    detached: true,
   });
+  target.unref();
 
   // artifacts/, not the temp directory: this log is the only account of what the server did, and it
   // has to outlive both the run and anything that tidies /tmp.
@@ -283,8 +317,9 @@ export async function start(): Promise<Harness> {
   const log = openSync(logPath, "w");
   const burpsy = spawn(bin, ["--proxy", `127.0.0.1:${proxyPort}`, "--web", `127.0.0.1:${webPort}`], {
     stdio: ["ignore", log, log],
-    detached: false,
+    detached: true,
   });
+  burpsy.unref();
 
   const died = (child: ChildProcess, name: string) =>
     child.once("exit", (code) => {
@@ -354,13 +389,19 @@ export function stop(harness: Harness): void {
   for (const pid of [harness.burpsyPid, harness.targetPid]) {
     if (pid > 0) {
       try {
-        // SIGKILL, not SIGTERM. These are throwaway processes with nothing to flush, and a burpsy
-        // that ignores or slow-walks a TERM leaves a listener on 182xx that makes the NEXT run's
-        // probes pass against the wrong process — the failure mode assertOurListeners exists to
-        // catch, and which is better prevented than diagnosed.
-        process.kill(pid, "SIGKILL");
+        // The process GROUP (-pid), because these are spawned detached and are therefore group
+        // leaders — killing the group also collects anything they spawned. SIGKILL rather than
+        // SIGTERM: they are throwaway processes with nothing to flush, and one that slow-walks a TERM
+        // leaves a listener on 182xx that makes the NEXT run's probes pass against the wrong process,
+        // which is the failure assertOurListeners exists to catch and is better prevented than
+        // diagnosed.
+        process.kill(-pid, "SIGKILL");
       } catch {
-        // Already gone; nothing to do. A failed kill must not mask a test failure.
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone; nothing to do. A failed kill must not mask a test failure.
+        }
       }
     }
   }

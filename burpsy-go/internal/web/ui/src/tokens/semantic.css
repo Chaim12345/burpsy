@@ -27,12 +27,12 @@
   --gap-xs: var(--s1);
   --gap-sm: var(--s2);
   --gap-md: var(--s3);
-  --gap: var(--s3);
   --gap-lg: var(--s4);
   --gap-xl: var(--s5);
   --gap-2xl: var(--s6);
   --gap-3xl: var(--s8);
   --pad-page: var(--s4);
+  --gap: var(--s3);
   --font-body: var(--font-sans);
   --font-code: var(--font-mono);
 }

@@ -80,4 +80,11 @@
   --z-skip: 200;
   --font-sans: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+  --radius-none: 0;
+  --radius-sm: 2;
+  --radius-md: 3;
+  --border-hairline: 1;
+  --border-focus: 2;
+  --font-weight-regular: 400;
+  --font-weight-bold: 700;
 }
