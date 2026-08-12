@@ -226,6 +226,47 @@ test.describe("data views", () => {
     await expect(page.locator(".statusbar")).toContainText("exchanges");
     await expect(page.locator(".statusbar")).not.toContainText("— stored");
   });
+
+  test("hiding a column removes it from the header and every row", async ({ page, consoleErrors }) => {
+    // UX-16. The Tool log is where the column-visibility menu is wired up (table.tsx's
+    // `enableColumnVisibility`), and it always has the harness's one logged repeater send to
+    // assert a row against.
+    await gotoRoute(page, route("logger"));
+    const statusHeader = page.locator("th", { has: page.getByRole("button", { name: "Status", exact: true }) });
+    await expect(statusHeader).toBeVisible();
+    await expect(page.locator("tr.data-row").first().locator("td")).not.toHaveCount(0);
+    const cellsBefore = await page.locator("tr.data-row").first().locator("td").count();
+
+    await page.getByRole("button", { name: "Show or hide columns" }).click();
+    await page.getByRole("checkbox", { name: "Status", exact: true }).uncheck();
+    await page.keyboard.press("Escape");
+
+    await expect(statusHeader).not.toBeVisible();
+    await expect(page.locator("tr.data-row").first().locator("td")).toHaveCount(cellsBefore - 1);
+    // Escape returned focus to the trigger, not somewhere it has to be hunted for.
+    await expect(page.getByRole("button", { name: "Show or hide columns" })).toBeFocused();
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("resetting columns restores the hidden ones", async ({ page, consoleErrors }) => {
+    // UX-16.
+    await gotoRoute(page, route("logger"));
+    const statusHeader = page.locator("th", { has: page.getByRole("button", { name: "Status", exact: true }) });
+    const cellsBefore = await page.locator("tr.data-row").first().locator("td").count();
+
+    await page.getByRole("button", { name: "Show or hide columns" }).click();
+    await page.getByRole("checkbox", { name: "Status", exact: true }).uncheck();
+    await expect(statusHeader).not.toBeVisible();
+
+    // The identifier column ("Age") is never offered as a checkbox — it is the one column an
+    // operator cannot lose track of a row through.
+    await expect(page.getByRole("checkbox", { name: "Age", exact: true })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Reset columns" }).click();
+    await expect(statusHeader).toBeVisible();
+    await expect(page.locator("tr.data-row").first().locator("td")).toHaveCount(cellsBefore);
+    expect(consoleErrors).toEqual([]);
+  });
 });
 
 test.describe("Intruder tabs", () => {
@@ -284,6 +325,57 @@ test.describe("preferences reach the rendered UI", () => {
 
     await expect(page.locator("main h1")).toHaveText(/^Repeater/);
     await expect(page.getByText("Request 1")).toBeVisible();
+    expect(consoleErrors).toEqual([]);
+  });
+});
+
+test.describe("Intercept rule reordering — UX-17", () => {
+  // Neither test saves, so the mutated draft is discarded on navigation and never reaches the
+  // shared server the other tests in this file poll (workers: 1, one burpsy process).
+  test("moving an intercept rule down changes the order it matches in", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("intercept"));
+    await page.getByRole("tab", { name: "Interception rules" }).click();
+
+    const requestCard = page
+      .locator(".card")
+      .filter({ has: page.getByRole("checkbox", { name: "Hold requests matching these rules" }) });
+
+    await requestCard.getByRole("button", { name: "Add rule" }).click();
+    await requestCard.getByRole("button", { name: "Add rule" }).click();
+    await requestCard.getByLabel("Comment for rule 1").fill("first");
+    await requestCard.getByLabel("Comment for rule 2").fill("second");
+
+    // Intercept rules match in order, so moving rule 1 below rule 2 is an observable change in
+    // which rule fires first — not just a visual reshuffle.
+    await requestCard.getByRole("button", { name: "Move rule 1 down" }).click();
+
+    await expect(requestCard.getByLabel("Comment for rule 1")).toHaveValue("second");
+    await expect(requestCard.getByLabel("Comment for rule 2")).toHaveValue("first");
+
+    // Rule 2 is now the last row, so its "down" control is disabled; focus must not land there —
+    // it goes to the still-enabled "up" control on the row that moved, so a keyboard operator can
+    // keep working without hunting for focus.
+    await expect(requestCard.getByRole("button", { name: "Move rule 2 up" })).toBeFocused();
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("the move-up control is disabled on the first intercept rule", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("intercept"));
+    await page.getByRole("tab", { name: "Interception rules" }).click();
+
+    const requestCard = page
+      .locator(".card")
+      .filter({ has: page.getByRole("checkbox", { name: "Hold requests matching these rules" }) });
+
+    await requestCard.getByRole("button", { name: "Add rule" }).click();
+    await requestCard.getByRole("button", { name: "Add rule" }).click();
+
+    await expect(requestCard.getByRole("button", { name: "Move rule 1 up" })).toBeDisabled();
+    await expect(requestCard.getByRole("button", { name: "Move rule 2 down" })).toBeDisabled();
+    await expect(requestCard.getByRole("button", { name: "Move rule 1 down" })).toBeEnabled();
+    await expect(requestCard.getByRole("button", { name: "Move rule 2 up" })).toBeEnabled();
+
     expect(consoleErrors).toEqual([]);
   });
 });
