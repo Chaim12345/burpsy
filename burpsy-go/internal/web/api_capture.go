@@ -82,13 +82,13 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(messageView(msg))
 }
 
-// handleExchange serves GET /api/exchange/{id} (and the legacy /api/exchanges/{id}) -> ExchangeView.
+// handleExchange serves GET /api/exchange/{id} (and the legacy /api/exchanges/{id}) -> ExchangeView,
+// plus PATCH /api/exchange/{id} to annotate one -> the updated ExchangeView. The legacy alias stays
+// read-only: it exists for the Rust UI's benefit, which never PATCHes anything, so widening it would
+// be surface no consumer needs.
 func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	path := r.URL.Path
+	legacy := strings.HasPrefix(path, "/api/exchanges/")
 	path = strings.TrimPrefix(path, "/api/exchange/")
 	path = strings.TrimPrefix(path, "/api/exchanges/")
 	id, err := strconv.ParseUint(path, 10, 64)
@@ -96,7 +96,65 @@ func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
 		return
 	}
-	ex, err := s.store.GetExchange(core.ExchangeID(id))
+	switch r.Method {
+	case http.MethodGet:
+		ex, err := s.store.GetExchange(core.ExchangeID(id))
+		if err != nil {
+			http.Error(w, "Exchange not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(exchangeView(ex))
+	case http.MethodPatch:
+		if legacy {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.handlePatchExchange(w, r, core.ExchangeID(id))
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handlePatchExchange serves PATCH /api/exchange/{id}: body {"notes": string|null, "highlight":
+// string}, both optional. An omitted field is left unchanged; an explicit `null` on notes clears it
+// (there is no way to express "clear" for highlight other than sending ""="none", so an omitted
+// highlight and one explicitly sent as the empty string are indistinguishable on the wire — that is
+// intentional, since "" already means "no highlight"). highlight must be "" or a member of
+// core.ValidHighlights; anything else is a 400 and is never coerced to a nearby value. Responds with
+// the updated ExchangeView.
+func (s *Server) handlePatchExchange(w http.ResponseWriter, r *http.Request, id core.ExchangeID) {
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var notes *string
+	notesSet := false
+	if raw, ok := body["notes"]; ok {
+		notesSet = true
+		if err := json.Unmarshal(raw, &notes); err != nil {
+			http.Error(w, "notes must be a string or null", http.StatusBadRequest)
+			return
+		}
+	}
+
+	highlight := ""
+	highlightSet := false
+	if raw, ok := body["highlight"]; ok {
+		highlightSet = true
+		if err := json.Unmarshal(raw, &highlight); err != nil {
+			http.Error(w, "highlight must be a string", http.StatusBadRequest)
+			return
+		}
+		if highlight != "" && !core.ValidHighlights[highlight] {
+			http.Error(w, fmt.Sprintf("Unknown highlight colour %q", highlight), http.StatusBadRequest)
+			return
+		}
+	}
+
+	ex, err := s.store.UpdateExchangeAnnotation(id, notes, notesSet, highlight, highlightSet)
 	if err != nil {
 		http.Error(w, "Exchange not found", http.StatusNotFound)
 		return

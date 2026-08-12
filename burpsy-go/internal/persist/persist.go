@@ -214,6 +214,13 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("tool_log", "response_len", "INTEGER"); err != nil {
 		return err
 	}
+	// exchanges gained highlight for the same reason notes did: an operator annotation, not traffic,
+	// so it lives beside notes rather than in its own table. NULL and "" both read back as "" (no
+	// highlight) — a legacy row written before this column existed never has an opinion either way, so
+	// there is nothing to distinguish it from an exchange explicitly cleared.
+	if err := s.addColumn("exchanges", "highlight", "TEXT"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -330,11 +337,12 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
-		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
-		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs)
+		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
+		ex.Highlight)
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -432,7 +440,7 @@ func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
 func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
-		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us
+		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -451,11 +459,13 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		var related []byte
 		var durationMs uint64
 		var durationUs sql.NullInt64
+		var highlight sql.NullString
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
-			&durationMs, &notes, &protocol, &related, &durationUs); err != nil {
+			&durationMs, &notes, &protocol, &related, &durationUs, &highlight); err != nil {
 			return nil, err
 		}
+		ex.Highlight = highlight.String
 		switch {
 		case durationUs.Valid && durationUs.Int64 >= 0:
 			ex.Duration = core.MeasuredMicros(uint64(durationUs.Int64))

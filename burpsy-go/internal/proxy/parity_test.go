@@ -96,10 +96,14 @@ var exchangeFieldRules = map[string]fieldRule{
 	"Duration": ruleMayDiffer,
 	// Source is the one field that must differ: it names which surface produced the row, and that is
 	// the point of it. Everything else being equal is what makes it useful.
-	"Source":   ruleMayDiffer,
-	"Notes":    ruleAbsent, // set only when the capture is not verbatim
-	"Related":  ruleAbsent, // WebSocket children hang off a handshake row, not off these
-	"Protocol": ruleIdentical,
+	"Source": ruleMayDiffer,
+	"Notes":  ruleAbsent, // set only when the capture is not verbatim
+	// Highlight, like Notes, is an operator annotation added after the fact through PATCH
+	// /api/exchange/{id} — neither the proxy nor the crawler has an opinion about it at capture time,
+	// so both legs must record it as unset.
+	"Highlight": ruleAbsent,
+	"Related":   ruleAbsent, // WebSocket children hang off a handshake row, not off these
+	"Protocol":  ruleIdentical,
 	// Which *run* produced the row, where Source says which kind of surface did. Neither leg of this
 	// test runs under a registry task — the proxy never does, and this crawl is driven directly rather
 	// than through the dashboard — so both are legitimately unset here. ruleAbsent rather than

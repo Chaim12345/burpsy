@@ -132,8 +132,8 @@ var manifest = map[string]route{
 		summary: "the stream's own counters: frames sent, subscribers, coalesced signals",
 	},
 	"/api/exchange/": {
-		methods: []string{"GET"}, risk: riskRead, subPath: "0",
-		summary: "one exchange row by id",
+		methods: []string{"GET", "PATCH"}, risk: riskLocal, subPath: "0",
+		summary: "one exchange row by id; PATCH sets its notes and/or highlight (UX-15)",
 	},
 	"/api/exchanges/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",

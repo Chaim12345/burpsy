@@ -306,8 +306,14 @@ type Exchange struct {
 	// ExchangeDuration for why it is not a millisecond count.
 	Duration ExchangeDuration
 	Notes    *string
-	Related  []ChildRef
-	Protocol Protocol
+	// Highlight is the operator's colour tag for this row, empty when unset. It mirrors the UI's
+	// Organizer highlight vocabulary (see ValidHighlights) rather than inventing a second one, so the
+	// same colour means the same thing whichever tool set it. Unlike organizer.Item.Highlight, the wire
+	// spelling of "no highlight" is "" here, not "none" — there is no sentinel string to confuse with a
+	// real colour.
+	Highlight string
+	Related   []ChildRef
+	Protocol  Protocol
 	// Source names the surface that produced this exchange. See the Source type: the zero value is
 	// deliberately *not* proxy.
 	Source Source
@@ -723,6 +729,48 @@ func (ts *TrafficStore) GetExchange(id ExchangeID) (*Exchange, error) {
 	}
 
 	return ts.exchanges[id], nil
+}
+
+// ValidHighlights is the wire vocabulary for Exchange.Highlight: exactly the UI's HIGHLIGHTS list
+// (organizer.tsx) minus its "none" sentinel, which the wire represents as "" rather than as a member
+// of this set. A caller validating a PATCH should accept "" (clear) or a key of this map, and reject
+// anything else rather than coercing it.
+var ValidHighlights = map[string]bool{
+	"red": true, "orange": true, "yellow": true, "green": true, "cyan": true,
+	"blue": true, "pink": true, "magenta": true, "gray": true,
+}
+
+// UpdateExchangeAnnotation sets an exchange's Notes and/or Highlight in place, leaving every other
+// field untouched, and mirrors the result through the same persistence sink AddExchange writes
+// through — so an annotation survives a restart exactly like the traffic it is attached to.
+//
+// notesSet and highlightSet exist because a *string alone cannot distinguish "the caller left this
+// field out" from "the caller set it to nil/empty": PATCH's contract is that an omitted field is
+// unchanged while an explicit null (notes) or "" (highlight, meaning "none") is a real value to write.
+// Only the caller parsing the request body knows which case it saw, so it is threaded through here
+// rather than re-guessed.
+//
+// Highlight vocabulary validation is deliberately not this function's job — it mutates the store
+// exactly as told, and the 400 for an unknown colour belongs to the HTTP layer that can see the
+// request that caused it.
+func (ts *TrafficStore) UpdateExchangeAnnotation(id ExchangeID, notes *string, notesSet bool, highlight string, highlightSet bool) (*Exchange, error) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if uint64(id) >= uint64(len(ts.exchanges)) {
+		return nil, fmt.Errorf("exchange not found: %d", id)
+	}
+	ex := ts.exchanges[id]
+	if notesSet {
+		ex.Notes = notes
+	}
+	if highlightSet {
+		ex.Highlight = highlight
+	}
+	if ts.onExchange != nil {
+		ts.onExchange(ex)
+	}
+	return ex, nil
 }
 
 // ExchangeByRequest resolves the exchange whose request is the given message.

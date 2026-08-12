@@ -44,8 +44,11 @@ type ExchangeView struct {
 	StartedMs   uint64          `json:"started_ms"`
 	DurationMs  uint64          `json:"duration_ms"`
 	Notes       *string         `json:"notes"`
-	Related     []any           `json:"related"`
-	Protocol    string          `json:"protocol"`
+	// Highlight is the operator's colour tag, "" when unset. See core.ValidHighlights for the
+	// vocabulary; PATCH /api/exchange/{id} is the only writer.
+	Highlight string `json:"highlight"`
+	Related   []any  `json:"related"`
+	Protocol  string `json:"protocol"`
 	// TaskID is the run that produced this exchange, omitted for traffic no task owns.
 	TaskID uint64 `json:"task_id,omitempty"`
 	// ParentID is the exchange this one was derived from — a Repeater resend's original, an Intruder
@@ -109,6 +112,7 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		// stays exactly as it was. See the note under ExchangeView for what that cannot express.
 		DurationMs: ex.Duration.Millis(),
 		Notes:      ex.Notes,
+		Highlight:  ex.Highlight,
 		Related:    []any{},
 		Protocol:   protocolToken(ex.Protocol),
 		TaskID:     ex.TaskID,
