@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
-import { Plus, Send, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Plus, Send, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatDuration } from "../lib/api";
 import { useInterceptControls } from "../lib/data";
@@ -78,6 +78,9 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
   const [active, setActive] = useState(false);
   const [rules, setRules] = useState<InterceptRuleSpec[]>([]);
   const [dirty, setDirty] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  const [pendingFocus, setPendingFocus] = useState<{ index: number; dir: "up" | "down" } | null>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
 
   // The server is the source of truth until the operator starts editing: re-syncing on every poll
   // would fight their cursor and revert an unsaved checkbox mid-keystroke.
@@ -91,6 +94,37 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
     setRules(patch);
     setDirty(true);
   };
+
+  // Copied from matchreplace.tsx's move() (102-110) so the three rule-order tools behave
+  // identically. Goes through `update`, so a reorder is marked dirty exactly like add/remove
+  // are, and survives the server-sync effect above.
+  const move = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= rules.length) return;
+    update((list) => {
+      const next = [...list];
+      const [moved] = next.splice(index, 1);
+      if (!moved) return list;
+      next.splice(target, 0, moved);
+      return next;
+    });
+    // Focus follows the moved rule so a second press repeats the action, unless that would
+    // land focus on the now-disabled control at the boundary — then it goes to the other
+    // direction's button on the same row, which stays enabled.
+    const disabledAtTarget = (delta < 0 && target === 0) || (delta > 0 && target === rules.length - 1);
+    const dir: "up" | "down" = delta < 0 ? "up" : "down";
+    setPendingFocus({ index: target, dir: disabledAtTarget ? (dir === "up" ? "down" : "up") : dir });
+    setAnnouncement(`${noun === "request" ? "Request" : "Response"} rule moved to position ${target + 1} of ${rules.length}`);
+  };
+
+  useEffect(() => {
+    if (!pendingFocus) return;
+    const { index, dir } = pendingFocus;
+    const label = `Move rule ${index + 1} ${dir}`;
+    const el = tableRef.current?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    el?.focus();
+    setPendingFocus(null);
+  }, [pendingFocus, rules]);
 
   const onSave = () => {
     save.mutate(
@@ -146,7 +180,10 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
           </Button>
         </Toolbar>
       </div>
-      <div className="table-frame">
+      <div aria-live="polite" className="sr-only">
+        {announcement}
+      </div>
+      <div className="table-frame" ref={tableRef}>
         <div className="table-scroll">
           <table>
             <thead>
@@ -154,17 +191,18 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
                 {/* Percentages so the columns track the table's own width; fixed
                     pixels do not scale under table-layout: fixed. */}
                 <th style={{ width: "8%" }}>On</th>
-                <th style={{ width: "20%" }}>Field</th>
+                <th style={{ width: "18%" }}>Field</th>
                 <th>Match</th>
-                <th style={{ width: "14%" }}>Kind</th>
-                <th style={{ width: "20%" }}>Comment</th>
+                <th style={{ width: "12%" }}>Kind</th>
+                <th style={{ width: "18%" }}>Comment</th>
+                <th style={{ width: "10%" }}>Order</th>
                 <th style={{ width: "6%" }} />
               </tr>
             </thead>
             <tbody>
               {rules.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="cell-dim">
+                  <td colSpan={7} className="cell-dim">
                     no rules — every {noun} is held while this list is on
                   </td>
                 </tr>
@@ -233,6 +271,26 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
                           update((list) => list.map((r, i) => (i === index ? { ...r, comment: event.target.value } : r)))
                         }
                       />
+                    </td>
+                    <td>
+                      <div className="chip-row">
+                        <IconButton
+                          label={`Move rule ${index + 1} up`}
+                          size="small"
+                          disabled={index === 0}
+                          onClick={() => move(index, -1)}
+                        >
+                          <ArrowUp size={13} />
+                        </IconButton>
+                        <IconButton
+                          label={`Move rule ${index + 1} down`}
+                          size="small"
+                          disabled={index === rules.length - 1}
+                          onClick={() => move(index, 1)}
+                        >
+                          <ArrowDown size={13} />
+                        </IconButton>
+                      </div>
                     </td>
                     <td>
                       <IconButton
