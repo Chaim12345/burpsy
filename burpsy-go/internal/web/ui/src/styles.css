@@ -3072,7 +3072,7 @@ tbody td {
   z-index: var(--z-menu);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
   width: 132px;
   padding: var(--s2);
   background: var(--paper-sunken);
