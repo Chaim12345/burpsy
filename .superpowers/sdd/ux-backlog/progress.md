@@ -76,3 +76,32 @@ Deferred to the final whole-branch review:
 - the "Age" vs "#" non-hideable column question
 - a11y spec has not been re-run since wave 1 merged; global constraint 2
   requires zero violations, so the final gate must run it
+
+## External merge reverted (2e1a2d2)
+
+Mid-wave, a concurrent process merged master into this branch as c89c398,
+force-merging work that belongs in PR 18. It took master's Go side wholesale and
+silently reverted several fixes on this branch:
+
+- api_sequencer_capture.go's real capture loop was shadowed by the old stubs
+  returning to api_tools.go — /stop answering {"stopped": true} for a loop that
+  did not exist, captureTokens returning nil (the HONEST-02 defect).
+- toolLog.Record lost its *int response-length parameter (HONEST-04), so a send
+  that never got a response and one that got an empty response became
+  indistinguishable again.
+- commit 863299e ("stop reporting findings against the wrong request") was undone
+  in api_tools.go: validParent, the ParentID lineage, and originForm's
+  absolute-form path handling all disappeared while their tests remained.
+- /api/intruder/points lost its verb guard.
+- the repeater wire contract was renamed request -> raw against the UI and tests.
+
+The build was broken and 6+ tests failed. Reverted with `git revert -m 1`,
+keeping our side. Task 5 (7d6c859) landed after the merge and is UI-only, so it
+survived untouched — verified: history.tsx still carries its highlight work.
+
+After the revert: go build clean, go vet clean, full `go test ./...` clean,
+bunx tsc --noEmit clean, bun run build clean.
+
+The useful parts of that merge (MCP server, crawler upgrades) are not lost — they
+are on master and belong in PR 18, applied deliberately rather than force-merged
+into a branch mid-flight.
