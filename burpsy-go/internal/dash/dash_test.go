@@ -272,6 +272,42 @@ func TestRegistryNeverEvictsARunningTask(t *testing.T) {
 	}
 }
 
+// HARD-01 finding #7: a long engagement evicts its oldest finished tasks — failures included — past
+// capacity, and Breakdown() must not report Complete()==true once that has happened. Before this,
+// Dropped() was a sibling counter a caller had to remember to add in; Breakdown itself only ever
+// looked at r.tasks, which no longer contains what was evicted.
+func TestRegistryBreakdownIsNotCompleteOnceFailuresHaveBeenEvicted(t *testing.T) {
+	r := NewRegistry().WithCapacity(2)
+
+	failed := r.Start(KindIntruder, "dead-host", 1)
+	failed.Fail(errors.New("connection refused"))
+
+	for i := 0; i < 5; i++ {
+		h := r.Start(KindAudit, "found", 1)
+		h.Advance(1)
+		h.Finish(Breakdown{Found: 1})
+	}
+
+	if r.Dropped() == 0 {
+		t.Fatal("setup did not evict anything; test is not exercising the eviction path")
+	}
+
+	b := r.Breakdown()
+	if b.Complete() {
+		t.Errorf("Complete()==true after %d tasks were evicted (including the failure); breakdown = %+v", r.Dropped(), b)
+	}
+	reasons := r.Reasons()
+	found := false
+	for _, rs := range reasons {
+		if rs.Bucket == BucketGated && rs.Count == r.Dropped() {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Reasons() does not name the %d evicted task(s): %+v", r.Dropped(), reasons)
+	}
+}
+
 // A table entirely full of running work overshoots capacity rather than trimming. An honest overshoot
 // beats a dishonest trim, and dropped stays at zero because nothing was dropped.
 func TestRegistryOvershootsCapacityRatherThanDropLiveWork(t *testing.T) {

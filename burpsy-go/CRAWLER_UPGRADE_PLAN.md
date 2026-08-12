@@ -4,11 +4,8 @@
 > `internal/crawler/discover.go`, and `gaps.md`.
 >
 > All 13 original Rust-parity gaps (HTTP/2, scanner, audit engine, etc.) are
-> **COMPLETE** as of 2026-08-04. The audit engine's last unwired scope —
-> `given insertion point` / `send payload` (M3) — landed 2026-08-09 with
-> `Finding.Param` attribution end to end; see `gaps.md` §3. The remaining open
-> work is entirely within the crawler itself, which the code comments document
-> with unusual candour.
+> **COMPLETE** as of 2026-08-04. The remaining open work is entirely within the
+> crawler itself, which the code comments document with unusual candour.
 
 ---
 

@@ -143,7 +143,41 @@ const jsUndeterminedIssue = "JavaScript library version not comparable"
 // strictVersionPattern is what retire.js substitutes for `§§version§§`: a version must start with a
 // digit. Copied from retire.js's own versionPattern so a match here means the same thing it means
 // upstream.
-const strictVersionPattern = `[0-9][0-9.a-z_\-]+`
+//
+// Two forms, chosen per pattern by strictVersionPatternFor: the class deliberately contains both
+// `.` and `a-z` so a version like `4.0.0-rc1` matches whole. Most corpus extractors terminate the
+// version on a literal outside that class (`.js`, a closing quote) — fine for a greedy `+`. But 45
+// `filename` extractors are shaped `name-(§§version§§)(\.min)?\.js`: an optional suffix built
+// entirely out of characters the version class also accepts. Greedy `+` swallows that suffix into
+// the capture first and never backtracks off it (RE2 finds one leftmost match, not the shortest one
+// satisfying the rest of the pattern), so `jquery-3.5.0.min.js` captured "3.5.0.min" as the
+// version — not a version any corpus range was written against, and one whose parsed tail ("min")
+// sorts as a prerelease of the real 3.5.0 (see Version.Compare). Non-greedy (`+?`) asks for the
+// shortest match that still lets the remainder of the pattern succeed, so it stops at "3.5.0" and
+// leaves ".min" for the pattern's own optional group.
+//
+// Non-greedy is wrong, though, for the ~67 patterns (mostly `filecontent` banners like
+// `/*! jQuery v(§§version§§)`) that have nothing at all after the version group: there, "the
+// shortest match that still lets the remainder succeed" is one digit, since an empty remainder
+// always succeeds. Those need the greedy form, where "match as much of the class as possible"
+// is exactly the intended behaviour and the class boundary (the first non-matching character,
+// e.g. whitespace) is the only terminator that exists.
+const strictVersionPatternGreedy = `[0-9][0-9.a-z_\-]+`
+const strictVersionPatternNonGreedy = `[0-9][0-9.a-z_\-]+?`
+
+// strictVersionPatternFor picks greedy or non-greedy for one corpus pattern, based on whether raw
+// has anything after the version placeholder's capture group for the version to stop early for.
+func strictVersionPatternFor(raw string) string {
+	idx := strings.Index(raw, versionPlaceholder)
+	if idx == -1 {
+		return strictVersionPatternGreedy
+	}
+	after := strings.TrimPrefix(raw[idx+len(versionPlaceholder):], ")")
+	if after == "" {
+		return strictVersionPatternGreedy
+	}
+	return strictVersionPatternNonGreedy
+}
 
 // looseVersionPattern is the same slot, widened to "whatever token is in that position". Used only
 // after the strict pattern has already failed, and only on a URL, and its matches can only ever
@@ -571,7 +605,7 @@ func parseJsVulnDb(src, source string) *JsVulnDb {
 			pats  []string
 		}{{"uri", comp.Extractors.URI}, {"filename", comp.Extractors.Filename}} {
 			for _, raw := range kind.pats {
-				strict, notes, err := compileCorpusPattern(substituteVersion(raw, strictVersionPattern))
+				strict, notes, err := compileCorpusPattern(substituteVersion(raw, strictVersionPatternFor(raw)))
 				if err != nil {
 					summary.UnusablePatterns = append(summary.UnusablePatterns,
 						fmt.Sprintf("%s %s: %v", name, kind.label, err))
@@ -591,7 +625,7 @@ func parseJsVulnDb(src, source string) *JsVulnDb {
 
 		ownContent := 0
 		for _, raw := range comp.Extractors.FileContent {
-			re, notes, err := compileCorpusPattern(substituteVersion(raw, strictVersionPattern))
+			re, notes, err := compileCorpusPattern(substituteVersion(raw, strictVersionPatternFor(raw)))
 			if err != nil {
 				summary.UnusablePatterns = append(summary.UnusablePatterns,
 					fmt.Sprintf("%s filecontent: %v", name, err))
