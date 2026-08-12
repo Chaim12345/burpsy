@@ -3021,3 +3021,85 @@ tbody td {
      Found by the e2e a11y suite's first real run (axe-core). */
   --accent: #ce480f; /* token-exempt: WCAG AA contrast stopgap, not a token value — see the comment above this section; delete once the Penpot-side fix lands */
 }
+
+/* ===========================================================================
+   Task 4 — loading / skeleton states (src/ui/states.tsx), plus the small
+   alignment `Empty`/`ErrorNotice` needed against `design/jsx/*`.
+
+   `--skeleton-1..4` do not exist anywhere else in this pipeline — grepping
+   `src/tokens/` for "skeleton" turns up nothing, in either the generated CSS
+   or PENDING-TOKEN-CHANGES.md, and none of the four hex values below round-trip
+   to an existing token via `primitives.css`'s `--grey-*` scale either. So these
+   are hand-authored here, the same way `--editor-*` and the other composite
+   values called out at the top of tokens/semantic.css are: values the Penpot
+   pipeline does not model yet, kept where the rest of the theme lives rather
+   than inlined into the component. Per DESIGN.md's "Skeleton" section, these
+   are dark-only today (same known gap as the badge-surface tokens) and will
+   look wrong once light theme is audited — that fix belongs in the token
+   pipeline, not here. */
+:root {
+  --skeleton-1: #4e5254;
+  --skeleton-2: #474b4d;
+  --skeleton-3: #434749;
+  --skeleton-4: #404446;
+}
+
+/* Six bars per row, widths measured from `design/jsx/skeleton-row.jsx`, fading
+   down the list via --skeleton-1..4 (set per-row as --row-skeleton by
+   SkeletonRows) so the block reads as a list rather than one grey rectangle. */
+.skeleton-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  height: 24px;
+}
+
+.skeleton-bar {
+  display: block;
+  height: 10px;
+  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless ("2", not "2px") in primitives.css, so var(--radius-sm) is invalid here; no other rule in this file consumes it either. Matches radius.sm = 2px per DESIGN.md. */
+  background: var(--row-skeleton, var(--skeleton-1));
+}
+
+/* Centred "still working" state from `design/jsx/state-loading.jsx`: accent
+   ring (the existing .spinner, reused rather than redrawn), bold title,
+   detail line. */
+.loading-state {
+  display: grid;
+  justify-items: center;
+  gap: var(--s2);
+  padding: var(--s5);
+  text-align: center;
+}
+
+.loading-state strong {
+  font-size: var(--fs-md);
+}
+
+.loading-state p {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  max-width: 46ch;
+}
+
+/* Decorative glyphs added to `Empty`/`ErrorNotice` to match `empty-state-default.jsx` and
+   `error-notice-default.jsx`; both are aria-hidden, so the wording that carries meaning still
+   comes entirely from props. Design specifies `color.muted-dim` (#9AA0A2 dark) for the empty
+   icon, which — like `--skeleton-*` above — has no emitted token; `--muted` (#B2B2B2 dark) is
+   the nearest existing one and is used here instead of inventing a one-off literal. */
+.empty-icon {
+  font-size: var(--fs-xl);
+  line-height: 1;
+  color: var(--muted);
+}
+
+.error-notice-icon {
+  flex: none;
+  color: var(--bad);
+  line-height: 1;
+}

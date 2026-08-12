@@ -200,9 +200,20 @@ export function Toolbar({ className, ...props }: HTMLAttributes<HTMLDivElement>)
   return <div className={cn("toolbar", className)} {...props} />;
 }
 
+/**
+ * `Empty` and `ErrorNotice` **replace** the element they stand in for,
+ * headers included. Per DESIGN.md's "three data states": a table that failed
+ * to load or has nothing to show is not a table with an empty body — leaving
+ * column headers stranded above either state is the specific mistake these
+ * two exist to prevent. Callers must swap out the whole region, not just the
+ * rows inside it.
+ */
 export function Empty({ title, detail, action }: { title: string; detail: string; action?: ReactNode }): JSX.Element {
   return (
     <div className="empty">
+      <span className="empty-icon" aria-hidden="true">
+        ∅
+      </span>
       <strong>{title}</strong>
       <p>{detail}</p>
       {action}
@@ -210,12 +221,26 @@ export function Empty({ title, detail, action }: { title: string; detail: string
   );
 }
 
-export function ErrorNotice({ error, onRetry }: { error: unknown; onRetry?: () => void }): JSX.Element {
+export function ErrorNotice({
+  error,
+  title = "Request failed",
+  onRetry,
+}: {
+  error: unknown;
+  /** Optional per `design/jsx/error-notice-default.jsx`, which titles each notice by what failed
+   * (e.g. "Could not reach the target") rather than a generic label. Defaults to the generic label
+   * so existing callers that only pass `error`/`onRetry` keep their current behaviour. */
+  title?: string;
+  onRetry?: () => void;
+}): JSX.Element {
   const message = error instanceof Error ? error.message : String(error);
   return (
     <div className="error-notice" role="alert">
+      <span className="error-notice-icon" aria-hidden="true">
+        ⚠
+      </span>
       <div>
-        <strong>Request failed</strong>
+        <strong>{title}</strong>
         <span>{message}</span>
       </div>
       {onRetry ? (
