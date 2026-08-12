@@ -9,7 +9,7 @@ import type { ToolLogRow } from "../lib/types.workbench";
 import { DetailList } from "../ui/json";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar } from "../ui/primitives";
-import { VirtualTable, type Column } from "../ui/table";
+import { VirtualTable, type Column, type VisibilityState } from "../ui/table";
 
 /**
  * A logged row records a request one of burpsy's own tools sent. The log carries
@@ -31,6 +31,35 @@ function rowCurl(row: ToolLogRow): string {
   return `curl -i -X ${row.method || "GET"} ${JSON.stringify(rowUrl(row))}`;
 }
 
+/**
+ * Reads and writes the hidden-column set for a table under `burpsy.<key>`, so
+ * a page opting into `VirtualTable`'s column-visibility capability can persist
+ * the operator's choice across reloads. Not part of table.tsx's API surface —
+ * that only defines the shape (`VisibilityState`); how it is stored is a page
+ * decision, same as `SplitPane`'s `storageId` pattern above.
+ */
+function useStoredColumnVisibility(key: string): [VisibilityState, (next: VisibilityState) => void] {
+  const [visibility, setVisibility] = useState<VisibilityState>(() => {
+    try {
+      const raw = localStorage.getItem(`burpsy.${key}`);
+      return raw ? (JSON.parse(raw) as VisibilityState) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const update = (next: VisibilityState) => {
+    setVisibility(next);
+    try {
+      localStorage.setItem(`burpsy.${key}`, JSON.stringify(next));
+    } catch {
+      // Storage can be unavailable (private mode, quota); the in-memory choice still applies.
+    }
+  };
+
+  return [visibility, update];
+}
+
 export function LoggerPage(): JSX.Element {
   const setHistoryQuery = useApp((state) => state.setHistoryQuery);
   const setRoute = useApp((state) => state.setRoute);
@@ -39,6 +68,7 @@ export function LoggerPage(): JSX.Element {
   const [term, setTerm] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [columnVisibility, setColumnVisibility] = useStoredColumnVisibility("logger.columns");
 
   const debouncedTerm = useDebounced(term, 260);
   const { data, error, isFetching, refetch } = useToolLogView(tool, debouncedTerm);
@@ -64,6 +94,9 @@ export function LoggerPage(): JSX.Element {
         accessorKey: "started_ms",
         header: "Age",
         size: 84,
+        // The only column that always identifies which log entry a row is, so
+        // — like an id column — it stays off the show/hide menu.
+        enableHiding: false,
         cell: (info) => <span className="cell-dim">{relativeTime(info.getValue<number>())}</span>,
       },
       { accessorKey: "tool", header: "Tool", size: 96, cell: (info) => <Badge>{info.getValue<string>()}</Badge> },
@@ -230,6 +263,9 @@ export function LoggerPage(): JSX.Element {
             getRowId={(row) => String(row.id)}
             selectedId={selectedId === null ? null : String(selectedId)}
             onSelect={(row) => setSelectedId(row.id)}
+            enableColumnVisibility
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChange={setColumnVisibility}
             menuGroups={(row) => [
               {
                 id: "copy",

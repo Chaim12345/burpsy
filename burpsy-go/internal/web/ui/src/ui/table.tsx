@@ -6,13 +6,19 @@ import {
   type ColumnDef,
   type Row,
   type SortingState,
+  type VisibilityState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn } from "../lib/cn";
+import { ColumnVisibilityMenu } from "./column-visibility-menu";
 import { ContextMenu, type MenuGroup } from "./menu";
 import { Spinner } from "./primitives";
+
+// Re-exported so a page wiring `columnVisibility`/`onColumnVisibilityChange` does
+// not need its own dependency on @tanstack/react-table just for this one type.
+export type { VisibilityState };
 
 // TanStack's ColumnDef is invariant in its value type; `any` is the documented
 // escape hatch for heterogeneous column collections.
@@ -53,6 +59,16 @@ function useFluidRowHeight(density: "comfortable" | "compact"): [number, (node: 
   return [height, setProbe];
 }
 
+/**
+ * The column-visibility menu needs a plain string per column. Every column in
+ * this app declares a string `header` (see history.tsx, sitemap.tsx, logger.tsx,
+ * wshistory.tsx) — the fallback to the column id only covers a future column
+ * whose header is a rendered node.
+ */
+function columnLabel(header: unknown, id: string): string {
+  return typeof header === "string" ? header : id;
+}
+
 export interface VirtualTableProps<T> {
   data: T[];
   columns: Column<T>[];
@@ -70,6 +86,24 @@ export interface VirtualTableProps<T> {
   /** CSS height for the scroll viewport. Must be bounded for virtualization. */
   height?: string;
   initialSort?: SortingState;
+  /**
+   * Shows the column show/hide trigger in the header. Off by default so a table
+   * that never opts in behaves exactly as before — no button, no menu, no
+   * change to `columns.length`-based layout.
+   *
+   * Mark a column non-removable with TanStack's own `enableHiding: false` on its
+   * `ColumnDef`, not a parallel prop.
+   */
+  enableColumnVisibility?: boolean;
+  /**
+   * Controlled column-visibility state, in TanStack's own shape (`false` means
+   * hidden; omitted or `true` means visible). Pass this with
+   * `onColumnVisibilityChange` when a page wants to read and persist which
+   * columns are hidden (e.g. to `localStorage`). Omit both to let the table
+   * manage the state itself.
+   */
+  columnVisibility?: VisibilityState;
+  onColumnVisibilityChange?: (next: VisibilityState) => void;
 }
 
 export function VirtualTable<T>({
@@ -87,20 +121,82 @@ export function VirtualTable<T>({
   density = "comfortable",
   height = "100%",
   initialSort = [],
+  enableColumnVisibility = false,
+  columnVisibility: controlledVisibility,
+  onColumnVisibilityChange,
 }: VirtualTableProps<T>): JSX.Element {
   const [sorting, setSorting] = useState<SortingState>(initialSort);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Controlled when a page supplies `columnVisibility`, uncontrolled otherwise —
+  // the same split `Field`-adjacent components in this codebase use, so a table
+  // that never opts in stays on the internal `{}` (every column visible) and a
+  // page that wants to persist the choice can own the state instead.
+  const [internalVisibility, setInternalVisibility] = useState<VisibilityState>({});
+  const visibility = controlledVisibility ?? internalVisibility;
+  const setVisibility = useCallback(
+    (next: VisibilityState) => {
+      onColumnVisibilityChange?.(next);
+      if (!controlledVisibility) setInternalVisibility(next);
+    },
+    [controlledVisibility, onColumnVisibilityChange],
+  );
+
+  const [columnMenuOpen, setColumnMenuOpen] = useState(false);
+  const columnMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const columnMenuPanelRef = useRef<HTMLDivElement>(null);
+
   const table = useReactTable({
     data,
     columns,
-    state: { sorting },
+    state: { sorting, columnVisibility: visibility },
     onSortingChange: setSorting,
+    onColumnVisibilityChange: (updater) => {
+      setVisibility(typeof updater === "function" ? updater(visibility) : updater);
+    },
     getRowId,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     columnResizeMode: "onChange",
   });
+
+  // Escape closes the menu and returns focus to the trigger that opened it;
+  // clicking anywhere outside the panel and trigger closes it too, matching the
+  // rest of this app's popovers (ContextMenu, DropdownMenu are Radix and get this
+  // for free — this one is plain markup so checkboxes stay in normal tab order,
+  // which is the requirement, rather than Radix's roving-tabindex menu keys).
+  useEffect(() => {
+    if (!columnMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setColumnMenuOpen(false);
+        columnMenuTriggerRef.current?.focus();
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (columnMenuPanelRef.current?.contains(target) || columnMenuTriggerRef.current?.contains(target)) return;
+      setColumnMenuOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [columnMenuOpen]);
+
+  const hideableColumns = useMemo(
+    () =>
+      enableColumnVisibility
+        ? table.getAllLeafColumns().filter((column) => column.getCanHide())
+        : [],
+    // table identity is stable per render pass; visibility changes are what should
+    // recompute the checked state, columns changes are what should recompute the set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [enableColumnVisibility, columns, visibility],
+  );
 
   const rows = table.getRowModel().rows;
   const [rowHeight, setProbe] = useFluidRowHeight(density);
@@ -183,6 +279,7 @@ export function VirtualTable<T>({
   };
 
   const showEmpty = !loading && rows.length === 0;
+  const visibleColumnCount = table.getVisibleLeafColumns().length;
 
   return (
     <div className={cn("table-frame", `density-${density}`)}>
@@ -192,6 +289,34 @@ export function VirtualTable<T>({
         className="row-height-probe"
         style={{ height: density === "compact" ? "var(--row-h-compact)" : "var(--row-h)" }}
       />
+      {enableColumnVisibility ? (
+        <div className="column-menu-anchor">
+          <button
+            ref={columnMenuTriggerRef}
+            type="button"
+            className="column-menu-trigger"
+            aria-haspopup="menu"
+            aria-expanded={columnMenuOpen}
+            aria-label="Show or hide columns"
+            title="Show or hide columns"
+            onClick={() => setColumnMenuOpen((open) => !open)}
+          >
+            <Columns3 size={12} />
+          </button>
+          {columnMenuOpen ? (
+            <ColumnVisibilityMenu
+              ref={columnMenuPanelRef}
+              columns={hideableColumns.map((column) => ({
+                id: column.id,
+                label: columnLabel(column.columnDef.header, column.id),
+                visible: column.getIsVisible(),
+              }))}
+              onToggle={(id, visible) => table.getColumn(id)?.toggleVisibility(visible)}
+              onReset={() => table.resetColumnVisibility()}
+            />
+          ) : null}
+        </div>
+      ) : null}
       <div
         className="table-scroll"
         ref={scrollRef}
@@ -238,7 +363,7 @@ export function VirtualTable<T>({
           <tbody>
             {paddingTop > 0 ? (
               <tr aria-hidden="true" style={{ height: paddingTop }}>
-                <td colSpan={columns.length} />
+                <td colSpan={visibleColumnCount} />
               </tr>
             ) : null}
             {virtualRows.map((virtualRow) => {
@@ -259,7 +384,7 @@ export function VirtualTable<T>({
             })}
             {paddingBottom > 0 ? (
               <tr aria-hidden="true" style={{ height: paddingBottom }}>
-                <td colSpan={columns.length} />
+                <td colSpan={visibleColumnCount} />
               </tr>
             ) : null}
           </tbody>
