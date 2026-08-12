@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,17 +29,22 @@ import (
 type repeaterSendReq struct {
 	Target   string `json:"target"`   // e.g. "http://host:port" or "host:port"
 	Protocol string `json:"protocol"` // optional "http" / "https"
-	Request  string `json:"raw"`  // raw request text
+	Request  string `json:"request"`  // raw request text
+	// FromExchange is the exchange this send was built from, when the operator reached Repeater via
+	// send-to rather than by typing a request. Recorded as the new exchange's parent so a resend can
+	// be traced back to the capture it came from. A pointer because exchange 0 is a real exchange and
+	// is very often the first thing sent to Repeater.
+	FromExchange *core.ExchangeID `json:"from_exchange,omitempty"`
 }
 
 // repeaterSendResp mirrors repeater.ts's SendResp.
 type repeaterSendResp struct {
-	Status        int    `json:"status"`
-	DurationMs    uint64 `json:"duration_ms"`
-	Response      string `json:"response"`
-	RequestMsgID  uint64 `json:"request_msg_id"`
-	ResponseMsgID uint64 `json:"response_msg_id"`
-	ExchangeID    uint64 `json:"exchange_id"`
+	Status        int             `json:"status"`
+	DurationMs    uint64          `json:"duration_ms"`
+	Response      string          `json:"response"`
+	RequestMsgID  uint64          `json:"request_msg_id"`
+	ResponseMsgID uint64          `json:"response_msg_id"`
+	ExchangeID    core.ExchangeID `json:"exchange_id"`
 }
 
 func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
@@ -65,29 +71,35 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Empty request", http.StatusBadRequest)
 		return
 	}
-	// Two layers, the same as the intruder handler: MayContainHost is a pre-filter over the typed
-	// target only, never an authorisation decision (core/scope.go), so it cannot see a path-scoped
-	// exclude like "/admin" — a rule that leaves the host itself possible. The real decision runs
-	// below, on the exact bytes about to go on the wire, via AuthoriseRaw.
+	// The repeater sends to whatever target the operator types, so it is gated
+	// by scope for the same reason the intruder is: a scope the operator set to
+	// constrain outbound traffic must not be bypassable by sending raw bytes
+	// here. The request line is not parsed (the operator owns it), so this is a
+	// host-level check, the same first layer the intruder applies.
 	if !s.scope.MayContainHost(host, port, tls) {
 		http.Error(w, "refused: "+s.scope.Explain(host, port, "/", tls), http.StatusForbidden)
 		return
 	}
 
-	// AuthorisedSender.Send, not the raw *sender.Sender: Repeater lets the operator retype the
-	// request line freely, so the authority a scope rule must judge is the one in the bytes about
-	// to be sent, not the target string that opened the tab. This is also where the duration and
-	// protocol outcome come from — SendRawOutcome's caller-facing half.
+	// SendRaw handles a raw HTTP request (possibly HTTP/1.0-style with Host line) over the wire.
+	// Timed here because SendRaw does not report a duration and the exchange row used to be written with a
+	// hardcoded zero — which, before core.ExchangeDuration existed, was indistinguishable from a
+	// sub-millisecond send, so the repeater's own "duration_ms: 0" reply looked like a measurement.
+	//
+	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
+	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
+	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
+	// replayed captured h2 bytes, and would now be wrong far more often.
 	ctx := r.Context()
-	auth := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
 	sendStarted := time.Now()
-	result, err := auth.Send(ctx, []byte(req.Request))
-	rawResp := result.Raw
-	outcome := result.Outcome
+	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, host, port, tls, []byte(req.Request),
+		sender.ProtocolPreferenceAuto)
 	elapsed := time.Since(sendStarted)
 	if err != nil {
 		// Surface the dial/parse error to the UI so Repeater is not silently empty.
-		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "SEND", "", 0, 0, err.Error())
+		// nil, not zero: the send never reached a response, which is a different fact from a response
+		// that arrived with no bytes in it.
+		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "SEND", "", 0, nil, 0, err.Error())
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -122,10 +134,17 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		// What actually carried the send, not what the request bytes asked for. outcome.Downgrade says why
 		// it was HTTP/1.1 when it was, and Sender.Protocols counts it across every surface.
 		Protocol: outcome.Protocol,
+		// Lineage, when the caller named one. Validated rather than trusted: a parent id pointing at
+		// nothing would be a link that resolves to the wrong row or to no row, which is the failure
+		// mode the whole exchange-id typing exercise exists to stop.
+		ParentID: s.validParent(req.FromExchange),
 	}
 	s.store.AddExchange(ex)
 
-	s.toolLog.Record(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status), ex.Duration.Millis(), "")
+	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
+	// cannot disagree about the size of one send.
+	s.toolLog.Record(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status),
+		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(repeaterSendResp{
@@ -182,6 +201,14 @@ type PointView struct {
 // handleIntruderPoints inspects a stored request for attack insertion points. The UI sends the
 // message id it just captured; this answers with the Rust PointView shape.
 func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
+	// Every other route in this file guards its verb; these two did not, so a GET reached the body
+	// decoder, failed on an empty body and answered "Invalid request body" — a complaint about the
+	// payload for what is really a wrong-method call. Phase 1's move to Go 1.22 `"POST /api/..."`
+	// patterns makes the whole class unrepresentable; until then it is spelled out.
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req intruderPointsReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -738,29 +765,6 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(sequencer.AnalyseAs(tokens, encoding))
 }
 
-// handleSequencerCapture serves the token lists accumulated by the sequencer capture phase.
-func (s *Server) handleSequencerCapture(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/sequencer/capture/")
-	if path == "stop" {
-		// The UI calls this to halt a live capture; the Go port has no live capture loop.
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]bool{"stopped": true})
-		return
-	}
-	if path != "" {
-		// Per-token-list detail: the Go engine exposes the shared capture list.
-		tokens := s.captureTokens()
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"total":  len(tokens),
-			"tokens": tokens,
-		})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"capturing": false, "total": 0})
-}
-
 // helpers ----------------------------------------------------------------------------------------
 
 func parseResponseStatus(raw []byte) *uint16 {
@@ -795,16 +799,48 @@ func firstLineMethod(req string) string {
 	return ""
 }
 
+// firstLinePath is the request target as a *path*, with an absolute-form request line reduced to
+// origin form.
+//
+// RFC 7230 §5.3 allows two forms in a request line, and both reach here. Origin-form
+// (`POST /login HTTP/1.1`) is what a browser sends to a server; absolute-form
+// (`POST http://host:9091/login HTTP/1.1`) is what it sends to a *proxy*, so it is exactly what the
+// store holds for captured traffic — and therefore exactly what send-to-Repeater hands back when the
+// operator resends it.
+//
+// Returning that verbatim made the whole URI the exchange's Path. One resend of /login then split on
+// its own slashes and grew a phantom branch in the site map — `http:` → “ → `127.0.0.1:9091` →
+// `login` — four nodes for one request, with the resource listed twice in the tree and findings on
+// the copy attributed to a path no server ever served.
 func firstLinePath(req string) string {
 	lines := strings.SplitN(req, "\n", 2)
 	if len(lines) == 0 {
 		return ""
 	}
 	parts := strings.Fields(lines[0])
-	if len(parts) >= 2 {
-		return parts[1]
+	if len(parts) < 2 {
+		return ""
 	}
-	return ""
+	return originForm(parts[1])
+}
+
+// originForm reduces an absolute-form request target to its path and query.
+//
+// Anything that does not parse as an absolute URI is returned unchanged: asterisk-form (`OPTIONS *`)
+// and authority-form (`CONNECT host:443`) are legal targets that are not paths, and rewriting them
+// into one would be inventing a request that was never sent.
+func originForm(target string) string {
+	if !strings.Contains(target, "://") {
+		return target
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Path == "" {
+		return target
+	}
+	if u.RawQuery != "" {
+		return u.Path + "?" + u.RawQuery
+	}
+	return u.Path
 }
 
 func intOrZero(p *uint16) int {
@@ -814,7 +850,17 @@ func intOrZero(p *uint16) int {
 	return int(*p)
 }
 
-// captureTokens is the shared sequencer capture accumulator; empty unless a capture ran.
-func (s *Server) captureTokens() []string {
-	return nil
+// validParent returns id when it names an exchange that exists, and nil otherwise.
+//
+// A caller-supplied id is not evidence that the row is there. Storing an unresolvable parent would
+// put a dangling link in the lineage graph, and a reader following it would land on nothing or —
+// worse, if the store later grows past it — on an unrelated exchange.
+func (s *Server) validParent(id *core.ExchangeID) *core.ExchangeID {
+	if id == nil {
+		return nil
+	}
+	if _, err := s.store.GetExchange(*id); err != nil {
+		return nil
+	}
+	return id
 }

@@ -35,131 +35,87 @@ type ValidityRule struct {
 	Not             *ValidityRule   `json:"not,omitempty"`
 }
 
-// Evaluate judges every field this rule has set, not just the first one in struct order, and ANDs
-// them together.
-//
-// A DTO decoded from arbitrary operator JSON can set more than one leaf field at once —
-// `{"status_is":200,"body_not_contains":"Please log in"}` is exactly the shape an operator would
-// write to mean "logged in AND no login page" — and an if-chain that returns on the first non-zero
-// field silently discards every field after it (HARD-01 finding #12): the status matching alone
-// would report Valid on a 200 response that still contains the login page, and the operator's
-// second condition never influenced the answer at all. Every field set on this rule must agree for
-// the rule to report Valid; any one of them reporting Invalid makes the whole rule Invalid, and an
-// Indeterminate among otherwise-Valid fields keeps the rule Indeterminate rather than guessing.
 func (vr *ValidityRule) Evaluate(status int, hdrs map[string]string, body []byte) ValidityState {
 	if vr == nil {
 		return Indeterminate
 	}
-	var results []ValidityState
-
 	if vr.StatusIs != nil {
-		switch {
-		case status == 0:
-			results = append(results, Indeterminate)
-		case status == *vr.StatusIs:
-			results = append(results, Valid)
-		default:
-			results = append(results, Invalid)
+		if status == 0 {
+			return Indeterminate
 		}
+		if status == *vr.StatusIs {
+			return Valid
+		}
+		return Invalid
 	}
 	if vr.BodyContains != "" {
-		results = append(results, validityFromBool(bytes.Contains(body, []byte(vr.BodyContains))))
+		if bytes.Contains(body, []byte(vr.BodyContains)) {
+			return Valid
+		}
+		return Invalid
 	}
 	if vr.BodyNotContains != "" {
-		results = append(results, validityFromBool(!bytes.Contains(body, []byte(vr.BodyNotContains))))
-	}
-	if vr.HeaderPresent != "" {
-		results = append(results, validityFromBool(headerFound(hdrs, vr.HeaderPresent)))
-	}
-	if vr.HeaderAbsent != "" {
-		results = append(results, validityFromBool(!headerFound(hdrs, vr.HeaderAbsent)))
-	}
-	if vr.All != nil {
-		results = append(results, evaluateAll(vr.All, status, hdrs, body))
-	}
-	if vr.Any != nil {
-		results = append(results, evaluateAny(vr.Any, status, hdrs, body))
-	}
-	if vr.Not != nil {
-		switch vr.Not.Evaluate(status, hdrs, body) {
-		case Valid:
-			results = append(results, Invalid)
-		case Invalid:
-			results = append(results, Valid)
-		default:
-			results = append(results, Indeterminate)
+		if bytes.Contains(body, []byte(vr.BodyNotContains)) {
+			return Invalid
 		}
-	}
-	if len(results) == 0 {
-		return Indeterminate
-	}
-	return validityAnd(results)
-}
-
-// headerFound reports whether name is present among hdrs, case-insensitively.
-func headerFound(hdrs map[string]string, name string) bool {
-	for k := range hdrs {
-		if strings.EqualFold(k, name) {
-			return true
-		}
-	}
-	return false
-}
-
-func validityFromBool(ok bool) ValidityState {
-	if ok {
 		return Valid
 	}
-	return Invalid
-}
-
-// validityAnd combines every field's result the way `all` combines sub-rules: one Invalid makes the
-// whole thing Invalid, otherwise any Indeterminate keeps it Indeterminate, otherwise Valid.
-func validityAnd(results []ValidityState) ValidityState {
-	sawIndeterminate := false
-	for _, r := range results {
-		if r == Invalid {
-			return Invalid
+	if vr.HeaderPresent != "" {
+		for k := range hdrs {
+			if strings.EqualFold(k, vr.HeaderPresent) {
+				return Valid
+			}
 		}
-		if r == Indeterminate {
-			sawIndeterminate = true
-		}
+		return Invalid
 	}
-	if sawIndeterminate {
+	if vr.HeaderAbsent != "" {
+		for k := range hdrs {
+			if strings.EqualFold(k, vr.HeaderAbsent) {
+				return Invalid
+			}
+		}
+		return Valid
+	}
+	if vr.All != nil {
+		allV := true
+		for _, s := range vr.All {
+			r := s.Evaluate(status, hdrs, body)
+			if r == Invalid {
+				return Invalid
+			}
+			if r == Indeterminate {
+				allV = false
+			}
+		}
+		if allV {
+			return Valid
+		}
 		return Indeterminate
 	}
-	return Valid
-}
-
-func evaluateAll(rules []*ValidityRule, status int, hdrs map[string]string, body []byte) ValidityState {
-	allV := true
-	for _, s := range rules {
-		r := s.Evaluate(status, hdrs, body)
-		if r == Invalid {
+	if vr.Any != nil {
+		best := Invalid
+		for _, s := range vr.Any {
+			r := s.Evaluate(status, hdrs, body)
+			if r == Valid {
+				return Valid
+			}
+			if r == Indeterminate {
+				best = Indeterminate
+			}
+		}
+		return best
+	}
+	if vr.Not != nil {
+		r := vr.Not.Evaluate(status, hdrs, body)
+		if r == Valid {
 			return Invalid
 		}
 		if r == Indeterminate {
-			allV = false
+			return Indeterminate
 		}
-	}
-	if allV {
 		return Valid
 	}
 	return Indeterminate
-}
-
-func evaluateAny(rules []*ValidityRule, status int, hdrs map[string]string, body []byte) ValidityState {
-	best := Invalid
-	for _, s := range rules {
-		r := s.Evaluate(status, hdrs, body)
-		if r == Valid {
-			return Valid
-		}
-		if r == Indeterminate {
-			best = Indeterminate
-		}
-	}
-	return best
 }
 
 // --- Extraction ---

@@ -28,16 +28,16 @@ satisfiable without waiting for the last five feature phases.
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 1: Store & Scope Chokepoint** - Race-free segmented store with an O(1) index, plus the one authorising sender every later surface must route through
-- [x] **Phase 2: HTTP/2** - h2 traffic captured, viewed, resent and honestly negotiated, moved ahead of WebSockets and the plugin API *(Complete in Go 2026-08-05: H2-01/02/04 closed — relay, history parity, authorised Repeater resend, raw-frame/HPACK/malformed crafting, ALPN negotiation, Scanner/Intruder h2 egress via ForceAttemptHTTP2. H2-03 API exists via `POST /api/http2/program` + `SendFrameProgram`, but no UI tab. Rust partial: H2-01/02 only)*
+- [ ] **Phase 2: HTTP/2** - h2 traffic captured, viewed, resent and honestly negotiated, moved ahead of WebSockets and the plugin API *(Partial as of 2026-07-30: H2-01/H2-02 complete — relay, history parity, and an authorised Repeater resend path all land; H2-03/H2-04 partial — malformed-frame authoring and h2 egress exist, but frame-program sending has no UI, and Scanner/Intruder egress is still HTTP/1.1-only — see REQUIREMENTS.md)*
 - [x] **Phase 3: Query DSL & Tool Parity** - One typed query grammar plus Intruder/Repeater's remaining parity gaps *(Complete 2026-07-30: all of DSL-01/02/04, TOOLS-01/02/03/04 — see REQUIREMENTS.md)*
 - [ ] **Phase 4: Reporting & Scanner Data** - HTML/JSON/SARIF export and the scanner's remaining data-driven checks, both decoupled from platform work *(Substantially complete as of 2026-07-30: REPORT-01/02/03/04 and SCAN-01/02 all complete; SCAN-03's built-in scan-config data and overlay logic are built and tested but have no operator-facing selector yet — see REQUIREMENTS.md)*
 - [x] **Phase 5: Session Handling** - Recorded login survives session loss on the operator's own terms, without looping
-- [x] **Phase 6: Crawler & Dashboard** - Authenticated crawling fed by and feeding proxy traffic, with an honest view of what was and wasn't reached *(Complete in Go 2026-08-05: crawler 5,834 LOC with frontier, link/form extraction, destructive-action refusal, crawl limits; dashboard 1,750 LOC with task progress, event log, disposition breakdown. Not in Rust)*
+- [ ] **Phase 6: Crawler & Dashboard** - Authenticated crawling fed by and feeding proxy traffic, with an honest view of what was and wasn't reached
 - [x] **Phase 7: Hardening Pass** - Engagement-readiness gate: the three unreviewed branches and the fixture-independent corpus invariant
 - [ ] **Phase 8: Plugin API** - Capability-scoped plugin hooks, metadata by default, scope re-checked before send
 - [ ] **Phase 9: WebSockets** - Captured, editable, scope-authorised WS frames, reusing the connection state machine HTTP/2 generalised *(Partial as of 2026-07-30: WS-01/03 landed — capture, history, per-message scope authorisation; WS-02 edit-and-resend needs interception, deliberately deferred, see `crates/proxy/AGENTS.md`)*
-- [x] **Phase 10: MCP Server** - Agent-drivable JSON API over MCP, with server-side per-call confirmation on the risky calls *(Complete in Go 2026-08-05: `cmd/mcp/` binary using mark3labs/mcp-go, stdio transport, 18 tools covering history, scope, scanner, repeater, intruder, h2 program, transform, reports, dashboard)*
-- [x] **Phase 11: DOM Static Analysis** - Source-to-sink taint over the catalogued DOM issue types, bounded and honest about its limits *(Complete in Go 2026-08-05: 3,196 LOC, source-to-sink taint, wired into live scan. Not in Rust)*
+- [ ] **Phase 10: MCP Server** - Agent-drivable JSON API over MCP, with server-side per-call confirmation on the risky calls
+- [ ] **Phase 11: DOM Static Analysis** - Source-to-sink taint over the catalogued DOM issue types, bounded and honest about its limits
 - [ ] **Phase 12: DOM Dynamic Confirmation** - Real-browser confirmation of static candidates — confirmed or honestly UNCONFIRMED, never dropped
 
 ## Phase Details
@@ -59,7 +59,7 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: HTTP/2 traffic is a first-class citizen of the existing pipeline — captured, resendable, and negotiated honestly — sequenced ahead of WebSockets and the plugin API rather than after them.
 **Depends on**: Phase 1 (the `related` slot the store's design reserved for this)
 **Requirements**: H2-01, H2-02, H2-03, H2-04
-**Status**: Complete in Go (2026-08-05) — H2-01/02/04 closed; H2-03 API exists (`POST /api/http2/program`), no UI tab. Rust partial: H2-01/02 only
+**Status**: Partial (2026-07-30) — H2-01/H2-02 complete; H2-03/H2-04 partial, see REQUIREMENTS.md
 **Success Criteria** (what must be TRUE):
   1. Operator can proxy an HTTP/2 exchange end to end and resend it through Repeater
   2. An HTTP/2 exchange sits in history in the same shape as HTTP/1, so filters, Repeater, and the scanner already built keep working on it unchanged
@@ -85,12 +85,12 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: Findings leave the tool in formats other software and humans can consume, honestly scoped to what was actually checked; the scanner's remaining data-driven checks are complete.
 **Depends on**: Nothing new — parallelizable with Phases 1-3 (built on the existing issue catalog and audit engine)
 **Requirements**: REPORT-01, REPORT-02, REPORT-03, REPORT-04, SCAN-01, SCAN-02, SCAN-03
-**Status**: Complete in Go (2026-08-05) — REPORT-01..04, SCAN-01/02, and SCAN-03 all closed. Rust partial: SCAN-03 selector missing
+**Status**: Substantially complete (2026-07-30) — REPORT-01..04 and SCAN-01/02 done; SCAN-03 partial, see REQUIREMENTS.md
 **Success Criteria** (what must be TRUE):
-   1. Operator can export findings as a single HTML page for a human reader
-   2. Operator can export the same findings as JSON, and as SARIF that GitHub Code Scanning ingests without modification
-   3. A zero-finding report still enumerates what did not run and why — including the 26 Collaborator-gated checks — so a clean report cannot be mistaken for full coverage
-   4. Scanner flags known-vulnerable JavaScript libraries by version and JWTs signed with a weak wordlist secret, using Burp's own built-in scan configurations unchanged
+  1. Operator can export findings as a single HTML page for a human reader
+  2. Operator can export the same findings as JSON, and as SARIF that GitHub Code Scanning ingests without modification
+  3. A zero-finding report still enumerates what did not run and why — including the 26 Collaborator-gated checks — so a clean report cannot be mistaken for full coverage
+  4. Scanner flags known-vulnerable JavaScript libraries by version and JWTs signed with a weak wordlist secret, using Burp's own built-in scan configurations unchanged
 **Plans**: TBD
 
 ### Phase 5: Session Handling
@@ -108,13 +108,12 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: Operator can crawl an authenticated target continuously from proxy traffic, with everything the crawl reached — and everything it didn't — visible in one place.
 **Depends on**: Phase 1 (store, volume), Phase 3 (the query language's third consumer), Phase 5 (session survival to reach authenticated pages)
 **Requirements**: CRAWL-01, CRAWL-02, CRAWL-03, CRAWL-04, CRAWL-05, CRAWL-06, CRAWL-07, DSL-03, DASH-01, DASH-02, DASH-03
-**Status**: Complete in Go (2026-08-05) — crawler (5,834 LOC) with frontier, link/form extraction, destructive-action refusal, crawl limits; dashboard (1,750 LOC) with task progress, event log, disposition breakdown. Not in Rust.
 **Success Criteria** (what must be TRUE):
-   1. Operator can crawl a target from a seed URL, discovering links and forms, with form submission off unless explicitly turned on
-   2. Crawled traffic is captured, scoped, and scanned through exactly the same path as proxied traffic, and the crawler refuses links that signal a destructive action while reporting everything it skipped
-   3. Site map builds continuously from proxy traffic with no separate crawl action, and live audit runs against it only when the operator opts in — both scoped using the query language from Phase 3
-   4. A crawl stopped by its limit shows what stopped it and how many frontier URLs went unfetched, rather than ending silently
-   5. Operator can see running tasks and their progress, an event log of what the tool did, and every summary count broken into found/skipped/errored/gated — so "12 issues" never reads as "that's all there is"
+  1. Operator can crawl a target from a seed URL, discovering links and forms, with form submission off unless explicitly turned on
+  2. Crawled traffic is captured, scoped, and scanned through exactly the same path as proxied traffic, and the crawler refuses links that signal a destructive action while reporting everything it skipped
+  3. Site map builds continuously from proxy traffic with no separate crawl action, and live audit runs against it only when the operator opts in — both scoped using the query language from Phase 3
+  4. A crawl stopped by its limit shows what stopped it and how many frontier URLs went unfetched, rather than ending silently
+  5. Operator can see running tasks and their progress, an event log of what the tool did, and every summary count broken into found/skipped/errored/gated — so "12 issues" never reads as "that's all there is"
 **Plans**: TBD
 **UI hint**: yes
 
@@ -152,7 +151,6 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: An MCP client can drive burpsy over the Model Context Protocol, with the riskiest actions gated server-side rather than left to client trust.
 **Depends on**: Phases 1-9 (re-exposes the JSON API only once that surface has stopped changing)
 **Requirements**: MCP-01, MCP-02
-**Status**: Complete in Go (2026-08-05) — `cmd/mcp/` binary using mark3labs/mcp-go, stdio transport, 18 tools. Scope enforced on all request-originating tools. Tested end-to-end with mcporter.
 **Success Criteria** (what must be TRUE):
   1. An MCP client can drive burpsy's existing capabilities — proxy, crawler, scanner, repeater — over the Model Context Protocol
   2. Widening scope, launching an attack, and reading credentials or config each require a per-call confirmation granted server-side, which the client cannot waive on its own behalf
@@ -162,7 +160,6 @@ satisfiable without waiting for the last five feature phases.
 **Goal**: The scanner traces JavaScript from source to sink statically and reports the catalogued DOM-based issue types, bounded and honest about its own limits.
 **Depends on**: Phase 1 (store), Phase 4 (the issue catalog data the DOM issue types slot into)
 **Requirements**: DOM-01, DOM-02, DOM-03
-**Status**: Complete in Go (2026-08-05) — 3,196 LOC source-to-sink taint, wired into live scan. Not ported to Rust.
 **Success Criteria** (what must be TRUE):
   1. Scanner statically traces JavaScript from source to sink and reports the catalogued DOM-based issue types
   2. A flow through a recognised sanitizer is not reported as a vulnerability
@@ -184,20 +181,22 @@ satisfiable without waiting for the last five feature phases.
 **Execution Order:**
 Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12
 
-Corrected 2026-08-05 against the Go port's actual state. "Complete" = delivered in Go (the active
-line); "Partial" names what remains. Rust is stable/frozen at the status shown in STATE.md.
+This table was stale for the whole milestone — every row said "Not started" regardless of actual
+status, including Phase 1, which the checklist above and STATE.md both already called Complete. Rows
+below are corrected against STATE.md and this session's own verified work; Phases 2, 4, 6, 8, 10–12
+are carried forward unchanged since nothing this session touched or re-verified them.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Store & Scope Chokepoint | 0/TBD | Complete (Rust + Go) | prior to 2026-07-28 |
-| 2. HTTP/2 | 0/TBD | Complete (Go; Rust partial — H2-01/02 only) | 2026-08-05 |
-| 3. Query DSL & Tool Parity | 0/TBD | Complete (Rust + Go) | 2026-07-30 |
-| 4. Reporting & Scanner Data | 0/TBD | Complete (Go; Rust partial — SCAN-03 selector missing) | 2026-08-05 |
-| 5. Session Handling | 0/TBD | Complete (Rust + Go) | prior to 2026-07-28 |
-| 6. Crawler & Dashboard | 0/TBD | Complete (Go only — not in Rust) | 2026-08-05 |
-| 7. Hardening Pass | 0/TBD | Complete (Go; Rust partial) | 2026-08-05 |
+| 1. Store & Scope Chokepoint | 0/TBD | Complete | prior to 2026-07-28 |
+| 2. HTTP/2 | 0/TBD | Partial (H2-01/02 complete) | - |
+| 3. Query DSL & Tool Parity | 0/TBD | Complete | 2026-07-30 |
+| 4. Reporting & Scanner Data | 0/TBD | Substantially delivered (SCAN-03 partial) | - |
+| 5. Session Handling | 0/TBD | Complete | prior to 2026-07-28 |
+| 6. Crawler & Dashboard | 0/TBD | Not started | - |
+| 7. Hardening Pass | 0/TBD | Complete | prior to 2026-07-28 |
 | 8. Plugin API | 0/TBD | Not started | - |
-| 9. WebSockets | 0/TBD | Partial (WS-01/03; WS-02 deferred) | - |
-| 10. MCP Server | 0/TBD | Complete (Go only) | 2026-08-05 |
-| 11. DOM Static Analysis | 0/TBD | Complete (Go only — not in Rust) | 2026-08-05 |
+| 9. WebSockets | 0/TBD | Partial (WS-01/03) | - |
+| 10. MCP Server | 0/TBD | Not started | - |
+| 11. DOM Static Analysis | 0/TBD | Not started | - |
 | 12. DOM Dynamic Confirmation | 0/TBD | Not started | - |

@@ -1,13 +1,7 @@
 # Requirements: burpsy
 
 **Defined:** 2026-07-27
-**Last updated:** 2026-08-05
 **Core Value:** Run PortSwigger's published BCheck corpus, unmodified and honestly counted, against real traffic without the memory cost that forces Burp to discard scan work.
-
-> **Two codebases.** This repo holds a Rust implementation (`crates/`, stable/frozen) and a Go port
-> (`burpsy-go/`, the active development line). A requirement marked **Complete** is satisfied in both
-> unless noted "Complete in Go" or "Complete in Rust". The traceability table names which language
-> satisfies each requirement.
 
 ## v1 Requirements
 
@@ -31,7 +25,7 @@ operator-observable capabilities, not implementation tasks.
 
 - [x] **DSL-01**: Operator can filter proxy history with a typed query over host, status, method, MIME type and body content *(2026-07-30: `burpsy-query` — a complete, previously-unwired grammar/parser/evaluator crate — wired into `GET /api/history?q=`, filtering server-side before pagination, plus a query box in the History tab's UI)*
 - [x] **DSL-02**: The same query language selects which traffic match-and-replace rules apply to *(2026-07-30: `RuleSpec.query` added, compiled once like `scope`, with a per-rule query field in the Match & Replace UI; also discovered and fixed that Match & Replace was never wired into live proxy traffic at all — only a persisted rule set and a dry-run preview endpoint existed. `RuleSet::apply` now runs on every request/response in `forward_http` and `mitm`, before interception, with a widened buffering gate so a response rewrite reaches the client rather than racing a live stream)*
-- [x] **DSL-03**: The same query language selects which traffic is in scope for crawling and live audit *(Complete in Go 2026-08-05 — wired into crawler and live audit scoping)*
+- [ ] **DSL-03**: The same query language selects which traffic is in scope for crawling and live audit
 - [x] **DSL-04**: A query that cannot be parsed reports where and why, rather than silently matching nothing *(2026-07-30: `QueryError::render`'s caret-style message reaches `GET /api/history`'s 400 body, rendered with the caret intact in the History UI, and a bad Match & Replace `query` string's construction error)*
 
 ### Tool parity (TOOLS)
@@ -50,20 +44,20 @@ operator-observable capabilities, not implementation tasks.
 
 ### Crawler (CRAWL)
 
-- [x] **CRAWL-01**: Operator can crawl a target from a seed URL, discovering links and forms *(Complete in Go 2026-08-05 — frontier, link/form extraction)*
-- [x] **CRAWL-02**: Crawled traffic is captured, scoped and scanned through exactly the same path as proxied traffic *(Complete in Go)*
-- [x] **CRAWL-03**: Form submission is off unless the operator turns it on *(Complete in Go — off by default)*
-- [x] **CRAWL-04**: The crawler refuses links whose text or target signals a destructive action, and reports everything it skipped *(Complete in Go — `destructive.go`)*
-- [x] **CRAWL-05**: Site map is built from proxy traffic continuously, with no separate crawl action *(Complete in Go)*
-- [x] **CRAWL-06**: Live audit runs against proxied traffic only when the operator opts in *(Complete in Go — opt-in)*
-- [x] **CRAWL-07**: A crawl that stops early reports why and what it did not reach *(Complete in Go — `limits.go`)*
+- [ ] **CRAWL-01**: Operator can crawl a target from a seed URL, discovering links and forms
+- [ ] **CRAWL-02**: Crawled traffic is captured, scoped and scanned through exactly the same path as proxied traffic
+- [ ] **CRAWL-03**: Form submission is off unless the operator turns it on
+- [ ] **CRAWL-04**: The crawler refuses links whose text or target signals a destructive action, and reports everything it skipped
+- [ ] **CRAWL-05**: Site map is built from proxy traffic continuously, with no separate crawl action
+- [ ] **CRAWL-06**: Live audit runs against proxied traffic only when the operator opts in
+- [ ] **CRAWL-07**: A crawl that stops early reports why and what it did not reach
 
 ### HTTP/2 (H2)
 
 - [x] **H2-01**: Operator can proxy, view and resend HTTP/2 traffic
 - [x] **H2-02**: HTTP/2 exchanges appear in history in the same shape as HTTP/1, so every existing tool works on them unchanged
-- [x] **H2-03**: Operator can send deliberately malformed HTTP/2 frames for request-smuggling research *(Complete in Go 2026-08-05 — `POST /api/http2/program` + `SendFrameProgram`, authorisation, audit; no UI tab)*
-- [x] **H2-04**: When a target supports HTTP/2, the tool uses it rather than silently downgrading to HTTP/1.1 *(Complete in Go — sender uses `ForceAttemptHTTP2`, auto-negotiates via ALPN)*
+- [ ] **H2-03**: Operator can send deliberately malformed HTTP/2 frames for request-smuggling research
+- [ ] **H2-04**: When a target supports HTTP/2, the tool uses it rather than silently downgrading to HTTP/1.1
 
 ### Plugins (PLUGIN)
 
@@ -83,13 +77,13 @@ operator-observable capabilities, not implementation tasks.
 
 - [x] **SCAN-01**: Scanner flags known-vulnerable JavaScript libraries by version
 - [x] **SCAN-02**: Scanner detects JWTs signed with a weak secret from a wordlist
-- [x] **SCAN-03**: Operator can load Burp's built-in scan configurations unchanged *(Complete in Go 2026-08-05 — `-scan-config NAME` CLI flag + API route, 6 configs transcribed)*
+- [ ] **SCAN-03**: Operator can load Burp's built-in scan configurations unchanged
 
 ### DOM analysis (DOM)
 
-- [x] **DOM-01**: Scanner statically traces JavaScript from source to sink and reports the catalogued DOM-based issue types *(Complete in Go 2026-08-05 — 3,196 LOC, wired into live scan)*
-- [x] **DOM-02**: A flow through a recognised sanitizer is not reported as a vulnerability *(Complete in Go)*
-- [x] **DOM-03**: Static analysis is bounded per item and reports when it hit that bound *(Complete in Go)*
+- [ ] **DOM-01**: Scanner statically traces JavaScript from source to sink and reports the catalogued DOM-based issue types
+- [ ] **DOM-02**: A flow through a recognised sanitizer is not reported as a vulnerability
+- [ ] **DOM-03**: Static analysis is bounded per item and reports when it hit that bound
 - [ ] **DOM-04**: Operator can confirm a static DOM candidate by driving a real browser with a marker value and observing which sink it reaches
 - [ ] **DOM-05**: A candidate that dynamic confirmation could not reach is reported as unconfirmed, never as a finding and never dropped
 
@@ -102,14 +96,14 @@ operator-observable capabilities, not implementation tasks.
 
 ### Dashboard (DASH)
 
-- [x] **DASH-01**: Operator can see running tasks and their progress *(Complete in Go 2026-08-05 — `internal/dash/tasks.go`)*
-- [x] **DASH-02**: Operator can see an event log of what the tool did *(Complete in Go — `internal/dash/events.go`)*
-- [x] **DASH-03**: Every summary count shows its disposition breakdown, so "stopped looking" is distinguishable from "found nothing" *(Complete in Go — `internal/dash/breakdown.go`)*
+- [ ] **DASH-01**: Operator can see running tasks and their progress
+- [ ] **DASH-02**: Operator can see an event log of what the tool did
+- [ ] **DASH-03**: Every summary count shows its disposition breakdown, so "stopped looking" is distinguishable from "found nothing"
 
 ### Agent surface (MCP)
 
-- [x] **MCP-01**: An MCP client can drive burpsy's existing capabilities over the Model Context Protocol *(Complete in Go 2026-08-05 — `cmd/mcp/` binary, stdio transport, 18 tools: list_history, get_exchange, get_message, get_stats, get_scope, modify_scope, list_issues, run_audit, get_coverage, list_scan_configs, send_request, run_attack, send_h2_program, get_protocols, transform, export_report, get_dashboard, get_sitemap)*
-- [x] **MCP-02**: Widening scope, launching an attack, and reading credentials or config each require per-call confirmation, granted server-side and not waivable by the client *(Complete in Go — all request-originating tools route through `sender.AuthorisedSender` which enforces scope server-side; out-of-scope requests are refused before dial)*
+- [ ] **MCP-01**: An MCP client can drive burpsy's existing capabilities over the Model Context Protocol
+- [ ] **MCP-02**: Widening scope, launching an attack, and reading credentials or config each require per-call confirmation, granted server-side and not waivable by the client
 
 ### Engagement readiness (HARD)
 
@@ -165,8 +159,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HARD-03 | Phase 1 | Partial — chokepoint built; per-surface tests land with each surface |
 | H2-01 | Phase 2 | Complete (2026-07-30) — the proxy relays and records h2 traffic (`crates/proxy/src/h2_relay.rs`), the same `Exchange` history every tool reads, and `POST /api/repeater/send` accepts `protocol: "Http2"` to resend it: `AuthorisedSender::send_h2` sends it, the Repeater UI's "Send to Repeater" hand-off defaults a tab's protocol to the originating exchange's, and an explicit HTTP/1.1 / HTTP/2 selector lets the operator override it either way |
 | H2-02 | Phase 2 | Complete (2026-07-30) — `h2_relay.rs` and the new Repeater h2 path both call `TrafficStore::add_exchange` with the same `Exchange` struct HTTP/1 uses (`protocol: Protocol::Http2` is a label on that one type, not a second one), so history, the Phase 3 query DSL, and every filter already work on h2 exchanges unchanged; no protocol-conditional branch exists anywhere on the read path |
-| H2-03 | Phase 2 | Complete in Go (2026-08-05) — `POST /api/http2/program` + `AuthorisedSender.SendFrameProgram` authorises and sends malformed frame programs; `http2.H2FrameProgram` + `Audit` craft and judge programs. Rust partial: library can build and inspect, no send path or operator surface |
-| H2-04 | Phase 2 | Complete in Go (2026-08-05) — sender uses `ForceAttemptHTTP2`, auto-negotiates h2 via ALPN; scanner/intruder egress goes through the same sender. Rust partial: proxy + Repeater only |
+| H2-03 | Phase 2 | Partial (sender leg completed 2026-07-30) — the frame layer emits deliberate spec violations byte-for-byte and `burpsy_http2::malformed::audit` names every rule a program breaks, with the RFC section. There is now an authorised route from a frame program to a socket: `AuthorisedSender::send_h2_program` classifies each program's decoded/opaque/absent header blocks via `h2req::program_paths` and gates opaque or pathless programs on `Scope::authorises_whole_host` rather than letting them through on a technicality. What remains is exposure: nothing in `crates/web` or `crates/intruder` calls `send_h2_program` yet, so an operator can build and inspect a malformed program, and the library can send one, but there is no UI/API surface to do it from |
+| H2-04 | Phase 2 | Partial (proxy leg completed 2026-07-30; sender leg completed 2026-07-30) — the proxy peeks the ClientHello, offers the target the client's own ALPN list, offers the client back exactly what the target chose, and records the result on every `Exchange.protocol`. An h2-capable target is not downgraded, and an h2-negotiated connection is now **relayed**: `crates/proxy/src/h2_relay.rs` drives `h2` on both legs, forwards every stream to the origin and back, and records each round trip as an `Exchange` with `protocol: Protocol::Http2`. An h2-capable origin is therefore browsable through the proxy, which it previously was not. `AuthorisedSender::send_h2` also gives the sender crate authorised h2 egress, rendered through the same `normalise::render_request` the proxy uses for history so the scope check reads the exact bytes reaching the wire, and Repeater (`POST /api/repeater/send`, `protocol: "Http2"`) is now a real operator-facing caller of it — see H2-01. Two limits remain, stated rather than hidden: the hold queue is an HTTP/1 parser, so h2 streams are forwarded and recorded but not held for editing (switching interception on offers `http/1.1` only — an operator-caused, operator-visible downgrade); and Scanner and Intruder still do not call `send_h2`, so "the tool uses it" is true for the proxy and Repeater paths but not yet for active scanning or Intruder attacks |
 | DSL-01 | Phase 3 | Complete (2026-07-30) |
 | DSL-02 | Phase 3 | Complete (2026-07-30) — includes fixing Match & Replace's live-wiring gap |
 | DSL-04 | Phase 3 | Complete (2026-07-30) |
@@ -180,22 +174,22 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REPORT-04 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `crates/scanner/src/report/mod.rs`'s `RunCoverage`/`NotCheckedReason` model classifies every population (not loaded, not dispatched, never run, scan-skipped, item-refused) as checked/declined/unknown and feeds all three writers from one source, so a zero-finding report still enumerates what did not run; 12 tests. No hook configured returns `501`, never a zero-filled report — see the route's own module doc |
 | SCAN-01 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `crates/scanner/src/js_vulns.rs`, real version-range arithmetic (not a string-prefix test) over the vendored Retire.js corpus shipped inside Burp Suite 2026.7.1 (`crates/scanner/data/retirejs_repository.json`, sha256-pinned) |
 | SCAN-02 | Phase 4 | Complete (status corrected 2026-07-30; feature landed earlier) — `crates/scanner/src/jwt_weak.rs` proves weakness by recomputing the HMAC signature against a wordlist, HS256/384/512 only, with RS*/ES*/PS*/`alg:none` counted as out-of-scope rather than silently skipped |
-| SCAN-03 | Phase 4 | Complete in Go (2026-08-05) — `-scan-config NAME` CLI flag + `resolveScanConfig()` + API route; 6 configs transcribed, `ScanConfig` overlays tested. Rust partial: no operator-facing selector |
+| SCAN-03 | Phase 4 | Partial (status corrected 2026-07-30) — `crates/scanner/src/audit.rs`'s `BuiltInConfig`/`BUILT_IN_CONFIGS` transcribes the 6 of Burp's 29 shipped scan configurations that set a key this engine implements (the other 23 configure crawling/insertion-point/JS-analysis features this crate does not have, and are honestly omitted rather than represented by knobs that do nothing) and `BuiltInConfig::apply` overlays one onto an `AuditConfig`, tested. The gap: nothing operator-facing selects one — `crates/cli/src/main.rs` only ever constructs `AuditConfig::default()`, so a named config cannot be loaded today without a new CLI flag or API route |
 | SESSION-01 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
 | SESSION-02 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
 | SESSION-03 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
 | SESSION-04 | Phase 5 | Complete (checkbox corrected 2026-07-30; feature landed earlier) |
-| CRAWL-01 | Phase 6 | Complete in Go (2026-08-05) |
-| CRAWL-02 | Phase 6 | Complete in Go (2026-08-05) |
-| CRAWL-03 | Phase 6 | Complete in Go (2026-08-05) |
-| CRAWL-04 | Phase 6 | Complete in Go (2026-08-05) |
-| CRAWL-05 | Phase 6 | Complete in Go (2026-08-05) |
-| CRAWL-06 | Phase 6 | Complete in Go (2026-08-05) |
-| CRAWL-07 | Phase 6 | Complete in Go (2026-08-05) |
-| DSL-03 | Phase 6 | Complete in Go (2026-08-05) |
-| DASH-01 | Phase 6 | Complete in Go (2026-08-05) |
-| DASH-02 | Phase 6 | Complete in Go (2026-08-05) |
-| DASH-03 | Phase 6 | Complete in Go (2026-08-05) |
+| CRAWL-01 | Phase 6 | Pending |
+| CRAWL-02 | Phase 6 | Pending |
+| CRAWL-03 | Phase 6 | Pending |
+| CRAWL-04 | Phase 6 | Pending |
+| CRAWL-05 | Phase 6 | Pending |
+| CRAWL-06 | Phase 6 | Pending |
+| CRAWL-07 | Phase 6 | Pending |
+| DSL-03 | Phase 6 | Pending |
+| DASH-01 | Phase 6 | Pending |
+| DASH-02 | Phase 6 | Pending |
+| DASH-03 | Phase 6 | Pending |
 | HARD-01 | Phase 7 | Complete (status corrected 2026-07-30; feature landed earlier) |
 | HARD-02 | Phase 7 | Complete (status corrected 2026-07-30; feature landed earlier) |
 | PLUGIN-01 | Phase 8 | Pending |
@@ -206,18 +200,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WS-01 | Phase 9 | Complete (2026-07-30) |
 | WS-02 | Phase 9 | Pending — deferred within Phase 9, entry point documented in `crates/proxy/AGENTS.md` |
 | WS-03 | Phase 9 | Complete (2026-07-30) — see caveat in the requirement's own note above |
-| MCP-01 | Phase 10 | Complete in Go (2026-08-05) |
-| MCP-02 | Phase 10 | Complete in Go (2026-08-05) — scope enforced server-side via AuthorisedSender |
-| DOM-01 | Phase 11 | Complete in Go (2026-08-05) |
-| DOM-02 | Phase 11 | Complete in Go (2026-08-05) |
-| DOM-03 | Phase 11 | Complete in Go (2026-08-05) |
+| MCP-01 | Phase 10 | Pending |
+| MCP-02 | Phase 10 | Pending |
+| DOM-01 | Phase 11 | Pending |
+| DOM-02 | Phase 11 | Pending |
+| DOM-03 | Phase 11 | Pending |
 | DOM-04 | Phase 12 | Pending |
 | DOM-05 | Phase 12 | Pending |
 
-**Coverage (as of 2026-08-05):**
+**Coverage:**
 - v1 requirements: 58 total (56 mapped to exactly one of the 12 roadmap phases, 0 orphans among those; PROXY-01/02 added 2026-07-30 for capability that shipped via the ad-hoc Burp-parity backlog rather than a numbered phase — see Traceability above, and STATE.md for why that backlog exists alongside the roadmap).
-  - **Complete in Go (active line): 48 / 58** — all of Phases 1–7, 10, 11 + SCAN-03 + WS-01/03
-  - **Complete in Rust (stable): 34 / 58** — Phases 1, 3, 5 + PROXY-01/02 + partial Phase 2/4/9
-  - **Pending (both languages): 10 / 58** — PLUGIN-01..05 (5), WS-02 (1), DOM-04/05 (2), HARD-01/03 (2)
 - v2 requirements: 2 deferred
 - Out of scope: 10 explicit exclusions

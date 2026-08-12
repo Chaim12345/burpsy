@@ -434,36 +434,6 @@ func Test_a_truncated_analysis_still_carries_the_findings_it_did_reach_and_says_
 	}
 }
 
-// HARD-01 finding #8: a minified bundle puts every statement on line 1, and the dedupe key used to
-// be Issue|SourceExpr|Sink.Match|Line — no Script.Origin, no Statement — so distinct sinks on the
-// same line collapsed into one flow with FlowsDropped staying at 0. That is the worst place for it
-// to happen: a minified bundle is exactly where line number carries no information at all.
-func Test_distinct_sinks_on_one_line_are_not_collapsed_by_the_flow_dedupe(t *testing.T) {
-	src := "a.innerHTML=location.hash;b.innerHTML=location.hash;"
-	a := AnalyzeDOMScript(src, DOMBudget{})
-
-	if len(a.Flows) != 2 {
-		t.Fatalf("flows = %d, want 2 (two distinct sinks on the same line): %v", len(a.Flows), domFlowNames(a))
-	}
-	if a.Budget.FlowsDropped != 0 {
-		t.Errorf("FlowsDropped = %d, want 0 — nothing here was actually dropped", a.Budget.FlowsDropped)
-	}
-}
-
-// The other half of the same fix: a truly identical flow — same script, same line, same statement —
-// is still a genuine duplicate and must still be counted as dropped, not silently discarded.
-func Test_a_genuinely_repeated_flow_is_still_counted_as_dropped(t *testing.T) {
-	src := "if (x) { a.innerHTML = location.hash; } if (y) { a.innerHTML = location.hash; }"
-	a := AnalyzeDOMScript(src, DOMBudget{})
-
-	if len(a.Flows) != 1 {
-		t.Fatalf("flows = %d, want 1 (identical statement text, same line): %v", len(a.Flows), domFlowNames(a))
-	}
-	if a.Budget.FlowsDropped != 1 {
-		t.Errorf("FlowsDropped = %d, want 1 — a real duplicate must still be counted", a.Budget.FlowsDropped)
-	}
-}
-
 func Test_the_flow_cap_drops_and_counts_the_excess_rather_than_appending_past_it(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 12; i++ {

@@ -1072,16 +1072,8 @@ func (e *domEngine) absLine(sc domScriptSrc, st domStatement) int {
 }
 
 func (e *domEngine) addFlow(f DOMFlow) {
-	// Script.Origin and Statement matter as much as Line: two statements on the same line — the
-	// normal case in a minified bundle, where every statement in the file is line 1 — are two
-	// different flows, not one seen twice. Without them, fifty distinct `x.innerHTML=location.hash`
-	// sinks in a minified file collapsed to one flow and FlowsDropped stayed at 0, which reads
-	// identically to "checked and found one" rather than "found forty-nine more and threw them away".
-	key := fmt.Sprintf("%s|%s|%s|%s|%d|%s", f.Issue, f.SourceExpr, f.Sink.Match, f.Script.Origin, f.Line, f.Statement)
+	key := fmt.Sprintf("%s|%s|%s|%d", f.Issue, f.SourceExpr, f.Sink.Match, f.Line)
 	if e.seen[key] {
-		// A key this specific repeating is a genuine duplicate — the same statement reached twice —
-		// and it is still a drop: the caller asked to record a flow and this pass silently declined.
-		e.res.Budget.FlowsDropped++
 		return
 	}
 	e.seen[key] = true

@@ -413,14 +413,6 @@ func (r *Registry) Dropped() uint64 {
 // Result stopped looking, and counting it as found is the exact collapse this package exists to
 // prevent. Running tasks are Skipped: their answer is not in yet, and folding them into found would
 // make a dashboard mid-sweep claim results it does not have.
-//
-// Dropped tasks — evicted by evictLocked once the table passed capacity — are folded into Gated
-// too, and for the same reason as everything else in that bucket: their answer is not knowable from
-// what remains. Before this, Dropped() was a sibling field a caller had to remember to add in on its
-// own (tasks_dropped in the dashboard API response); Breakdown itself said Complete()==true once
-// enough finished tasks — failures included — had scrolled off the end of a long engagement. A
-// caller that only reads Breakdown, which is the interface this package exists to make trustworthy,
-// saw a lie.
 func (r *Registry) Breakdown() Breakdown {
 	var b Breakdown
 	for _, t := range r.Snapshot() {
@@ -435,29 +427,21 @@ func (r *Registry) Breakdown() Breakdown {
 			b.Gated++
 		}
 	}
-	b.Gated += r.Dropped()
 	return b
 }
 
 // Reasons explains the registry's own breakdown, one line per non-zero caveat bucket.
 func (r *Registry) Reasons() []Reason {
 	b := r.Breakdown()
-	dropped := r.Dropped()
-	stoppedEarly := b.Gated - dropped
-	out := make([]Reason, 0, 4)
+	out := make([]Reason, 0, 3)
 	if b.Skipped > 0 {
 		out = append(out, Reason{Bucket: BucketSkipped, Detail: "still running; no result yet", Count: b.Skipped})
 	}
 	if b.Errored > 0 {
 		out = append(out, Reason{Bucket: BucketErrored, Detail: "ended on an error", Count: b.Errored})
 	}
-	if stoppedEarly > 0 {
-		out = append(out, Reason{Bucket: BucketGated, Detail: "stopped early, by the operator or by its own budget", Count: stoppedEarly})
-	}
-	if dropped > 0 {
-		out = append(out, Reason{Bucket: BucketGated,
-			Detail: "evicted at the registry's capacity bound; the oldest finished tasks, including failures, are dropped first",
-			Count:  dropped})
+	if b.Gated > 0 {
+		out = append(out, Reason{Bucket: BucketGated, Detail: "stopped early, by the operator or by its own budget", Count: b.Gated})
 	}
 	return out
 }

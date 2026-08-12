@@ -1,12 +1,12 @@
-<!-- Generated: 2026-07-28 | Updated: 2026-08-05 -->
+<!-- Generated: 2026-07-28 | Updated: 2026-08-02 -->
 
 # burpsy
 
 ## Purpose
 
-A memory-frugal HTTP testing proxy with a web UI. It exists to run PortSwigger's published BCheck
-corpus — unmodified and honestly counted — against real traffic without the memory cost that forces
-Burp to discard scan work.
+A memory-frugal HTTP testing proxy with a web UI, written in Rust. It exists to run PortSwigger's
+published BCheck corpus — unmodified and honestly counted — against real traffic without the memory
+cost that forces Burp to discard scan work.
 
 The whole architecture follows from one thesis: **raw bytes are written once and never copied.**
 Everything downstream (history rows, insertion points, attack results, findings) holds a `MsgId` plus
@@ -15,47 +15,30 @@ because `requests × insertion points × checks` is unbounded when each of those
 object. Here the resident set does not scale with work in flight, so the cap becomes backpressure
 rather than dropped findings.
 
-### Two codebases
-
-This repo holds **two implementations** of the same system:
-
-| | Rust (`crates/`) | Go (`burpsy-go/`) |
-|---|---|---|
-| Role | Reference implementation, stable since 2026-07-28 | **Active development line** |
-| Language | Rust 2024 (workspace, 13 crates) | Go 1.26 (24 packages) |
-| Tests | 1,032 | 1,029 |
-| Status | Feature-complete for Phases 1–5, 7; partial 2/4/9 | All 13 Rust-parity gaps closed; Phases 1–7, 11 complete |
-
-The Rust tree proved the architecture and is the reference for the memory model, scope chokepoint, and
-the egress-authorisation design. New features land in Go. Planning docs (`.planning/`) name which
-language satisfies each requirement — "Complete" without qualification means both.
-
 ## Key Files
 
 | File | Description |
 |------|-------------|
 | `Cargo.toml` | Workspace manifest. Edition 2024, resolver 3, thirteen member crates |
-| `verify.sh` | **The gate** (Rust). Build with zero warnings, clippy, unit tests, BCheck corpus conformance, e2e suites. `QUICK=1` skips e2e |
+| `verify.sh` | **The gate.** Build with zero warnings, clippy, unit tests, BCheck corpus conformance, e2e suites. `QUICK=1` skips e2e |
 | `ROADMAP.md` | Top-level feature roadmap (the working plan lives in `.planning/`) |
 | `serve.sh` | Launch the proxy + web UI locally |
 | `integrate.sh` | Integration harness |
-| `e2e.sh`, `e2e-audit.sh`, `e2e-intercept.sh`, `e2e-scan.sh`, `e2e-tls.sh` | End-to-end suites (Rust), driven by `verify.sh` unless `QUICK=1` |
-| `burpsy-go/` | The Go port — active development line. `go test ./...` runs 1,029 tests |
+| `e2e.sh`, `e2e-audit.sh`, `e2e-intercept.sh`, `e2e-scan.sh`, `e2e-tls.sh` | End-to-end suites, driven by `verify.sh` unless `QUICK=1` |
 
 ## Subdirectories
 
 | Directory | Purpose |
 |-----------|---------|
 | `crates/` | All thirteen workspace crates (see `crates/AGENTS.md`) |
-| `burpsy-go/` | The Go port — 24 packages, active development (see `burpsy-go/AGENTS.md`) |
 | `docs/` | Reverse-engineering and protocol research notes (see `docs/AGENTS.md`) |
 | `.planning/` | GSD planning state — roadmap, requirements, per-phase context/plans/research. Not code; read it to understand *why* something is being built |
 | `.omc/` | Operational agent state. Gitignored, never edit by hand |
 
 ### Where AGENTS.md files live, and where they deliberately do not
 
-There are 20, one per meaningful unit: this root, `crates/`, each of the thirteen crates, `docs/`,
-`burpsy-go/`, and two nested directories that carry their own rules (`crates/web/src/routes/`,
+There are 18, one per meaningful unit: this root, `crates/`, each of the thirteen crates, `docs/`, and
+two nested directories that carry their own rules (`crates/web/src/routes/`,
 `crates/sender/src/transport/`).
 
 There is deliberately **no** `AGENTS.md` in `crates/*/src/` — a crate's `src/` *is* the crate, and a file
@@ -81,14 +64,10 @@ files that carry real content.
 ### Testing Requirements
 
 ```bash
-# Rust
-cargo test --workspace          # 1032 tests
+cargo test --workspace          # 1032 tests at time of writing
 cargo build --workspace         # must produce ZERO warnings
 QUICK=1 ./verify.sh             # full gate minus e2e
 ./verify.sh                     # everything
-
-# Go
-cd burpsy-go && go test ./...   # 1029 tests, 23 packages
 ```
 
 ### Known environment gotcha: clippy toolchain mismatch
@@ -147,8 +126,6 @@ exists so the proxy's integration tests can drive the real HTTP API.
 
 ### External
 
-**Rust:**
-
 - `tokio` 1.x (workspace: `features = ["full"]`) — async runtime
 - `bytes` 1.12 — refcounted zero-copy slices; the whole memory model rests on it
 - `rustls` 0.23 / `tokio-rustls` 0.26 / `rcgen` — TLS, both legs
@@ -156,10 +133,5 @@ exists so the proxy's integration tests can drive the real HTTP API.
 - `memmap2` 0.9, `crc32fast` 1.5 — sealed segment storage
 - `parking_lot` — locks
 - `regex`, `serde`, `anyhow`, `tracing`
-
-**Go:**
-
-- `golang.org/x/net/http2` — HTTP/2 transport (conformant relay)
-- Standard library only for the hand-rolled frame/HPACK/malformed layer
 
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
