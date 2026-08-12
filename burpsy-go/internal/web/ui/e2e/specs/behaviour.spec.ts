@@ -379,3 +379,80 @@ test.describe("Intercept rule reordering — UX-17", () => {
     expect(consoleErrors).toEqual([]);
   });
 });
+
+test.describe("History row annotation and scope filter — UX-15, UX-18", () => {
+  test("highlighting a history row tints it and survives a reload", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("history"));
+    const row = page.locator("tr.data-row", { hasText: "/mango/deep/path" });
+    const otherRow = page.locator("tr.data-row", { hasText: "/beta" });
+    await row.click();
+
+    // The picker only exists once a row is selected — it lives in the detail pane, not the row
+    // itself, so painting a colour never costs one of the 24px rows the density budget is spent on.
+    await page.getByRole("button", { name: "Highlight row red" }).click();
+    await expect(row).toHaveClass(/row-highlight-red/);
+
+    // A real background fill, not the 2px inset shadow row-flag-bad/warn render as (the survey's
+    // finding this task exists to fix) — the highlighted row's cell colour must actually differ from
+    // an unhighlighted one, not just carry a class nothing paints.
+    const tinted = await row.locator("td").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+    const plain = await otherRow.locator("td").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(tinted, "the row-highlight-red class landed but the background did not change").not.toBe(plain);
+
+    await page.reload();
+    await expect(page.locator("main h1")).toHaveText(/^HTTP history/);
+    await expect(page.locator("tr.data-row", { hasText: "/mango/deep/path" })).toHaveClass(/row-highlight-red/);
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("a note on a history row shows the comment indicator", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("history"));
+    const row = page.locator("tr.data-row", { hasText: "/quokka?size=8" });
+    await row.click();
+    await expect(row.locator(".comment-indicator")).toHaveCount(0);
+
+    const note = page.getByRole("textbox", { name: "Row note" });
+    await note.fill("came back to check this one");
+    await note.blur();
+
+    await expect(row.locator(".comment-indicator")).toBeVisible();
+    // The glyph is decorative; the reason it is there is not, and that has to reach a screen reader.
+    await expect(row.locator(".comment-indicator")).toHaveAttribute("title", "Has a note");
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("the in-scope-only toggle filters the rows and shows in the query", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("history"));
+    const rows = page.locator("tr.data-row");
+    await expect(rows).toHaveCount(5);
+
+    // Every seeded exchange shares one host (the harness's throwaway origin) and it is served over
+    // bare 127.0.0.1, so a single exclude rule on that host takes the whole capture out of scope —
+    // a plain hostname with no wildcard, which is exactly the case the DSL can express exactly.
+    try {
+      await page.request.post("/api/scope", { data: { action: "exclude", pattern: "127.0.0.1" } });
+
+      const queryBox = page.getByRole("textbox", { name: "Filter history" });
+      await page.getByRole("button", { name: "In scope only" }).click();
+
+      // "Reflect it in the query text" (DESIGN.md / the task brief): the toggle's effect is visible
+      // as real DSL, not a second hidden filter — the operator can read it, and could have typed it.
+      await expect(queryBox).toHaveValue('NOT host = "127.0.0.1"');
+      await expect(page.getByText("No exchange matches this filter")).toBeVisible();
+      await expect(rows).toHaveCount(0);
+
+      // Turning it back off restores the capture and removes exactly the clause it added.
+      await page.getByRole("button", { name: "In scope only" }).click();
+      await expect(queryBox).toHaveValue("");
+      await expect(rows).toHaveCount(5);
+    } finally {
+      // Single shared server for the whole file (workers: 1) — leaving this rule in place would take
+      // every later test's traffic out of scope too.
+      await page.request.post("/api/scope", { data: { action: "clear" } });
+    }
+
+    expect(consoleErrors).toEqual([]);
+  });
+});

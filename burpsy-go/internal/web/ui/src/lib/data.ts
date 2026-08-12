@@ -309,6 +309,24 @@ export function useOrganizerMutations() {
   };
 }
 
+/**
+ * PATCH /api/exchange/:id (UX-15). `notes: undefined` leaves notes untouched, matching the Go
+ * handler's "omitted field is unchanged" contract; pass `notes: null` explicitly to clear it.
+ * Invalidates `keys.history` so every open history query (any filter/limit) refetches and picks up
+ * the new highlight/notes on its next render, the same prefix-invalidation shape `useOrganizerMutations`
+ * uses for `keys.organizer`.
+ */
+export function useAnnotateExchange() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ id, notes, highlight }: { id: number; notes?: string | null; highlight?: string }) =>
+      api<Exchange>(`/api/exchange/${id}`, json("PATCH", { notes, highlight })),
+    // ["history"] is a prefix: it matches keys.history(q, limit) for every q/limit combination in
+    // the cache, the same pattern the server-push INVALIDATION map above already uses.
+    onSuccess: () => invalidate([["history"]]),
+  });
+}
+
 export function useClearToolLog() {
   const invalidate = useInvalidate();
   return useMutation({

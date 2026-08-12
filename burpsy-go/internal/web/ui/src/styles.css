@@ -3191,3 +3191,212 @@ tbody td {
   color: var(--bad);
   line-height: 1;
 }
+
+/* ===========================================================================
+   Task 5 / UX-15, UX-18 — history row highlight + comment, filter toggles.
+   design/jsx/highlight-picker-default.jsx, comment-indicator-default.jsx,
+   filter-toggle-{off,on}.jsx. See .superpowers/task-5-report.md for the
+   contrast numbers behind --row-tint-alpha and why it differs per theme.
+   =========================================================================== */
+
+/* DESIGN.md's "Row highlights" table: a closed 9-colour vocabulary, identical in both themes on
+   purpose — a highlight someone chose should not change meaning when they switch theme. Nothing in
+   src/tokens/*.css carries these (confirmed: grep "highlight" there returns nothing), so they are
+   hand-authored here, the same way states.tsx did for --skeleton-1..4. */
+:root {
+  --highlight-red: #e5484d;
+  --highlight-orange: #f76b15;
+  --highlight-yellow: #f5d90a;
+  --highlight-green: #30a46c;
+  --highlight-cyan: #12a594;
+  --highlight-blue: #0091ff;
+  --highlight-pink: #e93d82;
+  --highlight-magenta: #ab4aba;
+  --highlight-gray: #8b8d98;
+
+  /* How much of --row-tint is mixed into --paper-raised for a highlighted row's background. This
+     one DOES vary by theme, even though the highlight colours themselves do not: dark theme's body
+     text (#BBBBBB, light-on-dark) loses contrast as the background is mixed *toward* a highlight
+     colour lighter than --paper-raised, so the ceiling there is much lower than light theme's
+     (#1E1E1E on a background that starts near-white and stays high-contrast at any of these tints).
+     4% is the largest value that still clears 4.5:1 for every one of the 9 colours against dark's
+     --paper-raised with --text — see the report for the measured numbers, worst case (yellow) is
+     4.62:1, chosen with margin rather than at the edge per DESIGN.md's "leave margin" rule. */
+  --row-tint-alpha: 4%;
+}
+
+[data-theme="light"] {
+  /* Light's --paper-raised is #FFFFFF; even at 24% every colour stays above 12:1 against #1E1E1E.
+     14% is chosen for a visibly present tint rather than the least that would pass — light has
+     enormous headroom, dark has almost none. */
+  --row-tint-alpha: 14%;
+}
+
+/* One class per colour, each binding nothing but the custom property the shared rules below read —
+   this is deliberately NOT 9 colours × 3 states (rest/hover/selected) of near-duplicated
+   color-mix() calls. See the report for the alternative considered (an inline-style prop on
+   VirtualTable) and why this won. */
+.row-highlight-red {
+  --row-tint: var(--highlight-red);
+}
+.row-highlight-orange {
+  --row-tint: var(--highlight-orange);
+}
+.row-highlight-yellow {
+  --row-tint: var(--highlight-yellow);
+}
+.row-highlight-green {
+  --row-tint: var(--highlight-green);
+}
+.row-highlight-cyan {
+  --row-tint: var(--highlight-cyan);
+}
+.row-highlight-blue {
+  --row-tint: var(--highlight-blue);
+}
+.row-highlight-pink {
+  --row-tint: var(--highlight-pink);
+}
+.row-highlight-magenta {
+  --row-tint: var(--highlight-magenta);
+}
+.row-highlight-gray {
+  --row-tint: var(--highlight-gray);
+}
+
+/* :not(:hover):not(.selected-row) is the mechanism that keeps this always at 4.5:1: hover
+   (.data-row:hover td, above) and selection (.data-row.selected-row td, above) already mix a
+   *lighter* colour into --paper-raised at 7%/13% to signal their own state, and layering the tint
+   on top of THAT measured below 4.5:1 for several colours in dark theme — mixing two lightening
+   tints compounds past the point plain --paper-raised had room for. Rather than ship a highlighted
+   row whose text fails contrast on hover, hover and selection simply take over the background as
+   they already did for every other row; the highlight is still visible as soon as the pointer or
+   selection moves on. See the report for the measured combined numbers that ruled this out. */
+.data-row.row-highlight:not(:hover):not(.selected-row) td {
+  background: color-mix(in srgb, var(--row-tint) var(--row-tint-alpha), var(--paper-raised));
+}
+
+/* --- highlight picker: design/jsx/highlight-picker-default.jsx --------------------------------- */
+
+.highlight-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px; /* token-exempt: matches the design's fixed 4px swatch gap, smaller than --s1 */
+  padding: 4px 6px; /* token-exempt: design's fixed py/px, below the fluid spacing floor */
+  background: var(--paper-raised);
+  border-radius: 4px; /* token-exempt: design specifies 4, which is not --radius-sm (2) or --radius-md (3) */
+}
+
+.highlight-swatch {
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: var(--swatch-color);
+  cursor: pointer;
+}
+
+.highlight-swatch-none {
+  background: transparent;
+  border-color: var(--highlight-gray);
+}
+
+.highlight-swatch-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.highlight-swatch:focus-visible {
+  outline: var(--border-strong) solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- comment indicator: design/jsx/comment-indicator-default.jsx ------------------------------- */
+
+/* Fixed colours rather than tokens: this is a single small badge exported from the design as one
+   literal component, not a themed role in DESIGN.md's semantic table, so there is no --token to
+   reference in either mode (the same situation states.tsx documented for --skeleton-*). #E8E8E8 on
+   #52565A measures 6.04:1 — comfortably past AA regardless of theme, since neither value changes
+   with it. */
+.comment-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 10px;
+  margin-inline-start: var(--s1);
+  border-radius: 2px; /* token-exempt: see .skeleton-bar above for why --radius-sm can't be used directly */
+  background: #52565a;
+  color: #e8e8e8;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.cell-id {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* --- annotation bar: highlight picker + note, shown under the selected row's detail head -------- */
+
+.annotate-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s3);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-deep);
+}
+
+.annotate-bar .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- filter toggle: design/jsx/filter-toggle-{off,on}.jsx --------------------------------------- */
+
+.filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* token-exempt: design's fixed 6px dot/label gap */
+  height: 18px; /* token-exempt: design's fixed pill height, below the 24px row-height scale */
+  padding: 3px 10px; /* token-exempt: design's fixed pill padding */
+  border-radius: 10px; /* token-exempt: DESIGN.md's own pill radius, used only by toggle chips */
+  border: 1px solid var(--line-strong);
+  background: var(--paper-sunken);
+  color: var(--text);
+  font-size: 11px; /* token-exempt: below --fs-2xs's fluid floor; matches the design's fixed 11px pill label */
+  line-height: 14px;
+  cursor: pointer;
+}
+
+.filter-toggle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--highlight-gray);
+}
+
+/* --accent-bright is #FF6633 in both themes (DESIGN.md: "identity orange"), so the fill does not
+   need a theme split — but its label/dot do: --grey-900 (#1a1a1a) is the only near-black already in
+   the token pipeline (used for --accent-contrast in dark), and #1A1A1A-on-#FF6633 measures 5.97:1 —
+   the theme-varying --accent-contrast would fail here in light mode (its light value is #FFFFFF,
+   2.92:1 against this fixed orange), because this fill is the fixed identity orange, not
+   --accent-deep, which is what --accent-contrast was designed to sit on. */
+.filter-toggle-on {
+  border-color: transparent;
+  background: var(--accent-bright);
+  color: var(--grey-900);
+  font-weight: 700;
+}
+
+.filter-toggle-on .filter-toggle-dot {
+  background: var(--grey-900);
+}
+
+.filter-toggle:focus-visible {
+  outline: var(--border-strong) solid var(--accent);
+  outline-offset: 2px;
+}

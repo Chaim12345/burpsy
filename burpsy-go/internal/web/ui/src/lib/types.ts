@@ -1,5 +1,30 @@
 /** Wire types for the burpsy HTTP API. Field names mirror the Go json tags exactly. */
 
+/**
+ * The highlight vocabulary an operator can paint on a row — an Exchange (Task 5 / UX-15) or an
+ * OrganizerItem (organizer.tsx). "none" is the absence of a highlight, and it is a UI-only sentinel:
+ * the wire never carries the string "none", it carries "" (see `Exchange.highlight` below and Go's
+ * `core.ValidHighlights`). Moved here from organizer.tsx so both pages read one copy — see
+ * .superpowers/task-5-report.md.
+ */
+export const HIGHLIGHTS = ["none", "red", "orange", "yellow", "green", "cyan", "blue", "pink", "magenta", "gray"];
+
+/**
+ * Tone to render each highlight as when it needs a `Badge` rather than a swatch (Organizer's table).
+ * `gray` and `none` are deliberately unmapped — neither reads as a severity/status colour, so callers
+ * fall back to `"neutral"`.
+ */
+export const HIGHLIGHT_TONE: Record<string, "neutral" | "bad" | "warn" | "good" | "info" | "accent"> = {
+  red: "bad",
+  orange: "warn",
+  yellow: "warn",
+  green: "good",
+  cyan: "info",
+  blue: "info",
+  pink: "accent",
+  magenta: "accent",
+};
+
 export interface Stats {
   exchanges: number;
   messages: number;
@@ -39,6 +64,12 @@ export interface Exchange {
   source?: string;
   notes?: string | null;
   related?: number[];
+  /**
+   * "" means no highlight. One of the colours in `HIGHLIGHTS` minus its `"none"` sentinel — see Go's
+   * `core.ValidHighlights` (UX-15). Always present on the wire (api_types.go's `exchangeView`
+   * populates it unconditionally), not optional.
+   */
+  highlight: string;
 }
 
 export interface MessageView {

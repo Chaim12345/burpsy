@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Columns3, Combine, Crosshair, HelpCircle, Repeat2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { useExchangeActions, exchangeUrl } from "../lib/actions";
 import { formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
-import { useDebounced, useHistory, useMessage } from "../lib/data";
+import { cn } from "../lib/cn";
+import { useAnnotateExchange, useDebounced, useHistory, useMessage } from "../lib/data";
+import { useScopeView } from "../lib/data.policy";
 import { useApp } from "../lib/store";
-import type { Exchange } from "../lib/types";
+import { HIGHLIGHTS, type Exchange } from "../lib/types";
+import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
@@ -23,6 +26,168 @@ const STATUS_BUCKETS = [
 ];
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+/**
+ * Escape a value for a double-quoted DSL string literal (query.go's lexer takes \", \\, \n, \t, \r).
+ * Only \\ and \" can occur in a host pattern in practice, but escaping is complete rather than
+ * assuming that.
+ */
+function escapeQueryString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\t/g, "\\t").replace(/\r/g, "\\r");
+}
+
+/**
+ * Translates the scope an operator has configured into the history filter grammar, so "In scope
+ * only" can compose with the DSL box instead of being a second, invisible filtering mechanism.
+ *
+ * Returns null when the scope cannot be expressed exactly:
+ * - `allow_all` or an empty rule set both mean "everything is in scope" — there is nothing to add.
+ * - A pattern containing `*` has no exact equivalent in the DSL's `=`/`~` string operators (the
+ *   query grammar has no glob operator), so it is not translated rather than approximated — an
+ *   approximate query shown in the box would misdescribe what is actually being filtered, which is
+ *   exactly the kind of dishonesty DESIGN.md's "the numbers must be honest" section rules out.
+ *
+ * When it returns null, the toggle still filters correctly — `isHostInScope` below does the same
+ * check client-side — it just does not show up in the query text.
+ *
+ * The translation mirrors `core.Scope.Contains` in burpsy-go/internal/core/scope.go: excludes always
+ * win, and with no include rules everything not excluded is in scope.
+ */
+function scopeToQueryFragment(scope: ScopeView | undefined): string | null {
+  if (!scope || scope.allow_all) return null;
+  const named = scope.rules.filter((rule): rule is ScopeRuleView & { host: string } => Boolean(rule.host));
+  if (named.length === 0) return null;
+  if (named.some((rule) => rule.host.includes("*"))) return null;
+  const includes = named.filter((rule) => rule.kind === "Include");
+  const excludes = named.filter((rule) => rule.kind === "Exclude");
+  const clause = (rules: typeof named) => rules.map((rule) => `host = "${escapeQueryString(rule.host)}"`).join(" OR ");
+  const parts: string[] = [];
+  if (includes.length > 0) parts.push(includes.length > 1 ? `(${clause(includes)})` : clause(includes));
+  if (excludes.length > 0) parts.push(`NOT ${excludes.length > 1 ? `(${clause(excludes)})` : clause(excludes)}`);
+  return parts.length > 0 ? parts.join(" AND ") : null;
+}
+
+/** Append a fragment as a new AND'd clause, or start the query with it if the box is empty. */
+function combineQuery(base: string, fragment: string): string {
+  const trimmed = base.trim();
+  return trimmed ? `${trimmed} AND ${fragment}` : fragment;
+}
+
+/**
+ * Best-effort removal of a fragment this component injected. If the operator has since hand-edited
+ * the box (the design's own intent — "the operator can see what it did and learn the language"), the
+ * exact injected substring may no longer be there; this leaves their edit alone rather than mangling
+ * unrelated text.
+ */
+function stripFragment(current: string, fragment: string): string {
+  const suffix = ` AND ${fragment}`;
+  if (current.endsWith(suffix)) return current.slice(0, -suffix.length);
+  if (current === fragment) return "";
+  const prefix = `${fragment} AND `;
+  if (current.startsWith(prefix)) return current.slice(prefix.length);
+  return current;
+}
+
+/**
+ * Wildcard-pattern host match, ported from `core.NewScopeRule`'s regex construction (the
+ * `*.example.com` case matches zero-or-more subdomain labels; a bare `*` matches anything). Used
+ * only when `scopeToQueryFragment` returned null, i.e. a wildcard pattern makes the scope
+ * inexpressible in the DSL, so the toggle still filters correctly without touching the query text.
+ */
+function hostPatternRegex(pattern: string): RegExp {
+  let out = "^";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const c = pattern[i] ?? "";
+    if (c === "*") {
+      if (i === 0 && pattern.length > 1 && pattern[1] === ".") {
+        out += "([a-zA-Z0-9-]+\\.)*";
+        i += 1; // the dot is consumed into the label group above, same as the Go loop
+      } else {
+        out += ".*";
+      }
+    } else if (c === ".") {
+      out += "\\.";
+    } else {
+      out += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  out += "$";
+  return new RegExp(out, "i");
+}
+
+/** Client-side mirror of `core.Scope.Contains`, ignoring port/path — the UI's own scope API exposes
+ *  neither (see settings.tsx), so there is nothing for either page to filter on. */
+function isHostInScope(host: string, scope: ScopeView | undefined): boolean {
+  if (!scope || scope.allow_all) return true;
+  const named = scope.rules.filter((rule): rule is ScopeRuleView & { host: string } => Boolean(rule.host));
+  if (named.some((rule) => rule.kind === "Exclude" && hostPatternRegex(rule.host).test(host))) return false;
+  const includes = named.filter((rule) => rule.kind === "Include");
+  if (includes.length === 0) return true;
+  return includes.some((rule) => hostPatternRegex(rule.host).test(host));
+}
+
+/** design/jsx/filter-toggle-{off,on}.jsx. A real toggle button, not a checkbox styled as a pill —
+ *  `aria-pressed` is the correct role for "this button's own state flips", per the task brief. */
+function FilterToggle({
+  pressed,
+  onPressedChange,
+  children,
+}: {
+  pressed: boolean;
+  onPressedChange: (next: boolean) => void;
+  children: string;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      className={cn("filter-toggle", pressed && "filter-toggle-on")}
+      onClick={() => onPressedChange(!pressed)}
+    >
+      <span className="filter-toggle-dot" aria-hidden="true" />
+      <span>{children}</span>
+    </button>
+  );
+}
+
+/**
+ * design/jsx/highlight-picker-default.jsx: ten 10px swatches including "none" (an outlined
+ * transparent circle, per DESIGN.md's Row highlights section — the exported JSX's solid black fill
+ * is a Penpot preview artifact, not the documented intent). Each swatch is a real button with its
+ * own accessible name, reachable by Tab, so the picker needs no pointer to operate.
+ */
+function HighlightPicker({ value, onChange }: { value: string; onChange: (next: string) => void }): JSX.Element {
+  return (
+    <div className="highlight-picker" role="group" aria-label="Row highlight">
+      {HIGHLIGHTS.map((name) => {
+        const wireValue = name === "none" ? "" : name;
+        const isSelected = value === wireValue;
+        return (
+          <button
+            key={name}
+            type="button"
+            className={cn("highlight-swatch", name === "none" && "highlight-swatch-none", isSelected && "highlight-swatch-selected")}
+            style={name === "none" ? undefined : ({ "--swatch-color": `var(--highlight-${name})` } as CSSProperties)}
+            aria-label={name === "none" ? "Clear highlight" : `Highlight row ${name}`}
+            aria-pressed={isSelected}
+            onClick={() => onChange(wireValue)}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/** design/jsx/comment-indicator-default.jsx. Decorative glyph plus a screen-reader-only label —
+ *  "a row has a note" is information, not decoration, so it cannot be aria-hidden outright. */
+function CommentIndicator(): JSX.Element {
+  return (
+    <span className="comment-indicator" title="Has a note">
+      <span aria-hidden="true">...</span>
+      <span className="sr-only">Has a note</span>
+    </span>
+  );
+}
 
 function QueryHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
   return (
@@ -61,10 +226,15 @@ export function HistoryPage(): JSX.Element {
   const [helpOpen, setHelpOpen] = useState(false);
   const [limit, setLimit] = useState(500);
   const [inspector, setInspector] = useState(true);
+  const [scopeOnly, setScopeOnly] = useState(false);
+  const [hideNoResponse, setHideNoResponse] = useState(false);
+  const [note, setNote] = useState("");
 
   const debouncedTerm = useDebounced(term, 260);
   const { data, error, isFetching, refetch } = useHistory(debouncedTerm, limit);
   const actions = useExchangeActions();
+  const scope = useScopeView();
+  const annotate = useAnnotateExchange();
 
   // Another page asked to filter here (for example "filter by this host").
   useEffect(() => {
@@ -80,15 +250,36 @@ export function HistoryPage(): JSX.Element {
     focusExchange(null);
   }, [historyFocus, focusExchange]);
 
+  // "In scope only" composes with the DSL box rather than filtering invisibly beside it: when the
+  // configured scope can be written as a query (scopeToQueryFragment), that text is spliced into the
+  // box itself, so the operator sees exactly what the toggle did and the server does the filtering.
+  // The ref tracks what this effect last injected, so turning the toggle off — or the scope changing
+  // while it is on — removes exactly that substring rather than guessing at one.
+  const injectedFragment = useRef<string | null>(null);
+  const scopeFragment = useMemo(() => scopeToQueryFragment(scope.data), [scope.data]);
+  useEffect(() => {
+    const wanted = scopeOnly ? scopeFragment : null;
+    if (injectedFragment.current === wanted) return;
+    setTerm((current) => {
+      const withoutOld = injectedFragment.current ? stripFragment(current, injectedFragment.current) : current;
+      return wanted ? combineQuery(withoutOld, wanted) : withoutOld;
+    });
+    injectedFragment.current = wanted;
+  }, [scopeOnly, scopeFragment]);
+
   const rows = useMemo(() => {
     const all = data ?? [];
     return all.filter((row) => {
       if (method !== "all" && row.method !== method) return false;
-      if (status === "all") return true;
-      if (status === "none") return row.status === null;
-      return row.status !== null && String(row.status).startsWith(status);
+      if (status === "none" && row.status !== null) return false;
+      if (status !== "all" && status !== "none" && (row.status === null || !String(row.status).startsWith(status))) return false;
+      if (hideNoResponse && row.response === null) return false;
+      // Only needed when the scope could not be written into the query above (a wildcard pattern) —
+      // when it could, the server already returned only in-scope rows and this is a no-op re-check.
+      if (scopeOnly && !scopeFragment && !isHostInScope(row.host, scope.data)) return false;
+      return true;
     });
-  }, [data, method, status]);
+  }, [data, method, status, hideNoResponse, scopeOnly, scopeFragment, scope.data]);
 
   // Selection is held by id, not by object identity, so a background refresh
   // cannot silently drop the operator's selection.
@@ -120,9 +311,34 @@ export function HistoryPage(): JSX.Element {
   const request = useMessage(selected?.request);
   const response = useMessage(selected?.response ?? null);
 
+  // The note field mirrors the selected row's own copy — see organizer.tsx's identical comment on
+  // its own draft state — but reset only on a selection change, not on every background refetch, so
+  // a background refetch cannot wipe out a note the operator is mid-typing.
+  useEffect(() => {
+    setNote(selected?.notes ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
+  const saveNote = () => {
+    if (!selected) return;
+    const trimmed = note.trim();
+    if (trimmed === (selected.notes ?? "")) return;
+    annotate.mutate({ id: selected.id, notes: trimmed === "" ? null : trimmed });
+  };
+
   const columns = useMemo<Column<Exchange>[]>(
     () => [
-      { accessorKey: "id", header: "#", size: 62, cell: (info) => <span className="cell-num">{info.getValue<number>()}</span> },
+      {
+        accessorKey: "id",
+        header: "#",
+        size: 62,
+        cell: (info) => (
+          <span className="cell-id">
+            <span className="cell-num">{info.getValue<number>()}</span>
+            {info.row.original.notes ? <CommentIndicator /> : null}
+          </span>
+        ),
+      },
       {
         accessorKey: "method",
         header: "Method",
@@ -217,6 +433,29 @@ export function HistoryPage(): JSX.Element {
           </IconButton>
         </div>
       </div>
+      {/* Annotation bar (UX-15): the highlight vocabulary and notes exist for Organizer items today —
+          this is what lets an operator mark a row up in place instead of filing it in a different
+          tool just to comment on it. */}
+      <div className="annotate-bar">
+        <HighlightPicker
+          value={selected.highlight}
+          onChange={(next) => annotate.mutate({ id: selected.id, highlight: next })}
+        />
+        <Input
+          aria-label="Row note"
+          title="Row note"
+          placeholder="Add a note…"
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          onBlur={saveNote}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              (event.target as HTMLInputElement).blur();
+            }
+          }}
+        />
+      </div>
       <div className={inspector ? "editor-grid-inspected" : "editor-grid"}>
         <HttpEditor
           label="Request"
@@ -280,6 +519,12 @@ export function HistoryPage(): JSX.Element {
               </button>
             </Tooltip>
           </div>
+          <FilterToggle pressed={scopeOnly} onPressedChange={setScopeOnly}>
+            In scope only
+          </FilterToggle>
+          <FilterToggle pressed={hideNoResponse} onPressedChange={setHideNoResponse}>
+            Hide items without responses
+          </FilterToggle>
           <Select aria-label="Status filter" title="Status filter" value={status} onChange={(event) => setStatus(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
             {STATUS_BUCKETS.map((bucket) => (
               <option key={bucket.value} value={bucket.value}>
@@ -346,7 +591,15 @@ export function HistoryPage(): JSX.Element {
               ])
             }
             rowClassName={(row) =>
-              row.status !== null && row.status >= 500 ? "row-flag-bad" : row.status !== null && row.status >= 400 ? "row-flag-warn" : undefined
+              cn(
+                row.status !== null && row.status >= 500 ? "row-flag-bad" : row.status !== null && row.status >= 400 ? "row-flag-warn" : undefined,
+                // `rowClassName` is a CSS-class hook only — see the survey — so an arbitrary per-row
+                // highlight colour is one class per colour (`row-highlight-<name>`), each of which
+                // just binds the `--row-tint` custom property a single generic rule reads. That
+                // keeps this to 9 one-line classes plus 3 shared rules instead of 9 colours x 3
+                // states of duplicated color-mix() — see styles.css's Task 5 section and the report.
+                row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined,
+              ) || undefined
             }
             loading={isFetching && !data}
             empty={

@@ -3,24 +3,10 @@ import { ExternalLink, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useOrganizer, useOrganizerMutations } from "../lib/data";
 import { useApp } from "../lib/store";
-import type { OrganizerItem } from "../lib/types";
+import { HIGHLIGHTS, HIGHLIGHT_TONE, type OrganizerItem } from "../lib/types";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
-
-/** The highlight vocabulary the organizer stores; "none" is the absence of one. */
-const HIGHLIGHTS = ["none", "red", "orange", "yellow", "green", "cyan", "blue", "pink", "magenta", "gray"];
-
-const HIGHLIGHT_TONE: Record<string, "neutral" | "bad" | "warn" | "good" | "info" | "accent"> = {
-  red: "bad",
-  orange: "warn",
-  yellow: "warn",
-  green: "good",
-  cyan: "info",
-  blue: "info",
-  pink: "accent",
-  magenta: "accent",
-};
 
 interface Draft {
   title: string;
