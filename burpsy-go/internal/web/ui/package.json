@@ -8,7 +8,7 @@
     "test:scripts": "node scripts/lib/transit.test.mjs && node scripts/fetch-penpot-file.test.mjs",
     "fetch:penpot": "node scripts/fetch-penpot-file.mjs",
     "audit:penpot": "node scripts/penpot-audit.mjs",
-    "build:js": "bun build src/app.tsx --outdir dist --minify --define:process.env.NODE_ENV='\"production\"'",
+    "build:js": "bun build src/app.tsx --outdir dist --minify",
     "build:css": "bun build src/styles.css --outfile style.css --minify",
     "build": "bun run gen:tokens && bun run build:js && bun run build:css",
     "check": "tsc --noEmit && node scripts/gen-tokens.mjs --check && bun run check:tokens && bun run test:scripts"

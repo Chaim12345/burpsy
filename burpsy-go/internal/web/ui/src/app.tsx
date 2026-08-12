@@ -105,8 +105,8 @@ function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (op
             {group.rows.map((entry) => (
               <div className="shortcut-row" key={entry.label}>
                 <div>
-                  {entry.keys.map((key) => (
-                    <Kbd key={key}>{key}</Kbd>
+                  {entry.keys.map((key, i) => (
+                    <span key={key}>{i > 0 ? "+" : null}<Kbd>{key}</Kbd></span>
                   ))}
                 </div>
                 <span>

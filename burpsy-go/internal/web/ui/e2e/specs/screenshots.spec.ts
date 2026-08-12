@@ -66,9 +66,12 @@ for (const viewport of VIEWPORTS) {
     // the desktop layout uses — so a media query that scoped a colour to a breakpoint would show here.
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     // pinTheme installs an init script, which only runs on a document load — so each sample needs a
-     // real navigation, not the hash change gotoRoute uses once the app is already mounted.
+    // real navigation. Both samples go to the same hash, so same-URL optimisation can skip the load
+    // event on the second call. Passing through about:blank between samples ensures the app URL
+    // always arrives as a fresh load with all accumulated init scripts running in order.
     const sample = async (theme: "dark" | "light") => {
       await pinTheme(page, theme);
+      await page.goto("about:blank");
       await page.goto(`/#${ROUTES[0]!.id}`);
       await expect(page.locator("main h1")).toBeVisible();
       return page.evaluate(() => {
