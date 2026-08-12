@@ -18,3 +18,38 @@ Plan corrections from the code survey, before dispatch:
   Task 2 shrank from "build it" to "wire it + menu".
 - primitives.tsx already exports Empty, ErrorNotice, Spinner.
   Task 4 shrank to loading/skeleton + aligning the existing three.
+
+## Wave 1 results
+
+Task 1: complete (b6d565c) — Exchange.Highlight + notes + PATCH /api/exchange/{id};
+  4 UX-15 Go tests pass, full go build/vet/test clean.
+  Concern (accepted): also had to classify Highlight as ruleAbsent in
+  internal/proxy/parity_test.go — an exhaustive Exchange-field parity check the
+  brief did not list. Correct call; the build required it.
+  Concern (deferred): PATCH fires no SSE live-update. Reasonable — changeHistory
+  means "exchange captured". Revisit if two windows need to see annotations sync.
+
+Task 2: complete (1fef344) — column-visibility menu, wired on Logger.
+Task 3: complete (acdadc9 + bc8e47a) — intercept rule reordering, UX-17 specs pass.
+Task 4: complete (54880e0, d6aaba4, 5a1e987) — SkeletonRows + LoadingState;
+  Empty/ErrorNotice aligned to design.
+
+Combined verification after all four merged: bunx tsc --noEmit clean,
+bun run build clean, go build ./... clean, go test (web/core/persist) clean.
+
+## Findings the agents surfaced that the plan got wrong
+
+1. TOKEN PIPELINE GAP (real, confirmed independently): the design's tokens are
+   NOT in the code pipeline at all. grep for skeleton/highlight across
+   src/tokens/*.css returns 0 in every file. My Task 4 brief assumed
+   --semantic-colorskeleton-1..4 existed; they do not. The agent hand-authored
+   --skeleton-1..4 following the --editor-* convention, which is the right
+   stopgap. This is task #28 and it is now load-bearing.
+2. --radius-sm and --radius-md are emitted UNITLESS (`--radius-sm: 2;`), so they
+   cannot be used in CSS at all. Confirmed by direct read of primitives.css:83-87.
+   --border-hairline/--border-focus have the same defect. Nothing owns this file,
+   so it is filed as a follow-up rather than patched mid-wave.
+3. Shared working tree contention: agents' `bun run build` picked up each other's
+   uncommitted WIP into dist/. Task 3 noticed and reverted the generated files
+   rather than committing another agent's work. Worth designing around next time
+   (per-agent worktrees, or nobody commits dist/).
