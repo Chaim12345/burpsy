@@ -53,3 +53,26 @@ bun run build clean, go build ./... clean, go test (web/core/persist) clean.
    uncommitted WIP into dist/. Task 3 noticed and reverted the generated files
    rather than committing another agent's work. Worth designing around next time
    (per-agent worktrees, or nobody commits dist/).
+
+## Task 2 — verified without its report
+
+The Task 2 agent ended without writing `.superpowers/task-2-report.md`, so its
+work was verified directly instead of taken on trust:
+- commit 1fef344 adds `src/ui/column-visibility-menu.tsx`, +133 lines in
+  `src/ui/table.tsx`, the Logger wiring, and 88 lines of CSS.
+- both UX-16 specs exist in behaviour.spec.ts (231, 252) and are substantive:
+  they assert the header disappears, the row's cell count drops by one, focus
+  returns to the trigger after Escape, and the non-hideable identifier column is
+  never offered as a checkbox. House style throughout (role/label locators,
+  consoleErrors asserted).
+- combined tsc/build/go verification after merge was clean.
+
+Treated as complete. One question for the final review: the spec comments call
+"Age" the identifier column on Logger — worth confirming that is the intended
+non-hideable column rather than "#".
+
+Deferred to the final whole-branch review:
+- missing task-2-report.md (process gap, not a code gap)
+- the "Age" vs "#" non-hideable column question
+- a11y spec has not been re-run since wave 1 merged; global constraint 2
+  requires zero violations, so the final gate must run it
