@@ -147,9 +147,10 @@ test.describe("data views", () => {
   test("a table header sorts, and reorders the rows", async ({ page, consoleErrors }) => {
     await gotoRoute(page, route("history"));
     const rows = page.locator("tr.data-row");
-    // Six rows: five proxied paths plus the one Repeater send (see the "holds proxy traffic only" test
-    // for why that send appears here — it is a known bug left open, not a test error).
-    await expect(rows).toHaveCount(6);
+    // EXPECTED TO FAIL for the same reason as "Proxy HTTP history holds proxy traffic only": the
+    // Repeater send leaks into history as a sixth row, making this assertion resolve to 6 not 5.
+    // The bug is documented there; this failure is a symptom, not an independent defect.
+    await expect(rows).toHaveCount(5);
 
     const paths = async () => (await rows.locator("td").nth(3).allInnerTexts()).map((text) => text.trim());
     const pathHeader = page.locator("th", { has: page.getByRole("button", { name: "Path" }) });
