@@ -10,7 +10,7 @@ func TestJavaXSSEvidenceRecognizesHTMLBreakout(t *testing.T) {
 	scriptMarker := xssScriptBreakoutMarker(canary)
 	body := `<div class="result">value=` + htmlMarker + `</div>`
 
-	evidence := analyzeXSSReflection(body, canary, htmlMarker, scriptMarker)
+	evidence := analyzeXSSReflection(body, canary, "text/html", htmlMarker, scriptMarker)
 	if evidence&XSSEvidenceReflected == 0 {
 		t.Fatal("canary reflection was not recognized")
 	}
@@ -28,7 +28,7 @@ func TestJavaXSSEvidenceRecognizesScriptBreakout(t *testing.T) {
 	scriptMarker := xssScriptBreakoutMarker(canary)
 	body := `<script>var msg = 'hi'-alert(` + canary + `)-'\` + "//" + `';</script>`
 
-	evidence := analyzeXSSReflection(body, canary, htmlMarker, scriptMarker)
+	evidence := analyzeXSSReflection(body, canary, "text/html", htmlMarker, scriptMarker)
 	if evidence&XSSEvidenceScriptBreakout == 0 {
 		t.Fatal("script breakout evidence was not recognized")
 	}
@@ -45,7 +45,7 @@ func TestJavaXSSEvidenceTreatsHTMLEncodedReflectionAsNoBreakout(t *testing.T) {
 	// metacharacters around it are entity-encoded, so neither marker appears.
 	body := `<div>value=&quot;&gt;&lt;svg id=` + canary + ` onload=alert(1)&gt;</div>`
 
-	evidence := analyzeXSSReflection(body, canary, htmlMarker, scriptMarker)
+	evidence := analyzeXSSReflection(body, canary, "text/html", htmlMarker, scriptMarker)
 	if evidence&XSSEvidenceReflected == 0 {
 		t.Fatal("canary reflection was not recognized")
 	}
@@ -63,7 +63,7 @@ func TestJavaXSSEvidenceIsZeroWhenCanaryNotReflected(t *testing.T) {
 	scriptMarker := xssScriptBreakoutMarker(canary)
 	body := `<div>no user input reflected here</div>`
 
-	if evidence := analyzeXSSReflection(body, canary, htmlMarker, scriptMarker); evidence != 0 {
+	if evidence := analyzeXSSReflection(body, canary, "text/html", htmlMarker, scriptMarker); evidence != 0 {
 		t.Fatalf("expected zero evidence for an unreflected canary, got %#x", evidence)
 	}
 }
@@ -95,7 +95,7 @@ func TestEscapedReflectionIsNotAScriptBreakout(t *testing.T) {
 	)
 	for _, payload := range []string{scriptBreakoutPayload(canary), htmlBreakoutPayload(canary)} {
 		body := "<h2>Results for: " + escape.Replace(payload) + "</h2>"
-		evidence := analyzeXSSReflection(body, canary, htmlMarker, scriptMarker)
+		evidence := analyzeXSSReflection(body, canary, "text/html", htmlMarker, scriptMarker)
 
 		if xssBreakoutConfirmed(evidence) {
 			t.Errorf("a fully escaped reflection of %q was classified as a breakout (evidence %#x). "+
@@ -120,10 +120,53 @@ func TestUnescapedScriptContextIsStillABreakout(t *testing.T) {
 	payload := scriptBreakoutPayload(canary)
 	body := "<script>var lastSearch = '" + payload + "';</script>"
 
-	evidence := analyzeXSSReflection(body, canary,
+	evidence := analyzeXSSReflection(body, canary, "text/html",
 		xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
 	if evidence&XSSEvidenceScriptBreakout == 0 {
 		t.Fatalf("an unescaped payload inside a single-quoted JavaScript string was not classified "+
 			"as a script breakout (evidence %#x)", evidence)
+	}
+}
+
+// Reflected XSS is a claim about what a BROWSER does with the response. A payload echoed intact
+// into text/plain or JSON is a reflection and nothing else, because nothing will parse it as markup.
+//
+// Without this gate every plain-text echo endpoint confirmed a breakout: the script marker is a
+// substring of its own payload, so a verbatim reflection contains it. internal/vulnapp alone serves
+// four such endpoints, and the runtime corpus could not see the false positives because it only
+// asked whether the row fired against its own declared endpoint.
+func TestAVerbatimReflectionIntoNonMarkupIsNotABreakout(t *testing.T) {
+	canary := "zxssplain08"
+	htmlMarker := xssHTMLBreakoutMarker(canary)
+	scriptMarker := xssScriptBreakoutMarker(canary)
+
+	for _, contentType := range []string{
+		"text/plain",
+		"text/plain; charset=utf-8",
+		"application/json",
+		"application/octet-stream",
+	} {
+		for _, payload := range []string{scriptBreakoutPayload(canary), htmlBreakoutPayload(canary)} {
+			// Verbatim, unescaped — the worst case for the marker test.
+			body := "PING " + payload + ": 64 bytes from 127.0.0.1"
+			evidence := analyzeXSSReflection(body, canary, contentType, htmlMarker, scriptMarker)
+
+			if xssBreakoutConfirmed(evidence) {
+				t.Errorf("%s: a verbatim reflection of %q was classified as a breakout (evidence %#x). "+
+					"No browser parses this type as markup, so nothing can execute.",
+					contentType, payload, evidence)
+			}
+			if evidence&XSSEvidenceReflected == 0 {
+				t.Errorf("%s: the reflection itself was not recorded; the observation must not be lost",
+					contentType)
+			}
+		}
+	}
+
+	// A missing Content-Type still counts as markup: the browser sniffs, and sniffing HTML-ish bytes
+	// is precisely the case an attacker relies on.
+	body := `<div>` + htmlMarker + `</div>`
+	if evidence := analyzeXSSReflection(body, canary, "", htmlMarker, scriptMarker); !xssBreakoutConfirmed(evidence) {
+		t.Error("a response with no Content-Type was treated as non-markup; sniffing makes it markup")
 	}
 }

@@ -59,8 +59,8 @@ var coreInjectionKinds = []string{"query", "body", "cookie"}
 // the case Burp reports as plain "SQL injection" — a quote that reaches a query and comes back as
 // a parser error.
 func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	if offline, ok := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures); ok {
-		return offline, nil
+	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures); isOffline {
+		return offline, err
 	}
 	res, err := runInjection(ctx, cc, coreInjectionKinds,
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
@@ -85,15 +85,14 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 // reaching the same signature through an insertion point earns `firm`.
 //
 // The second return value distinguishes "this was the offline path" from "the offline path found
-// nothing", so a caller cannot mistake one for the other.
-func offlineSignatureScan(cc *CheckContext, row string, signatures []string) ([]*Finding, bool) {
+// nothing", so a caller cannot mistake one for the other. The third is the refusal: absence of a
+// signature offline is NOT a clean result, because no probe was sent to make it one.
+func offlineSignatureScan(cc *CheckContext, row string, signatures []string) ([]*Finding, bool, error) {
 	if cc == nil || cc.Scanner == nil || cc.Exchange == nil || cc.Scanner.sender != nil {
-		return nil, false
+		return nil, false, nil
 	}
 	body := cc.Scanner.getResponseBody(cc.Exchange)
-	if body == "" {
-		return nil, true
-	}
+
 	// The baseline is the same bytes, so ClassifyErrorEvidence would call every match
 	// pre-existing. This is a direct signature read, and its weaker standing is carried by the
 	// confidence rather than hidden by reusing a differential classifier that does not apply.
@@ -121,9 +120,17 @@ func offlineSignatureScan(cc *CheckContext, row string, signatures []string) ([]
 			Solution:   remediation,
 			ExchangeID: cc.Exchange.ID,
 			Timestamp:  nowUTC(),
-		}}, true
+		}}, true, nil
 	}
-	return nil, true
+
+	// No signature in the captured bytes, and no way to send a probe that might have produced one.
+	// Returning (nil, nil) here would have been the conflation this file's own header calls a
+	// defect: it reads as "this endpoint was tested for %s and is clean", when the truth is that
+	// nothing was tested. Every other active row in the package refuses through RequireEgress for
+	// exactly this reason; these three used to be the outliers that pretended.
+	return nil, true, fmt.Errorf(
+		"%s: no sender is configured, so no probe could be sent, and the captured response carries "+
+			"none of this row's signatures — that is an untested endpoint, not a clean one", row)
 }
 
 // sqlErrorProbePayloads are the minimal forms that unbalance a quoted or numeric context. The
@@ -162,12 +169,12 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// the payload that caused it rather than to the other probe.
 		htmlCanary := newXSSCanary()
 		if res, err := h.Send(ctx, point, htmlBreakoutPayload(htmlCanary)); err == nil {
-			evidence |= analyzeXSSReflection(res.Body, htmlCanary,
+			evidence |= analyzeXSSReflection(res.Body, htmlCanary, rawHeaderValue(string(res.Raw), "Content-Type"),
 				xssHTMLBreakoutMarker(htmlCanary), xssScriptBreakoutMarker(htmlCanary))
 		}
 		scriptCanary := newXSSCanary()
 		if res, err := h.Send(ctx, point, scriptBreakoutPayload(scriptCanary)); err == nil {
-			evidence |= analyzeXSSReflection(res.Body, scriptCanary,
+			evidence |= analyzeXSSReflection(res.Body, scriptCanary, rawHeaderValue(string(res.Raw), "Content-Type"),
 				xssHTMLBreakoutMarker(scriptCanary), xssScriptBreakoutMarker(scriptCanary))
 		}
 
@@ -207,8 +214,8 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 // This row is the dot-dot-slash escape. Its sibling "File path manipulation" takes the absolute
 // path forms — see filePathManipulationPayloads for why the two banks are kept apart.
 func checkFilePathTraversalCore(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	if offline, ok := offlineSignatureScan(cc, "File path traversal", TraversalFileSignatures); ok {
-		return offline, nil
+	if offline, isOffline, err := offlineSignatureScan(cc, "File path traversal", TraversalFileSignatures); isOffline {
+		return offline, err
 	}
 	res, err := runInjection(ctx, cc, coreInjectionKinds,
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {

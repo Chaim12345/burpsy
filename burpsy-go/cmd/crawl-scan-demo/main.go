@@ -1,8 +1,14 @@
-// Command crawl-scan-demo starts a small vulnerable HTTP server, crawls it
-// with internal/crawler, then runs the real ActiveScanner (SQL injection and
-// reflected XSS) against everything the crawl captured — proving the
-// checkSQLi/checkXSS evidence models fire against real requests and real
-// responses, not just the pure-function unit tests in sqli_test.go/xss_test.go.
+// Command crawl-scan-demo starts the vulnerable application from internal/vulnapp, crawls it with
+// internal/crawler, then runs the real ActiveScanner against everything the crawl captured — so the
+// SQL-injection and reflected-XSS evidence models are exercised against real requests and real
+// responses rather than only the pure-function unit tests.
+//
+// It used to carry its own copy of the vulnerable endpoints, justified in a comment by
+// "cmd/demo-target is its own module and cannot be imported here". That was true when demo-target
+// had a nested go.mod and is not any more, and the copy had already drifted: it kept branching on
+// the scanner's own probe strings after internal/vulnapp stopped doing so. A second vulnerable
+// target that nobody tests is a target that quietly disagrees with the one that matters, so the
+// seeds now come from vulnapp's manifest and the handler is vulnapp's.
 package main
 
 import (
@@ -20,6 +26,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/crawler"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/vulnapp"
 	"go.uber.org/zap"
 )
 
@@ -36,7 +43,7 @@ func run() error {
 	}
 	defer ln.Close()
 
-	srv := &http.Server{Handler: vulnerableMux()}
+	srv := &http.Server{Handler: vulnapp.Handler()}
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
@@ -53,7 +60,7 @@ func run() error {
 	defer cancel()
 
 	crawlCfg := crawler.Config{
-		Seeds:  []string{base + "/", base + "/products?id=1", base + "/account"},
+		Seeds:  vulnappSeeds(base),
 		Scope:  scope,
 		Sender: snd,
 		Capture: scanner.Capture{
@@ -126,66 +133,21 @@ func run() error {
 	return nil
 }
 
-// vulnerableMux is a self-contained copy of the demo target's newly added
-// SQLi/XSS endpoints (cmd/demo-target is its own module and cannot be
-// imported here), kept behaviorally identical so this program demonstrates
-// the same surface the standalone demo target exposes.
-func vulnerableMux() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `<html><body>
-			<a href="/products?id=1">Products</a>
-			<a href="/account?xss=seed">Account</a>
-		</body></html>`)
-	})
-	mux.HandleFunc("/products", productsHandler)
-	mux.HandleFunc("/account", accountHandler)
-	return mux
-}
-
-func productsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	for _, values := range r.URL.Query() {
-		for _, v := range values {
-			unescaped := strings.ReplaceAll(v, "''", "")
-			quoteCount := strings.Count(unescaped, "'")
-			lower := strings.ToLower(v)
-
-			switch {
-			case strings.Contains(lower, "order by 999"):
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "SQL error: Unknown column '999' in 'order clause'")
-				return
-			case strings.Contains(lower, "order by 1"):
-				w.WriteHeader(http.StatusOK)
-				fmt.Fprintf(w, "Products (sorted): Widget, Gadget, Gizmo")
-				return
-			case strings.Contains(lower, "or '1'='1"):
-				w.WriteHeader(http.StatusOK)
-				fmt.Fprintf(w, "Products: Widget, Gadget, Gizmo, Doohickey, Thingamajig")
-				return
-			case strings.Contains(lower, "and '1'='2"):
-				w.WriteHeader(http.StatusOK)
-				fmt.Fprintf(w, "No products found")
-				return
-			case quoteCount > 0:
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "SQL syntax error: you have an error in your SQL syntax near '%s' at line 1", v)
-				return
-			}
+// vulnappSeeds returns one crawl seed per endpoint the manifest declares vulnerable.
+//
+// Seeding from the manifest rather than from a hand-written list means this program cannot drift
+// away from the corpus internal/scanner tests against: an endpoint added there is crawled here on
+// the next build. Safe counterparts are included too — they are part of the surface, and a crawl
+// that skipped them would not represent a real one.
+func vulnappSeeds(base string) []string {
+	seeds := []string{base + "/"}
+	for _, e := range vulnapp.Vulnerabilities() {
+		if e.Path == "/" || e.Method == http.MethodPost {
+			// The crawler issues GETs; a POST-only row is reached by form submission, which is the
+			// crawler's own business and not something a seed can express.
+			continue
 		}
+		seeds = append(seeds, base+e.Path)
 	}
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Products: Widget, Gadget, Gizmo")
-}
-
-func accountHandler(w http.ResponseWriter, r *http.Request) {
-	value := r.URL.Query().Get("xss")
-	w.Header().Set("Content-Type", "text/html")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><body>
-	<div data-value="%s">Account settings</div>
-	<script>var lastSearch = '%s';</script>
-</body></html>`, value, value)
+	return seeds
 }

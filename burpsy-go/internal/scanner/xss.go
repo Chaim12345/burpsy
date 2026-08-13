@@ -94,12 +94,26 @@ func xssScriptBreakoutMarker(canary string) string {
 // testable. canary must be the exact unique token embedded in the payload
 // sent for this probe; reusing a canary across probes would make evidence
 // from one probe indistinguishable from another.
-func analyzeXSSReflection(body, canary string, htmlMarker, scriptMarker string) XSSEvidence {
+//
+// contentType is the response's declared type and is REQUIRED to be one a browser will render as
+// markup. Reflected XSS is a claim about what a browser does with the response, and a browser does
+// not parse text/plain or application/json as HTML, so a payload coming back intact in one of those
+// is a reflection and nothing more. Without this gate every plain-text echo endpoint confirms a
+// breakout — internal/vulnapp alone has four (/safe/products, /safe/download, /safe/ping, and
+// /ping's non-shell branch), all of them false positives that the corpus could not see because it
+// only asked whether the row fired against its own declared endpoint. ZAP gates the same way
+// (CrossSiteScriptingScanRule checks the type before classifying context).
+func analyzeXSSReflection(body, canary, contentType string, htmlMarker, scriptMarker string) XSSEvidence {
 	if canary == "" || !strings.Contains(body, canary) {
 		return 0
 	}
 	evidence := XSSEvidenceReflected
-	if strings.Contains(body, htmlEscapeCanary(canary)) && !strings.Contains(body, htmlMarker) {
+	if !rendersAsMarkup(contentType) {
+		// Reflected, but into something no browser will execute. Recorded as a reflection so the
+		// observation is not lost, never as a breakout.
+		return evidence | XSSEvidenceReflectedEncoded
+	}
+	if !strings.Contains(body, htmlMarker) {
 		evidence |= XSSEvidenceReflectedEncoded
 	}
 	if strings.Contains(body, htmlMarker) {
@@ -111,13 +125,23 @@ func analyzeXSSReflection(body, canary string, htmlMarker, scriptMarker string) 
 	return evidence
 }
 
-// htmlEscapeCanary mirrors the one substitution relevant to detecting
-// encoding: an alphanumeric canary is unaffected by HTML-entity encoding, so
-// "encoded" is decided by the surrounding breakout markers being absent while
-// the bare canary is still present — this helper exists to name that case
-// rather than to perform character substitution.
-func htmlEscapeCanary(canary string) string {
-	return canary
+// rendersAsMarkup reports whether a browser will parse this content type as markup.
+//
+// An empty type counts as markup: a response with no Content-Type is sniffed, and sniffing HTML-ish
+// bytes is exactly the case an attacker relies on. Everything else must say so explicitly.
+func rendersAsMarkup(contentType string) bool {
+	t := strings.ToLower(strings.TrimSpace(contentType))
+	if t == "" {
+		return true
+	}
+	if i := strings.IndexByte(t, ';'); i >= 0 {
+		t = strings.TrimSpace(t[:i])
+	}
+	switch t {
+	case "text/html", "application/xhtml+xml", "application/xml", "text/xml", "image/svg+xml":
+		return true
+	}
+	return false
 }
 
 func xssBreakoutConfirmed(evidence XSSEvidence) bool {

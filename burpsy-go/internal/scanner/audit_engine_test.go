@@ -5,6 +5,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -335,13 +336,41 @@ func Test_a_cancelled_context_bounds_the_run_and_is_distinguishable_from_a_spent
 	}
 }
 
+// liveLedgerTarget serves a page that answers every probe, and returns the host/port to seed
+// exchanges against plus a real sender.
+//
+// The two tests below are about the AuditLedger's admission bookkeeping, not about evidence. They
+// used to run offline on the theory that "the ledger's refusal is what is under test, not the
+// network" — but an active check cannot run to completion without a reachable target, so their
+// premise that three active checks all Ran was only satisfiable while those checks quietly treated
+// "no sender" as a verdict. They now audit something real, which is both honest and a stronger test
+// of the ledger: the admissions it refuses are refusals of work that would otherwise have happened.
+func liveLedgerTarget(t *testing.T) (host string, port uint16, snd *sender.Sender) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "<html>nothing interesting</html>")
+	}))
+	t.Cleanup(srv.Close)
+
+	h, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split live target address: %v", err)
+	}
+	var p uint16
+	if _, err := fmt.Sscanf(portStr, "%d", &p); err != nil {
+		t.Fatalf("parse live target port: %v", err)
+	}
+	return h, p, sender.NewSender(nil)
+}
+
 func Test_auditing_two_captures_of_one_url_dispatches_each_per_url_check_once(t *testing.T) {
 	store := core.NewTrafficStore()
-	first := seedAuditExchange(t, store, "h.test", 80, "/shop?id=1", "<html>one</html>")
-	second := seedAuditExchange(t, store, "h.test", 80, "/shop?id=1", "<html>two</html>")
-	// Offline, and one worker: the ledger's refusal is what is under test, not the network, and with
-	// one worker the *attribution* is deterministic — the second capture is the one refused.
-	scan := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{
+	host, port, snd := liveLedgerTarget(t)
+	first := seedAuditExchange(t, store, host, port, "/shop?id=1", "<html>one</html>")
+	second := seedAuditExchange(t, store, host, port, "/shop?id=1", "<html>two</html>")
+	// One worker, so the *attribution* is deterministic: the second capture is the one refused.
+	scan := NewActiveScanner(store, zap.NewNop()).WithSender(snd).WithConfig(&ScanConfig{
 		MaxConcurrency:     1,
 		CheckSqli:          true,
 		CheckPathTraversal: true,
@@ -383,11 +412,12 @@ func Test_auditing_two_captures_of_one_url_dispatches_each_per_url_check_once(t 
 // what must be exact; which worker won the admission is not.
 func Test_a_concurrent_session_admits_each_pair_once_however_the_workers_interleave(t *testing.T) {
 	store := core.NewTrafficStore()
+	host, port, snd := liveLedgerTarget(t)
 	ids := make([]core.ExchangeID, 8)
 	for i := range ids {
-		ids[i] = seedAuditExchange(t, store, "h.test", 80, "/shop?id=1", "<html></html>")
+		ids[i] = seedAuditExchange(t, store, host, port, "/shop?id=1", "<html></html>")
 	}
-	scan := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{
+	scan := NewActiveScanner(store, zap.NewNop()).WithSender(snd).WithConfig(&ScanConfig{
 		MaxConcurrency: 8,
 		CheckSqli:      true, // one per-URL check, so all eight captures contend for one ledger bit
 	})

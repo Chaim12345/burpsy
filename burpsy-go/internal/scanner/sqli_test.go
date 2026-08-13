@@ -1,73 +1,41 @@
 package scanner
 
-import (
-	"strings"
-	"testing"
-)
+// The four tests that used to live here exercised analyzeSQLiEvidence, sqlInjectionProbes and the
+// SQLiEvidence bitmask. All three went with ActiveScanner.checkSQLi — see sqli.go's header for why —
+// and a test is not a reason to keep unreachable production code alive. The row they nominally
+// covered is now demonstrated end-to-end against a live vulnerable target by
+// runtime_coverage_test.go, which is strictly better evidence than a decision table exercised in
+// isolation from anything that sends a request.
+//
+// responsesDiffer is what remains, and it has four live callers, so it is tested here directly.
 
-func TestJavaSQLiEvidenceRecognizesErrorAndEscapedQuotePair(t *testing.T) {
-	observations := map[sqlInjectionProbeKind]string{
-		sqliProbeQuote:        "database syntax error",
-		sqliProbeEscapedQuote: "normal response",
-		sqliProbeError:        "normal response",
-	}
-	evidence := analyzeSQLiEvidence("baseline", observations, func(body string) bool {
-		return strings.Contains(body, "error")
-	})
-	if evidence&SQLiEvidenceDatabaseError == 0 {
-		t.Fatal("database error evidence was not recognized")
-	}
-	if evidence&SQLiEvidenceQuotePair == 0 {
-		t.Fatal("quote-pair evidence was not recognized")
-	}
-}
+import "testing"
 
-func TestJavaSQLiEvidenceRecognizesBooleanAndOrderDifferences(t *testing.T) {
-	observations := map[sqlInjectionProbeKind]string{
-		sqliProbeBooleanTrue:  "rows=1",
-		sqliProbeBooleanFalse: "rows=0",
-		sqliProbeOrderTrue:    "first row",
-		sqliProbeOrderFalse:   "database syntax error",
+func TestResponsesDifferIgnoresSurroundingWhitespaceOnly(t *testing.T) {
+	// Identical bytes: not a difference.
+	if responsesDiffer("rows=1", "rows=1") {
+		t.Error("identical bodies reported as differing")
 	}
-	evidence := analyzeSQLiEvidence("baseline", observations, func(body string) bool {
-		return strings.Contains(body, "error")
-	})
-	if evidence&SQLiEvidenceBooleanDifference == 0 {
-		t.Fatal("boolean true/false difference was not recognized")
+	// Differing only by surrounding whitespace: transport formatting noise, not behaviour. Four
+	// checks key on this helper, and treating a trailing newline as a behavioural change would make
+	// every one of them fire on any server that is inconsistent about it.
+	if responsesDiffer("rows=1", "  rows=1\n") {
+		t.Error("bodies differing only by surrounding whitespace reported as differing")
 	}
-	if evidence&SQLiEvidenceOrderDifference == 0 {
-		t.Fatal("ORDER BY difference was not recognized")
+	// A real substitution: the case boolean injection produces.
+	if !responsesDiffer("rows=1", "rows=0") {
+		t.Error("a genuine body substitution was not reported as differing")
 	}
-}
-
-func TestJavaSQLiEvidenceDoesNotTreatIdenticalResponsesAsDifferences(t *testing.T) {
-	observations := map[sqlInjectionProbeKind]string{
-		sqliProbeBooleanTrue:  "same response",
-		sqliProbeBooleanFalse: "same response",
-		sqliProbeOrderTrue:    "same response",
-		sqliProbeOrderFalse:   "same response",
+	// Interior whitespace is content, not framing: trimming is deliberately only at the ends.
+	if !responsesDiffer("rows=1", "rows= 1") {
+		t.Error("an interior change was missed; trimming must apply to the ends only")
 	}
-	if evidence := analyzeSQLiEvidence("baseline", observations, func(string) bool { return false }); evidence != 0 {
-		t.Fatalf("identical responses produced evidence %#x", evidence)
+	// One side empty is a difference.
+	if !responsesDiffer("", "rows=1") {
+		t.Error("an empty body against a populated one was not reported as differing")
 	}
-}
-
-func TestJavaSQLiProbeFamiliesCoverTheNonOOBEvidencePaths(t *testing.T) {
-	seen := make(map[sqlInjectionProbeKind]bool)
-	for _, probe := range sqlInjectionProbes {
-		seen[probe.kind] = true
-	}
-	for _, kind := range []sqlInjectionProbeKind{
-		sqliProbeQuote,
-		sqliProbeEscapedQuote,
-		sqliProbeBooleanTrue,
-		sqliProbeBooleanFalse,
-		sqliProbeOrderTrue,
-		sqliProbeOrderFalse,
-		sqliProbeError,
-	} {
-		if !seen[kind] {
-			t.Errorf("missing SQLi probe kind %d", kind)
-		}
+	// Both effectively empty is not.
+	if responsesDiffer("", "   \n\t") {
+		t.Error("two effectively empty bodies reported as differing")
 	}
 }
