@@ -1,0 +1,5 @@
+{
+  "buildCommand": "cd burpsy-go/internal/web/ui && bun install && bun run build",
+  "outputDirectory": "burpsy-go/internal/web/ui",
+  "framework": null
+}
