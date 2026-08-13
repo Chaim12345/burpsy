@@ -1,0 +1,169 @@
+# Scanner Coverage
+
+Status of the 183-issue Burp Suite catalog (`internal/scanner/catalog_data.go`) against the
+burpsy scanner. **Every catalog row is now runnable; nothing is declined.**
+
+## Totals
+
+| Bucket | Count |
+|---|---:|
+| Catalog issues (total) | 183 |
+| **Runnable checks** | **183** |
+| Declined (explicit, `DeclinedCatalogDescriptors`) | 0 |
+
+### Rows per descriptor family
+
+| Family | Rows |
+|---|---:|
+| original native (`NativeCheckRegistry` body) | 5 |
+| HeaderChecks (`checks_headers.go`) | 6 |
+| CacheChecks (`checks_cache.go`) | 2 |
+| ReflectionProbe (`checks_reflection2.go`) | 6 |
+| HostDiscovery (`checks_discovery.go`) | 5 |
+| ResponseDependence (`checks_reflection3.go`) | 5 |
+| PassivePosture (`checks_passive_posture.go`) | 15 |
+| PassiveAnalysis (`checks_passive_analysis.go`) | 28 |
+| Injection (`checks_injection.go`) | 12 |
+| DOM (`checks_dom.go`) | 48 |
+| DOMExtra (`checks_dom_extra.go`) | 3 |
+| Stored (`checks_stored.go`) | 10 |
+| Remaining (`checks_remaining.go`) | 22 |
+| Final (`checks_final.go`) | 16 |
+
+Sum check: 5 + 6 + 2 + 6 + 5 + 5 + 15 + 28 + 12 + 48 + 3 + 10 + 22 + 16 = 183. Every catalog
+`TypeIndex` is accounted for exactly once; no `TypeIndex` is claimed by more than one family
+(`ValidateRegistry` rejects a duplicate, and `TestDeclinedCatalogDescriptors` fails if the
+per-family partition stops summing to 183).
+
+`CacheChecks` holds 2, not 4: `HTTP request smuggling` and `Client-side desync` moved to
+`checks_final.go` when the pipelining driver over `internal/sender/pipeline.go` was built.
+`DOMAndStoredXSSDescriptors` and `DeclinedCatalogDescriptors` both return empty slices now —
+they are kept as registration points so a future decline has somewhere honest to go.
+
+## Native / implemented checks
+
+These are registered as runnable `CheckDescriptor`s (Implementation = `ImplementationNative`).
+Each is gated behind a per-family `ScanConfig` switch, all off by default.
+
+### Original native registry (5)
+
+The rows `NativeCheckRegistry`'s own body still declares. `SQL injection`,
+`Cross-site scripting (reflected)` and `File path traversal` left this list for
+`checks_core_injection.go` when they were ported onto enumerated insertion points, and
+`XML external entity injection` / `Out-of-band resource load (HTTP)` moved to
+`checks_remaining.go`.
+
+| Catalog name | TypeIndex |
+|---|---:|
+| `JWT weak HMAC secret` | 2099459 |
+| `Vulnerable JavaScript dependency` | 5243008 |
+
+(Two rows here plus the three in `checks_core_injection.go` are the five the totals table counts as
+"original native": the split is by which file declares the descriptor, and
+`coreInjectionDescriptors()` is aggregated into the registry body.)
+
+### HeaderChecks family (6)
+
+| Catalog name | TypeIndex |
+|---|---:|
+| `Content security policy: allows clickjacking` | 2098439 |
+| `Content security policy: not enforced` | 2098441 |
+| `Cross-origin resource sharing: arbitrary origin trusted` | 2098689 |
+| `Cross-origin resource sharing: unencrypted origin trusted` | 2098690 |
+| `Cross-origin resource sharing: all subdomains trusted` | 2098691 |
+| `Duplicate cookies set` | 4196864 |
+
+### CacheChecks family (2)
+
+| Catalog name | TypeIndex |
+|---|---:|
+| `Web cache poisoning` | 2097536 |
+| `Web cache deception` | 2098768 |
+
+`HTTP request smuggling` and `Client-side desync` were listed here while this family declined them
+for want of a pipelining primitive. They moved to `checks_final.go` when `SendPipelined` gained a
+driver.
+
+### Main-claimed family (0)
+
+`DOMAndStoredXSSDescriptors()` returns nothing. Its nine rows — the DOM-based and stored XSS /
+JavaScript-injection variants plus `SQL injection (second order)` and
+`Client-side template injection` — moved to `checks_dom.go`, `checks_dom_extra.go` and
+`checks_stored.go` once `internal/domexec` and the stored ledger existed. The function is kept as a
+registration point; see `checks_declined_dom.go`.
+
+### ReflectionProbe family (6)
+
+All six are the catalog issues `java_check_inventory.json`'s live-scan JDI trace confirmed firing
+(Zr02, Zuag, Zb_5, Zwi, Zsn3, Zexx) that were not yet native. See `checks_reflection2.go`'s file
+header for exactly which parts of each are ported from recovered Java evidence
+(`out/strings/map_root.tsv` literals, `Zw9s.Ze`'s encoding logic) versus a documented,
+non-Burp-specific standard payload where the Java literal is ZKM ciphertext residue with no
+recoverable value.
+
+| Catalog name | TypeIndex |
+|---|---:|
+| `Input returned in response (reflected)` | 4197376 |
+| `Open redirection (reflected)` | 5243136 |
+| `Link manipulation (reflected)` | 5246979 |
+| `HTTP response header injection` | 2097664 |
+| `Unidentified code injection` | 1052672 |
+| `SSI injection` | 1052928 |
+
+### HostDiscovery family (5)
+
+All five are host-wide checks in `checks_discovery.go`: three from real recovered Java probe
+lists (`out/strings/map_root.tsv`) and two (HTTP PUT/TRACE) from RFC-defined method confirmation
+behavior, ported once `sendTestRequestBody` made arbitrary-method probing available for probes
+with a method other than the captured exchange's own.
+
+| Catalog name | TypeIndex |
+|---|---:|
+| `OpenAPI definition found (active scan check)` | 6293760 |
+| `Robots.txt file` | 6292992 |
+| `GraphQL endpoint discovered` | 2098449 |
+| `HTTP PUT method is enabled` | 1050880 |
+| `HTTP TRACE method is enabled` | 5245440 |
+
+### ResponseDependence family (5)
+
+All five are per-URL checks in `checks_reflection3.go`, ported from real recovered Java probe
+strings (`out/strings/map_root.tsv`): four distinct backup-file classes combined into one check,
+a mobile User-Agent string, Referer literal fragments, and the ASP.NET debugging/tracing wire
+protocol markers.
+
+| Catalog name | TypeIndex |
+|---|---:|
+| `Backup file` | 6291672 |
+| `User agent-dependent response` | 4194592 |
+| `Referer-dependent response` | 4194560 |
+| `ASP.NET debugging enabled` | 1050624 |
+| `ASP.NET tracing enabled` | 1049216 |
+
+## BCheck-implemented (0)
+
+The 264-file BCheck corpus at `/root/.cache/BChecks` was scanned for any `metadata.name` whose value
+matches a catalog issue `Name`, using both an exact case-insensitive comparison and a normalized
+comparison (case and punctuation stripped, whitespace collapsed). **No BCheck matched any catalog
+issue name.** Every BCheck in the corpus targets a CVE, a specific technology, or a token/secret
+class that is not one of the 183 catalog issue names, so the `bcheck_implemented` set is empty.
+BChecks are a separate evaluator architecture (the plan defers wiring them into the native registry)
+and are surfaced through `ScanConfig.CheckCorpus` rather than as catalog-declined rows.
+
+## Declined (0)
+
+Nothing is declined. `DeclinedCatalogDescriptors()` returns an empty slice, and the mechanism is
+kept for the next row that genuinely cannot be answered — see `check_registry_declined.go`'s header.
+
+This section used to carry a 141-row table of decline reasons. It was left in place after the totals
+above were rewritten, so for a while this document asserted both "nothing is declined" and
+"`OS command injection` — burpsy has no native evaluator for this injection class" while
+`checks_injection.go` implemented exactly that. A document that states a fact and its negation is
+the same defect as a scanner that reports a partial result as a complete one, so the stale half is
+gone rather than annotated. The retired reasons are recoverable from git history if the wording is
+ever wanted again.
+
+## Unclassified
+
+None. All 183 catalog issues fall into exactly one bucket above; the partition is exhaustive and
+sums to 183, asserted by `TestDeclinedCatalogDescriptors`.

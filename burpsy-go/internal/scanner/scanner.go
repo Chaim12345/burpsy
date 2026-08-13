@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html"
 	"net/url"
 	"regexp"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/session"
 	"go.uber.org/zap"
 )
 
@@ -39,6 +39,19 @@ type ActiveScanner struct {
 	// that need a tool are counted at load (LoadReport.Tools) and excluded
 	// from the dispatch set, never run against nothing.
 	toolRunner bcheck.ToolRunner
+	// browsers hands out the shared headless browser for DOM checks. Nil means no DOM
+	// capability: CheckContext.Browser then returns an error, so a DOM check reports that
+	// it could not look rather than reporting an empty observation set.
+	browsers BrowserProvider
+	// stored is the scan-wide stored-input ledger for the second-order rows. Nil means no
+	// stored tracking, and CheckContext.StoredLedger says so rather than returning an
+	// empty ledger that would make every stored check look clean.
+	stored *StoredLedger
+	// sessions is the coordinator the access-control and CSRF rows need. Nil means those
+	// checks report a missing capability instead of comparing two anonymous requests.
+	sessions *session.Coordinator
+	// provenance counts findings by source for the four "<x> generated issue" rows.
+	provenance *ProvenanceLedger
 	// jsLib and jwtWeak are the two native checks (SCAN-01 in js_vulns.go, SCAN-02 in jwt_weak.go).
 	// Each carries its own dataset and coverage counters, so they are built once per scanner and
 	// reused across audits rather than rebuilt per exchange — re-parsing the 514 KB retire.js corpus
@@ -59,19 +72,89 @@ type ActiveScanner struct {
 // Timeout is the one that could have: it is read by ActiveScanner.AuditConfig as the source of the
 // audit's wall-clock budget rather than being duplicated there.
 type ScanConfig struct {
-	MaxConcurrency     int
-	Timeout            time.Duration
+	MaxConcurrency int
+	Timeout        time.Duration
+	// ProbeTimeout caps a single active probe (one Send through the authorised
+	// sender). Zero inherits the audit item's deadline, so a probe rides the
+	// audit's cancellation without its own clock. A positive value derives a
+	// child context with its own deadline, so one slow probe is cancelled on its
+	// own clock rather than hanging the whole audit.
+	ProbeTimeout       time.Duration
 	CheckSqli          bool
 	CheckXss           bool
 	CheckPathTraversal bool
-	CheckSSRF          bool
-	CheckXXE           bool
-	CheckJwtWeak       bool
-	CheckJSVulns       bool
+	// CheckSSRF is the SSRF family switch. Its single catalog row, "Out-of-band resource
+	// load (HTTP)", now has an evaluator that needs a collaborator binary and outbound DNS,
+	// so it is additionally gated behind CheckExtendedActive: enabling CheckSSRF alone no
+	// longer admits it. That keeps a default scan from failing every sweep on a machine with
+	// no interactsh installed.
+	CheckSSRF    bool
+	CheckXXE     bool
+	CheckJwtWeak bool
+	CheckJSVulns bool
+	// CheckHeaders admits the CORS/CSP/duplicate-cookie native checks (checks_headers.go).
+	CheckHeaders bool
+	// CheckCachePoisoning admits the cache poisoning/deception native checks, and the
+	// explicitly declined request-smuggling/client-side-desync entries in the same family
+	// (checks_cache.go).
+	CheckCachePoisoning bool
 	// CheckCorpus admits the loaded BCheck corpus's active checks into the audit set. Set by
 	// WithCorpusChecks when a corpus is loaded; WithConfig can switch it off. Off with a corpus
 	// loaded audits the built-ins alone, which is the honest opt-out.
-	CheckCorpus    bool
+	CheckCorpus bool
+	// CheckExtendedCoverage admits every remaining catalog TypeIndex the registry declares — the
+	// Task 6 completeness sweep's native (header/CORS/CSP, cache poisoning/deception) and explicit
+	// declined rows. Off by default: these rows have no individual ScanConfig switch of their own
+	// (Java gives most of them no equivalent toggle either), so admitting all ~176 of them
+	// unconditionally would make every audit report on issues the operator never asked about and
+	// would silently change what "the checks I enabled" means for every existing caller. On, an
+	// audit gets full 183-TypeIndex accounting: every catalog issue as runnable, tool-dependent or
+	CheckExtendedCoverage bool
+	// CheckReflectionProbes admits the six single-probe reflection/redirect/injection checks in
+	// checks_reflection2.go: input reflection, open redirection, link manipulation, HTTP response
+	// header injection, unidentified code injection, and SSI injection. These are the six catalog
+	// issues java_check_inventory.json's runtime trace confirmed firing on a live Burp Pro scan
+	// (Zr02/Zuag/Zb_5/Zwi/Zsn3/Zexx) that were not yet native. Off by default like every other
+	// per-family switch.
+	CheckReflectionProbes bool
+	// CheckHostDiscovery admits the three host-wide passive-discovery checks in
+	// checks_discovery.go: OpenAPI/Swagger definition found, robots.txt file, and GraphQL
+	// endpoint discovered. Off by default like every other per-family switch.
+	CheckHostDiscovery bool
+	// CheckResponseDependence admits the five checks in checks_reflection3.go: backup file
+	// discovery, User-Agent-dependent response, Referer-dependent response, ASP.NET debugging
+	// enabled, and ASP.NET tracing enabled. Off by default like every other per-family switch.
+	CheckResponseDependence bool
+	// CheckPassivePosture admits the fifteen network-free passive checks in
+	// checks_passive_posture.go: the password-handling family, cross-domain POST,
+	// content-type declaration, long redirects, request-URL override, cross-domain Referer
+	// leakage, and the transport posture set (cleartext, HSTS, cacheable HTTPS, mixed
+	// content). Off by default like every other per-family switch.
+	CheckPassivePosture bool
+	// CheckPassiveAnalysis admits the twenty-eight network-free analyser checks in
+	// checks_passive_analysis.go: cookie security, response/header attributes, the nine
+	// information-disclosure families, ASP.NET ViewState, serialized-object recognition,
+	// and the five CSP directive rows. Off by default like every other per-family switch.
+	CheckPassiveAnalysis bool
+	// CheckActiveInjection admits the twelve active injection checks in checks_injection.go:
+	// OS command, LDAP, XPath, XML, file path manipulation, server-side template, expression
+	// language, and the five interpreted-language code-injection rows. These SEND crafted
+	// payloads, so unlike the passive families they are not admissible in a passive-only
+	// scan. Off by default like every other per-family switch.
+	CheckActiveInjection bool
+	// CheckDOM admits the wired DOM-based checks in checks_dom.go. They drive a real headless
+	// browser, so they need a browser provider; without one they report a refusal rather than
+	// an empty observation set. Off by default like every other per-family switch.
+	CheckDOM bool
+	// CheckExtendedActive admits the remaining wired rows in checks_remaining.go: GraphQL,
+	// JWT forgery, TLS certificate, SMTP header injection, CORS, cross-domain policy files,
+	// XXE and entity expansion, file-upload and OpenAPI discovery, out-of-band interaction,
+	// React2Shell fingerprinting, and the SQL-in-parameter heuristic. Off by default.
+	CheckExtendedActive bool
+	// CheckStored admits the stored (second-order) checks in checks_stored.go. They plant
+	// canaries into endpoints they audit and can only confirm a finding once one surfaces in a
+	// later exchange, so they need a StoredLedger. Off by default.
+	CheckStored    bool
 	CustomPayloads []string
 }
 
@@ -192,169 +275,6 @@ func (s *ActiveScanner) AuditMultiple(ctx context.Context, exchangeIDs []core.Ex
 	return findings, nil
 }
 
-// checkSQLi performs SQL injection testing.
-func (s *ActiveScanner) checkSQLi(ctx context.Context, exchange *core.Exchange) []*Finding {
-	var findings []*Finding
-
-	// SQL injection payloads
-	payloads := []string{
-		"' OR '1'='1",
-		"1; DROP TABLE users--",
-		"' UNION SELECT NULL--",
-		"1' AND '1'='1",
-		"' OR 1=1--",
-		"admin'--",
-		"1' OR '1'='1'/*",
-	}
-
-	// Error patterns that indicate SQL injection vulnerabilities
-	errorPatterns := []string{
-		"(?i)syntax.*error",
-		"(?i)unclosed.*quote",
-		"(?i)SQL.*warning",
-		"(?i)mysql.*fetch",
-		"(?i)ORA-[0-9]+",
-		"(?i)Microsoft.*ODBC",
-		"(?i)PostgreSQL.*ERROR",
-		"(?i)SQLite.*error",
-	}
-
-	for _, payload := range payloads {
-		// Test in URL parameters
-		testURL := appendQueryParam(exchange.Path, "test", payload)
-		if s.testPayload(ctx, exchange, testURL, payload, errorPatterns, "SQL Injection", &findings) {
-			break // Found vulnerability, stop testing
-		}
-	}
-
-	return findings
-}
-
-// checkXSS performs XSS testing.
-func (s *ActiveScanner) checkXSS(ctx context.Context, exchange *core.Exchange) []*Finding {
-	var findings []*Finding
-
-	// XSS payloads
-	payloads := []string{
-		"<script>alert(1)</script>",
-		"<img src=x onerror=alert(1)>",
-		"javascript:alert(1)",
-		"'><script>alert(document.cookie)</script>",
-		"<svg onload=alert(1)>",
-	}
-
-	for _, payload := range payloads {
-		// Test in URL parameters
-		testURL := appendQueryParam(exchange.Path, "xss", payload)
-		if s.testXSSPayload(ctx, exchange, testURL, payload, &findings) {
-			break // Found vulnerability, stop testing
-		}
-	}
-
-	return findings
-}
-
-// checkPathTraversal performs path traversal testing.
-func (s *ActiveScanner) checkPathTraversal(ctx context.Context, exchange *core.Exchange) []*Finding {
-	var findings []*Finding
-
-	// Path traversal payloads
-	payloads := []string{
-		"../../../etc/passwd",
-		"..\\..\\..\\windows\\system32\\config\\sam",
-		"....//....//....//etc/passwd",
-		"%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
-	}
-
-	// Sensitive file contents to look for
-	sensitivePatterns := []string{
-		"root:x:0:0:",
-		"[boot loader]",
-		"Windows PE",
-	}
-
-	for _, payload := range payloads {
-		testURL := appendQueryParam(exchange.Path, "file", payload)
-		if s.testPathTraversal(ctx, exchange, testURL, payload, sensitivePatterns, &findings) {
-			break
-		}
-	}
-
-	return findings
-}
-
-// testPayload tests a payload and checks for error patterns.
-func (s *ActiveScanner) testPayload(ctx context.Context, exchange *core.Exchange, testURL, payload string, errorPatterns []string, vulnType string, findings *[]*Finding) bool {
-	respBody := s.sendTestRequest(ctx, exchange, testURL)
-
-	for _, pattern := range errorPatterns {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			continue
-		}
-		if re.MatchString(respBody) {
-			*findings = append(*findings, &Finding{
-				Name:        vulnType,
-				Severity:    "high",
-				Confidence:  "tentative",
-				Description: fmt.Sprintf("Potential %s detected with payload: %s", vulnType, payload),
-				URL:         testURL,
-				Method:      exchange.Method,
-				Evidence:    payload,
-				Solution:    "Use parameterized queries and input validation",
-				Timestamp:   time.Now(),
-			})
-			return true
-		}
-	}
-	return false
-}
-
-// testXSSPayload tests XSS payloads.
-func (s *ActiveScanner) testXSSPayload(ctx context.Context, exchange *core.Exchange, testURL, payload string, findings *[]*Finding) bool {
-	respBody := s.sendTestRequest(ctx, exchange, testURL)
-
-	// Check if payload is reflected
-	if strings.Contains(respBody, payload) || strings.Contains(respBody, html.EscapeString(payload)) {
-		*findings = append(*findings, &Finding{
-			Name:        "Cross-Site Scripting (XSS)",
-			Severity:    "high",
-			Confidence:  "firm",
-			Description: fmt.Sprintf("Reflected XSS detected with payload: %s", payload),
-			URL:         testURL,
-			Method:      exchange.Method,
-			Evidence:    payload,
-			Solution:    "Encode output and validate input",
-			Timestamp:   time.Now(),
-		})
-		return true
-	}
-	return false
-}
-
-// testPathTraversal tests path traversal payloads.
-func (s *ActiveScanner) testPathTraversal(ctx context.Context, exchange *core.Exchange, testURL, payload string, sensitivePatterns []string, findings *[]*Finding) bool {
-	respBody := s.sendTestRequest(ctx, exchange, testURL)
-
-	for _, pattern := range sensitivePatterns {
-		if strings.Contains(respBody, pattern) {
-			*findings = append(*findings, &Finding{
-				Name:        "Path Traversal",
-				Severity:    "high",
-				Confidence:  "firm",
-				Description: fmt.Sprintf("Path traversal detected, sensitive file content exposed"),
-				URL:         testURL,
-				Method:      exchange.Method,
-				Evidence:    pattern,
-				Solution:    "Validate and sanitize file paths, use chroot or containers",
-				Timestamp:   time.Now(),
-			})
-			return true
-		}
-	}
-	return false
-}
-
 // noEngagementScope is the gate a scanner built without WithScope uses.
 //
 // It authorises everything, which is what ActiveScanner has always done with a nil scope — see
@@ -456,6 +376,88 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 		}
 	}
 	return s.getResponseBody(exchange)
+}
+
+// sendTestRequestFull is sendTestRequest's sibling for checks that need the response status line
+// and headers, not only the body — open redirection needs the Location header, and HTTP response
+// header injection needs to see whether an injected header actually landed. There is no stored-
+// response fallback here (unlike sendTestRequest): a captured exchange has no equivalent full
+// sender.Response for a probe that was never sent, so an unavailable or refused sender returns nil
+// rather than a fabricated one. headers overrides/adds request headers for probes that inject
+// through User-Agent/Referer rather than the query string (Zsn3/Zexx's real insertion points per
+// out/strings/map_root.tsv); nil sends the request with only its normal headers.
+func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.Exchange, testURL string, headers map[string]string) *sender.Response {
+	if s.sender == nil {
+		return nil
+	}
+	meter := meterFrom(ctx)
+	meter.attempt()
+	gate := s.probeGate(exchange)
+	resp, err := gate.SendRequest(ctx, &sender.Request{
+		Method:  exchange.Method,
+		Host:    exchange.Host,
+		Path:    testURL,
+		Headers: headers,
+		TLS:     exchange.TLS,
+		Port:    exchange.Port,
+	})
+	if gate.Refused() > 0 {
+		meter.refusal()
+		if s.logger != nil {
+			s.logger.Warn("test request refused: outside the engagement scope",
+				zap.String("host", exchange.Host), zap.String("url", testURL), zap.Error(err))
+		}
+		return nil
+	}
+	if err == nil && resp != nil {
+		meter.succeeded()
+		return resp
+	}
+	meter.failure()
+	if s.logger != nil {
+		s.logger.Warn("test request failed", zap.String("host", exchange.Host), zap.String("url", testURL), zap.Error(err))
+	}
+	return nil
+}
+
+// sendTestRequestBody is sendTestRequestFull's sibling for probes that need a specific method and
+// body rather than the exchange's own method and an empty body — GraphQL endpoint discovery POSTs
+// a JSON query body to a candidate path that has nothing to do with the captured exchange's own
+// request. Same refusal/failure semantics as sendTestRequestFull: no sender or a refused/failed
+// probe returns nil, never a fabricated response.
+func (s *ActiveScanner) sendTestRequestBody(ctx context.Context, exchange *core.Exchange, method, path string, headers map[string]string, body []byte) *sender.Response {
+	if s.sender == nil {
+		return nil
+	}
+	meter := meterFrom(ctx)
+	meter.attempt()
+	gate := s.probeGate(exchange)
+	resp, err := gate.SendRequest(ctx, &sender.Request{
+		Method:  method,
+		Host:    exchange.Host,
+		Path:    path,
+		Headers: headers,
+		Body:    body,
+		TLS:     exchange.TLS,
+		Port:    exchange.Port,
+	})
+	if gate.Refused() > 0 {
+		meter.refusal()
+		if s.logger != nil {
+			s.logger.Warn("test request refused: outside the engagement scope",
+				zap.String("host", exchange.Host), zap.String("url", path), zap.Error(err))
+		}
+		return nil
+	}
+	if err == nil && resp != nil {
+		meter.succeeded()
+		return resp
+	}
+	meter.failure()
+	if s.logger != nil {
+		s.logger.Warn("test request failed", zap.String("host", exchange.Host), zap.String("url", path), zap.Error(err))
+	}
+	return nil
 }
 
 // appendQueryParam adds a query parameter to a path, preserving any existing

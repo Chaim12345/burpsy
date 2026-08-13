@@ -22,6 +22,7 @@ package scanner
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -36,10 +37,11 @@ var errCheckUnsupported = errors.New("bcheck: check cannot be evaluated")
 // bcheckSink adapts the evaluator's Sink to this scanner: every send is metered
 // and passes through the AuthorisedSender bound to the scanned exchange.
 type bcheckSink struct {
-	sc    *ActiveScanner
-	ctx   context.Context
-	ex    *core.Exchange
-	meter *probeMeter
+	sc          *ActiveScanner
+	ctx         context.Context
+	ex          *core.Exchange
+	meter       *probeMeter
+	probeBudget time.Duration
 }
 
 // Send writes raw request bytes to the bound target through the same gate every
@@ -56,7 +58,7 @@ func (k *bcheckSink) Send(target *bcheck.Target, raw []byte) ([]byte, error) {
 	}
 	k.meter.attempt()
 	gate := k.sc.probeGate(k.ex)
-	resp, err := gate.Send(k.ctx, raw)
+	resp, err := sendProbe(k.ctx, gate, raw, k.probeBudget)
 	if gate.Refused() > 0 {
 		// A refusal counts as a failure too: nothing left the process, so the
 		// check saw no probe response either way. (probeMeter.refusal already
@@ -69,7 +71,7 @@ func (k *bcheckSink) Send(target *bcheck.Target, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	k.meter.succeeded()
-	return resp.Raw, nil
+	return resp, nil
 }
 
 // corpusActiveChecks builds one audit-engine check per loaded corpus check the
@@ -139,7 +141,7 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 	if req, err := s.store.Get(ex.Request); err == nil {
 		bctx.Request = req.Raw()
 	}
-	sink := &bcheckSink{sc: s, ctx: ctx, ex: ex, meter: meterFrom(ctx)}
+	sink := &bcheckSink{sc: s, ctx: ctx, ex: ex, meter: meterFrom(ctx), probeBudget: probeBudgetFor(s)}
 	// The tool runner rides the context like the sink: the evaluator asks for a
 	// named tool, this scanner resolves it through the allowlist. Nil keeps the
 	// pre-tool behaviour — a check that somehow reaches `run tool` without one

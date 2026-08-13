@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -75,7 +74,7 @@ func TestAuditSendsRealRequests(t *testing.T) {
 	}
 	found := false
 	for _, f := range findings {
-		if f.Name == "Cross-Site Scripting (XSS)" {
+		if f.Name == "Cross-site scripting (reflected)" {
 			found = true
 			if f.Evidence == "" {
 				t.Error("finding has no evidence payload")
@@ -119,7 +118,9 @@ func TestAuditFallsBackToStoredResponse(t *testing.T) {
 	if len(findings) == 0 {
 		t.Fatal("no findings: stored response path traversal not detected")
 	}
-	if !strings.Contains(findings[0].Name, "Traversal") {
-		t.Errorf("finding = %q, want path traversal", findings[0].Name)
+	// The catalog row is "File path traversal". The predecessor emitted "Path Traversal", a name
+	// no catalog row carries, so its findings could not be attributed to a TypeIndex at all.
+	if findings[0].Name != "File path traversal" {
+		t.Errorf("finding = %q, want the catalog row name %q", findings[0].Name, "File path traversal")
 	}
 }

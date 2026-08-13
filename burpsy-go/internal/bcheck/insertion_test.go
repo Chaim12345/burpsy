@@ -2,8 +2,11 @@ package bcheck
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 // req parses a raw request for the enumerator, failing the test if it cannot.
@@ -183,6 +186,185 @@ func TestQualifiersSelectWhichFamiliesAreEnumerated(t *testing.T) {
 	}
 }
 
+func TestASyntheticHeaderPointIsEmittedOnlyForHeadersTheBaseRequestLacks(t *testing.T) {
+	r := req(t, "GET /s HTTP/1.1\r\nHost: x\r\n\r\n")
+	ps, declined := Enumerate(r, []string{"synthetic_header"})
+	if !reflect.DeepEqual(names(ps), []string{"synthetic_header:Referer", "synthetic_header:User-Agent"}) {
+		t.Errorf("points = %v, want a Referer and a User-Agent point when the request carries neither", names(ps))
+	}
+	if len(declined) != 0 {
+		t.Errorf("declined = %v, want none", declined)
+	}
+	if ps[0].BaseValue != "" {
+		t.Errorf("Referer BaseValue = %q, want empty (the header does not exist on the wire)", ps[0].BaseValue)
+	}
+
+	hasBoth := req(t, "GET /s HTTP/1.1\r\nHost: x\r\nUser-Agent: burpsy/1\r\nReferer: https://a.example/ref\r\n\r\n")
+	ps2, _ := Enumerate(hasBoth, []string{"synthetic_header"})
+	if len(ps2) != 0 {
+		t.Errorf("points = %v, want none when both headers are already carried (a second identical probe could not be attributed)", names(ps2))
+	}
+
+	hasUA := req(t, "GET /s HTTP/1.1\r\nHost: x\r\nuser-agent: burpsy/1\r\n\r\n")
+	ps3, _ := Enumerate(hasUA, []string{"synthetic_header"})
+	if !reflect.DeepEqual(names(ps3), []string{"synthetic_header:Referer"}) {
+		t.Errorf("points = %v, want only the absent Referer (the case-insensitive compare must see user-agent)", names(ps3))
+	}
+}
+
+func TestApplyToASyntheticHeaderAddsOnlyThatHeaderWithThePayloadUntouched(t *testing.T) {
+	r := req(t, "GET /s?q=1 HTTP/1.1\r\nHost: x\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"synthetic_header"})
+	out, err := ps[0].Apply(r, "https://fuzz.example/ref/", false)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	want := "GET /s?q=1 HTTP/1.1\r\nHost: x\r\nReferer: https://fuzz.example/ref/\r\n\r\n"
+	if string(out) != want {
+		t.Errorf("applied request = %q, want %q (the fresh header appends after the existing ones, the payload unescaped)", out, want)
+	}
+
+	out2, err := ps[1].Apply(r, "burpsy", true)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if !strings.Contains(string(out2), "User-Agent: burpsy\r\n") {
+		t.Errorf("appending on a synthetic point = %q, want the bare payload (there is no base value to keep)", out2)
+	}
+}
+
+func TestARelocateBodyToQueryPointMovesThePairIntoTheQueryString(t *testing.T) {
+	r := req(t, "POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\na=1&user=bo")
+	ps, _ := Enumerate(r, []string{"relocate_body_to_query"})
+	if !reflect.DeepEqual(names(ps), []string{"relocate_body_to_query:a", "relocate_body_to_query:user"}) {
+		t.Fatalf("points = %v, want one per form body field", names(ps))
+	}
+	if ps[1].BaseValue != "bo" {
+		t.Errorf("user BaseValue = %q, want %q", ps[1].BaseValue, "bo")
+	}
+	out, err := ps[1].Apply(r, "or '1'='1", false)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "POST /f?user=or%20'1'%3D'1 HTTP/1.1") {
+		t.Errorf("request line = %q, want the pair in the query, escaped (%q stays raw, it is not a separator), under its own name", s, "'")
+	}
+	if strings.Contains(s, "user=bo") {
+		t.Errorf("request = %q, want the wire value itself gone from the body", s)
+	}
+	if !strings.Contains(s, "\r\n\r\na=1") {
+		t.Errorf("body = %q, want the switched pair removed and the remaining field intact", s)
+	}
+}
+
+func TestARelocateQueryToBodyPointMovesThePairIntoAnEmptyFormBody(t *testing.T) {
+	r := req(t, "POST /f?user=bo&page=2 HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 0\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"relocate_query_to_body"})
+	if !reflect.DeepEqual(names(ps), []string{"relocate_query_to_body:user", "relocate_query_to_body:page"}) {
+		t.Fatalf("points = %v, want one per query pair", names(ps))
+	}
+	out, err := ps[0].Apply(r, "x&y=z", false)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	s := string(out)
+	if !strings.HasPrefix(s, "POST /f?page=2 HTTP/1.1") {
+		t.Errorf("request line = %q, want only the untouched pair left in the query (user alone must exist in the body)", s)
+	}
+	parsed, err := core.ParseRequestEdit(out)
+	if err != nil {
+		t.Fatalf("applied request no longer parses: %v", err)
+	}
+	if got := string(parsed.Body); got != "user=x%26y%3Dz" {
+		t.Errorf("body = %q, want the escaped payload appended as k=v form encoding", got)
+	}
+	if ct := parsed.Header("content-type"); ct != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q, want it preserved unchanged", ct)
+	}
+}
+
+func TestARelocateQueryToBodyOntoAMultipartBodyIsDeclinedNotClean(t *testing.T) {
+	r := req(t, "POST /u?user=bo HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n")
+	ps, declined := Enumerate(r, []string{"relocate_query_to_body"})
+	if len(ps) != 0 {
+		t.Errorf("points = %v, want none (a relocated pair would corrupt the multipart framing)", names(ps))
+	}
+	if len(declined) != 1 {
+		t.Fatalf("declined = %d, want 1 (the refusal is recorded, not a clean empty list)", len(declined))
+	}
+	if !strings.Contains(declined[0].What, "relocation") {
+		t.Errorf("declined.What = %q, want it to name the relocation family", declined[0].What)
+	}
+	if !strings.Contains(declined[0].Reason, "form") {
+		t.Errorf("declined.Reason = %q, want it to say the body is not a form target", declined[0].Reason)
+	}
+}
+
+func TestARelocateBodyToQueryFromAnUnmodelledBodySimplyHasNoPairs(t *testing.T) {
+	// The direction asymmetry: body→query reads the *source* (formKVPairs), so
+	// a multipart body has no relocatable pairs and yields nothing, while
+	// query→body reads the *target* and must decline. Neither claim is "tested,
+	// found nothing".
+	r := req(t, "POST /u?user=bo HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n")
+	ps, declined := Enumerate(r, []string{"relocate_body_to_query"})
+	if len(ps) != 0 {
+		t.Errorf("points = %v, want none (multipart body is not parsed as a form)", names(ps))
+	}
+	if len(declined) != 0 {
+		t.Errorf("declined = %v, want none (the source does not parse as a form, so there is nothing to relocate)", declined)
+	}
+}
+
+func TestARequestWithNoKVPairsYieldsNoRelocationPointsAndNoDeclines(t *testing.T) {
+	r := req(t, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	ps, declined := Enumerate(r, []string{"relocate_body_to_query", "relocate_query_to_body"})
+	if len(ps) != 0 {
+		t.Errorf("points = %v, want none", names(ps))
+	}
+	if len(declined) != 0 {
+		t.Errorf("declined = %v, want none (having no pairs to relocate is the normal no-points case)", declined)
+	}
+}
+
+func TestTheContentLengthAgreesAfterARelocationSplicesTheBody(t *testing.T) {
+	r := req(t, "POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\na=1&user=bo")
+	ps, _ := Enumerate(r, []string{"relocate_body_to_query"})
+	out, err := ps[1].Apply(r, "zz", true)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	parsed, err := core.ParseRequestEdit(out)
+	if err != nil {
+		t.Fatalf("applied request no longer parses: %v; raw %q", err, out)
+	}
+	want := strconv.Itoa(len(parsed.Body))
+	if cl := parsed.Header("content-length"); cl != want {
+		t.Errorf("Content-Length = %q, want %q to match the %d-byte body left after the pair moved", cl, want, len(parsed.Body))
+	}
+	if got := string(parsed.Body); got != "a=1" {
+		t.Errorf("body = %q, want %q (the switched pair removed, the rest intact)", got, "a=1")
+	}
+	if !strings.Contains(string(out), "/f?user=bozz") {
+		t.Errorf("request = %q, want appending to carry the base value to the switched location as %q", out, "user=bozz")
+	}
+}
+
+func TestAppendingToAHeaderPointStillKeepsTheBaseValueAndStaysRaw(t *testing.T) {
+	// The existing header-value kinds must not regress now that Apply also
+	// handles synthetic and relocation points: appending keeps the wire base
+	// value and a header payload is still never percent-escaped.
+	r := req(t, "GET / HTTP/1.1\r\nHost: x\r\nX-Flag: on\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"header"})
+	out, err := ps[0].Apply(r, "&x=1", true)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if !strings.Contains(string(out), "X-Flag: on&x=1") {
+		t.Errorf("X-Flag = %q, want the base value kept with the unescaped payload appended", out)
+	}
+}
+
 func TestARequestWithNowhereToInjectYieldsNoPoints(t *testing.T) {
 	r := req(t, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
 	ps, declined := Enumerate(r, []string{"any"})
@@ -293,5 +475,662 @@ given insertion point then
 	}
 	if !reflect.DeepEqual(c.InsertionKinds, []string{"any"}) {
 		t.Errorf("InsertionKinds = %v, want [any]", c.InsertionKinds)
+	}
+}
+
+func TestURLPathFilenameAndFoldersAreEnumeratedAsSeparatePoints(t *testing.T) {
+	r := req(t, "GET /api/users/42/profile.json?x=1 HTTP/1.1\r\nHost: x\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"url_path_filename", "url_path_folder"})
+	if !reflect.DeepEqual(names(ps), []string{"url_path_filename:filename", "url_path_folder:folder", "url_path_folder:folder", "url_path_folder:folder"}) {
+		t.Fatalf("points = %v", names(ps))
+	}
+	if ps[0].BaseValue != "profile.json" {
+		t.Errorf("filename BaseValue = %q, want %q", ps[0].BaseValue, "profile.json")
+	}
+	wantFolders := []string{"api", "users", "42"}
+	for i, want := range wantFolders {
+		if ps[i+1].BaseValue != want {
+			t.Errorf("folder[%d] BaseValue = %q, want %q", i, ps[i+1].BaseValue, want)
+		}
+	}
+}
+
+func TestURLPathFilenameOnRootIsAnEmptyPoint(t *testing.T) {
+	r := req(t, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"url_path_filename", "url_path_folder"})
+	if !reflect.DeepEqual(names(ps), []string{"url_path_filename:filename"}) {
+		t.Fatalf("points = %v, want one empty filename point and no folders", names(ps))
+	}
+	if ps[0].BaseValue != "" {
+		t.Errorf("BaseValue = %q, want empty", ps[0].BaseValue)
+	}
+}
+
+func TestApplyToAFolderPointOnlyChangesThatSegment(t *testing.T) {
+	r := req(t, "GET /api/users/42/profile.json HTTP/1.1\r\nHost: x\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"url_path_folder"})
+	out, err := ps[1].Apply(r, "'", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "/api/'/42/profile.json") {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestApplyToAFilenamePointPercentEscapesASlash(t *testing.T) {
+	r := req(t, "GET /api/users/42/profile.json HTTP/1.1\r\nHost: x\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"url_path_filename"})
+	out, err := ps[0].Apply(r, "../etc/passwd", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "/api/users/42/..%2Fetc%2Fpasswd") {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestParamNameURLTargetsTheNameNotTheValue(t *testing.T) {
+	r := req(t, "GET /s?q=cat HTTP/1.1\r\nHost: x\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"param_name_url"})
+	if !reflect.DeepEqual(names(ps), []string{"param_name_url:q"}) {
+		t.Fatalf("points = %v", names(ps))
+	}
+	out, err := ps[0].Apply(r, "x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "/s?qx=cat") {
+		t.Fatalf("got %q, want the name mutated and the value untouched", out)
+	}
+}
+
+func TestParamNameBodyOnlyAppliesToAFormBody(t *testing.T) {
+	r := req(t, "POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\na=1&user=bo")
+	ps, _ := Enumerate(r, []string{"param_name_body"})
+	if !reflect.DeepEqual(names(ps), []string{"param_name_body:a", "param_name_body:user"}) {
+		t.Fatalf("points = %v", names(ps))
+	}
+
+	jsonReq := req(t, "POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"user\":\"bo\"}")
+	jsonPs, _ := Enumerate(jsonReq, []string{"param_name_body"})
+	if len(jsonPs) != 0 {
+		t.Fatalf("json body should yield no param_name_body points, got %v", names(jsonPs))
+	}
+}
+
+func TestEntireBodyIsOnePointCoveringTheWholeBody(t *testing.T) {
+	r := req(t, "POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"user\":\"bo\"}")
+	ps, _ := Enumerate(r, []string{"entire_body"})
+	if len(ps) != 1 {
+		t.Fatalf("points = %v, want exactly one", names(ps))
+	}
+	if ps[0].BaseValue != `{"user":"bo"}` {
+		t.Errorf("BaseValue = %q", ps[0].BaseValue)
+	}
+	out, err := ps[0].Apply(r, `{"x":1}`, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "\r\n\r\n{\"x\":1}") {
+		t.Fatalf("got %q", out)
+	}
+}
+
+func TestARelocateQueryToCookiePointMovesThePairIntoTheCookieHeader(t *testing.T) {
+	r := req(t, "POST /f?user=bo&page=2 HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 0\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"relocate_query_to_cookie"})
+	if !reflect.DeepEqual(names(ps), []string{"relocate_query_to_cookie:user", "relocate_query_to_cookie:page"}) {
+		t.Fatalf("points = %v, want one per query pair", names(ps))
+	}
+	out, err := ps[0].Apply(r, "x&y=z", false)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	s := string(out)
+	if !strings.HasPrefix(s, "POST /f?page=2 HTTP/1.1") {
+		t.Errorf("request line = %q, want only the untouched pair left in the query (user alone must move to the cookie)", s)
+	}
+	parsed, err := core.ParseRequestEdit(out)
+	if err != nil {
+		t.Fatalf("applied request no longer parses: %v", err)
+	}
+	if got := parsed.Header("cookie"); got != "user=x%26y%3Dz" {
+		t.Errorf("cookie = %q, want the escaped payload appended as k=v form encoding", got)
+	}
+	if ct := parsed.Header("content-type"); ct != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q, want it preserved unchanged", ct)
+	}
+	// A request with no cookies must still accept a relocated pair.
+	noCookie := req(t, "POST /f?user=bo HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 0\r\n\r\n")
+	ps2, _ := Enumerate(noCookie, []string{"relocate_query_to_cookie"})
+	out2, err := ps2[0].Apply(noCookie, "v", false)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	parsed2, err := core.ParseRequestEdit(out2)
+	if err != nil {
+		t.Fatalf("applied request no longer parses: %v", err)
+	}
+	if got := parsed2.Header("cookie"); got != "user=v" {
+		t.Errorf("cookie = %q, want a Cookie header created when the base request had none", got)
+	}
+}
+
+func TestARelocateCookieToQueryPointMovesThePairIntoTheQueryString(t *testing.T) {
+	r := req(t, "GET /s HTTP/1.1\r\nHost: x\r\nCookie: sid=abc; theme=dark\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"relocate_cookie_to_query"})
+	if !reflect.DeepEqual(names(ps), []string{"relocate_cookie_to_query:sid", "relocate_cookie_to_query:theme"}) {
+		t.Fatalf("points = %v, want one per cookie", names(ps))
+	}
+	out, err := ps[0].Apply(r, "evil", false)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "sid=evil") {
+		t.Errorf("request = %q, want the pair in the query under its own name", s)
+	}
+	parsed, err := core.ParseRequestEdit(out)
+	if err != nil {
+		t.Fatalf("applied request no longer parses: %v", err)
+	}
+	if got := parsed.Header("cookie"); got != "theme=dark" {
+		t.Errorf("cookie = %q, want the moved pair gone and the remaining cookie intact", got)
+	}
+}
+
+func TestARelocateCookieToQueryPreservesTheSeparatorBetweenRemainingCookies(t *testing.T) {
+	// Three cookies: removing a middle one must keep the other two separated by
+	// a single delimiter, not merge them into one clause.
+	r := req(t, "GET /s HTTP/1.1\r\nHost: x\r\nCookie: a=1; b=2; c=3\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"relocate_cookie_to_query"})
+	if ps[1].Name != "b" {
+		t.Fatalf("points = %v, want b as the middle cookie", names(ps))
+	}
+	out, err := ps[1].Apply(r, "X", false)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	parsed, err := core.ParseRequestEdit(out)
+	if err != nil {
+		t.Fatalf("applied request no longer parses: %v", err)
+	}
+	if got := parsed.Header("cookie"); got != "a=1; c=3" {
+		t.Errorf("cookie = %q, want the middle clause removed while keeping the survivors separated", got)
+	}
+}
+
+func TestARelocateBodyToCookiePointMovesThePairIntoTheCookieHeader(t *testing.T) {
+	r := req(t, "POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\na=1&user=bo")
+	ps, _ := Enumerate(r, []string{"relocate_body_to_cookie"})
+	if !reflect.DeepEqual(names(ps), []string{"relocate_body_to_cookie:a", "relocate_body_to_cookie:user"}) {
+		t.Fatalf("points = %v, want one per form body field", names(ps))
+	}
+	out, err := ps[1].Apply(r, "zz", true)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	parsed, err := core.ParseRequestEdit(out)
+	if err != nil {
+		t.Fatalf("applied request no longer parses: %v", err)
+	}
+	if got := string(parsed.Body); got != "a=1" {
+		t.Errorf("body = %q, want the switched pair removed and the rest intact", got)
+	}
+	if got := parsed.Header("cookie"); got != "user=bozz" {
+		t.Errorf("cookie = %q, want the base value carried to the switched location as %q", got, "user=bozz")
+	}
+}
+
+func TestARelocateCookieToBodyPointMovesThePairIntoAFormBody(t *testing.T) {
+	r := req(t, "GET /s HTTP/1.1\r\nHost: x\r\nCookie: sid=abc; theme=dark\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 0\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"relocate_cookie_to_body"})
+	if !reflect.DeepEqual(names(ps), []string{"relocate_cookie_to_body:sid", "relocate_cookie_to_body:theme"}) {
+		t.Fatalf("points = %v, want one per cookie", names(ps))
+	}
+	out, err := ps[0].Apply(r, "x&y=z", false)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	parsed, err := core.ParseRequestEdit(out)
+	if err != nil {
+		t.Fatalf("applied request no longer parses: %v", err)
+	}
+	if got := string(parsed.Body); got != "sid=x%26y%3Dz" {
+		t.Errorf("body = %q, want the escaped payload appended as k=v form encoding", got)
+	}
+	if got := parsed.Header("cookie"); got != "theme=dark" {
+		t.Errorf("cookie = %q, want the moved pair gone and the remaining cookie intact", got)
+	}
+}
+
+func TestARelocateCookieToBodyOntoAMultipartBodyIsDeclinedNotClean(t *testing.T) {
+	r := req(t, "POST /u?x=1 HTTP/1.1\r\nHost: x\r\nCookie: sid=abc\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n")
+	ps, declined := Enumerate(r, []string{"relocate_cookie_to_body"})
+	if len(ps) != 0 {
+		t.Errorf("points = %v, want none (a relocated pair would corrupt the multipart framing)", names(ps))
+	}
+	if len(declined) != 1 {
+		t.Fatalf("declined = %d, want 1 (the refusal is recorded, not a clean empty list)", len(declined))
+	}
+	if !strings.Contains(declined[0].What, "relocation") {
+		t.Errorf("declined.What = %q, want it to name the relocation family", declined[0].What)
+	}
+	if !strings.Contains(declined[0].Reason, "form") {
+		t.Errorf("declined.Reason = %q, want it to say the body is not a form target", declined[0].Reason)
+	}
+}
+
+func TestAnyDoesNotReachTheFiveGoOnlyKinds(t *testing.T) {
+	r := req(t, "GET /api/users/42/profile.json?x=1 HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"any"})
+	for _, p := range ps {
+		switch p.Kind {
+		case IpParamNameURL, IpParamNameBody, IpEntireBody, IpURLPathFilename, IpURLPathFolder:
+			t.Fatalf("kind %q reached through any", p.Kind)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Nested expansion tests
+// ---------------------------------------------------------------------------
+
+func Test_tryDecodeNested_JSON(t *testing.T) {
+	inner, kind, ok := tryDecodeNested(`{"x":"hello","y":1}`)
+	if !ok || kind != nestedJSON {
+		t.Fatalf("got ok=%v kind=%v, want ok=true kind=nestedJSON", ok, kind)
+	}
+	if inner != `{"x":"hello","y":1}` {
+		t.Fatalf("inner = %q", inner)
+	}
+}
+
+func Test_tryDecodeNested_base64json(t *testing.T) {
+	// base64 of {"x":1}
+	inner, kind, ok := tryDecodeNested("eyJ4IjoxfQ==")
+	if !ok || kind != nestedBase64JSON {
+		t.Fatalf("got ok=%v kind=%v, want ok=true kind=nestedBase64JSON", ok, kind)
+	}
+	if inner != `{"x":1}` {
+		t.Fatalf("inner = %q", inner)
+	}
+}
+
+func Test_tryDecodeNested_base64raw(t *testing.T) {
+	// base64 of "hello world"
+	inner, kind, ok := tryDecodeNested("aGVsbG8gd29ybGQ=")
+	if !ok || kind != nestedBase64 {
+		t.Fatalf("got ok=%v kind=%v, want ok=true kind=nestedBase64", ok, kind)
+	}
+	if inner != "hello world" {
+		t.Fatalf("inner = %q", inner)
+	}
+}
+
+func Test_tryDecodeNested_XML(t *testing.T) {
+	inner, kind, ok := tryDecodeNested("<root><a>text</a></root>")
+	if !ok || kind != nestedXML {
+		t.Fatalf("got ok=%v kind=%v, want ok=true kind=nestedXML", ok, kind)
+	}
+	if inner != "<root><a>text</a></root>" {
+		t.Fatalf("inner = %q", inner)
+	}
+}
+
+func Test_tryDecodeNested_rejects_plain(t *testing.T) {
+	if _, _, ok := tryDecodeNested("hello"); ok {
+		t.Fatal("plain text should not be treated as nested")
+	}
+	if _, _, ok := tryDecodeNested(""); ok {
+		t.Fatal("empty string should not be treated as nested")
+	}
+	if _, _, ok := tryDecodeNested("not-base64!@#$"); ok {
+		t.Fatal("garbage should not be treated as nested")
+	}
+}
+
+func Test_innerSpans_JSON(t *testing.T) {
+	spans := innerSpans(nestedJSON, `{"x":"hello","y":"world"}`)
+	if len(spans) != 2 {
+		t.Fatalf("got %d spans, want 2", len(spans))
+	}
+	// The first string value "hello" is at byte 6..11 (inside quotes).
+	if spans[0] != [2]int{6, 11} {
+		t.Fatalf("span[0] = %v, want [6,11]", spans[0])
+	}
+	// The second string value "world" is at byte 18..23 (inside quotes).
+	if spans[1] != [2]int{18, 23} {
+		t.Fatalf("span[1] = %v, want [18,23]", spans[1])
+	}
+}
+
+func Test_innerSpans_base64(t *testing.T) {
+	spans := innerSpans(nestedBase64, "anything")
+	if len(spans) != 1 || spans[0] != [2]int{0, 8} {
+		t.Fatalf("got %v, want [0,8]", spans)
+	}
+}
+
+func Test_innerSpans_XML(t *testing.T) {
+	spans := innerSpans(nestedXML, "<root>hello <em>world</em></root>")
+	// Text nodes: "hello " at 6..12, but trailing whitespace is trimmed from
+	// a text-node span (see trimTrailingWS), so the first span is 6..11, not
+	// 6..12. "world" has no trailing whitespace to trim, so 16..21 stands.
+	if len(spans) != 2 {
+		t.Fatalf("got %d spans: %v", len(spans), spans)
+	}
+	if spans[0] != [2]int{6, 11} {
+		t.Fatalf("span[0] = %v, want [6,11]", spans[0])
+	}
+	if spans[1] != [2]int{16, 21} {
+		t.Fatalf("span[1] = %v, want [16,21]", spans[1])
+	}
+}
+
+func Test_containerDecodeEncode_roundtrip(t *testing.T) {
+	// containerEncode escapes '+', '=' and '&' because those bytes decide how
+	// a k=v container is parsed; containerDecode must reverse exactly that, so
+	// the round trip runs encode-then-decode over a logical value, not
+	// decode-then-encode over a string that already contains raw separators
+	// (which is not something containerEncode could ever have produced).
+	original := "a+b=c&d=e"
+	encoded := containerEncode(codingForm, original)
+	decoded := containerDecode(codingForm, encoded)
+	if decoded != original {
+		t.Fatalf("round-trip failed: %q → %q → %q", original, encoded, decoded)
+	}
+}
+
+func Test_nestedDecodeEncode_base64_roundtrip(t *testing.T) {
+	decoded, err := nestedDecode(nestedBase64, "aGVsbG8=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded != "hello" {
+		t.Fatalf("decoded = %q, want %q", decoded, "hello")
+	}
+	encoded := nestedEncode(nestedBase64, decoded)
+	if encoded != "aGVsbG8=" {
+		t.Fatalf("encoded = %q, want %q", encoded, "aGVsbG8=")
+	}
+}
+
+func Test_expandNested_query_param_json(t *testing.T) {
+	r := req(t, "GET /?data=%7B%22x%22%3A%22payload%22%7D HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, _ := Enumerate(r, []string{"query"})
+	var nestedFound int
+	for _, p := range points {
+		if p.coding == codingNested {
+			nestedFound++
+			if p.nested != nestedJSON {
+				t.Errorf("nested kind = %v, want nestedJSON", p.nested)
+			}
+		}
+	}
+	if nestedFound == 0 {
+		t.Fatal("expected at least one nested point for a JSON query param")
+	}
+}
+
+func Test_expandNested_query_param_base64json(t *testing.T) {
+	// data=eyJ4IjoiMSJ9  →  base64 of {"x":"1"}. The inner value must be a
+	// JSON *string* — innerSpans only targets string values (see its doc
+	// comment), so a base64→JSON fixture with only numeric fields can never
+	// produce a nested point by design.
+	r := req(t, "GET /?data=eyJ4IjoiMSJ9 HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, _ := Enumerate(r, []string{"query"})
+	var nestedFound int
+	for _, p := range points {
+		if p.coding == codingNested {
+			nestedFound++
+			if p.nested != nestedBase64JSON {
+				t.Errorf("nested kind = %v, want nestedBase64JSON", p.nested)
+			}
+		}
+	}
+	if nestedFound == 0 {
+		t.Fatal("expected at least one nested point for a base64→JSON query param")
+	}
+}
+
+func Test_expandNested_cookie_param_json(t *testing.T) {
+	// Cookie: session={"id":"42"}, percent-encoded. Same string-value
+	// requirement as the base64json case above.
+	r := req(t, "GET / HTTP/1.1\r\nHost: x\r\nCookie: session=%7B%22id%22%3A%2242%22%7D\r\n\r\n")
+	points, _ := Enumerate(r, []string{"cookie"})
+	var nestedFound int
+	for _, p := range points {
+		if p.coding == codingNested {
+			nestedFound++
+			if p.nested != nestedJSON {
+				t.Errorf("nested kind = %v, want nestedJSON", p.nested)
+			}
+		}
+	}
+	if nestedFound == 0 {
+		t.Fatal("expected at least one nested point for a JSON cookie param")
+	}
+}
+
+func Test_applyNested_json_replaces_inner_string(t *testing.T) {
+	// Request with query param data={"x":"old","y":"keep"}
+	// Enumerate gives a nested point targeting the first string value "old".
+	r := req(t, "GET /?data=%7B%22x%22%3A%22old%22%2C%22y%22%3A%22keep%22%7D HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, _ := Enumerate(r, []string{"query"})
+	for _, p := range points {
+		if p.coding != codingNested || p.nested != nestedJSON {
+			continue
+		}
+		if p.Name != "data" {
+			continue
+		}
+		// Payload to inject.
+		newReq, err := p.Apply(r, "INJECTED", false)
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		newPoints, _ := Enumerate(newReq, []string{"query"})
+		for _, np := range newPoints {
+			if np.Name == "data" {
+				decoded, err := percentDecode(np.BaseValue), error(nil)
+				if err != nil {
+					t.Fatalf("percentDecode: %v", err)
+				}
+				if !strings.Contains(decoded, "INJECTED") {
+					t.Errorf("applied value %q does not contain INJECTED (decoded=%s)", np.BaseValue, decoded)
+				}
+				// Ensure the other value survived.
+				if !strings.Contains(decoded, "keep") {
+					t.Errorf("other value 'keep' lost after apply (decoded=%s)", decoded)
+				}
+				return
+			}
+		}
+		t.Fatal("data param not found in applied request")
+	}
+	t.Fatal("no nested JSON point found to apply")
+}
+
+func Test_applyNested_base64json_re_encodes(t *testing.T) {
+	// data=eyJ4IjoiMSJ9  →  base64 of {"x":"1"} (must be a string value).
+	r := req(t, "GET /?data=eyJ4IjoiMSJ9 HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, _ := Enumerate(r, []string{"query"})
+	for _, p := range points {
+		if p.coding != codingNested || p.nested != nestedBase64JSON {
+			continue
+		}
+		if p.Name != "data" {
+			continue
+		}
+		newReq, err := p.Apply(r, "injected", false)
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		newPoints, _ := Enumerate(newReq, []string{"query"})
+		for _, np := range newPoints {
+			if np.Name == "data" {
+				lvl1 := containerDecode(codingForm, np.BaseValue)
+				lvl2, err := nestedDecode(nestedBase64, lvl1)
+				if err != nil {
+					t.Fatalf("nested decode: %v", err)
+				}
+				if !strings.Contains(lvl2, "injected") {
+					t.Errorf("decoded inner %q does not contain 'injected'", lvl2)
+				}
+				// Verify it's valid base64 round-trip.
+				reEncoded := nestedEncode(nestedBase64, lvl2)
+				if reEncoded != lvl1 {
+					t.Errorf("base64 round-trip mismatch: %q vs %q", reEncoded, lvl1)
+				}
+				return
+			}
+		}
+		t.Fatal("data param not found in applied request")
+	}
+	t.Fatal("no nested base64→JSON point found to apply")
+}
+
+func Test_applyNested_appending(t *testing.T) {
+	// data={"x":"hello"}
+	r := req(t, "GET /?data=%7B%22x%22%3A%22hello%22%7D HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, _ := Enumerate(r, []string{"query"})
+	for _, p := range points {
+		if p.coding != codingNested || p.nested != nestedJSON || p.Name != "data" {
+			continue
+		}
+		newReq, err := p.Apply(r, "_appended", true)
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		newPoints, _ := Enumerate(newReq, []string{"query"})
+		for _, np := range newPoints {
+			if np.Name == "data" {
+				decoded := containerDecode(codingForm, np.BaseValue)
+				if !strings.Contains(decoded, "hello_appended") {
+					t.Errorf("expected appended value, got %q", decoded)
+				}
+				return
+			}
+		}
+		t.Fatal("data param not found after append")
+	}
+	t.Fatal("no nested JSON point found for append")
+}
+
+func Test_applyNested_xml(t *testing.T) {
+	// data=<root><msg>old</msg></root>   (percent-encoded)
+	encoded := percentEscape("<root><msg>old</msg></root>")
+	r := req(t, "GET /?data="+encoded+" HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, _ := Enumerate(r, []string{"query"})
+	for _, p := range points {
+		if p.coding != codingNested || p.nested != nestedXML || p.Name != "data" {
+			continue
+		}
+		newReq, err := p.Apply(r, "new", false)
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		newPoints, _ := Enumerate(newReq, []string{"query"})
+		for _, np := range newPoints {
+			if np.Name == "data" {
+				decoded := containerDecode(codingForm, np.BaseValue)
+				if !strings.Contains(decoded, "new") {
+					t.Errorf("expected 'new' in XML text node, got %q", decoded)
+				}
+				if !strings.Contains(decoded, "<msg>") {
+					t.Errorf("XML structure lost, got %q", decoded)
+				}
+				return
+			}
+		}
+		t.Fatal("data param not found after XML apply")
+	}
+	t.Fatal("no nested XML point found")
+}
+
+func Test_expandNested_max_bound(t *testing.T) {
+	// Build a query with many JSON params to test the 400-point cap. Each
+	// value must carry a JSON string field, not a number, or innerSpans finds
+	// nothing to nest into.
+	var qs []string
+	for i := 0; i < 100; i++ {
+		qs = append(qs, "p"+strconv.Itoa(i)+"=%7B%22a%22%3A%221%22%7D")
+	}
+	r := req(t, "GET /?"+strings.Join(qs, "&")+" HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, _ := Enumerate(r, []string{"query"})
+	nestedCount := 0
+	for _, p := range points {
+		if p.coding == codingNested {
+			nestedCount++
+		}
+	}
+	// 100 params × 1 nested point each = 100 (well under 400).
+	if nestedCount < 100 {
+		t.Errorf("got %d nested points, want at least 100", nestedCount)
+	}
+	// Verify no nested point exceeds the length limit.
+	for _, p := range points {
+		if p.coding == codingNested && len(p.BaseValue) > maxNestedValueLen {
+			t.Errorf("nested point BaseValue exceeds maxNestedValueLen")
+		}
+	}
+}
+
+func Test_xmlTextSpans_basic(t *testing.T) {
+	spans := xmlTextSpans("<a>one</a><b>two</b>")
+	if len(spans) != 2 {
+		t.Fatalf("got %d spans: %v", len(spans), spans)
+	}
+	if spans[0] != [2]int{3, 6} {
+		t.Errorf("span[0] = %v, want [3,6]", spans[0])
+	}
+	// The second text node "two" is at byte 13..16 (between '>' and '<').
+	if spans[1] != [2]int{13, 16} {
+		t.Errorf("span[1] = %v, want [13,16]", spans[1])
+	}
+}
+
+func Test_xmlTextSkipsWhitespaceOnly(t *testing.T) {
+	spans := xmlTextSpans("<a>   </a>")
+	if len(spans) != 0 {
+		t.Fatalf("whitespace-only text node should be skipped, got %v", spans)
+	}
+}
+
+func Test_percentDecode_literal_plus(t *testing.T) {
+	// '+' is NOT decoded as space (matches percentEscape which escapes '+').
+	got := percentDecode("a+b")
+	if got != "a+b" {
+		t.Fatalf("percentDecode(\"a+b\") = %q, want %q", got, "a+b")
+	}
+}
+
+// A clause like `=2` has a value but no name. Enumerating it would produce an insertion
+// point whose Name is the empty string, and a finding reported against `""` names no
+// parameter at all — the same unattributable result the one-point-at-a-time rule exists to
+// prevent. Such a clause is skipped, exactly like a clause with no `=`.
+func Test_kvPairs_skips_a_clause_with_an_empty_name(t *testing.T) {
+	const q = "a=1&=2&b=3"
+	pairs := kvPairs(q, '&')
+	if len(pairs) != 2 {
+		t.Fatalf("got %d pairs, want 2; the nameless `=2` clause must not become an insertion point", len(pairs))
+	}
+	for _, kv := range pairs {
+		if name := q[kv.name[0]:kv.name[1]]; name == "" {
+			t.Errorf("a pair with an empty name survived: value %q", q[kv.value[0]:kv.value[1]])
+		}
+	}
+	if got := q[pairs[0].name[0]:pairs[0].name[1]]; got != "a" {
+		t.Errorf("first pair name = %q, want \"a\"", got)
+	}
+	if got := q[pairs[1].name[0]:pairs[1].name[1]]; got != "b" {
+		t.Errorf("second pair name = %q, want \"b\"", got)
+	}
+
+	// A clause that is nothing but `=` is the degenerate case of the same rule.
+	if pairs := kvPairs("=2", '&'); len(pairs) != 0 {
+		t.Errorf("a lone nameless clause yielded %d pairs, want 0", len(pairs))
 	}
 }

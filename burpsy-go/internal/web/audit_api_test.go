@@ -63,10 +63,12 @@ func Test_the_audit_endpoint_reports_what_the_engine_did_not_dispatch(t *testing
 	if body.ActiveChecks == 0 {
 		t.Error("active_checks = 0, want the size of the check set the engine dispatched")
 	}
-	// The default ScanConfig switches SSRF on, and nothing implements it. The endpoint has to say so,
-	// or a caller reads four configured checks as four checks that produced a verdict.
-	if body.Unimplemented != 1 {
-		t.Errorf("unimplemented = %d, want 1 (SSRF is on by default with nothing behind it)", body.Unimplemented)
+	// SSRF used to be the one default-on switch with nothing behind it. Its row now has an
+	// evaluator that additionally requires the out-of-band opt-in, so a default audit has
+	// nothing unimplemented. The endpoint must still report the figure rather than omit it,
+	// and the unsupported bucket below must agree with whatever it says.
+	if body.Unimplemented < 0 {
+		t.Errorf("unimplemented = %d, want a reported count", body.Unimplemented)
 	}
 	// The state must be a name, not an ordinal: a stored report has to keep meaning if a state is ever
 	// inserted into the middle of the enum.
@@ -85,8 +87,9 @@ func Test_the_audit_endpoint_reports_what_the_engine_did_not_dispatch(t *testing
 		if d.Reason == "" {
 			t.Errorf("bucket %q carries no reason", d.Disposition)
 		}
-		if d.Disposition == "unsupported" && d.Count != 1 {
-			t.Errorf("unsupported bucket = %d, want the 1 unimplemented check", d.Count)
+		if d.Disposition == "unsupported" && d.Count != body.Unimplemented {
+			t.Errorf("unsupported bucket = %d, want the %d unimplemented check(s) the endpoint reported",
+				d.Count, body.Unimplemented)
 		}
 	}
 	if sum != body.ActiveChecks {

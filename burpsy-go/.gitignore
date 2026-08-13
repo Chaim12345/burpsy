@@ -1,6 +1,17 @@
 # Compiled binaries — never commit build output.
+#
+# Two locations per command, because both are reachable by accident: `go build ./cmd/X`
+# from the module root drops the binary at /X, and `go build` inside cmd/X drops it there.
+# A 13 MB crawl-scan-demo binary was staged for commit before this list covered it, so the
+# rule is per command and enumerated rather than left to whoever remembers.
 /burpsy
+/conform
+/crawl-scan-demo
+/demo-target
+/live-test
 /cmd/burpsy/burpsy
+/cmd/conform/conform
+/cmd/crawl-scan-demo/crawl-scan-demo
 /cmd/demo-target/demo-target
 /cmd/live-test/live-test
 

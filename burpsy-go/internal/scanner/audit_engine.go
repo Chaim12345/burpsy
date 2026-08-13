@@ -55,76 +55,10 @@ type activeCheck struct {
 	run func(*ActiveScanner, context.Context, *core.Exchange) ([]*Finding, error)
 }
 
-// activeCheckSet is the built-in active check set, in table order.
-//
-// The scopes are a judgement about each check's evidence, not a guess:
-//
-//   - SQLi, XSS, path traversal, SSRF and XXE build their probes from the captured request target
-//     (Exchange.Path, query string included) and read the probe's own response. Two captures of the
-//     same URL cannot give different answers, so the unit is DispatchScopePerUrl and the second
-//     capture is refused as DispositionAlreadyCovered.
-//   - The JWT and JavaScript checks read *this exchange's stored response*. Two captures of one URL
-//     legitimately carry different tokens and different bundles, so the unit is
-//     DispatchScopePerRequest and every capture is audited.
-//
-// Getting this wrong in the coarse direction would silently skip real work, which is why it is
-// stated per check here rather than defaulted.
-var activeCheckSet = []activeCheck{
-	{
-		name:    "SQL injection",
-		scope:   DispatchScopePerUrl,
-		enabled: func(c *ScanConfig) bool { return c.CheckSqli },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
-			return s.checkSQLi(ctx, ex), nil
-		},
-	},
-	{
-		name:    "Cross-site scripting (reflected)",
-		scope:   DispatchScopePerUrl,
-		enabled: func(c *ScanConfig) bool { return c.CheckXss },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
-			return s.checkXSS(ctx, ex), nil
-		},
-	},
-	{
-		name:    "Path traversal",
-		scope:   DispatchScopePerUrl,
-		enabled: func(c *ScanConfig) bool { return c.CheckPathTraversal },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
-			return s.checkPathTraversal(ctx, ex), nil
-		},
-	},
-	// Configurable, and on by default, with nothing behind it. Dispatches as
-	// DispositionUnsupported: "the evaluator cannot run this check, so it proves nothing".
-	{
-		name:    "Server-side request forgery",
-		scope:   DispatchScopePerUrl,
-		enabled: func(c *ScanConfig) bool { return c.CheckSSRF },
-		run:     nil,
-	},
-	{
-		name:    "XML external entity injection",
-		scope:   DispatchScopePerUrl,
-		enabled: func(c *ScanConfig) bool { return c.CheckXXE },
-		run:     nil,
-	},
-	{
-		name:    "JWT weak secret",
-		scope:   DispatchScopePerRequest,
-		enabled: func(c *ScanConfig) bool { return c.CheckJwtWeak },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
-			return s.checkJWTWeak(ctx, ex), nil
-		},
-	},
-	{
-		name:    "Vulnerable JavaScript library",
-		scope:   DispatchScopePerRequest,
-		enabled: func(c *ScanConfig) bool { return c.CheckJSVulns },
-		run: func(s *ActiveScanner, ctx context.Context, ex *core.Exchange) ([]*Finding, error) {
-			return s.checkJSVulns(ctx, ex), nil
-		},
-	},
-}
+// activeCheckSet is the built-in active check set, adapted from the typed
+// registry in check_registry.go. The audit ledger still receives a stable,
+// ordered slice, while new check logic uses CheckDescriptor.
+var activeCheckSet = nativeActiveCheckSet()
 
 // enabledChecks is the check set one run dispatches: the built-in table entries whose ScanConfig
 // switch is on, in table order, followed by the loaded corpus's active checks when the corpus
@@ -834,6 +768,22 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	if _, err := s.store.Get(*ex.Response); err != nil {
 		return o.refuse(ItemStateUnauditable, "response not in store"), nil
 	}
+
+	// Feed this response to the stored-input ledger before any check runs.
+	//
+	// This is the observation half of the second-order mechanism, and it was missing. Canaries
+	// were planted by the stored checks and recorded, but nothing ever looked for them again, so
+	// StoredLedger.SecondOrderObservations stayed permanently empty and every stored row was
+	// wired, counted as coverage, and incapable of ever reporting anything — the exact failure
+	// this project holds to be worse than an honest decline. Two comments elsewhere claimed the
+	// feeding already happened; it did not, and only the tests called it.
+	//
+	// It belongs here rather than at capture time because the ledger is a property of a scan, not
+	// of the proxy: an exchange captured before a scan started cannot carry that scan's canaries,
+	// and an audit is the point at which this scan is looking at this response. Ordering matters
+	// too — observing before dispatch means a stored check running on THIS exchange can already
+	// see a canary that surfaced in it.
+	s.ObserveStoredCanaries(ex)
 
 	o.State = ItemStateAuditing
 	meter := &probeMeter{}

@@ -789,6 +789,50 @@ func (ts *TrafficStore) ExchangeByRequest(id MsgId) (*Exchange, error) {
 	return nil, fmt.Errorf("no exchange has request message %d", id)
 }
 
+// PriorExchange returns the most recent exchange against the same origin+path that was added
+// before the given exchange, for a second-order check to compare against.
+//
+// Second-order (stored) checks — Burp's `getStoredActivePerInsertionPointChecksFactory` — submit a
+// payload on one request and then read a *different* request's response to see whether it
+// persisted. The factory that detects it resolves "the other request" as a prior capture of the
+// same endpoint, so that is what this lookup returns: the highest-indexed exchange whose
+// origin (scheme+host+port), path, and — when the request carried one — query string match the
+// given exchange's, which was indexed before it. A match requires an earlier exchange of the
+// same endpoint existing at all: when the given exchange is the first capture of its endpoint,
+// or every other candidate was added *after* it, the second return value is false and the
+// caller passes a nil StoredExchange — exactly as today, for checks that have no prior to read.
+//
+// The lookup is a pure read over the already-indexed exchange slice; it adds no duplicate
+// storage and copies no message bytes (an Exchange holds IDs, never payloads). Exchange IDs are
+// their positions, so the highest-indexed match is also the most recent, and "before" is a
+// positional comparison rather than a wall-clock one — two captures of one endpoint are always
+// ordered by when they were added, and that is the order a stored check threads them in.
+func (ts *TrafficStore) PriorExchange(host string, port uint16, tls bool, path string, before ExchangeID) (*Exchange, bool) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+
+	var best *Exchange
+	for i, ex := range ts.exchanges {
+		if ExchangeID(i) >= before {
+			continue
+		}
+		if ex.Host != host || ex.Port != port || ex.TLS != tls {
+			continue
+		}
+		// The path carries the query string, so an exact match is one endpoint: "/a" and "/a?x=1"
+		// are different endpoints, and a stored check threads a payload through the same one.
+		if ex.Path != path {
+			continue
+		}
+		// ex.ID == ExchangeID(i); the first match is the earliest, each later match supersedes it.
+		best = ex
+	}
+	if best == nil {
+		return nil, false
+	}
+	return best, true
+}
+
 // Exchanges returns all exchanges (for history listing).
 func (ts *TrafficStore) Exchanges() []*Exchange {
 	ts.mu.RLock()

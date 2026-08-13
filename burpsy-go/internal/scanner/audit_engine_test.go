@@ -103,6 +103,11 @@ func Test_the_disposition_counts_partition_the_enabled_check_set(t *testing.T) {
 	store := core.NewTrafficStore()
 	id := seedAuditExchange(t, store, "h.test", 80, "/", "<html>nothing here</html>")
 	// Every switch on, no sender: the offline path, where no probe is attempted at all.
+	//
+	// Five, not seven: CheckSSRF and CheckXXE each used to admit one declined row, and both
+	// rows now have evaluators that are additionally gated behind CheckExtendedActive (an OOB
+	// channel and payload sending respectively). Enabling those two switches alone therefore
+	// admits nothing. The property under test is the partition, not the literal count.
 	scan := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{
 		MaxConcurrency:     1,
 		Timeout:            5 * time.Second,
@@ -120,7 +125,7 @@ func Test_the_disposition_counts_partition_the_enabled_check_set(t *testing.T) {
 	if got, want := outcome.Considered(), scan.ActiveCheckCount(); got != want {
 		t.Errorf("considered = %d, want the whole enabled check set (%d)", got, want)
 	}
-	if got, want := scan.ActiveCheckCount(), 7; got != want {
+	if got, want := scan.ActiveCheckCount(), 5; got != want {
 		t.Errorf("enabled checks = %d, want %d", got, want)
 	}
 	if outcome.State != ItemStateAudited {
@@ -139,41 +144,68 @@ func Test_the_disposition_counts_partition_the_enabled_check_set(t *testing.T) {
 	}
 }
 
+// Every catalog row now has an evaluator, so there is no configuration that produces an
+// unimplemented check any more. What still has to hold is that the *reporting* path is honest
+// about it: the count is reported rather than omitted, and the unsupported bucket agrees with
+// it. The mechanism that turns a run==nil descriptor into DispositionUnsupported is exercised
+// directly below with a synthetic descriptor, because the registry can no longer supply one.
 func Test_unimplemented_checks_are_reported_unsupported_rather_than_silently_absent(t *testing.T) {
 	store := core.NewTrafficStore()
 	id := seedAuditExchange(t, store, "h.test", 80, "/", "<html></html>")
-	// The two switches with nothing behind them, and nothing else. Before the audit engine these
-	// produced an audit indistinguishable from a clean one.
+
 	scan := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{
 		MaxConcurrency: 1,
 		CheckSSRF:      true,
 		CheckXXE:       true,
+		CheckSqli:      true,
 	})
-	if got := scan.UnimplementedCheckCount(); got != 2 {
-		t.Fatalf("unimplemented checks = %d, want 2", got)
+	if got := scan.UnimplementedCheckCount(); got != 0 {
+		t.Fatalf("unimplemented checks = %d, want 0 now that every catalog row is wired", got)
 	}
 
-	outcome, findings := scan.AuditWithin(context.Background(), id, DefaultAuditConfig())
-
-	if len(findings) != 0 {
-		t.Errorf("findings = %d, want 0 from checks that cannot run", len(findings))
+	outcome, _ := scan.AuditWithin(context.Background(), id, DefaultAuditConfig())
+	if outcome.Considered() != scan.ActiveCheckCount() {
+		t.Errorf("considered = %d, want the whole enabled set (%d)", outcome.Considered(), scan.ActiveCheckCount())
 	}
-	if outcome.Ran != 0 {
-		t.Errorf("ran = %d, want 0", outcome.Ran)
-	}
-	if outcome.Skipped != 2 {
-		t.Errorf("skipped = %d, want both unimplemented checks counted", outcome.Skipped)
-	}
-	if outcome.Considered() != 2 {
-		t.Errorf("considered = %d, want 2", outcome.Considered())
-	}
+	// With nothing unimplemented the unsupported bucket must be empty — not absent, and not
+	// quietly holding a count nothing explains.
 	for _, d := range outcome.Dispositions() {
-		if d.Disposition == DispositionUnsupported && d.Count != 2 {
-			t.Errorf("unsupported bucket = %d, want 2", d.Count)
+		if d.Disposition == DispositionUnsupported && d.Count != 0 {
+			t.Errorf("unsupported bucket = %d, want 0 when no check is unimplemented", d.Count)
+		}
+		if d.Reason == "" {
+			t.Errorf("bucket %q carries no reason", d.Disposition)
 		}
 	}
-	if outcome.RequestsSent != 0 {
-		t.Errorf("requests sent = %d, want 0", outcome.RequestsSent)
+}
+
+// The mechanism, exercised directly: a descriptor with no Run must count as unimplemented and
+// land in the unsupported bucket. This is what the registry used to supply and no longer can.
+func Test_a_descriptor_without_a_runner_counts_as_unimplemented(t *testing.T) {
+	d := CheckDescriptor{
+		TypeIndex:      1,
+		Name:           "synthetic",
+		Implementation: ImplementationDeclined,
+		DeclineReason:  "synthetic row with no evaluator",
+	}
+	if d.Runnable() {
+		t.Fatal("a descriptor with no Run reported itself runnable")
+	}
+	if !d.Valid() {
+		t.Fatal("a declined descriptor carrying a reason is not Valid()")
+	}
+
+	// And the inverse: a descriptor with a Run but also a decline reason is invalid, which is
+	// what keeps a half-wired row from counting as either.
+	half := CheckDescriptor{
+		TypeIndex:      1,
+		Name:           "synthetic",
+		Implementation: ImplementationNative,
+		DeclineReason:  "should not be here",
+		Run:            func(context.Context, *CheckContext) ([]*Finding, error) { return nil, nil },
+	}
+	if half.Valid() {
+		t.Error("a descriptor with both a runner and a decline reason was accepted")
 	}
 }
 
@@ -454,11 +486,23 @@ func Test_findings_from_a_check_whose_probes_never_went_out_are_dropped_and_coun
 	if outcome.Findings != 0 {
 		t.Errorf("outcome findings = %d, want 0", outcome.Findings)
 	}
-	if outcome.FindingsDropped != 1 {
-		t.Errorf("findings dropped = %d, want 1 — the drop must be counted, not silent", outcome.FindingsDropped)
+	// Nothing is dropped any more, because nothing is manufactured to drop.
+	//
+	// The check used to build its probe by appending a guessed parameter name and read the result
+	// through sendTestRequest, which falls back to the stored response when a send fails. It
+	// therefore produced a "path traversal" finding about the captured bytes and depended on the
+	// engine's attempted>0 && sent==0 rule to take it away again. Driven through ProbeHarness the
+	// baseline cannot be established against a dead port, so the check returns an error and no
+	// verdict at all. Same result for the operator, one less place for a finding about an
+	// unsent probe to exist.
+	if outcome.FindingsDropped != 0 {
+		t.Errorf("findings dropped = %d, want 0: the check no longer manufactures a finding from the "+
+			"stored response when its probe cannot go out, so there is nothing for the engine to discard",
+			outcome.FindingsDropped)
 	}
 	if outcome.SendFailures != 1 {
-		t.Errorf("send failures = %d, want 1", outcome.SendFailures)
+		t.Errorf("send failures = %d, want 1: the failure itself must still be counted, or a dead "+
+			"target would read as a clean one", outcome.SendFailures)
 	}
 	if len(dead.GetFindings()) != 0 {
 		t.Errorf("scanner retained %d findings, want 0", len(dead.GetFindings()))
