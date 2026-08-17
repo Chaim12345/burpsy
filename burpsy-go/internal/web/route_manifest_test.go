@@ -464,6 +464,14 @@ var allMethods = []string{
 // that point this test stops being a check on handler discipline and becomes a check on the manifest's
 // accuracy, which is still worth running.
 func Test_every_route_rejects_a_verb_it_does_not_implement(t *testing.T) {
+	// s is built once and shared by every subtest below, unlike everywhere else in this package
+	// where a fresh server per test is the correct choice. It is safe here specifically because a
+	// wrong-verb request never reaches a handler body at all - net/http's ServeMux rejects it with
+	// 405 during its own method dispatch - so no subtest can leave behind state for a later one to
+	// observe. Building a full Server (routes, sitemap, dashboard registries, ...) once instead of
+	// once per (route, disallowed verb) pair is what turns this table's ~190 cases from a
+	// quadratic cost into a linear one.
+	s := newTestServer()
 	for pattern, spec := range manifest {
 		// The UI catch-all deliberately serves the SPA for anything it does not recognise, so it has no
 		// wrong-verb answer to give. Asserting one would be asserting a behaviour nobody wants.
@@ -490,7 +498,6 @@ func Test_every_route_rejects_a_verb_it_does_not_implement(t *testing.T) {
 				continue
 			}
 			t.Run(method+" "+path, func(t *testing.T) {
-				s := newTestServer()
 				req := httptest.NewRequest(method, path, nil)
 				rec := httptest.NewRecorder()
 				s.mux.ServeHTTP(rec, req)

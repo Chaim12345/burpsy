@@ -162,8 +162,13 @@ func testSender() *Sender {
 	cfg.TLSVerify = false
 	// Short, because several of these probes are requests a server will never answer — an unterminated
 	// header section, a Content-Length that outruns the body — and the claim under test is what protocol
-	// carried them, not what came back. The default 30s would spend it waiting for silence.
-	cfg.Timeout = 2 * time.Second
+	// carried them, not what came back. The default 30s would spend it waiting for silence. 500ms, not
+	// merely "shorter than 30s", because every server in this file is an httptest loopback listener:
+	// a real response is on the wire in microseconds, so this is headroom, not a race against a
+	// server that might still be about to answer. Three subtests in
+	// TestSendRawKeepsAProbeOnHTTP11AndNamesTheConstruct construct exactly this kind of hang, and at
+	// 2s each they were three quarters of this package's wall time.
+	cfg.Timeout = 500 * time.Millisecond
 	return NewSender(cfg)
 }
 
