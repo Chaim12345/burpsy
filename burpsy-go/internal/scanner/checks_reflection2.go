@@ -261,19 +261,32 @@ var linkManipulationAttributes = [...]string{"href", "src", "action", "formactio
 // an attacker-controlled absolute URL reflected unescaped as the value of a link/resource/form
 // target attribute, giving an attacker control over where a link or form points without needing a
 // full HTML/script breakout.
+// It walks the request's real insertion points. The predecessor appended a parameter named
+// "burpsy_link", which only an application that happens to read that name could ever reflect - so
+// the check was silent on every real target and nobody noticed, because silence is what a clean
+// endpoint looks like.
 func checkLinkManipulation(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	exchange := cc.Exchange
-	canary := newProbeCanary("brpl")
-	payload := "https://" + canary + ".invalid/x"
-	testURL := appendQueryParam(exchange.Path, "burpsy_link", payload)
-	body := cc.Scanner.sendTestRequest(ctx, exchange, testURL)
-	if body == "" {
-		return nil, nil
+	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", linkManipulationIssue, err)
 	}
-	if attr := linkAttributeReflection(body, payload); attr != "" {
-		return []*Finding{buildProbeFinding(cc, linkManipulationIssue, "firm",
-			"submitted external URL "+payload+" was reflected unescaped as the value of an "+attr+" attribute",
-			"the injected external URL became the target of a link, resource, or form action in the response")}, nil
+	points := h.Points()
+	if len(points) > MaxInjectionPointsPerCheck {
+		points = points[:MaxInjectionPointsPerCheck]
+	}
+	for _, point := range points {
+		canary := newProbeCanary("brpl")
+		payload := "https://" + canary + ".invalid/x"
+		res, err := h.Send(ctx, point, payload)
+		if err != nil || res.Body == "" {
+			continue
+		}
+		if attr := linkAttributeReflection(res.Body, payload); attr != "" {
+			return []*Finding{buildProbeFinding(cc, linkManipulationIssue, "firm",
+				"submitted external URL "+payload+" was reflected unescaped as the value of an "+attr+
+					" attribute (via "+string(point.Kind)+" "+point.Name+")",
+				"the injected external URL became the target of a link, resource, or form action in the response")}, nil
+		}
 	}
 	return nil, nil
 }
@@ -411,7 +424,16 @@ var codeInjectionHeaders = [...]string{"User-Agent", "Referer"}
 // product* while not containing the literal payload — evidence the server evaluated the expression
 // rather than merely echoing it back.
 func checkCodeInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	exchange := cc.Exchange
+	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", codeInjectionIssue, err)
+	}
+	points := h.Points()
+	if len(points) > MaxInjectionPointsPerCheck {
+		points = points[:MaxInjectionPointsPerCheck]
+	}
+	// Operands are randomised per run so a page that happens to contain the product of a previous
+	// scan's payload cannot stand in for evaluation.
 	a := secureRandN(9000) + 1000
 	b := secureRandN(9000) + 1000
 	want := strconv.Itoa(a * b)
@@ -419,15 +441,22 @@ func checkCodeInjection(ctx context.Context, cc *CheckContext) ([]*Finding, erro
 	for _, wrap := range codeInjectionSyntaxes {
 		payload := wrap(expr)
 
-		testURL := appendQueryParam(exchange.Path, "burpsy_ci", payload)
-		if body := cc.Scanner.sendTestRequest(ctx, exchange, testURL); evaluatedNotReflected(body, want, payload) {
-			return []*Finding{buildProbeFinding(cc, codeInjectionIssue, "firm",
-				"template expression "+payload+" evaluated to "+want+" in the response body",
-				"the response contained the evaluated arithmetic result of an injected template expression rather than the literal payload, indicating server-side evaluation of user input")}, nil
+		// The request's own parameters, rather than a parameter named "burpsy_ci" that only an
+		// application reading that exact name could ever have evaluated.
+		for _, point := range points {
+			res, err := h.Send(ctx, point, payload)
+			if err != nil {
+				continue
+			}
+			if evaluatedNotReflected(res.Body, want, payload) {
+				return []*Finding{buildProbeFinding(cc, codeInjectionIssue, "firm",
+					"template expression "+payload+" evaluated to "+want+" in the response body (via "+
+						string(point.Kind)+" "+point.Name+")",
+					"the response contained the evaluated arithmetic result of an injected template expression rather than the literal payload, indicating server-side evaluation of user input")}, nil
+			}
 		}
-
 		for _, header := range codeInjectionHeaders {
-			resp := cc.Scanner.sendTestRequestFull(ctx, exchange, exchange.Path, map[string]string{header: payload})
+			resp := cc.Scanner.sendTestRequestFull(ctx, cc.Exchange, cc.Exchange.Path, map[string]string{header: payload})
 			if resp == nil {
 				continue
 			}
@@ -467,20 +496,40 @@ const ssiInjectionIssue = "SSI injection"
 // token and the literal directive syntax do not — a server that left the directive unprocessed
 // would reflect all three or none, so seeing only the true branch is evidence of SSI evaluation.
 func checkSSIInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	exchange := cc.Exchange
+	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ssiInjectionIssue, err)
+	}
+	points := h.Points()
+	if len(points) > MaxInjectionPointsPerCheck {
+		points = points[:MaxInjectionPointsPerCheck]
+	}
+	// The request's own parameters, not one named "burpsy_ssi": a directive placed in a parameter
+	// the application never reads is never processed, so the predecessor could only ever be silent.
+	for _, point := range points {
+		trueToken := newProbeCanary("brpt")
+		falseToken := newProbeCanary("brpf")
+		payload := `<!--#if expr="1 = 1" -->` + trueToken + `<!--#else-->` + falseToken + `<!--#endif-->`
+		res, err := h.Send(ctx, point, payload)
+		if err != nil {
+			continue
+		}
+		if ssiEvaluated(res.Body, trueToken, falseToken) {
+			return []*Finding{buildProbeFinding(cc, ssiInjectionIssue, "firm",
+				"injected SSI #if/#else/#endif directive evaluated to its true branch ("+trueToken+
+					") with no literal directive or false-branch token present",
+				"the "+string(point.Kind)+" parameter "+point.Name+
+					" reached a Server-Side Includes processor that parsed and evaluated the injected directive")}, nil
+		}
+	}
+
+	// The two headers Zexx was recovered probing. These stay header-addressed rather than going
+	// through insertion points, because the recovered evidence names them specifically.
 	trueToken := newProbeCanary("brpt")
 	falseToken := newProbeCanary("brpf")
 	payload := `<!--#if expr="1 = 1" -->` + trueToken + `<!--#else-->` + falseToken + `<!--#endif-->`
-
-	testURL := appendQueryParam(exchange.Path, "burpsy_ssi", payload)
-	if body := cc.Scanner.sendTestRequest(ctx, exchange, testURL); ssiEvaluated(body, trueToken, falseToken) {
-		return []*Finding{buildProbeFinding(cc, ssiInjectionIssue, "firm",
-			"injected SSI #if/#else/#endif directive evaluated to its true branch ("+trueToken+") with no literal directive or false-branch token present",
-			"the query parameter reached a Server-Side Includes processor that parsed and evaluated the injected directive")}, nil
-	}
-
 	for _, header := range codeInjectionHeaders {
-		resp := cc.Scanner.sendTestRequestFull(ctx, exchange, exchange.Path, map[string]string{header: payload})
+		resp := cc.Scanner.sendTestRequestFull(ctx, cc.Exchange, cc.Exchange.Path, map[string]string{header: payload})
 		if resp == nil {
 			continue
 		}

@@ -59,6 +59,10 @@ type ActiveScanner struct {
 	// allocates nothing.
 	pending   *PendingRegistry
 	pendingMu sync.Mutex
+	// oob is the scan's collaborator channel. Held here rather than per check so the callback
+	// window outlives the check that opened it.
+	oob   OOBProvider
+	oobMu sync.Mutex
 	// sessions is the coordinator the access-control and CSRF rows need. Nil means those
 	// checks report a missing capability instead of comparing two anonymous requests.
 	sessions *session.Coordinator

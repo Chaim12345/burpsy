@@ -102,13 +102,23 @@ func (s *ActiveScanner) StoredLedgerHandle() *StoredLedger {
 	return s.stored
 }
 
-// CloseCapabilities releases the browser if one was started. Callers that built a scanner
-// with a browser provider must call this when the scan ends.
+// CloseCapabilities releases every scan-scoped external handle: the browser and the collaborator
+// channel. Callers that built a scanner with either provider must call this when the scan ends.
+//
+// Both are closed even if the first fails, because leaking a Chrome process or an interactsh
+// subprocess is worse than losing one error string.
 func (s *ActiveScanner) CloseCapabilities() error {
-	if s == nil || s.browsers == nil {
+	if s == nil {
 		return nil
 	}
-	return s.browsers.Close()
+	var firstErr error
+	if s.browsers != nil {
+		firstErr = s.browsers.Close()
+	}
+	if err := s.closeOOB(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
 }
 
 // Browser returns the shared browser for a check, or an error naming why there is none.

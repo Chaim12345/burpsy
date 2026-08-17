@@ -279,3 +279,68 @@ func countHeader(e *RequestEdit, name string) int {
 	}
 	return n
 }
+
+// A URL in a query value is not an absolute-form request target.
+//
+// The parser used to search the whole target for "://", so a redirect or callback parameter turned
+// its own value into the origin: Path became whatever followed the value's first slash and the
+// query was discarded entirely. Every downstream consumer then saw a different request from the one
+// captured, and the insertion-point enumerator reported no query points and no declines - silently,
+// on exactly the parameters worth testing.
+func TestAUrlInsideAQueryValueIsNotAnAbsoluteFormTarget(t *testing.T) {
+	cases := []struct {
+		name, target, wantPath, wantQuery, wantOrigin, wantTarget string
+	}{
+		{"redirect parameter", "/r?next=https://example.com/x", "/r", "next=https://example.com/x", "",
+			"/r?next=https://example.com/x"},
+		{"no path after the value's host", "/r?next=https://example.com", "/r", "next=https://example.com", "",
+			"/r?next=https://example.com"},
+		{"scheme-relative value", "/r?next=//example.com/x", "/r", "next=//example.com/x", "",
+			"/r?next=//example.com/x"},
+		{"two urls", "/r?a=http://a.test/1&b=https://b.test/2", "/r", "a=http://a.test/1&b=https://b.test/2", "",
+			"/r?a=http://a.test/1&b=https://b.test/2"},
+		// Target() deliberately renders origin-form for an absolute-form capture; the origin is
+		// carried separately. Asserted here so the round-trip check above cannot be read as a claim
+		// about absolute-form requests.
+		{"genuine absolute form still works", "http://proxy.test/p?q=1", "/p", "q=1", "http://proxy.test", "/p?q=1"},
+		{"absolute form with no path", "https://proxy.test", "/", "", "https://proxy.test", "/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, err := ParseRequestEdit([]byte("GET " + tc.target + " HTTP/1.1\r\nHost: h\r\n\r\n"))
+			if err != nil {
+				t.Fatalf("ParseRequestEdit: %v", err)
+			}
+			if e.Path != tc.wantPath {
+				t.Errorf("Path = %q, want %q: a rewritten path sends every probe to the wrong endpoint",
+					e.Path, tc.wantPath)
+			}
+			if e.Query != tc.wantQuery {
+				t.Errorf("Query = %q, want %q: a discarded query leaves no insertion points to test",
+					e.Query, tc.wantQuery)
+			}
+			if e.Origin != tc.wantOrigin {
+				t.Errorf("Origin = %q, want %q", e.Origin, tc.wantOrigin)
+			}
+			// An origin-form target must round-trip exactly, or the request the scanner sends is
+			// not the request it captured.
+			if got := e.Target(); got != tc.wantTarget {
+				t.Errorf("Target() = %q, want %q", got, tc.wantTarget)
+			}
+		})
+	}
+}
+
+func TestIsSchemeTokenAcceptsOnlyRFC3986Schemes(t *testing.T) {
+	for _, ok := range []string{"http", "https", "a", "a1", "a+b", "a-b", "a.b", "coap+ws"} {
+		if !isSchemeToken(ok) {
+			t.Errorf("isSchemeToken(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", "1a", "/r?next=https", "a_b", "a b", "-a", "a/b"} {
+		if isSchemeToken(bad) {
+			t.Errorf("isSchemeToken(%q) = true, want false: a non-scheme prefix must not make a "+
+				"target look absolute-form", bad)
+		}
+	}
+}

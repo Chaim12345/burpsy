@@ -521,45 +521,73 @@ func oobCheck(row, protocol string) CheckRunner {
 			return nil, nil
 		}
 
-		client, err := oob.NewClient(ctx, oob.Options{Timeout: 30 * time.Second})
+		channel, err := cc.Scanner.OOBChannel(ctx)
 		if err != nil {
 			// No channel means no capability. Zero interactions must never read as zero
 			// vulnerabilities, which is exactly why this is an error.
-			return nil, fmt.Errorf("out-of-band channel unavailable: %w", err)
+			return nil, fmt.Errorf("%s: %w", row, err)
 		}
-		defer func() { _ = client.Close() }()
 
 		points := h.Points()
 		if len(points) > MaxInjectionPointsPerCheck {
 			points = points[:MaxInjectionPointsPerCheck]
 		}
 		marker := strings.ToLower(domCanary("oob"))
-		payloadHost := marker + "." + client.Domain()
+		payloadHost := marker + "." + channel.Domain()
+		var sent int
 		for _, point := range points {
 			for _, payload := range oobPayloadsFor(protocol, payloadHost) {
 				if _, err := h.Send(ctx, point, payload); err != nil {
 					continue
 				}
+				sent++
 			}
 		}
-		// Give the target a moment to make the callback it was going to make.
-		select {
-		case <-ctx.Done():
-		case <-time.After(5 * time.Second):
+		if sent == 0 {
+			// Nothing left the process, so there is nothing a callback could be a response to.
+			return nil, fmt.Errorf("%s: no probe carrying the collaborator domain could be sent: %w",
+				row, errCheckInconclusive)
 		}
-		interactions, err := client.InteractionsFor(marker)
-		if err != nil {
-			return nil, fmt.Errorf("reading out-of-band interactions: %w", err)
+
+		// The wait belongs to the registry, not to this check.
+		//
+		// This used to sleep five seconds, poll once, and close the channel on return - so a
+		// callback in the sixth second was unrecoverable and the row reported nothing, which reads
+		// as clean. A target that queues outbound work is precisely what this row is for.
+		deadline := nowUTC().Add(DefaultPendingDeadline)
+		if cc.Config != nil && cc.Config.PendingDeadline > 0 {
+			deadline = nowUTC().Add(cc.Config.PendingDeadline)
 		}
-		for _, i := range oob.Deduplicate(interactions) {
-			if !strings.EqualFold(i.Protocol, protocol) {
-				continue
+		if err := cc.Scanner.Pending().Register(PendingItem{
+			Row:      row,
+			Exchange: cc.Exchange.ID,
+			Deadline: deadline,
+			What: fmt.Sprintf("%d probe(s) carrying %s planted in %s, awaiting a %s callback",
+				sent, payloadHost, cc.Exchange.Path, protocol),
+		}, func(context.Context) (*Finding, bool, error) {
+			interactions, err := channel.InteractionsFor(marker)
+			if err != nil {
+				// Retryable: the channel being unreadable now says nothing about the target.
+				return nil, false, fmt.Errorf("reading out-of-band interactions: %w", err)
 			}
-			return []*Finding{buildHeaderFinding(cc, row, "high", "certain",
-				fmt.Sprintf("%s interaction from %s", i.Protocol, i.RemoteAddress),
-				"the target contacted a domain supplied in a parameter, proving it fetches attacker-controlled locations")}, nil
+			for _, i := range oob.Deduplicate(interactions) {
+				if !strings.EqualFold(i.Protocol, protocol) {
+					continue
+				}
+				return buildHeaderFinding(cc, row, "high", "certain",
+					fmt.Sprintf("%s interaction from %s", i.Protocol, i.RemoteAddress),
+					"the target contacted a domain supplied in a parameter, proving it fetches "+
+						"attacker-controlled locations"), true, nil
+			}
+			// Deliberately never settles negatively. Absence of a callback is not evidence the
+			// target does not make one; it is the absence of evidence, and the registry reports
+			// that as outstanding rather than clean.
+			return nil, false, nil
+		}); err != nil {
+			return nil, err
 		}
-		return nil, nil
+		return nil, fmt.Errorf("%s: collaborator domain planted, awaiting callback: %w",
+			row, errCheckInconclusive)
 	}
 }
 

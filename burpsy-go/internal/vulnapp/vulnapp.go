@@ -144,6 +144,12 @@ func Vulnerabilities() []Endpoint {
 			Note: "escapes the filter metacharacters, so no input changes the entry count"},
 		{Path: "/safe/greet?greeting=seed", Row: "Server-side template injection", Safe: true,
 			Note: "reflects the value as data, never as template source"},
+		{Path: "/safe/profile?website=https://example.com/x", Row: "Link manipulation (reflected)", Safe: true,
+			Note: "reflects the URL as text but links only to a same-origin path"},
+		{Path: "/safe/note?note=seed", Row: "Unidentified code injection", Safe: true,
+			Note: "reflects the expression without evaluating it"},
+		{Path: "/safe/include?tpl=seed", Row: "SSI injection", Safe: true,
+			Note: "reflects the directive without running it through the processor"},
 		{Path: "/safe/dom/redirect", Row: "Open redirection (DOM-based)", DOM: true, Safe: true,
 			Note: "navigates only to same-origin paths, rejecting any value naming an authority"},
 
@@ -161,6 +167,13 @@ func Vulnerabilities() []Endpoint {
 			Note: "concatenates into (uid=...) and evaluates it, so an appended always-true term still matches while a negation does not"},
 		{Path: "/greet?greeting=seed", Row: "Server-side template injection",
 			Note: "evaluates an arithmetic expression inside template delimiters"},
+
+		{Path: "/profile?website=https://example.com/x", Row: "Link manipulation (reflected)",
+			Note: "reflects a submitted absolute URL straight into an href value"},
+		{Path: "/note?note=seed", Row: "Unidentified code injection",
+			Note: "evaluates an arithmetic expression inside expression-language delimiters"},
+		{Path: "/include?tpl=seed", Row: "SSI injection",
+			Note: "runs reflected input through a Server-Side Includes processor"},
 
 		// The safe counterparts. Each reflects input for the same row without the defect, so a
 		// detector that fires on reflection alone is caught here rather than in the field.
@@ -230,6 +243,14 @@ func Handler() http.Handler {
 	mux.HandleFunc("/comment", postComment)
 	mux.HandleFunc("/comments", listComments)
 	mux.HandleFunc("/safe/comments", safeListComments)
+
+	// Link manipulation, code injection, SSI.
+	mux.HandleFunc("/profile", profileLink)
+	mux.HandleFunc("/note", evalNote)
+	mux.HandleFunc("/include", includePage)
+	mux.HandleFunc("/safe/profile", safeProfileLink)
+	mux.HandleFunc("/safe/note", safeEvalNote)
+	mux.HandleFunc("/safe/include", safeIncludePage)
 	return mux
 }
 
@@ -933,4 +954,74 @@ func safeListComments(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<div class=\"comment\">%s</div>", htmlEscape(e))
 	}
 	fmt.Fprint(w, "</body></html>")
+}
+
+// ---------------------------------------------------------------------------
+// Link manipulation, code injection, SSI
+// ---------------------------------------------------------------------------
+
+// profileLink reflects a submitted URL straight into an href, so an attacker chooses where the
+// link points without needing a full HTML breakout.
+func profileLink(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<!DOCTYPE html><html><body><a href="%s">your site</a></body></html>`,
+		r.URL.Query().Get("website"))
+}
+
+// safeProfileLink accepts only a same-origin path, so a submitted absolute URL cannot become the
+// target. It still reflects the value as text, so a detector keying on reflection is caught.
+func safeProfileLink(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("website")
+	w.Header().Set("Content-Type", "text/html")
+	target := "/"
+	if strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "//") {
+		target = v
+	}
+	fmt.Fprintf(w, `<!DOCTYPE html><html><body><a href="%s">your site</a><p>%s</p></body></html>`,
+		target, htmlEscape(v))
+}
+
+// evalNote evaluates an arithmetic expression the way a server-side expression language does. It
+// computes whatever product it is given rather than recognising a particular one.
+func evalNote(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("note")
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w, "note: %s\n", templateExpr.ReplaceAllStringFunc(v, func(m string) string {
+		p := templateExpr.FindStringSubmatch(m)
+		a, _ := strconv.Atoi(p[1])
+		b, _ := strconv.Atoi(p[2])
+		return strconv.Itoa(a * b)
+	}))
+}
+
+func safeEvalNote(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w, "note: %s\n", r.URL.Query().Get("note"))
+}
+
+// ssiDirective matches the #if/#else/#endif form a Server-Side Includes processor evaluates.
+var ssiDirective = regexp.MustCompile(`(?s)<!--#if expr="([^"]*)" -->(.*?)<!--#else-->(.*?)<!--#endif-->`)
+
+// includePage processes SSI directives in reflected input, which is the defect: the value reaches a
+// processor that parses it. The expression is evaluated generically - a literal comparison - rather
+// than by looking for any specific payload.
+func includePage(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("tpl")
+	w.Header().Set("Content-Type", "text/html")
+	out := ssiDirective.ReplaceAllStringFunc(v, func(m string) string {
+		p := ssiDirective.FindStringSubmatch(m)
+		lhs, rhs, ok := strings.Cut(p[1], "=")
+		if ok && strings.TrimSpace(lhs) == strings.TrimSpace(rhs) {
+			return p[2]
+		}
+		return p[3]
+	})
+	fmt.Fprintf(w, "<!DOCTYPE html><html><body>%s</body></html>", out)
+}
+
+// safeIncludePage reflects the same value without running it through the processor. The literal
+// directive comes back intact, which is what a non-evaluating server does.
+func safeIncludePage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, "<!DOCTYPE html><html><body>%s</body></html>", htmlEscape(r.URL.Query().Get("tpl")))
 }

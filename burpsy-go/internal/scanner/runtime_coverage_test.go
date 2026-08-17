@@ -415,8 +415,24 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 		})
 	}
 
-	t.Logf("runtime detection: %d declared vulnerabilities demonstrated, %d missed",
-		len(demonstrated), len(missed))
+	// The number this project reports as coverage. Pinned so it cannot drift downward silently:
+	// a check that stops firing takes a manifest row with it, and a demonstrated count that only
+	// ever appears in a log line is not a claim anything defends.
+	//
+	// It counts DISTINCT catalog rows, not endpoints - two endpoints proving one row is one row's
+	// worth of evidence, and conflating them is how 8 rows once got reported as 10.
+	distinct := map[string]bool{}
+	for _, r := range demonstrated {
+		distinct[r] = true
+	}
+	const wantDemonstrated = 21
+	t.Logf("runtime detection: %d distinct catalog rows demonstrated across %d endpoints, %d missed",
+		len(distinct), len(demonstrated), len(missed))
+	if len(missed) == 0 && len(distinct) < wantDemonstrated {
+		t.Errorf("distinct rows demonstrated = %d, want at least %d. Nothing failed, so a check did "+
+			"not regress - a manifest entry was removed or renamed, which quietly lowers the number "+
+			"this project publishes as its coverage", len(distinct), wantDemonstrated)
+	}
 }
 
 // The other direction: the safe counterparts must stay quiet for their row.

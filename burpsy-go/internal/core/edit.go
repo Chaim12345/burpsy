@@ -75,6 +75,25 @@ type RequestEdit struct {
 	Body    []byte
 }
 
+// isSchemeToken reports whether s is a URI scheme per RFC 3986: ALPHA *( ALPHA / DIGIT / "+" /
+// "-" / "." ). Used to tell an absolute-form request target from an origin-form one whose query
+// happens to contain a URL.
+func isSchemeToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ParseRequestEdit takes a raw request apart. It tolerates bare LF line endings,
 // as the store's parser does.
 func ParseRequestEdit(raw []byte) (*RequestEdit, error) {
@@ -108,16 +127,25 @@ func ParseRequestEdit(raw []byte) (*RequestEdit, error) {
 	}
 
 	// Absolute-form: split scheme://authority from the path.
+	//
+	// Only when the target actually begins with a scheme. This used to search the whole target for
+	// "://", so `GET /r?next=https://example.com/x` was read as absolute-form: Origin became
+	// "/r?next=https://", Path became "/x", and the entire query string was discarded. Every probe
+	// then went to the wrong path with no parameters, and because the query was gone rather than
+	// refused, the insertion-point enumerator reported no points and no declines - a silent
+	// omission on precisely the redirect, callback and webhook parameters worth testing.
 	target := parts[1]
 	rest := target
-	if i := strings.Index(target, "://"); i >= 0 {
-		after := target[i+3:]
-		if j := strings.IndexByte(after, '/'); j >= 0 {
-			e.Origin = target[:i+3+j]
-			rest = after[j:]
-		} else {
-			e.Origin = target
-			rest = "/"
+	if !strings.HasPrefix(target, "/") {
+		if i := strings.Index(target, "://"); i >= 0 && isSchemeToken(target[:i]) {
+			after := target[i+3:]
+			if j := strings.IndexByte(after, '/'); j >= 0 {
+				e.Origin = target[:i+3+j]
+				rest = after[j:]
+			} else {
+				e.Origin = target
+				rest = "/"
+			}
 		}
 	}
 	if i := strings.IndexByte(rest, '?'); i >= 0 {
