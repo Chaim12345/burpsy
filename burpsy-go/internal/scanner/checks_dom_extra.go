@@ -38,7 +38,10 @@ func checkClientSidePrototypePollution(ctx context.Context, cc *CheckContext) ([
 	}
 	return []*Finding{buildHeaderFinding(cc, "Client-side prototype pollution", "medium", "firm",
 		fmt.Sprintf("%s -> Object.prototype[%s]", hits[0].Source, hits[0].Argument),
-		"a URL-controlled value names a property written onto Object.prototype, which every object in the page then inherits")}, nil
+		"a URL-controlled value names a property written onto Object.prototype, which every object in the page "+
+			"then inherits. Exploitation additionally requires a gadget - code that reads the polluted property "+
+			"and acts on it. This check looks for the source only and did not search for one, which is the same "+
+			"scope Burp reports here before deferring gadget discovery to DOM Invader")}, nil
 }
 
 // templateInjectionMarkers are the delimiter families a client-side template engine evaluates.

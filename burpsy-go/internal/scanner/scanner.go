@@ -12,6 +12,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"go.uber.org/zap"
@@ -47,6 +48,12 @@ type ActiveScanner struct {
 	// stored tracking, and CheckContext.StoredLedger says so rather than returning an
 	// empty ledger that would make every stored check look clean.
 	stored *StoredLedger
+	// domObs caches taint observations per (exchange, source) for one scan. Sixteen DOM families
+	// across two variants each asked for the same page with the same sources and then filtered the
+	// shared result by sink — roughly eighty browser tabs per exchange to learn one thing five
+	// times. Observe once, match many.
+	domObs   map[string][]domexec.Observation
+	domObsMu sync.Mutex
 	// sessions is the coordinator the access-control and CSRF rows need. Nil means those
 	// checks report a missing capability instead of comparing two anonymous requests.
 	sessions *session.Coordinator

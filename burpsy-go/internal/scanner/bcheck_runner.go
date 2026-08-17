@@ -34,6 +34,9 @@ import (
 // DispositionUnsupported (Skipped) rather than counting a clean miss.
 var errCheckUnsupported = errors.New("bcheck: check cannot be evaluated")
 
+// errCheckInconclusive: the check ran but could not decide. Counted as Unmeasurable, not clean.
+var errCheckInconclusive = errors.New("scanner: check ran but its evidence was inconclusive")
+
 // bcheckSink adapts the evaluator's Sink to this scanner: every send is metered
 // and passes through the AuthorisedSender bound to the scanned exchange.
 type bcheckSink struct {

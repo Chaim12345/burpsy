@@ -1,9 +1,18 @@
 package scanner
 
 import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
+	"go.uber.org/zap"
 )
 
 // ---------- recovered payload banks ----------
@@ -448,5 +457,52 @@ func TestSQLErrorSignaturesSurviveHTMLEntityEncoding(t *testing.T) {
 	if got.Evidence != InjectionEvidenceErrorSignature {
 		t.Fatalf("evidence = %v, want ErrorSignature: a database error rendered into an HTML page "+
 			"is still a database error", got.Evidence)
+	}
+}
+
+// An endpoint whose baseline already contains the discriminator cannot be judged. That must reach
+// the outcome as undecided, not as clean.
+func TestAPoisonedBaselineReportsUndecidedRatherThanClean(t *testing.T) {
+	// The page always contains a SQL error, so an injected quote proves nothing.
+	always := "<html>SQL syntax error: you have an error in your SQL syntax near 'x' at line 1</html>"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, always)
+	}))
+	defer srv.Close()
+
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split address: %v", err)
+	}
+	var port uint16
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+		t.Fatalf("parse port: %v", err)
+	}
+
+	store := core.NewTrafficStore()
+	id := seedAuditExchange(t, store, host, port, "/shop?id=1", always)
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(nil)).
+		WithConfig(&ScanConfig{MaxConcurrency: 1, CheckSqli: true})
+
+	outcome, findings := scan.AuditWithin(context.Background(), id, DefaultAuditConfig())
+
+	if len(findings) != 0 {
+		t.Errorf("findings = %d, want 0: the error was already in the baseline", len(findings))
+	}
+	if outcome.Ran != 1 {
+		t.Errorf("ran = %d, want 1: the check did run", outcome.Ran)
+	}
+	if outcome.SendFailures != 0 {
+		t.Errorf("send failures = %d, want 0: an undecided check is not a failed one", outcome.SendFailures)
+	}
+	if outcome.Unmeasurable != 1 {
+		t.Fatalf("unmeasurable = %d, want 1. A baseline that already carries the discriminator makes "+
+			"the probe undecidable, and reporting that identically to a clean endpoint is the "+
+			"conflation this counter exists to remove.", outcome.Unmeasurable)
+	}
+	if !strings.Contains(outcome.Summary(), "undecided") {
+		t.Errorf("summary does not mention the undecided check: %q", outcome.Summary())
 	}
 }

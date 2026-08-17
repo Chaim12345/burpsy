@@ -39,12 +39,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/vulnapp"
 	"go.uber.org/zap"
@@ -61,6 +64,11 @@ type runtimeTarget struct {
 	// lastRequestsSent carries the probe count of the most recent findingsFor call, so the
 	// request-budget test can read it without every caller threading an extra return value.
 	lastRequestsSent uint32
+	// chrome records whether a browser was available, so DOM manifest entries are asserted or
+	// skipped by name rather than quietly passing.
+	chrome bool
+	// domScan is the browser-enabled scanner, nil when no Chrome is available.
+	domScan *ActiveScanner
 }
 
 // startRuntimeTarget serves vulnapp, requests every declared endpoint over real HTTP, and stores
@@ -104,12 +112,44 @@ func startRuntimeTarget(t *testing.T) *runtimeTarget {
 		t.Fatal("no exchanges were captured from the target; every assertion below would be vacuous")
 	}
 
-	snd := sender.NewSender(nil)
+	// Two scanners over one store. Auditing every endpoint with the 48 DOM rows drives a browser
+	// for each, which cost ~50s per endpoint and told us nothing about the ten non-DOM rows.
 	rt.scan = NewActiveScanner(rt.store, zap.NewNop()).
-		WithSender(snd).
-		WithConfig(runtimeScanConfig()).
-		WithStoredLedger(NewStoredLedger())
+		WithSender(sender.NewSender(nil)).
+		WithStoredLedger(NewStoredLedger()).
+		WithConfig(runtimeScanConfig())
+
+	rt.chrome = chromeOnPath()
+	if rt.chrome {
+		domCfg := runtimeScanConfig()
+		domCfg.CheckDOM = true
+		// Headless unless BURPSY_DOM_HEADED=1, which is for watching a flow live.
+		headed := os.Getenv("BURPSY_DOM_HEADED") == "1"
+		rt.domScan = NewActiveScanner(rt.store, zap.NewNop()).
+			WithSender(sender.NewSender(nil)).
+			WithStoredLedger(NewStoredLedger()).
+			WithBrowserProvider(NewLazyBrowserProvider(domexec.Options{Headed: headed})).
+			WithConfig(domCfg)
+		t.Cleanup(func() { _ = rt.domScan.CloseCapabilities() })
+	}
 	return rt
+}
+
+// scannerFor picks the DOM-enabled scanner only for endpoints whose row is a DOM row.
+func (rt *runtimeTarget) scannerFor(dom bool) *ActiveScanner {
+	if dom && rt.domScan != nil {
+		return rt.domScan
+	}
+	return rt.scan
+}
+
+func chromeOnPath() bool {
+	for _, name := range []string{"chromium", "google-chrome", "google-chrome-stable", "chrome"} {
+		if _, err := exec.LookPath(name); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // seed performs one real request and records the exchange, mirroring what the proxy captures.
@@ -228,8 +268,10 @@ func buildRawResponse(t *testing.T, res *http.Response) string {
 // vulnerabilities the manifest declares" — not a statement about the catalog.
 func runtimeScanConfig() *ScanConfig {
 	return &ScanConfig{
-		MaxConcurrency:          4,
-		Timeout:                 20 * time.Second,
+		MaxConcurrency: 4,
+		// Generous: with CheckDOM on, every audit drives a real browser, and a 20s budget was
+		// spent before the header checks ran — CORS stopped firing for lack of time, not evidence.
+		Timeout:                 5 * time.Minute,
 		CheckSqli:               true,
 		CheckXss:                true,
 		CheckPathTraversal:      true,
@@ -247,16 +289,18 @@ func runtimeScanConfig() *ScanConfig {
 }
 
 // findingsFor audits one seeded endpoint with the real engine and returns the row names reported.
-func (rt *runtimeTarget) findingsFor(t *testing.T, path string) map[string]*Finding {
+// dom selects the browser-enabled scanner, so non-DOM endpoints never pay for a page load.
+func (rt *runtimeTarget) findingsFor(t *testing.T, path string, dom bool) map[string]*Finding {
 	t.Helper()
 	id, ok := rt.exchanges[path]
 	if !ok {
 		t.Fatalf("%s was never seeded", path)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	outcome, findings := rt.scan.AuditWithin(ctx, id, rt.scan.AuditConfig())
+	scan := rt.scannerFor(dom)
+	outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
 	if outcome.Error != "" {
 		t.Fatalf("audit of %s failed outright: %s", path, outcome.Error)
 	}
@@ -301,7 +345,7 @@ func TestAnAuditSendsProbesAndStaysWithinARequestBudget(t *testing.T) {
 		e := e
 		t.Run(e.Path, func(t *testing.T) {
 			rt.lastRequestsSent = 0
-			rt.findingsFor(t, e.Path)
+			rt.findingsFor(t, e.Path, e.DOM)
 			sent := rt.lastRequestsSent
 			audited++
 			total += sent
@@ -346,7 +390,10 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 		}
 		e := e
 		t.Run(e.Row+" via "+e.Path, func(t *testing.T) {
-			got := rt.findingsFor(t, e.Path)
+			if e.DOM && !rt.chrome {
+				t.Skip("no Chrome on PATH: this DOM row is NOT exercised in this run")
+			}
+			got := rt.findingsFor(t, e.Path, e.DOM)
 			if _, fired := got[e.Row]; !fired {
 				missed = append(missed, e.Row+" @ "+e.Path)
 				t.Errorf("the target is vulnerable here (%s) but %q was not reported.\nrows reported instead: %s",
@@ -389,17 +436,20 @@ func TestTheScannerStaysQuietOnTheSafeCounterparts(t *testing.T) {
 		checked++
 		e := e
 		t.Run(e.Row+" via "+e.Path, func(t *testing.T) {
+			if e.DOM && !rt.chrome {
+				t.Skip("no Chrome on PATH: this DOM row is NOT exercised in this run")
+			}
 			twin, ok := vulnerableTwin[e.Row]
 			if !ok {
 				t.Fatalf("no vulnerable endpoint declared for %q, so silence here proves nothing", e.Row)
 			}
-			if fired := rt.findingsFor(t, twin); fired[e.Row] == nil {
+			if fired := rt.findingsFor(t, twin, e.DOM); fired[e.Row] == nil {
 				t.Fatalf("%q did not fire against its vulnerable twin %s in this run, so its silence "+
 					"on %s is not evidence of anything — the check may simply not be working here",
 					e.Row, twin, e.Path)
 			}
 
-			got := rt.findingsFor(t, e.Path)
+			got := rt.findingsFor(t, e.Path, e.DOM)
 			if f, fired := got[e.Row]; fired {
 				t.Errorf("%q was reported against a safe endpoint (%s). Evidence given: %q.\n"+
 					"This endpoint reflects input without the defect, so the detector is keying on "+

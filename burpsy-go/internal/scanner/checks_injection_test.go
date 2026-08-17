@@ -7,6 +7,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -34,6 +35,21 @@ func runCheck(t *testing.T, fn CheckRunner, cc *CheckContext) []*Finding {
 		t.Fatalf("check returned error: %v", err)
 	}
 	return got
+}
+
+// requireUndecided asserts the honest middle verdict: no finding, and the check saying so
+// because its evidence could not be judged rather than because the endpoint looked clean.
+// Asserting a nil error here would forbid the distinction this scanner exists to draw.
+func requireUndecided(t *testing.T, fn CheckRunner, cc *CheckContext) {
+	t.Helper()
+	got, err := fn(context.Background(), cc)
+	if len(got) != 0 {
+		t.Fatalf("got %d findings, want 0 - nothing here was provable", len(got))
+	}
+	if !errors.Is(err, errCheckInconclusive) {
+		t.Fatalf("err = %v, want the inconclusive sentinel: silence on an endpoint that cannot be "+
+			"judged must be reported as undecided, never as clean", err)
+	}
 }
 
 func requireInjectionFinding(t *testing.T, got []*Finding, wantName string) *Finding {
@@ -74,14 +90,13 @@ func TestXPathInjectionFiresOnAnXPathErrorAndNotOnReflection(t *testing.T) {
 	}
 }
 
-// An endpoint that always emits an XPath error proves nothing, so nothing may be reported.
-func TestXPathInjectionStaysQuietOnAnAlwaysErroringEndpoint(t *testing.T) {
+// An endpoint that always emits an XPath error proves nothing. The baseline already carries the
+// discriminator, so the verdict is undecided - reporting it as clean would be a false negative.
+func TestXPathInjectionReportsUndecidedOnAnAlwaysErroringEndpoint(t *testing.T) {
 	cc := injectionFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "System.Xml.XPath error, always")
 	})
-	if got := runCheck(t, checkXPathInjection, cc); len(got) != 0 {
-		t.Fatalf("got %d findings from a permanently broken endpoint, want 0", len(got))
-	}
+	requireUndecided(t, checkXPathInjection, cc)
 }
 
 // ---------- LDAP ----------
@@ -113,11 +128,9 @@ func TestLDAPInjectionFiresOnADirectoryError(t *testing.T) {
 	requireInjectionFinding(t, runCheck(t, checkLDAPInjection, cc), "LDAP injection")
 }
 
-func TestLDAPInjectionStaysQuietOnReflection(t *testing.T) {
+func TestLDAPInjectionReportsUndecidedOnReflection(t *testing.T) {
 	cc := injectionFixture(t, echoServer)
-	if got := runCheck(t, checkLDAPInjection, cc); len(got) != 0 {
-		t.Fatalf("got %d findings against a reflecting server, want 0", len(got))
-	}
+	requireUndecided(t, checkLDAPInjection, cc)
 }
 
 // ---------- file path manipulation ----------
@@ -166,11 +179,9 @@ func TestOSCommandInjectionFiresWhenTheShellEchoesTheMarker(t *testing.T) {
 
 // The critical false-positive case: the server reflects the whole payload, so the marker is
 // present in the response without any command having run.
-func TestOSCommandInjectionStaysQuietWhenThePayloadIsMerelyReflected(t *testing.T) {
+func TestOSCommandInjectionReportsUndecidedWhenThePayloadIsMerelyReflected(t *testing.T) {
 	cc := injectionFixture(t, echoServer)
-	if got := runCheck(t, checkOSCommandInjection, cc); len(got) != 0 {
-		t.Fatalf("got %d findings from a reflected payload, want 0: the marker was echoed, not executed", len(got))
-	}
+	requireUndecided(t, checkOSCommandInjection, cc)
 }
 
 // ---------- interpreted languages ----------
@@ -210,14 +221,13 @@ func TestCodeInjectionStaysQuietOnReflection(t *testing.T) {
 	}
 }
 
-// A page that already contains "42" must not make every payload look evaluated.
-func TestCodeInjectionStaysQuietWhenTheBaselineAlreadyContainsTheProduct(t *testing.T) {
+// A page that already contains "42" must not make every payload look evaluated. It also cannot be
+// called clean: the product was there before any probe, so nothing about the probe is knowable.
+func TestCodeInjectionReportsUndecidedWhenTheBaselineAlreadyContainsTheProduct(t *testing.T) {
 	cc := injectionFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "the answer is 42, always")
 	})
-	if got := runCheck(t, codeInjectionCheck("PHP code injection", "php", "high"), cc); len(got) != 0 {
-		t.Fatalf("got %d findings where the baseline already had the product, want 0", len(got))
-	}
+	requireUndecided(t, codeInjectionCheck("PHP code injection", "php", "high"), cc)
 }
 
 // ---------- template and expression language ----------

@@ -47,6 +47,9 @@ type Endpoint struct {
 	// Safe marks an endpoint that reflects or echoes input WITHOUT the defect, so a finding
 	// for Row against this path is a false positive.
 	Safe bool
+	// DOM marks an endpoint whose vulnerability lives in page script, so detecting it needs a
+	// headless browser.
+	DOM bool
 	// Note explains the mechanism, so a failing assertion can be read without opening the
 	// handler.
 	Note string
@@ -96,6 +99,30 @@ func Vulnerabilities() []Endpoint {
 		{Path: "/api/debug", Row: "Database connection string disclosed",
 			Note: "exposes a mysql:// URI with credentials"},
 
+		// DOM-based rows. These need a headless browser, so the runtime harness gates them on
+		// Chrome being present.
+		{Path: "/dom/innerhtml", Row: "Cross-site scripting (DOM-based)", DOM: true,
+			Note: "location.hash copied into innerHTML"},
+		{Path: "/dom/eval", Row: "JavaScript injection (DOM-based)", DOM: true,
+			Note: "location.hash passed to eval"},
+		{Path: "/dom/storage", Row: "HTML5 storage manipulation (DOM-based)", DOM: true,
+			Note: "location.hash written to localStorage"},
+		{Path: "/dom/cookie", Row: "Cookie manipulation (DOM-based)", DOM: true,
+			Note: "location.hash written to document.cookie"},
+		{Path: "/dom/redirect", Row: "Open redirection (DOM-based)", DOM: true,
+			Note: "location.hash passed to location.assign"},
+
+		{Path: "/safe/dom/innerhtml", Row: "Cross-site scripting (DOM-based)", DOM: true, Safe: true,
+			Note: "same source, assigned to textContent instead of innerHTML"},
+		{Path: "/safe/dom/eval", Row: "JavaScript injection (DOM-based)", DOM: true, Safe: true,
+			Note: "same source, rendered as text instead of evaluated"},
+		{Path: "/safe/dom/storage", Row: "HTML5 storage manipulation (DOM-based)", DOM: true, Safe: true,
+			Note: "same source, stored only when it matches a strict allowlist"},
+		{Path: "/safe/dom/cookie", Row: "Cookie manipulation (DOM-based)", DOM: true, Safe: true,
+			Note: "reads the same source but writes a fixed cookie value"},
+		{Path: "/safe/dom/redirect", Row: "Open redirection (DOM-based)", DOM: true, Safe: true,
+			Note: "navigates only to same-origin paths, rejecting any value naming an authority"},
+
 		// The safe counterparts. Each reflects input for the same row without the defect, so a
 		// detector that fires on reflection alone is caught here rather than in the field.
 		{Path: "/safe/search?q=seed", Row: "Cross-site scripting (reflected)", Safe: true,
@@ -134,6 +161,19 @@ func Handler() http.Handler {
 	mux.HandleFunc("/safe/ping", safePing)
 	mux.HandleFunc("/safe/redirect", safeRedirect)
 	mux.HandleFunc("/safe/echo", safeEcho)
+
+	// DOM sinks reading location.hash. No server involvement, which is what makes the rows
+	// "(DOM-based)".
+	mux.HandleFunc("/dom/innerhtml", domInnerHTML)
+	mux.HandleFunc("/dom/eval", domEval)
+	mux.HandleFunc("/dom/storage", domStorage)
+	mux.HandleFunc("/dom/cookie", domCookie)
+	mux.HandleFunc("/dom/redirect", domRedirect)
+	mux.HandleFunc("/safe/dom/innerhtml", safeDOMInnerHTML)
+	mux.HandleFunc("/safe/dom/eval", safeDOMEval)
+	mux.HandleFunc("/safe/dom/storage", safeDOMStorage)
+	mux.HandleFunc("/safe/dom/cookie", safeDOMCookie)
+	mux.HandleFunc("/safe/dom/redirect", safeDOMRedirect)
 	return mux
 }
 
@@ -414,4 +454,60 @@ func htmlEscape(s string) string {
 	return strings.NewReplacer(
 		"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;",
 	).Replace(s)
+}
+
+// domPage serves a page whose script copies location.hash into the named sink.
+func domPage(w http.ResponseWriter, script string) {
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>dom</title></head>
+<body><div id="out"></div><script>
+var taint = decodeURIComponent(location.hash.slice(1));
+%s
+</script></body></html>`, script)
+}
+
+func domInnerHTML(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `document.getElementById('out').innerHTML = taint;`)
+}
+
+func domEval(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `try { eval(taint); } catch (e) {}`)
+}
+
+func domStorage(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `localStorage.setItem('pref', taint);`)
+}
+
+func domCookie(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `document.cookie = 'pref=' + taint;`)
+}
+
+func domRedirect(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `if (taint) { location.assign(taint); }`)
+}
+
+// The safe twins read the same source and do not pass it to the sink.
+func safeDOMInnerHTML(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `document.getElementById('out').textContent = taint;`)
+}
+
+func safeDOMEval(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `document.getElementById('out').textContent = 'would run: ' + taint;`)
+}
+
+func safeDOMStorage(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `if (/^[a-z]+$/.test(taint)) { localStorage.setItem('pref', taint); }`)
+}
+
+// safeDOMCookie writes a fixed value. The taint reaches script but never the cookie, so a
+// detector firing on "the page read location.hash" alone is caught here.
+func safeDOMCookie(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `document.getElementById('out').textContent = taint; document.cookie = 'pref=fixed';`)
+}
+
+// safeDOMRedirect navigates only to a same-origin path, rejecting anything that names an
+// authority - the DOM counterpart of the safeRedirect rule.
+func safeDOMRedirect(w http.ResponseWriter, r *http.Request) {
+	domPage(w, `if (/^\/[a-z0-9\/]*$/.test(taint)) { location.assign(taint); }`)
 }

@@ -72,6 +72,15 @@ func runInjection(ctx context.Context, cc *CheckContext, kinds []string,
 	return injectionResult{best: best, confirmed: confirmed, coverage: h.Coverage(probes, tested)}, nil
 }
 
+// unresolved reports the inconclusive sentinel when nothing confirmed but some probe was undecided.
+func (r injectionResult) unresolved(row string) error {
+	if r.confirmed || r.coverage.Inconclusive == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s: %d of %d probe(s) undecided: %w",
+		row, r.coverage.Inconclusive, r.coverage.PayloadsSent, errCheckInconclusive)
+}
+
 // buildInjectionFinding renders a confirmed injection result. Coverage is folded into the
 // description so a reader sees how much of the endpoint the verdict rests on.
 func buildInjectionFinding(cc *CheckContext, name, severity string, res injectionResult) *Finding {
@@ -132,7 +141,7 @@ func checkXPathInjection(ctx context.Context, cc *CheckContext) ([]*Finding, err
 		return nil, err
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved("XPath injection")
 	}
 	return []*Finding{buildInjectionFinding(cc, "XPath injection", "high", res)}, nil
 }
@@ -150,7 +159,7 @@ func checkXMLInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error
 		return nil, err
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved("XML injection")
 	}
 	return []*Finding{buildInjectionFinding(cc, "XML injection", "medium", res)}, nil
 }
@@ -176,7 +185,7 @@ func checkLDAPInjection(ctx context.Context, cc *CheckContext) ([]*Finding, erro
 		return nil, err
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved("LDAP injection")
 	}
 	return []*Finding{buildInjectionFinding(cc, "LDAP injection", "high", res)}, nil
 }
@@ -196,7 +205,7 @@ func checkFilePathManipulation(ctx context.Context, cc *CheckContext) ([]*Findin
 		return nil, err
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved("File path manipulation")
 	}
 	return []*Finding{buildInjectionFinding(cc, "File path manipulation", "high", res)}, nil
 }
@@ -231,7 +240,7 @@ func checkOSCommandInjection(ctx context.Context, cc *CheckContext) ([]*Finding,
 		return nil, err
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved("OS command injection")
 	}
 	return []*Finding{buildInjectionFinding(cc, "OS command injection", "high", res)}, nil
 }
@@ -254,7 +263,7 @@ func codeInjectionCheck(rowName, language, severity string) CheckRunner {
 			return nil, err
 		}
 		if !res.confirmed {
-			return nil, nil
+			return nil, res.unresolved(rowName)
 		}
 		f := buildInjectionFinding(cc, rowName, severity, res)
 		f.Description = fmt.Sprintf("%s The payload landed in %s context.",
@@ -302,7 +311,7 @@ func checkServerSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]
 		return nil, err
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved("Server-side template injection")
 	}
 	return []*Finding{buildInjectionFinding(cc, "Server-side template injection", "high", res)}, nil
 }
@@ -323,7 +332,7 @@ func checkExpressionLanguageInjection(ctx context.Context, cc *CheckContext) ([]
 		return nil, err
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved("Expression Language injection")
 	}
 	return []*Finding{buildInjectionFinding(cc, "Expression Language injection", "high", res)}, nil
 }

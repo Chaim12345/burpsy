@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
 )
 
@@ -175,13 +176,14 @@ func domSourcesForVariant(v domVariant) []domexec.SourceKind {
 	return nil
 }
 
-// domCanary mints the marker planted in a source. Alphanumeric for the same reason the stored
-// ledger's tokens are: anything else is re-encoded on the way through the page.
+// domCanary mints the marker planted in a source. Alphanumeric so nothing re-encodes it, and
+// per-call random so a marker stored by an earlier scan cannot poison a later baseline.
 func domCanary(prefix string) string {
-	return "bsydom" + prefix + ArithmeticProofProduct()
+	return "bsydom" + prefix + newProbeCanary("")
 }
 
-// observeDOM loads the page once per source and returns every observation.
+// observeDOM loads the page once per source and returns every observation, caching per
+// (exchange, source) so the sixteen families sharing a source share one page load.
 func observeDOM(ctx context.Context, cc *CheckContext, sources []domexec.SourceKind) ([]domexec.Observation, error) {
 	browser, err := cc.Browser(ctx)
 	if err != nil {
@@ -190,17 +192,37 @@ func observeDOM(ctx context.Context, cc *CheckContext, sources []domexec.SourceK
 	target := exchangeURL(cc.Exchange)
 	var all []domexec.Observation
 	for i, source := range sources {
-		canary := domCanary(fmt.Sprintf("%d", i))
-		obs, err := browser.ObserveTaint(ctx, target, source, canary)
+		obs, err := cc.Scanner.observeTaintCached(ctx, browser, cc.Exchange.ID, target, source, i)
 		if err != nil {
-			// One source failing is not the whole page failing, but it is also not a
-			// clean result for that source; the error is returned so the check reports
-			// a refusal rather than silently covering fewer sources than it claims.
 			return all, fmt.Errorf("observing %s: %w", source, err)
 		}
 		all = append(all, obs...)
 	}
 	return all, nil
+}
+
+func (s *ActiveScanner) observeTaintCached(ctx context.Context, browser *domexec.Browser,
+	id core.ExchangeID, target string, source domexec.SourceKind, idx int) ([]domexec.Observation, error) {
+
+	key := fmt.Sprintf("%d|%s", id, source)
+	s.domObsMu.Lock()
+	if obs, ok := s.domObs[key]; ok {
+		s.domObsMu.Unlock()
+		return obs, nil
+	}
+	s.domObsMu.Unlock()
+
+	obs, err := browser.ObserveTaint(ctx, target, source, domCanary(fmt.Sprintf("%d", idx)))
+	if err != nil {
+		return obs, err
+	}
+	s.domObsMu.Lock()
+	if s.domObs == nil {
+		s.domObs = map[string][]domexec.Observation{}
+	}
+	s.domObs[key] = obs
+	s.domObsMu.Unlock()
+	return obs, nil
 }
 
 // domCheck builds a runner for one family/variant pair.

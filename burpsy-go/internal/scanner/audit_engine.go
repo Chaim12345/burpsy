@@ -332,6 +332,9 @@ type AuditOutcome struct {
 	// "the operator navigated away" and "this host is too slow to audit in two minutes" are
 	// different facts about the same stopped run.
 	Cancelled bool `json:"cancelled"`
+	// Unmeasurable counts checks included in Ran whose evidence was inconclusive, so their empty
+	// verdict is undecided rather than clean. A qualifier on Ran, not a tenth disposition.
+	Unmeasurable int `json:"unmeasurable"`
 	// Error names why an item was refused before any dispatch. Non-empty exactly for
 	// ItemStateOutOfScope and ItemStateUnauditable.
 	Error string `json:"error,omitempty"`
@@ -417,6 +420,9 @@ func (o AuditOutcome) Summary() string {
 	}
 	if o.RequestsRefused > 0 {
 		fmt.Fprintf(&b, "; %d probe(s) refused by scope", o.RequestsRefused)
+	}
+	if o.Unmeasurable > 0 {
+		fmt.Fprintf(&b, "; %d check(s) undecided, not clean", o.Unmeasurable)
 	}
 	if o.FindingsDropped > 0 {
 		fmt.Fprintf(&b, "; %d finding(s) dropped for want of a probe response", o.FindingsDropped)
@@ -839,6 +845,18 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 				o.Skipped++
 				if s.logger != nil {
 					s.logger.Warn("active check could not run",
+						zap.String("check", checks[check].name),
+						zap.Uint64("exchange_id", uint64(exchangeID)),
+						zap.Error(runErr))
+				}
+				continue
+			}
+			// Ran, but undecided. Before the error branch: not a failure, so the breaker must not trip.
+			if errors.Is(runErr, errCheckInconclusive) {
+				o.Ran++
+				o.Unmeasurable++
+				if s.logger != nil {
+					s.logger.Info("active check ran but could not reach a verdict",
 						zap.String("check", checks[check].name),
 						zap.Uint64("exchange_id", uint64(exchangeID)),
 						zap.Error(runErr))

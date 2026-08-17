@@ -69,12 +69,15 @@ type Options struct {
 	// be a bare name (resolved via exec.LookPath) or an absolute path.
 	ChromePath string
 
-	// Headless selects whether Chrome runs with no visible window. This
-	// package assumes headless operation: the container this scanner runs in
-	// has no display server, so Headless should always be set true by
-	// callers. false is accepted for interactive local debugging only and
-	// will fail to start wherever no display is available.
-	Headless bool
+	// Headed shows Chrome's window. The zero value is headless, which is the only mode that
+	// works where there is no display server and the only one that does not steal focus from
+	// whoever is running the tests.
+	//
+	// This is deliberately phrased as the opt-in rather than as `Headless bool`. That spelling
+	// made a visible window the zero value, so every Options{} literal in the test suite
+	// silently launched one; the field's own comment had to ask callers to remember to set it,
+	// which is an API telling you it is shaped wrong. Set this only to watch a flow live.
+	Headed bool
 
 	// Timeout bounds every page operation (navigation, script evaluation,
 	// settle wait). Zero means "use the default": a hostile or slow page
@@ -152,7 +155,7 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 		chromedp.NoSandbox,
 		chromedp.DisableGPU,
 	}
-	if opts.Headless {
+	if !opts.Headed {
 		execOpts = append(execOpts, chromedp.Headless)
 	}
 	if opts.UserAgent != "" {

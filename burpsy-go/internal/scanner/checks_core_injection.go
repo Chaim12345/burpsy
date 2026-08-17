@@ -70,7 +70,7 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		return nil, fmt.Errorf("%s: %w", sqlInjectionIssue, err)
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved(sqlInjectionIssue)
 	}
 	return []*Finding{buildInjectionFinding(cc, sqlInjectionIssue, "high", res)}, nil
 }
@@ -225,7 +225,7 @@ func checkFilePathTraversalCore(ctx context.Context, cc *CheckContext) ([]*Findi
 		return nil, fmt.Errorf("File path traversal: %w", err)
 	}
 	if !res.confirmed {
-		return nil, nil
+		return nil, res.unresolved("File path traversal")
 	}
 	return []*Finding{buildInjectionFinding(cc, "File path traversal", "high", res)}, nil
 }

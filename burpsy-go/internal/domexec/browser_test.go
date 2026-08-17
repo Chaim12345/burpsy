@@ -181,3 +181,13 @@ func TestObservationsForSinkFiltersToTheRequestedSink(t *testing.T) {
 		t.Fatalf("a sink with no observations must yield nil, got %+v", got)
 	}
 }
+
+// The zero value must be headless. Every live test in this repo builds Options{} without naming
+// this field, so if the default ever flips back the whole suite starts opening windows on whoever
+// runs it - which is exactly how this was found.
+func TestTheZeroValueOptionsIsHeadless(t *testing.T) {
+	if (Options{}).Headed {
+		t.Fatal("Options{} requests a visible browser window; headless must be the default because " +
+			"callers that never mention the field are the common case")
+	}
+}
