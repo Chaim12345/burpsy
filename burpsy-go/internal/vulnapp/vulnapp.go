@@ -32,10 +32,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Endpoint is one route of the application together with what it is for.
@@ -223,6 +225,11 @@ func Handler() http.Handler {
 	mux.HandleFunc("/safe/search/xpath", safeXPathSearch)
 	mux.HandleFunc("/safe/directory", safeLDAPLookup)
 	mux.HandleFunc("/safe/greet", safeRenderTemplate)
+
+	// Stored pair: one page persists, another renders.
+	mux.HandleFunc("/comment", postComment)
+	mux.HandleFunc("/comments", listComments)
+	mux.HandleFunc("/safe/comments", safeListComments)
 	return mux
 }
 
@@ -863,4 +870,67 @@ func renderTemplate(w http.ResponseWriter, r *http.Request) {
 func safeRenderTemplate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprintf(w, "rendered: %s\n", r.URL.Query().Get("greeting"))
+}
+
+// ---------------------------------------------------------------------------
+// Stored (second-order) pair
+// ---------------------------------------------------------------------------
+
+// The stored rows need two endpoints and an ordering. A value submitted to one page has to come
+// back out of a different one, later - which is why a batch audit can never confirm this without
+// going back for a second look. The scanner's re-fetch pass is what supplies the "later".
+var (
+	guestbookMu      sync.Mutex
+	guestbookEntries []string
+)
+
+// postComment persists whatever it is given. Storing untrusted input is not itself the defect, so
+// this endpoint declares no row of its own.
+func postComment(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("comment")
+	if v == "" {
+		b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		if parsed, err := url.ParseQuery(string(b)); err == nil {
+			v = parsed.Get("comment")
+		}
+	}
+	if v != "" {
+		guestbookMu.Lock()
+		// Bounded so a scan cannot grow this without limit; the newest entries are the ones a
+		// canary would be in.
+		guestbookEntries = append(guestbookEntries, v)
+		if len(guestbookEntries) > 200 {
+			guestbookEntries = guestbookEntries[len(guestbookEntries)-200:]
+		}
+		guestbookMu.Unlock()
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprint(w, "comment received\n")
+}
+
+// listComments renders every stored comment without escaping, which is the defect.
+func listComments(w http.ResponseWriter, r *http.Request) {
+	guestbookMu.Lock()
+	entries := append([]string(nil), guestbookEntries...)
+	guestbookMu.Unlock()
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprint(w, "<!DOCTYPE html><html><body><h1>Guestbook</h1>")
+	for _, e := range entries {
+		fmt.Fprintf(w, "<div class=\"comment\">%s</div>", e)
+	}
+	fmt.Fprint(w, "</body></html>")
+}
+
+// safeListComments renders the same stored values escaped. The canary still appears - so a
+// detector that merely greps for its own token fires here - but it appears as text.
+func safeListComments(w http.ResponseWriter, r *http.Request) {
+	guestbookMu.Lock()
+	entries := append([]string(nil), guestbookEntries...)
+	guestbookMu.Unlock()
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprint(w, "<!DOCTYPE html><html><body><h1>Guestbook</h1>")
+	for _, e := range entries {
+		fmt.Fprintf(w, "<div class=\"comment\">%s</div>", htmlEscape(e))
+	}
+	fmt.Fprint(w, "</body></html>")
 }

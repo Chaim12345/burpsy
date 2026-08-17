@@ -147,15 +147,18 @@ func DispatchScopeForGiven(given string) (DispatchScope, bool) {
 //
 // DispatchScopePerInsertionPoint became reachable when the corpus's active checks were wired in:
 // the check's run covers every point of one request internally (Enumerate), so one admission per
-// request admits the whole point set. DispatchScopeStoredPerInsertionPoint — second-order checks
-// threading a stored request — has no corpus check bound to it and stays unreachable: the scope
-// is part of the recovered `Zcud` model, and a reimplementation that silently omitted it would
-// misrepresent its coverage. Nothing pretends to dispatch it: UnitKey reports false, so no work
-// is ever admitted to it.
+// request admits the whole point set.
+//
+// DispatchScopeStoredPerInsertionPoint became reachable when StoredCheckDescriptors bound ten
+// native checks to it. Until then it deliberately yielded no unit, so nothing could appear to have
+// been audited under a scope with no implementation behind it. Leaving it unreachable *after*
+// binding checks to it inverted that protection into the harm it was guarding against: all ten
+// rows counted as runnable coverage while the engine admitted no work to them, so every one could
+// only ever report "unsupported" - and nothing in the registry said so.
 func (s DispatchScope) IsReachable() bool {
 	switch s {
 	case DispatchScopePerHost, DispatchScopePerPath, DispatchScopePerUrl, DispatchScopePerRequest,
-		DispatchScopePerInsertionPoint:
+		DispatchScopePerInsertionPoint, DispatchScopeStoredPerInsertionPoint:
 		return true
 	}
 	return false
@@ -191,12 +194,16 @@ func (s DispatchScope) UnitKey(ex *core.Exchange) (string, bool) {
 		return origin + ex.Path, true
 	case DispatchScopePerRequest:
 		return fmt.Sprintf("%s#%d", origin, ex.ID), true
-	case DispatchScopePerInsertionPoint:
+	case DispatchScopePerInsertionPoint, DispatchScopeStoredPerInsertionPoint:
 		// One request's point set is one unit: the check's run covers every point of this request
 		// internally (bcheck.Enumerate), and a second capture of the same request carries the same
 		// points and the same base values, so the answer cannot differ. Finer than per-request
 		// keying would buy nothing — the ledger exists to collapse identical work, and two
 		// captures of one request are identical work.
+		//
+		// The stored variant keys identically. It differs in what it is handed, not in how often it
+		// runs: the same request, plus the prior capture of that endpoint threaded into
+		// CheckContext.StoredExchange.
 		return fmt.Sprintf("%s#%d", origin, ex.ID), true
 	}
 	return "", false

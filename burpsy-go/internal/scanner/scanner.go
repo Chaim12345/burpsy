@@ -54,6 +54,11 @@ type ActiveScanner struct {
 	// times. Observe once, match many.
 	domObs   map[string][]domexec.Observation
 	domObsMu sync.Mutex
+	// pending carries claims that cannot be settled while the check that made them runs: a
+	// planted canary, a callback domain. Created on first use so a scan that defers nothing
+	// allocates nothing.
+	pending   *PendingRegistry
+	pendingMu sync.Mutex
 	// sessions is the coordinator the access-control and CSRF rows need. Nil means those
 	// checks report a missing capability instead of comparing two anonymous requests.
 	sessions *session.Coordinator
@@ -169,6 +174,10 @@ type ScanConfig struct {
 	// spend a whole scan's time budget and make later checks go silent for want of clock rather
 	// than want of evidence. Enabling this alone admits nothing; it only widens the family.
 	CheckOutOfBand bool
+	// PendingDeadline bounds how long a deferred claim is carried before it is reported
+	// outstanding. Zero means DefaultPendingDeadline. Worth setting low in tests and high against
+	// a target that queues work rather than acting inline.
+	PendingDeadline time.Duration
 	// CheckStored admits the stored (second-order) checks in checks_stored.go. They plant
 	// canaries into endpoints they audit and can only confirm a finding once one surfaces in a
 	// later exchange, so they need a StoredLedger. Off by default.

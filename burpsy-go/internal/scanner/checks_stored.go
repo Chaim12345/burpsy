@@ -42,6 +42,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 func storedChecksEnabled(c *ScanConfig) bool { return c != nil && c.CheckStored }
@@ -131,7 +133,12 @@ func storedContextCheck(row, severity string, inContext func(body, token string)
 		}
 		o, body, ok := storedSightingFor(cc)
 		if !ok {
-			return nil, nil
+			// Nothing has surfaced yet, and nothing could have: every response this scan holds
+			// was captured before the planting above. Returning nil here was the defect - it
+			// reported a clean second-order result at the one moment the answer was guaranteed
+			// to be unavailable. The claim is handed to the registry instead, and FinishScan
+			// asks again after re-fetching the pages that might render it.
+			return nil, deferStoredClaim(cc, row, severity, inContext)
 		}
 		evidence, matched := inContext(body, o.Canary.Token)
 		if !matched {
@@ -141,6 +148,67 @@ func storedContextCheck(row, severity string, inContext func(body, token string)
 			fmt.Sprintf("a value submitted to %s (parameter %q) in exchange %d is rendered here",
 				o.Canary.OriginPath, o.Canary.InsertionPoint, o.Canary.Origin))}, nil
 	}
+}
+
+// deferStoredClaim hands this row's canaries to the pending registry and returns the sentinel that
+// makes the audit count the check as undecided.
+//
+// It is deliberately per-row rather than per-canary: each stored row decides a different context
+// for the same sighting, so all of them are waiting on the same token and each must judge it with
+// its own matcher when it arrives.
+func deferStoredClaim(cc *CheckContext, row, severity string,
+	inContext func(body, token string) (string, bool)) error {
+
+	outstanding := cc.Scanner.stored.Outstanding()
+	if len(outstanding) == 0 {
+		// Nothing was planted here at all - no inputs to plant into. There is no claim to defer
+		// and nothing was suppressed, so a clean result is the truth.
+		return nil
+	}
+
+	deadline := nowUTC().Add(DefaultPendingDeadline)
+	if cc.Config != nil && cc.Config.PendingDeadline > 0 {
+		deadline = nowUTC().Add(cc.Config.PendingDeadline)
+	}
+	err := cc.Scanner.Pending().Register(PendingItem{
+		Row:      row,
+		Exchange: cc.Exchange.ID,
+		Deadline: deadline,
+		What: fmt.Sprintf("%d canary(ies) planted in %s, awaiting a sighting on another page",
+			len(outstanding), cc.Exchange.Path),
+	}, func(context.Context) (*Finding, bool, error) {
+		for _, o := range cc.Scanner.stored.SecondOrderObservations() {
+			body := responseBody(responseRaw(cc.Scanner, sightingExchange(cc.Scanner, o.SeenIn)))
+			if body == "" {
+				continue
+			}
+			evidence, matched := inContext(body, o.Canary.Token)
+			if !matched {
+				continue
+			}
+			return buildHeaderFinding(cc, row, severity, "firm", evidence,
+				fmt.Sprintf("a value submitted to %s (parameter %q) in exchange %d is rendered in exchange %d",
+					o.Canary.OriginPath, o.Canary.InsertionPoint, o.Canary.Origin, o.SeenIn)), true, nil
+		}
+		return nil, false, nil
+	})
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("%s: canaries planted, no sighting yet: %w", row, errCheckInconclusive)
+}
+
+// sightingExchange resolves the exchange a canary was seen in, so its body can be re-read for the
+// per-row context decision.
+func sightingExchange(s *ActiveScanner, id core.ExchangeID) *core.Exchange {
+	if s == nil || s.store == nil {
+		return nil
+	}
+	ex, err := s.store.GetExchange(id)
+	if err != nil {
+		return nil
+	}
+	return ex
 }
 
 // contextAnywhere matches a canary wherever it appears.

@@ -59,7 +59,7 @@ func Test_bcheck_given_clauses_reach_four_of_the_seven_dispatch_scopes(t *testin
 	}
 }
 
-func Test_the_two_unreachable_scopes_yield_no_dispatch_unit(t *testing.T) {
+func Test_the_one_unreachable_scope_yields_no_dispatch_unit(t *testing.T) {
 	ex := auditTestExchange(1, "a.test", "/x", true)
 	reachable := 0
 	for _, s := range DispatchScopeAll {
@@ -67,12 +67,13 @@ func Test_the_two_unreachable_scopes_yield_no_dispatch_unit(t *testing.T) {
 			reachable++
 		}
 	}
-	// Per-insertion-point became reachable with the corpus wiring: the check's run covers every
-	// point of one request internally (bcheck.Enumerate), so one admission per request admits the
-	// whole point set. In-session-per-request and stored-per-insertion-point have no bound corpus
-	// check and stay unreachable.
-	if reachable != 5 {
-		t.Errorf("reachable scopes = %d, want 5 of seven wired up", reachable)
+	// Six of seven. Per-insertion-point became reachable when the corpus's active checks were
+	// wired in; stored-per-insertion-point became reachable when StoredCheckDescriptors bound ten
+	// native checks to it, and leaving it unreachable after that made all ten permanently
+	// unsupported while still counting as runnable coverage. In-session-per-request has no bound
+	// check and stays unreachable, which is the state this assertion protects.
+	if reachable != 6 {
+		t.Errorf("reachable scopes = %d, want 6 of seven wired up", reachable)
 	}
 	for _, s := range DispatchScopeAll {
 		// Nothing can be admitted to a scope with no key, so an unreachable scope cannot quietly
