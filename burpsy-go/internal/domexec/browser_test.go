@@ -4,22 +4,56 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// newTestBrowser returns a Browser or skips. Chrome is present on the development box, so
-// these tests do run here; the skip exists so the suite stays green on a host without a
-// browser rather than reporting a missing prerequisite as a code failure.
+// This package's tests share one headless Chrome process instead of launching one per test.
+//
+// Launching Chrome ~14 times (once per test needing a browser) dominated this package's wall
+// clock: NewBrowser blocks on a real process start plus a warm-up round trip, so a sub-second
+// fixture cost was paid once per test rather than once per package. Browser already hands out
+// an isolated tab per call (see newTab) specifically so "concurrent or sequential
+// ObserveTaint/RenderedDOM calls never see each other's instrumentation state" - that contract,
+// already relied on by real scans running many DOM checks through one shared browser, is exactly
+// what makes sharing one Browser across every test in this package safe: each test still gets
+// its own tab, its own navigation, its own DOM, and (per that same contract) may run concurrently
+// with the others.
+//
+// TestMain, not t.Cleanup, owns teardown. t.Cleanup on the first test to request the browser
+// would close it the moment that ONE test finished, and every later test would then either error
+// on a dead browser or - the failure this package's own tests exist to catch - silently observe
+// nothing and be misread as a passing negative case.
+var (
+	sharedBrowserOnce sync.Once
+	sharedBrowser     *Browser
+	sharedBrowserErr  error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if sharedBrowser != nil {
+		_ = sharedBrowser.Close()
+	}
+	os.Exit(code)
+}
+
+// newTestBrowser returns the package's shared Browser, launching it on first use, or skips. Chrome
+// is present on the development box, so these tests do run here; the skip exists so the suite
+// stays green on a host without a browser rather than reporting a missing prerequisite as a code
+// failure.
 func newTestBrowser(t *testing.T) *Browser {
 	t.Helper()
-	b, err := NewBrowser(context.Background(), Options{Timeout: 30 * time.Second})
-	if err != nil {
-		t.Skipf("no browser available, skipping: %v", err)
+	sharedBrowserOnce.Do(func() {
+		sharedBrowser, sharedBrowserErr = NewBrowser(context.Background(), Options{Timeout: 30 * time.Second})
+	})
+	if sharedBrowserErr != nil {
+		t.Skipf("no browser available, skipping: %v", sharedBrowserErr)
 	}
-	t.Cleanup(func() { _ = b.Close() })
-	return b
+	return sharedBrowser
 }
 
 // servePage serves one HTML document at / and returns its URL.
@@ -45,6 +79,7 @@ func observe(t *testing.T, b *Browser, url string, canary string) []Observation 
 }
 
 func TestAHashSourceFlowingIntoEvalIsObservedAtTheEvalSink(t *testing.T) {
+	t.Parallel()
 	b := newTestBrowser(t)
 	url := servePage(t, `<html><body><script>
 		try { eval(decodeURIComponent(location.hash.slice(1))); } catch (e) {}
@@ -56,6 +91,7 @@ func TestAHashSourceFlowingIntoEvalIsObservedAtTheEvalSink(t *testing.T) {
 }
 
 func TestAHashSourceAssignedToInnerHTMLIsObservedAtTheInnerHTMLSink(t *testing.T) {
+	t.Parallel()
 	b := newTestBrowser(t)
 	url := servePage(t, `<html><body><div id="x"></div><script>
 		document.getElementById('x').innerHTML = location.hash.slice(1);
@@ -69,6 +105,7 @@ func TestAHashSourceAssignedToInnerHTMLIsObservedAtTheInnerHTMLSink(t *testing.T
 func TestAHashSourceDrivingANavigationIsObservedAtTheLocationSink(t *testing.T) {
 	// This is the DOM-based open-redirection family, which is why the location sink is
 	// tracked separately from the HTML-writing sinks.
+	t.Parallel()
 	b := newTestBrowser(t)
 	url := servePage(t, `<html><body><script>
 		var t = location.hash.slice(1);
@@ -81,6 +118,7 @@ func TestAHashSourceDrivingANavigationIsObservedAtTheLocationSink(t *testing.T) 
 }
 
 func TestAHashSourceWrittenToLocalStorageIsObservedAtTheStorageSink(t *testing.T) {
+	t.Parallel()
 	b := newTestBrowser(t)
 	url := servePage(t, `<html><body><script>
 		localStorage.setItem('k', location.hash.slice(1));
@@ -95,6 +133,7 @@ func TestAPageThatNeverReadsASourceYieldsNoObservations(t *testing.T) {
 	// The negative case that proves the harness reports flows rather than merely reporting
 	// that sinks were called. Without this, every page using innerHTML at all would look
 	// vulnerable.
+	t.Parallel()
 	b := newTestBrowser(t)
 	url := servePage(t, `<html><body><div id="x"></div><script>
 		document.getElementById('x').innerHTML = "<b>static content</b>";
@@ -110,6 +149,7 @@ func TestInstrumentedSinksStillCallThroughSoThePageKeepsWorking(t *testing.T) {
 	// An instrumentation wrapper that swallowed the call would observe nothing on any real
 	// page, and would do so silently. Proving call-through is what makes the whole harness
 	// trustworthy.
+	t.Parallel()
 	b := newTestBrowser(t)
 	url := servePage(t, `<html><body><div id="x"></div><script>
 		document.getElementById('x').innerHTML = "<span id=proof>" + location.hash.slice(1) + "</span>";
@@ -135,6 +175,7 @@ func TestInstrumentedSinksStillCallThroughSoThePageKeepsWorking(t *testing.T) {
 func TestRenderedDOMSeesMarkupThatOnlyExistsAfterScriptRuns(t *testing.T) {
 	// The other half of what the DOM rows need: content the HTTP-only scanner cannot see at
 	// all, because it is created by script rather than served.
+	t.Parallel()
 	b := newTestBrowser(t)
 	const raw = `<html><body><script>
 		var d = document.createElement('div');

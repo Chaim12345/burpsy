@@ -23,6 +23,7 @@ func observeSink(t *testing.T, html string, sink SinkKind) []Observation {
 }
 
 func TestAHashSourceReachingDocumentEvaluateIsObservedAtTheXPathSink(t *testing.T) {
+	t.Parallel()
 	hits := observeSink(t, `<html><body><script>
 		try { document.evaluate("//user[@name='" + location.hash.slice(1) + "']", document, null, 0, null); } catch (e) {}
 	</script></body></html>`, SinkXPathEvaluate)
@@ -35,6 +36,7 @@ func TestAHashSourceReachingDocumentEvaluateIsObservedAtTheXPathSink(t *testing.
 }
 
 func TestAHashSourceReachingJSONParseIsObservedAtTheJSONSink(t *testing.T) {
+	t.Parallel()
 	hits := observeSink(t, `<html><body><script>
 		try { JSON.parse('{"v":"' + location.hash.slice(1) + '"}'); } catch (e) {}
 	</script></body></html>`, SinkJSONParse)
@@ -44,6 +46,7 @@ func TestAHashSourceReachingJSONParseIsObservedAtTheJSONSink(t *testing.T) {
 }
 
 func TestAHashSourceAssignedToAnAnchorHrefIsObservedAtTheLinkSink(t *testing.T) {
+	t.Parallel()
 	hits := observeSink(t, `<html><body><a id="a">x</a><script>
 		document.getElementById('a').href = location.hash.slice(1);
 	</script></body></html>`, SinkAnchorHref)
@@ -53,6 +56,7 @@ func TestAHashSourceAssignedToAnAnchorHrefIsObservedAtTheLinkSink(t *testing.T) 
 }
 
 func TestAHashSourceUsedAsARegExpPatternIsObservedAtTheDoSSink(t *testing.T) {
+	t.Parallel()
 	hits := observeSink(t, `<html><body><script>
 		try { new RegExp(location.hash.slice(1)); } catch (e) {}
 	</script></body></html>`, SinkRegExpCtor)
@@ -62,6 +66,7 @@ func TestAHashSourceUsedAsARegExpPatternIsObservedAtTheDoSSink(t *testing.T) {
 }
 
 func TestAWriteToObjectPrototypeIsObservedAtThePollutionSink(t *testing.T) {
+	t.Parallel()
 	hits := observeSink(t, `<html><body><script>
 		try { Object.defineProperty(Object.prototype, location.hash.slice(1), {value: 1}); } catch (e) {}
 	</script></body></html>`, SinkPrototypePollution)
@@ -73,6 +78,7 @@ func TestAWriteToObjectPrototypeIsObservedAtThePollutionSink(t *testing.T) {
 // The negative case that keeps the new sinks honest: a page that never touches a source must
 // produce no observation at any of them, or every page using JSON.parse would look vulnerable.
 func TestAPageUsingTheNewSinksWithoutTaintYieldsNoObservations(t *testing.T) {
+	t.Parallel()
 	b := newTestBrowser(t)
 	url := servePage(t, `<html><body><a id="a">x</a><script>
 		JSON.parse('{"v":"static"}');
@@ -94,6 +100,7 @@ func TestAPageUsingTheNewSinksWithoutTaintYieldsNoObservations(t *testing.T) {
 // Instrumentation must call through: a wrapper that swallowed the call would observe nothing on
 // any real page, and would do so silently.
 func TestTheNewSinksStillCallThroughSoThePageKeepsWorking(t *testing.T) {
+	t.Parallel()
 	b := newTestBrowser(t)
 	url := servePage(t, `<html><body><div id="out"></div><script>
 		var parsed = JSON.parse('{"v":"' + location.hash.slice(1) + '"}');

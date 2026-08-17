@@ -43,12 +43,14 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/vulnapp"
 	"go.uber.org/zap"
 )
@@ -61,23 +63,37 @@ type runtimeTarget struct {
 	store     *core.TrafficStore
 	scan      *ActiveScanner
 	exchanges map[string]core.ExchangeID // endpoint path -> seeded exchange
-	// lastRequestsSent carries the probe count of the most recent findingsFor call, so the
-	// request-budget test can read it without every caller threading an extra return value.
-	lastRequestsSent uint32
 	// chrome records whether a browser was available, so DOM manifest entries are asserted or
 	// skipped by name rather than quietly passing.
 	chrome bool
 	// domScan is the browser-enabled scanner, nil when no Chrome is available.
 	domScan *ActiveScanner
+	// storedScan enables the stored rows and is driven through the deferred phase.
+	storedScan *ActiveScanner
+	// memo caches each endpoint's audit for this target's lifetime; see auditOnce. Guarded because
+	// the subtests that read it run in parallel.
+	memo   map[string]memoisedAudit
+	memoMu sync.Mutex
+	// The TLS twin of the target, for rows gated on an encrypted exchange.
+	tlsSrv  *httptest.Server
+	tlsHost string
+	tlsPort uint16
 }
 
 // startRuntimeTarget serves vulnapp, requests every declared endpoint over real HTTP, and stores
 // each request/response pair as the scanner would have captured it through the proxy.
+// startRuntimeTarget returns the package-shared target; see runtime_shared_test.go for why it is
+// shared rather than built per test.
 func startRuntimeTarget(t *testing.T) *runtimeTarget {
+	t.Helper()
+	return sharedRuntimeTarget(t)
+}
+
+// buildRuntimeTarget constructs the live corpus target. Called exactly once per test binary.
+func buildRuntimeTarget(t *testing.T) *runtimeTarget {
 	t.Helper()
 
 	srv := httptest.NewServer(vulnapp.Handler())
-	t.Cleanup(srv.Close)
 
 	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	if err != nil {
@@ -88,8 +104,28 @@ func startRuntimeTarget(t *testing.T) *runtimeTarget {
 		t.Fatalf("parse target port: %v", err)
 	}
 
+	// A second server over TLS, because several transport rows are gated on the exchange having
+	// been encrypted - a cacheable HTTPS response, mixed content, HSTS not enforced. On a
+	// cleartext-only harness those can never fire, and that is a property of the fixture rather
+	// than of the check: reporting them as undemonstrable would blame the wrong thing.
+	// EnableHTTP2 has to be set between NewUnstartedServer and StartTLS - httptest.NewTLSServer does
+	// both internally and leaves NextProtos as http/1.1 only, so ALPN could never negotiate h2 and
+	// the Hidden HTTP 2 row was unreachable for a reason that had nothing to do with the check.
+	tlsSrv := httptest.NewUnstartedServer(vulnapp.Handler())
+	tlsSrv.EnableHTTP2 = true
+	tlsSrv.StartTLS()
+	tlsHost, tlsPortStr, err := net.SplitHostPort(strings.TrimPrefix(tlsSrv.URL, "https://"))
+	if err != nil {
+		t.Fatalf("split tls target address: %v", err)
+	}
+	var tlsPort uint16
+	if _, err := fmt.Sscanf(tlsPortStr, "%d", &tlsPort); err != nil {
+		t.Fatalf("parse tls target port: %v", err)
+	}
+
 	rt := &runtimeTarget{
 		srv: srv, host: host, port: port,
+		tlsSrv: tlsSrv, tlsHost: tlsHost, tlsPort: tlsPort,
 		store:     core.NewTrafficStore(),
 		exchanges: map[string]core.ExchangeID{},
 	}
@@ -100,19 +136,38 @@ func startRuntimeTarget(t *testing.T) *runtimeTarget {
 		// and a client that chased it would store the destination instead.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+	tlsClient := tlsSrv.Client()
+	tlsClient.Timeout = 10 * time.Second
+	tlsClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	for _, e := range vulnapp.Vulnerabilities() {
+		if e.TLS {
+			rt.seed(t, tlsClient, e)
+			continue
+		}
 		rt.seed(t, client, e)
 	}
 	if len(rt.exchanges) == 0 {
 		t.Fatal("no exchanges were captured from the target; every assertion below would be vacuous")
 	}
 
+	// A session coordinator carrying a credential for the target.
+	//
+	// The access-control and CSRF rows compare an authenticated request against an anonymous one, so
+	// without one they can only report a missing capability - honest, but it leaves two rows
+	// undemonstrable for a reason belonging to the harness rather than the check. The cookie is
+	// absorbed through HandleResponse, the same path a real scan uses to learn a session from a login
+	// response, rather than by reaching into the jar.
+	coord := session.NewCoordinator(zap.NewNop())
+	coord.HandleResponse(host, port, false, http.StatusOK,
+		map[string]string{"Set-Cookie": "session=bsy-runtime-session; Path=/"}, nil)
+
 	// Two scanners over one store. Auditing every endpoint with the 48 DOM rows drives a browser
 	// for each, which cost ~50s per endpoint and told us nothing about the ten non-DOM rows.
 	rt.scan = NewActiveScanner(rt.store, zap.NewNop()).
-		WithSender(sender.NewSender(nil)).
+		WithSender(runtimeSender()).
 		WithStoredLedger(NewStoredLedger()).
+		WithSessionCoordinator(coord).
 		WithConfig(runtimeScanConfig())
 
 	rt.chrome = chromeOnPath()
@@ -122,13 +177,35 @@ func startRuntimeTarget(t *testing.T) *runtimeTarget {
 		// Headless unless BURPSY_DOM_HEADED=1, which is for watching a flow live.
 		headed := os.Getenv("BURPSY_DOM_HEADED") == "1"
 		rt.domScan = NewActiveScanner(rt.store, zap.NewNop()).
-			WithSender(sender.NewSender(nil)).
+			WithSender(runtimeSender()).
 			WithStoredLedger(NewStoredLedger()).
 			WithBrowserProvider(NewLazyBrowserProvider(domexec.Options{Headed: headed})).
 			WithConfig(domCfg)
-		t.Cleanup(func() { _ = rt.domScan.CloseCapabilities() })
 	}
+
+	// A third scanner for the stored rows. They are separate because enabling CheckStored on the
+	// main one would have all ten plant canaries into every endpoint audited, which is a lot of
+	// traffic to answer a question about two endpoints - and because these rows are the only ones
+	// whose verdict needs the deferred phase.
+	storedCfg := runtimeScanConfig()
+	storedCfg.CheckStored = true
+	storedCfg.PendingDeadline = 2 * time.Second
+	rt.storedScan = NewActiveScanner(rt.store, zap.NewNop()).
+		WithSender(runtimeSender()).
+		WithStoredLedger(NewStoredLedger()).
+		WithConfig(storedCfg)
 	return rt
+}
+
+// runtimeSender is the sender every scanner in this harness uses.
+//
+// TLSVerify is off because the TLS twin is an httptest server with a self-signed certificate. With
+// verification on, every probe to it failed the handshake, so the checks all reported send failures,
+// the breaker tripped, and the item came back ItemStateFailed with zero checks run — which reads in
+// the manifest as "the row did not fire" and blames the check for a certificate the harness itself
+// generated. This is a local test target; skipping verification here is not a policy about scanning.
+func runtimeSender() *sender.Sender {
+	return sender.NewSender(&sender.SenderConfig{Timeout: 30 * time.Second, TLSVerify: false})
 }
 
 // scannerFor picks the DOM-enabled scanner only for endpoints whose row is a DOM row.
@@ -137,6 +214,107 @@ func (rt *runtimeTarget) scannerFor(dom bool) *ActiveScanner {
 		return rt.domScan
 	}
 	return rt.scan
+}
+
+// storedFindingsFor audits an endpoint and then runs the scan's deferred phase.
+//
+// A stored row cannot be confirmed by AuditWithin alone: the canary is planted BY that audit, so no
+// response it has seen can contain it. FinishScan re-fetches the pages that might render it and asks
+// every deferred claim again. Routing these rows through the same call the CLI would make is the
+// point - a harness that skipped it would report the stored rows as silent and leave the manifest
+// unable to demonstrate a family that does work.
+func (rt *runtimeTarget) auditStoredEndpoint(t *testing.T, path string) (map[string]*Finding, uint32) {
+	t.Helper()
+	id, ok := rt.exchanges[path]
+	if !ok {
+		t.Fatalf("%s was never seeded", path)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	byRow := map[string]*Finding{}
+	outcome, findings := rt.storedScan.AuditWithin(ctx, id, rt.storedScan.AuditConfig())
+	deferred, completion := rt.storedScan.FinishScan(ctx)
+	if completion.RefetchError != "" {
+		t.Fatalf("the deferred phase could not re-fetch: %s", completion.RefetchError)
+	}
+	for _, f := range append(findings, deferred...) {
+		if f != nil {
+			byRow[f.Name] = f
+		}
+	}
+	return byRow, outcome.RequestsSent
+}
+
+// auditOnce memoises one endpoint's audit for the lifetime of a runtimeTarget.
+//
+// The safe-counterpart test audits a row's VULNERABLE twin once per safe entry, to prove the row is
+// live before trusting the safe endpoint's silence. Rows sharing a twin therefore re-audited the same
+// endpoint several times over, and for a DOM twin each repeat drives a real browser - the single
+// largest avoidable cost in this suite. Memoising is sound because the pairing only requires the twin
+// to have fired in THIS run, which a cached result from this run satisfies exactly.
+//
+// Deliberately keyed including the stored flag: a stored audit plants canaries and mutates the
+// ledger, so replaying it is not merely slow, it is a different scan each time.
+func (rt *runtimeTarget) auditOnce(t *testing.T, path string, dom, stored bool,
+	run func(*testing.T) (map[string]*Finding, uint32)) memoisedAudit {
+
+	t.Helper()
+	key := fmt.Sprintf("%s|%v|%v", path, dom, stored)
+	rt.memoMu.Lock()
+	if rt.memo == nil {
+		rt.memo = map[string]memoisedAudit{}
+	}
+	if got, ok := rt.memo[key]; ok {
+		rt.memoMu.Unlock()
+		return got
+	}
+	rt.memoMu.Unlock()
+
+	// Deliberately outside the lock: an audit takes seconds and drives a browser for DOM rows, so
+	// holding the mutex across it would serialise every parallel subtest onto the slowest one. The
+	// cost is that two subtests racing on the same fresh endpoint may both audit it - wasteful once,
+	// never wrong, and cheaper than the serialisation it avoids.
+	byRow, sent := run(t)
+
+	rt.memoMu.Lock()
+	entry := memoisedAudit{byRow: byRow, requestsSent: sent}
+	rt.memo[key] = entry
+	rt.memoMu.Unlock()
+	return entry
+}
+
+// memoisedAudit carries the probe count with the findings, so the request-budget test still reads
+// the count belonging to the audit it asked for rather than whichever ran most recently.
+type memoisedAudit struct {
+	byRow        map[string]*Finding
+	requestsSent uint32
+}
+
+// findingsFor audits one endpoint, once per target.
+func (rt *runtimeTarget) findingsFor(t *testing.T, path string, dom bool) map[string]*Finding {
+	t.Helper()
+	return rt.auditOnce(t, path, dom, false, func(t *testing.T) (map[string]*Finding, uint32) {
+		return rt.auditEndpoint(t, path, dom)
+	}).byRow
+}
+
+// findingsWithProbeCount returns the audit plus the probes it sent, so the budget test reads the
+// count belonging to ITS endpoint rather than a shared field another parallel subtest just wrote.
+func (rt *runtimeTarget) findingsWithProbeCount(t *testing.T, path string, dom bool) (map[string]*Finding, uint32) {
+	t.Helper()
+	entry := rt.auditOnce(t, path, dom, false, func(t *testing.T) (map[string]*Finding, uint32) {
+		return rt.auditEndpoint(t, path, dom)
+	})
+	return entry.byRow, entry.requestsSent
+}
+
+// storedFindingsFor audits one endpoint through the deferred phase, once per target.
+func (rt *runtimeTarget) storedFindingsFor(t *testing.T, path string) map[string]*Finding {
+	t.Helper()
+	return rt.auditOnce(t, path, false, true, func(t *testing.T) (map[string]*Finding, uint32) {
+		return rt.auditStoredEndpoint(t, path)
+	}).byRow
 }
 
 func chromeOnPath() bool {
@@ -166,7 +344,11 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 	if body != "" {
 		reader = strings.NewReader(body)
 	}
-	req, err := http.NewRequest(method, rt.srv.URL+e.Path, reader)
+	baseURL := rt.srv.URL
+	if e.TLS {
+		baseURL = rt.tlsSrv.URL
+	}
+	req, err := http.NewRequest(method, baseURL+e.Path, reader)
 	if err != nil {
 		t.Fatalf("build request for %s: %v", e.Path, err)
 	}
@@ -175,6 +357,11 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 	}
 	// An Origin is needed for the CORS row to have anything to reflect.
 	req.Header.Set("Origin", "https://evil.example")
+	// Headers the endpoint declares it must be captured with. A check reading a request header can
+	// only find one the seeded request actually sent.
+	for k, v := range e.RequestHeaders {
+		req.Header.Set(k, v)
+	}
 
 	res, err := client.Do(req)
 	if err != nil {
@@ -182,7 +369,11 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 	}
 	defer func() { _ = res.Body.Close() }()
 
-	rawReq := buildRawRequest(method, e.Path, rt.host, rt.port, body, contentType)
+	exHost, exPort, exTLS := rt.host, rt.port, false
+	if e.TLS {
+		exHost, exPort, exTLS = rt.tlsHost, rt.tlsPort, true
+	}
+	rawReq := buildRawRequest(method, e.Path, exHost, exPort, body, contentType, e.RequestHeaders)
 	rawResp := buildRawResponse(t, res)
 
 	reqID, err := rt.store.Put([]byte(rawReq), core.DirectionRequest)
@@ -195,18 +386,21 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 	}
 	ex := &core.Exchange{
 		Request: reqID, Response: &respID,
-		Host: rt.host, Port: rt.port, TLS: false,
+		Host: exHost, Port: exPort, TLS: exTLS,
 		Method: method, Path: e.Path,
 	}
 	rt.store.AddExchange(ex)
 	rt.exchanges[e.Path] = ex.ID
 }
 
-func buildRawRequest(method, path, host string, port uint16, body, contentType string) string {
+func buildRawRequest(method, path, host string, port uint16, body, contentType string, extra map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s HTTP/1.1\r\n", method, path)
 	fmt.Fprintf(&b, "Host: %s\r\n", net.JoinHostPort(host, fmt.Sprint(port)))
 	b.WriteString("Origin: https://evil.example\r\n")
+	for k, v := range extra {
+		fmt.Fprintf(&b, "%s: %s\r\n", k, v)
+	}
 	if body != "" {
 		// The stored bytes are what the insertion-point enumerator parses, so a mislabelled
 		// content type here would have it look for form parameters in an XML document.
@@ -301,7 +495,7 @@ func runtimeScanConfig() *ScanConfig {
 
 // findingsFor audits one seeded endpoint with the real engine and returns the row names reported.
 // dom selects the browser-enabled scanner, so non-DOM endpoints never pay for a page load.
-func (rt *runtimeTarget) findingsFor(t *testing.T, path string, dom bool) map[string]*Finding {
+func (rt *runtimeTarget) auditEndpoint(t *testing.T, path string, dom bool) (map[string]*Finding, uint32) {
 	t.Helper()
 	id, ok := rt.exchanges[path]
 	if !ok {
@@ -315,14 +509,13 @@ func (rt *runtimeTarget) findingsFor(t *testing.T, path string, dom bool) map[st
 	if outcome.Error != "" {
 		t.Fatalf("audit of %s failed outright: %s", path, outcome.Error)
 	}
-	rt.lastRequestsSent = outcome.RequestsSent
 	byRow := make(map[string]*Finding, len(findings))
 	for _, f := range findings {
 		if f != nil {
 			byRow[f.Name] = f
 		}
 	}
-	return byRow
+	return byRow, outcome.RequestsSent
 }
 
 // Request accounting, copied from ZAP's convention rather than invented.
@@ -348,29 +541,36 @@ func TestAnAuditSendsProbesAndStaysWithinARequestBudget(t *testing.T) {
 	rt := startRuntimeTarget(t)
 	var total uint32
 	var audited int
+	var mu sync.Mutex
 
-	for _, e := range vulnapp.Vulnerabilities() {
-		if e.Row == "" {
-			continue
+	// Grouped so the accounting below runs after every parallel subtest has finished.
+	t.Run("endpoints", func(t *testing.T) {
+		for _, e := range vulnapp.Vulnerabilities() {
+			if e.Row == "" {
+				continue
+			}
+			e := e
+			t.Run(e.Path, func(t *testing.T) {
+				if !e.Stored {
+					t.Parallel()
+				}
+				_, sent := rt.findingsWithProbeCount(t, e.Path, e.DOM)
+				mu.Lock()
+				audited++
+				total += sent
+				mu.Unlock()
+
+				if sent == 0 {
+					t.Fatalf("the audit of %s sent no probes at all. Every assertion about what this "+
+						"endpoint does or does not report is vacuous, because nothing was asked of it.", e.Path)
+				}
+				if sent > budgetPerEndpoint {
+					t.Errorf("the audit of %s sent %d probes, budget %d. A check has become a request "+
+						"amplifier; nothing else in this suite would notice.", e.Path, sent, budgetPerEndpoint)
+				}
+			})
 		}
-		e := e
-		t.Run(e.Path, func(t *testing.T) {
-			rt.lastRequestsSent = 0
-			rt.findingsFor(t, e.Path, e.DOM)
-			sent := rt.lastRequestsSent
-			audited++
-			total += sent
-
-			if sent == 0 {
-				t.Fatalf("the audit of %s sent no probes at all. Every assertion about what this "+
-					"endpoint does or does not report is vacuous, because nothing was asked of it.", e.Path)
-			}
-			if sent > budgetPerEndpoint {
-				t.Errorf("the audit of %s sent %d probes, budget %d. A check has become a request "+
-					"amplifier; nothing else in this suite would notice.", e.Path, sent, budgetPerEndpoint)
-			}
-		})
-	}
+	})
 	if audited == 0 {
 		t.Fatal("no endpoint was audited")
 	}
@@ -395,25 +595,47 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 	}
 
 	var demonstrated, missed []string
-	for _, e := range vulnapp.Vulnerabilities() {
-		if e.Row == "" || e.Safe {
-			continue
+	// The rows run inside a group so the tally below sees their results.
+	//
+	// A parallel subtest is deferred until its parent returns, so counting demonstrated rows straight
+	// after the loop would read empty slices and the coverage floor would fire on a green run. The
+	// group blocks until every child finishes, which is what makes the two safe to combine.
+	var tally sync.Mutex
+	t.Run("rows", func(t *testing.T) {
+		for _, e := range vulnapp.Vulnerabilities() {
+			if e.Row == "" || e.Safe {
+				continue
+			}
+			e := e
+			t.Run(e.Row+" via "+e.Path, func(t *testing.T) {
+				// Stored rows stay serial: they plant into a scan-wide ledger, so running two at once
+				// makes the second one's evidence depend on the first one's timing. Every other row
+				// audits an independent endpoint, and results are memoised, so parallel subtests
+				// overlap only on wall clock rather than on state.
+				if !e.Stored {
+					t.Parallel()
+				}
+				if e.DOM && !rt.chrome {
+					t.Skip("no Chrome on PATH: this DOM row is NOT exercised in this run")
+				}
+				var got map[string]*Finding
+				if e.Stored {
+					got = rt.storedFindingsFor(t, e.Path)
+				} else {
+					got = rt.findingsFor(t, e.Path, e.DOM)
+				}
+				tally.Lock()
+				defer tally.Unlock()
+				if _, fired := got[e.Row]; !fired {
+					missed = append(missed, e.Row+" @ "+e.Path)
+					t.Errorf("the target is vulnerable here (%s) but %q was not reported.\nrows reported instead: %s",
+						e.Note, e.Row, joinRows(got))
+					return
+				}
+				demonstrated = append(demonstrated, e.Row)
+			})
 		}
-		e := e
-		t.Run(e.Row+" via "+e.Path, func(t *testing.T) {
-			if e.DOM && !rt.chrome {
-				t.Skip("no Chrome on PATH: this DOM row is NOT exercised in this run")
-			}
-			got := rt.findingsFor(t, e.Path, e.DOM)
-			if _, fired := got[e.Row]; !fired {
-				missed = append(missed, e.Row+" @ "+e.Path)
-				t.Errorf("the target is vulnerable here (%s) but %q was not reported.\nrows reported instead: %s",
-					e.Note, e.Row, joinRows(got))
-				return
-			}
-			demonstrated = append(demonstrated, e.Row)
-		})
-	}
+	})
 
 	// The number this project reports as coverage. Pinned so it cannot drift downward silently:
 	// a check that stops firing takes a manifest row with it, and a demonstrated count that only
@@ -425,9 +647,24 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 	for _, r := range demonstrated {
 		distinct[r] = true
 	}
-	const wantDemonstrated = 21
 	t.Logf("runtime detection: %d distinct catalog rows demonstrated across %d endpoints, %d missed",
 		len(distinct), len(demonstrated), len(missed))
+
+	// Only meaningful on a complete run. Under `-run` the harness executes a subset, and a pin that
+	// fired then would make every filtered debugging run fail for a reason unrelated to what is
+	// being debugged.
+	var claimed int
+	for _, e := range vulnapp.Vulnerabilities() {
+		if e.Row != "" && !e.Safe {
+			claimed++
+		}
+	}
+	const wantDemonstrated = 145
+	if len(demonstrated)+len(missed) < claimed {
+		t.Logf("filtered run (%d of %d endpoints attempted): coverage floor not enforced",
+			len(demonstrated)+len(missed), claimed)
+		return
+	}
 	if len(missed) == 0 && len(distinct) < wantDemonstrated {
 		t.Errorf("distinct rows demonstrated = %d, want at least %d. Nothing failed, so a check did "+
 			"not regress - a manifest entry was removed or renamed, which quietly lowers the number "+
@@ -445,14 +682,30 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 func TestTheScannerStaysQuietOnTheSafeCounterparts(t *testing.T) {
 	rt := startRuntimeTarget(t)
 
-	// Row -> a vulnerable endpoint for it, so each safe case can prove the row is live.
-	vulnerableTwin := map[string]string{}
+	// Row -> a vulnerable endpoint for it, so each safe case can prove the row is live. The stored
+	// flag travels with it: a stored row's verdict only exists after the deferred phase, so both
+	// halves of the pairing have to go through the same path the detection test uses. Auditing the
+	// vulnerable twin without it would report "did not fire against its twin" for every stored row
+	// and make a genuine safe twin impossible to express.
+	type twin struct {
+		path   string
+		stored bool
+	}
+	vulnerableTwin := map[string]twin{}
 	for _, e := range vulnapp.Vulnerabilities() {
 		if e.Row != "" && !e.Safe {
 			if _, seen := vulnerableTwin[e.Row]; !seen {
-				vulnerableTwin[e.Row] = e.Path
+				vulnerableTwin[e.Row] = twin{path: e.Path, stored: e.Stored}
 			}
 		}
+	}
+
+	// findings picks the path a row's verdict actually comes from.
+	findings := func(t *testing.T, path string, dom, stored bool) map[string]*Finding {
+		if stored {
+			return rt.storedFindingsFor(t, path)
+		}
+		return rt.findingsFor(t, path, dom)
 	}
 
 	var checked int
@@ -463,20 +716,24 @@ func TestTheScannerStaysQuietOnTheSafeCounterparts(t *testing.T) {
 		checked++
 		e := e
 		t.Run(e.Row+" via "+e.Path, func(t *testing.T) {
+			// Same rule as the detection half: everything but the stored rows is independent.
+			if !e.Stored && !vulnerableTwin[e.Row].stored {
+				t.Parallel()
+			}
 			if e.DOM && !rt.chrome {
 				t.Skip("no Chrome on PATH: this DOM row is NOT exercised in this run")
 			}
-			twin, ok := vulnerableTwin[e.Row]
+			tw, ok := vulnerableTwin[e.Row]
 			if !ok {
 				t.Fatalf("no vulnerable endpoint declared for %q, so silence here proves nothing", e.Row)
 			}
-			if fired := rt.findingsFor(t, twin, e.DOM); fired[e.Row] == nil {
+			if fired := findings(t, tw.path, e.DOM, tw.stored); fired[e.Row] == nil {
 				t.Fatalf("%q did not fire against its vulnerable twin %s in this run, so its silence "+
 					"on %s is not evidence of anything — the check may simply not be working here",
-					e.Row, twin, e.Path)
+					e.Row, tw.path, e.Path)
 			}
 
-			got := rt.findingsFor(t, e.Path, e.DOM)
+			got := findings(t, e.Path, e.DOM, e.Stored)
 			if f, fired := got[e.Row]; fired {
 				t.Errorf("%q was reported against a safe endpoint (%s). Evidence given: %q.\n"+
 					"This endpoint reflects input without the defect, so the detector is keying on "+
@@ -510,20 +767,22 @@ func TestEveryDetectionClaimHasASafeCounterpart(t *testing.T) {
 	}
 
 	// Rows whose safe counterpart cannot be built without changing what the endpoint IS.
-	// Each needs a reason, because the alternative is an unexplained gap.
-	noSafeTwin := map[string]string{
-		"Cross-origin resource sharing: arbitrary origin trusted": "a safe twin is an endpoint with no CORS policy, which is covered by every other endpoint here",
-		"Database connection string disclosed":                    "a safe twin is a response without a connection string, which is every other endpoint here",
+	//
+	// The reason is read from the manifest rather than kept in a table here. A second source of
+	// truth would let a row be exempted in one file and required in the other, and the exemption
+	// belongs next to the endpoint claiming it, where a reviewer of that endpoint will see it.
+	noSafeTwin := map[string]string{}
+	for _, e := range vulnapp.Vulnerabilities() {
+		if e.Row != "" && !e.Safe && strings.TrimSpace(e.SafeTwinNotApplicable) != "" {
+			noSafeTwin[e.Row] = e.SafeTwinNotApplicable
+		}
 	}
 
 	for row, paths := range vulnerable {
 		if safe[row] {
 			continue
 		}
-		if reason, ok := noSafeTwin[row]; ok {
-			if strings.TrimSpace(reason) == "" {
-				t.Errorf("%q is exempted from needing a safe counterpart with no reason", row)
-			}
+		if _, ok := noSafeTwin[row]; ok {
 			continue
 		}
 		t.Errorf("%q is claimed vulnerable at %v but has no safe counterpart, so firing on plain "+

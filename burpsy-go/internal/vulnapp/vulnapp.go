@@ -62,6 +62,29 @@ type Endpoint struct {
 	// form-field rows need.
 	Body        string
 	ContentType string
+	// Stored marks a row that can only be confirmed after the scan's deferred phase. Planting
+	// happens during the audit, so the sighting cannot exist until FinishScan has re-fetched the
+	// pages that might render it; the harness routes these through that phase.
+	Stored bool
+	// SafeTwinNotApplicable justifies a vulnerable endpoint with no safe counterpart.
+	//
+	// Most rows need one: an endpoint reflecting the same input without the defect is what catches
+	// a detector firing on reflection alone. A few rows have no such thing - an informational
+	// "input came back in a later response" row is true whether or not the value was escaped, so a
+	// "safe" version would report it too and be a legitimate finding rather than a false positive.
+	//
+	// A written reason rather than a bool, so the exemption is auditable. Empty keeps the pairing
+	// requirement, which is the default and should stay the norm.
+	SafeTwinNotApplicable string
+	// TLS marks an endpoint that must be captured over https. Several transport rows are gated on
+	// the exchange having been encrypted - a cacheable HTTPS response, mixed content, HSTS not
+	// enforced - so on a cleartext-only harness they can never fire, which is a property of the
+	// fixture rather than of the check.
+	TLS bool
+	// RequestHeaders are headers the CAPTURE must carry. A check reading a request header can only
+	// find one the seeded request actually sent: the URL-override rows read X-Original-URL and
+	// X-Rewrite-URL, and are unreachable unless the captured request carried them.
+	RequestHeaders map[string]string
 	// Note explains the mechanism, so a failing assertion can be read without opening the
 	// handler.
 	Note string
@@ -72,7 +95,47 @@ type Endpoint struct {
 // Row names must match internal/scanner's catalog exactly. A typo here would silently exempt an
 // endpoint from its own assertion, so the runtime test resolves every Row against the shipped
 // catalog before it runs anything.
+//
+// The list is assembled from one file per check family. That split is not cosmetic: a family's
+// endpoints, safe twins and routes grow together, and keeping them in one file means a family can be
+// worked on and reviewed without reading the others.
 func Vulnerabilities() []Endpoint {
+	out := coreEndpoints()
+	for _, f := range familyEndpoints {
+		out = append(out, f()...)
+	}
+	return out
+}
+
+// familyEndpoints is every family's manifest contribution, in a fixed order.
+var familyEndpoints = []func() []Endpoint{
+	postureEndpoints,
+	analysisEndpoints,
+	headerEndpoints,
+	reflectionEndpoints,
+	discoveryEndpoints,
+	domFamilyEndpoints,
+	remainingEndpoints,
+	finalEndpoints,
+	storedFamilyEndpoints,
+	injectionEndpoints,
+}
+
+// familyRegistrars mirrors familyEndpoints: every family serves its own routes.
+var familyRegistrars = []func(*http.ServeMux){
+	registerPosture,
+	registerAnalysis,
+	registerHeaders,
+	registerReflection,
+	registerDiscovery,
+	registerDOMFamily,
+	registerRemaining,
+	registerFinal,
+	registerStoredFamily,
+	registerInjection,
+}
+
+func coreEndpoints() []Endpoint {
 	return []Endpoint{
 		{Path: "/", Note: "crawlable home page carrying both forms; no declared row of its own"},
 
@@ -106,9 +169,13 @@ func Vulnerabilities() []Endpoint {
 			Note: "reflects msg into a response header, so CRLF splits it"},
 
 		{Path: "/api/data", Row: "Cross-origin resource sharing: arbitrary origin trusted",
+			SafeTwinNotApplicable: "a safe twin is an endpoint with no CORS policy at all, which is " +
+				"every other endpoint in this manifest; a dedicated one would add nothing",
 			Note: "reflects any Origin and allows credentials"},
 
 		{Path: "/api/debug", Row: "Database connection string disclosed",
+			SafeTwinNotApplicable: "a safe twin is a response without a connection string in it, which " +
+				"is every other endpoint in this manifest",
 			Note: "exposes a mysql:// URI with credentials"},
 
 		// DOM-based rows. These need a headless browser, so the runtime harness gates them on
@@ -174,6 +241,16 @@ func Vulnerabilities() []Endpoint {
 			Note: "evaluates an arithmetic expression inside expression-language delimiters"},
 		{Path: "/include?tpl=seed", Row: "SSI injection",
 			Note: "runs reflected input through a Server-Side Includes processor"},
+
+		// The stored pair. /comment persists and declares no row of its own - storing untrusted
+		// input is not the defect. /comments renders it, and is listed as a crawlable target so the
+		// scan-end re-fetch has a GET to go back to; without that the canary could never be seen.
+		{Path: "/comment?comment=seed", Row: "Input returned in response (stored)", Stored: true,
+			SafeTwinNotApplicable: "an informational \"the value came back later\" row is true whether " +
+				"or not the output was escaped, so a safe twin would report it too and be a correct " +
+				"finding rather than a false positive",
+			Note: "a value submitted here is rendered by /comments on a later request"},
+		{Path: "/comments", Note: "renders every stored comment; re-fetched by the deferred phase"},
 
 		// The safe counterparts. Each reflects input for the same row without the defect, so a
 		// detector that fires on reflection alone is caught here rather than in the field.
@@ -251,10 +328,28 @@ func Handler() http.Handler {
 	mux.HandleFunc("/safe/profile", safeProfileLink)
 	mux.HandleFunc("/safe/note", safeEvalNote)
 	mux.HandleFunc("/safe/include", safeIncludePage)
+
+	for _, r := range familyRegistrars {
+		r(mux)
+	}
 	return mux
 }
 
 func home(w http.ResponseWriter, r *http.Request) {
+	// TRACE echoes the request back, which is the defect the "HTTP TRACE method is enabled" row is
+	// about. It lives here rather than in a family file because the check sends TRACE to "/"
+	// specifically, and "/" is this handler - a family file cannot serve it without shadowing the
+	// home page every other row depends on.
+	if r.Method == http.MethodTrace {
+		w.Header().Set("Content-Type", "message/http")
+		fmt.Fprintf(w, "TRACE %s %s\r\n", r.URL.RequestURI(), r.Proto)
+		for name, values := range r.Header {
+			for _, v := range values {
+				fmt.Fprintf(w, "%s: %s\r\n", name, v)
+			}
+		}
+		return
+	}
 	// No CSP, no X-Frame-Options, no charset: the passive posture rows have something to say
 	// about this page, which is deliberate.
 	w.Header().Set("Content-Type", "text/html")

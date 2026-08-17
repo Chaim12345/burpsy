@@ -178,6 +178,18 @@ func deferStoredClaim(cc *CheckContext, row, severity string,
 			len(outstanding), cc.Exchange.Path),
 	}, func(context.Context) (*Finding, bool, error) {
 		for _, o := range cc.Scanner.stored.SecondOrderObservations() {
+			// Only canaries THIS exchange planted.
+			//
+			// The ledger is scan-wide and holds every sighting from every audited endpoint, so an
+			// unscoped walk let a stale observation from an earlier endpoint satisfy this one: once
+			// any vulnerable page had rendered a canary in the right context, every subsequent
+			// stored audit found that same old sighting and reported the row again - including
+			// against endpoints that are genuinely safe and never rendered their own canary
+			// anywhere. The finding this row makes is "a value submitted HERE surfaced elsewhere",
+			// so the planting origin has to be this exchange or the claim is about someone else.
+			if o.Canary.Origin != cc.Exchange.ID {
+				continue
+			}
 			body := responseBody(responseRaw(cc.Scanner, sightingExchange(cc.Scanner, o.SeenIn)))
 			if body == "" {
 				continue

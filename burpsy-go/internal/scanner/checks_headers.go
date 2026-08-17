@@ -484,7 +484,28 @@ func probeCORSOrigin(ctx context.Context, s *ActiveScanner, exchange *core.Excha
 	if meter != nil {
 		meter.succeeded()
 	}
-	return resp.Headers[headerAccessControlAllowOrigin]
+	// Case-insensitively. The constants in this file are lowercase because the passive path reads
+	// raw response bytes, but resp.Headers comes from net/http, which canonicalises keys - so a
+	// direct lookup for "access-control-allow-origin" never matched "Access-Control-Allow-Origin"
+	// and this probe silently returned empty for every target. The row it feeds could not fire.
+	return headerLookupFold(resp.Headers, headerAccessControlAllowOrigin)
+}
+
+// headerLookupFold finds a header value regardless of key casing.
+//
+// Two sources of headers meet in this file: raw response bytes, parsed lowercase, and
+// sender.Response.Headers, which net/http canonicalises. Any code path that mixes them needs this,
+// and the one that did not had a check that could never fire.
+func headerLookupFold(headers map[string]string, name string) string {
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return ""
 }
 
 // checkCSPNotEnforced audits for a missing enforcing Content-Security-Policy

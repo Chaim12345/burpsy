@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"context"
+	"errors"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"strings"
 	"testing"
 )
@@ -105,5 +107,69 @@ func TestDeferringWithNothingPlantedReportsCleanRatherThanUndecided(t *testing.T
 	if scan.Pending().PendingCount() != 0 {
 		t.Error("a claim was registered with nothing planted; it could never settle and would be " +
 			"reported outstanding forever")
+	}
+}
+
+// A stored claim must only be settled by a canary the audited exchange itself planted.
+//
+// The ledger is scan-wide. An unscoped walk over its sightings let a stale observation from an
+// earlier endpoint satisfy a later one, so once any vulnerable page had rendered a canary in the
+// right context, every subsequent stored audit reported the row again - including for endpoints that
+// never rendered their own canary anywhere. The evidence string named the other exchange, so the
+// finding was not merely wrong, it was wrong about a page the reader would then go and inspect.
+func TestAStoredClaimIsNotSettledByAnotherExchangesCanary(t *testing.T) {
+	scan, store, ids := storedTarget(t)
+	submit := ids["/comment?comment=hello"]
+
+	// A sighting belonging to a different exchange entirely. Nothing about it says anything about
+	// the submit endpoint.
+	all := store.Exchanges()
+	other := all[len(all)-1].ID
+	canary, err := scan.stored.Plant(other, "/elsewhere", "query other")
+	if err != nil {
+		t.Fatalf("Plant: %v", err)
+	}
+	ex, err := store.GetExchange(submit)
+	if err != nil {
+		t.Fatalf("GetExchange: %v", err)
+	}
+	gate := scan.probeGate(ex)
+	if gate == nil {
+		t.Fatal("no authorised sender, so nothing could be submitted")
+	}
+	if _, err := gate.SendRequest(context.Background(), &sender.Request{
+		Method: "GET", Host: ex.Host, Port: ex.Port, TLS: false,
+		Path: "/comment?comment=" + canary.Token,
+	}); err != nil {
+		t.Fatalf("submit foreign canary: %v", err)
+	}
+	if _, err := scan.RefetchStoredTargets(context.Background()); err != nil {
+		t.Fatalf("RefetchStoredTargets: %v", err)
+	}
+	if len(scan.stored.SecondOrderObservations()) == 0 {
+		t.Fatal("the foreign canary never surfaced, so this test cannot distinguish the two states")
+	}
+
+	// The audited exchange needs an outstanding canary of its OWN, or deferStoredClaim returns
+	// early with nothing registered and the assertion below passes for the wrong reason - which is
+	// exactly how the first version of this test failed to catch the bug it was written for.
+	if _, err := scan.stored.Plant(submit, "/comment", "query comment"); err != nil {
+		t.Fatalf("Plant own canary: %v", err)
+	}
+
+	// Auditing the submit endpoint must not claim the other exchange's sighting as its own.
+	if err := deferStoredClaim(NewCheckContext(scan, ex, nil),
+		"Input returned in response (stored)", "info", contextAnywhere); err != nil &&
+		!errors.Is(err, errCheckInconclusive) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if scan.Pending().PendingCount() == 0 {
+		t.Fatal("no claim was registered, so nothing was under test")
+	}
+	for _, f := range scan.Pending().Await(context.Background()) {
+		t.Errorf("reported %q from a canary planted by exchange %d rather than by the audited "+
+			"exchange %d. Evidence: %q. A stored finding claims a value submitted HERE surfaced "+
+			"elsewhere; settling it with another endpoint's canary names the wrong page as vulnerable.",
+			f.Name, other, submit, f.Evidence)
 	}
 }

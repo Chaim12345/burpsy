@@ -129,7 +129,11 @@ const mobileUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 5_1 like Mac OS X) A
 // sent with Zxly's recovered mobile User-Agent string.
 func checkUserAgentDependentResponse(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	exchange := cc.Exchange
-	baseline := responseRaw(cc.Scanner, exchange)
+	// Body against body. This read responseRaw, which is the FULL stored message - status line,
+	// headers and body - and compared it against the probe's body alone, so responsesDiffer was
+	// true for every endpoint on earth and the row fired unconditionally. A check that cannot
+	// return a negative is not a detector; it is a row name attached to every scan.
+	baseline := responseBody(responseRaw(cc.Scanner, exchange))
 	if baseline == "" {
 		return nil, nil
 	}
@@ -156,7 +160,8 @@ const refererDependentIssue = "Referer-dependent response"
 // ("http://", ".com/") around a fresh canary so the probe cannot be mistaken for a real referrer.
 func checkRefererDependentResponse(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	exchange := cc.Exchange
-	baseline := responseRaw(cc.Scanner, exchange)
+	// Body against body — see checkUserAgentDependentResponse for the defect this replaces.
+	baseline := responseBody(responseRaw(cc.Scanner, exchange))
 	if baseline == "" {
 		return nil, nil
 	}

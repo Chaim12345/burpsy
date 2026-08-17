@@ -44,9 +44,19 @@ import (
 // "a default scan sends nothing it was not asked to send" while keeping the checks available.
 func remainingChecksEnabled(c *ScanConfig) bool { return c != nil && c.CheckExtendedActive }
 
-// oobChecksEnabled narrows remainingChecksEnabled to the five rows that need a collaborator or
-// an outbound socket. It is an AND, not an alternative: CheckOutOfBand on its own admits nothing.
+// oobChecksEnabled narrows remainingChecksEnabled to the four rows that need a collaborator: an
+// out-of-band callback nothing in this process can synthesise. It is an AND, not an alternative:
+// CheckOutOfBand on its own admits nothing.
 func oobChecksEnabled(c *ScanConfig) bool { return remainingChecksEnabled(c) && c.CheckOutOfBand }
+
+// tlsProbeChecksEnabled gates the TLS certificate row, which shells out to tlsx.
+//
+// It used to share oobChecksEnabled with the four collaborator rows, which was wrong in a way that
+// cost coverage rather than correctness: this row needs no callback and no collaborator, only a TLS
+// port to connect to. Grouping it with rows that wait five seconds for a DNS interaction made it
+// undemonstrable for a reason that was never true of it. Still behind the family switch, because it
+// spawns a subprocess.
+func tlsProbeChecksEnabled(c *ScanConfig) bool { return remainingChecksEnabled(c) }
 
 // ---------------------------------------------------------------------------
 // GraphQL
@@ -718,7 +728,7 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 			})),
 		nativeDescriptor("JWT private key disclosed", DispatchScopePerUrl, remainingChecksEnabled, checkJWTPrivateKeyDisclosed),
 
-		nativeDescriptor("TLS certificate", DispatchScopePerHost, oobChecksEnabled, checkTLSCertificate),
+		nativeDescriptor("TLS certificate", DispatchScopePerHost, tlsProbeChecksEnabled, checkTLSCertificate),
 		nativeDescriptor("SMTP header injection", DispatchScopePerUrl, remainingChecksEnabled, checkSMTPHeaderInjection),
 		nativeDescriptor("Cross-origin resource sharing", DispatchScopePerRequest, remainingChecksEnabled, checkCORSBaseRow),
 

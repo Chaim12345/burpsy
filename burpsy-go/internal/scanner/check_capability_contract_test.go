@@ -482,20 +482,23 @@ func describeFindings(f []*Finding) string {
 	return strings.Join(names, ", ")
 }
 
-// The five rows behind CheckOutOfBand are pinned by name.
+// The four rows behind CheckOutOfBand are pinned by name.
 //
-// Each of them waits on something outside this process, so each costs seconds of wall clock
-// whether or not anything answers. A sixth row joining them quietly would slow every scan that
-// enables the family and, worse, spend the time budget that later checks need to reach a verdict
-// at all — the failure that already cost this harness its CORS row once. Adding a row here is a
-// decision; this test makes it an explicit one.
+// Each waits on a callback nothing in this process can synthesise, so each costs seconds of wall
+// clock whether or not anything answers. A fifth row joining them quietly would slow every scan that
+// enables the family and, worse, spend the time budget later checks need to reach a verdict at all -
+// the failure that already cost this harness its CORS row once.
+//
+// It was five. "TLS certificate" was grouped here and did not belong: it shells out to tlsx and needs
+// only a port to connect to, no callback at all, so sharing a gate with the collaborator rows made it
+// undemonstrable for a reason that was never true of it. That is the other direction this test
+// guards - a row wrongly IN this set is silently uncoverable, not just slow.
 func TestOnlyTheCollaboratorRowsRequireTheOutOfBandSwitch(t *testing.T) {
 	want := map[string]bool{
 		"Out-of-band resource load (HTTP)":    true,
 		"External service interaction (DNS)":  true,
 		"External service interaction (HTTP)": true,
 		"External service interaction (SMTP)": true,
-		"TLS certificate":                     true,
 	}
 
 	// The difference between the two configurations is the definition, so it cannot drift from it.

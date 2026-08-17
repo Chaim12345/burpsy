@@ -169,7 +169,15 @@ const httpPutEnabledIssue = "HTTP PUT method is enabled"
 func checkHTTPPutEnabled(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	exchange := cc.Exchange
 	canary := newProbeCanary("brpu")
-	path := "/burpsy-put-probe-" + canary + ".txt"
+	// The canary sits in its own path segment rather than inside one.
+	//
+	// It has to stay unique per probe: writing to a fixed path on a live target risks overwriting a
+	// real file, which is a side effect a scanner has no business causing. But
+	// "/burpsy-put-probe-<canary>.txt" put the random part mid-segment, and a mid-segment wildcard
+	// is unroutable by Go's ServeMux - so no test fixture could serve it without a single-segment
+	// catch-all that would shadow every other route. A fixed prefix plus a canary segment keeps the
+	// uniqueness and is routable by "/burpsy-put-probe/".
+	path := "/burpsy-put-probe/" + canary + ".txt"
 	putResp := cc.Scanner.sendTestRequestBody(ctx, exchange, "PUT", path, nil, []byte(canary))
 	if putResp == nil || putResp.StatusCode < 200 || putResp.StatusCode >= 300 {
 		return nil, nil

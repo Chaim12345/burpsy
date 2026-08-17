@@ -154,6 +154,36 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 		chromedp.ExecPath(path),
 		chromedp.NoSandbox,
 		chromedp.DisableGPU,
+		// The rest mirror chromedp.DefaultExecAllocatorOptions - itself "Puppeteer's default
+		// behavior" - which NewExecAllocator does NOT apply on its own; that convenience is
+		// wired into chromedp's zero-config NewContext path only, so building execOpts from a
+		// bare ExecPath/NoSandbox/DisableGPU set, as this function did before, paid for
+		// Chrome's full first-run/update/telemetry machinery on every one of this harness's
+		// ~17 launches: a first-run dialog check, a default-browser prompt, background
+		// network probes for Safe Browsing and component updates, extension/sync bootstrap,
+		// and an OS keychain lookup for the password store (which can stall for seconds, or
+		// hang, on a container with no keyring daemon). None of it is observable to a page
+		// under test - every flag below disables a Chrome-internal service, never a web
+		// platform API a taint check could depend on - so it is free wall-clock time back.
+		chromedp.NoFirstRun,
+		chromedp.NoDefaultBrowserCheck,
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-breakpad", true),
+		chromedp.Flag("disable-client-side-phishing-detection", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-hang-monitor", true),
+		chromedp.Flag("disable-ipc-flooding-protection", true),
+		chromedp.Flag("disable-prompt-on-repost", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-sync", true),
+		chromedp.Flag("metrics-recording-only", true),
+		chromedp.Flag("safebrowsing-disable-auto-update", true),
+		chromedp.Flag("password-store", "basic"),
+		chromedp.Flag("use-mock-keychain", true),
 	}
 	if !opts.Headed {
 		execOpts = append(execOpts, chromedp.Headless)
