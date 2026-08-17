@@ -44,6 +44,10 @@ import (
 // "a default scan sends nothing it was not asked to send" while keeping the checks available.
 func remainingChecksEnabled(c *ScanConfig) bool { return c != nil && c.CheckExtendedActive }
 
+// oobChecksEnabled narrows remainingChecksEnabled to the five rows that need a collaborator or
+// an outbound socket. It is an AND, not an alternative: CheckOutOfBand on its own admits nothing.
+func oobChecksEnabled(c *ScanConfig) bool { return remainingChecksEnabled(c) && c.CheckOutOfBand }
+
 // ---------------------------------------------------------------------------
 // GraphQL
 // ---------------------------------------------------------------------------
@@ -378,7 +382,11 @@ func crossDomainPolicyCheck(row, path string, parse func([]byte) CrossdomainPoli
 // ---------------------------------------------------------------------------
 
 func checkXXE(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	h, err := NewProbeHarness(ctx, cc, []string{"body", "query"})
+	// entire_body first: an XXE payload is a whole document with its own DOCTYPE, not a value
+	// spliced into a parameter. IpBody only enumerates form pairs and JSON string values, so an
+	// application/xml request yielded zero points and the check reported clean having tested
+	// nothing at all.
+	h, err := NewProbeHarness(ctx, cc, []string{"entire_body", "body", "query"})
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +411,7 @@ func checkXXE(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 }
 
 func checkXMLEntityExpansion(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	h, err := NewProbeHarness(ctx, cc, []string{"body"})
+	h, err := NewProbeHarness(ctx, cc, []string{"entire_body", "body"})
 	if err != nil {
 		return nil, err
 	}
@@ -417,9 +425,19 @@ func checkXMLEntityExpansion(ctx context.Context, cc *CheckContext) ([]*Finding,
 			if err != nil {
 				continue
 			}
-			// The payloads are capped at MaxXMLEntityExpansionFactor, so a target that
-			// expanded them shows a body far larger than the baseline rather than dying.
-			if len(res.Body) <= len(h.Baseline().Body)*4 {
+			// An echo is not an expansion. The payload is itself a kilobyte of entity
+			// declarations, so "the body grew four times over the baseline" is satisfied by a
+			// server that merely reflected it - which is exactly how this row fired against an
+			// endpoint that caps expansion. Two discriminators, both required:
+			//
+			//   - the entity reference must be gone. If the response still contains it
+			//     verbatim, nothing expanded it, whatever the response now weighs.
+			//   - the growth must exceed what echoing the payload could account for, rather
+			//     than exceeding the baseline, which the payload's own length already does.
+			if strings.Contains(res.Body, payload.Marker) {
+				continue
+			}
+			if len(res.Body) <= len(h.Baseline().Body)+2*len(payload.Body) {
 				continue
 			}
 			return []*Finding{buildHeaderFinding(cc, "XML entity expansion", "medium", "firm",
@@ -672,7 +690,7 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 			})),
 		nativeDescriptor("JWT private key disclosed", DispatchScopePerUrl, remainingChecksEnabled, checkJWTPrivateKeyDisclosed),
 
-		nativeDescriptor("TLS certificate", DispatchScopePerHost, remainingChecksEnabled, checkTLSCertificate),
+		nativeDescriptor("TLS certificate", DispatchScopePerHost, oobChecksEnabled, checkTLSCertificate),
 		nativeDescriptor("SMTP header injection", DispatchScopePerUrl, remainingChecksEnabled, checkSMTPHeaderInjection),
 		nativeDescriptor("Cross-origin resource sharing", DispatchScopePerRequest, remainingChecksEnabled, checkCORSBaseRow),
 
@@ -687,11 +705,11 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("File upload functionality", DispatchScopePerHost, remainingChecksEnabled, checkFileUploadFunctionality),
 		nativeDescriptor("OpenAPI definition found (passive scan check)", DispatchScopePerUrl, remainingChecksEnabled, checkOpenAPIDefinitionPassive),
 
-		nativeDescriptor("Out-of-band resource load (HTTP)", DispatchScopePerUrl, remainingChecksEnabled,
+		nativeDescriptor("Out-of-band resource load (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
 			oobCheck("Out-of-band resource load (HTTP)", "http")),
-		nativeDescriptor("External service interaction (DNS)", DispatchScopePerUrl, remainingChecksEnabled,
+		nativeDescriptor("External service interaction (DNS)", DispatchScopePerUrl, oobChecksEnabled,
 			oobCheck("External service interaction (DNS)", "dns")),
-		nativeDescriptor("External service interaction (HTTP)", DispatchScopePerUrl, remainingChecksEnabled,
+		nativeDescriptor("External service interaction (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
 			oobCheck("External service interaction (HTTP)", "http")),
 
 		nativeDescriptor("React Server Components remote code execution (React2Shell)", DispatchScopePerUrl, remainingChecksEnabled, checkReact2Shell),

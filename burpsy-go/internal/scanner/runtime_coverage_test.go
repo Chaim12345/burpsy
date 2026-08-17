@@ -102,11 +102,7 @@ func startRuntimeTarget(t *testing.T) *runtimeTarget {
 	}
 
 	for _, e := range vulnapp.Vulnerabilities() {
-		method := e.Method
-		if method == "" {
-			method = http.MethodGet
-		}
-		rt.seed(t, client, method, e.Path)
+		rt.seed(t, client, e)
 	}
 	if len(rt.exchanges) == 0 {
 		t.Fatal("no exchanges were captured from the target; every assertion below would be vacuous")
@@ -153,60 +149,71 @@ func chromeOnPath() bool {
 }
 
 // seed performs one real request and records the exchange, mirroring what the proxy captures.
-func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, method, path string) {
+func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpoint) {
 	t.Helper()
 
-	var body string
-	req, err := http.NewRequest(method, rt.srv.URL+path, nil)
-	if err != nil {
-		t.Fatalf("build request for %s: %v", path, err)
+	method := e.Method
+	if method == "" {
+		method = http.MethodGet
 	}
-	if method == http.MethodPost {
-		// The login row is reached through form fields, so the captured request has to carry a
-		// form body for the enumerator to find insertion points in it.
-		body = "user=seed&pass=seed"
-		req, err = http.NewRequest(method, rt.srv.URL+path, strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("build post request for %s: %v", path, err)
-		}
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	body, contentType := e.Body, e.ContentType
+	if body == "" && method == http.MethodPost {
+		// The form-field rows are reached through form parameters, so a POST that declares no
+		// body of its own still needs one for the enumerator to find points in.
+		body, contentType = "user=seed&pass=seed", "application/x-www-form-urlencoded"
+	}
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, rt.srv.URL+e.Path, reader)
+	if err != nil {
+		t.Fatalf("build request for %s: %v", e.Path, err)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	// An Origin is needed for the CORS row to have anything to reflect.
 	req.Header.Set("Origin", "https://evil.example")
 
 	res, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("request %s: %v", path, err)
+		t.Fatalf("request %s: %v", e.Path, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 
-	rawReq := buildRawRequest(method, path, rt.host, rt.port, body)
+	rawReq := buildRawRequest(method, e.Path, rt.host, rt.port, body, contentType)
 	rawResp := buildRawResponse(t, res)
 
 	reqID, err := rt.store.Put([]byte(rawReq), core.DirectionRequest)
 	if err != nil {
-		t.Fatalf("store request for %s: %v", path, err)
+		t.Fatalf("store request for %s: %v", e.Path, err)
 	}
 	respID, err := rt.store.Put([]byte(rawResp), core.DirectionResponse)
 	if err != nil {
-		t.Fatalf("store response for %s: %v", path, err)
+		t.Fatalf("store response for %s: %v", e.Path, err)
 	}
 	ex := &core.Exchange{
 		Request: reqID, Response: &respID,
 		Host: rt.host, Port: rt.port, TLS: false,
-		Method: method, Path: path,
+		Method: method, Path: e.Path,
 	}
 	rt.store.AddExchange(ex)
-	rt.exchanges[path] = ex.ID
+	rt.exchanges[e.Path] = ex.ID
 }
 
-func buildRawRequest(method, path, host string, port uint16, body string) string {
+func buildRawRequest(method, path, host string, port uint16, body, contentType string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s HTTP/1.1\r\n", method, path)
 	fmt.Fprintf(&b, "Host: %s\r\n", net.JoinHostPort(host, fmt.Sprint(port)))
 	b.WriteString("Origin: https://evil.example\r\n")
 	if body != "" {
-		b.WriteString("Content-Type: application/x-www-form-urlencoded\r\n")
+		// The stored bytes are what the insertion-point enumerator parses, so a mislabelled
+		// content type here would have it look for form parameters in an XML document.
+		if contentType == "" {
+			contentType = "application/x-www-form-urlencoded"
+		}
+		fmt.Fprintf(&b, "Content-Type: %s\r\n", contentType)
 		fmt.Fprintf(&b, "Content-Length: %d\r\n", len(body))
 	}
 	b.WriteString("\r\n")
@@ -285,6 +292,10 @@ func runtimeScanConfig() *ScanConfig {
 		CheckPassivePosture:     true,
 		CheckPassiveAnalysis:    true,
 		CheckActiveInjection:    true,
+		// Admits the 22 checks_remaining.go rows plus the 16 in checks_final.go. Five of those
+		// need outbound network (the OOB row, three external-service-interaction rows, TLS
+		// certificate); the rest are network-free and are exercised here.
+		CheckExtendedActive: true,
 	}
 }
 

@@ -30,7 +30,11 @@ package vulnapp
 
 import (
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -50,6 +54,12 @@ type Endpoint struct {
 	// DOM marks an endpoint whose vulnerability lives in page script, so detecting it needs a
 	// headless browser.
 	DOM bool
+	// Body and ContentType are the request the vulnerability needs. The insertion-point
+	// enumerator can only find a body point if the captured request had a body, so an XML row
+	// is unreachable without one. Empty Body on a POST falls back to a form, which is what the
+	// form-field rows need.
+	Body        string
+	ContentType string
 	// Note explains the mechanism, so a failing assertion can be read without opening the
 	// handler.
 	Note string
@@ -120,8 +130,35 @@ func Vulnerabilities() []Endpoint {
 			Note: "same source, stored only when it matches a strict allowlist"},
 		{Path: "/safe/dom/cookie", Row: "Cookie manipulation (DOM-based)", DOM: true, Safe: true,
 			Note: "reads the same source but writes a fixed cookie value"},
+		{Path: "/safe/xml/parse", Row: "XML external entity injection", Method: "POST", Safe: true,
+			Body: "<order><item>seed</item></order>", ContentType: "application/xml",
+			Note: "echoes the document but refuses any SYSTEM entity"},
+		{Path: "/safe/xml/expand", Row: "XML entity expansion", Method: "POST", Safe: true,
+			Body: "<order><item>seed</item></order>", ContentType: "application/xml",
+			Note: "echoes the document but caps entity expansion"},
+		{Path: "/safe/search/xpath?name=seed", Row: "XPath injection", Safe: true,
+			Note: "reflects the name without ever emitting a parser error"},
+		{Path: "/safe/directory?uid=alice", Row: "LDAP injection", Safe: true,
+			Note: "escapes the filter metacharacters, so no input changes the entry count"},
+		{Path: "/safe/greet?greeting=seed", Row: "Server-side template injection", Safe: true,
+			Note: "reflects the value as data, never as template source"},
 		{Path: "/safe/dom/redirect", Row: "Open redirection (DOM-based)", DOM: true, Safe: true,
 			Note: "navigates only to same-origin paths, rejecting any value naming an authority"},
+
+		// XML, XPath, LDAP and server-side template rows. The XML pair carries a document body
+		// because the checks look for a body insertion point; without one the row is unreachable.
+		{Path: "/xml/parse", Row: "XML external entity injection", Method: "POST",
+			Body: "<order><item>seed</item></order>", ContentType: "application/xml",
+			Note: "resolves declared SYSTEM entities and substitutes them into the echoed document"},
+		{Path: "/xml/expand", Row: "XML entity expansion", Method: "POST",
+			Body: "<order><item>seed</item></order>", ContentType: "application/xml",
+			Note: "expands nested internal entities with no total-size limit"},
+		{Path: "/search/xpath?name=seed", Row: "XPath injection",
+			Note: "concatenates into //user[name='...'] and leaks the parser exception"},
+		{Path: "/directory?uid=alice", Row: "LDAP injection",
+			Note: "concatenates into (uid=...) and evaluates it, so an appended always-true term still matches while a negation does not"},
+		{Path: "/greet?greeting=seed", Row: "Server-side template injection",
+			Note: "evaluates an arithmetic expression inside template delimiters"},
 
 		// The safe counterparts. Each reflects input for the same row without the defect, so a
 		// detector that fires on reflection alone is caught here rather than in the field.
@@ -174,6 +211,18 @@ func Handler() http.Handler {
 	mux.HandleFunc("/safe/dom/storage", safeDOMStorage)
 	mux.HandleFunc("/safe/dom/cookie", safeDOMCookie)
 	mux.HandleFunc("/safe/dom/redirect", safeDOMRedirect)
+
+	// XML, XPath, LDAP and template rows.
+	mux.HandleFunc("/xml/parse", parseXML)
+	mux.HandleFunc("/xml/expand", parseXML)
+	mux.HandleFunc("/search/xpath", xpathSearch)
+	mux.HandleFunc("/directory", ldapLookup)
+	mux.HandleFunc("/greet", renderTemplate)
+	mux.HandleFunc("/safe/xml/parse", safeParseXML)
+	mux.HandleFunc("/safe/xml/expand", safeExpandXML)
+	mux.HandleFunc("/safe/search/xpath", safeXPathSearch)
+	mux.HandleFunc("/safe/directory", safeLDAPLookup)
+	mux.HandleFunc("/safe/greet", safeRenderTemplate)
 	return mux
 }
 
@@ -510,4 +559,308 @@ func safeDOMCookie(w http.ResponseWriter, r *http.Request) {
 // authority - the DOM counterpart of the safeRedirect rule.
 func safeDOMRedirect(w http.ResponseWriter, r *http.Request) {
 	domPage(w, `if (/^\/[a-z0-9\/]*$/.test(taint)) { location.assign(taint); }`)
+}
+
+// ---------------------------------------------------------------------------
+// XML: external entities and entity expansion
+// ---------------------------------------------------------------------------
+
+// docText returns the body of the request whichever way it arrived. The XML rows are reached
+// through a body point, but the enumerator also offers query points, and an endpoint that only
+// honoured one of them would make the other look clean.
+func docText(r *http.Request) string {
+	if v := r.URL.Query().Get("doc"); v != "" {
+		return v
+	}
+	b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	return string(b)
+}
+
+var xmlEntityDecl = regexp.MustCompile(`<!ENTITY\s+(\w+)\s+(?:SYSTEM\s+"([^"]*)"|"([^"]*)")\s*>`)
+
+// parseXML is a parser configured the wrong way round: it resolves declared entities, including
+// SYSTEM ones, and substitutes them into the document it echoes back.
+//
+// Go's encoding/xml refuses external entities outright, so a genuinely vulnerable endpoint has to
+// resolve them itself. That is not a contrivance - it is precisely the misconfiguration the row
+// describes, and the resolution here is generic: whatever path the entity names is what gets read,
+// with no knowledge of any particular payload or file.
+func parseXML(w http.ResponseWriter, r *http.Request) {
+	doc := docText(r)
+	w.Header().Set("Content-Type", "text/plain")
+
+	values := map[string]string{}
+	for _, m := range xmlEntityDecl.FindAllStringSubmatch(doc, -1) {
+		name, system, literal := m[1], m[2], m[3]
+		if system != "" {
+			values[name] = readSystemEntity(system)
+			continue
+		}
+		values[name] = literal
+	}
+
+	// Expand references repeatedly so a nested declaration resolves through its parents. The
+	// bound is what a real parser without an expansion limit lacks; the cap here only stops the
+	// test process itself dying, and is far above the scanner's own bounded payloads.
+	body := doc
+	for range 24 {
+		grew := false
+		for name, v := range values {
+			ref := "&" + name + ";"
+			if strings.Contains(body, ref) {
+				body = strings.ReplaceAll(body, ref, v)
+				grew = true
+			}
+		}
+		if !grew || len(body) > 1<<22 {
+			break
+		}
+	}
+	fmt.Fprintf(w, "parsed document:\n%s\n", body)
+}
+
+// readSystemEntity resolves a SYSTEM URI the way an unconfigured parser would.
+func readSystemEntity(uri string) string {
+	path := strings.TrimPrefix(uri, "file://")
+	if strings.HasPrefix(uri, "php://filter") {
+		// The wrapper form names its target after "resource=". A PHP parser would return the
+		// content base64-encoded; this one returns it plainly, which is strictly more evidence
+		// and keeps the endpoint honest about what it read.
+		if i := strings.Index(uri, "resource="); i >= 0 {
+			path = uri[i+len("resource="):]
+		}
+	}
+	if !strings.HasPrefix(path, "/") {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// safeParseXML resolves internal entities only and refuses SYSTEM ones, which is the fixed
+// configuration. It still echoes the document, so a detector keying on reflection is caught.
+func safeParseXML(w http.ResponseWriter, r *http.Request) {
+	doc := docText(r)
+	w.Header().Set("Content-Type", "text/plain")
+	if strings.Contains(doc, "SYSTEM") {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, "refused: external entities are disabled\n")
+		return
+	}
+	fmt.Fprintf(w, "parsed document:\n%s\n", doc)
+}
+
+// safeExpandXML caps total expansion, which is the documented fix for entity expansion. The
+// document is still echoed, so silence here cannot come from the endpoint ignoring input.
+func safeExpandXML(w http.ResponseWriter, r *http.Request) {
+	doc := docText(r)
+	w.Header().Set("Content-Type", "text/plain")
+	if len(doc) > 0 && strings.Count(doc, "&") > 64 {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, "refused: entity expansion limit exceeded\n")
+		return
+	}
+	fmt.Fprintf(w, "parsed document:\n%s\n", doc)
+}
+
+// ---------------------------------------------------------------------------
+// XPath, LDAP, server-side templates
+// ---------------------------------------------------------------------------
+
+// xpathSearch builds an XPath expression by concatenation and leaks the parser's error, which is
+// what makes the flaw detectable. The error text is a real Java XPath one.
+func xpathSearch(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("name")
+	w.Header().Set("Content-Type", "text/plain")
+	// An odd number of quotes leaves the expression unbalanced, exactly as string concatenation
+	// into a query language does. The endpoint does not inspect the payload for anything else.
+	if (strings.Count(v, "'")+strings.Count(v, `"`))%2 == 1 {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "javax.xml.xpath.XPathExpressionException: unable to evaluate //user[name='%s']\n", v)
+		return
+	}
+	fmt.Fprintf(w, "no user matching %s\n", v)
+}
+
+func safeXPathSearch(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("name")
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w, "no user matching %s\n", v)
+}
+
+// directoryEntries is the store the filter runs against.
+var directoryEntries = []map[string]string{
+	{"uid": "alice", "objectClass": "person", "active": "TRUE"},
+	{"uid": "bob", "objectClass": "person", "active": "TRUE"},
+	{"uid": "carol", "objectClass": "person", "active": "FALSE"},
+}
+
+// ldapLookup concatenates the parameter into a filter and evaluates it for real.
+//
+// The evaluator below knows nothing about any payload: it parses whatever filter string the
+// concatenation produced and applies it. That matters because an endpoint that instead matched
+// on the payloads it expected would grade the check against its own guesses - the fixture would
+// pass whether or not the detector worked, which is how a corpus stops being evidence.
+func ldapLookup(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("uid")
+	w.Header().Set("Content-Type", "text/plain")
+	writeDirectoryResult(w, "(uid="+v+")")
+}
+
+// safeLDAPLookup escapes the filter metacharacters per RFC 4515 before building the filter, so
+// every input is one literal assertion. The always-true payload then stops matching the baseline
+// too, which is what makes the differential inconclusive rather than a finding.
+func safeLDAPLookup(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("uid")
+	w.Header().Set("Content-Type", "text/plain")
+	esc := strings.NewReplacer(`\`, `\5c`, `*`, `\2a`, `(`, `\28`, `)`, `\29`, "\x00", `\00`).Replace(v)
+	writeDirectoryResult(w, "(uid="+esc+")")
+}
+
+func writeDirectoryResult(w http.ResponseWriter, filter string) {
+	uids, err := evalFilterSequence(filter)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "LDAP: error code 87 - invalid filter %q: %v\n", filter, err)
+		return
+	}
+	if len(uids) == 0 {
+		fmt.Fprint(w, "entries: none\n")
+		return
+	}
+	fmt.Fprintf(w, "entries: %s\n", strings.Join(uids, ", "))
+}
+
+// evalFilterSequence evaluates one or more adjacent top-level filters, ANDed together. The
+// adjacency case is the whole point: closing the app's own filter and appending another is
+// exactly what the injection does, and a parser that rejected it outright would not be
+// vulnerable in the first place.
+func evalFilterSequence(s string) ([]string, error) {
+	var out []string
+	for _, e := range directoryEntries {
+		rest, ok := s, true
+		for rest != "" && ok {
+			node, tail, err := parseFilter(rest)
+			if err != nil {
+				return nil, err
+			}
+			ok = node(e)
+			rest = tail
+		}
+		if ok {
+			out = append(out, e["uid"])
+		}
+	}
+	return out, nil
+}
+
+// parseFilter parses one parenthesised filter and returns a predicate plus the unconsumed tail.
+func parseFilter(s string) (func(map[string]string) bool, string, error) {
+	if len(s) == 0 || s[0] != '(' {
+		return nil, "", fmt.Errorf("expected '(' at %q", s)
+	}
+	end := matchingParen(s)
+	if end < 0 {
+		return nil, "", fmt.Errorf("unbalanced parentheses in %q", s)
+	}
+	inner, tail := s[1:end], s[end+1:]
+	if inner == "" {
+		return nil, "", fmt.Errorf("empty filter")
+	}
+
+	switch inner[0] {
+	case '&', '|', '!':
+		op := inner[0]
+		var kids []func(map[string]string) bool
+		for rest := inner[1:]; rest != ""; {
+			kid, t, err := parseFilter(rest)
+			if err != nil {
+				return nil, "", err
+			}
+			kids = append(kids, kid)
+			rest = t
+		}
+		if len(kids) == 0 {
+			return nil, "", fmt.Errorf("operator %q with no operands", string(op))
+		}
+		return func(e map[string]string) bool {
+			switch op {
+			case '&':
+				for _, k := range kids {
+					if !k(e) {
+						return false
+					}
+				}
+				return true
+			case '|':
+				for _, k := range kids {
+					if k(e) {
+						return true
+					}
+				}
+				return false
+			default:
+				return !kids[0](e)
+			}
+		}, tail, nil
+	}
+
+	eq := strings.Index(inner, "=")
+	if eq < 0 {
+		return nil, "", fmt.Errorf("assertion %q has no '='", inner)
+	}
+	attr, want := inner[:eq], inner[eq+1:]
+	return func(e map[string]string) bool {
+		have, present := e[attr]
+		switch {
+		case want == "*":
+			return present
+		case strings.HasSuffix(want, "*"):
+			return present && strings.HasPrefix(have, strings.TrimSuffix(want, "*"))
+		default:
+			return present && have == want
+		}
+	}, tail, nil
+}
+
+func matchingParen(s string) int {
+	depth := 0
+	for i := range len(s) {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// renderTemplate evaluates an arithmetic expression inside template delimiters, which is what a
+// server-side template engine handed untrusted input does. It computes the product rather than
+// recognising any particular one, so no specific payload is privileged.
+var templateExpr = regexp.MustCompile(`(?:\{\{|\$\{|#\{|<%=)\s*(\d{1,4})\s*\*\s*(\d{1,4})\s*(?:\}\}|\}|%>)`)
+
+func renderTemplate(w http.ResponseWriter, r *http.Request) {
+	v := r.URL.Query().Get("greeting")
+	w.Header().Set("Content-Type", "text/plain")
+	out := templateExpr.ReplaceAllStringFunc(v, func(m string) string {
+		p := templateExpr.FindStringSubmatch(m)
+		a, _ := strconv.Atoi(p[1])
+		b, _ := strconv.Atoi(p[2])
+		return strconv.Itoa(a * b)
+	})
+	fmt.Fprintf(w, "rendered: %s\n", out)
+}
+
+// safeRenderTemplate treats the value as data, never as template source.
+func safeRenderTemplate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w, "rendered: %s\n", r.URL.Query().Get("greeting"))
 }

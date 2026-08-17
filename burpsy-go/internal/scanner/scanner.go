@@ -153,11 +153,22 @@ type ScanConfig struct {
 	// browser, so they need a browser provider; without one they report a refusal rather than
 	// an empty observation set. Off by default like every other per-family switch.
 	CheckDOM bool
-	// CheckExtendedActive admits the remaining wired rows in checks_remaining.go: GraphQL,
-	// JWT forgery, TLS certificate, SMTP header injection, CORS, cross-domain policy files,
-	// XXE and entity expansion, file-upload and OpenAPI discovery, out-of-band interaction,
-	// React2Shell fingerprinting, and the SQL-in-parameter heuristic. Off by default.
+	// CheckExtendedActive admits the remaining wired rows in checks_remaining.go and
+	// checks_final.go: GraphQL, JWT forgery, SMTP header injection, CORS, cross-domain policy
+	// files, XXE and entity expansion, file-upload and OpenAPI discovery, React2Shell
+	// fingerprinting, the SQL-in-parameter heuristic, and the final sixteen. Off by default.
 	CheckExtendedActive bool
+	// CheckOutOfBand narrows CheckExtendedActive to also admit the five rows that cannot reach
+	// a verdict without something outside this process: the four collaborator rows (out-of-band
+	// resource load, and external service interaction over DNS/HTTP/SMTP) and TLS certificate,
+	// which shells out to tlsx.
+	//
+	// It exists because those five behave nothing like their family. Each collaborator row waits
+	// five seconds for a callback that cannot arrive on a host with no outbound DNS, so the four
+	// of them cost twenty seconds per endpoint whether or not anything is listening - enough to
+	// spend a whole scan's time budget and make later checks go silent for want of clock rather
+	// than want of evidence. Enabling this alone admits nothing; it only widens the family.
+	CheckOutOfBand bool
 	// CheckStored admits the stored (second-order) checks in checks_stored.go. They plant
 	// canaries into endpoints they audit and can only confirm a finding once one surfaces in a
 	// later exchange, so they need a StoredLedger. Off by default.

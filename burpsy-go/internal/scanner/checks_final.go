@@ -491,7 +491,7 @@ func FinalCheckDescriptors() []CheckDescriptor {
 
 		nativeDescriptor("Hidden HTTP 2", DispatchScopePerHost, finalChecksEnabled, checkHiddenHTTP2),
 
-		nativeDescriptor("External service interaction (SMTP)", DispatchScopePerUrl, finalChecksEnabled,
+		nativeDescriptor("External service interaction (SMTP)", DispatchScopePerUrl, oobChecksEnabled,
 			oobCheck("External service interaction (SMTP)", "smtp")),
 
 		nativeDescriptor("JWT arbitrary jku header supported", DispatchScopePerRequest, finalChecksEnabled,

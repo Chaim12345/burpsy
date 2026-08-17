@@ -107,7 +107,10 @@ func allChecksOn() *ScanConfig {
 		CheckDOM:                true,
 		CheckStored:             true,
 		CheckExtendedActive:     true,
-		CheckExtendedCoverage:   true,
+		// Without this the five collaborator rows are absent from every contract assertion in
+		// this file, which would exempt them from the refusal rules rather than test them.
+		CheckOutOfBand:        true,
+		CheckExtendedCoverage: true,
 	}
 }
 
@@ -477,4 +480,49 @@ func describeFindings(f []*Finding) string {
 		names = append(names, fmt.Sprintf("%s/%s", x.Name, x.Confidence))
 	}
 	return strings.Join(names, ", ")
+}
+
+// The five rows behind CheckOutOfBand are pinned by name.
+//
+// Each of them waits on something outside this process, so each costs seconds of wall clock
+// whether or not anything answers. A sixth row joining them quietly would slow every scan that
+// enables the family and, worse, spend the time budget that later checks need to reach a verdict
+// at all — the failure that already cost this harness its CORS row once. Adding a row here is a
+// decision; this test makes it an explicit one.
+func TestOnlyTheCollaboratorRowsRequireTheOutOfBandSwitch(t *testing.T) {
+	want := map[string]bool{
+		"Out-of-band resource load (HTTP)":    true,
+		"External service interaction (DNS)":  true,
+		"External service interaction (HTTP)": true,
+		"External service interaction (SMTP)": true,
+		"TLS certificate":                     true,
+	}
+
+	// The difference between the two configurations is the definition, so it cannot drift from it.
+	without := &ScanConfig{CheckExtendedActive: true}
+	with := &ScanConfig{CheckExtendedActive: true, CheckOutOfBand: true}
+
+	got := map[string]bool{}
+	for _, d := range NativeCheckRegistry() {
+		if d.Enabled == nil {
+			continue
+		}
+		if !d.Enabled(without) && d.Enabled(with) {
+			got[d.Name] = true
+		}
+	}
+
+	for name := range want {
+		if !got[name] {
+			t.Errorf("%q no longer needs CheckOutOfBand; if it stopped waiting on a collaborator "+
+				"say so here, because it is now paying no such cost", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("%q now requires CheckOutOfBand and was not declared as a collaborator row. "+
+				"Rows in this set cost seconds of wall clock each and can starve later checks of "+
+				"the time budget they need to reach a verdict", name)
+		}
+	}
 }
