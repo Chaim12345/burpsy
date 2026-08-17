@@ -74,6 +74,11 @@ type runtimeTarget struct {
 	// the subtests that read it run in parallel.
 	memo   map[string]memoisedAudit
 	memoMu sync.Mutex
+	// freshAudits counts audits that actually ran, as opposed to memo hits. The shared target lives
+	// for the whole test binary rather than per -count iteration, so a second in-process iteration
+	// is served entirely from cache; without this the coverage line would print an identical claim
+	// having sent no probe at all.
+	freshAudits int
 	// The TLS twin of the target, for rows gated on an encrypted exchange.
 	tlsSrv  *httptest.Server
 	tlsHost string
@@ -246,6 +251,13 @@ func (rt *runtimeTarget) auditStoredEndpoint(t *testing.T, path string) (map[str
 	return byRow, outcome.RequestsSent
 }
 
+// auditCount reports how many audits have actually run, as opposed to memo hits.
+func (rt *runtimeTarget) auditCount() int {
+	rt.memoMu.Lock()
+	defer rt.memoMu.Unlock()
+	return rt.freshAudits
+}
+
 // auditOnce memoises one endpoint's audit for the lifetime of a runtimeTarget.
 //
 // The safe-counterpart test audits a row's VULNERABLE twin once per safe entry, to prove the row is
@@ -280,6 +292,7 @@ func (rt *runtimeTarget) auditOnce(t *testing.T, path string, dom, stored bool,
 	rt.memoMu.Lock()
 	entry := memoisedAudit{byRow: byRow, requestsSent: sent}
 	rt.memo[key] = entry
+	rt.freshAudits++
 	rt.memoMu.Unlock()
 	return entry
 }
@@ -580,6 +593,10 @@ func TestAnAuditSendsProbesAndStaysWithinARequestBudget(t *testing.T) {
 // The headline assertion: every vulnerability vulnapp declares must actually be reported.
 func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 	rt := startRuntimeTarget(t)
+	// Snapshot, not absolute: freshAudits accumulates over the whole binary, so comparing it to zero
+	// would only ever be true on the very first test to run. The delta is what says whether THIS
+	// invocation measured anything.
+	auditsBefore := rt.auditCount()
 
 	// A row name that does not exist in the catalog would exempt its endpoint from every
 	// assertion here, so the manifest is resolved before anything is audited.
@@ -594,7 +611,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 		}
 	}
 
-	var demonstrated, missed []string
+	var demonstrated, missed, skipped []string
 	// The rows run inside a group so the tally below sees their results.
 	//
 	// A parallel subtest is deferred until its parent returns, so counting demonstrated rows straight
@@ -616,6 +633,9 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 					t.Parallel()
 				}
 				if e.DOM && !rt.chrome {
+					tally.Lock()
+					skipped = append(skipped, e.Row+" @ "+e.Path)
+					tally.Unlock()
 					t.Skip("no Chrome on PATH: this DOM row is NOT exercised in this run")
 				}
 				var got map[string]*Finding
@@ -647,12 +667,20 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 	for _, r := range demonstrated {
 		distinct[r] = true
 	}
+	// A replay served entirely from the memo must not print the claim as though it measured it.
+	//
+	// `-count=2` is the standard way to shake out flakes, and the shared target outlives a single
+	// iteration, so the second pass completed in 10ms from cache and printed a coverage line
+	// identical to the first. An operator would reasonably read two matching numbers as
+	// reproduction. It was a cache read.
+	if fresh := rt.auditCount() - auditsBefore; fresh == 0 && len(demonstrated) > 0 {
+		t.Logf("cached replay: %d row(s) served from a previous iteration's audits, no probe was sent "+
+			"and no coverage claim was re-verified in this pass", len(distinct))
+		return
+	}
 	t.Logf("runtime detection: %d distinct catalog rows demonstrated across %d endpoints, %d missed",
 		len(distinct), len(demonstrated), len(missed))
 
-	// Only meaningful on a complete run. Under `-run` the harness executes a subset, and a pin that
-	// fired then would make every filtered debugging run fail for a reason unrelated to what is
-	// being debugged.
 	var claimed int
 	for _, e := range vulnapp.Vulnerabilities() {
 		if e.Row != "" && !e.Safe {
@@ -660,6 +688,39 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 		}
 	}
 	const wantDemonstrated = 145
+
+	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
+	// a supported mode - and this is where that gets enforced.
+	//
+	// A row skipped for a missing capability and a row filtered out by `-run` look identical to a
+	// tally: both are simply absent. The earlier version returned early for either, which left the
+	// coverage pin unenforced with only a t.Logf to say so, so a machine without Chrome exited 0
+	// having demonstrated 116 rows against a pinned claim of 145. That is "we did not look" reading
+	// as "we looked and found nothing", which is the one outcome this project's standard forbids.
+	// Found in review.
+	//
+	// Failing is the right behaviour precisely BECAUSE Chrome is a base dependency: a misconfigured
+	// environment should say which dependency is missing, not quietly verify less than it claims.
+	// BURPSY_ALLOW_UNVERIFIED_COVERAGE=1 exists for a deliberately reduced environment and is loud
+	// about what it cost.
+	if len(skipped) > 0 {
+		distinctSkipped := map[string]bool{}
+		for _, r := range skipped {
+			distinctSkipped[r] = true
+		}
+		msg := fmt.Sprintf("%d row(s) were skipped for a missing capability, so this run cannot "+
+			"verify the pinned coverage claim of %d rows; it demonstrated %d. Skipped: %v",
+			len(distinctSkipped), wantDemonstrated, len(distinct), skipped)
+		if os.Getenv("BURPSY_ALLOW_UNVERIFIED_COVERAGE") == "1" {
+			t.Logf("COVERAGE UNVERIFIED (allowed by BURPSY_ALLOW_UNVERIFIED_COVERAGE): %s", msg)
+			return
+		}
+		t.Fatalf("%s\nInstall Chrome to exercise them, or set BURPSY_ALLOW_UNVERIFIED_COVERAGE=1 to "+
+			"accept a run that does not check the claim.", msg)
+	}
+
+	// Now the only remaining reason for an incomplete tally is a `-run` filter, where a pin would
+	// fail every filtered debugging run for a reason unrelated to what is being debugged.
 	if len(demonstrated)+len(missed) < claimed {
 		t.Logf("filtered run (%d of %d endpoints attempted): coverage floor not enforced",
 			len(demonstrated)+len(missed), claimed)

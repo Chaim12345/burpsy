@@ -133,8 +133,13 @@ func postureEndpoints() []Endpoint {
 		// row describes (use over an unencrypted connection). No safe twin can exist because the
 		// harness serves only HTTP, so there is no encrypted endpoint to stay silent.
 		{Path: "/px/unencrypted", Row: "Unencrypted communications",
-			SafeTwinNotApplicable: "the runtime harness serves only plain HTTP (exchange.TLS is always false), so no endpoint can present an encrypted response to silence this per-host row",
-			Note:                  "served over http://, so the application is used over an unencrypted connection"},
+			Note: "served over http://, so the application is used over an unencrypted connection"},
+		// A real twin, replacing an exemption whose stated ground - "the harness serves only plain
+		// HTTP" - was already false in the same commit: three TLS: true rows sit 20 lines above this
+		// one. exchangeURL picks https when exchange.TLS is set, which is exactly what
+		// IsUnencryptedCommunication keys on, so a TLS-seeded endpoint is genuinely quiet.
+		{Path: "/px/safe/unencrypted", Row: "Unencrypted communications", TLS: true, Safe: true,
+			Note: "the same page served over https://, so the transport condition does not hold"},
 	}
 }
 
@@ -309,6 +314,12 @@ func registerPosture(mux *http.ServeMux) {
 
 	// Unencrypted communications: served over plain HTTP, which is the condition the row reports.
 	mux.HandleFunc("/px/unencrypted", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<!DOCTYPE html><html><body><p>served over plain HTTP</p></body></html>`)
+	})
+	// Byte-identical page. The only difference is the transport the manifest seeds it over, which is
+	// the whole of what this row reports - so the twin isolates exactly the condition under test.
+	mux.HandleFunc("/px/safe/unencrypted", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, `<!DOCTYPE html><html><body><p>served over plain HTTP</p></body></html>`)
 	})

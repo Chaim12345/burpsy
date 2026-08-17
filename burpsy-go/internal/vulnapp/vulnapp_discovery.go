@@ -21,9 +21,11 @@ package vulnapp
 // Corresponding scanner descriptors: HostDiscoveryCheckDescriptors.
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -119,7 +121,28 @@ func registerDiscovery(mux *http.ServeMux) {
 	// /graphql — checkGraphQLEndpointDiscovered POSTs `query{__typename}` and confirms a data.__typename
 	// answer. The handler answers every POST that way; it models a real GraphQL endpoint, not a matcher.
 	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		// Parses the query rather than answering every POST with the evidence.
+		//
+		// The first version returned {"data":{"__typename":"Query"}} unconditionally, without
+		// reading the body - which is a static file at /graphql wearing GraphQL's evidence. It would
+		// have satisfied the check for an empty body, a malformed one, or no query at all, so the row
+		// demonstrated only that the check can substring-match a constant: it could not catch a
+		// regression where the check stopped sending the query, sent it to the wrong path, or sent it
+		// with the wrong content type.
 		w.Header().Set("Content-Type", "application/json")
+		var req struct {
+			Query string `json:"query"`
+		}
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Query) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"errors":[{"message":"no GraphQL query provided"}]}`)
+			return
+		}
+		if !strings.Contains(req.Query, "__typename") {
+			fmt.Fprint(w, `{"errors":[{"message":"Cannot query field on type Query"}]}`)
+			return
+		}
 		fmt.Fprint(w, `{"data":{"__typename":"Query"}}`)
 	})
 

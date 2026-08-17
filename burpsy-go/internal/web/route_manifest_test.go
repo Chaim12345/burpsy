@@ -464,13 +464,18 @@ var allMethods = []string{
 // that point this test stops being a check on handler discipline and becomes a check on the manifest's
 // accuracy, which is still worth running.
 func Test_every_route_rejects_a_verb_it_does_not_implement(t *testing.T) {
-	// s is built once and shared by every subtest below, unlike everywhere else in this package
-	// where a fresh server per test is the correct choice. It is safe here specifically because a
-	// wrong-verb request never reaches a handler body at all - net/http's ServeMux rejects it with
-	// 405 during its own method dispatch - so no subtest can leave behind state for a later one to
-	// observe. Building a full Server (routes, sitemap, dashboard registries, ...) once instead of
-	// once per (route, disallowed verb) pair is what turns this table's ~190 cases from a
-	// quadratic cost into a linear one.
+	// s is built once and shared by every subtest below, unlike everywhere else in this package where
+	// a fresh server per test is the correct choice. Building a full Server (routes, sitemap,
+	// dashboard registries, ...) once instead of once per (route, disallowed verb) pair is what turns
+	// this table's ~190 cases from a quadratic cost into a linear one.
+	//
+	// What makes that safe, stated accurately: the subtests here are sequential - none calls
+	// t.Parallel() - and every 405 in this package comes from a hand-written verb guard inside the
+	// handler, which in each case precedes any state mutation. It is NOT true that ServeMux rejects a
+	// wrong verb before the handler runs; this package does not use Go 1.22 method patterns
+	// ("POST /api/..."), as the note above about that migration being future work says. An earlier
+	// version of this comment claimed the structural guarantee, which would have been the better
+	// reason had it existed - and will be, once those patterns land.
 	s := newTestServer()
 	for pattern, spec := range manifest {
 		// The UI catch-all deliberately serves the SPA for anything it does not recognise, so it has no

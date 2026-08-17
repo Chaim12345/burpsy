@@ -169,13 +169,22 @@ func coreEndpoints() []Endpoint {
 			Note: "reflects msg into a response header, so CRLF splits it"},
 
 		{Path: "/api/data", Row: "Cross-origin resource sharing: arbitrary origin trusted",
-			SafeTwinNotApplicable: "a safe twin is an endpoint with no CORS policy at all, which is " +
-				"every other endpoint in this manifest; a dedicated one would add nothing",
 			Note: "reflects any Origin and allows credentials"},
+		// A real twin, replacing an exemption that claimed none was possible. It is: an endpoint
+		// that answers CORS from a fixed allowlist reflects nothing the check crafts, so it is
+		// genuinely quiet while still exercising the same code path. The old exemption said a twin
+		// would be "an endpoint with no CORS policy", which is a different thing entirely - it
+		// would prove only that a check keyed on a header cannot fire without the header.
+		{Path: "/safe/api/data", Row: "Cross-origin resource sharing: arbitrary origin trusted", Safe: true,
+			Note: "answers CORS only for an allowlisted origin, so a crafted Origin is never reflected"},
 
 		{Path: "/api/debug", Row: "Database connection string disclosed",
-			SafeTwinNotApplicable: "a safe twin is a response without a connection string in it, which " +
-				"is every other endpoint in this manifest",
+			SafeTwinNotApplicable: "tested rather than assumed: a twin serving the same diagnostic " +
+				"page with the credentials redacted still fires, because the detector keys on the " +
+				"mysql:// URI itself and a credential-free connection string still discloses the " +
+				"database's internal host, port and schema. That is the check being right rather " +
+				"than sloppy, so the only quiet twin is a response with no connection string at " +
+				"all - which is every other endpoint here",
 			Note: "exposes a mysql:// URI with credentials"},
 
 		// DOM-based rows. These need a headless browser, so the runtime harness gates them on
@@ -283,6 +292,7 @@ func Handler() http.Handler {
 	mux.HandleFunc("/redirect", redirect)
 	mux.HandleFunc("/echo", echo)
 	mux.HandleFunc("/api/data", cors)
+	mux.HandleFunc("/safe/api/data", safeCORS)
 
 	mux.HandleFunc("/safe/search", safeSearch)
 	mux.HandleFunc("/safe/products", safeProducts)
@@ -614,6 +624,18 @@ func safeEcho(w http.ResponseWriter, r *http.Request) {
 func cors(w http.ResponseWriter, r *http.Request) {
 	if origin := r.Header.Get("Origin"); origin != "" {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(w, `{"balance": 1000, "account": "victim"}`)
+}
+
+// safeCORS answers CORS from a fixed allowlist. The crafted origins the CORS checks probe with are
+// not on it, so nothing is reflected and the row is genuinely quiet.
+func safeCORS(w http.ResponseWriter, r *http.Request) {
+	const allowed = "https://app.example.com"
+	if r.Header.Get("Origin") == allowed {
+		w.Header().Set("Access-Control-Allow-Origin", allowed)
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 	}
 	w.Header().Set("Content-Type", "application/json")
