@@ -1,6 +1,6 @@
 // Decoder tab: smart multi-layer decode, explicit "decode as", encode, and hash.
 
-import { $, $all, esc, postJSON } from "./common";
+import { $, $all, esc, postJSON, toast } from "./common";
 
 interface BytesView {
   text: string;
@@ -62,9 +62,9 @@ export function initDecoder(): void {
   el.innerHTML = `
     <div class="two">
       <div class="stack">
-        <textarea id="dec-input" placeholder="paste text to decode / encode / hash"></textarea>
+        <textarea id="dec-input" aria-label="Input text to decode, encode, or hash" placeholder="paste text to decode / encode / hash"></textarea>
         <div class="row">
-          <select id="dec-encoding">
+          <select id="dec-encoding" aria-label="Decode algorithm">
             <option value="smart">smart</option>
             ${LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
@@ -77,25 +77,33 @@ export function initDecoder(): void {
           <label><input type="radio" name="dec-view" value="hex" /> Hex</label>
         </div>
         <div class="row">
-          <select id="enc-encoding">
+          <select id="enc-encoding" aria-label="Encode algorithm">
             ${ENCODABLE_LAYERS.map((l) => `<option value="${l}">${l}</option>`).join("")}
           </select>
           <button class="go" id="enc-run">Encode</button>
         </div>
         <div class="row">
-          <select id="hash-algorithm">
+          <select id="hash-algorithm" aria-label="Hash algorithm">
             ${HASH_ALGORITHMS.map((a) => `<option value="${a}">${a}</option>`).join("")}
           </select>
           <button class="go" id="hash-run">Hash</button>
           <span class="hint">one-way — there is no decode back</span>
         </div>
       </div>
-      <div><pre id="dec-output"></pre></div>
+      <div class="stack">
+        <div class="row" style="margin-bottom:0">
+          <b class="muted">Output</b>
+          <span class="grow"></span>
+          <button class="ghost small" id="dec-copy" aria-label="Copy output text to clipboard">Copy</button>
+        </div>
+        <pre id="dec-output"></pre>
+      </div>
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());
   $("#enc-run")!.addEventListener("click", () => void runEncode());
   $("#hash-run")!.addEventListener("click", () => void runHash());
+  $("#dec-copy")!.addEventListener("click", () => void copyOutput());
   $all<HTMLInputElement>('input[name="dec-view"]').forEach((r) => {
     r.addEventListener("change", () => {
       if (paneShowsDecode && lastDecode) $("#dec-output")!.innerHTML = renderDecodeResp(lastDecode);
@@ -197,6 +205,20 @@ async function runDecode(): Promise<void> {
   } catch (e) {
     paneShowsDecode = false;
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+  }
+}
+
+async function copyOutput(): Promise<void> {
+  const text = $("#dec-output")?.textContent ?? "";
+  if (!text) {
+    toast("Nothing to copy", "error");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Copied output to clipboard");
+  } catch (e) {
+    toast((e as Error).message || "Failed to copy", "error");
   }
 }
 
