@@ -116,6 +116,35 @@ func (a *AuthorisedSender) SendFrameProgram(
 	ctx context.Context,
 	program burpsyhttp2.H2FrameProgram,
 ) (FrameProgramResult, error) {
+	return a.sendFrameProgram(ctx, program, false)
+}
+
+// SendFrameProgramForcingHTTP2 does what SendFrameProgram does, except that on the TLS path it writes
+// the program even when ALPN did not settle on h2 — RFC 9113 §3.3 prior knowledge, over TLS.
+//
+// SendFrameProgram refuses that case on purpose: for an operator replaying frames, "this target
+// negotiated http/1.1" is the answer, and writing frames at an HTTP/1.1 server only produces a parse
+// error a hop further on. But one question can only be asked this way — *does an origin that does not
+// advertise h2 speak it anyway?* — and it is the question the "Hidden HTTP 2" row exists to answer.
+// Burp asks it the same way, through the FORCE_HTTP2_NON_POOLED flag on an isolated connection, so
+// that whatever h2 support the pooled connection to the site already discovered cannot answer for it.
+//
+// Non-pooled is not an extra: this sender never pools frame-program connections, so every call already
+// dials its own. That property is what makes the answer attributable to this handshake alone.
+//
+// The scope gate is unchanged. Forcing the protocol does not force the authorisation.
+func (a *AuthorisedSender) SendFrameProgramForcingHTTP2(
+	ctx context.Context,
+	program burpsyhttp2.H2FrameProgram,
+) (FrameProgramResult, error) {
+	return a.sendFrameProgram(ctx, program, true)
+}
+
+func (a *AuthorisedSender) sendFrameProgram(
+	ctx context.Context,
+	program burpsyhttp2.H2FrameProgram,
+	forceH2 bool,
+) (FrameProgramResult, error) {
 	res := FrameProgramResult{
 		Host:          a.host,
 		Port:          a.port,
@@ -149,7 +178,7 @@ func (a *AuthorisedSender) SendFrameProgram(
 		return res, fmt.Errorf("refused: this build cannot act on verdict %d", int(res.Authorisation.Verdict))
 	}
 
-	conn, negotiated, err := a.dialForProgram(ctx)
+	conn, negotiated, err := a.dialForProgram(ctx, forceH2)
 	if err != nil {
 		return res, err
 	}
@@ -235,7 +264,11 @@ func (a *AuthorisedSender) programRequestURL(req burpsyhttp2.ProgramRequest) str
 // makes an HTTP/1.1-only target abort the handshake with an opaque TLS alert; offering both means the
 // target says "http/1.1" and the operator gets told that the target does not speak h2 — which is the
 // actual finding, and one worth learning into the per-authority cache while we are here.
-func (a *AuthorisedSender) dialForProgram(ctx context.Context) (net.Conn, string, error) {
+// forceH2 keeps a TLS connection that negotiated something other than h2, for the prior-knowledge
+// probe described on SendFrameProgramForcingHTTP2. The negotiated value is still returned and still
+// learned, so a caller can tell "h2 was negotiated" from "h2 was forced past an http/1.1 ALPN" —
+// which for that probe is the entire finding.
+func (a *AuthorisedSender) dialForProgram(ctx context.Context, forceH2 bool) (net.Conn, string, error) {
 	if !a.tls {
 		dialer := &net.Dialer{Timeout: a.net.config.Timeout}
 		conn, err := dialer.DialContext(ctx, "tcp",
@@ -250,7 +283,7 @@ func (a *AuthorisedSender) dialForProgram(ctx context.Context) (net.Conn, string
 		return nil, "", fmt.Errorf("connection failed: %w", err)
 	}
 	a.net.protocols.learn(a.host, a.port, a.tls, negotiated)
-	if negotiated != alpn.H2 {
+	if negotiated != alpn.H2 && !forceH2 {
 		conn.Close()
 		what := "no ALPN protocol at all"
 		if negotiated != "" {

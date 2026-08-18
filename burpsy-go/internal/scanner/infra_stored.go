@@ -219,6 +219,47 @@ func (l *StoredLedger) SecondOrderObservations() []StoredObservation {
 	return out
 }
 
+// Tokens returns every canary the scan has planted, in planting order.
+//
+// Deliberately not Outstanding(): a browser looking for stored input has to ask about canaries
+// that already surfaced over plain HTTP too. A value the raw response carries AND a script also
+// feeds to a sink is two different findings, and filtering to the unseen ones would silence the
+// second whenever the first happened to fire.
+func (l *StoredLedger) Tokens() []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return append([]string(nil), l.order...)
+}
+
+// CanaryFor resolves a token back to the canary record, so an observer holding only the matched
+// string can say which exchange planted it.
+func (l *StoredLedger) CanaryFor(token string) (StoredCanary, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	entry, ok := l.entries[strings.ToLower(token)]
+	if !ok || entry == nil {
+		return StoredCanary{}, false
+	}
+	return entry.canary, true
+}
+
+// CanariesFrom returns the canaries one exchange planted.
+//
+// Scoping matters here: the ledger is scan-wide, so a check asking "did anything I planted get
+// anywhere" must ask about its own plantings. Answering from the whole ledger is the bleed that
+// once let one vulnerable endpoint's sighting satisfy every later stored audit, safe ones included.
+func (l *StoredLedger) CanariesFrom(origin core.ExchangeID) []StoredCanary {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	var out []StoredCanary
+	for _, token := range l.order {
+		if entry := l.entries[token]; entry != nil && entry.canary.Origin == origin {
+			out = append(out, entry.canary)
+		}
+	}
+	return out
+}
+
 func (l *StoredLedger) PlantedCount() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

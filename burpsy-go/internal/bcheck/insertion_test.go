@@ -1059,7 +1059,9 @@ func Test_expandNested_max_bound(t *testing.T) {
 		qs = append(qs, "p"+strconv.Itoa(i)+"=%7B%22a%22%3A%221%22%7D")
 	}
 	r := req(t, "GET /?"+strings.Join(qs, "&")+" HTTP/1.1\r\nHost: x\r\n\r\n")
-	points, _ := Enumerate(r, []string{"query"})
+	// Uncapped: this test is about expandNested's own 400-point bound, which the
+	// per-request cap would otherwise mask.
+	points, _ := EnumerateWithLimit(r, []string{"query"}, -1)
 	nestedCount := 0
 	for _, p := range points {
 		if p.coding == codingNested {
@@ -1132,5 +1134,99 @@ func Test_kvPairs_skips_a_clause_with_an_empty_name(t *testing.T) {
 	// A clause that is nothing but `=` is the degenerate case of the same rule.
 	if pairs := kvPairs("=2", '&'); len(pairs) != 0 {
 		t.Errorf("a lone nameless clause yielded %d pairs, want 0", len(pairs))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-request insertion-point cap
+// ---------------------------------------------------------------------------
+
+// queryWith builds a GET whose query carries n distinct scalar parameters.
+func queryWith(t *testing.T, n int) []byte {
+	t.Helper()
+	var qs []string
+	for i := 0; i < n; i++ {
+		qs = append(qs, "p"+strconv.Itoa(i)+"=v")
+	}
+	return req(t, "GET /?"+strings.Join(qs, "&")+" HTTP/1.1\r\nHost: x\r\n\r\n")
+}
+
+func TestARequestUnderTheCapIsUnaffected(t *testing.T) {
+	const want = 5
+	points, declined := EnumerateWithLimit(queryWith(t, want), []string{"query"}, DefaultMaxInsertionPoints)
+	if len(points) != want {
+		t.Errorf("got %d points, want %d; a request below the cap must not be truncated", len(points), want)
+	}
+	for _, d := range declined {
+		if strings.Contains(d.What, "per-request limit") {
+			t.Errorf("a request below the cap declined points anyway: %s", d.Describe())
+		}
+	}
+}
+
+func TestARequestOverTheCapIsTruncatedAtExactlyTheCapAndTheExcessIsDeclined(t *testing.T) {
+	const (
+		cap   = 10
+		total = 25
+	)
+	points, declined := EnumerateWithLimit(queryWith(t, total), []string{"query"}, cap)
+	if len(points) != cap {
+		t.Fatalf("got %d points, want exactly %d", len(points), cap)
+	}
+	// The excess must be recorded, not silently dropped: a truncation nobody can
+	// see reads as "this request had only 10 places to inject".
+	var found *Declined
+	for i := range declined {
+		if strings.Contains(declined[i].What, "per-request limit") {
+			found = &declined[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("the %d dropped points were not declined; declined = %v", total-cap, declined)
+	}
+	if !strings.Contains(found.Reason, strconv.Itoa(total-cap)) {
+		t.Errorf("the decline does not say how many points were dropped (want %d): %q", total-cap, found.Reason)
+	}
+	if !strings.Contains(found.Reason, strconv.Itoa(cap)) {
+		t.Errorf("the decline does not name the limit it hit (want %d): %q", cap, found.Reason)
+	}
+}
+
+func TestNestedExpansionCannotPushThePointCountPastTheCap(t *testing.T) {
+	// Each param's value decodes to JSON with one string field, so uncapped this
+	// request yields 20 flat + 20 nested points.
+	const cap = 6
+	var qs []string
+	for i := 0; i < 20; i++ {
+		qs = append(qs, "p"+strconv.Itoa(i)+"=%7B%22a%22%3A%221%22%7D")
+	}
+	r := req(t, "GET /?"+strings.Join(qs, "&")+" HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, declined := EnumerateWithLimit(r, []string{"query"}, cap)
+	if len(points) != cap {
+		t.Fatalf("got %d points, want exactly %d; nested expansion escaped the cap", len(points), cap)
+	}
+	if len(declined) == 0 {
+		t.Error("nested expansion was truncated without a decline")
+	}
+}
+
+func TestANegativeLimitLiftsTheCap(t *testing.T) {
+	const total = DefaultMaxInsertionPoints + 12
+	points, declined := EnumerateWithLimit(queryWith(t, total), []string{"query"}, -1)
+	if len(points) != total {
+		t.Errorf("got %d points, want %d; a negative limit must not cap", len(points), total)
+	}
+	if len(declined) != 0 {
+		t.Errorf("an uncapped enumeration declined %v", declined)
+	}
+}
+
+func TestEnumerateAppliesTheDefaultCap(t *testing.T) {
+	points, declined := Enumerate(queryWith(t, DefaultMaxInsertionPoints+7), []string{"query"})
+	if len(points) != DefaultMaxInsertionPoints {
+		t.Errorf("got %d points, want %d", len(points), DefaultMaxInsertionPoints)
+	}
+	if len(declined) == 0 {
+		t.Error("Enumerate truncated at the default cap without declining the excess")
 	}
 }

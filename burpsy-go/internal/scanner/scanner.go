@@ -54,6 +54,12 @@ type ActiveScanner struct {
 	// times. Observe once, match many.
 	domObs   map[string][]domexec.Observation
 	domObsMu sync.Mutex
+	// domStored holds the stored canaries a page's own script carried into an instrumented sink,
+	// filled by RenderStoredTargets during the deferred phase. Separate from domObs because it is
+	// not keyed by an exchange the check chose: the sighting happens on whatever page renders the
+	// value, which is never the page the canary was planted in.
+	domStored   []domStoredSighting
+	domStoredMu sync.Mutex
 	// pending carries claims that cannot be settled while the check that made them runs: a
 	// planted canary, a callback domain. Created on first use so a scan that defers nothing
 	// allocates nothing.
@@ -316,6 +322,16 @@ func (s *ActiveScanner) AuditMultiple(ctx context.Context, exchangeIDs []core.Ex
 type noEngagementScope struct{}
 
 func (noEngagementScope) AuthoriseRaw(string, uint16, bool, []byte) error { return nil }
+
+// MayContainHost answers the host-level pre-filter the frame-program path asks when a program
+// addresses no request at all.
+//
+// sender.AuthorisedSender refuses such a program outright when its scope handle cannot answer this,
+// on the principle that a question that cannot be asked is never a pass. That principle is right for
+// a real scope, but this type *is* the no-scope-configured case: AuthoriseRaw already admits every
+// request, so declining the weaker host-level question would refuse connection-only programs in
+// exactly the configuration that permits everything else.
+func (noEngagementScope) MayContainHost(string, uint16, bool) bool { return true }
 
 // probeGate binds the engagement scope and this scanner's sender to one exchange's authority, so
 // every probe at it is authorised against the bytes it will actually put on the wire.

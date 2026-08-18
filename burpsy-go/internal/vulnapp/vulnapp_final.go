@@ -28,19 +28,14 @@ package vulnapp
 // working in this package, so these are left out rather than wired to something that would give a
 // false reading:
 //
-//   - Hidden HTTP 2: checkHiddenHTTP2's doc comment describes a paired ALPN observation, but the
-//     code never wires its computed withoutH2/withH2 offers into the actual send - it just does
-//     one ordinary NewProbeHarness/h.send probe, which goes through sender's planSend with
-//     pref=ProtocolPreferenceAuto, defaulting plan.wantH2=true for any TLS target (sender.go:548;
-//     false only for plaintext or an explicit HTTP1 pin, neither of which applies). sendOverH2
-//     renders the response with a literal "HTTP/2 200 ..." status line (mirrors the assertion in
-//     sender's own protocol_test.go:201), so the check's condition collapses to "did this host
-//     negotiate h2 on an ordinary probe" - true for essentially any modern h2-capable TLS host,
-//     not "the server speaks h2 despite not advertising it", which is what the row actually means.
-//     A TLS:true endpoint here would "demonstrate" the row by exercising that defect, and no
-//     handler could give it a quiet twin either: the verdict depends only on the shared TLS
-//     server's h2 support, identical for every path on the host. This is a check defect, reported
-//     rather than fixture-wrapped.
+//   - Hidden HTTP 2: the check is now correct — it takes an ALPN baseline and then forces HTTP/2
+//     onto a separate, non-pooled connection (see checks_final.go) — but the row still cannot be
+//     declared here, and the reason is structural rather than a check defect. The verdict is
+//     per-host: it depends only on the shared server's ALPN offer and on whether that listener reads
+//     HTTP/2 frames, which is identical for every path on it. So no endpoint here can differ from
+//     its quiet twin in the way this row measures. The fixture has to be its own TLS listener with a
+//     hand-controlled ALPN offer, which is what internal/scanner/hidden_http2_test.go builds: a real
+//     hidden-h2 origin plus the two negatives (advertises h2; speaks no h2 at all).
 //   - HTTP request smuggling, Client-side desync: pipeliningCheck dials cc.Exchange.Host/Port
 //     directly. Endpoint has no field to point an exchange at a different listener, and
 //     runtime_coverage_test.go's seed() always sets Host/Port to one of the two shared httptest

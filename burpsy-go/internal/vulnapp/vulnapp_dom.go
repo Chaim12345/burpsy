@@ -26,11 +26,13 @@ package vulnapp
 // the SAME source but assign it to textContent (or otherwise avoid the sink), which is the only thing
 // that proves the detector keys on the sink rather than on "the page read untrusted input".
 //
-// The (stored DOM-based) spellings of every family are intentionally absent. They cannot pass the
-// runtime suite as it stands: TestTheScannerStaysQuietOnTheSafeCounterparts audits each safe twin's
-// vulnerable twin through the non-stored findingsFor, which can never confirm a second-order finding,
-// and domStoredCheck reads the rendered DOM while SecondOrderObservations() is only ever fed the raw
-// HTTP response. Those are harness/scanner defects, not endpoint defects, and are reported separately.
+// The (stored DOM-based) spellings live in vulnapp_stored_dom.go, not here, because they need a
+// plant/render pair rather than a single page. Three of the sixteen are built; the rest are still
+// absent. The two defects that made all sixteen impossible are fixed: domStoredCheck now plants,
+// defers and decides on the ledger's own sink sightings (it used to fire on the mere presence of any
+// canary in the rendered DOM, which every family shares and no safe page could avoid), and
+// ActiveScanner.RenderStoredTargets now loads pages in a browser so a canary that only script ever
+// puts in the document is observed at all.
 //
 // The (reflected DOM-based) spellings of the HTML5 web message manipulation and DOM data manipulation
 // families are also absent. The reflected variant's postMessage source is planted by the harness

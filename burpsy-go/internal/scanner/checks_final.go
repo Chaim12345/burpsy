@@ -12,6 +12,8 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
 )
 
@@ -319,9 +321,35 @@ func firstResponseLine(s string) string {
 
 // checkHiddenHTTP2 reports an origin that speaks HTTP/2 without advertising it.
 //
-// It needs two observations: the ALPN offer the origin answers, and whether a prior-knowledge
-// HTTP/2 attempt works anyway. internal/alpn owns the offer vocabulary, so the check asks it
-// what an h2-free offer looks like rather than spelling one itself.
+// # What the row actually means, and what this check used to do instead
+//
+// The row is about a *discrepancy*: an origin whose ALPN never offers h2, but which reads HTTP/2
+// frames anyway if you simply write them. Such a surface is reached by nothing that negotiates
+// politely, so it tends to sit behind less of the hardening the advertised HTTP/1.1 front has.
+//
+// The previous implementation sent one ordinary probe through the auto-preference sender and fired
+// whenever the response text contained "HTTP/2". Since the sender offers h2 by default, that fired
+// on essentially every modern HTTPS origin — and worse, it fired on exactly the origins that
+// advertise h2 correctly, which is the opposite population. It was a near-universal false positive,
+// recorded as a defect rather than papered over with a fixture.
+//
+// # The two observations, and why they must come from different connections
+//
+// Baseline: what this authority's ALPN says when h2 *is* offered. ProtocolFor answers that from the
+// handshake the scan already paid for. An origin that answers h2 there is advertising h2, so there
+// is nothing hidden and the check stops — this is Burp's own gate (Zpfw.Zw skips when its
+// per-service h2 ledger already knows the service speaks h2).
+//
+// Probe: an isolated, non-pooled connection on which HTTP/2 is forced past that http/1.1 ALPN —
+// RFC 9113 §3.3 prior knowledge over TLS. Burp does the same thing through
+// Zwk0.FORCE_HTTP2_NON_POOLED. Non-pooled is load-bearing: an answer drawn from a connection the
+// site had already negotiated would be an answer about that negotiation, not about this origin.
+//
+// The program is a preface and one empty SETTINGS frame, which is the least a client may say and
+// still be speaking HTTP/2. A peer that replies with a parseable HTTP/2 frame read those octets as
+// HTTP/2; an HTTP/1.1 server answers a 400 in text, which yields no frame. Nothing is asked about a
+// path, so no request is smuggled past the scope gate — SendFrameProgramForcingHTTP2 still runs the
+// host-level authorisation.
 func checkHiddenHTTP2(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if cc.Scanner == nil || cc.Exchange == nil || !cc.Exchange.TLS {
 		return nil, nil
@@ -329,31 +357,42 @@ func checkHiddenHTTP2(ctx context.Context, cc *CheckContext) ([]*Finding, error)
 	if cc.Scanner.sender == nil {
 		return nil, fmt.Errorf("Hidden HTTP 2: no sender; the paired probe cannot be sent")
 	}
-	// An offer without h2: if the origin still serves HTTP/2 afterwards, it was never
-	// advertising it.
-	withoutH2 := alpn.EgressOffer(false)
-	withH2 := alpn.EgressOffer(true)
-	if len(withoutH2) == 0 || len(withH2) == 0 {
+
+	// Baseline. An error here is the target's, not the check's: an authority whose ALPN cannot be
+	// observed cannot be said to be hiding anything, so the row stays silent rather than guessing.
+	support, err := cc.Scanner.sender.ProtocolFor(ctx, cc.Exchange.Host, cc.Exchange.Port, true)
+	if err != nil {
+		return nil, nil
+	}
+	if support != sender.ProtocolSupportHTTP11 {
 		return nil, nil
 	}
 
-	h, err := NewProbeHarness(ctx, cc, []string{"header"})
+	program := burpsyhttp2.NewH2FrameProgram(
+		burpsyhttp2.NewFrameSpec(burpsyhttp2.TypeSettings, 0, 0, nil),
+	)
+	res, err := cc.Scanner.probeGate(cc.Exchange).SendFrameProgramForcingHTTP2(ctx, program)
 	if err != nil {
-		return nil, err
-	}
-	raw := requestRaw(cc.Scanner, cc.Exchange)
-	res, err := h.send(ctx, []byte(raw))
-	if err != nil {
-		return nil, err
-	}
-	// The negotiated protocol is carried on the send outcome. A response that came back over
-	// HTTP/2 while the advertised offer excluded it is the finding.
-	if !strings.Contains(strings.ToUpper(string(res.Raw)), "HTTP/2") {
+		// A refusal or a connection the origin tore down on seeing the preface is the *safe*
+		// answer for this row: it did not read our frames.
 		return nil, nil
 	}
+	if res.Negotiated == alpn.H2 {
+		// The baseline said http/1.1 and this handshake said h2. Two different answers from one
+		// authority is a fact about the authority, not about hidden h2, so the row does not claim
+		// one — see the ProtocolFor gate above.
+		return nil, nil
+	}
+	if len(res.ReplyFrames) == 0 {
+		return nil, nil
+	}
+
 	return []*Finding{buildHeaderFinding(cc, "Hidden HTTP 2", "info", "tentative",
-		strings.Join(withoutH2, ","),
-		"the origin answered over HTTP/2 although h2 was not the advertised protocol; an unadvertised HTTP/2 surface is often less hardened than the HTTP/1.1 one in front of it")}, nil
+		strings.Join(alpn.EgressOffer(true), ","),
+		fmt.Sprintf("this origin's ALPN settled on HTTP/1.1 when h2 was offered, but a separate, non-pooled "+
+			"connection on which HTTP/2 was written regardless of that negotiation was answered with %d HTTP/2 "+
+			"frame(s); an HTTP/2 surface reachable only by prior knowledge is often less hardened than the "+
+			"advertised HTTP/1.1 one in front of it", len(res.ReplyFrames)))}, nil
 }
 
 // ---------------------------------------------------------------------------

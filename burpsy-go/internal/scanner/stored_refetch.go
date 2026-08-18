@@ -45,6 +45,10 @@ type ScanCompletion struct {
 	Refetch StoredRefetchOutcome
 	// RefetchError is why no second look happened, when none did.
 	RefetchError string
+	// Render is the browser second look's own accounting: the flows only a rendered page shows.
+	Render StoredDOMRenderOutcome
+	// RenderError is why no page was rendered, when the scan asked for DOM checks and none was.
+	RenderError string
 	// Outstanding are claims that never got an answer. Not findings, and not clean either.
 	Outstanding []*PendingItem
 	// Pending is the registry's summary line.
@@ -68,6 +72,14 @@ func (s *ActiveScanner) FinishScan(ctx context.Context) ([]*Finding, ScanComplet
 		c.RefetchError = err.Error()
 	} else {
 		c.Refetch = out
+	}
+	// The browser pass runs after the HTTP one and never instead of it: a canary the raw response
+	// already carried is cheaper to find there, and this pass exists only for the flows that pass
+	// cannot see at all.
+	if out, err := s.RenderStoredTargets(ctx); err != nil {
+		c.RenderError = err.Error()
+	} else {
+		c.Render = out
 	}
 	findings := s.Pending().Await(ctx)
 	c.Outstanding = s.Pending().Outstanding()

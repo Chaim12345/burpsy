@@ -252,7 +252,30 @@ func (d Declined) Describe() string {
 	return fmt.Sprintf("%s: %s", d.What, d.Reason)
 }
 
-// Enumerate returns every insertion point of the requested kinds, in a fixed
+// DefaultMaxInsertionPoints bounds how many insertion points one base request
+// yields.
+//
+// Burp enforces the same ceiling under the setting key
+// `scanner.misc_insertion_point_options.max_insertion_points_per_base_request`,
+// whose shipped default is 30 and whose UI reads "Limit how many insertion
+// points are used in each base request. This helps speed up auditing when
+// scanning requests with many parameters." A point past the ceiling is not
+// audited, and Burp says so on the point itself: "Burp Scanner didn't audit this
+// insertion point, as it reached the maximum limit of insertion points to audit
+// per request."
+//
+// Without a ceiling a param-heavy request multiplied by nested JSON/base64/XML
+// expansion has no upper bound on probe count, so one base request can consume
+// an audit's whole budget.
+const DefaultMaxInsertionPoints = 30
+
+// Enumerate returns every insertion point of the requested kinds, capped at
+// DefaultMaxInsertionPoints. See EnumerateWithLimit for the cap's semantics.
+func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
+	return EnumerateWithLimit(req, kinds, DefaultMaxInsertionPoints)
+}
+
+// EnumerateWithLimit returns every insertion point of the requested kinds, in a fixed
 // order: query, headers, cookies, body, parameter-name-url, parameter-name-body,
 // entire body, url-path filename, url-path folders, synthesised headers,
 // body→query relocations and query→body relocations — plus the places that were
@@ -267,7 +290,16 @@ func (d Declined) Describe() string {
 // nothing to do here. An empty point list *with* declines is different: the
 // request had somewhere to inject that this enumerator refuses to splice into,
 // and the caller must report that as skipped rather than clean.
-func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
+//
+// max bounds the returned point count: zero takes DefaultMaxInsertionPoints, a
+// negative value lifts the cap entirely. Points past the cap are dropped from
+// the tail of the fixed order and recorded as a Declined naming how many, so a
+// capped enumeration can never be mistaken for a request that simply had fewer
+// places to inject.
+func EnumerateWithLimit(req []byte, kinds []string, max int) ([]InsertionPoint, []Declined) {
+	if max == 0 {
+		max = DefaultMaxInsertionPoints
+	}
 	e, err := core.ParseRequestEdit(req)
 	if err != nil {
 		// Go's raw-byte model lets an unparseable request reach the enumerator,
@@ -526,11 +558,36 @@ func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
 		}
 	}
 
+	// The cap is applied to the flat points *before* nested expansion so a
+	// dropped flat point does not also spend budget on children it can no
+	// longer be spliced through, and again afterwards so nested points cannot
+	// push the total past the ceiling.
+	out, droppedFlat := capPoints(out, max)
+
 	// Nested expansion: for each flat param point whose value decodes to
 	// JSON/base64/XML, append nested points that target the inner structure.
-	out = append(out, expandNested(out)...)
+	out, droppedNested := capPoints(append(out, expandNested(out)...), max)
+
+	if dropped := droppedFlat + droppedNested; dropped > 0 {
+		declined = append(declined, Declined{
+			What: "insertion points past the per-request limit",
+			Reason: fmt.Sprintf("%d point(s) were not audited: this request reached the maximum of %d insertion points per base request",
+				dropped, max),
+		})
+	}
 
 	return out, declined
+}
+
+// capPoints truncates pts to max, returning how many it dropped. A negative max
+// is uncapped. The count is returned rather than logged because the caller
+// records it as a Declined: a truncation nobody can see is the silent false
+// negative the Declined type exists to prevent.
+func capPoints(pts []InsertionPoint, max int) ([]InsertionPoint, int) {
+	if max < 0 || len(pts) <= max {
+		return pts, 0
+	}
+	return pts[:max], len(pts) - max
 }
 
 // dslAddressable reports whether "given insertion point any" reaches k.

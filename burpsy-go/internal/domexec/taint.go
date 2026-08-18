@@ -25,6 +25,11 @@ const (
 	SourceReferrer
 	SourceWindowName
 	SourcePostMessage
+	// SourceStored is not a browser-readable source at all: it is a value the application
+	// persisted earlier and now serves back to its own page. It exists so a stored flow's
+	// observation can say where the data came from, and it is deliberately not plantable —
+	// plantSource refuses it, because the planting happened over HTTP long before this load.
+	SourceStored
 )
 
 func (s SourceKind) String() string {
@@ -39,6 +44,8 @@ func (s SourceKind) String() string {
 		return "window.name"
 	case SourcePostMessage:
 		return "postMessage"
+	case SourceStored:
+		return "stored application data"
 	default:
 		return fmt.Sprintf("SourceKind(%d)", int(s))
 	}
@@ -506,54 +513,80 @@ func (b *Browser) ObserveTaint(ctx context.Context, targetURL string, source Sou
 		return nil, fmt.Errorf("domexec: observe taint at %q (source %s): %w", targetURL, source, err)
 	}
 
-	var records []taintRecord
-	if err := json.Unmarshal([]byte(raw), &records); err != nil {
-		return nil, fmt.Errorf("domexec: decode taint records: %w", err)
-	}
-
-	observations := make([]Observation, 0, len(records))
-	for _, rec := range records {
-		if !strings.Contains(rec.Arg, canary) {
-			continue
-		}
-		sink, ok := sinkTags[rec.Sink]
-		if !ok {
-			continue
-		}
-		observations = append(observations, Observation{
-			Sink:       sink,
-			Source:     source,
-			Canary:     canary,
-			Argument:   rec.Arg,
-			StackTrace: rec.Stack,
-		})
+	observations, err := decodeObservations(raw, source, []string{canary})
+	if err != nil {
+		return nil, err
 	}
 
 	mu.Lock()
 	navigated := append([]string(nil), navigatedURLs...)
 	mu.Unlock()
-	for _, navURL := range navigated {
-		// Our own planted navigation must not be reported as a flow. Comparing the raw
-		// strings is not enough: CDP reports a normalised URL (Frame.URL carries an
-		// explicit "/" path where the planted string may have none), so
-		// "http://host#c" and the reported "http://host/#c" are the same navigation
-		// spelled two ways. An exact comparison therefore let every hash-probed page
-		// report a DOM open redirection — the probe's own URL contains the canary by
-		// construction. Canonicalise before comparing.
-		if sameNavigation(navURL, plantedURL) || navURL == "about:blank" {
+	return append(observations, navigationObservations(navigated, plantedURL, source, []string{canary})...), nil
+}
+
+// decodeObservations turns the JSON window.__burpsyTaint dump into observations, keeping only
+// the sink calls whose argument carried one of tokens.
+//
+// tokens is a slice rather than a single canary because a stored load looks for every canary the
+// scan has planted at once: one page render answers the whole ledger, and re-loading the page per
+// token would multiply browser work by the ledger's size for no extra evidence.
+func decodeObservations(raw string, source SourceKind, tokens []string) ([]Observation, error) {
+	var records []taintRecord
+	if err := json.Unmarshal([]byte(raw), &records); err != nil {
+		return nil, fmt.Errorf("domexec: decode taint records: %w", err)
+	}
+	observations := make([]Observation, 0, len(records))
+	for _, rec := range records {
+		sink, ok := sinkTags[rec.Sink]
+		if !ok {
 			continue
 		}
-		if strings.Contains(navURL, canary) {
+		for _, token := range tokens {
+			if !strings.Contains(rec.Arg, token) {
+				continue
+			}
 			observations = append(observations, Observation{
-				Sink:     SinkLocationAssign,
-				Source:   source,
-				Canary:   canary,
-				Argument: navURL,
+				Sink:       sink,
+				Source:     source,
+				Canary:     token,
+				Argument:   rec.Arg,
+				StackTrace: rec.Stack,
 			})
+			break
 		}
 	}
-
 	return observations, nil
+}
+
+// navigationObservations reports a script-driven navigation carrying one of tokens as a
+// SinkLocationAssign observation. loadedURL is the navigation this call issued itself, which is
+// never a finding.
+func navigationObservations(navigated []string, loadedURL string, source SourceKind, tokens []string) []Observation {
+	var out []Observation
+	for _, navURL := range navigated {
+		// Our own navigation must not be reported as a flow. Comparing the raw strings is not
+		// enough: CDP reports a normalised URL (Frame.URL carries an explicit "/" path where the
+		// planted string may have none), so "http://host#c" and the reported "http://host/#c" are
+		// the same navigation spelled two ways. An exact comparison therefore let every
+		// hash-probed page report a DOM open redirection — the probe's own URL contains the canary
+		// by construction. Canonicalise before comparing.
+		if sameNavigation(navURL, loadedURL) || navURL == "about:blank" {
+			continue
+		}
+		for _, token := range tokens {
+			if !strings.Contains(navURL, token) {
+				continue
+			}
+			out = append(out, Observation{
+				Sink:     SinkLocationAssign,
+				Source:   source,
+				Canary:   token,
+				Argument: navURL,
+			})
+			break
+		}
+	}
+	return out
 }
 
 // sameNavigation reports whether two URL strings denote the same navigation, tolerating the
@@ -622,6 +655,90 @@ func (b *Browser) RenderedDOM(ctx context.Context, targetURL string) (string, er
 		return "", fmt.Errorf("domexec: render %q: %w", targetURL, err)
 	}
 	return html, nil
+}
+
+// StoredRender is one load of a page that was given no attacker-controlled source at all.
+//
+// Both halves are returned from a single load on purpose. HTML alone says the value came back;
+// Observations say a script carried it into a dangerous sink. A caller given only the first would
+// have to report every page that merely displays stored data, which is what "(stored DOM-based)"
+// is not about.
+type StoredRender struct {
+	// HTML is the document after script has run.
+	HTML string
+	// Observations are the sink calls whose argument carried one of the tokens asked about.
+	Observations []Observation
+}
+
+// ObserveStored loads targetURL with nothing planted and reports what the page's own script did
+// with values already stored in the application.
+//
+// This is the browser half of the stored lifecycle. A canary planted over HTTP can reach the page
+// through an API call the raw response body never contains, so an HTTP-only second look reports
+// such a page as clean when it is the only place the value is ever rendered. Loading it here is the
+// only way that flow is visible at all.
+//
+// An empty token set is an error rather than an empty result: it means the caller is asking which
+// canaries surfaced without naming any, and answering "none" would read as a clean page.
+func (b *Browser) ObserveStored(ctx context.Context, targetURL string, tokens []string) (StoredRender, error) {
+	var out StoredRender
+	if len(tokens) == 0 {
+		return out, fmt.Errorf("domexec: observe stored at %q: no tokens to look for", targetURL)
+	}
+
+	tabCtx, cancel, err := b.newTab(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer cancel()
+
+	var mu sync.Mutex
+	var navigatedURLs []string
+	chromedp.ListenTarget(tabCtx, func(ev any) {
+		switch e := ev.(type) {
+		case *page.EventFrameNavigated:
+			if e.Frame != nil && e.Frame.ParentID == "" {
+				mu.Lock()
+				navigatedURLs = append(navigatedURLs, e.Frame.URL+e.Frame.URLFragment)
+				mu.Unlock()
+			}
+		case *page.EventNavigatedWithinDocument:
+			mu.Lock()
+			navigatedURLs = append(navigatedURLs, e.URL)
+			mu.Unlock()
+		}
+	})
+
+	var raw string
+	err = chromedp.Run(tabCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return page.Enable().Do(ctx)
+		}),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := page.AddScriptToEvaluateOnNewDocument(instrumentationJS).Do(ctx)
+			return err
+		}),
+		chromedp.Navigate(targetURL),
+		// Longer than RenderedDOM's wait: a stored DOM flow characteristically fetches the value
+		// over the network first, so the sink call happens a round trip after load rather than
+		// inline in the parsed script.
+		chromedp.Sleep(700*time.Millisecond),
+		chromedp.Evaluate(`JSON.stringify(window.__burpsyTaint || [])`, &raw),
+		chromedp.Evaluate(`document.documentElement.outerHTML`, &out.HTML),
+	)
+	if err != nil {
+		return out, fmt.Errorf("domexec: observe stored at %q: %w", targetURL, err)
+	}
+
+	obs, err := decodeObservations(raw, SourceStored, tokens)
+	if err != nil {
+		return out, err
+	}
+	mu.Lock()
+	navigated := append([]string(nil), navigatedURLs...)
+	mu.Unlock()
+	out.Observations = append(obs, navigationObservations(navigated, targetURL, SourceStored, tokens)...)
+	return out, nil
 }
 
 // ObservationsForSink filters obs down to those matching sink.
