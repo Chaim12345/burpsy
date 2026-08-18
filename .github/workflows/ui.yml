@@ -88,6 +88,8 @@ jobs:
       # and cmp's it against the committed dist/app.js / style.css, then runs the
       # full Playwright suite (routes, behaviour, a11y over both themes,
       # screenshots). It prints "N passed, M failed" and exits non-zero on any
-      # failure, which fails this step and therefore the run.
+      # failure, which fails this step and therefore the run. Runs from the repo
+      # root: the script does `cd "$(dirname "$0")"` and resolves UI relative to
+      # there, so it must be invoked from the checkout root.
       - name: Browser UAT (e2e-ui.sh)
         run: ./e2e-ui.sh
