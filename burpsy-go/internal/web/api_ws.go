@@ -145,13 +145,27 @@ func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 		limit = wsMaxLimit
 	}
 
+	// An `exchange` that will not parse is refused rather than ignored. The parse error used to be
+	// discarded, and the nil-check below then fell through to the unfiltered index — so
+	// `?exchange=abc` answered with every message on the server while the caller believed it was
+	// looking at one connection. A filter that silently does not filter is worse than no filter: the
+	// rows are real, so nothing about the response looks wrong.
+	//
+	// The fallback itself is kept for the no-filter case, but it is now reached only when `exchange`
+	// was absent — a connection that genuinely holds no messages answers with an empty page, not with
+	// the whole index.
 	var messages []*core.WsMessage
 	if raw := r.URL.Query().Get("exchange"); raw != "" {
-		if ex, err := strconv.ParseUint(raw, 10, 64); err == nil {
-			messages = s.store.WsMessagesFor(core.ExchangeID(ex), offset, limit)
+		ex, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("exchange must be a whole number, got %q", raw), http.StatusBadRequest)
+			return
 		}
-	}
-	if messages == nil {
+		messages = s.store.WsMessagesFor(core.ExchangeID(ex), offset, limit)
+		if messages == nil {
+			messages = []*core.WsMessage{}
+		}
+	} else {
 		messages = s.store.WsMessages(offset, limit)
 	}
 

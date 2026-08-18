@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -117,7 +116,18 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 			Port:   port,
 			TLS:    true,
 			Method: r.Method,
-			Path:   pathOnly(path),
+			// The whole request target, query string included, exactly as the HTTP/1 paths in
+			// proxy.go record it. This used to run through a pathOnly() helper that truncated at
+			// the first '?', which made h2 the one protocol whose captured Path disagreed with the
+			// request bytes stored beside it: the request line said
+			// `GET /search?q=secret HTTP/2` and the exchange said `/search`.
+			//
+			// It was not cosmetic. The site map derives a node's parameter list by splitting the
+			// stored path on '?' (see splitPathQuery in internal/web/api_toolkit.go), so every h2
+			// node reported no parameters at all — and h2 is what nearly every TLS origin
+			// negotiates, so the tree showed parameters only for the plaintext minority. Query-
+			// filtering, reporting and issue attribution all read the same truncated value.
+			Path: path,
 			// Rendered in HTTP/1 shape for history, which is what makes an h2 stream
 			// readable next to everything else and lets one status parser serve both.
 			Request: reqRaw,
@@ -158,13 +168,6 @@ func cloneHeaderWithoutHop(hdr http.Header) http.Header {
 		out[k] = append([]string(nil), vals...)
 	}
 	return out
-}
-
-func pathOnly(requestURI string) string {
-	if i := strings.Index(requestURI, "?"); i >= 0 {
-		return requestURI[:i]
-	}
-	return requestURI
 }
 
 func netJoinHostPort(host string, port uint16) string {

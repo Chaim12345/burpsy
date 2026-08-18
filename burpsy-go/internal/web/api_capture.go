@@ -490,10 +490,27 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	if s.passiveScanner != nil {
 		loaded = s.passiveScanner.Loaded()
 	}
-	enabled := loaded > 0
+	// `enabled` is read by the UI as "passive scanning is in force" — scanner.tsx renders a warning
+	// banner reading "passive scanning is not enabled" whenever it is false. It used to be defined as
+	// `loaded > 0`, which measures something narrower: whether a BCheck *corpus* was loaded with
+	// --bchecks. The built-in passive checks run regardless, so a server started without a corpus
+	// served that banner above a list of hundreds of real findings it had just produced — the response
+	// contradicting itself, and telling the operator to go and enable the thing that had evidently
+	// already run.
+	//
+	// So it now means what its consumer reads it as: passive scanning has a source of findings, either
+	// a loaded corpus or the built-in checks that demonstrably produced these. `loaded` is untouched
+	// and remains the exact corpus count, which is the field to read for the narrower question.
+	enabled := loaded > 0 || len(views) > 0
 	hint := ""
-	if !enabled {
+	switch {
+	case !enabled:
 		hint = "passive BCheck scanning is not enabled; start with --bchecks DIR"
+	case loaded == 0:
+		// Not a warning, and not shown as one: these findings came from the built-in checks, and the
+		// corpus is an addition rather than a precondition. Stated so "no corpus" stays visible
+		// without being dressed up as a failure.
+		hint = "these findings are from the built-in passive checks; no BCheck corpus is loaded (start with --bchecks DIR to add one)"
 	}
 
 	body := map[string]interface{}{

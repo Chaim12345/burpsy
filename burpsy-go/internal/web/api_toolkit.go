@@ -114,7 +114,7 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		tree = append(tree, sitemapNodeView{
-			Key:           nodeKey(host.Host, ""),
+			Key:           nodeKey(host.Host, host.Port, host.TLS, ""),
 			Segment:       host.Host,
 			Path:          host.Host,
 			Depth:         0,
@@ -226,13 +226,13 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 		sort.Slice(a.ids, func(i, j int) bool { return a.ids[i] < a.ids[j] })
 		a.ids = dedupeExchangeIDs(a.ids)
 		*nodeCount++
-		agg := issues[nodeKey(host.Host, p)]
+		agg := issues[nodeKey(host.Host, host.Port, host.TLS, p)]
 		own, ownWorst := 0, -1
 		if agg != nil {
 			own, ownWorst = agg.count, agg.worst
 		}
 		views[p] = &sitemapNodeView{
-			Key:           nodeKey(host.Host, p),
+			Key:           nodeKey(host.Host, host.Port, host.TLS, p),
 			Segment:       pathSegment(p),
 			Path:          p,
 			Depth:         strings.Count(p, "/"),
@@ -466,7 +466,7 @@ func (s *Server) issuesByNode() map[string]*issueAgg {
 				continue // unresolvable: counted nowhere rather than blamed on a guess
 			}
 			clean, _ := splitPathQuery(ex.Path)
-			key := nodeKey(ex.Host, clean)
+			key := nodeKey(ex.Host, ex.Port, ex.TLS, clean)
 			agg := out[key]
 			if agg == nil {
 				agg = &issueAgg{worst: -1}
@@ -509,11 +509,24 @@ func severityRankOf(name string) int {
 // The NUL separator is what makes it exact rather than merely usually-right: without it, host "a"
 // with path "/b" and a host literally named "a/b" would produce the same key, and a hostname cannot
 // contain NUL. An empty path means the node is the host itself.
-func nodeKey(host, path string) string {
-	if path == "" {
-		return host
+//
+// The scheme and port are part of that identity, because the site map's own host table is keyed on
+// (host, port, TLS) — see internal/sitemap's hosts map — so one hostname reached over both http and
+// https is two host nodes in the tree. Keying on the hostname alone gave those two nodes the same
+// key, and their `/` children the same key again: the response carried duplicate ids for distinct
+// rows while this comment claimed exactness. The UI uses `key` as its React key, its expansion-state
+// key and its cursor/selection id (pages/sitemap.tsx), so the collision made two real branches
+// collapse into one selectable row.
+func nodeKey(host string, port uint16, tls bool, path string) string {
+	scheme := "http"
+	if tls {
+		scheme = "https"
 	}
-	return host + "\x00" + path
+	authority := scheme + "://" + host + ":" + strconv.Itoa(int(port))
+	if path == "" {
+		return authority
+	}
+	return authority + "\x00" + path
 }
 
 // ---- Match & Replace ---------------------------------------------------------------------------
@@ -977,35 +990,66 @@ func (s *Server) handleToolsEncode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dec := tools.NewDecoder()
-	var out string
-	switch req.Encoding {
-	case "url":
-		out = dec.EncodeURL(req.Input)
-	case "html":
-		out = dec.EncodeHTML(req.Input)
-	case "base64":
-		out = dec.EncodeBase64(req.Input)
-	case "base64url":
-		out = dec.EncodeBase64(req.Input)
-	case "hex":
-		out = dec.EncodeHex(req.Input)
-	case "ascii":
-		asciiOut, err := dec.FromASCII(req.Input)
-		if err != nil {
-			http.Error(w, "ascii decode failed: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		out = asciiOut
-	case "rot13":
-		out = dec.Rot13(req.Input)
-	default:
-		out = req.Input
+	out, err := encodeNamed(dec, req.Encoding, req.Input)
+	if err != nil {
+		http.Error(w, "encode failed: "+err.Error(), http.StatusBadRequest)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"encoding": req.Encoding,
 		"output":   bytesView([]byte(out)),
 	})
+}
+
+// encodeNamed resolves the named encoding through tools.ParseLayer, so the handler covers exactly the
+// codec table plus the two helpers that are not codec layers. It is decodeLayer's mirror, and exists
+// for the same reason: the hand-rolled switch it replaces mapped base64url onto tools.Decoder's
+// standard-alphabet encoder, emitting the `+` and `/` that URL-safe base64 exists to avoid — so the
+// one encoding named for URLs was the one that broke in them, and encode disagreed with decode, which
+// has distinguished the two alphabets since it was routed through ParseLayer.
+//
+// An unknown encoding is refused rather than passed through. Returning the input unchanged while
+// still reporting the requested encoding meant a caller storing {encoding, output} recorded a
+// transformation that never happened, which is the failure a codec table exists to make impossible.
+func encodeNamed(dec *tools.Decoder, encoding, input string) (string, error) {
+	// ASCII and rot13 are Decoder helpers, not codec layers, so they are named here rather than
+	// looked up — the same split decodeLayer makes for ascii.
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "ascii":
+		out, err := dec.FromASCII(input)
+		if err != nil {
+			return "", fmt.Errorf("ascii decode failed: %w", err)
+		}
+		return out, nil
+	case "rot13":
+		return dec.Rot13(input), nil
+	}
+	layer, ok := tools.ParseLayer(encoding)
+	if !ok {
+		return "", fmt.Errorf("unknown encoding %q: expected one of %s",
+			encoding, strings.Join(encodableNames(), ", "))
+	}
+	out, err := tools.Encode(layer, []byte(input))
+	if err != nil {
+		// JWT reaches here: it parses as a layer but has no inverse without the signing key, and
+		// tools.Encode says so rather than emitting an unsigned token shaped like the original.
+		return "", err
+	}
+	return string(out), nil
+}
+
+// encodableNames lists what this endpoint accepts, which is not every layer: a layer with no inverse
+// is left out rather than offered and then refused.
+func encodableNames() []string {
+	names := make([]string, 0, len(tools.AllLayers())+2)
+	for _, l := range tools.AllLayers() {
+		if _, err := tools.Encode(l, nil); err != nil {
+			continue
+		}
+		names = append(names, l.String())
+	}
+	return append(names, "ascii", "rot13")
 }
 
 func (s *Server) handleToolsHash(w http.ResponseWriter, r *http.Request) {
@@ -1023,15 +1067,25 @@ func (s *Server) handleToolsHash(w http.ResponseWriter, r *http.Request) {
 	}
 	h := tools.NewHasher()
 	var digest string
-	switch req.Algorithm {
+	// Named exhaustively, with no default branch. An unknown algorithm used to fall through to SHA-256
+	// while the reply echoed back the algorithm that was *asked for*, so a caller storing
+	// {algorithm, output} recorded a digest under a name that did not produce it — and a typo in the
+	// field ("sha-256", "sha265") silently returned a plausible-looking hash rather than a complaint.
+	// An empty algorithm still means SHA-256, because that is the documented default and every existing
+	// caller that omits the field relies on it; a *stated* algorithm now has to be one this can compute.
+	switch strings.ToLower(strings.TrimSpace(req.Algorithm)) {
 	case "md5":
 		digest = h.MD5(req.Input)
 	case "sha1":
 		digest = h.SHA1(req.Input)
 	case "sha512":
 		digest = h.SHA512(req.Input)
-	default:
+	case "sha256", "":
 		digest = h.SHA256(req.Input)
+	default:
+		http.Error(w, fmt.Sprintf("unknown algorithm %q: expected one of md5, sha1, sha256, sha512",
+			req.Algorithm), http.StatusBadRequest)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
