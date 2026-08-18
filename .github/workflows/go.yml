@@ -1,0 +1,83 @@
+name: Go
+
+# The gate for burpsy-go, which is the active implementation. Until this file existed the Go tree
+# had no CI at all: release.yml builds only the Rust CLI, so every Go guarantee in the repo rested
+# on someone running the suite by hand and reporting the result honestly.
+#
+# The four commands here are the same four AGENTS.md names as the gate, in the same order, each its
+# own step so a failure says which one broke rather than "the job failed".
+
+on:
+  push:
+    branches: [master, ui-react-comparison]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: burpsy-go
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # The scanner package alone runs ~200-480s: it drives a real headless Chrome over the DOM rows
+    # and a deferred render pass over the stored-DOM ones. 45 minutes is headroom for a cold cache
+    # on a slower runner, not an expectation.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # go.mod is the single source of the version, so bumping it here is not a second place to
+      # forget.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: burpsy-go/go.mod
+          cache-dependency-path: burpsy-go/go.sum
+
+      # Chrome is a real dependency of the DOM catalog rows, not an optional extra. The suite has a
+      # BURPSY_ALLOW_NO_CHROME escape hatch for a deliberately reduced environment, and this job
+      # deliberately does NOT set it: a CI run that quietly demonstrated 35 fewer rows than the pin
+      # claims is precisely the "we did not look" reported as "we looked and found nothing" that
+      # this project forbids. ubuntu-latest ships Chrome; if that ever stops being true this step
+      # fails loudly here rather than silently reducing coverage 20 minutes later.
+      - name: Verify Chrome is present
+        run: |
+          for name in chromium google-chrome google-chrome-stable chrome; do
+            if command -v "$name" >/dev/null 2>&1; then
+              echo "found $name: $($name --version 2>&1 | head -1)"
+              exit 0
+            fi
+          done
+          echo "::error::No Chrome/Chromium on PATH. The DOM catalog rows cannot be exercised, so"
+          echo "::error::this run would report far fewer demonstrated rows than the suite pins."
+          exit 1
+
+      # tlsx and interactsh-client are NOT installed here, so the rows that shell out to them stay
+      # undemonstrated and their tests skip with a reason naming the missing binary. That is the
+      # honest outcome rather than a hidden one: those rows are already counted as registered-only
+      # in docs/SCANNER-COVERAGE.md, so CI is not claiming something the local gate does not.
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would rewrite these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      # -count=1 defeats the test cache. Without it a cached pass would print the same coverage
+      # claim without having re-verified anything, which the suite's own cached-replay guard now
+      # reports but which has no place in CI at all.
+      - name: go test
+        run: go test ./... -count=1 -timeout 1700s
