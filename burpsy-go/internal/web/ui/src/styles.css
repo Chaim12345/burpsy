@@ -3291,7 +3291,8 @@ tbody td {
   width: 10px;
   height: 10px;
   padding: 0;
-  border-radius: 50%;
+  border-radius: 50%; /* token-exempt: a circle swatch is 50% by definition, and Penpot's
+                         borderRadius resolves to px so a percentage cannot be expressed as a token */
   border: 1px solid transparent;
   background: var(--swatch-color);
   cursor: pointer;
@@ -3303,7 +3304,7 @@ tbody td {
 }
 
 .highlight-swatch-selected {
-  outline: 2px solid var(--accent);
+  outline: var(--border-strong) solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -3327,9 +3328,9 @@ tbody td {
   height: 10px;
   margin-inline-start: var(--s1);
   border-radius: 2px; /* token-exempt: see .skeleton-bar above for why --radius-sm can't be used directly */
-  background: #52565a;
-  color: #e8e8e8;
-  font-size: 8px;
+  background: #52565a; /* token-exempt: fixed design literal, no themed role — see the block comment above */
+  color: #e8e8e8; /* token-exempt: fixed design literal, no themed role — see the block comment above */
+  font-size: 8px; /* token-exempt: below the fluid type floor, fixed by the design's badge glyph */
   font-weight: 700;
   line-height: 1;
 }
@@ -3375,7 +3376,8 @@ tbody td {
 .filter-toggle-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: 50%; /* token-exempt: a round dot is 50% by definition, and Penpot's
+                         borderRadius resolves to px so a percentage cannot be a token */
   background: var(--highlight-gray);
 }
 
