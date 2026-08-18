@@ -5,7 +5,7 @@
 
 ## Purpose
 
-The engine: 29 packages under a single Go module, playing the role the 13 Rust crates play in
+The engine: 31 packages under a single Go module, playing the role the 13 Rust crates play in
 `../../crates/`. There are no Cargo-style manifest boundaries here — the split is enforced by Go's
 package graph and by convention — but the same rule holds: `core` owns the store and knows nothing
 about networks, `bcheck` is a pure interpreter with no transport, and `sender` is the only package
@@ -32,6 +32,8 @@ component is *not* allowed to reach, same as on the Rust side.
 | [`domexec/`](domexec/AGENTS.md) | Headless-Chrome (chromedp) DOM taint harness: plants a canary, reports every instrumented sink it reaches at runtime |
 | [`jsexec/`](jsexec/AGENTS.md) | DOM-less pure-Go JavaScript tier (goja) for prototype-pollution probing when Chrome is absent — not a browser substitute |
 | [`oob/`](oob/AGENTS.md) | Out-of-band interaction channel via `interactsh-client`, confirming callback-only vulnerabilities (SSRF, blind SQLi, XXE) |
+| [`blindxss/`](blindxss/AGENTS.md) | Blind-XSS callback channel: owns an HTTP listener serving a bounded capture script at a token-carrying path, so a payload rendered where the scanner cannot look calls home with its page context. Sibling of `oob`, same mint-plant-poll shape |
+| [`extscan/`](extscan/AGENTS.md) | Delegates a scan phase to the external `ffuf` (content discovery) and `nuclei` (template corpus) binaries, gated on the operator's allowlist and an up-front whole-subtree scope decision, and renders both into ordinary `report.Row`s |
 | [`tools/`](tools/AGENTS.md) | Pure byte/string transforms — Decoder, Hasher, budgeted Comparer — reused by intruder, proxy and the UI; no I/O |
 | [`matchreplace/`](matchreplace/AGENTS.md) | Ordered regex/literal rewrite rules over proxied requests/responses, Burp-compatible rule types |
 | [`organizer/`](organizer/AGENTS.md) | Ephemeral in-memory shortlist of saved exchanges, shared by web and CLI, never persisted |

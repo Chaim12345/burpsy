@@ -38,7 +38,9 @@ func main() {
 	// Allowlist for the bcheck `run tool` statement: name=path pairs, comma-separated. A check
 	// that invokes a tool not named here is refused — the same gate as the egress chokepoint.
 	// Tool execution is operator policy because it runs arbitrary external binaries.
-	toolsFlag := flag.String("tools", "", "allowlist external tools for `run tool` bchecks: sqlmap=/usr/bin/sqlmap,jwt_tool=/path (comma-separated name=path)")
+	// The same allowlist also gates `burpsy extscan`, which delegates a whole scan phase to ffuf or
+	// nuclei rather than running a tool per insertion point. One flag, one policy decision.
+	toolsFlag := flag.String("tools", "", "allowlist external tools for `run tool` bchecks and for `extscan`: sqlmap=/usr/bin/sqlmap,ffuf=ffuf,nuclei=nuclei (comma-separated name=path)")
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.

@@ -57,6 +57,14 @@ type cliContext struct {
 	sender    *sender.Sender
 	out       io.Writer
 
+	// toolAllowlist is the parsed -tools map. It is kept on the context as well
+	// as being folded into the bcheck tool runner because `extscan` resolves the
+	// same allowlist for a different purpose: bchecks run a tool per insertion
+	// point, extscan delegates a whole scan phase to one. One flag, one
+	// allowlist, two consumers — an operator who has not named ffuf or nuclei
+	// there cannot reach them from either.
+	toolAllowlist map[string]string
+
 	// dbPath is the -db SQLite file backing every store; empty means the CLI
 	// behaves like the web UI without persistence (in-memory only). persist is
 	// the open handle, nil when dbPath is empty.
@@ -163,6 +171,8 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		sender:    sender.NewSender(senderCfg),
 		out:       os.Stdout,
 		dbPath:    dbFile,
+
+		toolAllowlist: toolAllowlist,
 	}
 	if err := ctx.loadState(); err != nil {
 		return nil, err
