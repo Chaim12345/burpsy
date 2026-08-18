@@ -1,5 +1,15 @@
 # burpsy-go — Rust parity gaps (verified)
 
+> **2026-08-18 freshness pointer.** This ledger is complete as of 2026-08-04:
+> all thirteen gaps read COMPLETE, and that stands. It is *not* a changelog —
+> work done since (the crawler session gate, runtime coverage 21 → 145, the
+> docs sweep) is tracked in the dated handoffs
+> `docs/HANDOFF-2026-08-13.md` and `docs/HANDOFF-2026-08-18.md`, and in each
+> package's `AGENTS.md`. One section below — Phase 6's "authenticated crawling
+> is only weakly delivered" — was overtaken by events after this ledger was
+> written; it carries its own dated correction in place. Read that note before
+> quoting the paragraph.
+>
 > **UPDATED 2026-08-04.** ⚠️ **The 2026-08-03 note below claiming the build is
 > broken is stale** — `go build ./...` and `go test ./...` are both clean across
 > every package as of this update (verified directly, not inferred). The mid-flight
@@ -1012,6 +1022,17 @@ continuously", so that goal is not met; wiring it also needs a re-login generati
 coordinator's single-flight collapses *concurrent* callers but not sequential waves) and a
 per-crawl re-login cap with its own stop reason, because CRAWL-04's destructive-link heuristic
 can only ever be a heuristic and a self-inflicted logout will sometimes get through.
+
+> **Superseded 2026-08-11.** This named gap is closed. The session gate landed
+> with the crawler upgrade: `internal/crawler/session_gate.go` adds an optional
+> `SessionCoordinator` (expiry detection via status-flip or login-page pattern,
+> `recoverSession`, request rebuilding with a fresh cookie), `limits.go` carries
+> the bounded re-login budget with its own stop reason, and the report surfaces
+> relogin health. Commits: `c3c6538` (integrate the crawler upgrade),
+> `5a43dd6`, `cc0a04b` (session-recovery tests that pin authenticated-crawl
+> behaviour). The crawler `internal/crawler/AGENTS.md` documents the current
+> shape. The paragraph above is retained as the record of what the ledger
+> claimed on 2026-08-04; it is not the current state.
 
 ### Two capture defects found while collapsing the shared path
 

@@ -1,5 +1,12 @@
 # Requirements: burpsy
 
+> **Dated banner — 2026-08-18.** These requirements were authored against the **Rust**
+> tree. The Go port in `burpsy-go/` is the active implementation; its live status is
+> tracked in `.planning/GO-PORT.md`, `burpsy-go/gaps.md` (all 13 parity gaps
+> COMPLETE), and the dated handoffs. The checkbox state below reflects the Rust-era
+> plan and is not a statement about the Go tree. This file is retained as the
+> historical requirements record.
+
 **Defined:** 2026-07-27
 **Core Value:** Run PortSwigger's published BCheck corpus, unmodified and honestly counted, against real traffic without the memory cost that forces Burp to discard scan work.
 

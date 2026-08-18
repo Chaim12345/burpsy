@@ -1,5 +1,14 @@
 # Roadmap: burpsy
 
+> **Dated banner — 2026-08-18.** This twelve-phase roadmap was authored against the
+> **Rust** tree. The Go port in `burpsy-go/` is now the active implementation and is
+> tracked per-gap rather than per-phase: see `.planning/GO-PORT.md`,
+> `burpsy-go/PORT_STATUS.md` and `burpsy-go/gaps.md` (all 13 Rust↔Go parity gaps
+> COMPLETE as of 2026-08-04). Phase 6's Go work (crawler + dashboard) has landed
+> including the session gate; Phases 8 and 10 (plugin API, MCP) are documented in Go
+> as deliberately not shipped (`burpsy-go/docs/MCP.md`). This file is retained as the
+> historical Rust-era roadmap.
+
 ## Overview
 
 This milestone turns burpsy's working proxy and scanner into a platform: a race-free segmented

@@ -22,7 +22,8 @@ aspirational behavior is documented as if it exists.
 - **[BCHECK-COVERAGE.md](./BCHECK-COVERAGE.md)** — BCheck coverage: parse
   conformance vs. runtime coverage, and how coverage is reported.
 - **[SCANNER-COVERAGE.md](./SCANNER-COVERAGE.md)** — the 183-issue Burp catalog:
-  which rows are runnable, which are declined, and why.
+  which rows are runnable, which are declined, and why — plus the runtime
+  demonstration layer (145/183 end-to-end, pinned by test).
 - **[SCANNER-INFRA.md](./SCANNER-INFRA.md)** — the capability primitives behind
   the catalog checks and the wiring that sits on them.
 - **[SCANNER-INFRA-ROADMAP.md](./SCANNER-INFRA-ROADMAP.md)** — a plan, not a
@@ -32,8 +33,10 @@ aspirational behavior is documented as if it exists.
 
 - **[DATA-MODEL.md](./DATA-MODEL.md)** — the entities, how they are identified,
   and the identity hazard the type design exists to prevent.
-- **[HANDOFF-2026-08-13.md](./HANDOFF-2026-08-13.md)** — the latest dated work
-  handoff (scanner coverage measurement rebuilt on runtime evidence).
+- **[HANDOFF-2026-08-18.md](./HANDOFF-2026-08-18.md)** — the latest dated work
+  handoff (runtime coverage 21 → 145, the seven check defects, the docs sweep).
+  Earlier handoffs ([2026-08-13](./HANDOFF-2026-08-13.md)) remain as the record
+  of how the runtime harness was built.
 - `../gaps.md` — the source-verified Rust-parity ledger and how the corpus was
   counted.
 - `../PORT_STATUS.md` — recent verified work and where to read live status.

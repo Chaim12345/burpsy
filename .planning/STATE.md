@@ -9,6 +9,17 @@ progress:
   percent: 33
 ---
 
+> **Dated banner — 2026-08-18.** Everything below was authored against the **Rust**
+> tree and describes the Rust-era phase plan. The Go port in `burpsy-go/` is now the
+> active implementation and has moved far past this file: all thirteen Rust↔Go parity
+> gaps in `burpsy-go/gaps.md` are COMPLETE, and the per-phase status this file records
+> ("Phases 6, 8, 10–12 not started") is not the Go tree's state — the crawler and
+> dashboard (Phase 6) are built in Go, while the plugin API and MCP server (Phases 8,
+> 10) are deliberately not shipped there. The authoritative Go-port status lives in
+> `.planning/GO-PORT.md`, `burpsy-go/PORT_STATUS.md`, `burpsy-go/gaps.md`, and the
+> dated `burpsy-go/docs/HANDOFF-*.md` (latest: `burpsy-go/docs/HANDOFF-2026-08-18.md`).
+> This file is retained as the historical planning record.
+
 # Project State
 
 ## Project Reference

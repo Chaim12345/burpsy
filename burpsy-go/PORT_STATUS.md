@@ -47,6 +47,26 @@ rejection, `other/uuid-detected-guid-versions.bcheck`, is an `else if` chain
 that the parser does not close — unrelated to insertion points, present before
 this work.
 
+### 2026-08-17/18 — scanner runtime coverage 21 → 145 + the docs sweep
+
+Runtime evidence goes from 21 distinct catalog rows to **145** (`a0b3dfb`),
+across 148 vulnerable endpoints, each paired with a safe counterpart that must
+stay silent. The suite that proves it is 7× faster (1423s → 207s scanner
+package; 818s → 222s whole repo). Seven check defects were found by doing this
+— two false-positive generators that fired on every target, two structural
+(stored-ledger scope, PUT-probe routing), one mis-gate, one recorded-not-fixed
+(`checkHiddenHTTP2`), one fixture-harness trap — and an adversarial review
+(`335a253`) surfaced five honesty defects in the harness itself, four fixed
+(the coverage floor now fails without Chrome rather than silently lowering;
+`-count=2` cache replay is no longer printed as a fresh claim). The 145 is
+pinned by `wantDemonstrated` in `internal/scanner/runtime_coverage_test.go`;
+the exact 38 registered-only rows are listed in the handoff.
+
+The docs sweep (`0b71e67`) rebuilt the AGENTS.md hierarchy (29 `internal/`
+packages), retracted this file's false "100% COMPLETE" parity tables (see
+"Phase Status" below), rebuilt `docs/README.md`, and added this handoff.
+Latest: `docs/HANDOFF-2026-08-18.md`.
+
 ### 2026-08-02 — BCheck engine correctness + live audit + WebSocket relay
 
 - **`run for each` runs the full cartesian product** of its iterables, each
@@ -83,7 +103,7 @@ Read the live status from the documents that are kept honest against the code:
 | Question | Authoritative source |
 |----------|----------------------|
 | Which Rust↔Go behaviours still differ, with evidence and decline path | [`gaps.md`](gaps.md) |
-| What the most recent work session changed and verified | the dated `docs/HANDOFF-*.md` (latest: `docs/HANDOFF-2026-08-13.md`) |
+| What the most recent work session changed and verified | the dated `docs/HANDOFF-*.md` (latest: `docs/HANDOFF-2026-08-18.md`) |
 | Scanner catalog coverage (183-issue catalog, runnable vs declined) | [`docs/SCANNER-COVERAGE.md`](docs/SCANNER-COVERAGE.md) |
 | Which scanner primitives are built and wired | [`docs/SCANNER-INFRA.md`](docs/SCANNER-INFRA.md) |
 | BCheck coverage, parse conformance vs runtime | [`docs/BCHECK-COVERAGE.md`](docs/BCHECK-COVERAGE.md) |

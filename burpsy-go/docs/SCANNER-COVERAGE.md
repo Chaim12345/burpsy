@@ -1,7 +1,10 @@
 # Scanner Coverage
 
 Status of the 183-issue Burp Suite catalog (`internal/scanner/catalog_data.go`) against the
-burpsy scanner. **Every catalog row is now runnable; nothing is declined.**
+burpsy scanner. **Every catalog row is now runnable; nothing is declined** — but
+*runnable* is registration, not proof. The runtime-demonstration layer below
+(section "Runtime demonstration") is the honest half of this story and the
+figure to quote.
 
 ## Totals
 
@@ -34,6 +37,31 @@ Sum check: 5 + 6 + 2 + 6 + 5 + 5 + 15 + 28 + 12 + 48 + 3 + 10 + 22 + 16 = 183. E
 `TypeIndex` is accounted for exactly once; no `TypeIndex` is claimed by more than one family
 (`ValidateRegistry` rejects a duplicate, and `TestDeclinedCatalogDescriptors` fails if the
 per-family partition stops summing to 183).
+
+## Runtime demonstration
+
+Registration answers "is a detector wired to this catalog row?". It cannot answer "when
+this scanner is pointed at something that really is vulnerable, does it say so?" — a non-nil
+function pointer cannot be told apart from a stub. That question is answered by
+`internal/scanner/runtime_coverage_test.go`, which starts the deliberately vulnerable app in
+`internal/vulnapp`, seeds real exchanges over real HTTP, runs the real `AuditWithin`, and
+asserts every declared vulnerability is reported while its **safe counterpart** stays silent.
+
+| Bucket | Count |
+|---|---:|
+| Catalog rows with an end-to-end runtime demonstration | **145 / 183** |
+| Rows registered but not runtime-demonstrated | 38 / 183 |
+
+- The 145 is pinned by `wantDemonstrated` in `runtime_coverage_test.go` — removing a
+  manifest entry fails the suite rather than quietly lowering the published number. It
+  counts **distinct rows**, not endpoints (148 vulnerable endpoints in the manifest; some
+  rows have two).
+- Coverage grows by planting another vulnerability in `internal/vulnapp`, not by editing a
+  constant: the assertions come from the manifest declaration.
+- The exact 38 registered-only rows, grouped by why they lack a demonstration (stored-DOM
+  pairing, OOB/collaborator channel, smuggling listener, generated-issue rows, native
+  checks without a manifest endpoint), are listed in
+  [HANDOFF-2026-08-18.md](./HANDOFF-2026-08-18.md).
 
 `CacheChecks` holds 2, not 4: `HTTP request smuggling` and `Client-side desync` moved to
 `checks_final.go` when the pipelining driver over `internal/sender/pipeline.go` was built.

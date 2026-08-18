@@ -1,5 +1,15 @@
 # Scanner Infrastructure Roadmap
 
+> **Status banner — 2026-08-18.** This roadmap's premise ("gaps that still block
+> declined catalog rows") is now historical: the declined list is empty, and every
+> row is runnable (`docs/SCANNER-COVERAGE.md`). It is retained as the record of the
+> library-selection decisions, and its remaining "Planned" items have moved since:
+> **`projectdiscovery/wappalyzergo` and `Masterminds/semver/v3` landed** (both used
+> by `internal/scanner/infra_fingerprint.go` for real version-range fingerprinting),
+> and **`golang.org/x/net/html` landed in the crawler** (`internal/crawler/discover.go`)
+> though not yet for the scanner-side injection-context application this file
+> describes — that specific row remains open.
+
 Capability gaps that still block declined catalog rows, and the Go libraries that would close
 them. This is a **plan, not a claim**: nothing here is implemented unless it also appears in
 `docs/SCANNER-INFRA.md`, whose contents are asserted against the code by
