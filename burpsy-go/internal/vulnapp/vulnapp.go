@@ -118,6 +118,7 @@ var familyEndpoints = []func() []Endpoint{
 	remainingEndpoints,
 	finalEndpoints,
 	storedFamilyEndpoints,
+	storedDOMFamilyEndpoints,
 	injectionEndpoints,
 }
 
@@ -132,6 +133,7 @@ var familyRegistrars = []func(*http.ServeMux){
 	registerRemaining,
 	registerFinal,
 	registerStoredFamily,
+	registerStoredDOMFamily,
 	registerInjection,
 }
 

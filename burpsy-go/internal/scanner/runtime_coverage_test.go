@@ -70,6 +70,19 @@ type runtimeTarget struct {
 	domScan *ActiveScanner
 	// storedScan enables the stored rows and is driven through the deferred phase.
 	storedScan *ActiveScanner
+	// storedDomScan is the fourth scanner: stored rows AND a browser, for the rows whose evidence
+	// only exists once a page's own script has fetched the stored value and used it. Nil when no
+	// Chrome is available, which the DOM skip path already reports by name.
+	//
+	// It is a template rather than the scanner actually used. A stored claim is retired the instant
+	// it resolves, so two test functions sharing one ledger cannot both see the same row: whichever
+	// audits first consumes the claim and the second reads silence. Because this target is shared
+	// across the whole binary for speed, that made the stored DOM rows order-dependent. Each audit
+	// therefore gets its own ledger via storedDomScanner(), and only the browser is shared.
+	storedDomScan *ActiveScanner
+	// storedDomBrowsers is the one browser provider those per-audit scanners share; launching a
+	// Chrome per endpoint would cost far more than the isolation is worth.
+	storedDomBrowsers BrowserProvider
 	// memo caches each endpoint's audit for this target's lifetime; see auditOnce. Guarded because
 	// the subtests that read it run in parallel.
 	memo   map[string]memoisedAudit
@@ -199,7 +212,44 @@ func buildRuntimeTarget(t *testing.T) *runtimeTarget {
 		WithSender(runtimeSender()).
 		WithStoredLedger(NewStoredLedger()).
 		WithConfig(storedCfg)
+
+	// A fourth scanner for the stored DOM rows, which need both halves at once: a canary planted
+	// over HTTP, and a browser to run the script that fetches it back and uses it. Kept apart from
+	// storedScan for the same reason storedScan is kept apart from scan - turning CheckDOM on there
+	// would drive a browser over every page of every stored audit to answer a question about six
+	// endpoints.
+	if rt.chrome {
+		storedDomCfg := runtimeScanConfig()
+		storedDomCfg.CheckStored = true
+		storedDomCfg.CheckDOM = true
+		storedDomCfg.PendingDeadline = 5 * time.Second
+		rt.storedDomBrowsers = NewLazyBrowserProvider(domexec.Options{Headed: os.Getenv("BURPSY_DOM_HEADED") == "1"})
+		rt.storedDomScan = NewActiveScanner(rt.store, zap.NewNop()).
+			WithSender(runtimeSender()).
+			WithStoredLedger(NewStoredLedger()).
+			WithBrowserProvider(rt.storedDomBrowsers).
+			WithConfig(storedDomCfg)
+	}
 	return rt
+}
+
+// storedDomScanner returns a stored+DOM scanner with a ledger of its own.
+//
+// One ledger cannot serve two auditors: FinishScan retires a claim as it resolves, so the second
+// caller to ask about the same row is told nothing was planted. The detection test and the
+// safe-counterpart test both audit these endpoints, and this target is shared across the binary, so
+// a single scanner made the outcome depend on which test function ran first. The browser is the
+// expensive part and stays shared; the ledger is cheap and must not be.
+func (rt *runtimeTarget) storedDomScanner() *ActiveScanner {
+	cfg := runtimeScanConfig()
+	cfg.CheckStored = true
+	cfg.CheckDOM = true
+	cfg.PendingDeadline = 5 * time.Second
+	return NewActiveScanner(rt.store, zap.NewNop()).
+		WithSender(runtimeSender()).
+		WithStoredLedger(NewStoredLedger()).
+		WithBrowserProvider(rt.storedDomBrowsers).
+		WithConfig(cfg)
 }
 
 // runtimeSender is the sender every scanner in this harness uses.
@@ -228,20 +278,42 @@ func (rt *runtimeTarget) scannerFor(dom bool) *ActiveScanner {
 // every deferred claim again. Routing these rows through the same call the CLI would make is the
 // point - a harness that skipped it would report the stored rows as silent and leave the manifest
 // unable to demonstrate a family that does work.
-func (rt *runtimeTarget) auditStoredEndpoint(t *testing.T, path string) (map[string]*Finding, uint32) {
+// dom selects the browser-enabled stored scanner, which the "(stored DOM-based)" rows need: their
+// evidence is produced by the deferred phase's render pass, not by any HTTP response.
+func (rt *runtimeTarget) auditStoredEndpoint(t *testing.T, path string, dom bool) (map[string]*Finding, uint32) {
 	t.Helper()
 	id, ok := rt.exchanges[path]
 	if !ok {
 		t.Fatalf("%s was never seeded", path)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
+	scan := rt.storedScan
+	if dom {
+		if rt.storedDomScan == nil {
+			t.Fatal("a stored DOM row was audited with no browser-enabled stored scanner; the caller " +
+				"must skip these rows when Chrome is absent rather than audit them against nothing")
+		}
+		// A ledger of its own, so this audit's verdict does not depend on whether another test
+		// function already resolved and retired the same row's claim.
+		scan = rt.storedDomScanner()
+	}
+
 	byRow := map[string]*Finding{}
-	outcome, findings := rt.storedScan.AuditWithin(ctx, id, rt.storedScan.AuditConfig())
-	deferred, completion := rt.storedScan.FinishScan(ctx)
+	outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
+	deferred, completion := scan.FinishScan(ctx)
 	if completion.RefetchError != "" {
 		t.Fatalf("the deferred phase could not re-fetch: %s", completion.RefetchError)
+	}
+	// A stored DOM row's only evidence comes from the render pass, so a pass that did not happen
+	// must fail here rather than surface as a silent "no finding".
+	if dom && completion.RenderError != "" {
+		t.Fatalf("the deferred phase could not render any page: %s", completion.RenderError)
+	}
+	if dom && completion.Render.Rendered == 0 {
+		t.Fatalf("the deferred phase rendered no page at all (%s), so this row's silence would mean "+
+			"nothing was looked at", completion.Render.Summary())
 	}
 	for _, f := range append(findings, deferred...) {
 		if f != nil {
@@ -323,10 +395,10 @@ func (rt *runtimeTarget) findingsWithProbeCount(t *testing.T, path string, dom b
 }
 
 // storedFindingsFor audits one endpoint through the deferred phase, once per target.
-func (rt *runtimeTarget) storedFindingsFor(t *testing.T, path string) map[string]*Finding {
+func (rt *runtimeTarget) storedFindingsFor(t *testing.T, path string, dom bool) map[string]*Finding {
 	t.Helper()
-	return rt.auditOnce(t, path, false, true, func(t *testing.T) (map[string]*Finding, uint32) {
-		return rt.auditStoredEndpoint(t, path)
+	return rt.auditOnce(t, path, dom, true, func(t *testing.T) (map[string]*Finding, uint32) {
+		return rt.auditStoredEndpoint(t, path, dom)
 	}).byRow
 }
 
@@ -640,7 +712,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 				}
 				var got map[string]*Finding
 				if e.Stored {
-					got = rt.storedFindingsFor(t, e.Path)
+					got = rt.storedFindingsFor(t, e.Path, e.DOM)
 				} else {
 					got = rt.findingsFor(t, e.Path, e.DOM)
 				}
@@ -687,7 +759,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 145
+	const wantDemonstrated = 148
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.
@@ -751,12 +823,13 @@ func TestTheScannerStaysQuietOnTheSafeCounterparts(t *testing.T) {
 	type twin struct {
 		path   string
 		stored bool
+		dom    bool
 	}
 	vulnerableTwin := map[string]twin{}
 	for _, e := range vulnapp.Vulnerabilities() {
 		if e.Row != "" && !e.Safe {
 			if _, seen := vulnerableTwin[e.Row]; !seen {
-				vulnerableTwin[e.Row] = twin{path: e.Path, stored: e.Stored}
+				vulnerableTwin[e.Row] = twin{path: e.Path, stored: e.Stored, dom: e.DOM}
 			}
 		}
 	}
@@ -764,7 +837,7 @@ func TestTheScannerStaysQuietOnTheSafeCounterparts(t *testing.T) {
 	// findings picks the path a row's verdict actually comes from.
 	findings := func(t *testing.T, path string, dom, stored bool) map[string]*Finding {
 		if stored {
-			return rt.storedFindingsFor(t, path)
+			return rt.storedFindingsFor(t, path, dom)
 		}
 		return rt.findingsFor(t, path, dom)
 	}
@@ -788,7 +861,7 @@ func TestTheScannerStaysQuietOnTheSafeCounterparts(t *testing.T) {
 			if !ok {
 				t.Fatalf("no vulnerable endpoint declared for %q, so silence here proves nothing", e.Row)
 			}
-			if fired := findings(t, tw.path, e.DOM, tw.stored); fired[e.Row] == nil {
+			if fired := findings(t, tw.path, tw.dom, tw.stored); fired[e.Row] == nil {
 				t.Fatalf("%q did not fire against its vulnerable twin %s in this run, so its silence "+
 					"on %s is not evidence of anything — the check may simply not be working here",
 					e.Row, tw.path, e.Path)
