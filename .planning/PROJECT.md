@@ -1,11 +1,20 @@
 # burpsy
 
+> **Reading note (added 2026-08-17).** This is the GSD planning record, authored against the
+> original **Rust** implementation (`crates/`) and its 12-phase roadmap. Since then the project's
+> active implementation has moved to the **Go** port in `burpsy-go/`; the Rust tree is now a
+> frozen parity reference. Treat the phase/requirement tracking below as the Rust-era plan of
+> record — accurate as history — and read the Go port's live status from `burpsy-go/gaps.md`,
+> `burpsy-go/PORT_STATUS.md`, and the dated `burpsy-go/docs/HANDOFF-*.md`. Where a count below
+> (crate totals, BCheck coverage) disagrees with those, they win.
+
 ## What This Is
 
-A Rust reimplementation of Burp Suite's core — intercepting proxy, scanner, Repeater and
+A reimplementation of Burp Suite's core — intercepting proxy, scanner, Repeater and
 Intruder — specified from a teardown of the shipped Burp 2026.7.1 jar rather than from its
 documentation. It is for security testers who want Burp's capabilities without Burp's memory
-footprint and Swing latency, usable headless or over SSH.
+footprint and Swing latency, usable headless or over SSH. Originally written in Rust
+(`crates/`); now being ported to Go (`burpsy-go/`), which is where active work lands.
 
 ## Core Value
 
@@ -31,7 +40,7 @@ without the memory cost that forces Burp to discard scan work.
 - ✓ Intruder: sniper, battering ram, pitchfork and cluster bomb, lazily generated, behind a rate limiter — Phase 2
 - ✓ Supporting tools: Decoder, Comparer, Logger, Organizer, match-and-replace — Phase 2
 - ✓ Passive scanning over proxied responses, off the proxy hot path — Phase 3
-- ✓ BCheck interpreter M1–M3 — 232 of 264 published checks run (87.9%) — Phase 3
+- ✓ BCheck interpreter M1–M3 (the "232 of 264" once cited here conflated parse rate with runtime coverage; the Go port reports the two separately — see burpsy-go/docs/BCHECK-COVERAGE.md) — Phase 3
 - ✓ Audit engine: 7 dispatch scopes, item state machine, two-level circuit breakers — Phase 3
 - ✓ Burp's 183-issue catalog, mechanically transcribed and byte-reproducible — Phase 3
 - ✓ Issue dedup keyed on (check, issue name, host), occurrences capped with an uncapped true count — Phase 3
@@ -133,8 +142,10 @@ than a line-by-line human read. A review of two of six merged branches found thr
 
 ## Constraints
 
-- **Tech stack**: Rust, edition 2024, Cargo workspace of 9 crates — chosen for the memory control
-  the whole project depends on.
+- **Tech stack**: originally Rust (edition 2024, a Cargo workspace of 13 crates — not 9, as an
+  earlier draft of this line said); now the active implementation is the Go port under
+  `burpsy-go/` (module `github.com/burpsy-go/burpsy`, `go 1.26`), with the Rust tree kept as a
+  frozen parity reference. Both were chosen for the memory control the whole project depends on.
 - **Performance**: a message is stored once as bytes plus span offsets; never clone a body. Every
   subsystem is judged against this, because it is the reason the project exists.
 - **Security**: scope is authorised against the bytes actually going on the wire, never against the
@@ -155,7 +166,7 @@ than a line-by-line human read. A review of two of six merged branches found thr
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Checks are data, not code — run the published BCheck corpus rather than porting Java | One interpreter inherits 264 checks; porting would be derivative work | ✓ Good — 232/264 run |
+| Checks are data, not code — run the published BCheck corpus rather than porting Java | One interpreter inherits 264 checks; porting would be derivative work | ✓ Good — corpus parses; runtime coverage counted separately (burpsy-go/docs/BCHECK-COVERAGE.md) |
 | Store each message once as bytes plus span offsets | Burp's memory model is the problem being solved; copying anywhere undoes it | ✓ Good |
 | Web UI rather than a native GUI | Burp's perceived slowness is largely Swing; also enables headless and SSH use | — Pending |
 | Collaborator gated and counted, never stubbed | A fake address nothing polls turns 26 OOB checks into silent false negatives | ✓ Good |
