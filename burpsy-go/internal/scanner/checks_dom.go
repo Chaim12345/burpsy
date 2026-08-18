@@ -88,9 +88,9 @@ var domFamilies = []domFamily{
 	},
 	{
 		Row:      "Ajax request header manipulation (DOM-based)",
-		Sinks:    []domexec.SinkKind{domexec.SinkXHROpen},
+		Sinks:    []domexec.SinkKind{domexec.SinkAjaxHeader, domexec.SinkXHROpen},
 		Severity: "low",
-		Note:     "observed at XMLHttpRequest.open; the family's own sink is setRequestHeader, which is not instrumented, so a header-only flow would be missed",
+		Note:     "observed at XMLHttpRequest.setRequestHeader, the family's own sink; XHROpen is kept as a second signal because a tainted URL built alongside a tainted header is the same code path, but a header-only flow no longer goes unreported",
 	},
 	{
 		Row:      "DOM data manipulation (DOM-based)",

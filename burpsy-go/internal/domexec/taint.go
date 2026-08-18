@@ -85,6 +85,12 @@ const (
 	SinkRegExpCtor
 	SinkFileRead
 	SinkPrototypePollution
+	// SinkAjaxHeader is XMLHttpRequest.setRequestHeader's value argument. It exists because
+	// "Ajax request header manipulation" was previously observed at SinkXHROpen — the URL — which
+	// is a different defect that happens to be reachable from the same object. A flow that taints
+	// only a header value never touches the URL, so the row could report nothing while being
+	// exactly what it is named for.
+	SinkAjaxHeader
 )
 
 func (s SinkKind) String() string {
@@ -133,6 +139,8 @@ func (s SinkKind) String() string {
 		return "FileReader.read*"
 	case SinkPrototypePollution:
 		return "Object.prototype"
+	case SinkAjaxHeader:
+		return "XMLHttpRequest.setRequestHeader"
 	default:
 		return fmt.Sprintf("SinkKind(%d)", int(s))
 	}
@@ -147,28 +155,29 @@ func (s SinkKind) String() string {
 // `location = x` cannot be observed this way, and getNavigationObservations
 // for how it is observed instead.
 var sinkTags = map[string]SinkKind{
-	"eval":                SinkEval,
-	"function-ctor":       SinkFunctionCtor,
-	"innerHTML":           SinkInnerHTML,
-	"outerHTML":           SinkInnerHTML,
-	"document-write":      SinkDocumentWrite,
-	"settimeout-string":   SinkSetTimeoutString,
-	"script-src":          SinkScriptSrc,
-	"jquery-html":         SinkJQueryHtml,
-	"localStorage":        SinkLocalStorage,
-	"sessionStorage":      SinkSessionStorage,
-	"postmessage":         SinkPostMessage,
-	"websocket-url":       SinkWebSocketURL,
-	"document-domain":     SinkDocumentDomain,
-	"xhr-open":            SinkXHROpen,
-	"cookie":              SinkCookie,
-	"websql-executesql":   SinkWebSQL,
-	"document-evaluate":   SinkXPathEvaluate,
-	"json-parse":          SinkJSONParse,
-	"anchor-href":         SinkAnchorHref,
-	"regexp-ctor":         SinkRegExpCtor,
-	"file-read":           SinkFileRead,
-	"prototype-pollution": SinkPrototypePollution,
+	"eval":                 SinkEval,
+	"function-ctor":        SinkFunctionCtor,
+	"innerHTML":            SinkInnerHTML,
+	"outerHTML":            SinkInnerHTML,
+	"document-write":       SinkDocumentWrite,
+	"settimeout-string":    SinkSetTimeoutString,
+	"script-src":           SinkScriptSrc,
+	"jquery-html":          SinkJQueryHtml,
+	"localStorage":         SinkLocalStorage,
+	"sessionStorage":       SinkSessionStorage,
+	"postmessage":          SinkPostMessage,
+	"websocket-url":        SinkWebSocketURL,
+	"document-domain":      SinkDocumentDomain,
+	"xhr-open":             SinkXHROpen,
+	"cookie":               SinkCookie,
+	"websql-executesql":    SinkWebSQL,
+	"document-evaluate":    SinkXPathEvaluate,
+	"json-parse":           SinkJSONParse,
+	"anchor-href":          SinkAnchorHref,
+	"regexp-ctor":          SinkRegExpCtor,
+	"file-read":            SinkFileRead,
+	"prototype-pollution":  SinkPrototypePollution,
+	"xhr-setrequestheader": SinkAjaxHeader,
 }
 
 // Observation is one canary sighting: attacker-controlled data (Canary),
@@ -292,6 +301,9 @@ const instrumentationJS = `
   } catch (e) {}
   wrapMethod(window, 'postMessage', 'postmessage', 0);
   wrapMethod(XMLHttpRequest.prototype, 'open', 'xhr-open', 1);
+  // Argument 1 is the header VALUE, not the name: a stored value smuggled into a header is the
+  // "Ajax request header manipulation" defect, and it never touches the URL that xhr-open sees.
+  wrapMethod(XMLHttpRequest.prototype, 'setRequestHeader', 'xhr-setrequestheader', 1);
   try {
     var OrigWebSocket = window.WebSocket;
     var wrappedWebSocket = function(url, protocols) {

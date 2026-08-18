@@ -141,3 +141,40 @@ func TestEveryNewSinkHasAStringAndATagMapping(t *testing.T) {
 		}
 	}
 }
+
+func TestAHashSourcePassedToSetRequestHeaderIsObservedAtTheAjaxHeaderSink(t *testing.T) {
+	t.Parallel()
+	hits := observeSink(t, `<html><body><script>
+		try {
+			var x = new XMLHttpRequest();
+			x.open('GET', '/static-path', true);
+			x.setRequestHeader('X-Trace', location.hash.slice(1));
+			x.send();
+		} catch (e) {}
+	</script></body></html>`, SinkAjaxHeader)
+	if len(hits) == 0 {
+		t.Fatal("a request header built from tainted data was not observed; the Ajax request header " +
+			"manipulation rows depend on this sink, and observing only XMLHttpRequest.open would miss " +
+			"this flow entirely because the URL here is a constant")
+	}
+	if !strings.Contains(hits[0].Argument, "bsycanary") {
+		t.Errorf("observation lost the canary: %+v", hits[0])
+	}
+}
+
+// The URL is constant above on purpose. If the header sink were absent, this page would have to be
+// reported through XMLHttpRequest.open, and there is nothing tainted there to report.
+func TestAConstantUrlWithATaintedHeaderIsNotReportedAtTheXhrOpenSink(t *testing.T) {
+	t.Parallel()
+	hits := observeSink(t, `<html><body><script>
+		try {
+			var x = new XMLHttpRequest();
+			x.open('GET', '/static-path', true);
+			x.setRequestHeader('X-Trace', location.hash.slice(1));
+			x.send();
+		} catch (e) {}
+	</script></body></html>`, SinkXHROpen)
+	if len(hits) != 0 {
+		t.Errorf("the URL is a constant, yet %d XHR-open observation(s) claimed taint: %+v", len(hits), hits[0])
+	}
+}
