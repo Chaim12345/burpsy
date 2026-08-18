@@ -1,0 +1,93 @@
+name: UI build & browser UAT
+
+# Builds the React console shipped inside burpsy-go and runs the real browser UAT
+# (e2e-ui.sh) against the built binary. This is the UI half of the gate; the Go
+# unit/integration half lives in go.yml. Together they are the whole "the console
+# under test is the console in src/" promise: e2e-ui.sh rebuilds src/ and cmp's it
+# against the committed bundle, then drives a real Chromium over every route,
+# asserts behaviour (theme toggle, mod+K palette, sort, arrow-key selection), runs
+# axe over both themes, and captures 68 screenshots.
+#
+# ubuntu-latest ships a working apt and a system Chrome, so playwright's
+# `--with-deps chromium` can install both the browser and its shared libraries
+# here — the same step that cannot run in this project's broken local apt image.
+
+on:
+  push:
+    branches: [master, ui-react-comparison, build/ui-gate-plus-browser-uat]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ui-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: burpsy-go/go.mod
+          cache-dependency-path: burpsy-go/go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # bun builds the bundle and drives the e2e gate's bundle-compare step.
+      - name: Install bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      # The Go half of the gate: a clean build, vet and format is the baseline the
+      # e2e-ui.sh binary must come from. (go.yml runs the full `go test ./...`;
+      # keeping build/vet/fmt here too means a broken binary can never reach the
+      # browser step with a green check elsewhere.)
+      - name: Go build / vet / fmt
+        working-directory: burpsy-go
+        run: |
+          go build ./...
+          go vet ./...
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would rewrite these files:"; echo "$unformatted"; exit 1
+          fi
+
+      # Build the committed bundle from src/, enforce the design-token contract,
+      # and typecheck. bun run build also runs gen:tokens --check, so a stale
+      # penpot export fails the gate rather than silently shipping.
+      - name: UI build, token check, typecheck
+        working-directory: burpsy-go/internal/web/ui
+        run: |
+          bun install
+          bun run build
+          node scripts/check-closed-tokens.mjs
+          bunx tsc --noEmit
+
+      # Playwright + a real Chromium for the UAT. --with-deps installs the
+      # browser's system libraries via apt, which works here (unlike the local
+      # sandbox image).
+      - name: Install Playwright Chromium
+        working-directory: burpsy-go/internal/web/ui/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # The browser UAT. e2e-ui.sh builds burpsy (via go), rebuilds the UI bundle
+      # and cmp's it against the committed dist/app.js / style.css, then runs the
+      # full Playwright suite (routes, behaviour, a11y over both themes,
+      # screenshots). It prints "N passed, M failed" and exits non-zero on any
+      # failure, which fails this step and therefore the run.
+      - name: Browser UAT (e2e-ui.sh)
+        run: ./e2e-ui.sh

@@ -9,7 +9,7 @@ name: Go
 
 on:
   push:
-    branches: [master, ui-react-comparison]
+    branches: [master, ui-react-comparison, build/ui-gate-plus-browser-uat]
   pull_request:
   workflow_dispatch:
 
