@@ -322,8 +322,12 @@ export function InterceptPage(): JSX.Element {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [raw, setRaw] = useState("");
   const [fixContentLength, setFixContentLength] = useState(true);
+  const [directionFilter, setDirectionFilter] = useState<"all" | "request" | "response">("all");
 
-  const held = data?.held ?? [];
+  const heldAll = data?.held ?? [];
+  // Apply direction filter to the held queue — the operator can focus on
+  // just requests or just responses without losing the other half.
+  const held = directionFilter === "all" ? heldAll : heldAll.filter((h) => h.direction === directionFilter);
   // Selection is held by id, not object identity, so a poll that rebuilds every row cannot silently
   // drop the operator's selection.
   const selected = useMemo(() => held.find((h) => h.id === selectedId) ?? null, [held, selectedId]);
@@ -498,7 +502,20 @@ export function InterceptPage(): JSX.Element {
           <Metric accent label="Pending" value={data?.pending ?? 0} />
           <Metric label="Mode" value={data?.enabled ? "Holding" : "Passing"} />
           <Metric label="Transport" value={data?.wired ? "Connected" : "Unavailable"} />
-          <Metric label="Queue depth" value={held.length} />
+          <Metric label="Queue depth" value={heldAll.length} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <label htmlFor="direction-filter" style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>Show:</label>
+            <Select
+              id="direction-filter"
+              value={directionFilter}
+              onChange={(e) => setDirectionFilter(e.target.value as "all" | "request" | "response")}
+              style={{ width: "auto" }}
+            >
+              <option value="all">All messages</option>
+              <option value="request">Requests only</option>
+              <option value="response">Responses only</option>
+            </Select>
+          </div>
         </div>
       </div>
 
