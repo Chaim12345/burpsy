@@ -199,8 +199,34 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			if err != nil {
 				continue
 			}
-			evidence |= analyzeXSSReflection(res.Body, canary, rawHeaderValue(string(res.Raw), "Content-Type"),
-				xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
+			contentType := rawHeaderValue(string(res.Raw), "Content-Type")
+			if !strings.Contains(res.Body, canary) {
+				continue
+			}
+			evidence |= XSSEvidenceReflected
+			if !rendersAsMarkup(contentType) {
+				// Reflected into something no browser parses. Recorded, never a breakout.
+				evidence |= XSSEvidenceReflectedEncoded
+				continue
+			}
+			// Each payload brings its own evidence. Checking a context-specific payload against
+			// the generic markers is what made three contexts unreportable and cost four more:
+			// `javascript:` opens no tag, an injected attribute opens no tag, and srcdoc's payload
+			// must stay ENCODED, so none of them can produce `<svg id=CANARY onload=alert(1)>`.
+			if payload.confirm != nil {
+				bit := payload.bit
+				if bit == 0 {
+					bit = XSSEvidenceHTMLBreakout
+				}
+				if payload.confirm(res.Body, canary) {
+					evidence |= bit
+				} else {
+					evidence |= XSSEvidenceReflectedEncoded
+				}
+			} else {
+				evidence |= analyzeXSSReflection(res.Body, canary, contentType,
+					xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
+			}
 			if xssBreakoutConfirmed(evidence) {
 				break
 			}

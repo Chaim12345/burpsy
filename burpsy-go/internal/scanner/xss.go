@@ -46,6 +46,14 @@ const (
 	XSSEvidenceReflectedEncoded
 	XSSEvidenceHTMLBreakout
 	XSSEvidenceScriptBreakout
+	// XSSEvidenceAttrInjection is an attribute added to an element that was already there, which
+	// is the exploit when a host escapes `<` and `>` but leaves the quote alone. Distinct from
+	// XSSEvidenceHTMLBreakout because no tag is injected and saying one was would describe
+	// something that did not happen.
+	XSSEvidenceAttrInjection
+	// XSSEvidenceURLScheme is a javascript: scheme leading a URL-valued attribute. No tag, no
+	// quote, and nothing a markup marker could ever show.
+	XSSEvidenceURLScheme
 )
 
 // htmlBreakoutSuffix is Zh7u's lambda$new$0 shape specialised to the common
@@ -267,13 +275,20 @@ func rendersAsMarkup(contentType string) bool {
 }
 
 func xssBreakoutConfirmed(evidence XSSEvidence) bool {
-	return evidence&(XSSEvidenceHTMLBreakout|XSSEvidenceScriptBreakout) != 0
+	return evidence&(XSSEvidenceHTMLBreakout|XSSEvidenceScriptBreakout|
+		XSSEvidenceAttrInjection|XSSEvidenceURLScheme) != 0
 }
 
 func xssEvidenceText(evidence XSSEvidence) string {
 	parts := make([]string, 0, 2)
 	if evidence&XSSEvidenceHTMLBreakout != 0 {
 		parts = append(parts, "HTML/attribute breakout: injected tag reflected unescaped")
+	}
+	if evidence&XSSEvidenceAttrInjection != 0 {
+		parts = append(parts, "attribute injection: an event-handler attribute was added to an existing element")
+	}
+	if evidence&XSSEvidenceURLScheme != 0 {
+		parts = append(parts, "URL scheme injection: a javascript: URL leads a URL-valued attribute")
 	}
 	if evidence&XSSEvidenceScriptBreakout != 0 {
 		parts = append(parts, "JavaScript string breakout: escaped literal reflected unescaped")

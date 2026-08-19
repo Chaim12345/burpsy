@@ -409,6 +409,13 @@ func report(all []xcase, truth map[string]bool, found map[string]map[string]*sca
 	fmt.Printf("\nFALSE POSITIVES %d of %d safe endpoints\n", len(falsePos), len(falsePos)+len(clean))
 	for _, c := range falsePos {
 		fmt.Printf("  FP    %-24s %s\n        %s\n", c.name, strings.Join(xssRows(found[c.name]), ", "), c.context)
+		// The evidence text names the payload and the bit that confirmed it, which is what turns a
+		// false positive from a number into something fixable.
+		for _, name := range xssRows(found[c.name]) {
+			if f := found[c.name][name]; f != nil {
+				fmt.Printf("        evidence: %s\n", f.Evidence)
+			}
+		}
 	}
 	for _, c := range clean {
 		fmt.Printf("  quiet %-24s %s\n", c.name, c.context)

