@@ -516,7 +516,7 @@ func (c *JwtWeakSecretCheck) Scan(resp *core.StoredMessage, request *core.Stored
 	budget := c.maxAttempts
 	var out []*Finding
 	for _, t := range raw {
-		if !c.claim(t.signingInput) {
+		if !c.claim(t) {
 			c.alreadyCovered.Add(1)
 			continue
 		}
@@ -540,21 +540,38 @@ func (c *JwtWeakSecretCheck) Scan(resp *core.StoredMessage, request *core.Stored
 	return out
 }
 
-// claim claims a signing input for attack, returning false when it was already resolved.
+// claim claims a token for attack, returning false when it was already resolved.
+//
+// The key is the signing input AND the signature, not the signing input alone.
+//
+// Deduping on the signing input was one character short of correct and cost a real detection. Two
+// tokens can carry byte-identical headers and payloads and differ only in their signature, which
+// means they were signed with DIFFERENT KEYS - one of which may be weak. Keyed on the signing input,
+// whichever token was seen first claimed the pair and the other was accounted "already covered"
+// without ever being attacked, so a weak key sitting behind an identical payload was silently
+// unreachable. A host rotating keys, or dev and prod signing the same claims, produces exactly that
+// shape; so does internal/vulnapp, where /nt/session and /nt/safe/session issue the same claims
+// under a wordlist secret and a random one, and whichever the harness audited first decided the
+// verdict for both.
+//
+// The signature is the thing being attacked, so it belongs in the identity. The optimisation this
+// table exists for is untouched: a session token seen on 200 pages has the same signing input and
+// the same signature on all 200, so it is still cracked once.
 //
 // Past MaxTrackedTokens the table stops growing and every token is claimed — repeating work rather
 // than skipping tokens, which is the failure direction that cannot produce a false negative.
-func (c *JwtWeakSecretCheck) claim(signingInput string) bool {
+func (c *JwtWeakSecretCheck) claim(t rawToken) bool {
+	key := t.signingInput + "." + t.signatureB64
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.seen[signingInput]; ok {
+	if _, ok := c.seen[key]; ok {
 		return false
 	}
 	if len(c.seen) >= MaxTrackedTokens {
 		c.dedupFull.Store(true)
 		return true
 	}
-	c.seen[signingInput] = struct{}{}
+	c.seen[key] = struct{}{}
 	return true
 }
 
