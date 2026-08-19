@@ -85,7 +85,7 @@ type runtimeTarget struct {
 	storedDomBrowsers BrowserProvider
 	// memo caches each endpoint's audit for this target's lifetime; see auditOnce. Guarded because
 	// the subtests that read it run in parallel.
-	memo   map[string]memoisedAudit
+	memo   map[string]*memoisedAudit
 	memoMu sync.Mutex
 	// freshAudits counts audits that actually ran, as opposed to memo hits. The shared target lives
 	// for the whole test binary rather than per -count iteration, so a second in-process iteration
@@ -347,26 +347,44 @@ func (rt *runtimeTarget) auditOnce(t *testing.T, path string, dom, stored bool,
 	key := fmt.Sprintf("%s|%v|%v", path, dom, stored)
 	rt.memoMu.Lock()
 	if rt.memo == nil {
-		rt.memo = map[string]memoisedAudit{}
+		rt.memo = map[string]*memoisedAudit{}
 	}
 	if got, ok := rt.memo[key]; ok {
 		rt.memoMu.Unlock()
-		return got
+		// Someone else owns this key. Wait for their audit rather than starting a second one.
+		<-got.done
+		return *got
 	}
+	// Claim the key before releasing the lock, so a racing caller finds this entry and waits on it
+	// instead of racing us.
+	entry := &memoisedAudit{done: make(chan struct{})}
+	rt.memo[key] = entry
 	rt.memoMu.Unlock()
 
-	// Deliberately outside the lock: an audit takes seconds and drives a browser for DOM rows, so
-	// holding the mutex across it would serialise every parallel subtest onto the slowest one. The
-	// cost is that two subtests racing on the same fresh endpoint may both audit it - wasteful once,
-	// never wrong, and cheaper than the serialisation it avoids.
+	// The audit itself runs outside the lock: it takes seconds and drives a browser for DOM rows,
+	// so holding the mutex across it would serialise every parallel subtest onto the slowest one.
+	// Different keys still run concurrently; only a second audit of the SAME key is prevented.
+	//
+	// This used to let two subtests racing on the same fresh endpoint both audit it, on the
+	// reasoning that a duplicate audit was "wasteful once, never wrong". That is not true of a
+	// check holding one-shot state per input on the scanner these subtests share. JWT weak HMAC
+	// secret is exactly that: JwtWeakSecretCheck.claim (jwt_weak.go) fires once per signing input,
+	// so the losing audit of a duplicated pair came back with no JWT finding — and could then win
+	// the memo write, leaving the row looking dead. The safe-counterpart guard then correctly
+	// refused to accept the twin's silence as evidence, and the suite failed on a race rather than
+	// on anything about the scanner.
+	//
+	// Closing in a defer matters: run() reaches t.Fatalf on failure, which unwinds via
+	// runtime.Goexit, and a waiter blocked on this channel would otherwise hang until the timeout.
+	defer close(entry.done)
+
 	byRow, sent := run(t)
 
 	rt.memoMu.Lock()
-	entry := memoisedAudit{byRow: byRow, requestsSent: sent}
-	rt.memo[key] = entry
+	entry.byRow, entry.requestsSent = byRow, sent
 	rt.freshAudits++
 	rt.memoMu.Unlock()
-	return entry
+	return *entry
 }
 
 // memoisedAudit carries the probe count with the findings, so the request-budget test still reads
@@ -374,6 +392,9 @@ func (rt *runtimeTarget) auditOnce(t *testing.T, path string, dom, stored bool,
 type memoisedAudit struct {
 	byRow        map[string]*Finding
 	requestsSent uint32
+	// done is closed once this entry's audit has finished. A caller that finds an entry already in
+	// the map waits on it rather than running a duplicate audit of the same endpoint; see auditOnce.
+	done chan struct{}
 }
 
 // findingsFor audits one endpoint, once per target.
@@ -759,7 +780,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 158
+	const wantDemonstrated = 160
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.
