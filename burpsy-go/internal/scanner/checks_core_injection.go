@@ -165,17 +165,45 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	for _, point := range points {
 		var evidence XSSEvidence
 
-		// Two probes per point, each with its own canary so a reflection can be attributed to
-		// the payload that caused it rather than to the other probe.
-		htmlCanary := newXSSCanary()
-		if res, err := h.Send(ctx, point, htmlBreakoutPayload(htmlCanary)); err == nil {
-			evidence |= analyzeXSSReflection(res.Body, htmlCanary, rawHeaderValue(string(res.Raw), "Content-Type"),
-				xssHTMLBreakoutMarker(htmlCanary), xssScriptBreakoutMarker(htmlCanary))
+		// A probe with a bare canary first, to learn WHERE this point's value lands before
+		// choosing what to send at it.
+		//
+		// A payload is exploitable or inert entirely according to its context, and no single
+		// payload covers them all: `';…//` sits inertly inside a double-quoted host and vice
+		// versa, and a value reflected into a text node needs no quote at all. Sending a fixed
+		// pair and hoping was the previous approach, and it is why three of cmd/xsschallenge's
+		// contexts were missed — their exploits contain no quote character, so nothing the old
+		// payloads carried could ever have appeared. This is ZAP's ordering: observe the context,
+		// then attack it.
+		//
+		// The observation probe is not wasted. A reflection it sees is recorded even when no
+		// breakout follows, which is the honest half of the result.
+		observed := newXSSCanary()
+		var contexts []xssContext
+		if res, err := h.Send(ctx, point, observed); err == nil {
+			contentType := rawHeaderValue(string(res.Raw), "Content-Type")
+			if strings.Contains(res.Body, observed) {
+				evidence |= XSSEvidenceReflected
+				if rendersAsMarkup(contentType) {
+					contexts = classifyXSSContexts(res.Body, observed)
+				}
+			}
 		}
-		scriptCanary := newXSSCanary()
-		if res, err := h.Send(ctx, point, scriptBreakoutPayload(scriptCanary)); err == nil {
-			evidence |= analyzeXSSReflection(res.Body, scriptCanary, rawHeaderValue(string(res.Raw), "Content-Type"),
-				xssHTMLBreakoutMarker(scriptCanary), xssScriptBreakoutMarker(scriptCanary))
+
+		// Each distinct context gets the payload that actually works there. Distinct, because a
+		// value echoed into both a text node and an attribute is ordinary, and the two need
+		// different payloads.
+		for _, payload := range xssPayloadsForContexts(contexts) {
+			canary := newXSSCanary()
+			res, err := h.Send(ctx, point, payload.build(canary))
+			if err != nil {
+				continue
+			}
+			evidence |= analyzeXSSReflection(res.Body, canary, rawHeaderValue(string(res.Raw), "Content-Type"),
+				xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
+			if xssBreakoutConfirmed(evidence) {
+				break
+			}
 		}
 
 		if !xssBreakoutConfirmed(evidence) {

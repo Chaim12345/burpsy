@@ -114,10 +114,22 @@ func TestEscapedReflectionIsNotAScriptBreakout(t *testing.T) {
 }
 
 // The other direction: an unescaped reflection in a JavaScript string context IS a breakout, and
-// tightening the marker must not have cost that.
+// tightening the evidence must not cost that.
+//
+// This test previously asserted the same thing about the OLD payload, `\'-alert(C)-'\//`, and was
+// passing for a reason that did not hold. That payload does not break out of anything. Run in a
+// real JS engine against the host below it raises `SyntaxError: Unexpected token ILLEGAL` and
+// alert is never called: a backslash inside a string literal escapes the quote that follows, so
+// the payload extended the literal it meant to close, and the trailing bare `\` made the statement
+// unparseable. The old assertion held only because the check was matching the payload's own bytes
+// as a substring — evidence and claim had come apart, and the test was pinning the gap open.
+//
+// The payload is now `';alert(C)//`, which closes the literal for real; the same engine reports
+// `ReferenceError: C is not defined`, i.e. it evaluated the canary as an identifier in expression
+// position. Reaching executable position is the claim, so that is what is asserted.
 func TestUnescapedScriptContextIsStillABreakout(t *testing.T) {
 	canary := "zxssraw07"
-	payload := scriptBreakoutPayload(canary)
+	payload := scriptBreakoutPayloadFor('\'', canary)
 	body := "<script>var lastSearch = '" + payload + "';</script>"
 
 	evidence := analyzeXSSReflection(body, canary, "text/html",
@@ -125,6 +137,59 @@ func TestUnescapedScriptContextIsStillABreakout(t *testing.T) {
 	if evidence&XSSEvidenceScriptBreakout == 0 {
 		t.Fatalf("an unescaped payload inside a single-quoted JavaScript string was not classified "+
 			"as a script breakout (evidence %#x)", evidence)
+	}
+}
+
+// The double-quoted host, which the single payload the check used to send could never reach:
+// `';…//` sits inertly inside a double-quoted literal, so a fixed payload silently skipped every
+// application using the other quote style.
+func TestDoubleQuotedScriptHostIsABreakout(t *testing.T) {
+	canary := "zxssraw08"
+	payload := scriptBreakoutPayloadFor('"', canary)
+	body := `<script>var lastSearch = "` + payload + `";</script>`
+
+	evidence := analyzeXSSReflection(body, canary, "text/html",
+		xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
+	if evidence&XSSEvidenceScriptBreakout == 0 {
+		t.Fatalf("a double-quoted host was not classified as a script breakout (evidence %#x)", evidence)
+	}
+}
+
+// The measured false positive this work exists to remove: a host that reflects through
+// json.Marshal escapes the quote, so nothing breaks out, and must not be reported.
+func TestJSONMarshalHostIsNotAScriptBreakout(t *testing.T) {
+	canary := "zxssjson09"
+	payload := scriptBreakoutPayloadFor('"', canary)
+	// json.Marshal escapes the quote and the backslash; the canary never leaves the literal.
+	escaped := strings.ReplaceAll(payload, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	body := `<script>var conf = "` + escaped + `";</script>`
+
+	evidence := analyzeXSSReflection(body, canary, "text/html",
+		xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
+	if evidence&XSSEvidenceScriptBreakout != 0 {
+		t.Fatalf("a correctly-escaped json.Marshal host was reported as a script breakout "+
+			"(evidence %#x); body: %s", evidence, body)
+	}
+	if evidence&XSSEvidenceReflected == 0 {
+		t.Error("the reflection itself should still be recorded")
+	}
+}
+
+// Markup that only appears inside a comment or inside RCDATA is inert: a browser creates no
+// element from it. Claiming a tag breakout there is the same class of error as the JSON case.
+func TestMarkerInInertContextIsNotAnHTMLBreakout(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"comment", "<!-- <svg id=%s onload=alert(1)> -->"},
+		{"textarea", "<textarea><svg id=%s onload=alert(1)></textarea>"},
+	} {
+		canary := "zxssinert10"
+		body := strings.ReplaceAll(tc.body, "%s", canary)
+		evidence := analyzeXSSReflection(body, canary, "text/html",
+			xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
+		if evidence&XSSEvidenceHTMLBreakout != 0 {
+			t.Errorf("%s: inert markup was reported as an HTML breakout (evidence %#x)", tc.name, evidence)
+		}
 	}
 }
 

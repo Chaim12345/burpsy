@@ -57,12 +57,60 @@ func htmlBreakoutPayload(canary string) string {
 	return `"><svg id=` + canary + ` onload=alert(1)>`
 }
 
-// scriptBreakoutSuffix is Zh7u's lambda$new$1 shape: escape out of a
-// single-quoted or double-quoted JavaScript string with a backslash, then
-// use `//` to comment out whatever followed on the original line, which is
-// what makes the resulting script still parse.
+// scriptBreakoutPayload closes the enclosing JavaScript string literal, puts the canary in
+// expression position, and comments out the remainder of the original statement so the script
+// still parses.
+//
+// The shape this replaced — `\'-alert(<canary>)-'\//` — could not work, and was measured not to
+// rather than argued about. Run in a real JS engine against the three host shapes it targets:
+//
+//	var a = '\'-alert(C)-'\//';   SyntaxError, alert never called
+//	var a = "\'-alert(C)-'\//";   no error, but the payload never leaves the string
+//	var a = '\\'-alert(C)-\'\//'; SyntaxError, alert never called
+//
+// The leading `\'` was the defect: inside a string literal a backslash ESCAPES the quote that
+// follows, so the payload extended the string it was trying to close, and the trailing bare `\`
+// then made the statement unparseable. That means the script-breakout bit could only ever have
+// been set by the substring marker matching the payload's own bytes — never by an actual breakout.
+// The evidence and the thing it claimed to evidence had come apart.
+//
+// `';alert(C)//` closes the literal for real. Verified the same way: the engine reports
+// `ReferenceError: C is not defined`, which is the interpreter evaluating the canary as an
+// identifier in expression position — reaching executable position is exactly the claim.
+//
+// Burp's Zh7u lambda$new$1 is `\`+canary+`//`, which is the escape-the-escaper variant below
+// rather than this one; the two target different host behaviour and both are sent.
 func scriptBreakoutPayload(canary string) string {
-	return `\'-alert(` + canary + `)-'\` + "//"
+	return scriptBreakoutPayloadFor('\'', canary)
+}
+
+// scriptBreakoutPayloadFor returns the breakout for a specific host-string quote.
+//
+// quote is the delimiter of the literal the canary landed in: '\” or '"'. Any other value gets
+// the single-quote form, which is the more common host shape.
+//
+// A payload cannot serve both quote styles at once — `';…//` sits inertly inside a double-quoted
+// host and vice versa — which is why the check learns the context before choosing, rather than
+// sending one payload and hoping. That is ZAP's ordering and the reason its false-positive rate is
+// what it is.
+func scriptBreakoutPayloadFor(quote byte, canary string) string {
+	q := "'"
+	if quote == '"' {
+		q = `"`
+	}
+	return q + `;alert(` + canary + `)//`
+}
+
+// scriptBreakoutPayloadEscaped is the escape-the-escaper variant, for a host that escapes a quote
+// as \' but does not also escape the backslash.
+//
+// The leading backslash is consumed by the escape the application itself adds, so the quote that
+// follows closes the literal for real. Measured: against a host applying `'` → `\'`, this reaches
+// expression position where the plain variant does not. An application that escapes backslashes
+// too — json.Marshal, and anything else doing it properly — defeats this, which is the correct
+// outcome and is what xss_jscontext.go is there to notice.
+func scriptBreakoutPayloadEscaped(quote byte, canary string) string {
+	return `\` + scriptBreakoutPayloadFor(quote, canary)
 }
 
 // xssHTMLBreakoutMarker is the literal substring that only appears in the
@@ -86,7 +134,7 @@ func xssHTMLBreakoutMarker(canary string) string {
 // This was latent for as long as the check appended a guessed parameter name and never reached a
 // sink. Driving it through real insertion points is what surfaced it.
 func xssScriptBreakoutMarker(canary string) string {
-	return `'-alert(` + canary + `)-'`
+	return `;alert(` + canary + `)//`
 }
 
 // analyzeXSSReflection classifies one probe's response body without network
@@ -113,16 +161,90 @@ func analyzeXSSReflection(body, canary, contentType string, htmlMarker, scriptMa
 		// observation is not lost, never as a breakout.
 		return evidence | XSSEvidenceReflectedEncoded
 	}
+
 	if !strings.Contains(body, htmlMarker) {
 		evidence |= XSSEvidenceReflectedEncoded
 	}
-	if strings.Contains(body, htmlMarker) {
+
+	// The HTML claim is that a crafted element was injected. The marker's presence as a substring
+	// is necessary but not sufficient: the same bytes inside a comment, inside <textarea>, or
+	// inside a script string are text a browser never turns into an element. Requiring the marker
+	// to sit where markup is actually parsed is ZAP's re-verification step, and it is the
+	// difference between "these bytes came back" and "an element was created".
+	if strings.Contains(body, htmlMarker) && htmlMarkerIsParsedAsMarkup(body, htmlMarker) {
 		evidence |= XSSEvidenceHTMLBreakout
 	}
-	if strings.Contains(body, scriptMarker) {
+
+	// The script claim rests on the lexer, not on a substring.
+	//
+	// It used to be `strings.Contains(body, scriptMarker)`, which is what reported an endpoint
+	// reflecting through json.Marshal as vulnerable: JSON leaves `'` alone so the marker survived,
+	// and doubled the payload's backslash so the quote it meant to escape with terminated nothing.
+	// The bytes that "proved" the breakout and the bytes that neutralised it were the same bytes;
+	// only their position in the grammar separated them, and a substring test cannot see position.
+	//
+	// scriptMarker is now a hint rather than a requirement. Requiring it would re-introduce the
+	// same class of error in the opposite direction: a host that reflects the payload with its
+	// punctuation rearranged, or that splits it across a template, can still put the canary in
+	// executable position, and that is a breakout whether or not the crafted bytes survived
+	// verbatim. The lexer answers the question the marker was standing in for.
+	if xssScriptBreakoutReachesCode(body, canary) {
 		evidence |= XSSEvidenceScriptBreakout
 	}
 	return evidence
+}
+
+// htmlMarkerIsParsedAsMarkup reports whether the injected marker sits somewhere a browser parses
+// markup, rather than somewhere it is inert text.
+//
+// It classifies the canary's own occurrences rather than the marker's: the canary is what the
+// classifier can find unambiguously, and it is embedded in the marker by construction. A canary in
+// a text node means the surrounding crafted tag is parsed as a tag. A canary inside a comment,
+// inside RCDATA or inside a script is inert as markup.
+//
+// An attribute-value occurrence counts, because that is where the crafted `"><svg …>` payload does
+// its work: the quote closes the value, the `>` closes the tag, and the element that follows is
+// real. That the classifier reports it as an attribute value is a statement about the ORIGINAL
+// document's shape at that offset, not a claim the breakout failed.
+func htmlMarkerIsParsedAsMarkup(body, marker string) bool {
+	canary := canaryWithinMarker(marker)
+	if canary == "" {
+		return true // Nothing to place; fall back to the substring verdict rather than dropping it.
+	}
+	contexts := classifyXSSContexts(body, canary)
+	if len(contexts) == 0 {
+		return true
+	}
+	for _, c := range contexts {
+		switch c.Kind {
+		case xssCtxText, xssCtxAttrValue:
+			return true
+		}
+	}
+	return false
+}
+
+// xssScriptBreakoutReachesCode reports whether the canary reached executable position in any
+// <script> in the body.
+func xssScriptBreakoutReachesCode(body, canary string) bool {
+	for _, sb := range scriptBodies(body) {
+		if jsBreakoutConfirmed(sb.Source, canary) {
+			return true
+		}
+	}
+	return false
+}
+
+// canaryWithinMarker recovers the canary from a marker built by xssHTMLBreakoutMarker, whose shape
+// is `<svg id=<canary> onload=alert(1)>`. Returns "" when the marker is not that shape, so a
+// caller can tell "no canary to place" from "canary placed nowhere".
+func canaryWithinMarker(marker string) string {
+	const prefix = `<svg id=`
+	const suffix = ` onload=alert(1)>`
+	if !strings.HasPrefix(marker, prefix) || !strings.HasSuffix(marker, suffix) {
+		return ""
+	}
+	return marker[len(prefix) : len(marker)-len(suffix)]
 }
 
 // rendersAsMarkup reports whether a browser will parse this content type as markup.
