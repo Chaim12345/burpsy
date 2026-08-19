@@ -29,6 +29,13 @@
 .codegraph/
 .cursor/
 
+# Scratch output from a design tool that writes into whatever directory it is run from. Its
+# manifests name a different product entirely ("DeepSeek iDesign", created-by "deepseek-harness"),
+# so it is neither burpsy source nor a burpsy artifact — it simply landed here. Ignored rather than
+# deleted because it belongs to whoever ran the tool, and left untracked it was one `git add -A`
+# away from being committed into this repository by accident.
+/design/
+
 # Frontend dependencies are restored from the committed Bun lockfile.
 node_modules/
 

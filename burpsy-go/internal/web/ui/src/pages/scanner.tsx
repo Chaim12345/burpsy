@@ -504,6 +504,21 @@ export function ScannerPage(): JSX.Element {
                                     {findingName(leaf.finding)}
                                   </span>
                                   <span className="tree-row-meta">
+                                    {/*
+                                      A merged row covers several parameters, and the count is the
+                                      one fact that distinguishes it from a single observation at a
+                                      glance. Without it a five-parameter finding and a
+                                      one-parameter finding are the same line, and the merge reads
+                                      as though four results went missing.
+                                    */}
+                                    {leaf.finding.params && leaf.finding.params.length > 1 ? (
+                                      <span
+                                        className="cell-dim tree-row-params"
+                                        title={`Affects ${leaf.finding.params.length} parameters: ${leaf.finding.params.join(", ")}`}
+                                      >
+                                        {leaf.finding.params.length} params
+                                      </span>
+                                    ) : null}
                                     <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
                                   </span>
                                 </div>
@@ -572,9 +587,21 @@ export function ScannerPage(): JSX.Element {
               // Only rendered when the finding names a parameter: an insertion-point BCheck or a
               // DOM sink is attributable to one input, a resource-level finding is not, and a row
               // that can only ever say "—" is noise.
-              ...(selected.finding.param
-                ? [{ label: "Parameter", value: selected.finding.param }]
-                : []),
+              //
+              // Findings of one type against one target are merged into a single row, so this shows
+              // every parameter the row covers rather than only the first observed. Showing one of
+              // five would make the merge look like it had lost the other four. Singular label when
+              // there is one, so the common case does not read as a list of one.
+              ...(selected.finding.params && selected.finding.params.length > 1
+                ? [
+                    {
+                      label: `Parameters (${selected.finding.params.length})`,
+                      value: selected.finding.params.join(", "),
+                    },
+                  ]
+                : selected.finding.param
+                  ? [{ label: "Parameter", value: selected.finding.param }]
+                  : []),
               { label: "Times seen", value: selected.finding.times_seen },
               { label: "Occurrences", value: selected.finding.occurrences.length },
             ]}

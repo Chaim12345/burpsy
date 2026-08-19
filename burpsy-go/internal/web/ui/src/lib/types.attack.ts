@@ -80,6 +80,14 @@ export interface FindingDetail {
   remediation: string | null;
   /** The parameter this finding was observed at; absent for resource-level findings. */
   param?: string;
+  /**
+   * Every parameter this finding covers. Findings of one type against one target are merged into a
+   * single row, so a reflected XSS reachable through five parameters is one finding with five
+   * entries here rather than five rows. `param` remains the first one observed; without this field
+   * the merge would hide the other four, which would make it a loss of information rather than a
+   * tidier list. Absent for a resource-level finding and for legacy rows.
+   */
+  params?: string[];
   times_seen: number;
   occurrences: Occurrence[];
   /** The catalogue entry this check resolved to, when it resolved to one. */

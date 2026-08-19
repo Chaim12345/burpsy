@@ -263,3 +263,46 @@ func TestRestore_RoundTripsMergedFinding(t *testing.T) {
 		t.Errorf("findings = %d after a post-restore observation, want 1", restored.Count())
 	}
 }
+
+// TaskID is the link between a coverage summary and the findings that produced it: the dashboard
+// can say an audit swept 200 exchanges and that 12 findings exist, and TaskID is the only thing
+// relating the two. It was carried in memory and dropped on the way to disk, so that link survived
+// exactly until the first restart, silently — every restored finding read back as "nothing tracked
+// it", which is also what a genuinely untracked finding reads as.
+func TestRestore_RoundTripsFindingTaskID(t *testing.T) {
+	p := newTestStore(t)
+	findings := core.NewFindingStore()
+	findings.SetPersistenceSink(p.SaveFinding)
+
+	tracked := findings.Add(core.NewFinding{
+		Name: "SQL injection", Severity: core.SeverityHigh, Confidence: core.ConfidenceFirm,
+		TaskID: 4242,
+		Target: core.FindingTarget{Host: "app.test", Port: 443, TLS: true, Path: "/items"},
+	})
+	// A finding nobody tracked keeps TaskID 0, and must stay distinguishable from a tracked one.
+	untracked := findings.Add(core.NewFinding{
+		Name: "Cleartext submission of password", Severity: core.SeverityMedium,
+		Confidence: core.ConfidenceCertain,
+		Target:     core.FindingTarget{Host: "app.test", Port: 80, Path: "/login"},
+	})
+
+	restored := core.NewFindingStore()
+	if err := p.Restore(nil, restored, nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
+	byID := map[uint64]*core.Finding{}
+	for _, f := range restored.All() {
+		byID[f.ID] = f
+	}
+	if got := byID[tracked]; got == nil {
+		t.Fatalf("tracked finding %d did not survive the restore", tracked)
+	} else if got.TaskID != 4242 {
+		t.Errorf("TaskID = %d after restore, want 4242 — the finding/coverage link was dropped", got.TaskID)
+	}
+	if got := byID[untracked]; got == nil {
+		t.Fatalf("untracked finding %d did not survive the restore", untracked)
+	} else if got.TaskID != 0 {
+		t.Errorf("TaskID = %d, want 0 for a finding no task produced", got.TaskID)
+	}
+}

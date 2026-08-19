@@ -244,6 +244,14 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("findings", "params", "TEXT"); err != nil {
 		return err
 	}
+	// task_id is the run that produced the finding. It was carried in memory and dropped on the way
+	// to disk, so the link between a coverage summary and the findings it produced survived only
+	// until a restart: the dashboard could say an audit swept 200 exchanges and that 12 findings
+	// exist, and after a reload nothing related the two. NULL on a legacy row reads back as 0, which
+	// is the same "nothing tracked it" the in-memory zero already means.
+	if err := s.addColumn("findings", "task_id", "INTEGER"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -556,11 +564,11 @@ func (s *Store) SaveFinding(f *core.Finding) {
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO findings
 		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
-		  target_host, target_port, target_tls, target_path, params)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  target_host, target_port, target_tls, target_path, params, task_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
 		f.Remediation, occ, ins, f.Timestamp, f.Param,
-		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params)
+		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -570,7 +578,7 @@ func (s *Store) SaveFinding(f *core.Finding) {
 func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
-		        target_host, target_port, target_tls, target_path, params
+		        target_host, target_port, target_tls, target_path, params, task_id
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -584,11 +592,13 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		// Nullable because a row written before these columns existed has no value for them, and a
 		// zero target is exactly the right reading of that: unknown, so not eligible to merge.
 		var tHost, tPath sql.NullString
-		var tPort, tTLS sql.NullInt64
+		var tPort, tTLS, taskID sql.NullInt64
 		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param,
-			&tHost, &tPort, &tTLS, &tPath, &params); err != nil {
+			&tHost, &tPort, &tTLS, &tPath, &params, &taskID); err != nil {
 			return nil, err
 		}
+		// NULL on a legacy row becomes 0, which is what an untracked finding already means in memory.
+		f.TaskID = uint64(taskID.Int64)
 		f.Severity = core.Severity(sev)
 		f.Confidence = core.Confidence(conf)
 		f.Timestamp = uint64(ts)
