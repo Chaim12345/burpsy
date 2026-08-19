@@ -80,9 +80,22 @@ type runtimeTarget struct {
 	// across the whole binary for speed, that made the stored DOM rows order-dependent. Each audit
 	// therefore gets its own ledger via storedDomScanner(), and only the browser is shared.
 	storedDomScan *ActiveScanner
-	// storedDomBrowsers is the one browser provider those per-audit scanners share; launching a
-	// Chrome per endpoint would cost far more than the isolation is worth.
+	// storedDomBrowsers is the one browser provider the stored-DOM phase uses.
 	storedDomBrowsers BrowserProvider
+	// The stored-DOM phase runs ONCE for every stored+DOM endpoint, and these hold its result.
+	//
+	// It used to run per audit, each with a fresh ledger, which was correct and quadratic: every
+	// audit's FinishScan rendered every script-bearing page in the manifest, so 26 endpoints times
+	// ~100 pages was ~2,600 browser page loads and the scanner package took 1092s. Almost none of
+	// those renders could show the canary belonging to the audit that paid for them.
+	//
+	// One pass is also closer to what a real scan does: plant everything, then run the deferred
+	// phase once. Attribution is by exchange - deferStoredClaim only resolves canaries whose origin
+	// is the claim's own exchange - so a shared ledger cannot mix two endpoints' verdicts, which is
+	// what the per-audit ledgers were there to prevent.
+	storedDomOnce   sync.Once
+	storedDomByPath map[string]map[string]*Finding
+	storedDomSent   map[string]uint32
 	// memo caches each endpoint's audit for this target's lifetime; see auditOnce. Guarded because
 	// the subtests that read it run in parallel.
 	memo   map[string]*memoisedAudit
@@ -289,16 +302,21 @@ func (rt *runtimeTarget) auditStoredEndpoint(t *testing.T, path string, dom bool
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	scan := rt.storedScan
 	if dom {
 		if rt.storedDomScan == nil {
 			t.Fatal("a stored DOM row was audited with no browser-enabled stored scanner; the caller " +
 				"must skip these rows when Chrome is absent rather than audit them against nothing")
 		}
-		// A ledger of its own, so this audit's verdict does not depend on whether another test
-		// function already resolved and retired the same row's claim.
-		scan = rt.storedDomScanner()
+		// One batched phase for every stored+DOM endpoint; see storedDomBatch.
+		rt.storedDomBatch(t)
+		out := map[string]*Finding{}
+		for name, f := range rt.storedDomByPath[path] {
+			out[name] = f
+		}
+		return out, rt.storedDomSent[path]
 	}
+
+	scan := rt.storedScan
 
 	byRow := map[string]*Finding{}
 	outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
@@ -306,21 +324,106 @@ func (rt *runtimeTarget) auditStoredEndpoint(t *testing.T, path string, dom bool
 	if completion.RefetchError != "" {
 		t.Fatalf("the deferred phase could not re-fetch: %s", completion.RefetchError)
 	}
-	// A stored DOM row's only evidence comes from the render pass, so a pass that did not happen
-	// must fail here rather than surface as a silent "no finding".
-	if dom && completion.RenderError != "" {
-		t.Fatalf("the deferred phase could not render any page: %s", completion.RenderError)
-	}
-	if dom && completion.Render.Rendered == 0 {
-		t.Fatalf("the deferred phase rendered no page at all (%s), so this row's silence would mean "+
-			"nothing was looked at", completion.Render.Summary())
-	}
+	// No render assertions here: a DOM row returned above, so this path is the non-DOM stored rows,
+	// whose evidence comes from the HTTP re-fetch. The render pass is asserted once, in
+	// storedDomBatch, where it actually runs.
 	for _, f := range append(findings, deferred...) {
 		if f != nil {
 			byRow[f.Name] = f
 		}
 	}
 	return byRow, outcome.RequestsSent
+}
+
+// storedDomBatch runs the stored-DOM deferred phase once for the whole target.
+//
+// Every stored+DOM endpoint is audited first, which plants that endpoint's canaries and registers
+// its deferred claim. Only then does FinishScan run, so the one re-fetch and the one render pass
+// serve all of them. Findings are bucketed by the exchange they name.
+func (rt *runtimeTarget) storedDomBatch(t *testing.T) {
+	t.Helper()
+	rt.storedDomOnce.Do(func() {
+		rt.storedDomByPath = map[string]map[string]*Finding{}
+		rt.storedDomSent = map[string]uint32{}
+		if rt.storedDomScan == nil {
+			return
+		}
+		scan := rt.storedDomScanner()
+
+		byID := make(map[core.ExchangeID]string, len(rt.exchanges))
+		for path, id := range rt.exchanges {
+			byID[id] = path
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		defer cancel()
+
+		record := func(path string, f *Finding) {
+			if f == nil || path == "" {
+				return
+			}
+			if rt.storedDomByPath[path] == nil {
+				rt.storedDomByPath[path] = map[string]*Finding{}
+			}
+			rt.storedDomByPath[path][f.Name] = f
+		}
+
+		var planted int
+		for _, e := range vulnapp.Vulnerabilities() {
+			if !e.Stored || !e.DOM {
+				continue
+			}
+			id, ok := rt.exchanges[e.Path]
+			if !ok {
+				t.Errorf("%s is declared stored+DOM but was never seeded", e.Path)
+				continue
+			}
+			outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
+			rt.storedDomSent[e.Path] = outcome.RequestsSent
+			for _, f := range findings {
+				record(e.Path, f)
+			}
+			planted++
+		}
+		if planted == 0 {
+			return
+		}
+
+		deferred, completion := scan.FinishScan(ctx)
+		if completion.RefetchError != "" {
+			t.Errorf("the stored-DOM deferred phase could not re-fetch: %s", completion.RefetchError)
+			return
+		}
+		// The render pass IS the evidence for these rows. A pass that did not happen must fail
+		// loudly rather than leave every row silent and looking clean.
+		if completion.RenderError != "" {
+			t.Errorf("the stored-DOM deferred phase could not render any page: %s", completion.RenderError)
+			return
+		}
+		if completion.Render.Rendered == 0 {
+			t.Errorf("the stored-DOM deferred phase rendered no page at all (%s), so every row's "+
+				"silence would mean nothing was looked at", completion.Render.Summary())
+			return
+		}
+		t.Logf("stored-DOM phase: %d endpoint(s) planted, one deferred phase, %s",
+			planted, completion.Render.Summary())
+
+		for _, f := range deferred {
+			if f == nil {
+				continue
+			}
+			// Attribute by the exchange the finding names. A deferred finding that names no known
+			// exchange is reported rather than spread across endpoints, because guessing which
+			// endpoint it belongs to is how a finding ends up describing the wrong one.
+			path, ok := byID[f.ExchangeID]
+			if !ok {
+				t.Errorf("deferred stored-DOM finding %q names exchange %d, which no endpoint owns",
+					f.Name, f.ExchangeID)
+				continue
+			}
+			record(path, f)
+		}
+	})
 }
 
 // auditCount reports how many audits have actually run, as opposed to memo hits.
