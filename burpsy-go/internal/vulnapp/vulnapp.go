@@ -120,6 +120,7 @@ var familyEndpoints = []func() []Endpoint{
 	storedFamilyEndpoints,
 	storedDOMFamilyEndpoints,
 	injectionEndpoints,
+	nativeEndpoints,
 }
 
 // familyRegistrars mirrors familyEndpoints: every family serves its own routes.
@@ -135,6 +136,7 @@ var familyRegistrars = []func(*http.ServeMux){
 	registerStoredFamily,
 	registerStoredDOMFamily,
 	registerInjection,
+	registerNative,
 }
 
 func coreEndpoints() []Endpoint {

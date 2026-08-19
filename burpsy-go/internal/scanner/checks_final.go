@@ -420,6 +420,31 @@ var provenanceRows = map[FindingProvenance]string{
 	ProvenanceFilter: "Bambda generated issue",
 }
 
+// UndemonstrableRows are catalog rows that no vulnerable endpoint can ever declare, mapped to the
+// reason. They are permanently exempt from vulnapp's coverage accounting rather than outstanding
+// work: counting them as "remaining" states there is a fixture somebody could still write, and there
+// is not.
+//
+// Derived from provenanceRows rather than re-typed, so the names cannot drift from the rows they
+// exempt. The four are provenance labels Burp attaches when something other than its own scanner
+// files a finding; provenanceCheck reads a ProvenanceLedger and never an HTTP exchange, so there is
+// no response an endpoint could serve that would produce one. See vulnapp_final.go, which states the
+// same fact next to the family that would otherwise own them.
+//
+// This is deliberately narrow. A row that is merely hard to demonstrate — one needing a raw
+// listener, a collaborator channel, or a browser capability — is outstanding work and belongs
+// nowhere near this map.
+func UndemonstrableRows() map[string]string {
+	const why = "a provenance label applied to findings filed by something other than the scanner; " +
+		"provenanceCheck reads the ProvenanceLedger, never an exchange, so no served response can " +
+		"produce it"
+	out := make(map[string]string, len(provenanceRows))
+	for _, row := range provenanceRows {
+		out[row] = why
+	}
+	return out
+}
+
 // ProvenanceLedger counts findings by source. A scan with no BCheck corpus loaded records
 // nothing under ProvenanceBCheck, and the row then correctly does not fire.
 type ProvenanceLedger struct {
