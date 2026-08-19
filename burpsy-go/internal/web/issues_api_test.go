@@ -119,3 +119,54 @@ func TestIssuesStillReportsDisabledWhenNothingHasRun(t *testing.T) {
 		t.Errorf("hint = %q, want it to name --bchecks", hint)
 	}
 }
+
+// A merged finding must not lose the parameters it covers on the way to the UI. Five reflected-XSS
+// hits on one endpoint become one row with five occurrences, and `params` is the field that keeps
+// that row as actionable as the five separate rows it replaced.
+func TestIssuesSurfacesMergedParams(t *testing.T) {
+	findings := core.NewFindingStore()
+	target := core.FindingTarget{Host: "app.test", Port: 443, TLS: true, Path: "/search"}
+	for i, p := range []string{"q", "sort", "page", "lang", "ref"} {
+		findings.Add(core.NewFinding{
+			Name:       "Cross-site scripting (reflected)",
+			Severity:   core.SeverityHigh,
+			Confidence: core.ConfidenceFirm,
+			Param:      p,
+			Target:     target,
+			Occurrences: []core.Occurrence{{
+				ExchangeID: core.ExchangeID(i),
+				Request:    core.MsgId(i * 2),
+			}},
+		})
+	}
+
+	s := newTestServer().WithFindings(findings)
+	rec := get(t, s, "/api/issues")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/issues: %d", rec.Code)
+	}
+	var body struct {
+		Findings []struct {
+			Params    []string `json:"params"`
+			TimesSeen int      `json:"times_seen"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1 merged row", len(body.Findings))
+	}
+	if body.Findings[0].TimesSeen != 5 {
+		t.Errorf("times_seen = %d, want 5", body.Findings[0].TimesSeen)
+	}
+	want := []string{"q", "sort", "page", "lang", "ref"}
+	if len(body.Findings[0].Params) != len(want) {
+		t.Fatalf("params = %v, want %v", body.Findings[0].Params, want)
+	}
+	for i, p := range want {
+		if body.Findings[0].Params[i] != p {
+			t.Errorf("params[%d] = %q, want %q", i, body.Findings[0].Params[i], p)
+		}
+	}
+}

@@ -106,6 +106,87 @@ type Occurrence struct {
 	Span       Span
 }
 
+// FindingTarget is the logical location a finding is about — the thing two findings must agree on
+// before they can be considered the same issue seen twice.
+//
+// # Why the producer supplies this rather than the store resolving it
+//
+// A finding's occurrences carry message ids, and only TrafficStore can turn one into a host and a
+// path. There were two ways to close that gap: install a resolver callback on FindingStore (there is
+// precedent — SetPersistenceSink and OnChange are both installed-callback slots), or have the caller
+// pass the target it already holds. This is the second, for three reasons.
+//
+//   - Lock discipline. Anything installed on this store runs under its write lock, under the same
+//     contract onAdd carries: it must not call back into a store. A resolver would do exactly that,
+//     reaching into TrafficStore's own RWMutex from inside FindingStore's. Findings are already
+//     produced from the proxy's response path, which is where the traffic store's observers run, and
+//     an RWMutex is not reentrant — so that is a latent deadlock, not a hypothetical one.
+//   - The producer already has it. Every site that builds a NewFinding is holding the *Exchange the
+//     finding came from (internal/scanner/capture.go, Server.activeFinding, the CLI audit command).
+//     There is no lookup to do, only a value to carry.
+//   - It survives capture rollover. An exchange can leave the traffic store; a resolver would then
+//     return nothing and the finding would silently fall into the "unknown target" bucket, where it
+//     would either merge with unrelated findings or stop merging with its own siblings. A target
+//     recorded at production time stays true.
+//
+// A zero value means "the producer did not say", and such a finding is never merged: merging on name
+// alone across unknown targets would collapse genuinely distinct issues, which is strictly worse than
+// the duplication this whole mechanism exists to remove.
+type FindingTarget struct {
+	Host string
+	Port uint16
+	TLS  bool
+	Path string
+}
+
+// Origin is the scheme/host/port triple, without the path. Port is always written out: a target is
+// compared as a string, and "app.test" on 80 and on 8080 are different targets.
+func (t FindingTarget) Origin() string {
+	scheme := "http"
+	if t.TLS {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, t.Host, t.Port)
+}
+
+// dedupExemptRows are the catalog rows that never merge, mirroring Burp's burp.Zbvp.Zd
+// (out/clean/jdt_src/burp/Zbvp.java:62-64), which exempts CROSS_DOMAIN_POST and
+// SERIALIZED_OBJECT_IN_HTTP_MESSAGE from the intake gate entirely.
+//
+// Both rows describe a property of one specific message rather than of an endpoint: a page's
+// cross-domain form posts somewhere in particular, and a serialized blob is in one particular
+// request or response. Collapsing five of them into one occurrence list would hide four distinct
+// facts behind a count, which is why Burp exempts them and why the exemption is reproduced here.
+//
+// These are the two Burp names, and both exist verbatim as burpsy-go catalog rows
+// (internal/scanner/catalog_data.go:2083 and :2147) and as live check names, so neither needed a
+// substitute. The list lives in core rather than being installed alongside the granularity policy
+// because it is a correctness rule: a build that forgot to wire a policy must still not merge these.
+var dedupExemptRows = map[string]bool{
+	"Cross-domain POST":                 true,
+	"Serialized object in HTTP message": true,
+}
+
+// DedupPolicy is the per-catalog-row tuning the store cannot derive on its own.
+//
+// Granularity is the part that needs it. Most rows are about an endpoint — reflected XSS on /search
+// is not the same issue as reflected XSS on /login — so the default target is origin+path. But a row
+// like "Strict transport security not enforced" or a cookie-scope finding is a property of the host,
+// and a passive check re-fires it on every response, so at path granularity one host yields one
+// finding per URL ever captured. Which rows are which is knowledge the scanner's check registry
+// already holds as DispatchScopePerHost, and internal/scanner exports it as ScannerDedupPolicy();
+// core cannot import scanner, so the set is handed in rather than looked up.
+//
+// With no policy installed everything is path-scoped. That is the safe direction: path granularity
+// only ever under-merges, and under-merging is the behaviour that exists today.
+type DedupPolicy struct {
+	// HostScoped names the catalog rows whose target is the origin alone, ignoring the path.
+	HostScoped map[string]bool
+	// Exempt names additional rows that never merge. Added to the built-in set above, never
+	// replacing it — a caller cannot switch the built-in exemptions off.
+	Exempt map[string]bool
+}
+
 // Inserted represents inserted payload information.
 type Inserted struct {
 	Original string
@@ -130,6 +211,10 @@ type NewFinding struct {
 	// the finding is about a resource rather than one of its inputs — a DOM sink's source
 	// expression, or an insertion point a BCheck fired at.
 	Param string
+	// Target is the logical location this finding is about, and the second half of the dedup key
+	// (the first is Name). Zero means the producer did not resolve one, which disables merging for
+	// this finding. See FindingTarget.
+	Target FindingTarget
 }
 
 // Finding represents a security finding.
@@ -146,8 +231,30 @@ type Finding struct {
 	TaskID    uint64
 	Timestamp uint64
 	// Param names the parameter the finding was observed at, empty when it is about a resource.
-	// See NewFinding.Param.
+	// See NewFinding.Param. On a merged finding this is the *first* param observed; Params below is
+	// the full set and is what a reader should use.
 	Param string
+	// Params is every distinct parameter this finding was observed at, in first-seen order, empty
+	// for a resource-level finding.
+	//
+	// This field is the reason merging is safe. Five reflected-XSS findings on /search differ only in
+	// which parameter was vulnerable, and folding them into one finding with five occurrences would
+	// destroy exactly the fact the operator needs — the occurrences record *where* each hit was, not
+	// *what* was injected. Keeping the set here means the merged finding still answers "which
+	// parameters", so the merge loses nothing.
+	Params []string
+	// Target is the logical location this finding is about. See NewFinding.Target.
+	Target FindingTarget
+}
+
+// HasParam reports whether the finding was observed at the named parameter.
+func (f *Finding) HasParam(name string) bool {
+	for _, p := range f.Params {
+		if p == name {
+			return true
+		}
+	}
+	return false
 }
 
 // FindingStore stores security findings.
@@ -166,19 +273,127 @@ type FindingStore struct {
 	// about arrivals, this one is the live-update stream and also fires for a
 	// delete and a clear, which the UI has to hear about too.
 	onChange func()
+
+	// policy tunes the dedup key per catalog row; nil means "everything path-scoped, built-in
+	// exemptions only". See DedupPolicy.
+	policy *DedupPolicy
+	// byKey maps a dedup key to the finding that owns it, so Add is O(1) rather than a scan of every
+	// finding on every intake — the passive path adds a finding per response, and an engagement's
+	// store runs to thousands. Rebuilt wholesale by Restore, maintained by Delete and Clear.
+	byKey map[string]*Finding
 }
 
 // NewFindingStore creates a new finding store.
 func NewFindingStore() *FindingStore {
 	return &FindingStore{
 		findings: make([]*Finding, 0),
+		byKey:    make(map[string]*Finding),
 	}
 }
 
-// Add adds a new finding to the store.
+// SetDedupPolicy installs the per-row dedup tuning (see DedupPolicy). Single slot, so re-installing
+// replaces rather than merges.
+//
+// The index is rebuilt against the new policy rather than left as it is, because the realistic
+// ordering is policy-after-restore: the durable layer loads a session's findings into the store and
+// the server installs the policy when it adopts that store. Keeping keys computed under the old rule
+// would leave every host-scoped row indexed by a path key it will never be looked up by, so a
+// restored session would quietly stop merging exactly the rows the policy exists for. Findings
+// already merged are not re-split — a merge is not reversible from what is kept — so a policy change
+// mid-session narrows or widens future intake only.
+func (fs *FindingStore) SetDedupPolicy(p *DedupPolicy) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.policy = p
+	fs.rebuildIndexLocked()
+}
+
+// rebuildIndexLocked recomputes byKey from the current findings under the current policy. Called
+// with the write lock held. Where several findings share a key — possible after a policy change
+// widened one — the first wins, so new occurrences land on the oldest finding of that class rather
+// than on whichever happened to be last.
+func (fs *FindingStore) rebuildIndexLocked() {
+	fs.byKey = make(map[string]*Finding, len(fs.findings))
+	for _, f := range fs.findings {
+		if key, ok := fs.dedupKeyLocked(f.Name, f.Target); ok {
+			if _, clash := fs.byKey[key]; !clash {
+				fs.byKey[key] = f
+			}
+		}
+	}
+}
+
+// dedupKeyLocked returns the key a finding merges on, and whether it may merge at all.
+//
+// The key is the catalog row name plus the target, which is this port's reading of Burp's intake
+// gate: burp.Zbvp.ZE collects candidates with findIssuesOfSameType — a filter on the issue-type
+// enum (Zbvp.java:74-76) — over a list that is already scoped to one target, so "same issue" there
+// is (type, target) too. Name stands in for the type enum because Name *is* the catalog row here;
+// every producer sets it from the catalog and the advisory resolver already keys on it.
+//
+// Query strings are deliberately not in the key. /search?q=a and /search?q=b are the same endpoint,
+// and merging across them is precisely the behaviour that turns five parameter hits into one issue.
+func (fs *FindingStore) dedupKeyLocked(name string, t FindingTarget) (string, bool) {
+	if name == "" || t.Host == "" {
+		return "", false
+	}
+	if dedupExemptRows[name] {
+		return "", false
+	}
+	if fs.policy != nil {
+		if fs.policy.Exempt[name] {
+			return "", false
+		}
+		if fs.policy.HostScoped[name] {
+			return name + "\x00" + t.Origin(), true
+		}
+	}
+	return name + "\x00" + t.Origin() + t.Path, true
+}
+
+// Add takes in a new finding, merging it into an existing one when it is the same catalog row seen
+// at the same target, and returns the id of the finding that now holds it.
+//
+// On a merge that is the *existing* finding's id, not a freshly minted one — the caller asked for
+// this observation to be recorded and the return value says where it landed, which is the only
+// answer that stays useful. No caller in the tree treats the result as "an id that did not exist
+// before"; they either ignore it or hand it straight to a lookup.
+//
+// # What escalates on a merge, and what does not
+//
+// Severity takes the maximum and confidence takes the best (Certain beats Firm beats Tentative). A
+// merged issue is as bad as its worst occurrence and as certain as its most certain one: an operator
+// triaging by severity must not have a High hidden because a Low arrived at that endpoint first.
+//
+// This is a design decision, not a port. Burp's shouldMergeIssues (Zbvp.java:53-60) has a
+// JWT-specific branch comparing secret values and a generic branch counting matches through an
+// obfuscated fingerprint that does not survive decompilation, and it decides *whether* to merge
+// rather than what the merged issue looks like. Nothing about escalation is recoverable from it.
+//
+// Description, remediation, timestamp, TaskID and Inserted stay with the first observation. They
+// describe the issue class and the moment it was first seen, and rewriting them on each merge would
+// make a finding's text depend on scan order.
 func (fs *FindingStore) Add(finding NewFinding) uint64 {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+
+	key, mergeable := fs.dedupKeyLocked(finding.Name, finding.Target)
+	if mergeable {
+		if existing, ok := fs.byKey[key]; ok {
+			fs.mergeLocked(existing, finding)
+			// onAdd, not a separate update hook: the sink is a write-through mirror of a finding's
+			// current state, and persist.Store.SaveFinding is an INSERT OR REPLACE keyed on the id,
+			// so re-offering the merged finding rewrites its row rather than inserting a second
+			// one. SQLite therefore does not drift from memory across a merge.
+			if fs.onAdd != nil {
+				fs.onAdd(existing)
+			}
+			// The set of findings did not grow, but one of them changed — the UI's list is stale
+			// either way, and the live stream's only job is to say so.
+			fs.signalChangeLocked()
+			return existing.ID
+		}
+	}
 
 	id := fs.nextID
 	fs.nextID++
@@ -190,19 +405,56 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		Confidence:  finding.Confidence,
 		Description: finding.Description,
 		Remediation: finding.Remediation,
-		Occurrences: finding.Occurrences,
+		Occurrences: append([]Occurrence(nil), finding.Occurrences...),
 		Inserted:    finding.Inserted,
 		TaskID:      finding.TaskID,
 		Timestamp:   uint64(getTimestamp()),
 		Param:       finding.Param,
+		Target:      finding.Target,
+	}
+	if finding.Param != "" {
+		f.Params = []string{finding.Param}
 	}
 
+	// Copied rather than aliased above, because a merge appends to this slice later. Aliasing the
+	// caller's slice was harmless while it was only ever read; appending to one whose backing array
+	// the caller still holds is how a later merge would scribble into somebody else's memory.
 	fs.findings = append(fs.findings, f)
+	if mergeable {
+		// Guarded because a zero-value FindingStore is usable everywhere else in this file, and a
+		// write to a nil map panics where a read from one does not.
+		if fs.byKey == nil {
+			fs.byKey = make(map[string]*Finding)
+		}
+		fs.byKey[key] = f
+	}
 	if fs.onAdd != nil {
 		fs.onAdd(f)
 	}
 	fs.signalChangeLocked()
 	return id
+}
+
+// mergeLocked folds one new observation into an existing finding. Called with the write lock held.
+func (fs *FindingStore) mergeLocked(existing *Finding, incoming NewFinding) {
+	existing.Occurrences = append(existing.Occurrences, incoming.Occurrences...)
+	if incoming.Param != "" && !existing.HasParam(incoming.Param) {
+		existing.Params = append(existing.Params, incoming.Param)
+		if existing.Param == "" {
+			// The first observation was resource-level and this one names a parameter. Param is the
+			// legacy single-value view of Params, so it takes the first one that exists.
+			existing.Param = incoming.Param
+		}
+	}
+	if incoming.Severity > existing.Severity {
+		existing.Severity = incoming.Severity
+	}
+	if incoming.Confidence < existing.Confidence {
+		existing.Confidence = incoming.Confidence
+	}
+	if existing.Inserted == nil && incoming.Inserted != nil {
+		existing.Inserted = incoming.Inserted
+	}
 }
 
 // OnChange installs the signal called after the findings change, or nil to remove
@@ -252,6 +504,11 @@ func (fs *FindingStore) Restore(findings []*Finding) {
 		}
 	}
 	fs.nextID = max
+	// The dedup index is rebuilt from the snapshot rather than left empty, so a finding added after a
+	// restart merges into the finding it belongs with instead of starting a second one beside it. A
+	// row persisted before Target existed reads back with a zero target and simply does not
+	// participate — it stays exactly as durable as it was, it just cannot attract new occurrences.
+	fs.rebuildIndexLocked()
 }
 
 // Get retrieves a finding by ID.
@@ -293,6 +550,12 @@ func (fs *FindingStore) Delete(id uint64) bool {
 	for i, f := range fs.findings {
 		if f.ID == id {
 			fs.findings = append(fs.findings[:i], fs.findings[i+1:]...)
+			// Drop the index entry too, and only if it still points at *this* finding: leaving it
+			// behind would make the next matching finding merge into a deleted one, which would
+			// vanish from the store's own list.
+			if key, ok := fs.dedupKeyLocked(f.Name, f.Target); ok && fs.byKey[key] == f {
+				delete(fs.byKey, key)
+			}
 			fs.signalChangeLocked()
 			return true
 		}
@@ -306,6 +569,7 @@ func (fs *FindingStore) Clear() {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	fs.findings = fs.findings[:0]
+	fs.byKey = make(map[string]*Finding)
 	fs.nextID = 0
 	fs.signalChangeLocked()
 }

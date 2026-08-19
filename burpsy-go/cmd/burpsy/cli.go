@@ -137,9 +137,11 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		toolRunner = scanner.NewToolRunner(scanner.ToolRunnerConfig{Tools: toolAllowlist})
 	}
 	ctx := &cliContext{
-		store:    store,
-		scope:    scope,
-		logger:   logger,
+		store:  store,
+		scope:  scope,
+		logger: logger,
+		// SetDedupPolicy below rather than at construction because core cannot import scanner; see
+		// scanner.DedupPolicy. Without it the CLI would still dedup, just per path for every row.
 		findings: core.NewFindingStore(),
 		sess:     session.NewCoordinator(logger),
 		// WithSend, because the engine has no other way out and refuses to send without one. It used
@@ -174,6 +176,9 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 
 		toolAllowlist: toolAllowlist,
 	}
+	// Before loadState, which restores persisted findings: SetDedupPolicy rebuilds the index anyway,
+	// but installing it first means the restore builds the right keys the first time.
+	ctx.findings.SetDedupPolicy(scanner.DedupPolicy())
 	if err := ctx.loadState(); err != nil {
 		return nil, err
 	}

@@ -126,6 +126,11 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 // is not worth an unsubscribe protocol.
 func (s *Server) followLive() {
 	s.findings.OnChange(func() { s.live.notify(changeIssues) })
+	// Installed here for the same reason as the hooks around it: it is a single slot on a store that
+	// a With* may have just replaced, so it has to follow the store rather than the constructor. It
+	// tells the finding store which catalog rows dedup per host rather than per path, knowledge that
+	// only the scanner's check registry has — see scanner.DedupPolicy.
+	s.findings.SetDedupPolicy(scanner.DedupPolicy())
 	s.toolLog.OnChange(func() { s.live.notify(changeToolLog) })
 	s.events.OnChange(func() { s.live.notify(changeDashboard) })
 	s.intercept.OnChange(func() { s.live.notify(changeIntercept) })

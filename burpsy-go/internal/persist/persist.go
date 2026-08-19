@@ -221,6 +221,29 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("exchanges", "highlight", "TEXT"); err != nil {
 		return err
 	}
+	// findings gained a target and a param set, both for deduplication (core.FindingStore.Add). The
+	// target is the second half of the dedup key, so without it a restored finding cannot attract new
+	// occurrences after a restart — it would start a second finding beside itself. params is the set
+	// a merged finding folded together, and it is the field that makes the merge non-lossy: one
+	// reflected-XSS finding covering five parameters is only better than five findings if it can still
+	// name the five. All four read back as NULL on a legacy row, which correctly means "written before
+	// this build knew about targets": such a row is left out of the dedup index rather than guessed
+	// into it.
+	if err := s.addColumn("findings", "target_host", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "target_port", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "target_tls", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "target_path", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "params", "TEXT"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -502,6 +525,11 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 // ---- Findings ----------------------------------------------------------------------------------
 
 // SaveFinding mirrors one finding.
+//
+// INSERT OR REPLACE keyed on the id, which is what lets a merge (core.FindingStore.Add folding a new
+// observation into an existing finding) come through this same slot: the store re-offers the changed
+// finding, this rewrites its row, and the mirror holds the merged state rather than a stale copy
+// plus a phantom second row.
 func (s *Store) SaveFinding(f *core.Finding) {
 	occ, err := json.Marshal(f.Occurrences)
 	if err != nil {
@@ -514,12 +542,25 @@ func (s *Store) SaveFinding(f *core.Finding) {
 			ins = nil
 		}
 	}
+	var params []byte
+	if len(f.Params) > 0 {
+		params, err = json.Marshal(f.Params)
+		if err != nil {
+			params = nil
+		}
+	}
+	tls := 0
+	if f.Target.TLS {
+		tls = 1
+	}
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO findings
-		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
+		  target_host, target_port, target_tls, target_path, params)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
-		f.Remediation, occ, ins, f.Timestamp, f.Param)
+		f.Remediation, occ, ins, f.Timestamp, f.Param,
+		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -528,7 +569,8 @@ func (s *Store) SaveFinding(f *core.Finding) {
 // LoadFindings restores every finding.
 func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param
+		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
+		        target_host, target_port, target_tls, target_path, params
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -538,13 +580,34 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	for rows.Next() {
 		f := &core.Finding{}
 		var sev, conf, ts int
-		var occ, ins []byte
-		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param); err != nil {
+		var occ, ins, params []byte
+		// Nullable because a row written before these columns existed has no value for them, and a
+		// zero target is exactly the right reading of that: unknown, so not eligible to merge.
+		var tHost, tPath sql.NullString
+		var tPort, tTLS sql.NullInt64
+		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param,
+			&tHost, &tPort, &tTLS, &tPath, &params); err != nil {
 			return nil, err
 		}
 		f.Severity = core.Severity(sev)
 		f.Confidence = core.Confidence(conf)
 		f.Timestamp = uint64(ts)
+		f.Target = core.FindingTarget{
+			Host: tHost.String,
+			Port: uint16(tPort.Int64),
+			TLS:  tTLS.Int64 != 0,
+			Path: tPath.String,
+		}
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &f.Params); err != nil {
+				return nil, err
+			}
+		} else if f.Param != "" {
+			// A row from before params existed still knows its single param. Reconstructing the set
+			// from it keeps Params usable as "the parameters this finding covers" for every row,
+			// rather than leaving legacy findings looking parameter-less next to new ones.
+			f.Params = []string{f.Param}
+		}
 		if len(occ) > 0 {
 			if err := json.Unmarshal(occ, &f.Occurrences); err != nil {
 				return nil, err

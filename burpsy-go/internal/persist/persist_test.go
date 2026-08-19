@@ -209,3 +209,57 @@ func TestOpen_FailsOnBogusPath(t *testing.T) {
 		t.Fatalf("Open in missing directory succeeded, want error")
 	}
 }
+
+// A merged finding must survive a restart as one finding with its whole occurrence and parameter
+// set, and it must still be able to attract new occurrences afterwards. The first half tests that
+// SaveFinding's INSERT OR REPLACE really does rewrite the row a merge changed rather than leaving a
+// stale copy; the second tests that Restore rebuilds the dedup index from the persisted target.
+func TestRestore_RoundTripsMergedFinding(t *testing.T) {
+	p := newTestStore(t)
+	findings := core.NewFindingStore()
+	findings.SetPersistenceSink(p.SaveFinding)
+
+	target := core.FindingTarget{Host: "app.test", Port: 443, TLS: true, Path: "/search"}
+	var id uint64
+	for i, param := range []string{"q", "sort", "page"} {
+		id = findings.Add(core.NewFinding{
+			Name: "Cross-site scripting (reflected)", Severity: core.SeverityHigh,
+			Confidence: core.ConfidenceFirm, Param: param, Target: target,
+			Occurrences: []core.Occurrence{{ExchangeID: core.ExchangeID(i), Request: core.MsgId(i * 2)}},
+		})
+	}
+
+	restored := core.NewFindingStore()
+	if err := p.Restore(nil, restored, nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored.Count() != 1 {
+		t.Fatalf("findings = %d, want 1 merged row — the sink must rewrite, not insert", restored.Count())
+	}
+	f := restored.All()[0]
+	if f.ID != id {
+		t.Errorf("id = %d, want %d", f.ID, id)
+	}
+	if len(f.Occurrences) != 3 {
+		t.Errorf("occurrences = %d, want 3", len(f.Occurrences))
+	}
+	if len(f.Params) != 3 || f.Params[0] != "q" || f.Params[2] != "page" {
+		t.Errorf("params = %v, want [q sort page]", f.Params)
+	}
+	if f.Target != target {
+		t.Errorf("target = %+v, want %+v", f.Target, target)
+	}
+
+	// The restored store still knows this finding's key, so a fourth observation joins it.
+	got := restored.Add(core.NewFinding{
+		Name: "Cross-site scripting (reflected)", Severity: core.SeverityHigh,
+		Confidence: core.ConfidenceFirm, Param: "lang", Target: target,
+		Occurrences: []core.Occurrence{{ExchangeID: 9, Request: 18}},
+	})
+	if got != id {
+		t.Fatalf("Add after restore returned %d, want the restored finding %d", got, id)
+	}
+	if restored.Count() != 1 {
+		t.Errorf("findings = %d after a post-restore observation, want 1", restored.Count())
+	}
+}

@@ -26,6 +26,11 @@ type Row struct {
 	Remediation string   `json:"remediation"`
 	Hosts       []string `json:"hosts"`
 	Occurrences int      `json:"occurrences"`
+	// Params is every parameter this finding covers. A finding that merged several observations of
+	// one issue at one target reports a single row with several occurrences, and without this the
+	// report would say "5 occurrences" while silently dropping which 5 parameters were affected —
+	// the one detail that makes the finding reproducible.
+	Params []string `json:"params,omitempty"`
 	// Advisory is the issue-definition catalogue entry this finding resolved to, or nil when it
 	// resolved to none. The catalogue is what turns a one-line check name into something an operator
 	// can act on and put in front of a client, so a report that has it and does not print it is
@@ -101,11 +106,19 @@ func SARIF(rows []Row) ([]byte, error) {
 			"shortDescription": map[string]interface{}{"text": f.Description},
 			"help":             map[string]interface{}{"text": f.Remediation},
 		})
-		results = append(results, map[string]interface{}{
+		result := map[string]interface{}{
 			"ruleId":  ruleID,
 			"level":   sarifLevel(f.Severity),
 			"message": map[string]interface{}{"text": f.Description},
-		})
+		}
+		// A merged finding stands for several observations that differed only in which parameter was
+		// affected. SARIF has no first-class field for that, so it goes in the properties bag rather
+		// than being dropped: a consumer that ignores it is no worse off, and one that reads it can
+		// still tell the five parameters apart.
+		if len(f.Params) > 0 {
+			result["properties"] = map[string]interface{}{"params": f.Params}
+		}
+		results = append(results, result)
 	}
 	doc := map[string]interface{}{
 		"$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -264,6 +277,17 @@ func writeFinding(b *strings.Builder, f Row, sev string) {
 		b.WriteString(`<div class="label">Affected hosts</div><div class="hosts">`)
 		for _, h := range f.Hosts {
 			b.WriteString(fmt.Sprintf(`<code>%s</code>`, html.EscapeString(h)))
+		}
+		b.WriteString(`</div>`)
+	}
+
+	// Printed beside the hosts because it answers the same question at the next level down: the hosts
+	// say where, these say which input. A merged finding's occurrence count is meaningless to a reader
+	// who cannot see what varied between the occurrences.
+	if len(f.Params) > 0 {
+		b.WriteString(`<div class="label">Affected parameters</div><div class="hosts">`)
+		for _, p := range f.Params {
+			b.WriteString(fmt.Sprintf(`<code>%s</code>`, html.EscapeString(p)))
 		}
 		b.WriteString(`</div>`)
 	}

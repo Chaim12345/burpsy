@@ -222,3 +222,41 @@ func TestAnEmptyReportSaysWhatEmptyMeans(t *testing.T) {
 		t.Error("an empty report must not read as an all-clear")
 	}
 }
+
+// A merged finding covers several parameters, and none of the three formats may drop them: the
+// occurrence count is only meaningful next to what varied between the occurrences.
+func TestReportsCarryMergedParams(t *testing.T) {
+	rows := []Row{{
+		ID: 1, Name: "Cross-site scripting (reflected)", Severity: "High", Confidence: "Firm",
+		Description: "Payload reflected.", Hosts: []string{"app.test"},
+		Occurrences: 3, Params: []string{"q", "sort", "page"},
+	}}
+
+	j, err := JSON(rows)
+	if err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	for _, p := range []string{"q", "sort", "page"} {
+		if !strings.Contains(string(j), `"`+p+`"`) {
+			t.Errorf("JSON report omits parameter %q", p)
+		}
+	}
+
+	s, err := SARIF(rows)
+	if err != nil {
+		t.Fatalf("SARIF: %v", err)
+	}
+	if !strings.Contains(string(s), `"params"`) || !strings.Contains(string(s), `"sort"`) {
+		t.Errorf("SARIF report omits the parameter set:\n%s", s)
+	}
+
+	h := string(HTML(rows))
+	if !strings.Contains(h, "Affected parameters") {
+		t.Error("HTML report has no affected-parameters section")
+	}
+	for _, p := range []string{"q", "sort", "page"} {
+		if !strings.Contains(h, ">"+p+"<") {
+			t.Errorf("HTML report omits parameter %q", p)
+		}
+	}
+}

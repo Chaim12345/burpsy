@@ -204,6 +204,11 @@ func (s *Server) activeFinding(f *scanner.Finding, taskID uint64) core.NewFindin
 			Request:    ex.Request,
 			Response:   ex.Response,
 		}}
+		// The dedup target, from the same exchange the occurrence came from. Left zero when the
+		// exchange did not resolve, which disables merging for this finding — the same rule as the
+		// occurrence above: an unknown location is recorded as unknown, never guessed, and a finding
+		// with a guessed target would merge into the wrong issue.
+		nf.Target = core.FindingTarget{Host: ex.Host, Port: ex.Port, TLS: ex.TLS, Path: ex.Path}
 	}
 	return nf
 }

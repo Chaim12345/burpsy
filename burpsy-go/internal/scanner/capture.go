@@ -315,6 +315,10 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 			Description: f.Description,
 			Remediation: f.Solution,
 			Param:       f.Param,
+			// The dedup target, taken from the exchange in hand rather than resolved later. This is
+			// the path that produces the most duplicates by far — a passive check re-fires on every
+			// response — so it is the one that most needs the store to be able to merge.
+			Target: core.FindingTarget{Host: ex.Host, Port: ex.Port, TLS: ex.TLS, Path: ex.Path},
 		}
 		nf.TaskID = ex.TaskID
 		if ex.Response != nil {

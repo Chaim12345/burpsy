@@ -302,6 +302,11 @@ func scanAudit(ctx *cliContext, args []string) error {
 			Remediation: f.Solution,
 			Param:       f.Param,
 		}
+		// The dedup target, from the exchange the check actually fired at — which is not necessarily
+		// the one named on the command line, since an audit can reach a second-order exchange.
+		if fex, err := ctx.store.GetExchange(f.ExchangeID); err == nil {
+			nf.Target = core.FindingTarget{Host: fex.Host, Port: fex.Port, TLS: fex.TLS, Path: fex.Path}
+		}
 		ctx.findings.Add(nf)
 		line := fmt.Sprintf("%-8s %-10s %s", nf.Severity, nf.Confidence, nf.Name)
 		if nf.Param != "" {

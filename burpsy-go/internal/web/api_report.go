@@ -49,6 +49,7 @@ func (s *Server) reportRows() []report.Row {
 			Remediation: f.Remediation,
 			Hosts:       s.findingHosts(f),
 			Occurrences: len(f.Occurrences),
+			Params:      f.Params,
 			Evidence:    s.findingEvidence(f),
 		}
 		// The catalogue was already resolved for /api/issues and then thrown away at the report
