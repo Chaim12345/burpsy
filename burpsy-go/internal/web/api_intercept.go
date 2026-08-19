@@ -122,6 +122,28 @@ func (s *Server) handleInterceptEnable(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"enabled": req.Enabled})
 }
 
+// handleInterceptDropAll serves POST /api/intercept/drop-all and resolves every
+// held message as dropped in one round trip — the queue toolbar's "Drop all".
+// The count in the answer is what the engine actually dropped on this call: a
+// message resolved elsewhere between the page's last poll and this request is
+// not double-counted, so the toast the UI shows cannot overstate.
+func (s *Server) handleInterceptDropAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Reason == "" {
+		req.Reason = "dropped by operator"
+	}
+	dropped := s.intercept.DropAll(req.Reason)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"dropped": dropped})
+}
+
 // directionFor maps the URL suffix (requests|responses) to a Direction.
 func directionFor(s string) (intercept.Direction, bool) {
 	switch s {

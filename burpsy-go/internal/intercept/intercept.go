@@ -564,6 +564,40 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	return nil
 }
 
+// DropAll resolves every held message as dropped in one pass and returns how
+// many this call dropped. A message already resolved elsewhere (another
+// operator, a client that gave up waiting) is left to whoever resolved it and
+// is not counted — the same once-only resolve gate Drop applies per id. One
+// change signal fires at the end no matter how many dropped: N drops are one
+// queue event, not N, so the live-update fan-out sees a single change for one
+// operator action instead of one per message.
+func (e *Engine) DropAll(reason string) int {
+	e.mu <- struct{}{}
+	all := make([]*Held, 0, len(e.held))
+	for _, h := range e.held {
+		all = append(all, h)
+	}
+	<-e.mu
+	dropped := make([]*Held, 0, len(all))
+	for _, h := range all {
+		if h.resolve(ActionDrop, nil, reason) {
+			dropped = append(dropped, h)
+		}
+	}
+	if len(dropped) == 0 {
+		return 0
+	}
+	// Remove what this call resolved, then signal with the lock released —
+	// the same two-step shape as Drop, batched over the queue.
+	e.mu <- struct{}{}
+	for _, h := range dropped {
+		delete(e.held, h.ID)
+	}
+	<-e.mu
+	e.signalChange()
+	return len(dropped)
+}
+
 // fixContentLength rewrites the Content-Length header to match the body. If the
 // message is chunked or has no Content-Length at all, it is returned unchanged:
 // inventing a length for a framing we do not own would corrupt the exchange.

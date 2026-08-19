@@ -161,6 +161,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
 		summary: "resolve one held message: forward, drop, or forward edited bytes",
 	},
+	"/api/intercept/drop-all": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "drop every held message in one round trip; answers the count actually dropped",
+	},
 	"/api/intercept/enable": {
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "turn interception on or off",

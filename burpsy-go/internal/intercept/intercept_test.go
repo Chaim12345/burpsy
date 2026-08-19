@@ -313,3 +313,34 @@ func TestHeld_StatusField(t *testing.T) {
 		t.Fatalf("status_code = %q", got)
 	}
 }
+
+func TestEngine_DropAllDropsEveryHeldMessageAndCountsOnlyItsOwn(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	e.SetRules(DirectionRequest, true, nil)
+	first := e.Hold(reqMessage("a.test", "GET", "/one"))
+	second := e.Hold(reqMessage("a.test", "GET", "/two"))
+	if first == nil || second == nil {
+		t.Fatalf("expected both messages held")
+	}
+	// Resolve one out from under DropAll: it must not be counted or re-resolved,
+	// because the proxy side of that message already has its answer.
+	if err := e.Forward(first.ID, "", false); err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	if got := e.DropAll("clear the queue"); got != 1 {
+		t.Fatalf("DropAll = %d, want 1 (the forwarded message was already resolved)", got)
+	}
+	if left := len(e.Held()); left != 0 {
+		t.Fatalf("queue not empty after DropAll: %d left", left)
+	}
+	// The dropped message's proxy side wakes with a drop and no bytes.
+	action, raw := second.Wait()
+	if action != ActionDrop || raw != nil {
+		t.Fatalf("Wait = (%v, %q), want (drop, nil)", action, raw)
+	}
+	// An empty queue drops nothing and says so.
+	if got := e.DropAll("again"); got != 0 {
+		t.Fatalf("DropAll on an empty queue = %d, want 0", got)
+	}
+}

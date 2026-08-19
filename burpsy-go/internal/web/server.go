@@ -378,6 +378,7 @@ func (s *Server) setupRoutes() {
 	// Intercept (condition lists + held queue)
 	s.mux.HandleFunc("/api/intercept", s.handleIntercept)
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
+	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
 
