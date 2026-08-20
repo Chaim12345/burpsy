@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
-import { Columns3, Combine, Crosshair, HelpCircle, Repeat2, Search, X } from "lucide-react";
+import { Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { useExchangeActions, exchangeUrl } from "../lib/actions";
-import { formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
+import { downloadText, formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useHistory, useMessage } from "../lib/data";
 import { useScopeView } from "../lib/data.policy";
@@ -23,6 +23,17 @@ const STATUS_BUCKETS = [
   { value: "4", label: "4xx client" },
   { value: "5", label: "5xx server" },
   { value: "none", label: "No response" },
+];
+
+const MIME_TYPES = [
+  { value: "all", label: "All types" },
+  { value: "html", label: "HTML" },
+  { value: "json", label: "JSON" },
+  { value: "xml", label: "XML" },
+  { value: "javascript", label: "JavaScript" },
+  { value: "css", label: "CSS" },
+  { value: "image", label: "Images" },
+  { value: "binary", label: "Binary" },
 ];
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -221,6 +232,7 @@ export function HistoryPage(): JSX.Element {
 
   const [term, setTerm] = useState(historyQuery);
   const [status, setStatus] = useState("all");
+  const [mime, setMime] = useState("all");
   const [method, setMethod] = useState("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -271,6 +283,20 @@ export function HistoryPage(): JSX.Element {
     const all = data ?? [];
     return all.filter((row) => {
       if (method !== "all" && row.method !== method) return false;
+      if (mime !== "all") {
+        const exMime = (row.mime ?? "").toLowerCase();
+        if (mime === "binary") {
+          // Binary = everything that is not a text-ish content type.
+          if (
+            exMime.includes("text") || exMime.includes("json") || exMime.includes("xml") ||
+            exMime.includes("javascript") || exMime.includes("css") || exMime.includes("html")
+          ) {
+            return false;
+          }
+        } else if (!exMime.includes(mime)) {
+          return false;
+        }
+      }
       if (status === "none" && row.status !== null) return false;
       if (status !== "all" && status !== "none" && (row.status === null || !String(row.status).startsWith(status))) return false;
       if (hideNoResponse && row.response === null) return false;
@@ -279,7 +305,32 @@ export function HistoryPage(): JSX.Element {
       if (scopeOnly && !scopeFragment && !isHostInScope(row.host, scope.data)) return false;
       return true;
     });
-  }, [data, method, status, hideNoResponse, scopeOnly, scopeFragment, scope.data]);
+  }, [data, method, status, mime, hideNoResponse, scopeOnly, scopeFragment, scope.data]);
+
+  // CSV export — client-side from the loaded rows; no server endpoint needed
+  // because the page already holds the index rows in memory.
+  const exportCSV = () => {
+    if (!data || data.length === 0) {
+      toast.error("No history rows to export");
+      return;
+    }
+    const headers = ["ID", "Timestamp", "Method", "Host", "Port", "Path", "Status", "Length", "MIME", "Duration"];
+    const rows = data.map((ex) => [
+      ex.id,
+      new Date(ex.started_ms).toISOString(),
+      ex.method,
+      ex.host,
+      ex.port,
+      ex.path,
+      ex.status ?? "",
+      ex.response_len,
+      ex.mime ?? "",
+      ex.duration_ms,
+    ]);
+    const csv = [headers, ...rows].map((r) => r.map((cell) => `"${cell}"`).join(",")).join("\n");
+    downloadText("history.csv", csv, "text/csv");
+    toast.success(`Exported ${data.length} exchanges to CSV`);
+  };
 
   // Selection is held by id, not by object identity, so a background refresh
   // cannot silently drop the operator's selection.
@@ -396,7 +447,7 @@ export function HistoryPage(): JSX.Element {
   );
 
   const detail = selected ? (
-    <div className="tabs-fill">
+    <div className="tabs-fill history-detail">
       <div className="detail-head">
         <div className="detail-head-title">
           <span className="eyebrow">#{selected.id}</span>
@@ -495,6 +546,10 @@ export function HistoryPage(): JSX.Element {
                 {data && rows.length !== data.length ? ` / ${data.length.toLocaleString()}` : ""} rows
               </Badge>
               <RefreshButton onClick={() => void refetch()} loading={isFetching} />
+              <Button variant="outline" size="small" onClick={exportCSV} disabled={!data || data.length === 0}>
+                <Download size={14} />
+                Export CSV
+              </Button>
             </>
           }
         />
@@ -529,6 +584,13 @@ export function HistoryPage(): JSX.Element {
             {STATUS_BUCKETS.map((bucket) => (
               <option key={bucket.value} value={bucket.value}>
                 {bucket.label}
+              </option>
+            ))}
+          </Select>
+          <Select aria-label="MIME type filter" title="MIME type filter" value={mime} onChange={(event) => setMime(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
+            {MIME_TYPES.map((mt) => (
+              <option key={mt.value} value={mt.value}>
+                {mt.label}
               </option>
             ))}
           </Select>
