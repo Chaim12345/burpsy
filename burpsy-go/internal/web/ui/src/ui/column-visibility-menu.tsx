@@ -25,7 +25,7 @@ export const ColumnVisibilityMenu = forwardRef<
   }
 >(function ColumnVisibilityMenu({ columns, onToggle, onReset }, ref) {
   return (
-    <div ref={ref} className="column-menu-panel" role="menu" aria-label="Show or hide columns">
+    <div ref={ref} className="column-menu-panel" role="group" aria-label="Show or hide columns">
       {columns.map((column) => (
         <Checkbox
           key={column.id}

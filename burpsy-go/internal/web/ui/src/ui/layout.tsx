@@ -63,7 +63,13 @@ export function RefreshButton({
   label?: string;
 }): JSX.Element {
   return (
-    <Button variant="outline" onClick={onClick} disabled={loading} aria-label={label}>
+    <Button
+      variant="outline"
+      onClick={onClick}
+      disabled={loading}
+      aria-busy={loading}
+      aria-label={loading ? `${label} (loading…)` : label}
+    >
       <RefreshCw size={14} className={loading ? "spin" : undefined} />
       {label}
     </Button>
