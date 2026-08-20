@@ -93,19 +93,29 @@ type brokenCase struct{ name, why string }
 
 // proveAll loads every case with its exploit and records whether the marker fired.
 func proveAll(base string, all []xcase) (map[string]bool, []brokenCase) {
-	// Headed on a virtual display when one is available, headless otherwise.
+	// Headless by default, headed only when explicitly asked.
 	//
-	// This is not cosmetic. A headless window is never activated, so autofocus does not deliver a
-	// focus event and every attribute-context payload whose handler is onfocus silently fails to
-	// fire - which would have made the fixture, not the scanner, the thing under test. The three
-	// attribute cases and the javascript:-URL case are only provable with a real display, so the
-	// challenge keeps the textbook payloads and brings a display instead of weakening them.
+	// The previous comment here had this backwards and the recipe it prescribed could not score. It
+	// claimed a headless window is never activated so autofocus cannot deliver a focus event, and that
+	// a DISPLAY was therefore required. Measured, both ways, on the real fixtures: headless reports
+	// document.activeElement == INPUT and the handler fires; headed on bare Xvfb - and on Xvfb with a
+	// window manager - reports BODY and it does not, even though document.hasFocus() is true. So the
+	// display was never the mechanism, and anyone following the old recipe hit the same refusal the
+	// instrument exists to prevent.
+	//
+	// Rather than trade one environment assumption for another, prove() now focuses the element it
+	// needs instead of hoping the window does it, so both modes work. BURPSY_XSS_HEADED=1 is kept for
+	// watching a run.
 	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.NoSandbox)
-	if display := os.Getenv("DISPLAY"); display != "" {
+	if os.Getenv("BURPSY_XSS_HEADED") == "1" {
+		display := os.Getenv("DISPLAY")
+		if display == "" {
+			fail("BURPSY_XSS_HEADED=1 needs a DISPLAY")
+		}
 		opts = append(opts, chromedp.Flag("headless", false), chromedp.Env("DISPLAY="+display))
-		fmt.Printf("  driving a headed browser on DISPLAY=%s\n", display)
+		fmt.Printf("  headed on DISPLAY=%s (explicitly requested)\n", display)
 	} else {
-		fmt.Println("  no DISPLAY: falling back to headless, so focus-triggered payloads cannot fire")
+		fmt.Println("  headless (set BURPSY_XSS_HEADED=1 with a DISPLAY to watch a run)")
 	}
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancelAlloc()
@@ -185,6 +195,14 @@ func prove(parent context.Context, base string, c xcase) (bool, error) {
 		// so settle before asking.
 		chromedp.Sleep(700*time.Millisecond),
 	)
+	// Deliver focus explicitly. autofocus depends on the document being the active one, which varies
+	// by mode and window manager; focusing the element the payload targets does not. A payload that
+	// needs a click still gets a real one below.
+	acts = append(acts, chromedp.ActionFunc(func(ctx context.Context) error {
+		_ = chromedp.Evaluate(`(function(){var e=document.querySelector('[autofocus]');if(e&&e.focus)e.focus();})()`, nil).Do(ctx)
+		return nil
+	}), chromedp.Sleep(200*time.Millisecond))
+
 	if c.clickSelector != "" {
 		// A real click on a real display. The href sink genuinely requires one, and pretending
 		// otherwise would either drop the case or fake its proof.

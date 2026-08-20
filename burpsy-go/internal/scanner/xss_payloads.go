@@ -56,7 +56,7 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 			// and without it a host that strips onerror/onload reads as not vulnerable.
 			add(xssPayload{build: altHandlerBreakoutPayload,
 				note:    "tag injection with a handler outside the usual blocklist",
-				confirm: confirmEventAttrInjection})
+				confirm: confirmAltHandlerBreakout})
 
 		case xssCtxAttrValue:
 			switch {
@@ -73,9 +73,27 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 				add(xssPayload{build: javascriptURLPayload, note: "javascript: scheme in a URL-valued attribute",
 					confirm: confirmJavaScriptURL, bit: XSSEvidenceURLScheme})
 			case c.IsEventAttr():
-				// The value is already JavaScript; it needs no breakout at all, only an expression.
-				add(xssPayload{build: eventHandlerPayload, note: "expression in an inline event handler",
-					confirm: confirmEventAttrInjection, bit: XSSEvidenceAttrInjection})
+				// The value is already JavaScript, but that does NOT mean an expression suffices: the
+				// canary almost always lands inside a string literal in that handler, and a host that
+				// escapes the literal correctly is not vulnerable. So this context gets the same
+				// literal breakouts the <script> context gets, and the same lexer decides them. A bare
+				// `alert(canary)` was sent here before, and its confirmation could not fail - the canary
+				// being in a handler was the fact that chose this branch.
+				for _, q := range []byte{'\'', '"'} {
+					quote := q
+					add(xssPayload{
+						build:   func(canary string) string { return scriptBreakoutPayloadFor(quote, canary) },
+						note:    "string-literal breakout inside an inline event handler (" + string(quote) + "-quoted)",
+						confirm: confirmHandlerLiteralBreakout,
+						bit:     XSSEvidenceScriptBreakout,
+					})
+					add(xssPayload{
+						build:   func(canary string) string { return scriptBreakoutPayloadClosingCall(quote, canary) },
+						note:    "literal-and-call breakout inside an inline event handler (" + string(quote) + "-quoted)",
+						confirm: confirmHandlerLiteralBreakout,
+						bit:     XSSEvidenceScriptBreakout,
+					})
+				}
 			case c.Quote == 0:
 				// An unquoted value ends at the first space, so a space and an event-handler
 				// attribute inject onto the element that is already there. Nothing needs closing,
@@ -114,6 +132,12 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 				add(xssPayload{
 					build:   func(canary string) string { return scriptBreakoutPayloadFor(quote, canary) },
 					note:    "JavaScript string breakout (" + string(quote) + "-quoted host)",
+					confirm: confirmScriptBreakout,
+					bit:     XSSEvidenceScriptBreakout,
+				})
+				add(xssPayload{
+					build:   func(canary string) string { return scriptBreakoutPayloadClosingCall(quote, canary) },
+					note:    "literal-and-call breakout (" + string(quote) + "-quoted host)",
 					confirm: confirmScriptBreakout,
 					bit:     XSSEvidenceScriptBreakout,
 				})

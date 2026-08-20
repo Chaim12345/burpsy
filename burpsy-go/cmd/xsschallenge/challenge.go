@@ -215,7 +215,40 @@ func cases() []xcase {
 			context: "a cookie value is reflected into the body",
 		},
 
-		// ---- the safe six: reflected, not exploitable ----
+		// ---- reflection into an EXISTING inline handler ----
+		//
+		// The pair a confirmation that only checks "the canary is in an on* attribute" cannot tell
+		// apart: both reflect into onclick, and only one escapes the JS literal it lands in.
+		{
+			name: "handler-literal-raw", path: "/x/handler", param: "q",
+			// The call has to be closed as well as the literal: `track('';…)` puts a statement inside
+			// an argument list and is a SyntaxError, so the handler never compiles and nothing runs.
+			exploit: `');window.__pwned=1;//`, vulnerable: true, clickSelector: "#go",
+			context: "reflected raw into a single-quoted JS string inside an existing onclick handler, " +
+				"so closing the literal executes",
+		},
+		{
+			name: "attr-url-img", path: "/x/imgsrc", param: "q",
+			exploit: `javascript:window.__pwned=1`, vulnerable: false,
+			context: "a javascript: value reflected into <img src>, which no current browser executes - " +
+				"a URL-valued attribute is not the same thing as an executable one",
+		},
+
+		// ---- the safe set: reflected, not exploitable ----
+		{
+			name: "safe-handler-literal", path: "/s/handler", param: "q",
+			exploit: `');window.__pwned=1;//`, vulnerable: false, clickSelector: "#go",
+			context: "reflected into the same existing onclick handler, with the JS literal escaped and " +
+				"then attribute-escaped - correct output, and the shape that exposes a confirmation " +
+				"which only checks whether the canary is in a handler",
+		},
+		{
+			name: "safe-attr-quote-escaped", path: "/s/attrquote", param: "q",
+			exploit: `" autofocus onfocus="` + pwn, vulnerable: false,
+			context: `inside <input value="..."> with ONLY the quote escaped - correct for a quoted ` +
+				`attribute, since nothing can close the value, yet the raw marker bytes still appear ` +
+				`in the response`,
+		},
 		{
 			name: "safe-escaped-body", path: "/s/escaped", param: "q",
 			exploit: "<script>" + pwn + "</script>", vulnerable: false,
@@ -328,10 +361,11 @@ func challengeMux() *http.ServeMux {
 	})
 
 	// ---- attributes ----
-	// src points at a path that 404s on purpose: onerror then fires on load, so these cases need no
-	// interaction. An autofocus/onfocus payload is the textbook example but does not reliably fire in
-	// a headless window that was never activated, which would make the fixture, not the scanner, the
-	// thing under test.
+	// These three use the textbook attribute-context payload: close the value, then add `autofocus`
+	// and an `onfocus` handler. Nothing here uses src/onerror - an earlier version of this comment
+	// described a design that was never written, and pointed away from the real mechanism when the
+	// fixtures failed. Focus is delivered explicitly by phase 1 rather than left to window
+	// activation, which is what actually varies between browser modes.
 	mux.HandleFunc("/x/attrdouble", func(w http.ResponseWriter, r *http.Request) {
 		page(w, `<input value="`+escAngle(q(r, "q"))+`">`)
 	})
@@ -399,6 +433,24 @@ document.getElementById('out').innerHTML = decodeURIComponent(location.hash.slic
 			v = c.Value
 		}
 		page(w, "<p>preference: "+v+"</p>")
+	})
+
+	// An existing inline handler holding a reflected value. The vulnerable one splices raw; the safe
+	// one escapes for the JS literal AND then for the attribute, which is what correct output is here.
+	mux.HandleFunc("/x/handler", func(w http.ResponseWriter, r *http.Request) {
+		page(w, `<button id="go" onclick="track('`+q(r, "q")+`')">go</button><script>function track(x){void x;}</script>`)
+	})
+	mux.HandleFunc("/s/handler", func(w http.ResponseWriter, r *http.Request) {
+		v := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(q(r, "q"))
+		page(w, `<button id="go" onclick="track('`+html.EscapeString(v)+`')">go</button><script>function track(x){void x;}</script>`)
+	})
+	// A javascript: value in <img src>. Reflected, and inert in every current browser.
+	mux.HandleFunc("/x/imgsrc", func(w http.ResponseWriter, r *http.Request) {
+		page(w, `<img src="`+escAngleAndQuotes(q(r, "q"))+`" alt="avatar">`)
+	})
+	// Only the quote escaped, which is correct for a quoted attribute value.
+	mux.HandleFunc("/s/attrquote", func(w http.ResponseWriter, r *http.Request) {
+		page(w, `<input value="`+strings.ReplaceAll(q(r, "q"), `"`, "&quot;")+`">`)
 	})
 
 	// ---- the safe six ----

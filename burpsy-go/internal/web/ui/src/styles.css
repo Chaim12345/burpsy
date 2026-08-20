@@ -32,6 +32,16 @@
   color-scheme: light;
 
   --accent-contrast: #ffffff;
+
+  /* Skeleton bars: light theme values. Dark values live in the dark block below;
+     both blocks must stay in source-order agreement with the .skeleton-* rules
+     (which read var(--skeleton-N) at line ~3169) — a stray :root definition later
+     in the file would override this block, since :root and [data-theme="light"]
+     match the same element with equal specificity. */
+  --skeleton-1: #d9d9d9;
+  --skeleton-2: #e1e1e1;
+  --skeleton-3: #e9e9e9;
+  --skeleton-4: #f0f0f0;
   --overlay: rgb(43 43 43 / 45%);
 
   --editor-line: var(--line);
@@ -57,6 +67,13 @@
   color-scheme: dark;
 
   --accent-contrast: #1a1a1a;
+
+  /* Skeleton bars: dark theme values (moved here from the old :root-only block,
+     which made light theme inherit dark bars — the DESIGN.md known gap). */
+  --skeleton-1: #4e5254;
+  --skeleton-2: #474b4d;
+  --skeleton-3: #434749;
+  --skeleton-4: #404446;
   --overlay: rgb(0 0 0 / 60%);
 
   --editor-line: var(--line);
@@ -2067,6 +2084,15 @@ tbody td {
   overflow: hidden;
 }
 
+/* History's detail pane stacks three rows — head, annotation bar, editors — where the shared
+   two-row .tabs-fill template leaves the annotation bar on the collapsible 1fr row. When there is
+   no free space that row's minmax(0, …) floor collapses it to zero height, its highlight swatches
+   overflow down into the editors' row, and the editor's header bar (later in the DOM) is painted on
+   top and intercepts their clicks. Giving the annotation bar its own auto row keeps it uncollapsed. */
+.history-detail {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .tab-close {
   display: grid;
   place-items: center;
@@ -3116,21 +3142,18 @@ tbody td {
 
    `--skeleton-1..4` do not exist anywhere else in this pipeline — grepping
    `src/tokens/` for "skeleton" turns up nothing, in either the generated CSS
-   or PENDING-TOKEN-CHANGES.md, and none of the four hex values below round-trip
+   or PENDING-TOKEN-CHANGES.md, and none of the four hex values round-trip
    to an existing token via `primitives.css`'s `--grey-*` scale either. So these
    are hand-authored here, the same way `--editor-*` and the other composite
    values called out at the top of tokens/semantic.css are: values the Penpot
    pipeline does not model yet, kept where the rest of the theme lives rather
-   than inlined into the component. Per DESIGN.md's "Skeleton" section, these
-   are dark-only today (same known gap as the badge-surface tokens) and will
-   look wrong once light theme is audited — that fix belongs in the token
-   pipeline, not here. */
-:root {
-  --skeleton-1: #4e5254;
-  --skeleton-2: #474b4d;
-  --skeleton-3: #434749;
-  --skeleton-4: #404446;
-}
+   than inlined into the component.
+
+   They are now theme-split: light values in the shared `:root, [data-theme="light"]`
+   block and dark values in `[data-theme="dark"]`, both at the top of this file.
+   They must not be defined on bare `:root` anywhere — that would override the
+   light block by source order (equal specificity, later wins), which is exactly
+   the bug this layout replaces (light theme rendered dark skeleton bars). */
 
 /* Six bars per row, widths measured from `design/jsx/skeleton-row.jsx`, fading
    down the list via --skeleton-1..4 (set per-row as --row-skeleton by
@@ -3291,7 +3314,7 @@ tbody td {
   width: 10px;
   height: 10px;
   padding: 0;
-  border-radius: 50%;
+  border-radius: 50%; /* token-exempt: a circle is %-radius, not a --radius-* step */
   border: 1px solid transparent;
   background: var(--swatch-color);
   cursor: pointer;
@@ -3303,7 +3326,7 @@ tbody td {
 }
 
 .highlight-swatch-selected {
-  outline: 2px solid var(--accent);
+  outline: var(--border-strong) solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -3327,9 +3350,9 @@ tbody td {
   height: 10px;
   margin-inline-start: var(--s1);
   border-radius: 2px; /* token-exempt: see .skeleton-bar above for why --radius-sm can't be used directly */
-  background: #52565a;
-  color: #e8e8e8;
-  font-size: 8px;
+  background: #52565a; /* token-exempt: fixed literal badge, see the block comment above — not a themed role */
+  color: #e8e8e8; /* token-exempt: fixed literal badge text, same rationale */
+  font-size: 8px; /* token-exempt: fixed badge glyph, below the fluid floor */
   font-weight: 700;
   line-height: 1;
 }
@@ -3375,7 +3398,7 @@ tbody td {
 .filter-toggle-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: 50%; /* token-exempt: a dot is %-radius, not a --radius-* step */
   background: var(--highlight-gray);
 }
 

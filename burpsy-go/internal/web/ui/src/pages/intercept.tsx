@@ -507,6 +507,7 @@ export function InterceptPage(): JSX.Element {
             <label htmlFor="direction-filter" style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>Show:</label>
             <Select
               id="direction-filter"
+              aria-label="Filter by direction"
               value={directionFilter}
               onChange={(e) => setDirectionFilter(e.target.value as "all" | "request" | "response")}
               style={{ width: "auto" }}

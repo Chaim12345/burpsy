@@ -41,6 +41,13 @@ func TestRestore_RoundTripsMessagesAndExchanges(t *testing.T) {
 		Request: reqID, Response: &respID, Host: "a", Port: 80, TLS: false,
 		Method: "GET", Path: "/", Status: &status, ResponseLen: 20,
 	})
+	// A tool-originated resend beside the proxy traffic: the mirror must restore each row's
+	// attribution exactly, because HTTP history's tool-traffic filter reads nothing but this field.
+	store.AddExchange(&core.Exchange{
+		Request: reqID, Response: &respID, Host: "a", Port: 80, TLS: false,
+		Method: "GET", Path: "/repeated", Status: &status, ResponseLen: 20,
+		Source: core.SourceRepeater,
+	})
 
 	// A fresh store restored from the same DB must see both messages and the exchange.
 	restored := core.NewTrafficStore()
@@ -48,8 +55,8 @@ func TestRestore_RoundTripsMessagesAndExchanges(t *testing.T) {
 		t.Fatalf("Restore: %v", err)
 	}
 	msgs, exs := restored.Count()
-	if msgs != 2 || exs != 1 {
-		t.Fatalf("counts = %d/%d, want 2/1", msgs, exs)
+	if msgs != 2 || exs != 2 {
+		t.Fatalf("counts = %d/%d, want 2/2", msgs, exs)
 	}
 	ex, err := restored.GetExchange(0)
 	if err != nil {
@@ -57,6 +64,19 @@ func TestRestore_RoundTripsMessagesAndExchanges(t *testing.T) {
 	}
 	if ex.Host != "a" || ex.Method != "GET" || ex.Path != "/" || ex.Status == nil || *ex.Status != 200 {
 		t.Fatalf("exchange = %+v", ex)
+	}
+	// The row nobody attributed keeps the zero value — restoring it must not invent a producer.
+	if ex.Source != core.SourceUnattributed {
+		t.Fatalf("exchange 0 source = %q, want the unattributed zero value", ex.Source)
+	}
+	// And the resend row keeps its tool attribution: the field the history filter reads, which
+	// a restart must not lose, or tool traffic would leak back into HTTP history.
+	repeated, err := restored.GetExchange(1)
+	if err != nil {
+		t.Fatalf("GetExchange(1): %v", err)
+	}
+	if repeated.Source != core.SourceRepeater {
+		t.Fatalf("exchange 1 source = %q, want %q", repeated.Source, core.SourceRepeater)
 	}
 	// The raw request must still be retrievable by its original id.
 	msg, err := restored.Get(reqID)

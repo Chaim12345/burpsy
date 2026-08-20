@@ -163,6 +163,21 @@
 > Evidence convention: Rust paths are crate-relative (`crates/scanner/...`);
 > Go paths are repo-relative (`internal/scanner/...`).
 
+> **Dated divergence — 2026-08-19: HTTP history is proxy traffic, by attribution.**
+> Rust leaks tool traffic into Proxy history: `repeater_send`
+> (`crates/web/src/lib.rs:679`) calls `store.add_exchange` and `history`
+> (`crates/web/src/lib.rs:565`) serves every exchange unfiltered — a Repeater
+> resend shows up as a proxy row. Rust's `Exchange` has no attribution field at
+> all. Go deliberately diverges: `core.Exchange.Source`
+> (`internal/core/store.go`) names the producing surface, the repeater tags its
+> exchange `SourceRepeater` (`internal/web/api_tools.go`), `/api/history` drops
+> repeater/intruder/scanner-attributed rows (`internal/web/api_capture.go`), and
+> `persist` round-trips the column so a restart cannot bring them back
+> (`internal/persist/persist.go`). Burp's own split — Proxy history for proxied
+> traffic, Logger for the tool's own sends — is the spec. The e2e suite pinned
+> the leak as a deliberate red test before the fix; both the unit test
+> (`history_source_filter_test.go`) and the browser suite now guard it.
+
 ## How the corpus was counted
 
 - Corpus: `/root/.cache/BChecks` — **264 files**.

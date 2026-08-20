@@ -12,6 +12,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, Columns3 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn } from "../lib/cn";
+import { useApp } from "../lib/store";
 import { ColumnVisibilityMenu } from "./column-visibility-menu";
 import { ContextMenu, type MenuGroup } from "./menu";
 import { Spinner } from "./primitives";
@@ -118,13 +119,21 @@ export function VirtualTable<T>({
   rowClassName,
   loading = false,
   empty,
-  density = "comfortable",
+  density: densityProp,
   height = "100%",
   initialSort = [],
   enableColumnVisibility = false,
   columnVisibility: controlledVisibility,
   onColumnVisibilityChange,
 }: VirtualTableProps<T>): JSX.Element {
+  // The operator's density preference is the default when a page does not name
+  // one — the store is the single source of truth for it, so a table that never
+  // opts in still honours the Settings/palette/View-menu toggle instead of
+  // silently rendering at the component default forever. The store read is
+  // unconditional (a hook must not sit on the right of `??`, or it would run only
+  // when no prop is passed), and an explicit prop still wins when a page supplies one.
+  const storeDensity = useApp((state) => state.density);
+  const density = densityProp ?? storeDensity;
   const [sorting, setSorting] = useState<SortingState>(initialSort);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -439,9 +448,23 @@ function TableRow<T>({
 }
 
 /** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */
-export function SimpleTable({ headers, children, className }: { headers: string[]; children: ReactNode; className?: string }): JSX.Element {
+export function SimpleTable({
+  headers,
+  children,
+  className,
+  density: densityProp,
+}: {
+  headers: string[];
+  children: ReactNode;
+  className?: string;
+  density?: "comfortable" | "compact";
+}): JSX.Element {
+  // Same store fallback as VirtualTable: density is a preference set in one
+  // place and consumed here, and the crossing must not silently stop working.
+  const storeDensity = useApp((state) => state.density);
+  const density = densityProp ?? storeDensity;
   return (
-    <div className={cn("table-frame", className)}>
+    <div className={cn("table-frame", "density-" + density, className)}>
       <div className="table-scroll">
         <table>
           <thead>

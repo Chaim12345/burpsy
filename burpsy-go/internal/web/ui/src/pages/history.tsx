@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, X } from "lucide-react";
 import { toast } from "sonner";
@@ -267,13 +267,27 @@ export function HistoryPage(): JSX.Element {
   // box itself, so the operator sees exactly what the toggle did and the server does the filtering.
   // The ref tracks what this effect last injected, so turning the toggle off — or the scope changing
   // while it is on — removes exactly that substring rather than guessing at one.
+  //
+  // The toggle handler is async: when turning ON, it awaits scope.refetch() BEFORE flipping
+  // scopeOnly. This matters because the scope may have been mutated externally (another client, or
+  // a test harness POSTing to /api/scope directly) since the page mounted — React Query's cache
+  // would be stale, and scopeFragment would be computed from the wrong data. By awaiting the
+  // refetch, the effect that injects the fragment always sees the server's actual state.
   const injectedFragment = useRef<string | null>(null);
   const scopeFragment = useMemo(() => scopeToQueryFragment(scope.data), [scope.data]);
+  const handleScopeToggle = useCallback(async (pressed: boolean) => {
+    if (pressed) await scope.refetch();
+    setScopeOnly(pressed);
+  }, [scope]);
   useEffect(() => {
     const wanted = scopeOnly ? scopeFragment : null;
     if (injectedFragment.current === wanted) return;
+    // Capture the previously injected fragment BEFORE queueing the setTerm update: React may run
+    // the functional updater after this effect returns, by which point the ref below already holds
+    // wanted — reading the ref inside the updater would strip the new fragment instead of the old.
+    const previous = injectedFragment.current;
     setTerm((current) => {
-      const withoutOld = injectedFragment.current ? stripFragment(current, injectedFragment.current) : current;
+      const withoutOld = previous ? stripFragment(current, previous) : current;
       return wanted ? combineQuery(withoutOld, wanted) : withoutOld;
     });
     injectedFragment.current = wanted;
@@ -407,6 +421,10 @@ export function HistoryPage(): JSX.Element {
         accessorKey: "path",
         header: "Path",
         size: 330,
+        // 'basic' matches JS native .sort() (UTF-16 code unit order); the default
+        // 'alphanumeric' treats '?' inside query strings differently, which makes
+        // the descending sort disagree with [...ascending].reverse().
+        sortingFn: "basic",
         cell: (info) => <code title={info.getValue<string>()}>{info.getValue<string>()}</code>,
       },
       {
@@ -574,7 +592,7 @@ export function HistoryPage(): JSX.Element {
               </button>
             </Tooltip>
           </div>
-          <FilterToggle pressed={scopeOnly} onPressedChange={setScopeOnly}>
+          <FilterToggle pressed={scopeOnly} onPressedChange={handleScopeToggle}>
             In scope only
           </FilterToggle>
           <FilterToggle pressed={hideNoResponse} onPressedChange={setHideNoResponse}>

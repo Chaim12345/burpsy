@@ -32,17 +32,21 @@ export const workbenchKeys = {
 /* --- supported values, read off the Go handlers --------------------------- */
 
 /**
- * Layers `decodeLayer` in api_toolkit.go actually implements. Anything else
- * falls through its `default` and is returned unchanged while still being named
- * in `layers`, so offering (say) gzip here would report a decode that never
- * happened. base64url is accepted but is an alias of base64 server-side.
+ * Layers `decodeLayer` in api_toolkit.go implements. It resolves the name through
+ * the codec table (tools.ParseLayer) and answers 400 for anything outside it, so
+ * an unknown layer is a visible error rather than a decode that never happened.
+ * base64url uses the URL-safe alphabet here and on the encode side.
  */
 export const DECODE_LAYERS = ["url", "html", "base64", "base64url", "hex", "jwt", "ascii"] as const;
 
-/** Encodings `handleToolsEncode` implements; its `default` is a passthrough. */
+/**
+ * Encodings `handleToolsEncode` implements, via the same codec table. Anything
+ * else is a 400 naming the accepted set; there is no passthrough branch, so the
+ * `encoding` echoed back always describes the bytes in `output`.
+ */
 export const ENCODE_ENCODINGS = ["url", "html", "base64", "base64url", "hex", "ascii", "rot13"] as const;
 
-/** Weakest first, matching the handler's switch. sha256 is its default branch. */
+/** Weakest first. These four are the whole accepted set; anything else is a 400. */
 export const HASH_ALGORITHMS = ["md5", "sha1", "sha256", "sha512"] as const;
 
 /** How the Sequencer may read a token's bits. Empty string means "let the server detect". */

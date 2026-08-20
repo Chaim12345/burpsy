@@ -138,6 +138,11 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		// nothing would be a link that resolves to the wrong row or to no row, which is the failure
 		// mode the whole exchange-id typing exercise exists to stop.
 		ParentID: s.validParent(req.FromExchange),
+		// SourceRepeater, not the unattributed zero value: this was not traffic the operator's
+		// client proxied, and HTTP history must not claim it was. It is recorded in the tool log
+		// below, which is the view whose subject is requests burpsy itself made — the same way
+		// Burp keeps a Repeater send out of Proxy history.
+		Source: core.SourceRepeater,
 	}
 	s.store.AddExchange(ex)
 

@@ -130,16 +130,16 @@ test.describe("data views", () => {
   });
 
   test("Proxy HTTP history holds proxy traffic only", async ({ page }) => {
-    // EXPECTED TO FAIL — a real finding, left failing on purpose.
+    // The harness sends exactly one request through Repeater, and it must not show up here. In
+    // Burp, Proxy › HTTP history is proxy traffic; a Repeater send appears in Logger, which is the
+    // view whose whole subject is "requests the tool itself made". burpsy now enforces that split:
+    // the repeater tags its exchange SourceRepeater, /api/history drops repeater/intruder/scanner-
+    // attributed rows, and persist round-trips the attribution so a restart cannot bring the row
+    // back. The sibling test below already proves Logger holds the send.
     //
-    // The harness sends exactly one request through Repeater, and it shows up here as a sixth row.
-    // In Burp, Proxy › HTTP history is proxy traffic; a Repeater send appears in Logger, which is the
-    // view whose whole subject is "requests the tool itself made". burpsy has both views, and the
-    // sibling test below already proves Logger holds the Repeater send — so this row makes the two
-    // views the same list with different columns, and makes "how many requests did I proxy" a
-    // question HTTP history answers wrongly.
-    //
-    // Kept as its own test so the five assertions above still report independently of it.
+    // This was a deliberate red test pinning the leak (2026-08); the fix landed and this is now
+    // the regression guard. Kept as its own test so the five assertions above still report
+    // independently of it.
     await gotoRoute(page, route("history"));
     await expect(page.locator("tr.data-row", { hasText: "/repeated" })).toHaveCount(0);
   });
@@ -147,12 +147,15 @@ test.describe("data views", () => {
   test("a table header sorts, and reorders the rows", async ({ page, consoleErrors }) => {
     await gotoRoute(page, route("history"));
     const rows = page.locator("tr.data-row");
-    // EXPECTED TO FAIL for the same reason as "Proxy HTTP history holds proxy traffic only": the
-    // Repeater send leaks into history as a sixth row, making this assertion resolve to 6 not 5.
-    // The bug is documented there; this failure is a symptom, not an independent defect.
+    // Five rows exactly: the Repeater send no longer leaks into history (see the test above), so
+    // the count is the five proxied exchanges and nothing else.
     await expect(rows).toHaveCount(5);
 
-    const paths = async () => (await rows.locator("td").nth(3).allInnerTexts()).map((text) => text.trim());
+    // All five path cells: only the Path column renders a <code> element, so targeting it
+    // avoids the column-index fragility that .nth(3) across a flattened td list caused (it
+    // narrowed to one cell, not one per row — the sort assertion was comparing 1-element arrays).
+    const paths = async () =>
+      (await page.locator("tr.data-row code").allInnerTexts()).map((text) => text.trim());
     const pathHeader = page.locator("th", { has: page.getByRole("button", { name: "Path" }) });
 
     // Unsorted, history is in capture order — which is the order the harness proxied them in, and
@@ -294,14 +297,13 @@ test.describe("Intruder tabs", () => {
 
 test.describe("preferences reach the rendered UI", () => {
   test("the density command changes the table's row class", async ({ page, consoleErrors }) => {
-    // EXPECTED TO FAIL — a real finding, left failing on purpose.
-    //
     // Density is a preference set in one place and consumed in another, and that crossing is exactly
-    // where a preference quietly stops being read. It has: the store holds `density`, Settings offers
-    // a Select for it, the palette and the View menu each offer a toggle, and the toggle fires a
-    // success toast — but `density={...}` is passed to none of the 24 VirtualTable/SimpleTable call
-    // sites, so every table renders at the component's own default and nothing on screen ever gets
-    // denser. Four controls and a confirmation for a value no table reads.
+    // where a preference quietly stops being read. The store holds density, Settings offers a Select
+    // for it, and the palette and the View menu each offer a toggle. The tables consume it directly:
+    // VirtualTable and SimpleTable fall back to the store's value when no page passes an explicit
+    // density prop (src/ui/table.tsx), so the toggle reaches every table at once instead of needing
+    // 24 call sites kept in sync — the drift that made this a deliberate red test (2026-08). The fix
+    // landed; this is now the regression guard.
     await gotoRoute(page, route("history"));
     await expect(page.locator(".table-frame")).toHaveClass(/density-comfortable/);
 

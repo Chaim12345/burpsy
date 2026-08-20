@@ -45,10 +45,22 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Proxy history is proxy traffic — plus crawled traffic, which travels the identical
+	// capture path (CRAWL-02), and anything no producer claimed, which hiding would make
+	// invisible rather than absent. Tool-originated sends — Repeater resends, Intruder
+	// payloads, Scanner probes — belong in Logger, the view whose whole subject is "requests
+	// burpsy itself made"; showing them here would make HTTP history and Logger the same list
+	// with different columns, and turn "how many requests did I proxy" into a question history
+	// answers wrongly.
+	//
 	// Newest first (the store appends in arrival order).
 	views := make([]*ExchangeView, 0, len(exchanges))
 	for i := len(exchanges) - 1; i >= 0; i-- {
 		ex := exchanges[i]
+		switch ex.Source {
+		case core.SourceRepeater, core.SourceIntruder, core.SourceScanner:
+			continue
+		}
 		if filter != nil && !filter.match(ex) {
 			continue
 		}
@@ -385,7 +397,13 @@ type issueFindingView struct {
 	// Param is the parameter this finding was observed at, omitted when the finding is about a
 	// resource rather than one of its inputs. An insertion-point BCheck or a DOM sink names it;
 	// everything else stays absent so the UI renders an em dash, not an empty cell.
-	Param       string                `json:"param,omitempty"`
+	Param string `json:"param,omitempty"`
+	// Params is every parameter this finding covers. A finding that merged several observations of
+	// the same issue at the same target — five reflected-XSS hits on /search — reports one row with
+	// several occurrences, and this is what stops that row from hiding which five parameters were
+	// vulnerable. Single-observation findings carry the one param here too, so the UI has one field
+	// to read rather than two rules.
+	Params      []string              `json:"params,omitempty"`
 	Occurrences []issueOccurrenceView `json:"occurrences"`
 	TimesSeen   int                   `json:"times_seen"`
 	// Advisory is the catalogue entry for this issue class, when one resolves. Omitted rather than
@@ -420,6 +438,7 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		Detail:      strPtr(f.Description),
 		Remediation: strPtr(f.Remediation),
 		Param:       f.Param,
+		Params:      f.Params,
 		TimesSeen:   len(f.Occurrences),
 		TaskID:      f.TaskID,
 	}

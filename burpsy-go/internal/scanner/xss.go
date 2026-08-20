@@ -117,6 +117,20 @@ func scriptBreakoutPayloadFor(quote byte, canary string) string {
 // expression position where the plain variant does not. An application that escapes backslashes
 // too — json.Marshal, and anything else doing it properly — defeats this, which is the correct
 // outcome and is what xss_jscontext.go is there to notice.
+// scriptBreakoutPayloadClosingCall closes the string literal AND an enclosing call before running.
+//
+// A canary is very often an argument rather than a bare assignment - `track('…')`, `log('…')`,
+// `t('…')` - and there closing only the literal produces `track(”;alert(C)//')`, which puts a
+// statement inside an argument list. That is a SyntaxError, the handler or script never compiles, and
+// nothing executes: correctly NOT a finding, and the lexer refuses it. Closing the call as well
+// yields `track(”);alert(C)//')`, which parses and runs.
+//
+// Sent alongside the plain form rather than instead of it, because a canary that is not inside a call
+// needs the plain one. One extra request per context.
+func scriptBreakoutPayloadClosingCall(quote byte, canary string) string {
+	return string(quote) + `);alert(` + canary + `)//`
+}
+
 func scriptBreakoutPayloadEscaped(quote byte, canary string) string {
 	return `\` + scriptBreakoutPayloadFor(quote, canary)
 }
