@@ -106,4 +106,33 @@ cd burpsy-go && go test ./internal/web/...                    # web tests
 - 2026-08-19b: intercept.tsx enhanced version written (21.3KB) — KNOWN BUGS listed above, must fix before typecheck
 - 2026-08-19f: history.tsx Burp-parity: MIME type filter dropdown (8 options incl. Binary = non-text-ish), client-side filter composed with status/method in the rows useMemo (dep array +mime), CSV export button in PageHeader actions exporting ID/Timestamp/Method/Host/Port/Path/Status/Length/MIME/Duration via downloadText (no backend needed), Download icon + downloadText imports. bun check + bun build GREEN. Diff: +60/-2 across 1 file.
 - 2026-08-19g: history.tsx status bar added (MIME column was already present): shows visible rows over loaded total, summed response bytes, pending count, selected exchange. bun check + bun build GREEN.
-- NEXT: Repeater page (P1-2 multi-tab + analyser, then P1-3 backend wiring) → Scanner/Intruder pages
+
+- 2026-08-20a: Full audit — all 17 page components verified built (255–1064 lines each), every page wired in nav.ts, whole app typechecks (bun run check exit 0), whole Go tree builds/vets/formats clean, go test ./... passes across every package including internal/scanner (401s).
+- 2026-08-20b: Desktop bridge (P4) committed as adbf8ec: cmd/desktop/main.go (Wails v2, hybrid reverse-proxy AssetServer onto in-process web.Server, native menu bar, bound SaveFileDialog/OpenFileDialog/Notify), internal/web/ui/src/lib/runtime.ts (getRuntimeMode/isDesktop + dialog/notify wrappers), docs/DESKTOP.md (operator guide + honest known-gaps list). go.mod picks up wails/v2 v2.15.0.
+- 2026-08-20c: Plan ledger (2026-08-19-webui-full-plan.md) P1/P2 rows corrected from stale NOT STARTED to verified ✅ with evidence. P3-3/P3-4 remain deliberate gaps (documented).
+
+## FINAL HONEST PARITY REPORT (2026-08-20)
+
+### What is done
+- **17/17 pages** built, wired in src/nav.ts, typechecking, rendering. Two (Intercept, History) have explicit Burp-parity enhancements committed in this branch; the other 15 were built in an earlier span and verified at audit time.
+- **Desktop bridge (P4)**: Wails v2 shell, hybrid mode (one server, two doors — desktop window and remote browser render byte-identical UI), native menu bar, file dialogs, notification events. Binary builds with plain go build (no wails-cli asset pipeline required).
+- **Backend gaps (P3)**: /api/intercept/drop-all implemented (one round trip, honest count); CSV export handled client-side via downloadText; IP column and delete-from-history documented as deliberate gaps (Exchange has no ip field; TrafficStore is append-only by design).
+- **Gate**: go build ./... clean, go vet ./... clean, gofmt -l . clean, go test ./... all ok, bun run check clean, bun run build produces 1.40MB bundle.
+
+### What is honestly not done (documented, not hidden)
+- **-db not wired in desktop shell** — flag accepted, persistence not opened; every desktop session starts empty. Documented in docs/DESKTOP.md Known gaps.
+- **No system tray icon** — only native menu bar. Needs wails build asset pipeline to bundle an icon.
+- **No native OS notification** — Notify emits a frontend event rendered as sonner toast. Wails v2 classic runtime has no cross-platform Linux notification without per-OS wiring.
+- **-tools, -bchecks, -intercept-tls, scope flags, -scan-config** not exposed in desktop shell. Operator configures these through the same web UI panels once the window opens.
+- **No single headline parity percentage** — consistent with the project's honest-counting value. Per-page feature lists above are the evidence; no aggregated number is published until someone re-verifies against a running Burp instance.
+
+### Commits in this branch (ui-react-comparison)
+- a5deab4 web(intercept): add Drop All — one round trip, honest count
+- cbc043d web(intercept): Burp-parity enhancements — direction filter, context menu, message view tabs
+- e5938a2 web(intercept): status bar (intercept ON/OFF, queue count, filter indicator)
+- 599e489 web(history): MIME type filter + CSV export
+- 9ec0b76 web(history): status bar with honest capture counts
+- d8dbc17 docs(plans): full WebUI Burp-parity plan and task ledger
+- fde7e86 docs(plans): point working memory at master task ledger
+- 13b9b71 docs(plans): correct page status to verified reality; mark P1/P2 complete
+- adbf8ec desktop: Wails v2 shell, hybrid reverse-proxy, native menus and dialogs
