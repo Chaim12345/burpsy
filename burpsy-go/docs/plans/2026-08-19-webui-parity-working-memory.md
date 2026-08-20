@@ -75,22 +75,22 @@ hotkeys (arrows j/k nav?), escapeQueryString/scopeToQueryFragment helpers for sc
 ## PAGE STATUS
 | Page | File | Status | Notes |
 |---|---|---|---|
-| Proxy/Intercept | pages/intercept.tsx | 🟡 REWRITE IN PROGRESS | Enhanced version WRITTEN but has 3 bugs to fix: uses contextMenu= (must be menuGroups=), SplitPane props wrong (direction/first/second → orientation/master/detail/storageId), missing ariaLabel. Drop-all = N client-side drop calls (no backend endpoint yet) |
-| History | pages/history.tsx | ✅ FULL PARITY | MIME/Type column (was already present), status bar at bottom with honest counts (visible rows / loaded total, response bytes sum, pending count, selected exchange). MIME type filter dropdown (HTML/JSON/XML/JavaScript/CSS/Images/Binary), CSV export button (client-side via downloadText). DSL search, status/method filters, scope toggle, row limit, highlight picker, notes all preserved. |
-| Repeater | pages/repeater.tsx | ⏳ NOT STARTED | |
-| Scanner | pages/scanner.tsx | ⏳ NOT STARTED | |
-| Intruder | pages/intruder.tsx | ⏳ NOT STARTED | |
-| Target/SiteMap | pages/sitemap.tsx + scope.tsx | ⏳ NOT STARTED | |
-| Dashboard | pages/dashboard.tsx | ⏳ NOT STARTED | |
-| Decoder | pages/decoder.tsx | ⏳ NOT STARTED | |
-| Comparer | pages/comparer.tsx | ⏳ NOT STARTED | |
-| Sequencer | pages/sequencer.tsx | ⏳ NOT STARTED | |
-| Settings | pages/settings.tsx | ⏳ NOT STARTED | |
-| Logger | pages/logger.tsx | ⏳ NOT STARTED | |
-| Organizer | pages/organizer.tsx | ⏳ NOT STARTED | |
-| Match/Replace | pages/matchreplace.tsx | ⏳ NOT STARTED | |
-| WS History | pages/wshistory.tsx | ⏳ NOT STARTED | |
-| Session | pages/session.tsx | ⏳ NOT STARTED | |
+| Proxy/Intercept | pages/intercept.tsx | ✅ FULL PARITY | Drop All (backend one round trip, honest count), queue direction filter, context menu (Forward/Drop/Copy URL/Copy cURL with shortcuts), Original vs Edited tabs, status bar. Commits a5deab4/cbc043d/e5938a2 |
+| History | pages/history.tsx | ✅ FULL PARITY | DSL search, status/method/MIME filters, row limit, scope toggle, MIME/Type column, CSV export, status bar with honest counts, highlight picker, notes. Commits 599e489/9ec0b76 |
+| Repeater | pages/repeater.tsx | ✅ BUILT (313 lines) | Multi-tab (persisted in store), per-tab response history with paging, Inspector toggle, Send via /api/repeater/send, To-Intruder handoff, mod+Enter hotkey |
+| Scanner | pages/scanner.tsx | ✅ BUILT (802 lines) | Issue table with severity dots + filters, live active-audit toggle, passive coverage view, config selector, advisory/request/response tabs, report download |
+| Intruder | pages/intruder.tsx | ✅ BUILT (790 lines) | Positions/Payloads/Resource pool/Settings/Results tabs, sniper/battering_ram/pitchfork/cluster_bomb modes, payload sets, results table |
+| Target/SiteMap | pages/sitemap.tsx (555) + scope.tsx | ✅ BUILT | Host→path→segment tree with expand/collapse + search, VirtualTable with actions.menu; scope editor shared with settings |
+| Dashboard | pages/dashboard.tsx | ✅ BUILT (255 lines) | Metrics (coverage summary), task table (crawl/audit/attack), activity feed, all from useDashboard |
+| Decoder | pages/decoder.tsx | ✅ BUILT (391 lines) | Chained decode/encode/hash steps, auto-decode, live /api/tools endpoints |
+| Comparer | pages/comparer.tsx | ✅ BUILT (327 lines) | A/B message diff with nav + download |
+| Sequencer | pages/sequencer.tsx | ✅ BUILT (584 lines) | Paste-live token source tabs, /api/sequencer/analyse, encodings |
+| Settings | pages/settings.tsx | ✅ BUILT (501 lines) | Protocols, appearance/theme, CA download, diagnostics, scope editor (shared with Scope page) |
+| Logger | pages/logger.tsx | ✅ BUILT (365 lines) | Tool-log table, filter/search, column visibility, menuGroups, VirtualTable |
+| Organizer | pages/organizer.tsx | ✅ BUILT (333 lines) | Saved exchanges list + notes via useOrganizer, SimpleTable |
+| Match/Replace | pages/matchreplace.tsx | ✅ BUILT (457 lines) | Rule list + editor, test against pasted request, /api/tools/rules wiring |
+| WS History | pages/wshistory.tsx | ✅ BUILT (284 lines) | Connection list + frame detail, ContextMenu, VirtualTable with menuGroups |
+| Session | pages/session.tsx | ✅ BUILT (1064 lines) | Rules (match/action), cookies table, login macro runner |
 ## BACKEND GAPS IDENTIFIED (add when frontend needs them)
 - [ ] POST /api/intercept/drop-all — batch drop (currently frontend loops N drop calls; works but N round-trips)
 - [ ] GET /api/history?format=csv (or client-side export — prefer client-side downloadText from loaded rows)

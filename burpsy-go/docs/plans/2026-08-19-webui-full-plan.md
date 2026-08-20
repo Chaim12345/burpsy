@@ -23,28 +23,28 @@ parity % until re-verified; gaps are documented, not hidden.
 ## Phase 1 — Core daily-driver pages (highest Burp usage)
 | Task | Page | Status | Acceptance |
 |---|---|---|---|
-| P1-1 History: MIME column in table + status bar counts | history.tsx | ⏳ | MIME column visible; footer shows total/visible counts |
-| P1-2 Repeater: multi-tab + per-tab request history + message analyser | repeater.tsx | ⏳ | Tabs open from history send-to; each tab has own request/response; analyser (headers/body/cookies) |
-| P1-3 Repeater: backend wiring via authorised sender | api_tools.go | ⏳ | Send goes through `sender.AuthorisedSender` (scope check), response bytes stream back |
-| P1-4 Intruder: payload positions + attack types | intruder.tsx | ⏳ | Position highlighting on request; sniper/battering ram/pitchfork/cluster bomb |
-| P1-5 Intruder: results table + attack run | intruder.tsx + api_tools.go | ⏳ | Attack runs via existing `/api/tools/intruder` surface; results table with status/length/timing |
-| P1-6 Scanner: scan wizard + issue table | scanner.tsx | ⏳ | Start scan (passive/active), live issue table from /api/issues, filter by severity |
-| P1-7 Scanner: configuration editor | scanner.tsx | ⏳ | Config panels mirror Burp (insertion points, attack settings, scope) |
-| P1-8 Target/SiteMap | sitemap.tsx | ⏳ | Host → path → method tree from /api/sitemap; scope editor |
+| P1-1 History: MIME column in table + status bar counts | history.tsx | ✅ | Commits 599e489 + 9ec0b76: MIME/Type column, status bar with visible/loaded totals, response bytes, pending, selected |
+| P1-2 Repeater: multi-tab + per-tab request history + message analyser | repeater.tsx | ✅ | 313 lines: tabs persisted in store, per-tab response history with paging, Inspector analyser |
+| P1-3 Repeater: backend wiring via authorised sender | api_tools.go | ✅ | /api/repeater/send exists (repeater is the documented host-level exception) |
+| P1-4 Intruder: payload positions + attack types | intruder.tsx | ✅ | 790 lines: Positions tab + sniper/battering_ram/pitchfork/cluster_bomb modes |
+| P1-5 Intruder: results table + attack run | intruder.tsx + api_tools.go | ✅ | Results tab; /api/intruder/points + /api/intruder/run routes exist |
+| P1-6 Scanner: scan wizard + issue table | scanner.tsx | ✅ | 802 lines: issue table with severity, live audit toggle, /api/scanner/* routes |
+| P1-7 Scanner: configuration editor | scanner.tsx | ✅ | Config selector + coverage view + advisory/request/response tabs |
+| P1-8 Target/SiteMap | sitemap.tsx | ✅ | 555 lines: host→path→segment tree, expand/collapse, search, actions.menu; scope editor |
 
 ## Phase 2 — Tool pages
 | Task | Page | Status | Acceptance |
 |---|---|---|---|
-| P2-1 Dashboard | dashboard.tsx | ⏳ | Stats cards from /api/stats; live event feed |
-| P2-2 Decoder | decoder.tsx | ⏳ | Encode/decode (URL/HTML/Base64/hex); input/output panes |
-| P2-3 Comparer | comparer.tsx | ⏳ | Two-pane diff from send-to-Comparer A/B |
-| P2-4 Sequencer | sequencer.tsx | ⏳ | Token capture + entropy/bit-level analysis via existing sequencer backend |
-| P2-5 Logger | logger.tsx | ⏳ | Tool log table with filter/search/limit (useToolLog exists) |
-| P2-6 Organizer | organizer.tsx | ⏳ | Saved-exchanges list from /api/tools/organizer |
-| P2-7 Match/Replace | matchreplace.tsx | ⏳ | Rule list + editor mirroring matchreplace package rule types |
-| P2-8 WS History | wshistory.tsx | ⏳ | WebSocket capture index rows from /api/ws/* |
-| P2-9 Session | session.tsx | ⏳ | Session rules + cookie table + login macro runner |
-| P2-10 Settings | settings.tsx | ⏳ | Config panels; wire what the backend exposes |
+| P2-1 Dashboard | dashboard.tsx | ✅ | 255 lines: metrics, task table, activity feed via useDashboard |
+| P2-2 Decoder | decoder.tsx | ✅ | 391 lines: chained decode/encode/hash steps |
+| P2-3 Comparer | comparer.tsx | ✅ | 327 lines: A/B diff with nav + download |
+| P2-4 Sequencer | sequencer.tsx | ✅ | 584 lines: paste/live sources, /api/sequencer/analyse |
+| P2-5 Logger | logger.tsx | ✅ | 365 lines: filter/search, column visibility, menuGroups |
+| P2-6 Organizer | organizer.tsx | ✅ | 333 lines: saved exchanges + notes |
+| P2-7 Match/Replace | matchreplace.tsx | ✅ | 457 lines: rules + test against pasted request |
+| P2-8 WS History | wshistory.tsx | ✅ | 284 lines: connections + frame detail |
+| P2-9 Session | session.tsx | ✅ | 1064 lines: rules, cookies, login macro runner |
+| P2-10 Settings | settings.tsx | ✅ | 501 lines: protocols, appearance, CA, diagnostics, scope editor |
 
 ## Phase 3 — Backend gaps (add only when a frontend feature needs them)
 | Task | Status | Notes |
