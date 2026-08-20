@@ -76,7 +76,7 @@ hotkeys (arrows j/k nav?), escapeQueryString/scopeToQueryFragment helpers for sc
 | Page | File | Status | Notes |
 |---|---|---|---|
 | Proxy/Intercept | pages/intercept.tsx | 🟡 REWRITE IN PROGRESS | Enhanced version WRITTEN but has 3 bugs to fix: uses contextMenu= (must be menuGroups=), SplitPane props wrong (direction/first/second → orientation/master/detail/storageId), missing ariaLabel. Drop-all = N client-side drop calls (no backend endpoint yet) |
-| History | pages/history.tsx | ✅ ENHANCED | MIME type filter dropdown (HTML/JSON/XML/JavaScript/CSS/Images/Binary), CSV export button (client-side from loaded rows via downloadText utility). Existing features preserved: DSL search, status/method filters, scope toggle, row limit, highlight picker, notes. TODO: MIME column in table, status bar counts |
+| History | pages/history.tsx | ✅ FULL PARITY | MIME/Type column (was already present), status bar at bottom with honest counts (visible rows / loaded total, response bytes sum, pending count, selected exchange). MIME type filter dropdown (HTML/JSON/XML/JavaScript/CSS/Images/Binary), CSV export button (client-side via downloadText). DSL search, status/method filters, scope toggle, row limit, highlight picker, notes all preserved. |
 | Repeater | pages/repeater.tsx | ⏳ NOT STARTED | |
 | Scanner | pages/scanner.tsx | ⏳ NOT STARTED | |
 | Intruder | pages/intruder.tsx | ⏳ NOT STARTED | |
@@ -105,4 +105,5 @@ cd burpsy-go && go test ./internal/web/...                    # web tests
 - 2026-08-19a: Survey complete (src tree 17 pages, 11 ui components, package.json deps verified: radix context-menu, dropdown-menu, dialog, switch, tabs, tooltip; tanstack query/table/virtual; react-hotkeys-hook; sonner; lucide; codemirror; zustand persist)
 - 2026-08-19b: intercept.tsx enhanced version written (21.3KB) — KNOWN BUGS listed above, must fix before typecheck
 - 2026-08-19f: history.tsx Burp-parity: MIME type filter dropdown (8 options incl. Binary = non-text-ish), client-side filter composed with status/method in the rows useMemo (dep array +mime), CSV export button in PageHeader actions exporting ID/Timestamp/Method/Host/Port/Path/Status/Length/MIME/Duration via downloadText (no backend needed), Download icon + downloadText imports. bun check + bun build GREEN. Diff: +60/-2 across 1 file.
-- NEXT: history.tsx MIME column + status bar counts → Repeater page → Scanner/Intruder pages
+- 2026-08-19g: history.tsx status bar added (MIME column was already present): shows visible rows over loaded total, summed response bytes, pending count, selected exchange. bun check + bun build GREEN.
+- NEXT: Repeater page (P1-2 multi-tab + analyser, then P1-3 backend wiring) → Scanner/Intruder pages

@@ -678,6 +678,39 @@ export function HistoryPage(): JSX.Element {
         }
         detail={detail}
       />
+
+      {/* Status bar at bottom — Burp-style capture counts at a glance. Counts are
+          honest: visible (post-filter) rows over the server-loaded total, response
+          bytes summed from what is actually shown, and the pending count is the
+          exchanges with no response yet, not a cached number. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+          padding: "6px 12px",
+          borderTop: "1px solid var(--border)",
+          fontSize: "var(--fs-sm)",
+          color: "var(--fg-dim)",
+        }}
+      >
+        <div title="Rows visible after the current filters">
+          <strong style={{ color: "var(--fg)" }}>{rows.length.toLocaleString()}</strong>
+          {data && rows.length !== data.length ? ` of ${data.length.toLocaleString()}` : ""} rows
+        </div>
+        <div title="Sum of response bytes for the visible rows">
+          {formatBytes(rows.reduce((sum, row) => sum + (row.response_len ?? 0), 0))} in responses
+        </div>
+        <div title="Exchanges with no response yet">
+          {rows.filter((row) => row.status === null).length} pending
+        </div>
+        {selected ? (
+          <div style={{ color: "var(--fg)", marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={exchangeUrl(selected)}>
+            <strong>#{selected.id}</strong> {selected.method} {selected.path}
+          </div>
+        ) : null}
+      </div>
+
       <QueryHelp open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
