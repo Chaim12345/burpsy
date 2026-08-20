@@ -1,6 +1,7 @@
 # Web UI Burp-Parity — WORKING MEMORY (live tracker)
 > Created 2026-08-19. This file is the durable record for the page-by-page UI parity work.
 > UPDATE IT after every file read/write/verification. Do not re-derive facts already stored here.
+> MASTER LEDGER: see `2026-08-19-webui-full-plan.md` for the full task plan (P0–P5) with acceptance checks.
 ## Goal
 Bring `burpsy-go/internal/web/ui` (React SPA) to full Burp Suite look-and-feel parity —
 menus, data, actions, UX — page by page, then desktop shell later.
