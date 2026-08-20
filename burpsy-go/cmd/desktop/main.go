@@ -167,16 +167,25 @@ func buildMenu(app *App) *menu.Menu {
 		runtime.EventsEmit(app.ctx, "burpsy:menu", "command-palette")
 	})
 
+	// Every Burp tool that carries an alt+N hotkey in the web shell (nav.ts), in
+	// nav order, so the menu accelerators match the in-app ones exactly. The
+	// event is handled by src/app.tsx's desktop menu bridge, the same handler
+	// the hotkeys drive — a menu click and a keyboard shortcut are one code path.
 	toolsMenu := m.AddSubmenu("Tools")
 	for _, item := range []struct {
 		label string
 		route string
 		key   string
 	}{
-		{"Repeater", "repeater", "5"},
+		{"Target", "sitemap", "2"},
+		{"Proxy", "intercept", "3"},
 		{"Intruder", "intruder", "4"},
+		{"Repeater", "repeater", "5"},
+		{"Sequencer", "sequencer", "6"},
 		{"Decoder", "decoder", "7"},
 		{"Comparer", "comparer", "8"},
+		{"Logger", "logger", "9"},
+		{"Organizer", "organizer", "0"},
 	} {
 		route := item.route
 		toolsMenu.AddText(item.label, keys.OptionOrAlt(item.key), func(_ *menu.CallbackData) {

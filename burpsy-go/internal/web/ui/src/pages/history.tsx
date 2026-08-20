@@ -3,7 +3,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { useExchangeActions, exchangeUrl } from "../lib/actions";
-import { downloadText, formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
+import { downloadText, formatBytes, formatDuration, historyToCSV, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useHistory, useMessage } from "../lib/data";
 import { useScopeView } from "../lib/data.policy";
@@ -322,27 +322,16 @@ export function HistoryPage(): JSX.Element {
   }, [data, method, status, mime, hideNoResponse, scopeOnly, scopeFragment, scope.data]);
 
   // CSV export — client-side from the loaded rows; no server endpoint needed
-  // because the page already holds the index rows in memory.
+  // because the page already holds the index rows in memory. The CSV shape is
+  // historyToCSV in lib/api: the desktop shell's File > Export History renders
+  // through the same helper, so the two doors cannot drift apart. This button
+  // exports the loaded (filtered) view; the menu item exports the full capture.
   const exportCSV = () => {
     if (!data || data.length === 0) {
       toast.error("No history rows to export");
       return;
     }
-    const headers = ["ID", "Timestamp", "Method", "Host", "Port", "Path", "Status", "Length", "MIME", "Duration"];
-    const rows = data.map((ex) => [
-      ex.id,
-      new Date(ex.started_ms).toISOString(),
-      ex.method,
-      ex.host,
-      ex.port,
-      ex.path,
-      ex.status ?? "",
-      ex.response_len,
-      ex.mime ?? "",
-      ex.duration_ms,
-    ]);
-    const csv = [headers, ...rows].map((r) => r.map((cell) => `"${cell}"`).join(",")).join("\n");
-    downloadText("history.csv", csv, "text/csv");
+    downloadText("history.csv", historyToCSV(data), "text/csv");
     toast.success(`Exported ${data.length} exchanges to CSV`);
   };
 

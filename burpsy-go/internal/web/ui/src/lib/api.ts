@@ -124,6 +124,41 @@ export function downloadText(filename: string, text: string, type = "text/plain"
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Serialise history index rows to CSV. The one CSV shape in the app: the History
+ * page's export button and the desktop shell's File > Export History both render
+ * through this, so the two doors cannot drift into separate formats. Rows are
+ * index rows (ids and byte lengths, never bodies) — all /api/history ever hands
+ * out — so an export can never quietly copy message payloads.
+ */
+export function historyToCSV(exchanges: {
+  id: number;
+  started_ms: number;
+  method: string;
+  host: string;
+  port: number;
+  path: string;
+  status: number | null;
+  response_len: number;
+  mime?: string;
+  duration_ms: number;
+}[]): string {
+  const headers = ["ID", "Timestamp", "Method", "Host", "Port", "Path", "Status", "Length", "MIME", "Duration"];
+  const rows = exchanges.map((ex) => [
+    ex.id,
+    new Date(ex.started_ms).toISOString(),
+    ex.method,
+    ex.host,
+    ex.port,
+    ex.path,
+    ex.status ?? "",
+    ex.response_len,
+    ex.mime ?? "",
+    ex.duration_ms,
+  ]);
+  return [headers, ...rows].map((row) => row.map((cell) => `"${cell}"`).join(",")).join("\n");
+}
+
 /** Build a minimal raw HTTP/1.1 request for a target, used when seeding Repeater by hand. */
 export function templateRequest(host: string, path = "/"): string {
   return [`GET ${path} HTTP/1.1`, `Host: ${host}`, "Accept: */*", "", ""].join("\r\n");

@@ -21,10 +21,12 @@ import { useCallback, useEffect, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
-import { formatBytes, formatCount, relativeTime, templateRequest } from "./lib/api";
+import { api, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, templateRequest } from "./lib/api";
 import { queryClient, useConnection, useEventStream, useScope, useStats } from "./lib/data";
 import { useCaCert } from "./lib/data.policy";
+import { onDesktopEvent } from "./lib/runtime";
 import { resolveTheme, useApp } from "./lib/store";
+import type { Exchange } from "./lib/types";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
 import { DropdownMenu, type MenuGroup } from "./ui/menu";
@@ -229,6 +231,56 @@ function App(): JSX.Element {
     const next = resolveTheme(theme) === "dark" ? "light" : "dark";
     setTheme(next);
   }, [theme, setTheme]);
+
+  // File > Export History from the desktop shell exports the full capture (the
+  // History page's button exports the loaded, filtered view). Index rows only —
+  // never bodies — so the CSV cannot leak payloads.
+  const exportHistoryCSV = useCallback(async () => {
+    try {
+      const rows = await api<Exchange[]>("/api/history?limit=100000");
+      if (rows.length === 0) {
+        toast.error("No history rows to export");
+        return;
+      }
+      downloadText("history.csv", historyToCSV(rows), "text/csv");
+      toast.success(`Exported ${rows.length} exchanges to CSV`);
+    } catch {
+      toast.error("History export failed");
+    }
+  }, []);
+
+  // Desktop menu bridge: cmd/desktop's buildMenu emits burpsy:navigate (Tools
+  // items) and burpsy:menu (File/View/Help items) as Wails events. The shell
+  // subscribes here; in web mode onDesktopEvent returns null and this effect is
+  // a no-op — every action stays reachable through the hotkeys and the palette,
+  // so a menu click and a keyboard shortcut drive the identical handler.
+  useEffect(() => {
+    const offNavigate = onDesktopEvent("burpsy:navigate", (route) => {
+      if (typeof route === "string") navigate(route);
+    });
+    const offMenu = onDesktopEvent("burpsy:menu", (action) => {
+      switch (action) {
+        case "toggle-theme":
+          toggleTheme();
+          break;
+        case "command-palette":
+          setPaletteOpen(true);
+          break;
+        case "shortcuts":
+          setShortcutsOpen(true);
+          break;
+        case "export-history":
+          void exportHistoryCSV();
+          break;
+        default:
+          break;
+      }
+    });
+    return () => {
+      offNavigate?.();
+      offMenu?.();
+    };
+  }, [navigate, toggleTheme, exportHistoryCSV, setPaletteOpen, setShortcutsOpen]);
 
   useHotkeys(
     "mod+k",

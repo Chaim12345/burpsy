@@ -53,3 +53,19 @@ export function notifyDesktop(title: string, body: string): void {
     new Notification(title, { body });
   }
 }
+
+/**
+ * Subscribe to a Wails event emitted by the desktop shell (cmd/desktop/main.go's
+ * buildMenu emits "burpsy:navigate" and "burpsy:menu"). Returns an unsubscribe
+ * function, or null in web mode — a browser has no native menu, so a menu click
+ * and a keyboard shortcut still land in the identical handler either way.
+ */
+export function onDesktopEvent(eventName: string, handler: (...args: unknown[]) => void): (() => void) | null {
+  if (!isDesktop()) return null;
+  const wails = (window as any).runtime;
+  if (typeof wails?.EventsOn !== "function") return null;
+  wails.EventsOn(eventName, handler);
+  return () => {
+    if (typeof wails.EventsOff === "function") wails.EventsOff(eventName);
+  };
+}

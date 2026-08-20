@@ -47,12 +47,20 @@ wiring package exists.
 
 ## Native integration delivered
 
-- **System tray / native menu bar** — `buildMenu` wires File (Export History, Quit), View
-  (Toggle Theme, Command Palette), Tools (Repeater/Intruder/Decoder/Comparer, each with
-  the same Alt+N accelerator the web shell's hotkeys use) and Help (Keyboard Shortcuts).
-  Every item emits a `burpsy:menu` / `burpsy:navigate` Wails event; the React shell listens
-  for these the same way it already listens for hotkeys, so a menu click and a keyboard
-  shortcut drive the identical code path.
+- **Native menu bar** — `buildMenu` wires File (Export History, Quit), View
+  (Toggle Theme, Command Palette), Tools (Target/Proxy/Intruder/Repeater/Sequencer/
+  Decoder/Comparer/Logger/Organizer, each with the same Alt+N accelerator the web
+  shell's hotkeys use) and Help (Keyboard Shortcuts). Every item emits a `burpsy:menu`
+  / `burpsy:navigate` Wails event; `src/app.tsx` subscribes through `src/lib/runtime.ts`'
+  `onDesktopEvent` (Wails' `EventsOn`, injected as `window.runtime`), so a menu click
+  and a keyboard shortcut drive the identical handler. In web mode the subscription
+  is a no-op — nothing emits those events there. File > Export History exports the
+  full capture through `historyToCSV` (index rows only, never bodies); the History
+  page's button exports the loaded, filtered view through the same helper.
+
+  Historical note: the first cut of this shell emitted these events with no frontend
+  subscriber — every menu item was dead while this doc claimed otherwise. The bridge
+  landed 2026-08-20; this paragraph now describes verified behaviour.
 - **File dialogs** — `SaveFileDialog` / `OpenFileDialog` are bound Go methods
   (`window.go.main.App.*`) that open native OS dialogs. `src/lib/runtime.ts`'s
   `saveFileDialog` / `openFileDialog` call them when `isDesktop()` is true and return `null`
