@@ -64,8 +64,8 @@ export const useApp = create<AppState>()(
   persist(
     (set, get) => ({
       route: "dashboard",
-      theme: "system",
-      density: "comfortable",
+      theme: "dark",
+      density: "compact",
       paletteOpen: false,
       shortcutsOpen: false,
       repeaterTabs: [],

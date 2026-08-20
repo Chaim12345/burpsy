@@ -237,7 +237,7 @@ code {
   min-width: 0;
   display: flex;
   align-items: stretch;
-  gap:var(--s2);
+  gap: 0;
   background: var(--chrome);
   border-bottom: 1px solid var(--line-strong);
   padding-right:var(--s2);
@@ -253,11 +253,12 @@ code {
 }
 
 .brand-symbol {
-  width: calc(var(--toolbar-h) * 0.62);
-  height: calc(var(--toolbar-h) * 0.62);
+  width: calc(var(--toolbar-h) * 0.58);
+  height: calc(var(--toolbar-h) * 0.58);
   flex: none;
   display: grid;
   place-items: center;
+  border-radius: 0;      /* square brand mark, matching Burp's chrome */
   /* --accent, not --accent-bright: this file's own header comment explains --accent exists
      specifically because --accent-bright (#ff6633) cannot carry white text at WCAG AA (2.9:1) — see
      the --accent contrast fix further down this file for why the token itself, not a component
@@ -278,28 +279,36 @@ code {
   flex: 1;
   display: flex;
   align-items: stretch;
+  gap: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Burp's FlatLaf tab strip: a flat bar without extra chrome chrome — the
+     tabs themselves carry the borders, not the container. */
+  padding-left: 0;
 }
 
 .tool-tabs::-webkit-scrollbar {
   display: none;
 }
 
+/* Burp-style rectangular tab. The border shorthand is deliberate: 1px on top,
+   left, and right — no bottom border so the active tab reads contiguous with
+   the page surface below it. A tab has a gap in Burp's look only when it is
+   not selected, and the gap is the line colour, not transparent. */
 .tool-tab {
   flex: none;
   height: 100%;
-  border: 0;
-  border-bottom: var(--border-strong) solid transparent;
-  background: transparent;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 0;      /* Burp tabs are pure rectangles */
+  margin-right: -1px;    /* adjacent borders collapse to 1px */
+  background: var(--chrome);
   color: var(--muted);
   display: flex;
   align-items: center;
   gap:var(--s2);
   padding:0 var(--s2);
   cursor: pointer;
-  /* A step below body: these are chrome, and ten of them have to fit beside the brand and the status
-     chips before the strip starts scrolling and hides the last tools. */
   font-size: var(--fs-sm);
   white-space: nowrap;
   transition:
@@ -315,7 +324,7 @@ code {
 .tool-tab-active {
   background: var(--paper);
   color: var(--text);
-  border-bottom-color: var(--accent-bright);
+  border-bottom: 1px solid var(--paper);   /* fill the gap — no line visible under active tab */
   font-weight: var(--weight-bold);
 }
 
@@ -332,10 +341,10 @@ code {
   min-width: 0;
   display: flex;
   align-items: stretch;
-  gap:0;
+  gap: 0;
   background: var(--paper);
   border-bottom: 1px solid var(--line);
-  padding-left:var(--s2);
+  padding-left: 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -344,11 +353,15 @@ code {
   display: none;
 }
 
+/* Burp's secondary tabs: same rectangular model as the tool tabs, but seated
+   on the page paper surface rather than the chrome bar. */
 .sub-tab {
   flex: none;
   height: 100%;
-  border: 0;
-  border-bottom: var(--border-strong) solid transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 0;
+  margin-right: -1px;
   background: transparent;
   color: var(--muted);
   padding:0 var(--s3);
@@ -359,13 +372,15 @@ code {
 
 .sub-tab:hover {
   color: var(--text);
-  background: var(--chrome-hover);
+  background: var(--paper-deep);
 }
 
 .sub-tab-active {
   color: var(--text);
-  border-bottom-color: var(--accent-bright);
+  background: var(--paper);
   font-weight: var(--weight-bold);
+  border-color: var(--line);
+  border-bottom: 1px solid var(--paper);
 }
 
 /* --- status bar ---------------------------------------------------------- */
@@ -540,6 +555,7 @@ main {
 .card {
   background: var(--paper-raised);
   border: 1px solid var(--line);
+  border-radius: 0;
   padding:var(--s3);
   min-width: 0;
 }
