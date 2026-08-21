@@ -137,3 +137,26 @@ cd burpsy-go && go test ./internal/web/...                    # web tests
 - fde7e86 docs(plans): point working memory at master task ledger
 - 13b9b71 docs(plans): correct page status to verified reality; mark P1/P2 complete
 - adbf8ec desktop: Wails v2 shell, hybrid reverse-proxy, native menus and dialogs
+## PROGRESS LOG (2026-08-21 session — finishing the dsh session's five gaps)
+
+Recovered context from dsh session 6a3d3ca7 into docs/plans/2026-08-20-dsh-session-context.md,
+then closed every gap it had committed to:
+
+- 6669247 web(settings): /api/stats gains proxy_bind/web_bind/tls_interception; Settings gains
+  Proxy listener/Web console/TLS metrics + Scanner configs section; organizer swatches; e2e tests
+  re-pinned to the Darcula+compact defaults 7d0c7d5 shipped (its 151/151 claim was false).
+- 288889b web(scope): standalone Scope page — Burp-style rule table (Kind|Host|Port|Path), add
+  with optional port/path arms, exact-tuple remove. Backend already supported all of it.
+- 6481352 web(shell): menu bar burpsy/File/Repeater/Tools/View/Help — Tools lists every tool with
+  alt+N; View gains Reset panel layout (clears burpsy.split.*). menubar.spec.ts pins it (574786c).
+- 5f468d3 web(wshistory): Frame | Handshake tabs — Handshake renders the upgrade request/response
+  via useMessage(exchange.request/.response). No backend change needed.
+- 926ba57 web(settings): Hotkeys section from shared lib/shortcuts.ts registry.
+- 2b435d2 web(actions): row context menus gain "Add <host> to scope" and "Audit exchange #N".
+- bbf8a0b web(logger): method + status-class filters (client-side over loaded rows).
+
+All verified against a running server with agent-browser (real keypresses, real right-clicks, real
+WS traffic seeded through the proxy via raw RFC6455). Deliberate gaps after this session:
+scan-config creation wizard (would expose engine knobs that do not exist), settings/rules
+import-export (needs new endpoints), scope protocol arm (core change), Extensions/plugins (no
+plugin API by design), system tray (Wails asset pipeline).

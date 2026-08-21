@@ -57,3 +57,32 @@ Against freshly built binaries on test ports:
   TLS interception = Off (first instance) and = On (TLS instance); Scanner section lists presets.
 - Gates at close: `tsc --noEmit` + token checks green, `bun run build` green,
   `go vet ./internal/web/... ./cmd/...` clean, `gofmt -l` clean, `go test ./internal/web/...` ok.
+
+---
+
+# Parity push 2026-08-21 — five committed gaps closed, each verified live
+
+| Gap | Commit | Evidence (agent-browser against a running server) |
+|---|---|---|
+| Scope page was a Settings delegate; no port/path arms in UI | 288889b | rule table renders full tuples; exact-tuple remove leaves same-host sibling intact |
+| Menu bar: Project naming, no Tools menu, no layout reset | 6481352 | six triggers in Burp order; Tools navigates; Reset panel layout wipes burpsy.split.* |
+| WS History showed frames but not the upgrade handshake | 5f468d3 | Handshake tab renders the real GET /ws … 101 pair from proxied traffic |
+| Settings had no Hotkeys section | 926ba57 | all five groups render from the shared registry (lib/shortcuts.ts) |
+| Organizer highlight picker was a text select | 6669247 | colour swatch radiogroup |
+| Row context menu lacked scope/scan moves | 2b435d2 | "Add host to scope" lands a real Include rule; "Audit exchange" queues an active audit |
+| Logger filters short of Burp's set | bbf8a0b | method + status-class selects filter live (2xx drops no-response rows correctly) |
+
+## Deliberate gaps remaining (documented, not hidden)
+
+- Scan-config creation wizard — the engine implements 6 of Burp's 29 shipped configurations and
+  has no custom-config knobs; a wizard would offer controls that do nothing. The functional path
+  exists: context-menu "Audit exchange", or Scanner → Targeted audit with the config selector.
+- No protocol arm on scope rules — core.ScopeRule matches host/port/path; http-vs-https scoping is
+  a core+persist change tracked as future work.
+- No settings/rules import-export — needs new endpoints; future work.
+- No plugin/extension API — deliberate architecture decision (Phase 8 never shipped).
+- No system tray — needs the Wails asset pipeline (docs/DESKTOP.md).
+- "Show response in browser" — Burp loops responses through its own listener; burpsy has no
+  loopback surface yet. Backend work required before the menu item can exist honestly.
+- IP address column / delete-from-history — unchanged deliberate gaps (Exchange carries no ip
+  field; TrafficStore is append-only by design).
