@@ -5,6 +5,7 @@ import {
   Command,
   Database,
   FileDown,
+  FileUp,
   Gauge,
   Keyboard,
   Moon,
@@ -18,7 +19,7 @@ import {
   Sun,
   Unplug,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
@@ -241,6 +242,55 @@ function App(): JSX.Element {
     [toggleTheme],
   );
 
+  const [importResult, setImportResult] = useState<{ ok: boolean; detail: string } | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  const exportConfiguration = useCallback(() => {
+    // A blob download rather than window.open: an operator wants a file to carry between
+    // engagements, not a browser tab rendering JSON.
+    void fetch("/api/config/export")
+      .then((res) => {
+        if (!res.ok) throw new Error(`export failed (${res.status})`);
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "burpsy-config.json";
+        link.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((err) => setImportResult({ ok: false, detail: String(err) }));
+  }, []);
+
+  const importConfiguration = useCallback(async (file: File) => {
+    const text = await file.text();
+    try {
+      const res = await fetch("/api/config/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: text,
+      });
+      const body: unknown = await res.json().catch(() => null);
+      if (!res.ok || !body || typeof body !== "object" || !("status" in body)) {
+        const detail =
+          body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : res.statusText;
+        setImportResult({ ok: false, detail });
+        return;
+      }
+      const counts = body as { scope_rules?: number; intercept_dirs?: number; session_rules?: number };
+      // Every surface the bundle touched just changed underneath the open pages.
+      void queryClient.invalidateQueries();
+      setImportResult({
+        ok: true,
+        detail: `${counts.scope_rules ?? 0} scope rule(s), ${counts.intercept_dirs ?? 0} intercept list(s), ${counts.session_rules ?? 0} session rule(s) applied.`,
+      });
+    } catch (err) {
+      setImportResult({ ok: false, detail: String(err) });
+    }
+  }, []);
+
   const hotkeyTools = useMemo(() => TOOLS.filter((entry) => entry.hotkey), []);
   useHotkeys(
     hotkeyTools.map((entry) => `alt+${entry.hotkey}`).join(","),
@@ -359,6 +409,13 @@ function App(): JSX.Element {
             { id: "html", label: "Export report (HTML)", icon: FileDown, onSelect: () => window.open("/api/report/html", "_blank") },
             { id: "json", label: "Export report (JSON)", icon: FileDown, onSelect: () => window.open("/api/report/json", "_blank") },
             { id: "sarif", label: "Export report (SARIF)", icon: FileDown, onSelect: () => window.open("/api/report/sarif", "_blank") },
+          ],
+        },
+        {
+          id: "config",
+          actions: [
+            { id: "export-config", label: "Export configuration", icon: FileDown, onSelect: () => exportConfiguration() },
+            { id: "import-config", label: "Import configuration…", icon: FileUp, onSelect: () => importInputRef.current?.click() },
           ],
         },
         {
@@ -611,6 +668,29 @@ function App(): JSX.Element {
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
       <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {/* Hidden on purpose: the File menu item is the affordance; the input only has to accept the
+          chosen file. Cleared after every change so picking the same file twice still fires. */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: "none" }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void importConfiguration(file);
+          event.target.value = "";
+        }}
+      />
+      <Modal
+        open={importResult !== null}
+        onOpenChange={(open) => {
+          if (!open) setImportResult(null);
+        }}
+        title={importResult?.ok ? "Configuration imported" : "Import failed"}
+        description={importResult?.detail}
+      >
+        <p>Scope, intercept rules and session handling rules are affected.</p>
+      </Modal>
       <Toaster position="bottom-right" theme={resolveTheme(theme)} closeButton duration={3800} />
     </Tooltip.Provider>
   );

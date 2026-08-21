@@ -362,6 +362,8 @@ func (s *Server) setupRoutes() {
 	// Matches the Rust route (crates/web/src/lib.rs) so the shipped frontend's CA link works unchanged.
 	s.mux.HandleFunc("/ca.crt", s.handleCACert)
 	s.mux.HandleFunc("/api/scope", s.handleScope)
+	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
+	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)
 	s.mux.HandleFunc("/api/issues", s.handleIssues)
 	s.mux.HandleFunc("/api/findings", s.handleFindings) // legacy alias for /api/issues
 

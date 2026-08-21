@@ -114,6 +114,16 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack, subPath: "0",
 		summary: "run an active audit over one captured exchange, by id (0 is valid — see HONEST-05)",
 	},
+	"/api/config/export": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "one JSON bundle of every configurable surface: scope, intercept rules, session handling rules",
+	},
+	// Import rewrites what the engagement may touch — the bundle carries scope — so it shares
+	// /api/scope's confirmation-worthy class rather than sitting with ordinary writes.
+	"/api/config/import": {
+		methods: []string{"POST"}, risk: riskScope,
+		summary: "apply a configuration bundle; a bundle with any invalid rule is refused without applying any part",
+	},
 	"/api/crawl": {
 		// GET reports the last crawl's coverage report; POST starts one.
 		methods: []string{"GET", "POST"}, risk: riskAttack,
@@ -578,7 +588,7 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		"/api/audit/", "/api/crawl", "/api/intruder/run", "/api/scanner/audit",
 		"/api/scanner/live", "/api/sequencer/capture",
 	}
-	wantScope := []string{"/api/scope"}
+	wantScope := []string{"/api/config/import", "/api/scope"}
 	wantCredential := []string{
 		"/api/session/cookies", "/api/session/login", "/api/session/rules", "/api/session/rules/",
 	}
