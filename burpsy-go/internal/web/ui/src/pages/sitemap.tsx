@@ -139,7 +139,7 @@ function TreeRow({
         <button
           type="button"
           className="tree-toggle"
-          aria-label={expanded ? `Collapse ${node.segment}` : `Expand ${node.segment}`}
+          aria-label={expanded ? `Collapse ${node.segment || node.path || "/"}` : `Expand ${node.segment || node.path || "/"}`}
           aria-expanded={expanded}
           onClick={(event) => {
             event.stopPropagation();
