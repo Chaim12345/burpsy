@@ -76,8 +76,32 @@ export function LoggerPage(): JSX.Element {
 
   const rows = data?.entries ?? [];
 
+  // Method and status-class filters run client-side over the loaded rows: the
+  // server's filter arm is tool-only, and these two are the rest of Burp
+  // Logger's everyday set. Distinct methods come from the data, so a new verb
+  // needs no frontend change — the same trick the tool list uses.
+  const [method, setMethod] = useState("");
+  const [statusClass, setStatusClass] = useState("");
+  const methods = useMemo(
+    () => [...new Set(rows.map((row) => row.method))].sort(),
+    [rows],
+  );
+  const filteredRows = useMemo(
+    () =>
+      rows.filter((row) => {
+        if (method && row.method !== method) return false;
+        if (statusClass) {
+          if (row.status === null) return false;
+          const classDigit = Math.floor(row.status / 100);
+          if (String(classDigit) !== statusClass) return false;
+        }
+        return true;
+      }),
+    [rows, method, statusClass],
+  );
+
   // Selection is held by id so a background refresh cannot drop it.
-  const selected = useMemo(() => rows.find((row) => row.id === selectedId) ?? null, [rows, selectedId]);
+  const selected = useMemo(() => filteredRows.find((row) => row.id === selectedId) ?? null, [filteredRows, selectedId]);
 
   // The tool list comes from the server's histogram rather than a hard-coded set,
   // so a tool that starts logging is filterable without a frontend change.
@@ -247,6 +271,22 @@ export function LoggerPage(): JSX.Element {
               </option>
             ))}
           </Select>
+          <Select aria-label="Method filter" value={method} onChange={(event) => setMethod(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+            <option value="">Any method</option>
+            {methods.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </Select>
+          <Select aria-label="Status class filter" value={statusClass} onChange={(event) => setStatusClass(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+            <option value="">Any status</option>
+            <option value="2">2xx</option>
+            <option value="3">3xx</option>
+            <option value="4">4xx</option>
+            <option value="5">5xx</option>
+            <option value="0">no response</option>
+          </Select>
         </Toolbar>
         {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
       </div>
@@ -258,7 +298,7 @@ export function LoggerPage(): JSX.Element {
         master={
           <VirtualTable
             ariaLabel="Requests sent by burpsy's own tools"
-            data={rows}
+            data={filteredRows}
             columns={columns}
             getRowId={(row) => String(row.id)}
             selectedId={selectedId === null ? null : String(selectedId)}
