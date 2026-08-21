@@ -6,11 +6,13 @@ import {
   FolderTree,
   Link2,
   NotebookPen,
+  Radar,
   Repeat2,
+  ShieldCheck,
   Terminal,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, copyToClipboard } from "./api";
+import { api, copyToClipboard, json } from "./api";
 import { useApp } from "./store";
 import type { Exchange, MessageView } from "./types";
 import type { MenuGroup } from "../ui/menu";
@@ -75,6 +77,8 @@ export function useExchangeActions(): {
   copyUrl: (exchange: Exchange) => Promise<void>;
   copyCurl: (exchange: Exchange) => Promise<void>;
   filterByHost: (exchange: Exchange) => void;
+  addToScope: (exchange: Exchange) => Promise<void>;
+  auditExchange: (exchange: Exchange) => Promise<void>;
   menu: (exchange: Exchange, extra?: MenuGroup[]) => MenuGroup[];
 } {
   const openRepeaterTab = useApp((state) => state.openRepeaterTab);
@@ -153,6 +157,24 @@ export function useExchangeActions(): {
     setRoute("history");
   };
 
+  const addToScope = async (exchange: Exchange) => {
+    try {
+      await api<unknown>("/api/scope", json("POST", { action: "include", pattern: exchange.host }));
+      toast.success(`${exchange.host} added to scope`);
+    } catch (error) {
+      toast.error(`Could not scope ${exchange.host}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const auditExchange = async (exchange: Exchange) => {
+    try {
+      await api<unknown>(`/api/audit/${exchange.id}`, json("POST", {}));
+      toast.success(`Active audit queued for exchange #${exchange.id}`);
+    } catch (error) {
+      toast.error(`Could not start the audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   const menu = (exchange: Exchange, extra: MenuGroup[] = []): MenuGroup[] => [
     {
       id: "send",
@@ -178,8 +200,15 @@ export function useExchangeActions(): {
         { id: "host", label: `Filter history by ${exchange.host}`, icon: FolderTree, onSelect: () => filterByHost(exchange) },
       ],
     },
+    {
+      id: "scope-scan",
+      actions: [
+        { id: "scope", label: `Add ${exchange.host} to scope`, icon: ShieldCheck, onSelect: () => void addToScope(exchange) },
+        { id: "audit", label: `Audit exchange #${exchange.id}`, icon: Radar, onSelect: () => void auditExchange(exchange) },
+      ],
+    },
     ...extra,
   ];
 
-  return { sendToRepeater, sendToIntruder, sendToComparer, addToOrganizer, copyUrl, copyCurl, filterByHost, menu };
+  return { sendToRepeater, sendToIntruder, sendToComparer, addToOrganizer, copyUrl, copyCurl, filterByHost, addToScope, auditExchange, menu };
 }
