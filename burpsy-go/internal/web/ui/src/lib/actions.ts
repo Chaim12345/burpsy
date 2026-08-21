@@ -3,6 +3,7 @@ import {
   Combine,
   Copy,
   Crosshair,
+  FileCode2,
   FolderTree,
   Link2,
   NotebookPen,
@@ -175,6 +176,19 @@ export function useExchangeActions(): {
     }
   };
 
+  const generateCSRF = async (exchange: Exchange) => {
+    try {
+      const view = await api<{ html: string; notes: string[] }>(`/api/exchange/${exchange.id}/csrf`);
+      // Opened as a blob page rather than copied to the clipboard: the PoC IS an auto-submitting
+      // page, so rendering it is both the review surface and the proof.
+      const blob = new Blob([view.html], { type: "text/html" });
+      window.open(URL.createObjectURL(blob), "_blank", "noopener");
+      for (const note of view.notes ?? []) toast.info(note);
+    } catch (error) {
+      toast.error(`Could not generate the CSRF PoC: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   const menu = (exchange: Exchange, extra: MenuGroup[] = []): MenuGroup[] => [
     {
       id: "send",
@@ -206,6 +220,10 @@ export function useExchangeActions(): {
         { id: "scope", label: `Add ${exchange.host} to scope`, icon: ShieldCheck, onSelect: () => void addToScope(exchange) },
         { id: "audit", label: `Audit exchange #${exchange.id}`, icon: Radar, onSelect: () => void auditExchange(exchange) },
       ],
+    },
+    {
+      id: "engage",
+      actions: [{ id: "csrf", label: "Generate CSRF PoC", icon: FileCode2, onSelect: () => void generateCSRF(exchange) }],
     },
     ...extra,
   ];

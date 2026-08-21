@@ -103,6 +103,20 @@ func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
 	legacy := strings.HasPrefix(path, "/api/exchanges/")
 	path = strings.TrimPrefix(path, "/api/exchange/")
 	path = strings.TrimPrefix(path, "/api/exchanges/")
+	// The CSRF PoC generator rides the same subtree: /api/exchange/{id}/csrf.
+	if strings.HasSuffix(path, "/csrf") {
+		if legacy {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.ParseUint(strings.TrimSuffix(path, "/csrf"), 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
+			return
+		}
+		s.handleCSRF(w, r, core.ExchangeID(id))
+		return
+	}
 	id, err := strconv.ParseUint(path, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
