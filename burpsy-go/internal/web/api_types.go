@@ -67,9 +67,12 @@ type MessageView struct {
 
 // StatsView mirrors the UI's Stats interface.
 type StatsView struct {
-	Exchanges   int   `json:"exchanges"`
-	Messages    int   `json:"messages"`
-	StoredBytes int64 `json:"stored_bytes"`
+	Exchanges       int    `json:"exchanges"`
+	Messages        int    `json:"messages"`
+	StoredBytes     int64  `json:"stored_bytes"`
+	ProxyBind       string `json:"proxy_bind"`
+	WebBind         string `json:"web_bind"`
+	TLSInterception bool   `json:"tls_interception"`
 }
 
 // FindingView is the legacy /api/findings wire shape.

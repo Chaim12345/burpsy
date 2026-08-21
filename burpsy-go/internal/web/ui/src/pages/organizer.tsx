@@ -5,7 +5,7 @@ import { useOrganizer, useOrganizerMutations } from "../lib/data";
 import { useApp } from "../lib/store";
 import { HIGHLIGHTS, HIGHLIGHT_TONE, type OrganizerItem } from "../lib/types";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Modal, Textarea, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 interface Draft {
@@ -272,19 +272,22 @@ export function OrganizerPage(): JSX.Element {
                     />
                   )}
                 </Field>
-                <Field label="Highlight" hint="Matches the colour vocabulary used across the console.">
-                  {(id) => (
-                  <Select
-                    id={id}
-                    value={draft.highlight}
-                    onChange={(event) => setDraft({ ...draft, highlight: event.target.value })}
-                  >
+                <Field label="Highlight" hint="Tap a colour to assign it.">
+                  {(_id) => (
+                  <div className="swatch-row" role="radiogroup" aria-label="Highlight colour">
                     {HIGHLIGHTS.map((colour) => (
-                      <option key={colour} value={colour}>
-                        {colour}
-                      </option>
+                      <button
+                        key={colour}
+                        type="button"
+                        role="radio"
+                        aria-checked={draft.highlight === colour}
+                        className={draft.highlight === colour ? "swatch-button swatch-active" : "swatch-button"}
+                        style={{ "--swatch-color": "var(--highlight-" + colour + ")" } as React.CSSProperties}
+                        title={colour}
+                        onClick={() => setDraft({ ...draft, highlight: colour })}
+                      />
                     ))}
-                  </Select>
+                  </div>
                   )}
                 </Field>
               </div>

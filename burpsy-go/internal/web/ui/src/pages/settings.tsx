@@ -3,6 +3,7 @@ import { Download, Plus, Radar, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import { useStats } from "../lib/data";
+import { useScannerConfigs } from "../lib/data.attack";
 import {
   useCaCert,
   useEventHubStats,
@@ -13,6 +14,7 @@ import {
 } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
 import type { FrameProgramResponse } from "../lib/types.policy";
+import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, LinkButton, Metric, Modal, Select, Switch, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
@@ -346,6 +348,83 @@ function ProtocolSection(): JSX.Element {
   );
 }
 
+function ProxySettingsSection(): JSX.Element {
+  const stats = useStats();
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Proxy"
+        detail="What the server has captured so far, and where its listeners are bound."
+        actions={
+          <RefreshButton onClick={() => void stats.refetch()} loading={stats.isFetching} />
+        }
+      />
+      {stats.error ? <ErrorNotice error={stats.error} onRetry={() => void stats.refetch()} /> : null}
+      <div className="metric-grid wide">
+        <Metric label="Proxy listener" value={stats.data?.proxy_bind ?? "—"} />
+        <Metric label="Web console" value={stats.data?.web_bind ?? "—"} />
+        <Metric label="TLS interception" value={stats.data == null ? "—" : stats.data.tls_interception ? "On" : "Off"} tone={stats.data?.tls_interception ? "good" : "neutral"} />
+        <Metric label="Exchanges captured" value={formatCount(stats.data?.exchanges)} />
+        <Metric label="Messages stored" value={formatCount(stats.data?.messages)} />
+        <Metric label="Stored on disk" value={stats.data ? formatBytes(stats.data.stored_bytes) : "—"} />
+      </div>
+    </Card>
+  );
+}
+
+function ScannerSettingsSection(): JSX.Element {
+  const configs = useScannerConfigs();
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Scanner"
+        detail="Shipped audit configurations and their concrete settings. Read-only."
+        actions={
+          <RefreshButton onClick={() => void configs.refetch()} loading={configs.isFetching} />
+        }
+      />
+      {configs.error ? <ErrorNotice error={configs.error} onRetry={() => void configs.refetch()} /> : null}
+      {configs.data ? (
+        <>
+          <div className="metric-grid wide">
+            <Metric label="Shipped by Burp" value={configs.data.shipped_by_burp} />
+            <Metric label="Implemented here" value={configs.data.implemented_here} />
+            <Metric label="Omitted" value={configs.data.omitted_reason} detail={configs.data.how_to_run_under} />
+          </div>
+          {configs.data.default ? (
+            <div className="stack" style={{ marginTop: "var(--gap)" }}>
+              <h4>Server default</h4>
+              <DetailList rows={[
+                { label: "Time budget", value: formatDuration(configs.data.default.time_budget_ms) },
+                { label: "Max requests", value: configs.data.default.max_requests ?? "uncapped" },
+                { label: "Consecutive check failures (abandon unit)", value: configs.data.default.consecutive_check_failures_to_abandon_unit },
+                { label: "Consecutive unit failures (fail item)", value: configs.data.default.consecutive_unit_failures_to_fail_item },
+                { label: "Pause session after failed items", value: configs.data.default.pause_session_after_failed_items },
+                { label: "Pause at failed item %", value: configs.data.default.pause_session_at_failed_item_percentage + "%" },
+              ]} />
+            </div>
+          ) : null}
+          <div className="stack" style={{ marginTop: "var(--gap)" }}>
+            <h4>Presets</h4>
+            <SimpleTable headers={["Name", "Keys set", ""]}>
+              {(configs.data.configs ?? []).map((c) => (
+                <tr key={c.name}>
+                  <td><strong>{c.name}</strong></td>
+                  <td><span className="cell-num">{c.keys.length}</span></td>
+                  <td>{c.keys.map((k) => k.name).join(", ") || <span className="cell-dim">no extra keys</span>}</td>
+                </tr>
+              ))}
+            </SimpleTable>
+          </div>
+        </>
+      ) : configs.isLoading ? <LoadingPanel label="Loading scanner configurations" /> : null}
+      {configs.data ? <p className="field-hint">{configs.data.applies_to_server}</p> : null}
+    </Card>
+  );
+}
+
 function AppearanceSection(): JSX.Element {
   const theme = useApp((state) => state.theme);
   const setTheme = useApp((state) => state.setTheme);
@@ -492,7 +571,9 @@ export function SettingsPage(): JSX.Element {
         title="Settings"
         description="Protocol reporting, appearance, the CA certificate, and the console's own diagnostics. Scope lives under Target."
       />
+      <ProxySettingsSection />
       <ProtocolSection />
+      <ScannerSettingsSection />
       <AppearanceSection />
       <CertificateSection />
       <DiagnosticsSection />

@@ -2359,6 +2359,35 @@ tbody td {
   scrollbar-width: thin;
 }
 
+/* ---- Colour swatches (organizer highlight picker) -------------------------------------------- */
+
+.swatch-row {
+  display: flex;
+  gap: var(--s1);
+  align-items: center;
+}
+
+.swatch-button {
+  width: 22px;  /* token-exempt: swatch size is a deliberate fixed choice, independent of the fluid spacing scale */
+  height: 22px; /* token-exempt: same fixed swatch dimension as width */
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--swatch-color);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 120ms ease, outline 120ms ease;
+}
+
+.swatch-button:hover {
+  border-color: var(--accent);
+}
+
+.swatch-active {
+  outline: 2px solid var(--accent-bright); /* token-exempt: focused active state, a deliberate fixed weight thicker than --border-strong (2px) which the check below verifies is identical — keeping the literal so the outline doesn't change if the token evolves */
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
 /* ---- Issue advisory ----------------------------------------------------------------------------
    Severity as a small square rather than a badge: at tree density one badge per row competes with
    the issue name it is meant to qualify. Colour carries the rank, the title/aria-label carries the

@@ -41,20 +41,23 @@ test.describe("shell behaviour", () => {
     // zustand persists theme under burpsy.workspace and partialize keeps it. An operator who picks
     // light and gets dark back on the next page load will not pick it twice.
     //
+    // Since the FlatLaf restyle (7d0c7d5) the shell ships dark (Darcula) as its first-launch
+    // default regardless of the OS colour scheme, so this flow pins both facts at once: first
+    // launch is dark even under an OS that says light, and an operator's explicit choice survives
+    // a reload that would otherwise fall back to the dark default.
+    //
     // Deliberately NOT using pinTheme here: addInitScript runs on EVERY document load, reloads
-    // included, so it would rewrite localStorage back to its own value before the app boots and the
-    // test would report a persistence bug that does not exist. The starting theme comes from the
-    // emulated colour scheme instead, and the assertion is only that the toggle's choice survives.
+    // included, so it would rewrite localStorage back to its own value before the app boots and
+    // the test would report a persistence bug that does not exist.
     await page.emulateMedia({ colorScheme: "light" });
     await gotoApp(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    await page.getByRole("button", { name: "Use light theme" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
-    await page.getByRole("button", { name: "Use dark theme" }).click();
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-
-    // Reloaded with the OS preference still saying light: only the persisted choice can keep it dark.
     await page.reload();
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   });
 
   test("mod+K opens the command palette, and it navigates", async ({ page, consoleErrors }) => {
@@ -304,14 +307,17 @@ test.describe("preferences reach the rendered UI", () => {
     // density prop (src/ui/table.tsx), so the toggle reaches every table at once instead of needing
     // 24 call sites kept in sync — the drift that made this a deliberate red test (2026-08). The fix
     // landed; this is now the regression guard.
+    //
+    // Since the FlatLaf restyle (7d0c7d5) the first-launch default is compact (Burp's own density),
+    // so the flow starts from compact and asserts the command moves the table to comfortable.
     await gotoRoute(page, route("history"));
-    await expect(page.locator(".table-frame")).toHaveClass(/density-comfortable/);
+    await expect(page.locator(".table-frame")).toHaveClass(/density-compact/);
 
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByLabel("Search commands").fill("compact");
+    await page.getByLabel("Search commands").fill("comfortable");
     await page.locator("#palette-results [role=option]").first().click();
 
-    await expect(page.locator(".table-frame")).toHaveClass(/density-compact/);
+    await expect(page.locator(".table-frame")).toHaveClass(/density-comfortable/);
     expect(consoleErrors).toEqual([]);
   });
 

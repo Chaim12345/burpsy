@@ -183,11 +183,18 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	messages, exchanges := s.store.Count()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(StatsView{
+	view := StatsView{
 		Exchanges:   exchanges,
 		Messages:    messages,
 		StoredBytes: s.store.Bytes(),
-	})
+		ProxyBind:   s.proxyBind,
+		WebBind:     s.webBind,
+	}
+	// caCertPEM exists iff -intercept-tls was passed
+	if s.caCertPEM != nil {
+		view.TLSInterception = true
+	}
+	json.NewEncoder(w).Encode(view)
 }
 
 // ---- scope -------------------------------------------------------------------------------------

@@ -277,7 +277,8 @@ func main() {
 		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
 		// for a client that already trusts the CA, and the operator gets told why the download is
 		// missing instead of the link silently staying hidden.
-		WithCACertPEM(readCACert(*interceptTLS, *caDir, logger))
+		WithCACertPEM(readCACert(*interceptTLS, *caDir, logger)).
+		WithBindAddrs(*proxyBind, *webBind)
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.

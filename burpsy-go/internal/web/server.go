@@ -23,13 +23,20 @@ import (
 
 // Server represents the web API server.
 type Server struct {
-	store          *core.TrafficStore
-	scope          *core.Scope
-	logger         *zap.Logger
-	mux            *http.ServeMux
-	sender         *sender.Sender
-	scanner        *scanner.ActiveScanner
-	passiveScanner *scanner.PassiveScanner
+	store  *core.TrafficStore
+	scope  *core.Scope
+	logger *zap.Logger
+	// proxyBind and webBind are the -proxy and -web flag values the binary was
+	// started with, so the Settings page can show where it listens.
+	proxyBind string
+	webBind   string
+	// tlsInterception reports whether the server is configured for TLS
+	// interception (determined by whether a CA cert PEM exists).
+	tlsInterception bool
+	mux             *http.ServeMux
+	sender          *sender.Sender
+	scanner         *scanner.ActiveScanner
+	passiveScanner  *scanner.PassiveScanner
 	// toolRunner is the allowlist runner `run tool` statements dispatch through
 	// on the lazily built audit scanner. Nil means tool execution is disabled;
 	// corpus checks that need a tool are counted at load and never admitted.
@@ -206,6 +213,16 @@ func (s *Server) WithLiveAudit(la *LiveAuditState) *Server {
 // leaves the route reporting that interception is off, which is what the UI's CA link keys off.
 func (s *Server) WithCACertPEM(pem []byte) *Server {
 	s.caCertPEM = pem
+	s.tlsInterception = pem != nil
+	return s
+}
+
+// WithBindAddrs records the -proxy and -web bind addresses the binary was
+// started with, so the Settings page can show where the listeners actually are
+// rather than leaving the operator to check the process logs.
+func (s *Server) WithBindAddrs(proxyBind, webBind string) *Server {
+	s.proxyBind = proxyBind
+	s.webBind = webBind
 	return s
 }
 

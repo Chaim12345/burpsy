@@ -29,6 +29,9 @@ export interface Stats {
   exchanges: number;
   messages: number;
   stored_bytes: number;
+  proxy_bind?: string;
+  web_bind?: string;
+  tls_interception?: boolean;
 }
 
 export interface ScopeRule {

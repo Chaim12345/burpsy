@@ -100,7 +100,8 @@ func (a *App) startup(ctx context.Context) {
 			WithCorpusChecks(passiveScanner.ActiveChecks())).
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
-		WithIntercept(interceptEngine)
+		WithIntercept(interceptEngine).
+		WithBindAddrs(a.proxyBind, a.webBind)
 	webServer.StartLiveAuditSweep(runCtx)
 	go func() {
 		if err := webServer.ListenAndServe(runCtx, a.webBind); err != nil && err != context.Canceled {
