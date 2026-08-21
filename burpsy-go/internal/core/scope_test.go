@@ -95,3 +95,43 @@ func TestScopeWithOnlyExcludesAllowsEverythingElse(t *testing.T) {
 		t.Error("with no include rules, a non-excluded host should be in scope")
 	}
 }
+
+func TestProtocolScopedIncludeOnlyAdmitsItsOwnScheme(t *testing.T) {
+	s := NewScope()
+	httpsOnly := NewScopeRule(ScopeInclude, "example.test")
+	scheme := "https"
+	httpsOnly.Protocol = &scheme
+	s.Add(httpsOnly)
+
+	if !s.Contains("example.test", 443, "/", true) {
+		t.Error("an https-scoped include must admit an https request to example.test")
+	}
+	if s.Contains("example.test", 80, "/", false) {
+		t.Error("an https-scoped include admitted plain http; a protocol arm that matches both schemes is decorative and lies on the Scope page")
+	}
+}
+
+func TestProtocolScopedExcludeRemovesOnlyItsScheme(t *testing.T) {
+	s := NewScope()
+	s.AddInclude("example.test")
+	httpsExclusion := NewScopeRule(ScopeExclude, "example.test")
+	scheme := "https"
+	httpsExclusion.Protocol = &scheme
+	s.Add(httpsExclusion)
+
+	if !s.Contains("example.test", 80, "/", false) {
+		t.Error("excluding only https from example.test must leave http authorised")
+	}
+	if s.Contains("example.test", 443, "/", true) {
+		t.Error("an https-scoped exclude failed to keep https out of scope for example.test")
+	}
+}
+
+func TestRuleWithoutProtocolArmMatchesBothSchemes(t *testing.T) {
+	s := NewScope()
+	s.AddInclude("example.test")
+
+	if !s.Contains("example.test", 443, "/", true) || !s.Contains("example.test", 80, "/", false) {
+		t.Error("a rule with no protocol arm must match both schemes; every rule built before the arm existed relies on this")
+	}
+}

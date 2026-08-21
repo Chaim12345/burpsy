@@ -90,9 +90,10 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			req := ScopeRequest{
-				Action:  "include",
-				Pattern: *view.Host,
-				Path:    derefString(view.Path),
+				Action:   "include",
+				Pattern:  *view.Host,
+				Path:     derefString(view.Path),
+				Protocol: derefString(view.Protocol),
 			}
 			kind := core.ScopeInclude
 			switch view.Kind {

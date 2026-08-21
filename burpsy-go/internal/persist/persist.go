@@ -112,6 +112,14 @@ CREATE TABLE IF NOT EXISTS scope_rules_v2 (
 	port        INTEGER,
 	path_prefix TEXT
 );
+CREATE TABLE IF NOT EXISTS scope_rules_v3 (
+	ord         INTEGER PRIMARY KEY,
+	kind        TEXT NOT NULL,
+	pattern     TEXT NOT NULL,
+	port        INTEGER,
+	path_prefix TEXT,
+	protocol    TEXT
+);
 CREATE TABLE IF NOT EXISTS matchreplace_rules (
 	ord      INTEGER PRIMARY KEY,
 	target   INTEGER NOT NULL,
@@ -670,15 +678,20 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 // The legacy table is still written, best-effort and as lossily as it always was, for one reason: an
 // older build reads *only* that table, and core.Scope with no rules is default-allow. Stopping the
 // legacy write would turn a downgrade into an engagement with no scope at all, which is the one failure
-// direction worth carrying a duplicate table to avoid.
+// direction worth carrying a duplicate table to avoid. scope_rules_v2 is mirrored for the same reason:
+// a v2-era build reads only v2, so dropping its write would hand that downgrade an empty scope.
 func (s *Store) SaveScope(rules []*core.ScopeRule) {
-	if _, err := s.db.Exec(`DELETE FROM scope_rules_v2`); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM scope_rules_v3`); err != nil {
 		s.log("scope clear", err)
 		return
 	}
+	if _, err := s.db.Exec(`DELETE FROM scope_rules_v2`); err != nil {
+		// Not fatal: the v3 table is the one that will be read back.
+		s.log("scope clear v2", err)
+	}
 	if _, err := s.db.Exec(`DELETE FROM scope_rules`); err != nil {
 		s.log("scope clear legacy", err)
-		// Not fatal: the v2 table is the one that will be read back.
+		// Not fatal: the v3 table is the one that will be read back.
 	}
 	for i, r := range rules {
 		var port any
@@ -689,15 +702,27 @@ func (s *Store) SaveScope(rules []*core.ScopeRule) {
 		if r.PathPrefix != nil {
 			pathPrefix = *r.PathPrefix
 		}
+		var protocol any
+		if r.Protocol != nil {
+			protocol = *r.Protocol
+		}
 		kind := scopeKindName(r.Kind)
 		if _, err := s.db.Exec(
-			`INSERT INTO scope_rules_v2 (ord, kind, pattern, port, path_prefix) VALUES (?, ?, ?, ?, ?)`,
-			i, kind, r.Pattern, port, pathPrefix); err != nil {
+			`INSERT INTO scope_rules_v3 (ord, kind, pattern, port, path_prefix, protocol) VALUES (?, ?, ?, ?, ?, ?)`,
+			i, kind, r.Pattern, port, pathPrefix, protocol); err != nil {
 			// Returning here would leave the durable scope narrower *or* wider than the live one with no
 			// record of which rules made it, so every remaining rule is still attempted and every failure
 			// is named.
 			s.log("scope rule", fmt.Errorf("rule %d (%s %s): %w", i, kind, r.Pattern, err))
 			continue
+		}
+		// The v2 mirror drops the protocol arm — a scheme-wide rule on a downgraded build is wider than
+		// the operator set, but it is what a build without the column can represent, and the alternative
+		// is no rule at all. A failure here costs that build one rule, not this one.
+		if _, err := s.db.Exec(
+			`INSERT INTO scope_rules_v2 (ord, kind, pattern, port, path_prefix) VALUES (?, ?, ?, ?, ?)`,
+			i, kind, r.Pattern, port, pathPrefix); err != nil {
+			s.log("scope rule v2 mirror", err)
 		}
 		// The legacy mirror, whose key cannot hold two rules that differ only by port or path. A failure
 		// here is logged and stepped over: it costs a downgraded build one rule, not this one.
@@ -718,23 +743,24 @@ func scopeKindName(k core.ScopeRuleKind) string {
 
 // LoadScope restores scope rules, in the order they were saved.
 //
-// scope_rules_v2 is authoritative when it holds anything. The legacy table is read when v2 is **empty**,
-// which is a database written before v2 existed — and such a row cannot carry a path prefix, so the rule
-// comes back host-and-port-wide. That is stated rather than papered over: it is the widening the v2 table
-// exists to stop, and it cannot be recovered from data that never held it.
+// scope_rules_v3 is authoritative when it holds anything; v2 is read when v3 is **empty** — a database
+// written by a v2-era build, whose rows cannot carry a protocol, so those rules come back scheme-wide.
+// The legacy table is read when both are empty, which is a database written before v2 existed — and
+// such a row cannot carry a path prefix either, so the rule comes back host-and-port-wide. Both widenings
+// are stated rather than papered over: they are what the newer tables exist to stop, and they cannot be
+// recovered from data that never held them.
 //
-// Note "empty", not "absent": migrate creates v2 on open, so every old database arrives here with an
-// empty v2 beside a populated legacy table. Treating "v2 is the current table" as reason enough to read
-// only v2 would hand core.Scope zero rules, and an empty core.Scope is default-allow — the fallback is
-// what stops an upgrade from failing open. Pinned by
-// TestLoadScopeFallsBackToAnEmptyV2AndAPopulatedLegacyTable, which asserts v2 is present and empty first
-// so it cannot pass for the wrong reason.
+// Note "empty", not "absent": migrate creates every generation on open, so an old database arrives here
+// with empty current tables beside populated older ones. Treating "v3 exists" as reason enough to read
+// only v3 would hand core.Scope zero rules, and an empty core.Scope is default-allow — the fallbacks are
+// what stop an upgrade from failing open. Pinned by TestLoadScopeFallsBackToAnEmptyV2AndAPopulatedLegacyTable
+// and TestAV2EraDatabaseStillRestoresItsRules.
 func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
-	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix FROM scope_rules_v2 ORDER BY ord`)
+	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix, protocol FROM scope_rules_v3 ORDER BY ord`)
 	if err != nil {
 		return nil, err
 	}
-	out, err := scanScopeRows(rows, true)
+	out, err := scanScopeRows(rows, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -742,11 +768,23 @@ func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
 		s.checkLegacyScopeDivergence(out)
 		return out, nil
 	}
-	legacy, err := s.db.Query(`SELECT kind, pattern, port, NULL FROM scope_rules`)
+	v2rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix, NULL FROM scope_rules_v2 ORDER BY ord`)
 	if err != nil {
 		return nil, err
 	}
-	return scanScopeRows(legacy, false)
+	out, err = scanScopeRows(v2rows, true, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > 0 {
+		s.checkLegacyScopeDivergence(out)
+		return out, nil
+	}
+	legacy, err := s.db.Query(`SELECT kind, pattern, port, NULL, NULL FROM scope_rules`)
+	if err != nil {
+		return nil, err
+	}
+	return scanScopeRows(legacy, false, false)
 }
 
 // checkLegacyScopeDivergence reports a legacy scope row that this build did not write.
@@ -824,14 +862,15 @@ func scopeTriple(kind, pattern string, port *uint16) string {
 // rule from the pattern alone. A rule restricted to one port therefore came back matching every port on
 // that host — silently authorising traffic the operator had not authorised, for an include rule, and
 // silently excluding traffic they had allowed, for an exclude one.
-func scanScopeRows(rows *sql.Rows, withPath bool) ([]*core.ScopeRule, error) {
+func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRule, error) {
 	defer rows.Close()
 	var out []*core.ScopeRule
 	for rows.Next() {
 		var kind, pattern string
 		var port sql.NullInt64
 		var pathPrefix sql.NullString
-		if err := rows.Scan(&kind, &pattern, &port, &pathPrefix); err != nil {
+		var protocol sql.NullString
+		if err := rows.Scan(&kind, &pattern, &port, &pathPrefix, &protocol); err != nil {
 			return nil, err
 		}
 		// kind is stored as a string ("include"/"exclude") for readability.
@@ -847,6 +886,10 @@ func scanScopeRows(rows *sql.Rows, withPath bool) ([]*core.ScopeRule, error) {
 		if withPath && pathPrefix.Valid && pathPrefix.String != "" {
 			prefix := pathPrefix.String
 			r.PathPrefix = &prefix
+		}
+		if hasProtocol && protocol.Valid && protocol.String != "" {
+			scheme := protocol.String
+			r.Protocol = &scheme
 		}
 		out = append(out, r)
 	}

@@ -12,9 +12,10 @@ interface ScopeRow {
   host: string;
   port: number | null;
   path: string | null;
+  protocol: string | null;
 }
 
-const rowKey = (row: ScopeRow) => `${row.kind}|${row.host}|${row.port ?? ""}|${row.path ?? ""}`;
+const rowKey = (row: ScopeRow) => `${row.kind}|${row.host}|${row.port ?? ""}|${row.path ?? ""}|${row.protocol ?? ""}`;
 
 /**
  * Scope sits under Target, where Burp puts it. The editor is a full Burp-style rule table rather
@@ -30,6 +31,7 @@ export function ScopePage(): JSX.Element {
   const [pattern, setPattern] = useState("");
   const [port, setPort] = useState("");
   const [path, setPath] = useState("");
+  const [protocol, setProtocol] = useState<"" | "http" | "https">("");
   const [selected, setSelected] = useState<ScopeRow | null>(null);
 
   const run = (body: Parameters<typeof update.mutate>[0], message: string) =>
@@ -55,12 +57,14 @@ export function ScopePage(): JSX.Element {
         pattern: pattern.trim(),
         ...(parsedPort !== undefined ? { port: parsedPort } : {}),
         ...(path.trim() ? { path: path.trim() } : {}),
+        ...(protocol ? { protocol } : {}),
       },
       `${kind === "include" ? "Included" : "Excluded"} ${pattern.trim()}`,
     );
     setPattern("");
     setPort("");
     setPath("");
+    setProtocol("");
   };
 
   const removeSelected = () => {
@@ -72,6 +76,7 @@ export function ScopePage(): JSX.Element {
         pattern: selected.host,
         ...(selected.port !== null ? { port: selected.port } : {}),
         ...(selected.path !== null ? { path: selected.path } : {}),
+        ...(selected.protocol !== null ? { protocol: selected.protocol as "http" | "https" } : {}),
       },
       `Removed ${selected.host}`,
     );
@@ -85,6 +90,7 @@ export function ScopePage(): JSX.Element {
         host: rule.host ?? "",
         port: rule.port ?? null,
         path: rule.path ?? null,
+        protocol: rule.protocol ?? null,
       })),
     [data],
   );
@@ -100,6 +106,15 @@ export function ScopePage(): JSX.Element {
         cell: (info) => {
           const value = info.getValue<number | null>();
           return value === null ? <span className="cell-dim">any</span> : <span className="cell-num">{value}</span>;
+        },
+      },
+      {
+        accessorKey: "protocol",
+        header: "Protocol",
+        size: 100,
+        cell: (info) => {
+          const value = info.getValue<string | null>();
+          return value === null ? <span className="cell-dim">any</span> : <code>{value}</code>;
         },
       },
       {
@@ -162,6 +177,15 @@ export function ScopePage(): JSX.Element {
           </Field>
           <Field label="Path prefix" hint="Optional; must start with /.">
             {(id) => <Input id={id} value={path} onChange={(event) => setPath(event.target.value)} placeholder="/v2" style={{ maxWidth: "var(--w-sm)" }} />}
+          </Field>
+          <Field label="Protocol" hint="Optional; blank means either scheme.">
+            {(id) => (
+              <Select id={id} value={protocol} onChange={(event) => setProtocol(event.target.value === "http" ? "http" : event.target.value === "https" ? "https" : "")} style={{ maxWidth: "var(--w-xs)" }}>
+                <option value="">Any</option>
+                <option value="http">HTTP</option>
+                <option value="https">HTTPS</option>
+              </Select>
+            )}
           </Field>
           <Button variant="primary" onClick={addRule}>
             <Plus size={14} />

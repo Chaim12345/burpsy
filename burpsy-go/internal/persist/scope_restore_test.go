@@ -114,10 +114,10 @@ func TestRestoreKeepsAScopeRulesPathPrefix(t *testing.T) {
 	if r.PathPrefix == nil || *r.PathPrefix != "/api" {
 		t.Fatalf("path prefix = %v, want /api: an authorisation boundary was widened by a restart", r.PathPrefix)
 	}
-	if r.MatchesRequest("app.test", 80, "/admin") {
+	if r.MatchesRequest("app.test", 80, "/admin", false) {
 		t.Error("the restored rule matches /admin, which is outside the prefix it was saved with")
 	}
-	if !r.MatchesRequest("app.test", 80, "/api/users") {
+	if !r.MatchesRequest("app.test", 80, "/api/users", false) {
 		t.Error("the restored rule no longer matches its own prefix")
 	}
 }
@@ -244,7 +244,7 @@ func TestScopeSurvivesADoubleRoundTrip(t *testing.T) {
 	if !twicePortRestricted.Matches("app.test", 8443) || twicePortRestricted.Matches("app.test", 80) {
 		t.Error("the twice-restored port rule does not match its own port, or matches another")
 	}
-	if !second[1].MatchesRequest("app.test", 80, "/admin/x") || second[1].MatchesRequest("app.test", 80, "/public") {
+	if !second[1].MatchesRequest("app.test", 80, "/admin/x", false) || second[1].MatchesRequest("app.test", 80, "/public", false) {
 		t.Error("the twice-restored path rule no longer bounds its own prefix")
 	}
 }
@@ -329,5 +329,61 @@ func TestSaveScopeStillMirrorsToTheLegacyTable(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("the legacy table holds %d rows, want 1: an older build reading it would see no scope at "+
 			"all, which it treats as allow-everything", n)
+	}
+}
+
+// A protocol-limited rule keeps its scheme. The v2 table had no column for one, so an include rule
+// limited to https came back matching both schemes — an authorisation boundary widened by a
+// restart, in exactly the direction the port and path-prefix columns exist to prevent.
+func TestRestoreKeepsAScopeRulesProtocol(t *testing.T) {
+	p := newTestStore(t)
+	httpsOnly := core.NewScopeRule(core.ScopeInclude, "app.test")
+	scheme := "https"
+	httpsOnly.Protocol = &scheme
+	p.SaveScope([]*core.ScopeRule{httpsOnly})
+
+	loaded, err := p.LoadScope()
+	if err != nil {
+		t.Fatalf("LoadScope: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded %d rules, want 1", len(loaded))
+	}
+	r := loaded[0]
+	if r.Protocol == nil {
+		t.Fatal("the restored rule has no protocol, so it now authorises both schemes on that host")
+	}
+	if *r.Protocol != "https" {
+		t.Fatalf("protocol = %q, want \"https\"", *r.Protocol)
+	}
+	if !r.MatchesRequest("app.test", 443, "/", true) {
+		t.Error("the restored rule no longer matches the https request it was saved for")
+	}
+	if r.MatchesRequest("app.test", 80, "/", false) {
+		t.Error("the restored rule matches plain http, which the operator did not authorise")
+	}
+}
+
+// A database written by a v2-era build still restores its rules under the v3 loader. The v2 rows
+// cannot carry a protocol, so the rules come back scheme-wide — stated, not papered over; what must
+// not happen is the loader returning nothing and core.Scope failing open.
+func TestAV2EraDatabaseStillRestoresItsRules(t *testing.T) {
+	p := newTestStore(t)
+	if _, err := p.db.Exec(
+		`INSERT INTO scope_rules_v2 (ord, kind, pattern, port, path_prefix) VALUES (?, ?, ?, ?, ?)`,
+		0, "include", "old.test", nil, "/api"); err != nil {
+		t.Fatalf("seed v2 row: %v", err)
+	}
+
+	loaded, err := p.LoadScope()
+	if err != nil {
+		t.Fatalf("LoadScope: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded %d rules, want 1 — an upgrade that loses the operator's scope fails open", len(loaded))
+	}
+	r := loaded[0]
+	if r.Pattern != "old.test" || r.PathPrefix == nil || *r.PathPrefix != "/api" {
+		t.Fatalf("restored %+v, want old.test with /api prefix intact", r)
 	}
 }

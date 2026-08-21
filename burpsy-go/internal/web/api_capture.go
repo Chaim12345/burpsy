@@ -212,6 +212,8 @@ type ScopeRequest struct {
 	// gap that left burpsy unable to say "this host, but not /admin".
 	Path string  `json:"path,omitempty"`
 	Port *uint16 `json:"port,omitempty"`
+	// Protocol limits the rule to one scheme: "http" or "https". Empty means either.
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // normaliseScopePath validates an optional path prefix and returns nil for "no path".
@@ -230,9 +232,29 @@ func normaliseScopePath(raw string) (*string, error) {
 	return &trimmed, nil
 }
 
+// normaliseScopeProtocol validates an optional protocol arm and returns nil for "either scheme".
+//
+// Only "http" and "https" are accepted, because those are the only schemes a request through this
+// proxy can speak. Anything else would build a rule that silently matches nothing — the worst outcome
+// for a scope rule: the operator believes a restriction is in force and it is not.
+func normaliseScopeProtocol(raw string) (*string, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	if trimmed == "" {
+		return nil, nil
+	}
+	if trimmed != "http" && trimmed != "https" {
+		return nil, fmt.Errorf("A scope protocol must be http or https; got %q", raw)
+	}
+	return &trimmed, nil
+}
+
 // buildScopeRule turns a request into the narrowest rule it describes.
 func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule, error) {
 	path, err := normaliseScopePath(req.Path)
+	if err != nil {
+		return nil, err
+	}
+	protocol, err := normaliseScopeProtocol(req.Protocol)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +265,7 @@ func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule,
 	if req.Port != nil {
 		rule.Port = req.Port
 	}
+	rule.Protocol = protocol
 	return rule, nil
 }
 
@@ -267,6 +290,8 @@ type scopeRuleView struct {
 	// in path are the ordinary case, and removing by host alone would delete the wrong one.
 	Path *string `json:"path,omitempty"`
 	Port *uint16 `json:"port,omitempty"`
+	// Protocol is omitted when the rule matches either scheme.
+	Protocol *string `json:"protocol,omitempty"`
 }
 
 func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +303,7 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 			kind = "Exclude"
 		}
 		pattern := rule.Pattern
-		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port})
+		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port, Protocol: rule.Protocol})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

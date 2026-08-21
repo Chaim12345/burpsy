@@ -190,6 +190,7 @@ export interface ScopeRuleView {
   host: string | null;
   path?: string | null;
   port?: number | null;
+  protocol?: string | null;
 }
 
 export interface ScopeView {
@@ -198,13 +199,14 @@ export interface ScopeView {
   empty: boolean;
 }
 
-/** POST /api/scope. Port and path are optional arms on include/exclude, and part of a remove's identity. */
+/** POST /api/scope. Port, path and protocol are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
   action: "include" | "exclude" | "remove" | "clear";
   kind?: "include" | "exclude";
   pattern?: string;
   path?: string;
   port?: number;
+  protocol?: "http" | "https";
 }
 
 /* --- protocols / diagnostics ---------------------------------------------- */
