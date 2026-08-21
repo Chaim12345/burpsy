@@ -181,26 +181,30 @@ export interface SessionLoginResponse {
 
 /* --- scope ---------------------------------------------------------------- */
 
+/**
+ * /api/scope. The Go handler reports each rule's full tuple — host pattern plus optional port
+ * and path arms — so removal can target one rule without touching a same-host sibling.
+ */
 export interface ScopeRuleView {
   kind: "Include" | "Exclude";
   host: string | null;
+  path?: string | null;
+  port?: number | null;
 }
 
-/**
- * /api/scope. Note this differs from types.ts's `Scope`: the Go handler emits
- * {kind, host} rules plus `empty`, and has no port/protocol/path fields at all.
- */
 export interface ScopeView {
   allow_all: boolean;
   rules: ScopeRuleView[];
   empty: boolean;
 }
 
-/** POST /api/scope. Only a host pattern is addressable; there is no port or path arm. */
+/** POST /api/scope. Port and path are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
   action: "include" | "exclude" | "remove" | "clear";
   kind?: "include" | "exclude";
   pattern?: string;
+  path?: string;
+  port?: number;
 }
 
 /* --- protocols / diagnostics ---------------------------------------------- */

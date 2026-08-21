@@ -67,8 +67,9 @@ export function ScopeSection(): JSX.Element {
 
       <div className="notice">
         <span>
-          A scope rule matches on a host pattern only — this build&apos;s scope API has no port, protocol or path
-          arm, so those are not offered here. An empty scope means everything is in scope.
+          A rule matches a host pattern, optionally narrowed to one port or a path prefix — the full
+          rule table with both arms lives under Target &rarr; Scope. There is no protocol arm in this
+          build&apos;s scope engine. An empty scope means everything is in scope.
         </span>
       </div>
 
