@@ -13,10 +13,11 @@ import {
   useUpdateScope,
 } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
+import { SHORTCUT_GROUPS } from "../lib/shortcuts";
 import type { FrameProgramResponse } from "../lib/types.policy";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, LinkButton, Metric, Modal, Select, Switch, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 const THEMES: { value: Theme; label: string }[] = [
@@ -426,6 +427,40 @@ function ScannerSettingsSection(): JSX.Element {
   );
 }
 
+function HotkeysSection(): JSX.Element {
+  return (
+    <Card>
+      <SectionHeading
+        title="Hotkeys"
+        detail="The full binding set, the same list the ? modal shows. mod is ⌘ on macOS and Ctrl elsewhere; bindings that had to differ from Burp say why."
+      />
+      <div className="shortcut-table">
+        {SHORTCUT_GROUPS.map((group) => (
+          <div key={group.title}>
+            <div className="shortcut-group">{group.title}</div>
+            {group.rows.map((entry) => (
+              <div className="shortcut-row" key={entry.label}>
+                <div>
+                  {entry.keys.map((key, i) => (
+                    <span key={key}>
+                      {i > 0 ? "+" : null}
+                      <Kbd>{key}</Kbd>
+                    </span>
+                  ))}
+                </div>
+                <span>
+                  {entry.label}
+                  {entry.note ? <small className="shortcut-note">{entry.note}</small> : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function AppearanceSection(): JSX.Element {
   const theme = useApp((state) => state.theme);
   const setTheme = useApp((state) => state.setTheme);
@@ -576,6 +611,7 @@ export function SettingsPage(): JSX.Element {
       <ProtocolSection />
       <ScannerSettingsSection />
       <AppearanceSection />
+      <HotkeysSection />
       <CertificateSection />
       <DiagnosticsSection />
     </div>
