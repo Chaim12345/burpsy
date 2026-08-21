@@ -221,6 +221,7 @@ with the reason named), **PARTIAL** (ported with a reduced scope, named), or
 | 11 | Comparer no granularity/budget | COMPLETE | P3 |
 | 12 | Session coordinator simplified | COMPLETE | P3 |
 | 13 | Query DSL (parens / `in` range / escapes / DSL-04) | COMPLETE | P2 |
+| 14 | Scope protocol arm (Go ahead of the Rust oracle) | COMPLETE — deliberate divergence, Go-only | P2 |
 
 ---
 
@@ -1147,3 +1148,39 @@ bcheck_runner,scanner}.go` (runner, load bucket, dispatch gate), `internal/web`
   standing argument for why this ledger counts runtime behaviour separately from
   `cmd/conform`'s number, and why a builtin's argument shapes get their own
   tests rather than being assumed from the corpus parsing.
+
+### Gap 14 — Scope protocol arm — CLOSED 2026-08-21 (deliberate divergence: Go ahead of the oracle)
+
+**Rust** `crates/core/src/scope.rs` has no protocol arm: a rule matches host,
+port and path prefix, and `may_contain_host`/`contains` carry no scheme. The
+frozen tree stays that way — this gap is recorded here because the Go tree now
+does something the oracle cannot express, and the next person diffing the two
+deserves to read why rather than file it as drift.
+
+**Go (ahead):** `internal/core/scope.go`'s `ScopeRule` gained `Protocol *string`
+("http"/"https"; nil = either, which is what every rule built before the arm
+means). The decision the arm rests on: scheme is the TLS state of the connection
+a request actually uses, not a property of its URL string — so matching compares
+against the `isTLS` every authorisation caller already passed (`Contains`,
+`AuthoriseRequest`, `AuthoriseRaw`; the sender has handed a truthful flag across
+every dial since it was written — the parameter simply died at the rule boundary
+until now). `MayContainHost` treats a protocol-scoped exclude as partial: an
+https-only exclude says nothing about http.
+
+Persistence follows the v2 precedent exactly (`persist.go`): `scope_rules_v3`
+adds the column; v3 is authoritative on load with fallback to v2 then legacy;
+both older tables stay written because a downgraded build reading only its own
+table must not find an empty scope — default-allow is the one failure direction
+this file never accepts. A v2-era database restores scheme-wide, stated in the
+loader doc and pinned by test. Wire: `ScopeRequest.Protocol` /
+`scopeRuleView.Protocol`, unknown schemes refused 400 (a scheme no request can
+speak builds a rule that silently matches nothing); the configuration bundle
+round-trips the arm through export/import via `scopeRuleView`. UI: Protocol
+select beside the port/path arms, column in the rules table, exact-tuple remove
+carries it.
+
+Pinned by `internal/core/scope_test.go` (include gates by scheme; exclude
+removes only its scheme; armless rules match both), `scope_restore_test.go`
+(protocol survives save/load; a v2-era database still restores), and
+`server_test.go` (arm survives the wire and gates through `AuthoriseRaw`;
+"gopher" is refused). Landed as de93912.
