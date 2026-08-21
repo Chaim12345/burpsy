@@ -11,6 +11,7 @@ import {
   Network,
   Plus,
   Repeat2,
+  RotateCcw,
   Rows3,
   Settings,
   ShieldCheck,
@@ -412,7 +413,7 @@ function App(): JSX.Element {
       ],
     },
     {
-      label: "Project",
+      label: "File",
       groups: [
         {
           id: "report",
@@ -462,6 +463,23 @@ function App(): JSX.Element {
       ],
     },
     {
+      label: "Tools",
+      groups: [
+        {
+          id: "tools",
+          // One item per tool, in tab order — the menu-bar twin of the tool-tab strip, which is
+          // where Burp's own Tools menu starts. entryLeaf lands on each tool's first page.
+          actions: TOOLS.map((entry) => ({
+            id: `tool-${entry.id}`,
+            label: entry.label,
+            icon: entry.icon,
+            shortcut: entry.hotkey ? `alt+${entry.hotkey}` : undefined,
+            onSelect: () => navigate(entryLeaf(entry)),
+          })),
+        },
+      ],
+    },
+    {
       label: "View",
       groups: [
         {
@@ -490,6 +508,23 @@ function App(): JSX.Element {
               label: `${density === "compact" ? "Comfortable" : "Compact"} table rows`,
               icon: Rows3,
               onSelect: () => setDensity(density === "compact" ? "comfortable" : "compact"),
+            },
+          ],
+        },
+        {
+          id: "layout",
+          actions: [
+            {
+              id: "reset-layout",
+              label: "Reset panel layout",
+              icon: RotateCcw,
+              onSelect: () => {
+                for (let i = localStorage.length - 1; i >= 0; i--) {
+                  const key = localStorage.key(i);
+                  if (key?.startsWith("burpsy.split.")) localStorage.removeItem(key);
+                }
+                window.location.reload();
+              },
             },
           ],
         },
