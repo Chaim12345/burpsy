@@ -3,13 +3,14 @@ import { ArrowDownLeft, ArrowUpRight, Copy, ExternalLink, X } from "lucide-react
 import { copyToClipboard, formatBytes, relativeTime } from "../lib/api";
 import { useWsConnections, useWsHistory } from "../lib/data";
 import { useExchange, useWsMessageDetailed } from "../lib/data.observe";
+import { useMessage } from "../lib/data";
 import { useApp } from "../lib/store";
 import { useExchangeActions } from "../lib/actions";
 import type { WsConnection, WsRow } from "../lib/types";
 import type { WsMessageDetail } from "../lib/types.observe";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader, RefreshButton } from "../ui/layout";
-import { Badge, Empty, ErrorNotice, IconButton, Metric } from "../ui/primitives";
+import { Badge, Empty, ErrorNotice, IconButton, Metric, Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { DetailList } from "../ui/json";
 import { VirtualTable, type Column } from "../ui/table";
@@ -114,6 +115,11 @@ export function WebSocketPage(): JSX.Element {
   // Fetched only for the connection currently under the pointer, so a right-click on any other
   // connection still gets the minimal id-only menu rather than blocking on a fetch.
   const exchangeDetail = useExchange(selectedExchange);
+  // The upgrade handshake: the exchange behind a WebSocket connection IS the HTTP request that
+  // opened it, so its message ids render through the ordinary message endpoint. Burp shows this
+  // pair for every WS connection; without it there is no way to see what negotiated the socket.
+  const handshakeRequest = useMessage(exchangeDetail.data?.request ?? null);
+  const handshakeResponse = useMessage(exchangeDetail.data?.response ?? null);
 
   const conns = connections.data ?? [];
 
@@ -256,26 +262,65 @@ export function WebSocketPage(): JSX.Element {
         </div>
 
         <div className="card-fill">
-          {selectedFrame ? (
-            <div className="tabs-fill">
+          {selectedFrame || selectedExchange !== null ? (
+            <Tabs defaultValue="frame" className="tabs-fill">
               <div className="detail-head">
-                <div className="detail-head-title">
-                  <span className="eyebrow">#{selectedFrame.id}</span>
-                  <strong>
-                    {selectedConn ? `${selectedConn.host}${selectedConn.path}` : "frame"} · {selectedFrame.opcode}
-                  </strong>
-                </div>
+                <TabsList>
+                  <TabsTrigger value="frame">Frame</TabsTrigger>
+                  <TabsTrigger value="handshake" disabled={selectedExchange === null}>
+                    Handshake
+                  </TabsTrigger>
+                </TabsList>
                 <div className="detail-actions">
-                  <Badge>{formatBytes(selectedFrame.len)}</Badge>
-                  <IconButton label="Clear selection" size="small" onClick={() => setSelectedFrameId(null)}>
-                    <X size={13} />
-                  </IconButton>
+                  {selectedFrame ? (
+                    <>
+                      <span className="eyebrow">#{selectedFrame.id}</span>
+                      <Badge>{formatBytes(selectedFrame.len)}</Badge>
+                      <IconButton label="Clear frame selection" size="small" onClick={() => setSelectedFrameId(null)}>
+                        <X size={13} />
+                      </IconButton>
+                    </>
+                  ) : null}
                 </div>
               </div>
-              <PayloadView message={frame.data} isFetching={frame.isFetching} />
-            </div>
+              <TabsContent value="frame" className="tabs-fill">
+                {selectedFrame ? (
+                  <PayloadView message={frame.data} isFetching={frame.isFetching} />
+                ) : (
+                  <Empty title="No frame selected" detail="Choose a row in the frame table to read its exact payload." />
+                )}
+              </TabsContent>
+              <TabsContent value="handshake" className="tabs-fill">
+                {selectedConn ? (
+                  <div className="editor-grid tabs-fill">
+                    <HttpEditor
+                      views={false}
+                      label={`Upgrade request — ${selectedConn.host}:${selectedConn.port}${selectedConn.path}`}
+                      readOnly
+                      value={handshakeRequest.data?.text ?? ""}
+                      filename={`ws-handshake-${selectedConn.exchange}-request.txt`}
+                      placeholder={handshakeRequest.isLoading ? "Loading handshake…" : "No request bytes captured."}
+                    />
+                    <HttpEditor
+                      views={false}
+                      label={`Upgrade response — ${selectedConn.host}:${selectedConn.port}${selectedConn.path}`}
+                      readOnly
+                      value={handshakeResponse.data?.text ?? ""}
+                      filename={`ws-handshake-${selectedConn.exchange}-response.txt`}
+                      placeholder={
+                        selectedConn.exchange === null || handshakeResponse.data === undefined
+                          ? handshakeResponse.isLoading
+                            ? "Loading handshake…"
+                            : "No response bytes captured."
+                          : "The upgrade was not answered through the proxy."
+                      }
+                    />
+                  </div>
+                ) : null}
+              </TabsContent>
+            </Tabs>
           ) : (
-            <Empty title="No frame selected" detail="Choose a row in the frame table to read its exact payload." />
+            <Empty title="No connection selected" detail="Pick a connection on the left to see its frames and the HTTP handshake that opened it." />
           )}
         </div>
       </div>
