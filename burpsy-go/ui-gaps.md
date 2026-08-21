@@ -77,9 +77,18 @@ Against freshly built binaries on test ports:
 - Scan-config creation wizard — the engine implements 6 of Burp's 29 shipped configurations and
   has no custom-config knobs; a wizard would offer controls that do nothing. The functional path
   exists: context-menu "Audit exchange", or Scanner → Targeted audit with the config selector.
-- No protocol arm on scope rules — core.ScopeRule matches host/port/path; http-vs-https scoping is
-  a core+persist change tracked as future work.
-- No settings/rules import-export — needs new endpoints; future work.
+- No protocol arm on scope rules — core.ScopeRule matches host/port/path (scope.go:22, matching at
+  :80/:88); http-vs-https scoping is a six-layer change: a Protocol field + match extension in
+  core/scope.go, caller-side scheme plumbing in sender/proxy/crawler (all three know the scheme at
+  decision time), a scope_rules_v3 migration following the v2 precedent (SQLite cannot alter the
+  rule shape; see persist.go:657-666), wire fields in ScopeRequest/scopeRuleView (api_capture.go —
+  api_config.go's bundle would carry it automatically), and a protocol select + column on the Scope
+  page mirroring the existing port/path arms. Assessed and scoped 2026-08-21; deferred so it lands
+  as one complete RED→GREEN cycle per layer rather than half-migrated state.
+- ~~No settings/rules import-export~~ — closed dd0781f: GET /api/config/export and POST
+  /api/config/import carry scope + intercept rules + session handling rules as one atomic bundle;
+  an invalid rule anywhere refuses the whole import (verified live: refused bundle left scope
+  untouched). File menu → Export/Import configuration.
 - No plugin/extension API — deliberate architecture decision (Phase 8 never shipped).
 - No system tray — needs the Wails asset pipeline (docs/DESKTOP.md).
 - "Show response in browser" — Burp loops responses through its own listener; burpsy has no

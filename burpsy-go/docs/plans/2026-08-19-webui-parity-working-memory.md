@@ -160,3 +160,21 @@ WS traffic seeded through the proxy via raw RFC6455). Deliberate gaps after this
 scan-config creation wizard (would expose engine knobs that do not exist), settings/rules
 import-export (needs new endpoints), scope protocol arm (core change), Extensions/plugins (no
 plugin API by design), system tray (Wails asset pipeline).
+
+## PROGRESS LOG (2026-08-21 session, later — configuration portability)
+
+- dd0781f web(config): GET /api/config/export and POST /api/config/import carry scope + intercept
+  rules + session handling rules as one atomic bundle. Import converts every section before
+  touching state — an invalid rule anywhere refuses the whole bundle with 400 and nothing applied
+  (pinned by api_config_test.go: export round-trips all three surfaces, clean-server apply,
+  refusal atomicity). File menu gains Export configuration (blob download) and Import
+  configuration… (hidden input, result modal with per-surface counts, blanket query invalidation).
+  Import is riskScope in the route manifest: the bundle rewrites what the engagement may touch.
+  Verified live via agent-browser: valid bundle replaced scope wholesale (qa-roundtrip.test tuple
+  pair), invalid bundle left it untouched.
+- Scope protocol arm assessed and scoped in ui-gaps.md (six layers: core match, caller-side scheme
+  plumbing in sender/proxy/crawler, scope_rules_v3 migration per the v2 precedent, wire fields,
+  UI select+column, parity-ledger entry). Deferred as one coherent change rather than half-migrated.
+
+Final gate at close: go build/vet/gofmt clean; go test ./... = 31/31 packages ok; e2e-ui.sh run
+recorded in docs/plans/2026-08-21-final-gate.md.
