@@ -338,7 +338,18 @@ export function VirtualTable<T>({
                   return (
                     <th key={header.id} style={{ width: header.getSize() }} aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}>
                       {canSort ? (
-                        <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
+                        <button
+                          type="button"
+                          className="th-sort"
+                          onClick={header.column.getToggleSortingHandler()}
+                          title={
+                            sorted === "asc"
+                              ? "Sorted ascending. Click to sort descending."
+                              : sorted === "desc"
+                                ? "Sorted descending. Click to clear sort."
+                                : "Click to sort ascending."
+                          }
+                        >
                           {flexRender(header.column.columnDef.header, header.getContext())}
                           {sorted === "asc" ? <ArrowUp size={11} /> : sorted === "desc" ? <ArrowDown size={11} /> : null}
                         </button>

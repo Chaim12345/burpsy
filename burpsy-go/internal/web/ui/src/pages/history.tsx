@@ -13,7 +13,7 @@ import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
-import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar, Tooltip } from "../ui/primitives";
+import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
 
 const STATUS_BUCKETS = [
@@ -513,11 +513,9 @@ export function HistoryPage(): JSX.Element {
                 <X size={13} />
               </IconButton>
             ) : null}
-            <Tooltip content="Filter syntax">
-              <button type="button" className="icon-button icon-button-sm" aria-label="Filter syntax" onClick={() => setHelpOpen(true)}>
-                <HelpCircle size={13} />
-              </button>
-            </Tooltip>
+            <IconButton label="Filter syntax" size="small" onClick={() => setHelpOpen(true)}>
+              <HelpCircle size={13} />
+            </IconButton>
           </div>
           <FilterToggle pressed={scopeOnly} onPressedChange={setScopeOnly}>
             In scope only
