@@ -60,6 +60,26 @@ jobs:
       # undemonstrated and their tests skip with a reason naming the missing binary. That is the
       # honest outcome rather than a hidden one: those rows are already counted as registered-only
       # in docs/SCANNER-COVERAGE.md, so CI is not claiming something the local gate does not.
+      #
+      # ffuf and nuclei ARE installed, because internal/extscan's capability gate is the Chrome
+      # rule again: its live tests fail the package when a binary was missing, and a runner without
+      # them reported red on every push since the subprocess phases landed while verifying nothing
+      # about the integration. Pinned versions rather than @latest — a CI gate that moves under its
+      # own feet is not a gate. The template corpus is fetched with the binary it belongs to; the
+      # test checks ~/.local/nuclei-templates/http directly, since a binary with no templates runs
+      # and matches nothing, which would let an empty result pass for a real scan.
+      - name: Install ffuf and nuclei (extscan live tests)
+        run: |
+          go install github.com/ffuf/ffuf/v2@v2.1.0
+          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.3.9
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+      - name: Fetch nuclei template corpus
+        run: |
+          nuclei -update-templates >/dev/null 2>&1 || true
+          test -d "$HOME/.local/nuclei-templates/http" || {
+            echo "::error::nuclei template corpus did not land in ~/.local/nuclei-templates"
+            exit 1
+          }
 
       - name: gofmt
         run: |
