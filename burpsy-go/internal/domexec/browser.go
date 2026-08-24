@@ -69,6 +69,16 @@ type Options struct {
 	// be a bare name (resolved via exec.LookPath) or an absolute path.
 	ChromePath string
 
+	// RemoteURL, if set, attaches to an already-running CDP server (obscura
+	// serve, lightpanda serve) instead of launching a browser process. This is
+	// how an alternative engine plugs in: the server owns process lifetime, so
+	// Close releases only this client's connection and never the server itself,
+	// and Headless/UserAgent/ChromePath are meaningless here — the server was
+	// configured before we connected. Setting both RemoteURL and ChromePath is
+	// a configuration contradiction and is refused rather than silently
+	// resolved by priority.
+	RemoteURL string
+
 	// Headed shows Chrome's window. The zero value is headless, which is the only mode that
 	// works where there is no display server and the only one that does not steal focus from
 	// whoever is running the tests.
@@ -130,69 +140,101 @@ type Browser struct {
 
 	opts Options
 
+	// remoteURL is set only in remote mode. The server owns process lifetime,
+	// and its per-connection isolation (each CDP connection gets its own V8
+	// isolate) is what lets every check dial a fresh connection instead of
+	// sharing one: see newTab.
+	remoteURL string
+
 	closeOnce sync.Once
 }
 
-// NewBrowser resolves a Chrome binary, launches it, and blocks until the
-// browser has actually started (not merely until a process handle exists —
-// chromedp's allocator starts the process lazily on first use, so this issues
-// a no-op Run to force that and catch startup failures here rather than on
-// the caller's first real operation).
+// NewBrowser starts or attaches to a browser and blocks until it is actually
+// usable (not merely until a process handle or socket exists — chromedp's
+// allocators start lazily on first use, so this issues a no-op Run to force
+// that and catch startup failures here rather than on the caller's first real
+// operation).
+//
+// Two modes, mutually exclusive (setting both is an error):
+//
+//   - exec (default): resolves a Chrome binary per Options.ChromePath and
+//     launches it.
+//   - remote (Options.RemoteURL): attaches to a running CDP server such as
+//     `obscura serve` or `lightpanda serve`. The server owns process lifetime;
+//     Close releases only this client's connection.
 //
 // NoSandbox is required in the flag set below because this scanner commonly
 // runs as root inside a container: Chrome's sandbox refuses to initialise for
 // a root user and the process exits immediately without it.
 func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
-	path, err := resolveChromePath(opts.ChromePath)
-	if err != nil {
-		return nil, err
+	if opts.RemoteURL != "" && opts.ChromePath != "" {
+		return nil, errors.New("domexec: RemoteURL and ChromePath are mutually exclusive: one names a running CDP server, the other a binary to launch")
 	}
 
 	timeout := opts.resolvedTimeout()
 
-	execOpts := []chromedp.ExecAllocatorOption{
-		chromedp.ExecPath(path),
-		chromedp.NoSandbox,
-		chromedp.DisableGPU,
-		// The rest mirror chromedp.DefaultExecAllocatorOptions - itself "Puppeteer's default
-		// behavior" - which NewExecAllocator does NOT apply on its own; that convenience is
-		// wired into chromedp's zero-config NewContext path only, so building execOpts from a
-		// bare ExecPath/NoSandbox/DisableGPU set, as this function did before, paid for
-		// Chrome's full first-run/update/telemetry machinery on every one of this harness's
-		// ~17 launches: a first-run dialog check, a default-browser prompt, background
-		// network probes for Safe Browsing and component updates, extension/sync bootstrap,
-		// and an OS keychain lookup for the password store (which can stall for seconds, or
-		// hang, on a container with no keyring daemon). None of it is observable to a page
-		// under test - every flag below disables a Chrome-internal service, never a web
-		// platform API a taint check could depend on - so it is free wall-clock time back.
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.Flag("disable-background-networking", true),
-		chromedp.Flag("disable-background-timer-throttling", true),
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-breakpad", true),
-		chromedp.Flag("disable-client-side-phishing-detection", true),
-		chromedp.Flag("disable-default-apps", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-hang-monitor", true),
-		chromedp.Flag("disable-ipc-flooding-protection", true),
-		chromedp.Flag("disable-prompt-on-repost", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-sync", true),
-		chromedp.Flag("metrics-recording-only", true),
-		chromedp.Flag("safebrowsing-disable-auto-update", true),
-		chromedp.Flag("password-store", "basic"),
-		chromedp.Flag("use-mock-keychain", true),
-	}
-	if !opts.Headed {
-		execOpts = append(execOpts, chromedp.Headless)
-	}
-	if opts.UserAgent != "" {
-		execOpts = append(execOpts, chromedp.UserAgent(opts.UserAgent))
+	var allocCtx context.Context
+	var allocCancel context.CancelFunc
+	var describe string
+
+	if opts.RemoteURL != "" {
+		// Remote mode: attach to an already-running CDP server. The warm-up Run
+		// below still applies — it proves the server accepts a browser session
+		// and answers protocol calls before the caller commits to it.
+		describe = opts.RemoteURL
+		allocCtx, allocCancel = chromedp.NewRemoteAllocator(ctx, opts.RemoteURL)
+	} else {
+		path, err := resolveChromePath(opts.ChromePath)
+		if err != nil {
+			return nil, err
+		}
+		describe = path
+
+		execOpts := []chromedp.ExecAllocatorOption{
+			chromedp.ExecPath(path),
+			chromedp.NoSandbox,
+			chromedp.DisableGPU,
+			// The rest mirror chromedp.DefaultExecAllocatorOptions - itself "Puppeteer's default
+			// behavior" - which NewExecAllocator does NOT apply on its own; that convenience is
+			// wired into chromedp's zero-config NewContext path only, so building execOpts from a
+			// bare ExecPath/NoSandbox/DisableGPU set, as this function did before, paid for
+			// Chrome's full first-run/update/telemetry machinery on every one of this harness's
+			// ~17 launches: a first-run dialog check, a default-browser prompt, background
+			// network probes for Safe Browsing and component updates, extension/sync bootstrap,
+			// and an OS keychain lookup for the password store (which can stall for seconds, or
+			// hang, on a container with no keyring daemon). None of it is observable to a page
+			// under test - every flag below disables a Chrome-internal service, never a web
+			// platform API a taint check could depend on - so it is free wall-clock time back.
+			chromedp.NoFirstRun,
+			chromedp.NoDefaultBrowserCheck,
+			chromedp.Flag("disable-background-networking", true),
+			chromedp.Flag("disable-background-timer-throttling", true),
+			chromedp.Flag("disable-backgrounding-occluded-windows", true),
+			chromedp.Flag("disable-breakpad", true),
+			chromedp.Flag("disable-client-side-phishing-detection", true),
+			chromedp.Flag("disable-default-apps", true),
+			chromedp.Flag("disable-dev-shm-usage", true),
+			chromedp.Flag("disable-extensions", true),
+			chromedp.Flag("disable-hang-monitor", true),
+			chromedp.Flag("disable-ipc-flooding-protection", true),
+			chromedp.Flag("disable-prompt-on-repost", true),
+			chromedp.Flag("disable-renderer-backgrounding", true),
+			chromedp.Flag("disable-sync", true),
+			chromedp.Flag("metrics-recording-only", true),
+			chromedp.Flag("safebrowsing-disable-auto-update", true),
+			chromedp.Flag("password-store", "basic"),
+			chromedp.Flag("use-mock-keychain", true),
+		}
+		if !opts.Headed {
+			execOpts = append(execOpts, chromedp.Headless)
+		}
+		if opts.UserAgent != "" {
+			execOpts = append(execOpts, chromedp.UserAgent(opts.UserAgent))
+		}
+
+		allocCtx, allocCancel = chromedp.NewExecAllocator(ctx, execOpts...)
 	}
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, execOpts...)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 
 	// Warm the browser up so a launch failure is reported here rather than at the first
@@ -214,12 +256,12 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 		if err != nil {
 			browserCancel()
 			allocCancel()
-			return nil, fmt.Errorf("domexec: chrome at %q failed to start: %w", path, err)
+			return nil, fmt.Errorf("domexec: browser at %q failed to start: %w", describe, err)
 		}
 	case <-time.After(timeout):
 		browserCancel()
 		allocCancel()
-		return nil, fmt.Errorf("domexec: chrome at %q did not become ready within %s", path, timeout)
+		return nil, fmt.Errorf("domexec: browser at %q did not become ready within %s", describe, timeout)
 	}
 
 	return &Browser{
@@ -228,6 +270,7 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 		browserCtx:    browserCtx,
 		browserCancel: browserCancel,
 		opts:          opts,
+		remoteURL:     opts.RemoteURL,
 	}, nil
 }
 
@@ -253,6 +296,31 @@ func (b *Browser) Close() error {
 func (b *Browser) newTab(ctx context.Context) (context.Context, context.CancelFunc, error) {
 	if !b.Available() {
 		return nil, nil, errors.New("domexec: browser is closed")
+	}
+	// Remote mode dials a fresh CDP connection per tab rather than sharing this
+	// Browser's warm-up connection. Measured against obscura serve: rapid
+	// create/navigate/cancel cycles over ONE connection eventually lose their
+	// server-side sessions ("executor for page-N-session doesn't exist"), which
+	// reads downstream as zero observations — a false negative. A fresh
+	// connection per check is the shape the server is built for (each gets its
+	// own thread and V8 isolate, so isolation is if anything stronger), costs
+	// one localhost dial, and was 20/20 stable where shared tabs were 10/20.
+	if b.remoteURL != "" {
+		tabAllocCtx, tabAllocCancel := chromedp.NewRemoteAllocator(ctx, b.remoteURL)
+		tabCtx, tabCancel := chromedp.NewContext(tabAllocCtx)
+		opCtx, opCancel := context.WithTimeout(tabCtx, b.opts.resolvedTimeout())
+		stop := context.AfterFunc(ctx, func() {
+			opCancel()
+			tabCancel()
+			tabAllocCancel()
+		})
+		cancel := func() {
+			stop()
+			opCancel()
+			tabCancel()
+			tabAllocCancel()
+		}
+		return opCtx, cancel, nil
 	}
 	tabCtx, tabCancel := chromedp.NewContext(b.browserCtx)
 	opCtx, opCancel := context.WithTimeout(tabCtx, b.opts.resolvedTimeout())

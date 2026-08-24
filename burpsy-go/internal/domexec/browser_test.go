@@ -48,7 +48,15 @@ func TestMain(m *testing.M) {
 func newTestBrowser(t *testing.T) *Browser {
 	t.Helper()
 	sharedBrowserOnce.Do(func() {
-		sharedBrowser, sharedBrowserErr = NewBrowser(context.Background(), Options{Timeout: 30 * time.Second})
+		// BURPSY_DOM_REMOTE points the whole suite at a running CDP server
+		// (obscura serve / lightpanda serve) instead of launching Chrome —
+		// this is how alternative engines get benchmarked against the same
+		// sink-by-sink assertions with zero test changes.
+		if remote := os.Getenv("BURPSY_DOM_REMOTE"); remote != "" {
+			sharedBrowser, sharedBrowserErr = NewBrowser(context.Background(), Options{RemoteURL: remote})
+		} else {
+			sharedBrowser, sharedBrowserErr = NewBrowser(context.Background(), Options{Timeout: 30 * time.Second})
+		}
 	})
 	if sharedBrowserErr != nil {
 		t.Skipf("no browser available, skipping: %v", sharedBrowserErr)
