@@ -456,6 +456,34 @@ function TlsPassthroughSection(): JSX.Element {
   );
 }
 
+// Burp keeps its browser block in User options → Misc, beside Hotkeys; this section sits in the
+// same relative slot. Read-only on purpose: the engine is named by -dom at startup, and switching
+// it live would race the audit engine's unlocked config reads and strand a cached browser.
+function DomEngineSection(): JSX.Element {
+  const stats = useStats();
+  const checks = stats.data?.dom_checks === true;
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Browser engine"
+        detail="Which headless browser runs the DOM-based checks — named by -dom when this server started. Changing it takes a restart."
+        actions={<RefreshButton onClick={() => void stats.refetch()} loading={stats.isFetching} />}
+      />
+      {stats.error ? <ErrorNotice error={stats.error} onRetry={() => void stats.refetch()} /> : null}
+      <div className="metric-grid wide">
+        <Metric label="Engine" value={stats.data?.dom_engine ?? "—"} />
+        <Metric
+          label="DOM-based checks"
+          value={stats.data == null ? "—" : checks ? "Admitted" : "Excluded"}
+          tone={checks ? "good" : "neutral"}
+          detail={checks ? undefined : "Start the server with -dom chrome or -dom ws://… to admit them"}
+        />
+      </div>
+    </Card>
+  );
+}
+
 function ScannerSettingsSection(): JSX.Element {
   const configs = useScannerConfigs();
 
@@ -692,6 +720,7 @@ export function SettingsPage(): JSX.Element {
       <TlsPassthroughSection />
       <ProtocolSection />
       <ScannerSettingsSection />
+      <DomEngineSection />
       <AppearanceSection />
       <HotkeysSection />
       <CertificateSection />

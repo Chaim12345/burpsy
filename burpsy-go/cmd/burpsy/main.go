@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/proxy"
@@ -45,6 +47,13 @@ func main() {
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
 	scanConfig := flag.String("scan-config", "", `run audits under a built-in scan configuration by name ("list" prints them)`)
+	// DOM execution is operator policy for the same reason -tools is: "chrome" launches a browser
+	// process, and a ws:// endpoint hands page control to a server this process did not start.
+	// Empty is the behaviour this binary had unconditionally until now — every DOM-based check
+	// reports a missing capability rather than an empty observation set. One flag, three forms:
+	// domexec refuses RemoteURL together with ChromePath as a contradiction, and a single flag
+	// cannot express that pair at all.
+	domEngine := flag.String("dom", "", `engine for DOM-based checks: "chrome", a browser path, or a ws:// CDP endpoint (obscura/lightpanda serve)`)
 
 	// TLS passthrough flags
 	passthrough := flag.String("tls-passthrough", "", "host pattern to passthrough without interception (repeatable)")
@@ -62,11 +71,18 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Resolved here for the same reason: a -dom naming a binary that is not there fails at the
+	// command line, where the operator is still looking, rather than at the first DOM check.
+	domOpts, err := domEngineOptions(*domEngine)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// CLI mode: when the first positional argument names a subcommand, drive the
 	// engines directly (no HTTP) and exit. Global flags above still parse, so
 	// `burpsy -db data.db history` reads the same database the proxy writes.
 	if flag.NArg() > 0 {
-		os.Exit(runCLI(flag.Arg(0), flag.Args()[1:], *captureDir, *segmentBytes, *scopeInclude, *scopeExclude, *dbFile, *bchecksDir, *toolsFlag))
+		os.Exit(runCLI(flag.Arg(0), flag.Args()[1:], *captureDir, *segmentBytes, *scopeInclude, *scopeExclude, *dbFile, *bchecksDir, *toolsFlag, *domEngine))
 	}
 
 	// Handle store verify subcommand
@@ -248,6 +264,20 @@ func main() {
 		}
 	}()
 
+	// Hoisted out of the builder chain below because the DOM engine is conditional: -dom names one,
+	// and without it every DOM-based check reports a missing capability — which is what this binary
+	// did unconditionally until the flag existed. The provider is lazy, so an audit whose check set
+	// contains no DOM check never starts a browser.
+	activeScanner := scanner.NewActiveScanner(store, logger).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithScope(scope).
+		WithCorpusChecks(passiveScanner.ActiveChecks()).
+		WithToolRunner(toolRunner).
+		WithAuditConfig(auditConfig)
+	if domOpts != nil {
+		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
+	}
+
 	// Start web server
 	webServer := web.NewServer(store, scope).
 		WithLogger(logger).
@@ -264,12 +294,7 @@ func main() {
 		// WithCorpusChecks leaves the built-in set alone then. WithToolRunner carries the -tools
 		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
 		// checks counted-but-excluded.
-		WithScanner(scanner.NewActiveScanner(store, logger).
-			WithSender(sender.NewSender(sender.DefaultSenderConfig())).
-			WithScope(scope).
-			WithCorpusChecks(passiveScanner.ActiveChecks()).
-			WithToolRunner(toolRunner).
-			WithAuditConfig(auditConfig)).
+		WithScanner(activeScanner).
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
@@ -282,7 +307,8 @@ func main() {
 		// for a client that already trusts the CA, and the operator gets told why the download is
 		// missing instead of the link silently staying hidden.
 		WithCACertPEM(readCACert(*interceptTLS, *caDir, logger)).
-		WithBindAddrs(*proxyBind, *webBind)
+		WithBindAddrs(*proxyBind, *webBind).
+		WithDOMEngine(*domEngine)
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
@@ -336,6 +362,35 @@ func main() {
 // exits 0, because a name containing spaces and hyphens is not guessable and an operator should not have
 // to read the source to find one; anything else must resolve, and a name that does not is fatal rather
 // than a warning that starts the process under a configuration the operator did not ask for.
+// domEngineOptions turns the -dom flag into domexec options, or nil for "no DOM engine".
+//
+// The form is inferred from the value rather than declared by a second mode flag, because a mode
+// and a value are two things that can disagree — and one of the disagreements domexec explicitly
+// refuses is RemoteURL together with ChromePath. Inferring makes that pair unrepresentable:
+//
+//   - ""            no engine; DOM checks report a missing capability, as they did before this flag
+//   - "chrome"      launch and discover, the zero-value Options the test harness uses
+//   - "ws://…"      attach to a CDP server someone else started; its process, its lifetime
+//   - anything else a browser binary, resolved here with the same LookPath the launcher will use
+func domEngineOptions(flagValue string) (*domexec.Options, error) {
+	v := strings.TrimSpace(flagValue)
+	switch {
+	case v == "":
+		return nil, nil
+	case v == "chrome":
+		return &domexec.Options{}, nil
+	case strings.HasPrefix(v, "ws://"), strings.HasPrefix(v, "wss://"):
+		return &domexec.Options{RemoteURL: v}, nil
+	default:
+		// Resolved now so the refusal names the flag. The launcher would resolve the same value
+		// later and fail per check, where "no browser" and "nothing to find" read alike.
+		if _, err := exec.LookPath(v); err != nil {
+			return nil, fmt.Errorf("-dom %q names neither a ws:// CDP endpoint nor a runnable browser: %w", v, err)
+		}
+		return &domexec.Options{ChromePath: v}, nil
+	}
+}
+
 func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 	base := scanner.DefaultAuditConfig()
 	switch name {

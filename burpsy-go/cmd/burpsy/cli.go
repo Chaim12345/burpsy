@@ -90,7 +90,13 @@ func registerCLI(cmds ...*cliCommand) {
 // same passive set the proxy would run. tools is the -tools allowlist (name=path,
 // comma-separated) for `run tool` statements; empty keeps tool checks counted
 // but excluded from the audit set.
-func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) (*cliContext, error) {
+func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, dom string) (*cliContext, error) {
+	// Before the store is opened: a -dom that names nothing resolvable is refused here rather than
+	// at the first DOM check, where it would read as a scan that found nothing.
+	domOpts, domErr := domEngineOptions(dom)
+	if domErr != nil {
+		return nil, domErr
+	}
 	logger := zap.NewNop()
 	var store *core.TrafficStore
 	var err error
@@ -176,6 +182,11 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 
 		toolAllowlist: toolAllowlist,
 	}
+	// The provider is lazy, so naming an engine costs nothing until a DOM check asks for it; a scan
+	// with no DOM-based check in its set never starts a browser at all.
+	if domOpts != nil {
+		ctx.scanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
+	}
 	// Before loadState, which restores persisted findings: SetDedupPolicy rebuilds the index anyway,
 	// but installing it first means the restore builds the right keys the first time.
 	ctx.findings.SetDedupPolicy(scanner.DedupPolicy())
@@ -186,7 +197,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 }
 
 // runCLI dispatches to a subcommand and exits. Returns the process exit code.
-func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) int {
+func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, dom string) int {
 	if name == "help" || name == "-h" || name == "--help" {
 		printCLIHelp()
 		return 0
@@ -196,7 +207,7 @@ func runCLI(name string, args []string, captureDir string, segmentBytes uint64, 
 		fmt.Fprintf(os.Stderr, "burpsy: unknown command %q (see \"burpsy help\")\n", name)
 		return 2
 	}
-	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools)
+	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, dom)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "burpsy: %v\n", err)
 		return 1

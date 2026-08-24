@@ -87,9 +87,34 @@ func (l *lazyBrowser) Close() error {
 
 // WithBrowserProvider installs the browser handle. Without it, DOM checks report a missing
 // capability instead of an empty observation set.
+//
+// Attaching an engine also switches the DOM families on (ScanConfig.CheckDOM), the same way
+// WithCorpusChecks switches CheckCorpus on for a loaded corpus, and WithConfig can turn it back
+// off again. The two knobs are load-bearing in opposite directions and half-opening either one is
+// a defect with no error message: an engine with the families still gated is a browser launched
+// for checks that cannot dispatch, and reads as a clean scan of a page nobody looked at. A nil
+// provider leaves the switch alone, so a process with no engine does not turn a knob that gates
+// nothing.
 func (s *ActiveScanner) WithBrowserProvider(p BrowserProvider) *ActiveScanner {
 	s.browsers = p
+	if p != nil && s.config != nil {
+		s.config.CheckDOM = true
+	}
 	return s
+}
+
+// DOMCapabilityConfigured reports whether an engine was named for this scan. It answers from
+// configuration alone and never starts anything: the provider is lazy on purpose, so "an engine
+// is configured" and "an engine works" are separate questions with separate answers — the second
+// is what Browser() reports, per check, naming the failure.
+//
+// It exists because a caller that wires the engine (cmd/burpsy) cannot otherwise see whether it
+// succeeded, and a silently unwired binary reports every DOM check as capability-less while
+// looking correctly configured from the outside.
+// A nil receiver answers false, like enabledChecks: a server with no scanner attached has no DOM
+// capability, and making the caller check twice invites the check being forgotten once.
+func (s *ActiveScanner) DOMCapabilityConfigured() bool {
+	return s != nil && s.browsers != nil
 }
 
 // WithStoredLedger installs a stored-input ledger shared across the scan. Without it, stored

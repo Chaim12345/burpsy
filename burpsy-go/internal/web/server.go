@@ -31,6 +31,8 @@ type Server struct {
 	// started with, so the Settings page can show where it listens.
 	proxyBind string
 	webBind   string
+	// domEngine is the -dom flag value, reported by /api/stats. Empty means no engine was named.
+	domEngine string
 	// tlsInterception reports whether the server is configured for TLS
 	// interception (determined by whether a CA cert PEM exists).
 	tlsInterception bool
@@ -236,6 +238,15 @@ func (s *Server) WithCACertPEM(pem []byte) *Server {
 func (s *Server) WithBindAddrs(proxyBind, webBind string) *Server {
 	s.proxyBind = proxyBind
 	s.webBind = webBind
+	return s
+}
+
+// WithDOMEngine records the -dom value, for the same reason WithBindAddrs records the binds: the
+// operator should read the console rather than the process logs to learn what this process can do.
+// The label is reported beside whether the DOM families can dispatch at all, and the two are not
+// derived from each other — see StatsView.
+func (s *Server) WithDOMEngine(label string) *Server {
+	s.domEngine = label
 	return s
 }
 

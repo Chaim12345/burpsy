@@ -73,6 +73,13 @@ type StatsView struct {
 	ProxyBind       string `json:"proxy_bind"`
 	WebBind         string `json:"web_bind"`
 	TLSInterception bool   `json:"tls_interception"`
+	// DOMEngine is the -dom value as the operator wrote it ("chrome", a browser path, a ws://
+	// endpoint), or "off". DOMChecks is whether the audit engine can actually dispatch the DOM
+	// families. Two fields because they can disagree — an engine named for a process whose
+	// scanner is absent is a capability nobody has — and because a console that reports neither
+	// lets a scan of a JavaScript application look complete when no script ever ran.
+	DOMEngine string `json:"dom_engine"`
+	DOMChecks bool   `json:"dom_checks"`
 }
 
 // FindingView is the legacy /api/findings wire shape.

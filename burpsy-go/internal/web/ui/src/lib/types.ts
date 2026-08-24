@@ -32,6 +32,10 @@ export interface Stats {
   proxy_bind?: string;
   web_bind?: string;
   tls_interception?: boolean;
+  /** The -dom value ("chrome", a path, a ws:// endpoint) or "off". */
+  dom_engine?: string;
+  /** Whether the audit engine can dispatch the DOM-based checks at all. */
+  dom_checks?: boolean;
 }
 
 export interface ScopeRule {

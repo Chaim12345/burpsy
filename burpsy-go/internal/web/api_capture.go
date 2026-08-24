@@ -208,6 +208,13 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if s.caCertPEM != nil {
 		view.TLSInterception = true
 	}
+	// "off" rather than "": a blank field is indistinguishable from a field this build does not
+	// report, and the whole point of showing this is that an operator can tell the difference.
+	view.DOMEngine = "off"
+	if s.domEngine != "" {
+		view.DOMEngine = s.domEngine
+	}
+	view.DOMChecks = s.scanner.DOMCapabilityConfigured()
 	json.NewEncoder(w).Encode(view)
 }
 
