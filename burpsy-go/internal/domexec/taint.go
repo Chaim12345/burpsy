@@ -477,21 +477,27 @@ func (b *Browser) ObserveTaint(ctx context.Context, targetURL string, source Sou
 		}
 	})
 
+	// window.name cannot be planted by navigating first: planting relied on the
+	// browser preserving window.name across a navigation, and obscura rebuilds
+	// its window object per document, dropping it — which turned every
+	// reflected-DOM row dark (11 catalog rows demonstrated by Chrome but missed
+	// here). Injecting the canary at the end of the preload script runs before
+	// the page's own scripts on every engine, relies on no cross-navigation
+	// persistence, and is observationally identical to arriving with an
+	// attacker-set window.name.
+	preload := instrumentationJS
+	if source == SourceWindowName {
+		preload += "\nwindow.name = " + jsString(canary) + ";"
+	}
+
 	tasks := chromedp.Tasks{
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.Enable().Do(ctx)
 		}),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, err := page.AddScriptToEvaluateOnNewDocument(instrumentationJS).Do(ctx)
+			_, err := page.AddScriptToEvaluateOnNewDocument(preload).Do(ctx)
 			return err
 		}),
-	}
-
-	if source == SourceWindowName {
-		tasks = append(tasks,
-			chromedp.Navigate("about:blank"),
-			chromedp.Evaluate("window.name = "+jsString(canary)+";", nil),
-		)
 	}
 
 	if referrer != "" {
@@ -557,6 +563,9 @@ func decodeObservations(raw string, source SourceKind, tokens []string) ([]Obser
 			if !strings.Contains(rec.Arg, token) {
 				continue
 			}
+			if engineInternalStack(rec.Stack) {
+				continue
+			}
 			observations = append(observations, Observation{
 				Sink:       sink,
 				Source:     source,
@@ -568,6 +577,39 @@ func decodeObservations(raw string, source SourceKind, tokens []string) ([]Obser
 		}
 	}
 	return observations, nil
+}
+
+// engineInternalStack reports whether the sink call at the top of this stack was made by the
+// engine's own bootstrap machinery rather than by the page under test.
+//
+// Obscura implements location/URL handling in a JS bootstrap layer that itself calls instrumented
+// platform functions — reading location.search routes through JSON.parse on the page's URL. Those
+// calls carry attacker-controlled canaries (they ride in the URL by construction), so without this
+// filter every URL-bearing navigation reported a Client-side JSON injection on provably safe
+// endpoints. Chrome has no such layer and is unaffected.
+//
+// The discriminator is structural, not textual guesswork: every observation's stack begins with
+// exactly two <preload> frames (record + the wrapper), so the first frame after them is whoever
+// actually made the call. A page frame ("at http://…") means the page did it — keep. An
+// "<obscura:" frame means the engine did it internally — drop. Deeper bootstrap frames below a
+// page frame are ordinary: a page may legitimately read location.search (engine shim) and then
+// parse the value itself, and that flow must survive.
+func engineInternalStack(stack string) bool {
+	const marker = "<obscura:"
+	for _, line := range strings.Split(stack, "\n") {
+		frame := strings.TrimSpace(line)
+		if !strings.HasPrefix(frame, "at ") {
+			continue
+		}
+		if strings.Contains(frame, "<preload>") {
+			// record() and the wrapper itself.
+			continue
+		}
+		// The first frame outside the preload harness is whoever made the call;
+		// everything deeper is irrelevant to attribution.
+		return strings.Contains(frame, marker)
+	}
+	return false
 }
 
 // navigationObservations reports a script-driven navigation carrying one of tokens as a

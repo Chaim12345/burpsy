@@ -72,7 +72,15 @@ func TestMain(m *testing.M) {
 // so the tests are exercising the handle exactly the way the scanner will.
 func sharedBrowserProvider() BrowserProvider {
 	sharedChromeOnce.Do(func() {
-		sharedChrome = NewLazyBrowserProvider(domexec.Options{Headed: os.Getenv("BURPSY_DOM_HEADED") == "1"})
+		// BURPSY_DOM_REMOTE attaches to a running CDP server (obscura serve /
+		// lightpanda serve) instead of launching Chrome — the same hook
+		// domexec's own tests use, so the whole DOM surface here can be driven
+		// by an alternative engine without code changes. Empty means exec
+		// Chrome as before.
+		sharedChrome = NewLazyBrowserProvider(domexec.Options{
+			Headed:    os.Getenv("BURPSY_DOM_HEADED") == "1",
+			RemoteURL: os.Getenv("BURPSY_DOM_REMOTE"),
+		})
 	})
 	return sharedChrome
 }

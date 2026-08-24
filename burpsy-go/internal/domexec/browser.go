@@ -49,6 +49,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"sync"
@@ -146,6 +147,11 @@ type Browser struct {
 	// sharing one: see newTab.
 	remoteURL string
 
+	// ctxOpts ride along to every per-check connection newTab dials in remote
+	// mode — browser options (error/log loggers) attach per Browser instance,
+	// and each check creates a new one.
+	ctxOpts []chromedp.ContextOption
+
 	closeOnce sync.Once
 }
 
@@ -176,6 +182,7 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 	var allocCtx context.Context
 	var allocCancel context.CancelFunc
 	var describe string
+	var ctxOpts []chromedp.ContextOption
 
 	if opts.RemoteURL != "" {
 		// Remote mode: attach to an already-running CDP server. The warm-up Run
@@ -183,6 +190,20 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 		// and answers protocol calls before the caller commits to it.
 		describe = opts.RemoteURL
 		allocCtx, allocCancel = chromedp.NewRemoteAllocator(ctx, opts.RemoteURL)
+		// Obscura delivers Target.detachedFromTarget AFTER the client-side
+		// session is already torn down, so chromedp logs one benign
+		// "executor for ... doesn't exist" per check (~1 per DOM observation;
+		// verified 20/20 green with 19 of them, 1095 across a full vulnapp
+		// scan with zero failures). Chrome never emits this ordering, so the
+		// filter is remote-only. Everything else still logs unchanged — a real
+		// mid-check connection loss fails commands loudly long before this
+		// message could have been the only sign.
+		ctxOpts = append(ctxOpts, chromedp.WithErrorf(func(format string, args ...any) {
+			if msg := fmt.Sprintf(format, args...); strings.Contains(msg, "executor for") && strings.Contains(msg, "doesn't exist") {
+				return
+			}
+			log.Printf(format, args...)
+		}))
 	} else {
 		path, err := resolveChromePath(opts.ChromePath)
 		if err != nil {
@@ -235,7 +256,7 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 		allocCtx, allocCancel = chromedp.NewExecAllocator(ctx, execOpts...)
 	}
 
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx, ctxOpts...)
 
 	// Warm the browser up so a launch failure is reported here rather than at the first
 	// ObserveTaint call.
@@ -271,6 +292,7 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 		browserCancel: browserCancel,
 		opts:          opts,
 		remoteURL:     opts.RemoteURL,
+		ctxOpts:       ctxOpts,
 	}, nil
 }
 
@@ -307,7 +329,7 @@ func (b *Browser) newTab(ctx context.Context) (context.Context, context.CancelFu
 	// one localhost dial, and was 20/20 stable where shared tabs were 10/20.
 	if b.remoteURL != "" {
 		tabAllocCtx, tabAllocCancel := chromedp.NewRemoteAllocator(ctx, b.remoteURL)
-		tabCtx, tabCancel := chromedp.NewContext(tabAllocCtx)
+		tabCtx, tabCancel := chromedp.NewContext(tabAllocCtx, b.ctxOpts...)
 		opCtx, opCancel := context.WithTimeout(tabCtx, b.opts.resolvedTimeout())
 		stop := context.AfterFunc(ctx, func() {
 			opCancel()
