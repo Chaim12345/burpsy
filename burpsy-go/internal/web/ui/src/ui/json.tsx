@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { IconButton } from "./primitives";
 
@@ -76,7 +77,14 @@ export function JsonView({ value, defaultOpen = 2, label = "response" }: { value
     <div className="json-view">
       <div className="json-view-head">
         <span className="editor-label-inline">{label}</span>
-        <IconButton label="Copy JSON" size="small" onClick={() => void copyToClipboard(JSON.stringify(value, null, 2))}>
+        <IconButton
+          label="Copy JSON"
+          size="small"
+          onClick={() => {
+            void copyToClipboard(JSON.stringify(value, null, 2));
+            toast.success("JSON copied to clipboard");
+          }}
+        >
           <Copy size={13} />
         </IconButton>
       </div>

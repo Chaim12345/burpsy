@@ -4,6 +4,7 @@ import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
 import { Copy, Download, WrapText } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
 import {
@@ -273,7 +274,14 @@ export function HttpEditor({
               <WrapText size={13} />
             </IconButton>
           ) : null}
-          <IconButton label="Copy message" size="small" onClick={() => void copyToClipboard(shown)}>
+          <IconButton
+            label="Copy message"
+            size="small"
+            onClick={() => {
+              void copyToClipboard(shown);
+              toast.success(`${label} copied to clipboard`);
+            }}
+          >
             <Copy size={13} />
           </IconButton>
           <IconButton label="Save to file" size="small" onClick={() => downloadText(filename, value)}>
