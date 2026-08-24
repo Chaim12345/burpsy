@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { copyToClipboard, formatBytes } from "../lib/api";
 import {
   bodyParamsOf,
@@ -36,7 +37,15 @@ function SectionBlock({ section, open, onToggle }: { section: Section; open: boo
                 <dd title={value}>
                   {/* Click-to-copy: reading a value out of a dense pane by hand is
                       exactly the friction the Inspector exists to remove. */}
-                  <button type="button" className="inspector-value" onClick={() => void copyToClipboard(value)} title="Copy value">
+                  <button
+                    type="button"
+                    className="inspector-value"
+                    onClick={() => {
+                      void copyToClipboard(value);
+                      toast.success(`Copied ${name}`);
+                    }}
+                    title="Copy value"
+                  >
                     {value === "" ? <span className="cell-dim">(empty)</span> : value}
                   </button>
                 </dd>
