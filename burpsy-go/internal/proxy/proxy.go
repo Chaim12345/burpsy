@@ -93,6 +93,31 @@ func (p *TlsPolicy) AddPassthroughPort(port uint16) {
 	p.passthroughPorts = append(p.passthroughPorts, port)
 }
 
+// Passthrough returns a copy of the host patterns currently passed through without interception.
+// A copy, because callers render this list in the UI while the proxy keeps matching against it.
+func (p *TlsPolicy) Passthrough() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]string, len(p.passthrough))
+	copy(out, p.passthrough)
+	return out
+}
+
+// RemovePassthrough removes the first exact match of pattern and reports whether one was removed.
+// Exact, not glob-equal: "*.bank.test" and "bank.test" are different rules an operator added
+// deliberately, and removing by wildcard equality would delete a rule they did not select.
+func (p *TlsPolicy) RemovePassthrough(pattern string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, existing := range p.passthrough {
+		if existing == pattern {
+			p.passthrough = append(p.passthrough[:i], p.passthrough[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
 // WithCommonDefaults returns a TLS policy with common pinned hosts.
 func (p *TlsPolicy) WithCommonDefaults() *TlsPolicy {
 	p.mu.Lock()
