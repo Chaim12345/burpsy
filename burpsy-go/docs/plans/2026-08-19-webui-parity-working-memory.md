@@ -178,3 +178,31 @@ plugin API by design), system tray (Wails asset pipeline).
 
 Final gate at close: go build/vet/gofmt clean; go test ./... = 31/31 packages ok; e2e-ui.sh run
 recorded in docs/plans/2026-08-21-final-gate.md.
+
+## PROGRESS LOG (2026-08-24 session — the DOM engine reaches the shipped binary)
+
+Review of the lightpanda/obscura work found the capability was tested but unreachable from
+production: cmd/burpsy wired no browser provider AND ScanConfig.CheckDOM defaulted false — two
+gates, `plain=3` active checks dispatched by the real binary while the suite demonstrated 160/160.
+Closed by 776cca2:
+
+- `-dom` flag: "" (off), "chrome"/browser-path (LookPath-resolved at the command line), or
+  ws://…/wss://… CDP endpoint. Attaching flips CheckDOM per the WithCorpusChecks precedent;
+  WithConfig can turn it back off.
+- /api/stats dom_engine/dom_checks + Settings → Browser engine section (Burp's User-options-Misc
+  slot, beside Hotkeys). Read-only on purpose: enabledChecks reads config unlocked and the lazy
+  provider caches one browser for process lifetime — live switching would be a data race wearing a
+  settings dialog. Recorded here so nobody re-litigates without addressing both hazards.
+- Measured through the real binary vs vulnapp: chrome launches headless chromium (RSS ~161MB×2),
+  DOM XSS Tentative→Firm, 7→11 findings; lightpanda ws:// byte-identical results at RSS 33MB.
+  lightpanda sinks: 18/20 parallel, 20/20 serialised — its CDP server drops parallel dials
+  ("could not dial: EOF"), a server-side concurrency limit, not a sink defect. obscura not
+  installed on this machine (validated upstream, v0.2.1).
+- Engine guidance until connection serialisation exists: chrome is the honest default; lightpanda
+  is the memory win behind a serialisation gate; obscura remains the validated fast option.
+
+Still open from the audit that surfaced all this: the shipping binary's default dispatch set is
+THREE checks (CheckSqli/Xss/PathTraversal) — CheckSSRF true but unexercised in the A/B, XXE false,
+CheckCorpus false unless a corpus loads, and no CLI surface for any of it. Burp's default audit
+covers far more. This is the next increment: decide the shipped defaults deliberately, with the
+-scan-config list as the model, rather than leaving NewActiveScanner's struct literal as policy.
