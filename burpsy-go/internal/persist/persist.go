@@ -1161,6 +1161,43 @@ func (s *Store) getSetting(key string) (string, error) {
 	return v, err
 }
 
+// SaveTlsPassthrough replaces the persisted TLS passthrough host-pattern list.
+//
+// One settings value holding a JSON array rather than its own table: this is a
+// single small ordered list whose rows have no identity of their own, so a table
+// would be ceremony without being structure. The save is whole-list because the
+// web endpoint mirrors the policy's live list after every mutation — an
+// incremental add/remove API would give the mirror a second chance to drift from
+// what the proxy actually matches against.
+func (s *Store) SaveTlsPassthrough(patterns []string) {
+	if patterns == nil {
+		patterns = []string{}
+	}
+	encoded, err := json.Marshal(patterns)
+	if err != nil {
+		s.log("tls passthrough encode", err)
+		return
+	}
+	if err := s.setSetting("tls.passthrough", string(encoded)); err != nil {
+		s.log("tls passthrough save", err)
+	}
+}
+
+// LoadTlsPassthrough restores the pattern list. A database that never saved one
+// yields an empty list and no error: absence of state is the empty state, not a
+// failure worth waking the operator up for.
+func (s *Store) LoadTlsPassthrough() ([]string, error) {
+	v, err := s.getSetting("tls.passthrough")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ---- Restore -----------------------------------------------------------------------------------
 
 // Restore loads every table into the given in-memory stores. It is the one

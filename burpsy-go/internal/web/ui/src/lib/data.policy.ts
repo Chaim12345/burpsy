@@ -7,6 +7,7 @@ import type {
   FrameProgramResponse,
   MatchReplaceTestRequest,
   MatchReplaceTestResponse,
+  PassthroughView,
   ProtocolReport,
   ScopeUpdate,
   ScopeView,
@@ -20,6 +21,7 @@ import type {
 export const policyKeys = {
   eventStats: ["events", "stats"] as const,
   caCert: ["ca-cert"] as const,
+  passthrough: ["tls-passthrough"] as const,
 };
 
 export interface CaCertState {
@@ -49,6 +51,10 @@ export const useProtocols = (): UseQueryResult<ProtocolReport> =>
 
 export const useEventHubStats = (): UseQueryResult<EventHubStats> =>
   useResource<EventHubStats>(policyKeys.eventStats, "/api/events/stats");
+
+/** The live TLS passthrough list. Edits through the mutations below take effect immediately. */
+export const usePassthrough = (): UseQueryResult<PassthroughView> =>
+  useResource<PassthroughView>(policyKeys.passthrough, "/api/proxy/passthrough");
 
 /**
  * Whether there is a CA to import. /ca.crt is not JSON and answers 404 when TLS
@@ -132,5 +138,28 @@ export function useUpdateScope() {
   return useMutation({
     mutationFn: (update: ScopeUpdate) => api<unknown>("/api/scope", json("POST", update)),
     onSuccess: () => invalidate([keys.scope]),
+  });
+}
+
+/** POST /api/proxy/passthrough — append one host pattern; the reply is the confirmed list. */
+export function useAddPassthrough() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (pattern: string) => api<PassthroughView>("/api/proxy/passthrough", json("POST", { pattern })),
+    onSuccess: () => invalidate([policyKeys.passthrough]),
+  });
+}
+
+/**
+ * DELETE /api/proxy/passthrough?pattern=… — take back exactly the named rule.
+ * The server answers 404 for a pattern that is not there, so a stale row's
+ * remove surfaces as an error toast instead of silently "succeeding".
+ */
+export function useRemovePassthrough() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (pattern: string) =>
+      api<PassthroughView>(`/api/proxy/passthrough?pattern=${encodeURIComponent(pattern)}`, json("DELETE")),
+    onSuccess: () => invalidate([policyKeys.passthrough]),
   });
 }

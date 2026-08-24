@@ -4,14 +4,7 @@ import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import { useStats } from "../lib/data";
 import { useScannerConfigs } from "../lib/data.attack";
-import {
-  useCaCert,
-  useEventHubStats,
-  useProtocols,
-  useScopeView,
-  useSendFrameProgram,
-  useUpdateScope,
-} from "../lib/data.policy";
+import { useCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
 import { SHORTCUT_GROUPS } from "../lib/shortcuts";
 import type { FrameProgramResponse } from "../lib/types.policy";
@@ -375,6 +368,94 @@ function ProxySettingsSection(): JSX.Element {
   );
 }
 
+function TlsPassthroughSection(): JSX.Element {
+  const { data, error, isFetching, isLoading, refetch } = usePassthrough();
+  const add = useAddPassthrough();
+  const remove = useRemovePassthrough();
+  const [pattern, setPattern] = useState("");
+
+  const fail = (failure: unknown) =>
+    toast.error(failure instanceof Error ? failure.message : "Passthrough change failed");
+
+  return (
+    <Card>
+      <SectionHeading
+        title="TLS passthrough"
+        detail="Hosts the proxy relays without intercepting. Edits apply immediately and survive a restart."
+        actions={<RefreshButton onClick={() => void refetch()} loading={isFetching} />}
+      />
+      {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+      {isLoading ? <LoadingPanel label="Loading passthrough rules" /> : null}
+
+      <div className="notice">
+        <span>
+          A matching connection is relayed untouched — burpsy never sees its plaintext and it never appears in HTTP
+          history. Patterns may carry a leading <code>*.</code> wildcard subdomain. Removal matches the exact
+          pattern: <code>*.bank.test</code> and <code>bank.test</code> are separate rules.
+        </span>
+      </div>
+
+      <Toolbar>
+        <Field label="Host pattern" hint="e.g. internal.bank.test or *.cdn.example">
+          {(id) => (
+            <Input
+              id={id}
+              value={pattern}
+              onChange={(event) => setPattern(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && pattern.trim() && !add.isPending) {
+                  add.mutate(pattern.trim(), { onSuccess: () => toast.success(`Added ${pattern.trim()}`), onError: fail });
+                  setPattern("");
+                }
+              }}
+              placeholder="internal.bank.test"
+              style={{ maxWidth: "var(--w-sm)" }}
+            />
+          )}
+        </Field>
+        <Button
+          disabled={!pattern.trim() || add.isPending}
+          onClick={() => {
+            add.mutate(pattern.trim(), { onSuccess: () => toast.success(`Added ${pattern.trim()}`), onError: fail });
+            setPattern("");
+          }}
+        >
+          <Plus size={13} />
+          Add rule
+        </Button>
+      </Toolbar>
+
+      {data && data.patterns.length === 0 ? (
+        <Empty
+          title="No passthrough rules"
+          detail="Every TLS connection is intercepted (while -intercept-tls is on). Add a host pattern to relay it untouched."
+        />
+      ) : null}
+      {data && data.patterns.length > 0 ? (
+        <SimpleTable headers={["Host pattern", ""]}>
+          {data.patterns.map((entry) => (
+            <tr key={entry}>
+              <td>
+                <code>{entry}</code>
+              </td>
+              <td>
+                <IconButton
+                  label={`Remove passthrough rule ${entry}`}
+                  size="small"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate(entry, { onSuccess: () => toast.success(`Removed ${entry}`), onError: fail })}
+                >
+                  <Trash2 size={13} />
+                </IconButton>
+              </td>
+            </tr>
+          ))}
+        </SimpleTable>
+      ) : null}
+    </Card>
+  );
+}
+
 function ScannerSettingsSection(): JSX.Element {
   const configs = useScannerConfigs();
 
@@ -608,6 +689,7 @@ export function SettingsPage(): JSX.Element {
         description="Protocol reporting, appearance, the CA certificate, and the console's own diagnostics. Scope lives under Target."
       />
       <ProxySettingsSection />
+      <TlsPassthroughSection />
       <ProtocolSection />
       <ScannerSettingsSection />
       <AppearanceSection />

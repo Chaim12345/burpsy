@@ -273,6 +273,10 @@ func main() {
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
+		// The same policy the proxy matches against, so Settings can list and edit
+		// passthrough rules live: two copies would let the UI describe a list the
+		// relay no longer obeys.
+		WithTlsPolicy(tlsPolicy).
 		// So /ca.crt can serve it. Read here rather than in the web server because this is where the
 		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
 		// for a client that already trusts the CA, and the operator gets told why the download is
@@ -283,6 +287,23 @@ func main() {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
 		webServer.WithPersist(persistStore)
+		// Runtime edits to the TLS passthrough list survive restarts. The persisted
+		// patterns apply on top of whatever the flags configured — a flag rule and a
+		// UI-added rule are both real rules, and dedupe keeps a pattern that arrived
+		// by both doors from rendering twice in Settings.
+		if patterns, err := persistStore.LoadTlsPassthrough(); err != nil {
+			logger.Warn("could not restore TLS passthrough list", zap.Error(err))
+		} else {
+			existing := map[string]bool{}
+			for _, p := range tlsPolicy.Passthrough() {
+				existing[p] = true
+			}
+			for _, p := range patterns {
+				if !existing[p] {
+					tlsPolicy.AddPassthrough(p)
+				}
+			}
+		}
 	}
 	// Live active audit: the sweep loop owns the context; cancelling ctx (on
 	// shutdown) stops it at the next tick. It creates and wires the state if

@@ -74,6 +74,12 @@ Against freshly built binaries on test ports:
 
 ## Deliberate gaps remaining (documented, not hidden)
 
+- ~~TLS passthrough was CLI-only~~ — closed 2026-08-24: `/api/proxy/passthrough`
+  (GET/POST/DELETE) lists, adds and removes host patterns on the proxy's live
+  `TlsPolicy`; Settings → TLS passthrough renders it with add/remove; edits mirror
+  to SQLite (`tls.passthrough` setting) and are re-applied over flag-configured
+  rules on startup. Verified live: add/remove round trip, exact-match removal
+  answering 404 for an absent pattern, and the list surviving a server restart.
 - Scan-config creation wizard — the engine implements 6 of Burp's 29 shipped configurations and
   has no custom-config knobs; a wizard would offer controls that do nothing. The functional path
   exists: context-menu "Audit exchange", or Scanner → Targeted audit with the config selector.

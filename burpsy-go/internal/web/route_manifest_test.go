@@ -207,6 +207,10 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded",
 	},
+	"/api/proxy/passthrough": {
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal,
+		summary: "the TLS passthrough host-pattern list, live: add and remove without restarting the proxy",
+	},
 	"/api/repeater/send": {
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send one operator-authored request and record the exchange",

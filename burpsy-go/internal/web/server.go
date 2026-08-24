@@ -13,6 +13,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/persist"
+	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
@@ -54,8 +55,13 @@ type Server struct {
 	loginRuns          *sessionLoginRuns
 	intercept          *intercept.Engine
 	persist            *persist.Store
-	liveAudit          *LiveAuditState
-	tasks              *dash.Registry
+	// tlsPolicy is the proxy's live TLS interception policy, shared so the web API can list and
+	// edit passthrough rules while the proxy keeps matching against the same list. Nil is a
+	// supported state (direct construction in tests); the passthrough endpoint says so rather
+	// than serving an empty list nothing could ever change.
+	tlsPolicy *proxy.TlsPolicy
+	liveAudit *LiveAuditState
+	tasks     *dash.Registry
 	// crawls retains recent crawl reports, keyed by the task id that produced them, so the dashboard
 	// row and the coverage report are one identity rather than two numbers to correlate by hand.
 	crawls *crawlRuns
@@ -192,8 +198,15 @@ func (s *Server) WithFindings(fs *core.FindingStore) *Server {
 	return s
 }
 
-// WithIntercept attaches the shared intercept engine. The web API and the proxy
-// must hold the same instance, or edits here would not affect the hold queue.
+// WithTlsPolicy attaches the proxy's live TLS policy so passthrough rules can be listed and edited
+// at runtime. Nil (the default in tests) leaves the endpoint reporting honestly that no policy is
+// attached rather than pretending to manage one.
+func (s *Server) WithTlsPolicy(policy *proxy.TlsPolicy) *Server {
+	s.tlsPolicy = policy
+	return s
+}
+
+// WithIntercept attaches the shared intercept engine. The web API and the proxy must hold the same instance, or edits here would not affect the hold queue.
 func (s *Server) WithIntercept(engine *intercept.Engine) *Server {
 	s.intercept = engine
 	s.followLive()
@@ -396,6 +409,7 @@ func (s *Server) setupRoutes() {
 
 	// Intercept (condition lists + held queue)
 	s.mux.HandleFunc("/api/intercept", s.handleIntercept)
+	s.mux.HandleFunc("/api/proxy/passthrough", s.handleTlsPassthrough)
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
 	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)

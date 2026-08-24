@@ -269,3 +269,9 @@ export interface EventHubStats {
   fanout_running: boolean;
   pending: Record<string, number>;
 }
+
+/** GET/POST/DELETE /api/proxy/passthrough — the live TLS passthrough host-pattern list. */
+export interface PassthroughView {
+  patterns: string[];
+}
+
