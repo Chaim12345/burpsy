@@ -77,7 +77,12 @@ func (l *lazyBrowser) Close() error {
 	if l.browser == nil {
 		return nil
 	}
-	return l.browser.Close()
+	err := l.browser.Close()
+	// Idempotent: the test binary closes this provider through two doors (a scanner's
+	// CloseCapabilities and TestMain's own teardown), and a second Close must be a
+	// no-op rather than an error a caller has to interpret.
+	l.browser = nil
+	return err
 }
 
 // WithBrowserProvider installs the browser handle. Without it, DOM checks report a missing
