@@ -48,7 +48,16 @@ type Server struct {
 	intercept          *intercept.Engine
 	persist            *persist.Store
 	liveAudit          *LiveAuditState
-	tasks              *dash.Registry
+	// auditItems is the audit queue: what the engine decided about each item it was handed, retained
+	// so /api/scanner/audit-items can serve it. Built in NewServer rather than lazily, unlike
+	// `captures`: every audit path in this package attaches it to the AuditConfig it runs under, so a
+	// nil here would mean the first audit of a session silently did not appear in the queue.
+	//
+	// Not persisted. The queue is a statement about what this process did with this process's
+	// budgets and breakers, and a row restored from a previous run would carry thresholds that are no
+	// longer in force — findings and the task log are the durable record.
+	auditItems *scanner.AuditItemLedger
+	tasks      *dash.Registry
 	// crawls retains recent crawl reports, keyed by the task id that produced them, so the dashboard
 	// row and the coverage report are one identity rather than two numbers to correlate by hand.
 	crawls *crawlRuns
@@ -93,6 +102,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		organizer:          organizer.New(),
 		loginRuns:          newSessionLoginRuns(),
 		intercept:          intercept.NewEngine(),
+		auditItems:         scanner.NewAuditItemLedger(scanner.DefaultAuditItemCap),
 		tasks:              dash.NewRegistry(),
 		crawls:             newCrawlRuns(),
 		events:             dash.NewEventLog(),
@@ -361,6 +371,13 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
 	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
+	// The audit queue, and the one action on a queued item. Two patterns because they are two
+	// operations on two shapes: the exact path lists the queue, the subtree acts on one item. Note the
+	// exact pattern above does *not* swallow these — a ServeMux pattern without a trailing slash
+	// matches that path and nothing else, so "/api/scanner/audit" and "/api/scanner/audit-items" are
+	// unrelated routes despite the shared prefix.
+	s.mux.HandleFunc("/api/scanner/audit-items", s.handleScannerAuditItems)
+	s.mux.HandleFunc("/api/scanner/audit-items/", s.handleScannerAuditItemAction)
 	s.mux.HandleFunc("/api/audit/", s.handleAuditByPath)
 	s.mux.HandleFunc("/api/sequencer/analyse", s.handleSequencerAnalyse)
 	// Two patterns, because they are two operations: the exact path starts a capture, the subtree

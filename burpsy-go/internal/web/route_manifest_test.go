@@ -205,6 +205,19 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack,
 		summary: "legacy alias for /api/audit/{id}, taking the id in the body",
 	},
+	"/api/scanner/audit-items": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the audit queue: per-item state, plan progress, dispositions and the insertion points each covers",
+	},
+	"/api/scanner/audit-items/": {
+		// POST {id}/again only — Burp's "Audit again". riskAttack rather than riskLocal because it is
+		// not a state change on a row: it starts an audit that sends real traffic, through the same
+		// runAudit as /api/audit/{id}. A verb in the path is what makes that classifiable by reading
+		// the route; a PATCH of a "state" field that happened to launch a scan would not be.
+		methods: []string{"POST"}, risk: riskAttack, subPath: "0/again",
+		pathValidatedFirst: true,
+		summary:            "re-audit one queued item: POST {id}/again, Burp's auditItemContextMenuAuditAgain",
+	},
 	"/api/scanner/configs": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "the built-in scan configurations, generated from the table rather than listed by hand",
@@ -572,6 +585,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 
 	wantAttack := []string{
 		"/api/audit/", "/api/crawl", "/api/intruder/run", "/api/scanner/audit",
+		// "Audit again" belongs here for the same reason /api/audit/ does: it re-runs the whole check set
+		// against a live target through runAudit. That it is spelled as an action on an existing queue
+		// row does not make it cheaper than a first audit — AuditWithin gives it a fresh admission
+		// ledger precisely so that it is not.
+		"/api/scanner/audit-items/",
 		"/api/scanner/live", "/api/sequencer/capture",
 	}
 	wantScope := []string{"/api/scope"}

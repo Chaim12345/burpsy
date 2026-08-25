@@ -150,7 +150,11 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 	// On the dashboard while it runs, not only once it answers (DASH-01). Total is the check set,
 	// which is known up front for a single item.
 	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCount()))
-	outcome, findings := s.scanner.AuditWithin(ctx, id, cfg)
+	// Attached here, in the one place both audit routes and the re-audit action pass through, so no
+	// entry point can run an audit that never appears in the queue. The reply's `config` block above
+	// is deliberately rendered from the caller's cfg rather than this one: the queue is observation,
+	// not configuration, and echoing it back would suggest the operator had asked for it.
+	outcome, findings := s.scanner.AuditWithin(ctx, id, s.withAuditItems(cfg))
 	task.Advance(uint64(outcome.Considered()))
 	task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
 	body["outcome"] = outcome

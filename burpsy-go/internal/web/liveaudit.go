@@ -585,6 +585,11 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// The ledger is the one part of the config that outlives this tick — see liveAuditRun.
 	cfg := s.scanner.AuditConfig()
 	cfg.Ledger = run.auditLedger(s.liveAudit, s.events, s.logger)
+	// The sweep is the highest-volume producer of audit items, so it is the one that makes the queue
+	// worth having: this is where "swept 400" becomes 400 rows an operator can ask which of them the
+	// budget bounded. The queue's own cap (scanner.DefaultAuditItemCap) is what keeps a sweep that
+	// runs for hours from growing it without limit, and the endpoint reports the evictions.
+	cfg.Items = s.auditItems
 	outcome, findings := s.scanner.AuditSession(ctx, ids, cfg)
 	s.liveAudit.recordCollapsed(uint64(outcome.AlreadyCovered()))
 	task.Advance(uint64(len(ids)))
