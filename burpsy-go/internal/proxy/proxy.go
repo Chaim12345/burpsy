@@ -15,7 +15,6 @@ import (
 	"io"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -443,15 +442,20 @@ type ProxyConfig struct {
 	// stripWsExtensions removes the client's Sec-WebSocket-Extensions offer
 	// from a handshake before forwarding it. See WithStripWsExtensions.
 	stripWsExtensions bool
+	// options is the live, operator-editable option set: the response modification
+	// rules and the Accept-Encoding strip. Never nil after NewProxyConfig, and the
+	// same pointer the web API holds — see WithOptions and internal/proxy/options.go.
+	options *Options
 }
 
 // NewProxyConfig creates a new proxy configuration.
 func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 	return &ProxyConfig{
-		store:  store,
-		tls:    NewTlsPolicy(),
-		scope:  core.NewScopeAllowEverything(),
-		logger: zap.NewNop(), // Default to nop logger
+		store:   store,
+		tls:     NewTlsPolicy(),
+		scope:   core.NewScopeAllowEverything(),
+		options: NewOptions(),
+		logger:  zap.NewNop(), // Default to nop logger
 		// On, matching Burp's default. A proxy that let permessage-deflate be
 		// negotiated would record DEFLATE blocks and call them messages, so the
 		// safe setting is the one that keeps the capture readable.
@@ -505,6 +509,26 @@ func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 	c.stripWsExtensions = strip
 	return c
 }
+
+// WithOptions attaches the live option set, so the response modification rules and
+// the Accept-Encoding strip can be turned on and off without restarting the proxy.
+//
+// The same pointer must be handed to the web server (web.Server.WithProxyOptions),
+// for the reason WithTlsPolicy states about the passthrough list: two option sets
+// would let the panel describe rules the relay is not applying. Nil leaves the
+// config's own set in place rather than disabling the feature, so a caller that
+// passes nil by accident gets "every rule off" instead of a nil dereference on the
+// response path.
+func (c *ProxyConfig) WithOptions(options *Options) *ProxyConfig {
+	if options != nil {
+		c.options = options
+	}
+	return c
+}
+
+// Options returns the live option set, for a caller that built the config and now
+// needs to hand the same pointer to the web server.
+func (c *ProxyConfig) Options() *Options { return c.options }
 
 // WithLogger sets the logger.
 func (c *ProxyConfig) WithLogger(logger *zap.Logger) *ProxyConfig {
@@ -734,6 +758,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		if core.IsWsUpgradeRequest(requestData) {
 			requestData, wsStripped = s.stripWsHandshake(requestData)
 		}
+		requestData = s.applyRequestRules(requestData)
 
 		// Scope decides retention, not egress: an excluded request is still
 		// forwarded, it is simply not kept. The request bytes are not stored
@@ -840,6 +865,11 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
 	}
+	// Then the blanket response modification rules. This order, not the other one:
+	// a Match & Replace rule is a pattern the operator wrote against the origin's
+	// own bytes, and running "remove all JavaScript" first would delete the text
+	// their rule was written to find. See applyResponseRules.
+	responseData = s.applyResponseRules(responseData)
 
 	// Intercept: hold the response before it reaches the client.
 	var notes *string
@@ -960,10 +990,29 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 
 	// Parse target
 	host, port, path := parseTarget(target)
+
+	// Read the whole request first, and only then look for a Host header in the bytes
+	// we already hold.
+	//
+	// # Why the order matters — this is Burp's "invisible proxying" case
+	//
+	// A proxy-aware client sends absolute-form (`GET http://host/path`), so parseTarget
+	// has the host and this is the ordinary path. A client that is *not* proxy-aware —
+	// one whose DNS or hosts file points the origin's name at this listener — sends
+	// origin-form (`GET /path`) with the authority only in the Host header, which is
+	// what Burp calls invisible proxying.
+	//
+	// That case used to be handled by calling readHeaders(reader) here, before
+	// readFullRequest. readHeaders consumes the header block off the same *bufio.Reader,
+	// so readFullRequest then started at the blank line and returned the request line
+	// with no headers at all: the Host was found, and every header the client sent —
+	// Host included — was dropped on the way upstream. The origin got a header-less
+	// request, history recorded that same header-less request, and nothing anywhere
+	// said so. Reading the message once and parsing the Host out of the bytes keeps a
+	// single reader position and one copy of the request.
+	requestData := readFullRequest(requestLine, reader)
 	if host == "" {
-		// Try to get from Host header
-		headers := readHeaders(reader)
-		if h := headers.Get("Host"); h != "" {
+		if h := headerValue(requestHead(requestData), "Host"); h != "" {
 			host, port = parseHostPort(h)
 		}
 	}
@@ -972,9 +1021,6 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		clientConn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
-
-	// Read full request
-	requestData := readFullRequest(requestLine, reader)
 
 	// A client speaking to a proxy sends absolute-form — `GET http://host/path HTTP/1.1` (RFC 9112
 	// §3.2.2) — but an origin server must be sent origin-form, `GET /path HTTP/1.1` (§3.2.1). This
@@ -1015,6 +1061,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	if core.IsWsUpgradeRequest(requestData) {
 		requestData, wsStripped = s.stripWsHandshake(requestData)
 	}
+	// The request-direction options run in the same slot, for the same reasons. See
+	// applyRequestRules.
+	requestData = s.applyRequestRules(requestData)
 
 	// Check scope
 	inScope := s.config.scope.Contains(host, port, path, false)
@@ -1074,10 +1123,12 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // them with the post-rewrite status and length, so the row disagreed with the
 // message it indexed whenever a response rule fired.
 func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time) {
-	// Apply Match & Replace on response
+	// Apply Match & Replace on response, then the blanket response modification
+	// rules — same order, and for the same reason, as handleTLSResponse.
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
 	}
+	responseData = s.applyResponseRules(responseData)
 
 	// Intercept: hold the response for the operator before it reaches the client.
 	var notes *string
@@ -1130,6 +1181,41 @@ func interceptDropNote() *string {
 		"The bytes recorded here are the response as it stood when it was dropped — the origin's " +
 		"answer, after any Match & Replace rule — which is the only record that it arrived at all."
 	return &note
+}
+
+// applyResponseRules runs the operator's response modification rules over one
+// response, in the one slot where doing so is safe.
+//
+// That slot is: after Match & Replace, before the intercept hold, before the write to
+// the client and before the record. Everything downstream of here — what the operator
+// sees held, what the client receives, what history stores, what the passive scanner
+// reads — is then the same byte string, which is the invariant every comment on this
+// package's capture sites exists to protect. Applying it after the write would put
+// bytes in history no peer ever saw; applying it after the record would show the
+// operator an origin response the browser never got.
+//
+// A thin wrapper rather than an inline call because both capture sites need it, and
+// because the nil-tolerance belongs in one place: a Server built by a caller that
+// never called WithOptions has no rules on, and must not crash finding that out.
+func (s *Server) applyResponseRules(responseData []byte) []byte {
+	return s.config.options.ApplyResponse(responseData)
+}
+
+// applyRequestRules runs the request-direction options over one outgoing request.
+//
+// Called in the same slot as the WebSocket extension strip — after intercept, before
+// the scope check and before anything is stored — and for the same reasons that
+// comment gives: before the scope check so an out-of-scope forward sends exactly the
+// bytes the recorded path would, and before the store so history shows what upstream
+// received.
+//
+// After intercept, which is worth being explicit about: an operator who edits a held
+// request and puts Accept-Encoding back still gets it stripped while the option is on.
+// That is the right behaviour for a blanket rule — the option says "this proxy does
+// not accept compressed responses", which stays true regardless of what a single
+// request asked for — and it is the same ordering stripWsHandshake already uses.
+func (s *Server) applyRequestRules(requestData []byte) []byte {
+	return s.config.options.ApplyRequest(requestData)
 }
 
 // record hands one completed exchange to scanner.Capture.Record: the shared
@@ -1258,22 +1344,14 @@ func parseHostPort(hostPort string) (host string, port uint16) {
 	return
 }
 
-func readHeaders(reader *bufio.Reader) http.Header {
-	headers := make(http.Header)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil || line == "\r\n" || line == "\n" {
-			break
-		}
-		line = strings.TrimSpace(line)
-		if colon := strings.Index(line, ":"); colon > 0 {
-			name := line[:colon]
-			value := strings.TrimSpace(line[colon+1:])
-			headers.Add(name, value)
-		}
-	}
-	return headers
-}
+// readHeaders is gone with its only caller. It parsed the header block off the
+// client's *bufio.Reader so handleHTTP could find a Host header when the request
+// target carried no authority — and because it consumed those bytes, the
+// readFullRequest call that followed returned a request with no headers. The
+// authority is now read out of the fully-buffered request instead (headerValue in
+// options.go), which cannot consume anything. Keeping this function as a helper
+// nothing calls would leave the reader-consuming shape available to the next caller
+// that needs a header early, which is exactly how the bug arrived.
 
 func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	var buf bytes.Buffer

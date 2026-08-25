@@ -106,6 +106,15 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBody)
 
+	// The response modification rules do not run here, and the count says so rather
+	// than a caveat in a doc file. This path does not have one response message it
+	// can rewrite: the origin's headers and body are copied to the client through
+	// net/http's ResponseWriter, and the HTTP/1-shaped Response recorded below is a
+	// *re-rendering* for history. Rewriting that rendering would put bytes in history
+	// the browser never received; rewriting the copy above would need the rules
+	// reimplemented against http.Header and a body writer. See Options.NoteRelayedHTTP2.
+	s.config.options.NoteRelayedHTTP2()
+
 	if inScope {
 		// ResponseLen is the whole rendered message, where the hand-rolled row
 		// counted the body alone. Every HTTP/1 row in this package has always meant
