@@ -14,6 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { ComponentType } from "react";
+import { IssueDefinitionsPage } from "./pages/advisories";
 import { ComparerPage } from "./pages/comparer";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
@@ -78,6 +79,14 @@ export const TOOLS: NavTool[] = [
     leaves: [
       { id: "sitemap", label: "Site map", description: "Hosts, paths, and observed behaviour", page: SiteMapPage },
       { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
+      {
+        id: "advisories",
+        label: "Issue definitions",
+        // Reads as the companion to Issues, and sits next to it: Issues is what was found, this is
+        // what can be described. Burp keeps the same pair under Target for the same reason.
+        description: "Every issue class the catalogue describes, found or not",
+        page: IssueDefinitionsPage,
+      },
       { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
     ],
   },

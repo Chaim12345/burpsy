@@ -391,6 +391,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)
 	s.mux.HandleFunc("/api/issues", s.handleIssues)
 	s.mux.HandleFunc("/api/findings", s.handleFindings) // legacy alias for /api/issues
+	// The issue-definition catalogue, independent of whether anything was found. Two patterns because
+	// they are two operations on two shapes: the exact path lists index rows, the subtree serves one
+	// definition in full. ServeMux picks the longest match regardless of registration order.
+	s.mux.HandleFunc("/api/advisories", s.handleAdvisories)
+	s.mux.HandleFunc("/api/advisories/", s.handleAdvisoryDetail)
 
 	// Tools
 	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)

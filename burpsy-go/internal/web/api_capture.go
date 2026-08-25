@@ -451,11 +451,15 @@ type issueFindingView struct {
 	// resource rather than one of its inputs. An insertion-point BCheck or a DOM sink names it;
 	// everything else stays absent so the UI renders an em dash, not an empty cell.
 	Param string `json:"param,omitempty"`
-	// Params is every parameter this finding covers. A finding that merged several observations of
-	// the same issue at the same target — five reflected-XSS hits on /search — reports one row with
-	// several occurrences, and this is what stops that row from hiding which five parameters were
-	// vulnerable. Single-observation findings carry the one param here too, so the UI has one field
-	// to read rather than two rules.
+	// Params is every distinct parameter a merged finding covers, in first-seen order. Findings of one
+	// type against one target are merged into a single row, so a reflected XSS reachable through five
+	// parameters is one row here — and without this field that row shows only the first, which makes
+	// the merge read as four results going missing.
+	//
+	// core.Finding.Params, the TypeScript `params?: string[]`, and TestIssuesSurfacesMergedParams all
+	// existed before this field did: the store kept the set, the console rendered it, the test asserted
+	// it, and the wire shape in between silently dropped it. Nothing about that was visible except the
+	// one red test, which is why it is wired here rather than left to the next reader.
 	Params      []string              `json:"params,omitempty"`
 	Occurrences []issueOccurrenceView `json:"occurrences"`
 	TimesSeen   int                   `json:"times_seen"`
@@ -496,17 +500,10 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		TaskID:      f.TaskID,
 	}
 	if def, note := s.advisories.Resolve(f.Name); def != nil {
-		v.Advisory = &issueAdvisoryView{
-			TypeIndex:             def.HexIndex(),
-			Name:                  def.Name,
-			Description:           def.Description,
-			Remediation:           def.Remediation,
-			DescriptionParagraphs: advisory.PlainParagraphs(def.Description),
-			RemediationParagraphs: advisory.PlainParagraphs(def.Remediation),
-			TypicalSeverity:       string(def.Severity),
-			References:            advisoryLinks(def.References, nil),
-			Classifications:       advisoryLinks(nil, def.Classification),
-		}
+		// Built by the same function GET /api/advisories/{typeIndex} uses, so the browsable catalogue
+		// and a finding's attached advisory cannot come to disagree about the shape they share.
+		view := advisoryDetailView(def)
+		v.Advisory = &view
 	} else {
 		v.AdvisoryNote = note
 	}

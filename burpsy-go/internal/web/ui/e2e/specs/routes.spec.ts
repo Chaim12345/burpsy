@@ -1,7 +1,7 @@
 // Every route renders, names itself, and logs nothing.
 //
 // One test per route rather than one loop inside one test, so a failure names the route in its title
-// and the other sixteen still report. A single "all routes" test that fails tells you the console is
+// and the other seventeen still report. A single "all routes" test that fails tells you the console is
 // broken somewhere.
 
 import { expect, gotoApp, gotoRoute, test } from "../harness/fixtures";
@@ -83,7 +83,9 @@ test.describe("routes", () => {
 
   test("the sub-tab row appears only for tools that own more than one view", async ({ page }) => {
     // Proxy owns four leaves, Repeater one. The row is conditional, and a regression that always
-    // renders it eats a row of vertical space on eleven of the seventeen routes.
+    // renders it eats a row of vertical space on ten of the eighteen routes — the ten whose tool owns
+    // a single leaf. (This said "eleven of the seventeen"; the total was right for the time, the ten
+    // never was. Target and Proxy have always accounted for the rest, and Target now owns four.)
     await gotoRoute(page, ROUTES.find((route) => route.id === "history")!);
     await expect(page.locator("nav.sub-tabs")).toBeVisible();
     await expect(page.locator("nav.sub-tabs button")).toHaveCount(4);
