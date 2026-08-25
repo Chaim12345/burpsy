@@ -206,3 +206,30 @@ THREE checks (CheckSqli/Xss/PathTraversal) — CheckSSRF true but unexercised in
 CheckCorpus false unless a corpus loads, and no CLI surface for any of it. Burp's default audit
 covers far more. This is the next increment: decide the shipped defaults deliberately, with the
 -scan-config list as the model, rather than leaving NewActiveScanner's struct literal as policy.
+
+## 2026-08-25 — runtime scan config + dashboard/settings control surfaces (commits 8b7dc63, 10bfa10)
+
+- **ScanConfig is runtime state**: `ActiveScanner.mu` + `ConfigSnapshot()`/`UpdateScanConfig(fn)`;
+  `GET/PUT /api/scanner/config` (whitelisted keys, ms durations, unknown key → 400); persisted via
+  `persist.Save/LoadScanConfig` (nil-for-absent — main previously clobbered defaults with a zero
+  config on first launch, showing concurrency 0). Precedence: persisted edits beat launch flags.
+- **Passive-by-default**: `CheckHeaders`, `CheckPassivePosture` (15), `CheckPassiveAnalysis` (28),
+  `CheckHostDiscovery` (3) now default true in `NewActiveScanner`.
+- **Settings → Audit checks card**: all 21 family switches grouped active/passive/corpus+DOM,
+  concurrency/timeout steppers, unsaved badge, batch Save. Verified live: toggle OOB → Save →
+  server `check_out_of_band: true`.
+- **Dashboard control surfaces**: New scan modal (Burp scan-type cards; unbuilt ones honestly
+  disabled "not built yet"), New live task modal, per-task progress bars (indeterminate pulse when
+  fraction unknown), cancel route `POST /api/tasks/{id}/cancel` (registry.Cancel finally reachable),
+  severity strip renders whenever issues are loaded (0 findings genuinely means 0 high).
+- **Standing live-audit row**: while enabled, a LIVE AUDIT row stays visible between sweep batches
+  (registry only records per-batch rows); driven by /api/scanner/live, stop button disables sweep.
+  Verified: enable → row; stop → row gone + toast + server enabled:false; crawl → batch row with
+  26 findings from 4 exchanges, honest bounded summaries.
+- **Design-system lesson**: `Field` mints branded `LabelledId` via children render-prop — passing a
+  plain string `id` to Input/Switch is a type error by design; `--radius-sm` emits unitless "2" so
+  raw px + `token-exempt` comment is the established pattern.
+- **Library research (librarian, 2026-08-25)**: adopt nothing now. Two real candidates tied to
+  future features: recharts (dashboard activity/severity charts) and golang.org/x/time/rate
+  (intruder/scan throttling). Everything else (RHF, dnd-kit, validator, errgroup, SSE lib) either
+  duplicates working hand-rolled code or has no consumer today — no dep without a user.
