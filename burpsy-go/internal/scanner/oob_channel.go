@@ -36,7 +36,43 @@ import (
 type OOBProvider interface {
 	// Channel returns the shared channel, or an error explaining why there is none.
 	Channel(ctx context.Context) (OOBChannel, error)
+	// Registration reports what this provider has already done, without doing any of it.
+	//
+	// On the interface rather than behind a type assertion because an operator-facing surface has
+	// to be able to render the channel's state, and the one thing it must never do is call
+	// Channel() to find out: Channel registers a public collaborator domain on first use and blocks
+	// for up to Options.Timeout doing it. A status read that mints is a status read that changes
+	// the thing it reports, and — for the Collaborator tab, which polls — it would spawn
+	// interactsh-client the moment someone opened the tool.
+	//
+	// A provider that could not answer this would leave that surface guessing, so it is a required
+	// method: guessing here means showing an address nothing polls, or reporting a channel as
+	// absent while a scan holds one open.
+	Registration() OOBRegistration
 	Close() error
+}
+
+// OOBRegistration is a provider's own account of its channel, obtainable without opening one.
+//
+// Attempted and Open are separate booleans because three states have to be told apart and two of
+// them are both "not open": never asked for (nothing has needed a callback yet), asked for and
+// failed (the binary is missing, or registration timed out), and open. Collapsing the first two
+// loses the distinction between "no evidence has been sought" and "evidence could not be sought",
+// which is the same distinction the whole out-of-band path exists to preserve.
+type OOBRegistration struct {
+	// Attempted is true once registration has been tried, successfully or not.
+	Attempted bool
+	// Open is true when a channel exists and Domain names its payload domain.
+	Open bool
+	// Domain is the registered payload domain. Empty unless Open.
+	Domain string
+	// Err is why the attempt failed, when one was made and did not succeed.
+	Err error
+	// Server is the interaction server the operator configured. Empty means the client's own
+	// default public pool (oast.pro / oast.live / oast.fun / oast.me / oast.online) — reported as
+	// empty rather than filled in with a guess, because which of those a registration lands on is
+	// the client's choice and is not knowable until Domain exists.
+	Server string
 }
 
 // OOBChannel is the part of the collaborator a check actually uses.
@@ -88,6 +124,22 @@ func (l *lazyOOB) Channel(ctx context.Context) (OOBChannel, error) {
 	return c, nil
 }
 
+// Registration reports the channel this provider has already opened, and never opens one.
+//
+// It reads the same three fields Channel() writes under the same mutex, so a status read
+// concurrent with a first registration sees either the before or the after state, never a
+// half-populated one.
+func (l *lazyOOB) Registration() OOBRegistration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	reg := OOBRegistration{Attempted: l.started, Err: l.err, Server: l.opts.ServerURL}
+	if l.client != nil {
+		reg.Open = true
+		reg.Domain = l.client.Domain()
+	}
+	return reg
+}
+
 func (l *lazyOOB) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -125,6 +177,26 @@ func (s *ActiveScanner) OOBChannel(ctx context.Context) (OOBChannel, error) {
 			"so a callback cannot be observed and this check cannot report a verdict")
 	}
 	return p.Channel(ctx)
+}
+
+// OOBRegistration reports the scan channel's state, and whether one is configured at all, without
+// opening a channel.
+//
+// The bool is the distinction the operator-facing surface turns on: no provider is "the Collaborator
+// tool is not configured", which is a sentence about this installation, whereas a provider whose
+// registration failed is "configured and broken", which is a sentence about this run. They call for
+// different copy and different remedies, so they are not folded into one zero value.
+func (s *ActiveScanner) OOBRegistration() (OOBRegistration, bool) {
+	if s == nil {
+		return OOBRegistration{}, false
+	}
+	s.oobMu.Lock()
+	p := s.oob
+	s.oobMu.Unlock()
+	if p == nil {
+		return OOBRegistration{}, false
+	}
+	return p.Registration(), true
 }
 
 // closeOOB releases the channel at the end of a scan.

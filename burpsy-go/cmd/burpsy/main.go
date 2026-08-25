@@ -19,6 +19,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/oob"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
@@ -66,6 +67,25 @@ func main() {
 	// domexec refuses RemoteURL together with ChromePath as a contradiction, and a single flag
 	// cannot express that pair at all.
 	domEngine := flag.String("dom", "", `engine for DOM-based checks: "chrome", a browser path, or a ws:// CDP endpoint (obscura/lightpanda serve)`)
+
+	// The out-of-band interaction channel, and the only way to turn it on.
+	//
+	// `internal/oob` and `scanner.NewLazyOOBProvider` were both implemented, tested, and reachable from
+	// nothing: the provider had zero callers, so `ActiveScanner.oob` was nil in every running burpsy and
+	// every out-of-band check refused with "no collaborator channel is configured for this scan". This
+	// flag is what makes the capability exist for an operator.
+	//
+	// Opt-in, and deliberately not "on whenever interactsh-client happens to be installed". Registering
+	// a payload domain reaches a third-party interaction server and tells it an engagement is running;
+	// that is a decision for the person running the tool, not a side effect of what is on PATH. It is
+	// the same reason -tools is opt-in: capabilities that leave the process are operator policy.
+	//
+	// "public" rather than an empty string for the default pool, because empty already means "not
+	// configured" — and those two must not be spelled the same way when one of them mints addresses.
+	collaboratorServer := flag.String("collaborator-server", "",
+		`Interactsh server for out-of-band interactions, or "public" for interactsh's own pool. Unset disables the Collaborator tool`)
+	collaboratorClient := flag.String("collaborator-client", "",
+		"path to the interactsh-client binary (default: look it up on PATH)")
 
 	// TLS passthrough flags
 	passthrough := flag.String("tls-passthrough", "", "host pattern to passthrough without interception (repeatable)")
@@ -236,6 +256,26 @@ func main() {
 	if toolAllowlist != nil {
 		toolRunner = scanner.NewToolRunner(scanner.ToolRunnerConfig{Tools: toolAllowlist})
 	}
+	// The out-of-band provider, built only when the operator named a server. Lazy by construction:
+	// nothing spawns interactsh-client until a check or the Collaborator tool actually asks for a
+	// channel, so configuring one costs nothing on a run that never needs a callback.
+	//
+	// A missing binary is deliberately NOT fatal here, unlike the -tools typo above. -tools names a
+	// path the operator typed, so a bad one is a command-line error; this names a server, and whether
+	// interactsh-client can be found is a property of the machine that the provider reports honestly at
+	// first use — as "unavailable", on the surface built to say so, rather than as a refusal to boot.
+	var oobProvider scanner.OOBProvider
+	if *collaboratorServer != "" {
+		serverURL := *collaboratorServer
+		if serverURL == "public" {
+			// The client's own default pool. Empty ServerURL is what selects it.
+			serverURL = ""
+		}
+		oobProvider = scanner.NewLazyOOBProvider(oob.Options{
+			ServerURL:  serverURL,
+			BinaryPath: *collaboratorClient,
+		})
+	}
 	if *bchecksDir != "" {
 		ps, err := scanner.LoadDir(*bchecksDir, store, scope, logger)
 		if err != nil {
@@ -297,6 +337,7 @@ func main() {
 		WithScope(scope).
 		WithCorpusChecks(passiveScanner.ActiveChecks()).
 		WithToolRunner(toolRunner).
+		WithOOBProvider(oobProvider).
 		WithAuditConfig(auditConfig)
 	if domOpts != nil {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
@@ -342,6 +383,10 @@ func main() {
 		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
 		// checks counted-but-excluded.
 		WithScanner(activeScanner).
+		// WithOOBProvider carries -collaborator-server. Installed on this scanner and only this one,
+		// because it is the scanner the web server audits with — so the channel the Collaborator tab
+		// displays and the channel a check plants in a payload are the same registration. Nil (no flag)
+		// keeps every out-of-band row refusing rather than reporting zero interactions.
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
@@ -409,6 +454,17 @@ func main() {
 
 	logger.Info("Shutting down...")
 	cancel()
+	// The out-of-band channel does not stop with ctx, and that is deliberate upstream: lazyOOB binds
+	// interactsh-client to context.Background() so a channel outlives the check that opened it. The
+	// consequence is that cancelling ctx does not reap it, so shutdown has to — otherwise every burpsy
+	// run that opened a channel leaves an interactsh-client behind, holding a registration and a temp
+	// file. Closed here rather than through CloseCapabilities because this is the provider this process
+	// built, and it is the one thing on this path with a subprocess to collect.
+	if oobProvider != nil {
+		if err := oobProvider.Close(); err != nil {
+			logger.Error("Failed to close the out-of-band channel", zap.Error(err))
+		}
+	}
 	// Seal the capture's tail. Sync rather than Close: handlers may still be
 	// unwinding, and Close would unmap segments they are reading spans out of.
 	if err := store.Sync(); err != nil {

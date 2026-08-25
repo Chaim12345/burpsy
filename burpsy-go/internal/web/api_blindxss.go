@@ -53,12 +53,12 @@ type blindXSSChannel struct {
 	why string
 
 	mu     sync.Mutex
-	minted []mintedPayload
+	minted []mintedBlindXSSPayload
 }
 
-// mintedPayload is one correlation token this server handed out, and the two forms of it an operator
+// mintedBlindXSSPayload is one correlation token this server handed out, and the two forms of it an operator
 // plants.
-type mintedPayload struct {
+type mintedBlindXSSPayload struct {
 	Token     string    `json:"token"`
 	ScriptURL string    `json:"script_url"`
 	ScriptTag string    `json:"script_tag"`
@@ -94,7 +94,7 @@ func (s *Server) WithBlindXSS(listener *blindxss.Listener, unavailable error) *S
 
 // blindxssPayloadView is one minted payload plus what has come back for it.
 type blindxssPayloadView struct {
-	mintedPayload
+	mintedBlindXSSPayload
 	// Hits is every callback recorded against this token, oldest first.
 	Hits []blindxss.Hit `json:"hits"`
 	// Outstanding is true while no callback has arrived. Named for what it means rather than derived
@@ -169,7 +169,7 @@ func (s *Server) handleBlindXSSPayload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	minted := mintedPayload{
+	minted := mintedBlindXSSPayload{
 		Token:     payload.Token,
 		ScriptURL: payload.ScriptURL,
 		ScriptTag: payload.ScriptTag(),
@@ -189,7 +189,7 @@ func (s *Server) handleBlindXSSPayload(w http.ResponseWriter, r *http.Request) {
 }
 
 // remember records a minted payload, dropping the oldest past the cap.
-func (c *blindXSSChannel) remember(p mintedPayload) {
+func (c *blindXSSChannel) remember(p mintedBlindXSSPayload) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.minted = append(c.minted, p)
@@ -199,10 +199,10 @@ func (c *blindXSSChannel) remember(p mintedPayload) {
 }
 
 // snapshot copies the minted list so hits can be read without holding the lock.
-func (c *blindXSSChannel) snapshot() []mintedPayload {
+func (c *blindXSSChannel) snapshot() []mintedBlindXSSPayload {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]mintedPayload, len(c.minted))
+	out := make([]mintedBlindXSSPayload, len(c.minted))
 	copy(out, c.minted)
 	return out
 }
@@ -243,7 +243,7 @@ func (s *Server) blindXSSState() blindxssStateView {
 			hits = []blindxss.Hit{}
 		}
 		view.Payloads = append(view.Payloads, blindxssPayloadView{
-			mintedPayload: minted,
+			mintedBlindXSSPayload: minted,
 			Hits:          hits,
 			Outstanding:   len(hits) == 0,
 		})

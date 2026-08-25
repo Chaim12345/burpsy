@@ -142,6 +142,36 @@ var manifest = map[string]route{
 		summary: "mint one blind-XSS correlation payload to plant: the token, the script URL and the " +
 			"script tag carrying it",
 	},
+	"/api/collaborator/interaction/": {
+		methods: []string{"GET"}, risk: riskRead, subPath: "0",
+		summary: "one out-of-band interaction's raw request and response, plus what its client IP means",
+	},
+	"/api/collaborator/interactions": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "index rows for recorded out-of-band interactions: id, type, client IP, time",
+	},
+	"/api/collaborator/payload": {
+		// riskEgress, and the one route in this manifest whose egress is NOT to the engagement target:
+		// minting registers a payload domain with the interaction server, which tells a third party that
+		// an engagement is running. Bounded (one registration per process), so not riskAttack — but a
+		// read classification would be wrong, because this is the only route here that can open a
+		// subprocess and a public DNS registration.
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "mint one out-of-band payload address; refuses with 409 and no address when no " +
+			"interaction server is configured",
+	},
+	"/api/collaborator/poll": {
+		// POST but riskRead, like /api/intruder/points and /api/sequencer/analyse: the verb marks an
+		// operator asking for something now, not an outbound send. Nothing leaves the process — the
+		// interactsh-client subprocess owns polling, and this re-reads the log it writes.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "re-read the interaction log now instead of waiting for the page's next tick",
+	},
+	"/api/collaborator/status": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the out-of-band channel's state: configured or not, the registered domain, minted " +
+			"payloads, and how many corpus checks are gated without it",
+	},
 	"/api/config/export": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "one JSON bundle of every configurable surface: scope, intercept rules, session handling rules",
