@@ -25,6 +25,33 @@ export const HIGHLIGHT_TONE: Record<string, "neutral" | "bad" | "warn" | "good" 
   magenta: "accent",
 };
 
+export interface ScannerConfig {
+  max_concurrency: number;
+  timeout_ms: number;
+  probe_timeout_ms: number;
+  check_sqli: boolean;
+  check_xss: boolean;
+  check_path_traversal: boolean;
+  check_ssrf: boolean;
+  check_xxe: boolean;
+  check_jwt_weak: boolean;
+  check_js_vulns: boolean;
+  check_headers: boolean;
+  check_cache_poisoning: boolean;
+  check_corpus: boolean;
+  check_dom: boolean;
+  check_extended_coverage: boolean;
+  check_reflection_probes: boolean;
+  check_host_discovery: boolean;
+  check_response_dependence: boolean;
+  check_passive_posture: boolean;
+  check_passive_analysis: boolean;
+  check_active_injection: boolean;
+  check_extended_active: boolean;
+  check_out_of_band: boolean;
+  check_stored: boolean;
+}
+
 export interface Stats {
   exchanges: number;
   messages: number;
@@ -111,6 +138,12 @@ export interface TaskRow {
   kind: string;
   target: string;
   state: string;
+  done: number;
+  total: number;
+  fraction: number;
+  fraction_known: boolean;
+  cancellable: boolean;
+  note?: string;
   progress: string;
   elapsed_ms: number;
   result: TaskResult;

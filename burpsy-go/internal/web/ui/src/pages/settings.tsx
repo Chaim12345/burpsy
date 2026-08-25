@@ -2,12 +2,13 @@ import { useState } from "react";
 import { Download, Plus, Radar, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
-import { useStats } from "../lib/data";
+import { useScannerConfig, useSaveScannerConfig, useStats } from "../lib/data";
 import { useScannerConfigs } from "../lib/data.attack";
 import { useCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
 import { SHORTCUT_GROUPS } from "../lib/shortcuts";
 import type { FrameProgramResponse } from "../lib/types.policy";
+import type { ScannerConfig } from "../lib/types";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Toolbar } from "../ui/primitives";
@@ -484,9 +485,172 @@ function DomEngineSection(): JSX.Element {
   );
 }
 
+// The audit-family switches Burp keeps under Scanner → Options → Scan issues, made live: every
+// toggle PUTs through /api/scanner/config and persists, so a policy set here survives a restart.
+// Draft-then-Save rather than save-on-toggle because flipping six families should cost one
+// confirmed request, not six racing ones.
+const AUDIT_CHECK_GROUPS: { title: string; detail: string; rows: { key: keyof ScannerConfig; label: string; hint?: string }[] }[] = [
+  {
+    title: "Active injection",
+    detail: "Families that send crafted requests at the target.",
+    rows: [
+      { key: "check_sqli", label: "SQL injection" },
+      { key: "check_xss", label: "Cross-site scripting" },
+      { key: "check_path_traversal", label: "File path traversal" },
+      { key: "check_ssrf", label: "Server-side request forgery" },
+      { key: "check_xxe", label: "XML external entity", hint: "Needs the target to accept XML input" },
+      { key: "check_jwt_weak", label: "Weak JWT secrets" },
+      { key: "check_js_vulns", label: "JavaScript vulnerabilities" },
+      { key: "check_cache_poisoning", label: "Web cache poisoning" },
+      { key: "check_response_dependence", label: "Response-dependence analysis" },
+      { key: "check_active_injection", label: "Generic active insertion probes" },
+      { key: "check_extended_active", label: "Extended active coverage", hint: "More insertion points per exchange — slower, deeper" },
+    ],
+  },
+  {
+    title: "Passive",
+    detail: "Response inspection that never sends a request of its own. On by default.",
+    rows: [
+      { key: "check_headers", label: "Security headers & cookies" },
+      { key: "check_passive_posture", label: "Security posture" },
+      { key: "check_passive_analysis", label: "Advanced passive analysis" },
+      { key: "check_host_discovery", label: "Host discovery notes" },
+    ],
+  },
+  {
+    title: "Engines & coverage",
+    detail: "Cross-cutting engines and where the scanner is allowed to spend effort.",
+    rows: [
+      { key: "check_corpus", label: "BCheck corpus actives", hint: "Only with a corpus loaded via --bchecks" },
+      { key: "check_dom", label: "DOM-based checks", hint: "Needs -dom chrome (or ws://) at startup" },
+      { key: "check_out_of_band", label: "Out-of-band callbacks", hint: "interactsh confirmation for blind findings" },
+      { key: "check_stored", label: "Stored-input rendering" },
+      { key: "check_extended_coverage", label: "Extended crawl coverage" },
+      { key: "check_reflection_probes", label: "Reflection probing" },
+    ],
+  },
+];
+
+function AuditChecksSection(): JSX.Element {
+  const config = useScannerConfig();
+  const save = useSaveScannerConfig();
+  const [draft, setDraft] = useState<ScannerConfig | null>(null);
+
+  const confirmed = config.data ?? null;
+  const current = draft ?? confirmed;
+  const dirty =
+    current !== null && confirmed !== null &&
+    (Object.keys(confirmed) as (keyof ScannerConfig)[]).some((key) => current[key] !== confirmed[key]);
+
+  const toggle = (key: keyof ScannerConfig) =>
+    setDraft({ ...current!, [key]: !current![key] } as ScannerConfig);
+
+  const persist = () => {
+    if (!current || !confirmed) return;
+    const patch: Partial<ScannerConfig> = {};
+    const writable = patch as Record<string, number | boolean>;
+    for (const key of Object.keys(confirmed) as (keyof ScannerConfig)[]) {
+      if (current[key] !== confirmed[key]) writable[key] = current[key];
+    }
+    save.mutate(patch, {
+      onSuccess: () => {
+        toast.success("Scan configuration saved — it now governs this run and future starts");
+        setDraft(null);
+      },
+      onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Saving scan configuration failed"),
+    });
+  };
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Audit checks"
+        detail="Which issue families the scanner runs, editable while it runs. Changes are persisted for future starts too."
+        actions={
+          <>
+            {dirty ? <Badge tone="warn">unsaved</Badge> : null}
+            <Button size="small" disabled={!dirty || save.isPending} onClick={persist}>
+              Save changes
+            </Button>
+            <RefreshButton
+              onClick={() => {
+                setDraft(null);
+                void config.refetch();
+              }}
+              loading={config.isFetching}
+            />
+          </>
+        }
+      />
+      {config.error ? <ErrorNotice error={config.error} onRetry={() => void config.refetch()} /> : null}
+      {config.isLoading ? <LoadingPanel label="Loading audit checks" /> : null}
+      {current ? (
+        <>
+          <div className="metric-grid wide">
+            <Field label="Concurrent checks">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={1}
+                  value={current.max_concurrency}
+                  onChange={(event) => setDraft({ ...current, max_concurrency: Math.max(1, Number(event.target.value) || 1) })}
+                  style={{ maxWidth: "6rem" }}
+                />
+              )}
+            </Field>
+            <Field label="Check timeout (ms)">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={0}
+                  value={current.timeout_ms}
+                  onChange={(event) => setDraft({ ...current, timeout_ms: Math.max(0, Number(event.target.value) || 0) })}
+                  style={{ maxWidth: "8rem" }}
+                />
+              )}
+            </Field>
+            <Field label="Probe timeout (ms)">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={0}
+                  value={current.probe_timeout_ms}
+                  onChange={(event) => setDraft({ ...current, probe_timeout_ms: Math.max(0, Number(event.target.value) || 0) })}
+                  style={{ maxWidth: "8rem" }}
+                />
+              )}
+            </Field>
+          </div>
+          <div className="stack">
+            {AUDIT_CHECK_GROUPS.map((group) => (
+              <div key={group.title} style={{ marginTop: "var(--gap)" }}>
+                <h4>{group.title}</h4>
+                <p className="cell-dim" style={{ margin: 0 }}>{group.detail}</p>
+                <div className="switch-grid">
+                  {group.rows.map((row) => (
+                    <label key={row.key} className="switch-row" htmlFor={`audit-${row.key}`}>
+                      <span>
+                        <span>{row.label}</span>
+                        {row.hint ? <span className="cell-dim" style={{ display: "block" }}>{row.hint}</span> : null}
+                      </span>
+                      <Switch id={`audit-${row.key}`} label={row.label} checked={Boolean(current[row.key])} onCheckedChange={() => toggle(row.key)} />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </Card>
+  );
+}
+
 function ScannerSettingsSection(): JSX.Element {
   const configs = useScannerConfigs();
-
   return (
     <Card>
       <SectionHeading
@@ -719,6 +883,7 @@ export function SettingsPage(): JSX.Element {
       <ProxySettingsSection />
       <TlsPassthroughSection />
       <ProtocolSection />
+      <AuditChecksSection />
       <ScannerSettingsSection />
       <DomEngineSection />
       <AppearanceSection />

@@ -120,6 +120,8 @@ var manifest = map[string]route{
 	},
 	// Import rewrites what the engagement may touch — the bundle carries scope — so it shares
 	// /api/scope's confirmation-worthy class rather than sitting with ordinary writes.
+	// /api/scanner/config joins it: flipping audit families mid-engagement changes what the
+	// scanner is allowed to send, which is the same class of decision.
 	"/api/config/import": {
 		methods: []string{"POST"}, risk: riskScope,
 		summary: "apply a configuration bundle; a bundle with any invalid rule is refused without applying any part",
@@ -223,6 +225,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack,
 		summary: "legacy alias for /api/audit/{id}, taking the id in the body",
 	},
+	"/api/scanner/config": {
+		methods: []string{"GET", "PUT"}, risk: riskScope,
+		summary: "the audit families and performance knobs, readable and editable while the process runs; PUT persists the overrides",
+	},
 	"/api/scanner/configs": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "the built-in scan configurations, generated from the table rather than listed by hand",
@@ -277,7 +283,11 @@ var manifest = map[string]route{
 	},
 	"/api/stats": {
 		methods: []string{"GET"}, risk: riskRead,
-		summary: "exchange, message and stored-byte counts",
+		summary: "proxy counters, tool counts, and the DOM engine's admission state",
+	},
+	"/api/tasks/": {
+		methods: []string{"POST"}, risk: riskLocal, subPath: "{id}/cancel",
+		summary: "POST {id}/cancel: ask a running task to stop; an unknown or finished id answers 404",
 	},
 	"/api/tools/compare": {
 		methods: []string{"POST"}, risk: riskRead,
@@ -592,7 +602,7 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		"/api/audit/", "/api/crawl", "/api/intruder/run", "/api/scanner/audit",
 		"/api/scanner/live", "/api/sequencer/capture",
 	}
-	wantScope := []string{"/api/config/import", "/api/scope"}
+	wantScope := []string{"/api/config/import", "/api/scanner/config", "/api/scope"}
 	wantCredential := []string{
 		"/api/session/cookies", "/api/session/login", "/api/session/rules", "/api/session/rules/",
 	}

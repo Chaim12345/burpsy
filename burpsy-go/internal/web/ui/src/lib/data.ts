@@ -12,6 +12,7 @@ import type {
   MessageView,
   OrganizerItem,
   Scope,
+  ScannerConfig,
   SessionRule,
   SessionRules,
   SiteMap,
@@ -56,6 +57,7 @@ export const keys = {
   sessionCookies: ["session", "cookies"] as const,
   protocols: ["protocols"] as const,
   scannerConfigs: ["scanner", "configs"] as const,
+  scannerConfig: ["scanner", "config"] as const,
   scannerCoverage: ["scanner", "coverage"] as const,
   scannerLive: ["scanner", "live"] as const,
 };
@@ -208,6 +210,21 @@ export function useResource<T>(key: readonly unknown[], url: string, enabled = t
 /* --- reads --------------------------------------------------------------- */
 
 export const useStats = () => useResource<Stats>(keys.stats, "/api/stats");
+export const useScannerConfig = () => useResource<ScannerConfig>(keys.scannerConfig, "/api/scanner/config");
+
+/** PUT /api/scanner/config — apply a partial patch of audit-family switches and knobs. The server
+ *  answers with the whole confirmed state and persists it for the next start, so the confirmed
+ *  response is what the cache gets, never the optimistic draft. */
+export function useSaveScannerConfig() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (patch: Partial<ScannerConfig>) => api<ScannerConfig>("/api/scanner/config", json("PUT", patch)),
+    onSuccess: (confirmed) => {
+      queryClient.setQueryData(keys.scannerConfig, confirmed);
+      invalidate([keys.scannerCoverage]);
+    },
+  });
+}
 export const useScope = () => useResource<Scope>(keys.scope, "/api/scope");
 export const useDashboard = () => useResource<Dashboard>(keys.dashboard, "/api/dashboard");
 export const useIssues = () => useResource<Issues>(keys.issues, "/api/issues");

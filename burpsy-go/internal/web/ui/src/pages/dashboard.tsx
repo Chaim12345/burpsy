@@ -1,11 +1,15 @@
-import { useMemo } from "react";
-import { Activity, CircleAlert, Gauge, Play } from "lucide-react";
-import { formatBytes, formatCount, formatDuration, relativeTime, statusTone } from "../lib/api";
-import { useDashboard } from "../lib/data";
+import { useMemo, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { Activity, CircleAlert, Gauge, Play, Plus, Radar, Square } from "lucide-react";
+import { toast } from "sonner";
+import { api, formatBytes, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
+import { useDashboard, useInvalidate, useIssues } from "../lib/data";
+import { useScannerLive, useSetScannerLive } from "../lib/data.attack";
+import { useStartCrawl } from "../lib/data.observe";
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Card, Empty, ErrorNotice, Metric } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 function taskTone(state: string): "good" | "bad" | "warn" | "info" {
@@ -59,25 +63,109 @@ function CoverageCard({ summary }: { summary: CoverageSummary }): JSX.Element {
   );
 }
 
-function TaskTable({ tasks }: { tasks: TaskRow[] }): JSX.Element {
-  if (!tasks.length) {
+function useCancelTask() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (id: number) => api<{ cancelled: number }>(`/api/tasks/${id}/cancel`, json("POST")),
+    onSuccess: () => {
+      toast.success("Task cancelled");
+      invalidate([["dashboard"]]);
+    },
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Cancelling the task failed"),
+  });
+}
+
+function TaskTable({ tasks, liveFindings, liveEnabled }: { tasks: TaskRow[]; liveFindings?: number; liveEnabled: boolean }): JSX.Element {
+  const cancel = useCancelTask();
+  const setLive = useSetScannerLive();
+
+  // While live auditing is enabled Burp keeps its live task permanently visible even between
+  // sweep batches; the registry only records a row per bounded batch (:577 in liveaudit.go), so
+  // the standing entry is rendered here from /api/scanner/live state instead of faking registry data.
+  const batchRunning = tasks.some((task) => task.kind === "live audit" && task.state === "running");
+  const standing: TaskRow | null = liveEnabled && !batchRunning ? {
+    id: -1,
+    kind: "live audit",
+    target: "proxied traffic",
+    state: "running",
+    done: 0,
+    total: 0,
+    fraction: 0,
+    fraction_known: false,
+    cancellable: true,
+    progress: "waiting for in-scope traffic",
+    elapsed_ms: 0,
+    result: { summary: "" },
+  } : null;
+  const rows = standing ? [standing, ...tasks] : tasks;
+
+  if (!rows.length) {
     return <Empty title="No tasks" detail="Crawls, audits and attacks appear here with their progress and bounded results." />;
   }
   return (
-    <SimpleTable headers={["Kind", "Target", "State", "Progress", "Result", "Elapsed"]}>
-      {tasks.map((task) => (
+    <SimpleTable headers={["Kind", "Target", "State", "Progress", "Issues", "Elapsed", ""]}>      {rows.map((task) => (
         <tr key={task.id}>
           <td>
             <Badge>{task.kind}</Badge>
           </td>
-          <td title={task.target}>{task.target}</td>
+          <td title={task.note || task.target}>{task.target}</td>
           <td>
             <Badge tone={taskTone(task.state)}>{task.state}</Badge>
           </td>
-          <td>{task.progress}</td>
-          <td title={task.result?.summary}>{task.result?.summary ?? "—"}</td>
+          <td style={{ minWidth: "9rem" }}>
+            <div className="progress-track" title={task.progress}>
+              {task.fraction_known ? (
+                <div className={`progress-fill ${task.state === "running" ? "progress-live" : ""}`} style={{ width: `${Math.round(task.fraction * 100)}%` }} />
+              ) : (
+                <div className="progress-fill progress-unknown" />
+              )}
+            </div>
+            <span className="cell-dim">{task.progress}</span>
+          </td>
+          <td>
+            {task.kind === "live audit" ? (
+              liveFindings === undefined ? (
+                <span className="cell-dim">—</span>
+              ) : (
+                <Badge tone={liveFindings > 0 ? "bad" : undefined}>{liveFindings}</Badge>
+              )
+            ) : (
+              <span className="cell-dim" title={task.result?.summary}>
+                {task.result?.summary || "—"}
+              </span>
+            )}
+          </td>
           <td>
             <span className="cell-num">{formatDuration(task.elapsed_ms)}</span>
+          </td>
+          <td>
+            {task.id === -1 ? (
+              <IconButton
+                label="Stop live auditing"
+                size="small"
+                disabled={setLive.isPending}
+                onClick={() =>
+                  setLive.mutate(
+                    { enabled: false },
+                    {
+                      onSuccess: () => toast.success("Live audit stopped"),
+                      onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Stopping the live audit failed"),
+                    },
+                  )
+                }
+              >
+                <Square size={12} />
+              </IconButton>
+            ) : task.cancellable && task.state === "running" ? (
+              <IconButton
+                label={`Cancel ${task.kind} task on ${task.target}`}
+                size="small"
+                disabled={cancel.isPending}
+                onClick={() => cancel.mutate(task.id)}
+              >
+                <Square size={12} />
+              </IconButton>
+            ) : null}
           </td>
         </tr>
       ))}
@@ -111,9 +199,142 @@ function ActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
   );
 }
 
+// Two entry points, matching Burp's dashboard header: "New scan" starts bounded work against a
+// seed, "New live task" flips the always-on sweep. The scan-type cards mirror the New scan dialog's
+// first page; the two kinds burpsy cannot run yet render as disabled cards that say so rather than
+// disappearing, because a missing capability silently hidden is the defect this UI exists to avoid.
+const SCAN_TYPES = [
+  { id: "crawl-audit", title: "Crawl and audit", detail: "Maps the attack surface and audits what it finds.", ready: false },
+  { id: "crawl", title: "Crawl", detail: "Maps the attack surface of the web application.", ready: true },
+  { id: "api", title: "API-only scan", detail: "Scans detected API definitions.", ready: false },
+] as const;
+
+function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
+  const startCrawl = useStartCrawl();
+  const [kind, setKind] = useState<string>("crawl");
+  const [seed, setSeed] = useState("");
+  const [maxRequests, setMaxRequests] = useState("50");
+  const [maxDepth, setMaxDepth] = useState("5");
+  const [maxDuration, setMaxDuration] = useState("");
+
+  const close = () => onOpenChange(false);
+  const submit = () => {
+    startCrawl.mutate(
+      {
+        seeds: [seed.trim()],
+        max_requests: Number(maxRequests) || undefined,
+        max_depth: Number(maxDepth) || undefined,
+        max_duration_secs: Number(maxDuration) || undefined,
+      },
+      {
+        onSuccess: () => toast.success(`Crawl started on ${seed.trim()}`),
+        onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Starting the crawl failed"),
+      },
+    );
+    close();
+  };
+
+  return (
+    <Modal open={open} onOpenChange={onOpenChange} title="New scan" wide description="Select the type of scan to run. It registers as a task below, with progress and a cancel button.">
+      <div className="stack">
+        <h4>Scan type</h4>
+        <div className="scan-type-grid">
+          {SCAN_TYPES.map((scan) => (
+            <button
+              key={scan.id}
+              type="button"
+              className={`scan-type-card ${kind === scan.id ? "scan-type-selected" : ""}`}
+              disabled={!scan.ready}
+              onClick={() => setKind(scan.id)}
+            >
+              <strong>{scan.title}</strong>
+              <span>{scan.detail}</span>
+              {!scan.ready ? <small className="cell-dim">not built yet</small> : null}
+            </button>
+          ))}
+        </div>
+        {kind === "crawl" ? (
+          <>
+            <Field label="Seed URL">
+              {(id) => <Input id={id} value={seed} onChange={(event) => setSeed(event.target.value)} placeholder="https://demo.local/" />}
+            </Field>
+            <div className="metric-grid wide">
+              <Field label="Max requests (empty = uncapped)">
+                {(id) => <Input id={id} type="number" min={1} value={maxRequests} onChange={(event) => setMaxRequests(event.target.value)} />}
+              </Field>
+              <Field label="Max depth">
+                {(id) => <Input id={id} type="number" min={1} value={maxDepth} onChange={(event) => setMaxDepth(event.target.value)} />}
+              </Field>
+              <Field label="Max duration (seconds)">
+                {(id) => <Input id={id} type="number" min={1} value={maxDuration} onChange={(event) => setMaxDuration(event.target.value)} placeholder="uncapped" />}
+              </Field>
+            </div>
+          </>
+        ) : null}
+        <div className="toolbar-end">
+          <Button variant="outline" size="small" onClick={close}>
+            Cancel
+          </Button>
+          <Button size="small" disabled={kind !== "crawl" || !seed.trim() || startCrawl.isPending} onClick={submit}>
+            Start
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// The live task's own dialog: one Capturing switch and the optional scope filter, mirroring Burp's
+// "Live audit from Proxy (all traffic)" task configuration panel. Family switches are global —
+// they live in Settings → Audit checks — so this panel points there instead of pretending to
+// carry a per-task check set burpsy does not have.
+function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
+  const setLive = useSetScannerLive();
+  const [query, setQuery] = useState("");
+  const close = () => onOpenChange(false);
+
+  return (
+    <Modal open={open} onOpenChange={onOpenChange} title="New live task" description="Audit proxied traffic as it arrives. The sweep registers as a task below.">
+      <div className="stack">
+        <Field label="Scope filter query (optional)">
+          {(id) => <Input id={id} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='host == "demo.local"' />}
+        </Field>
+        <p className="cell-dim" style={{ margin: 0 }}>
+          Which checks run is global — set it under Settings → Audit checks.
+        </p>
+        <div className="toolbar-end">
+          <Button variant="outline" size="small" onClick={close}>
+            Cancel
+          </Button>
+          <Button
+            size="small"
+            disabled={setLive.isPending}
+            onClick={() => {
+              setLive.mutate(
+                { enabled: true, query: query.trim() || undefined },
+                {
+                  onSuccess: () => toast.success("Live audit sweep enabled"),
+                  onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Enabling the live sweep failed"),
+                },
+              );
+              close();
+            }}
+          >
+            Start
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function DashboardPage(): JSX.Element {
   const { data, error, isFetching, refetch } = useDashboard();
+  const issues = useIssues();
+  const live = useScannerLive();
   const setRoute = useApp((state) => state.setRoute);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(false);
 
   const sources = useMemo(() => Object.entries(data?.sources ?? {}).sort((a, b) => b[1] - a[1]), [data?.sources]);
   const incomplete = useMemo(() => (data?.summaries ?? []).filter((item) => !item.breakdown.complete).length, [data?.summaries]);
@@ -156,6 +377,25 @@ export function DashboardPage(): JSX.Element {
           tone={incomplete ? "warn" : "good"}
         />
       </div>
+
+      {issues.data ? (
+        <div className="metric-grid wide">
+          {(["high", "medium", "low", "info"] as const).map((severity) => (
+            <Metric
+              key={severity}
+              label={`${severity} findings`}
+              value={formatCount(issues.data!.counts?.[severity] ?? 0)}
+              tone={
+                severity === "high" && (issues.data!.counts?.high ?? 0) > 0
+                  ? "bad"
+                  : severity === "medium" && (issues.data!.counts?.medium ?? 0) > 0
+                    ? "warn"
+                    : undefined
+              }
+            />
+          ))}
+        </div>
+      ) : null}
 
       <div className="dashboard-grid">
         <Card className="dashboard-wide">
@@ -200,8 +440,23 @@ export function DashboardPage(): JSX.Element {
         </Card>
 
         <Card className="dashboard-wide">
-          <SectionHeading title="Tasks" detail="Progress and bounded results for active and recent work." />
-          <TaskTable tasks={data?.tasks ?? []} />
+          <SectionHeading
+            title="Tasks"
+            detail="Progress and bounded results for active and recent work."
+            actions={
+              <>
+                <Button size="small" onClick={() => setScanOpen(true)}>
+                  <Plus size={13} />
+                  New scan
+                </Button>
+                <Button variant="outline" size="small" onClick={() => setLiveOpen(true)}>
+                  <Radar size={13} />
+                  New live task
+                </Button>
+              </>
+            }
+          />
+          <TaskTable tasks={data?.tasks ?? []} liveFindings={live.data?.findings} liveEnabled={live.data?.enabled === true} />
         </Card>
 
         <Card className="dashboard-wide">
@@ -250,6 +505,9 @@ export function DashboardPage(): JSX.Element {
           </div>
         </div>
       ) : null}
+
+      <NewScanModal open={scanOpen} onOpenChange={setScanOpen} />
+      <NewLiveTaskModal open={liveOpen} onOpenChange={setLiveOpen} />
     </div>
   );
 }

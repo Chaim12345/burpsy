@@ -386,6 +386,7 @@ func (s *Server) setupRoutes() {
 	// Matches the Rust route (crates/web/src/lib.rs) so the shipped frontend's CA link works unchanged.
 	s.mux.HandleFunc("/ca.crt", s.handleCACert)
 	s.mux.HandleFunc("/api/scope", s.handleScope)
+	s.mux.HandleFunc("/api/scanner/config", s.handleScannerConfig)
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
 	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)
 	s.mux.HandleFunc("/api/issues", s.handleIssues)
@@ -428,6 +429,7 @@ func (s *Server) setupRoutes() {
 
 	// Site map
 	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
+	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
 	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
 
 	// Dashboard: running tasks, the activity log, and every summary count with its
