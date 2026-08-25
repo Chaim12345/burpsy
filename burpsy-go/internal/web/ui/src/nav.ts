@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Braces,
   ChartNoAxesCombined,
   Combine,
@@ -18,6 +19,7 @@ import { IssueDefinitionsPage } from "./pages/advisories";
 import { ComparerPage } from "./pages/comparer";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
+import { DiscoverPage } from "./pages/discover";
 import { HistoryPage } from "./pages/history";
 import { InterceptPage } from "./pages/intercept";
 import { IntruderPage } from "./pages/intruder";
@@ -173,6 +175,23 @@ export const TOOLS: NavTool[] = [
     icon: ShieldCheck,
     leaves: [
       { id: "session", label: "Session", description: "Login macros and recovery behaviour", page: SessionPage },
+    ],
+  },
+  {
+    // Burp's DISCOVER constant, the tab that used to be called Learn, sits second
+    // to last — right before Settings — and so does this. What it holds is not
+    // Burp's link farm: see pages/discover.tsx for why an in-app reference is the
+    // honest analogue and a list of outbound links is not.
+    id: "discover",
+    label: "Discover",
+    icon: BookOpen,
+    leaves: [
+      {
+        id: "discover",
+        label: "Discover",
+        description: "Query grammar, BCheck syntax, hotkeys, and the deliberate gaps",
+        page: DiscoverPage,
+      },
     ],
   },
   {

@@ -2782,6 +2782,138 @@ tbody td {
   font-size: var(--fs-xs);
 }
 
+/* ---- Discover: the in-app reference ------------------------------------------
+   Built out of the same parts as every other panel here — a card, hairlines, a
+   term column and a meaning column — rather than as prose. A reference is read by
+   scanning for one term, not from the top, so the term column is fixed-width and
+   monospace and the row never becomes a paragraph.
+
+   Measures are capped at 96ch on the meaning column only. The code blocks are
+   deliberately not capped: a grammar production or a BCheck line wraps into
+   nonsense, so those scroll sideways in their own box instead. */
+
+.reference-panel {
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  padding:var(--s3);
+  min-width: 0;
+  display: grid;
+  gap:var(--s2);
+}
+
+/* The contents row. Chips rather than a list: it is navigation between siblings,
+   and it has to survive wrapping at 390px without becoming a column of links. */
+.reference-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap:var(--s1);
+}
+
+.reference-jump-link {
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--text-soft);
+  padding:var(--s1) var(--s2);
+  font: var(--fs-xs) var(--font-mono);
+  cursor: pointer;
+}
+
+.reference-jump-link:hover {
+  border-color: var(--line-strong);
+  background: var(--chrome-hover);
+  color: var(--text);
+}
+
+.reference-block {
+  border: 1px solid var(--line);
+  background: var(--paper-sunken);
+  min-width: 0;
+}
+
+.reference-block-label {
+  border-bottom: 1px solid var(--line);
+  padding:var(--s1) var(--s2);
+  color: var(--muted);
+  font: var(--weight-bold) var(--fs-2xs) var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.reference-block pre {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding:var(--s2);
+  color: var(--text-soft);
+  font: var(--fs-sm) var(--font-mono);
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+.reference-rows {
+  display: grid;
+  gap:0;
+  min-width: 0;
+}
+
+.reference-rows > div {
+  display: grid;
+  grid-template-columns: minmax(150px, 230px) minmax(0, 1fr);
+  gap:var(--s3);
+  padding:var(--s2) 0;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+
+.reference-rows > div:last-child {
+  border-bottom: 0;
+}
+
+.reference-rows dt {
+  color: var(--text);
+  font: var(--fs-sm) var(--font-mono);
+  word-break: break-word;
+}
+
+.reference-rows dd {
+  color: var(--text-soft);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  max-width: 96ch;
+  min-width: 0;
+}
+
+.reference-note {
+  display: block;
+  margin-top:var(--s1);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.reference-keys {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap:var(--s1);
+}
+
+/* Where the material is maintained. Last line of the panel because it is a
+   provenance note, not a heading — but present on every panel, because a
+   reference nobody can check against the tree is just a claim. */
+.reference-source {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* At the shell's own narrow breakpoint the term stops being a column: 150px of
+   minimum leaves too little beside it for the meaning to read as a sentence. */
+@media (max-width: 760px) {
+  .reference-rows > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap:var(--s1);
+  }
+}
+
 /* Off-screen probe the virtualized table measures to learn the resolved fluid row
    height; it must take part in layout enough to have a height, but occupy none. */
 .row-height-probe {
