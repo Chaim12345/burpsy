@@ -446,6 +446,18 @@ func (c *ProxyConfig) WithTlsPolicy(policy *TlsPolicy) *ProxyConfig {
 	return c
 }
 
+// WithMatchReplace sets the match-and-replace rule set the proxy applies to live
+// traffic. The same *matchreplace.RuleSet the web layer mutates is attached here — not
+// a copy — so a rule an operator edits on the Match & Replace page takes effect on the
+// wire, and the list that page renders can never disagree with the rules the proxy
+// actually honours. Nil (the default) applies no rules, which is why every read of the
+// field below is nil-guarded. cmd/burpsy shares one object between this config and the
+// web server for exactly the reason it shares one intercept.Engine.
+func (c *ProxyConfig) WithMatchReplace(rs *matchreplace.RuleSet) *ProxyConfig {
+	c.matchReplace = rs
+	return c
+}
+
 // WithScanner sets the passive scanner used to check captured traffic.
 func (c *ProxyConfig) WithScanner(scanner *scanner.PassiveScanner) *ProxyConfig {
 	c.scanner = scanner
@@ -688,6 +700,14 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 
 		requestData := readFullRequest(requestLine, br)
 		startTime := time.Now()
+
+		// Apply Match & Replace on the request — same position and same reasoning as the
+		// plain path in handleHTTP: before intercept, before the scope-gated store, so the
+		// bytes forwarded upstream equal the bytes recorded. Requests inside the tunnel
+		// already arrive origin-form, so there is no toOriginForm step to precede it here.
+		if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
+			requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
+		}
 
 		// Intercept: hold the decrypted request before it is forwarded upstream.
 		if s.config.intercept != nil {
@@ -963,6 +983,21 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// bytes upstream receives. The tunnelled path (handleTunnel, below) needs none of this — requests
 	// inside a CONNECT tunnel already arrive in origin-form.
 	requestData = toOriginForm(requestData, target, path)
+
+	// Apply Match & Replace on the request. Placed here for the same reason the response
+	// direction is applied at the top of completeResponse: everything the proxy does *to*
+	// the bytes happens before the operator's hold queue, before the scope check and before
+	// anything is stored, so what upstream receives, what the operator edits in the intercept
+	// window, and what history records are one set of bytes — the invariant toOriginForm's
+	// comment states. Before the scope check specifically so the out-of-scope forwardOnly path
+	// below sends the identical rewritten bytes it would have recorded had the host been in
+	// scope. Request-direction rules (request_first_line, request_header, request_body) could
+	// never fire until this call existed; only DirResponse was ever applied. A body rule that
+	// changes the body length has its Content-Length corrected inside Apply when the operator
+	// enabled that toggle — the same fix intercept's forward path performs after a body edit.
+	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
+		requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
+	}
 
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
