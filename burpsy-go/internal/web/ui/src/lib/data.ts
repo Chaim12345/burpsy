@@ -60,6 +60,9 @@ export const keys = {
   scannerConfig: ["scanner", "config"] as const,
   scannerCoverage: ["scanner", "coverage"] as const,
   scannerLive: ["scanner", "live"] as const,
+  collaborator: ["collaborator"] as const,
+  collaboratorInteractions: ["collaborator", "interactions"] as const,
+  blindxss: ["blindxss"] as const,
 };
 
 /**

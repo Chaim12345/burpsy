@@ -3,6 +3,7 @@ import {
   Braces,
   ChartNoAxesCombined,
   Combine,
+  RadioTower,
   Crosshair,
   FileClock,
   Gauge,
@@ -17,6 +18,7 @@ import {
 import type { ComponentType } from "react";
 import { IssueDefinitionsPage } from "./pages/advisories";
 import { ComparerPage } from "./pages/comparer";
+import { CollaboratorPage } from "./pages/collaborator";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
 import { DiscoverPage } from "./pages/discover";
@@ -154,10 +156,23 @@ export const TOOLS: NavTool[] = [
     leaves: [{ id: "comparer", label: "Comparer", description: "Byte-level differences", page: ComparerPage }],
   },
   {
+    id: "collaborator",
+    label: "Collaborator",
+    icon: RadioTower,
+    hotkey: "9",
+    leaves: [
+      {
+        id: "collaborator",
+        label: "Collaborator",
+        description: "Out-of-band interactions and blind-XSS callbacks",
+        page: CollaboratorPage,
+      },
+    ],
+  },
+  {
     id: "logger",
     label: "Logger",
     icon: FileClock,
-    hotkey: "9",
     leaves: [{ id: "logger", label: "Logger", description: "Requests burpsy itself sent", page: LoggerPage }],
   },
   {

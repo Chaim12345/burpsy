@@ -244,8 +244,8 @@ func (s *Server) blindXSSState() blindxssStateView {
 		}
 		view.Payloads = append(view.Payloads, blindxssPayloadView{
 			mintedBlindXSSPayload: minted,
-			Hits:          hits,
-			Outstanding:   len(hits) == 0,
+			Hits:                  hits,
+			Outstanding:           len(hits) == 0,
 		})
 		view.Counts.Payloads++
 		view.Counts.Hits += len(hits)
