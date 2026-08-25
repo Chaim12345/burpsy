@@ -55,6 +55,12 @@ type fakeOOBProvider struct{ ch *fakeChannel }
 func (p *fakeOOBProvider) Channel(context.Context) (OOBChannel, error) { return p.ch, nil }
 func (p *fakeOOBProvider) Close() error                                { return nil }
 
+// This fake is always already registered: it has no subprocess to spawn, so there is no
+// before-registration state for it to be in.
+func (p *fakeOOBProvider) Registration() OOBRegistration {
+	return OOBRegistration{Attempted: true, Open: true, Domain: p.ch.Domain()}
+}
+
 // The defect: the old check slept five seconds, polled once and closed the channel, so a callback
 // in the sixth second was unrecoverable. The registry has to still find it.
 func TestACallbackArrivingAfterTheCheckReturnedIsStillReported(t *testing.T) {
@@ -160,6 +166,13 @@ func (p *countingProvider) Channel(context.Context) (OOBChannel, error) {
 	return p.ch, nil
 }
 func (p *countingProvider) Close() error { return nil }
+
+// Deliberately does NOT count as an open: the point of Registration is that reporting the channel's
+// state never registers one. A status read that incremented `opened` would fail the test above,
+// which is the guarantee the Collaborator tab's polling depends on.
+func (p *countingProvider) Registration() OOBRegistration {
+	return OOBRegistration{Attempted: true, Open: true, Domain: p.ch.Domain()}
+}
 
 // With no provider the rows must refuse. Zero interactions from a channel nobody opened cannot be
 // distinguished from a target that did not call back.

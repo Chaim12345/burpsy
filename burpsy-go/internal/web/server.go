@@ -64,6 +64,13 @@ type Server struct {
 	// every existing test constructs a Server directly — see api_sequencer_capture.go.
 	captures    *sequencerCaptures
 	captureOnce sync.Once
+	// collaborator holds what the Collaborator tool knows that the out-of-band channel does not:
+	// which payload addresses an operator minted, and how the last read of the interaction log went.
+	// The channel itself lives on the ActiveScanner and is deliberately NOT duplicated here — see
+	// api_collaborator.go on why a second registration would show interactions no finding correlates
+	// with. Lazy for the same reasons as captures above.
+	collaborator     *collaboratorHub
+	collaboratorOnce sync.Once
 	// live is the change-event hub behind /api/events: every store the UI reads signals it, and it
 	// coalesces those signals into "this kind changed" frames the browser refetches on. See events.go
 	// for why the frames carry no data and why the producer side is atomics only.
@@ -368,6 +375,17 @@ func (s *Server) setupRoutes() {
 	// longest matching pattern regardless of registration order.
 	s.mux.HandleFunc("/api/sequencer/capture", s.handleSequencerCaptureStart)
 	s.mux.HandleFunc("/api/sequencer/capture/", s.handleSequencerCapture)
+
+	// Collaborator: the out-of-band interaction channel. Five routes rather than one because the
+	// index/detail split applies here too — the table is rows, and an interaction's raw bytes are
+	// fetched per row. `status` and `poll` are the same shape deliberately: the difference between them
+	// is only whether the operator asked for the read now, and a caller should not have to reconcile
+	// two views of one channel. See api_collaborator.go on why none of the GETs can register a channel.
+	s.mux.HandleFunc("/api/collaborator/interaction/", s.handleCollaboratorInteraction)
+	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
+	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
+	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)
+	s.mux.HandleFunc("/api/collaborator/status", s.handleCollaboratorStatus)
 
 	// Session
 	s.mux.HandleFunc("/api/session/rules", s.handleSessionRules)
