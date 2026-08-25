@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
-import { Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, X } from "lucide-react";
+import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { useExchangeActions, exchangeUrl } from "../lib/actions";
 import { downloadText, formatBytes, formatDuration, historyToCSV, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useHistory, useMessage } from "../lib/data";
 import { useScopeView } from "../lib/data.policy";
+import { QUERY_PANEL } from "../lib/reference";
 import { useApp } from "../lib/store";
 import { HIGHLIGHTS, type Exchange } from "../lib/types";
 import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
@@ -14,6 +15,7 @@ import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar, Tooltip } from "../ui/primitives";
+import { ReferencePanelView } from "../ui/reference";
 import { VirtualTable, type Column } from "../ui/table";
 
 const STATUS_BUCKETS = [
@@ -200,26 +202,41 @@ function CommentIndicator(): JSX.Element {
   );
 }
 
+/**
+ * The filter box's syntax help.
+ *
+ * This modal used to hold its own nine-line cheat sheet and a paragraph naming the
+ * fields. Both were already drifting: the examples spelled the connectives AND and
+ * OR while every other example in the tree uses lowercase, and neither mentioned
+ * `in low..high`, nor that a comparison against an absent field is false rather
+ * than an error — the single most misread behaviour in the grammar, because it is
+ * why `status != 304` quietly excludes rows that have no response yet.
+ *
+ * So it renders the same panel Discover renders, from `lib/reference.ts`. One list,
+ * two renderers. The link is there because the modal is the wrong place to read a
+ * grammar at length, and the page is the right one.
+ */
 function QueryHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
+  const setRoute = useApp((state) => state.setRoute);
   return (
-    <Modal open={open} onOpenChange={onOpenChange} title="Filter syntax" description="The filter box is sent to the server as a query expression.">
-      <div className="prose">
-        {[
-          "host = api.example.com",
-          "host ~ example          (substring match)",
-          "status = 500",
-          "status >= 400",
-          "method = POST",
-          "path ~ /admin",
-          "body ~ password",
-          'host = api.example.com AND status >= 400',
-          "method = POST OR method = PUT",
-        ].join("\n")}
-      </div>
-      <p className="field-hint">
-        The fields are host, status, method, path, mime and body — every term needs an operator and a value. host and
-        mime ignore case; method and path do not. Clear the box to return to the full capture.
-      </p>
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      wide
+      title="Filter syntax"
+      description="The filter box is sent to the server as a query expression. Clear the box to return to the full capture."
+    >
+      <ReferencePanelView panel={QUERY_PANEL} showHeading={false} />
+      <Button
+        variant="outline"
+        onClick={() => {
+          onOpenChange(false);
+          setRoute("discover");
+        }}
+      >
+        <BookOpen size={14} />
+        Open the full reference in Discover
+      </Button>
     </Modal>
   );
 }

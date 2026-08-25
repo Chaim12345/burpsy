@@ -42,6 +42,7 @@ export const ROUTES: Route[] = [
   { id: "logger", label: "Logger", h1: "Tool log", tool: "logger", hotkey: "9" },
   { id: "organizer", label: "Organizer", h1: "Organizer", tool: "organizer", hotkey: "0" },
   { id: "session", label: "Session", h1: "Session", tool: "session" },
+  { id: "discover", label: "Discover", h1: "Discover", tool: "discover" },
   { id: "settings", label: "Settings", h1: "Settings", tool: "settings" },
 ];
 
