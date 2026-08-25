@@ -82,13 +82,17 @@ test.describe("routes", () => {
   });
 
   test("the sub-tab row appears only for tools that own more than one view", async ({ page }) => {
-    // Proxy owns four leaves, Repeater one. The row is conditional, and a regression that always
-    // renders it eats a row of vertical space on eleven of the twenty routes — the eleven whose
-    // tool owns a single leaf. Target (five leaves) and Proxy (four) account for the rest; the
-    // audit queue added a Target leaf, which changes the total but not the single-leaf count.
+    // The row is conditional, and a regression that always renders it eats a row of vertical
+    // space on every route whose tool owns a single leaf.
+    //
+    // The expected count is DERIVED from ROUTES rather than written as a literal. It used to be a
+    // hardcoded 4, which went stale the moment Proxy gained the Proxy-settings leaf: the test then
+    // failed for a correct UI, which teaches the next reader to edit the number instead of looking.
+    const proxyLeaves = ROUTES.filter((route) => route.tool === "proxy").length;
+    expect(proxyLeaves).toBeGreaterThan(1); // otherwise this test is asserting nothing
     await gotoRoute(page, ROUTES.find((route) => route.id === "history")!);
     await expect(page.locator("nav.sub-tabs")).toBeVisible();
-    await expect(page.locator("nav.sub-tabs button")).toHaveCount(4);
+    await expect(page.locator("nav.sub-tabs button")).toHaveCount(proxyLeaves);
 
     await gotoRoute(page, ROUTES.find((route) => route.id === "repeater")!);
     await expect(page.locator("nav.sub-tabs")).toHaveCount(0);

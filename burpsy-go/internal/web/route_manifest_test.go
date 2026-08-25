@@ -276,6 +276,11 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded",
 	},
+
+	"/api/proxy/options": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters",
+	},
 	"/api/proxy/passthrough": {
 		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal,
 		summary: "the TLS passthrough host-pattern list, live: add and remove without restarting the proxy",

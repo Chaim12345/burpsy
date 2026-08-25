@@ -29,6 +29,7 @@ import { IntruderPage } from "./pages/intruder";
 import { LoggerPage } from "./pages/logger";
 import { MatchReplacePage } from "./pages/matchreplace";
 import { OrganizerPage } from "./pages/organizer";
+import { ProxySettingsPage } from "./pages/proxysettings";
 import { RepeaterPage } from "./pages/repeater";
 import { ScannerPage } from "./pages/scanner";
 import { SequencerPage } from "./pages/sequencer";
@@ -111,6 +112,12 @@ export const TOOLS: NavTool[] = [
         description: "Reviewable traffic transformations",
         page: MatchReplacePage,
       },
+      {
+        id: "proxysettings",
+        label: "Proxy settings",
+        description: "Response modification rules and their outcome counters",
+        page: ProxySettingsPage,
+      },
     ],
   },
   {
@@ -161,7 +168,6 @@ export const TOOLS: NavTool[] = [
     id: "collaborator",
     label: "Collaborator",
     icon: RadioTower,
-    hotkey: "9",
     leaves: [
       {
         id: "collaborator",
@@ -175,6 +181,7 @@ export const TOOLS: NavTool[] = [
     id: "logger",
     label: "Logger",
     icon: FileClock,
+    hotkey: "9",
     leaves: [{ id: "logger", label: "Logger", description: "Requests burpsy itself sent", page: LoggerPage }],
   },
   {

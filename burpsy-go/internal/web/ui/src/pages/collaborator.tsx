@@ -13,7 +13,7 @@
 import { useState } from "react";
 import { Copy, Plus, RefreshCw } from "lucide-react";
 import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Metric } from "../ui/primitives";
-import { LoadingPanel, SectionHeading } from "../ui/layout";
+import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
 import {
   useBlindXSS,
@@ -49,9 +49,19 @@ export function CollaboratorPage(): JSX.Element {
 
   return (
     <div className="stack">
+      <PageHeader
+        title="Collaborator"
+        description="Out-of-band interactions and blind-XSS callbacks — payloads planted where the scanner cannot watch."
+        actions={
+          <>
+            <Badge tone={s.configured ? "good" : "warn"}>{s.configured ? "channel configured" : "not configured"}</Badge>
+            <RefreshButton onClick={() => void status.refetch()} loading={status.isFetching} />
+          </>
+        }
+      />
       <Card>
         <SectionHeading
-          title="Collaborator"
+          title="Interaction channel"
           detail={s.configured ? (s.default_pool ? "Using the interactsh public pool." : s.server ?? undefined) : s.hint}
           actions={
             <>

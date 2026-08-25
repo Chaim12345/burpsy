@@ -103,7 +103,8 @@ function TaskTable({ tasks, liveFindings, liveEnabled }: { tasks: TaskRow[]; liv
     return <Empty title="No tasks" detail="Crawls, audits and attacks appear here with their progress and bounded results." />;
   }
   return (
-    <SimpleTable headers={["Kind", "Target", "State", "Progress", "Issues", "Elapsed", ""]}>      {rows.map((task) => (
+    <SimpleTable headers={["Kind", "Target", "State", "Progress", "Issues", "Elapsed", ""]}>
+      {rows.map((task) => (
         <tr key={task.id}>
           <td>
             <Badge>{task.kind}</Badge>

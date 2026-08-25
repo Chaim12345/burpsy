@@ -89,7 +89,12 @@ export function IssueDefinitionsPage(): JSX.Element {
   // so this is one request per settled keystroke rather than per keystroke.
   const debouncedTerm = useDebounced(term, 260);
   const catalogue = useAdvisories(debouncedTerm.trim(), severity);
-  const detail = useAdvisory(selected);
+  // Selection is keyed on the composite row key, because type_index alone cannot address a row
+  // (two pairs share one). The DETAIL fetch still goes by type_index -- that is the only thing
+  // /api/advisories/{index} can look up, and the backend's byIndex map holds one per index -- so
+  // for a shared index the reader is told whose definition it is actually looking at.
+  const selectedIndex = selected === null ? null : selected.slice(0, selected.indexOf(":"));
+  const detail = useAdvisory(selectedIndex);
 
   const rows = catalogue.data?.advisories ?? [];
   const counts = catalogue.data?.severity_counts ?? {};
@@ -97,7 +102,19 @@ export function IssueDefinitionsPage(): JSX.Element {
 
   // The selected row's index entry, so the reader's head can show the name and severity immediately
   // rather than blanking while the detail request is in flight.
-  const selectedRow = useMemo(() => rows.find((row) => row.type_index === selected) ?? null, [rows, selected]);
+  const selectedRow = useMemo(
+    () => rows.find((row) => `${row.type_index}:${row.name}` === selected) ?? null,
+    [rows, selected],
+  );
+  // Other catalogue rows sharing this row's index. Non-empty means the definition below is
+  // addressed by an index that does not identify it uniquely, which the reader has to know.
+  const indexTwins = useMemo(
+    () =>
+      selectedRow === null
+        ? []
+        : rows.filter((row) => row.type_index === selectedRow.type_index && row.name !== selectedRow.name),
+    [rows, selectedRow],
+  );
 
   const listPane = (
     <div className="pane">
@@ -133,12 +150,20 @@ export function IssueDefinitionsPage(): JSX.Element {
         />
       ) : (
         <div className="row-list">
+          {/*
+            type_index is NOT unique: the shipped catalogue has 183 definitions across 181
+            distinct indices. "Perl code injection" shares 00100e00 with the React2Shell RCE
+            row, and "BCheck generated issue" shares 09000000 with "Bambda generated issue".
+            Keying on it alone made React drop one row of each pair, so the list silently
+            showed 181 of 183 definitions -- exactly the undercount this project treats as a
+            defect. The name disambiguates and is unique across the catalogue.
+          */}
           {rows.map((row) => (
             <DefinitionRow
-              key={row.type_index}
+              key={`${row.type_index}:${row.name}`}
               row={row}
-              selected={row.type_index === selected}
-              onSelect={() => setSelected(row.type_index)}
+              selected={`${row.type_index}:${row.name}` === selected}
+              onSelect={() => setSelected(`${row.type_index}:${row.name}`)}
             />
           ))}
         </div>
@@ -156,9 +181,9 @@ export function IssueDefinitionsPage(): JSX.Element {
       <div className="pane">
         <div className="detail-head">
           <div className="detail-head-title">
-            <span className="eyebrow">Issue definition · {selected}</span>
+            <span className="eyebrow">Issue definition · {selectedIndex}</span>
             <h2>
-              <strong>{selectedRow?.name ?? detail.data?.name ?? selected}</strong>
+              <strong>{selectedRow?.name ?? detail.data?.name ?? selectedIndex}</strong>
             </h2>
           </div>
           <div className="detail-actions">
@@ -168,6 +193,15 @@ export function IssueDefinitionsPage(): JSX.Element {
           </div>
         </div>
         <div className="advisory-body">
+          {indexTwins.length > 0 ? (
+            <p className="cell-dim">
+              The catalogue gives type index {selectedIndex} to{" "}
+              {indexTwins.length === 1 ? "another definition" : `${indexTwins.length} other definitions`} —{" "}
+              {indexTwins.map((twin) => twin.name).join(", ")}. The index does not identify a definition on its own,
+              and the reader below is whichever one the catalogue resolves that index to, which may not be the row
+              selected.
+            </p>
+          ) : null}
           {detail.error ? <ErrorNotice error={detail.error} onRetry={() => void detail.refetch()} /> : null}
           {detail.isFetching && !detail.data ? <LoadingPanel label="Loading definition" /> : null}
           {/* heading="Description" because the pane head above already names the definition; the

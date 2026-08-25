@@ -314,10 +314,16 @@ func main() {
 	// restored ruleset lands in this shared object.
 	interceptEngine := intercept.NewEngine()
 	matchReplaceRules := matchreplace.NewRuleSet()
+	// The proxy's live option set — Burp's response-modification switches. One set handed to both
+	// the relay and the web API, the same single-pointer rule as the TLS policy and the Match &
+	// Replace rules: a panel that described a different set than the relay applies is the drift
+	// this project keeps closing.
+	proxyOptions := proxy.NewOptions()
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
 		WithMatchReplace(matchReplaceRules).
+		WithOptions(proxyOptions).
 		WithLogger(logger).
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
@@ -419,6 +425,9 @@ func main() {
 		// scanner's access-control/CSRF comparisons are one rule set. Without this the server
 		// would quietly build its own no-op-logged coordinator and the two surfaces would drift.
 		WithSessionCoordinator(sessionCoord).
+		// The same option set the relay holds, so the Proxy settings panel's switches and the
+		// response path's rules are one state.
+		WithProxyOptions(proxyOptions).
 		// The raw -tools map, for the surfaces that delegate a whole phase to an external binary rather
 		// than one tool per insertion point: POST /api/discovery runs ffuf. Without -tools that route
 		// refuses and names the missing tool, which is the difference between "not configured" and "this

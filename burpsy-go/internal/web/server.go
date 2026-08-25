@@ -62,7 +62,13 @@ type Server struct {
 	// supported state (direct construction in tests); the passthrough endpoint says so rather
 	// than serving an empty list nothing could ever change.
 	tlsPolicy *proxy.TlsPolicy
-	liveAudit *LiveAuditState
+	// proxyOptions is the proxy's live option set — response modification rules and the
+	// Accept-Encoding strip — shared with the relay for the same reason tlsPolicy is: a
+	// settings panel describing rules the relay does not apply is the failure two option
+	// sets produce. Nil is supported; the endpoint reports it rather than serving a panel
+	// that could not change anything.
+	proxyOptions *proxy.Options
+	liveAudit    *LiveAuditState
 	// auditItems is the audit queue: what the engine decided about each item it was handed, retained
 	// so /api/scanner/audit-items can serve it. Built in NewServer rather than lazily, unlike
 	// `captures`: every audit path in this package attaches it to the AuditConfig it runs under, so a
@@ -248,6 +254,15 @@ func (s *Server) WithFindings(fs *core.FindingStore) *Server {
 // attached rather than pretending to manage one.
 func (s *Server) WithTlsPolicy(policy *proxy.TlsPolicy) *Server {
 	s.tlsPolicy = policy
+	return s
+}
+
+// WithProxyOptions attaches the proxy's live option set so the response modification rules and the
+// Accept-Encoding strip can be listed and edited at runtime. Nil (the default in tests) leaves the
+// endpoint reporting that no option set is attached rather than serving a panel whose switches
+// would do nothing — the same honesty WithTlsPolicy's nil state holds.
+func (s *Server) WithProxyOptions(options *proxy.Options) *Server {
+	s.proxyOptions = options
 	return s
 }
 
@@ -488,6 +503,7 @@ func (s *Server) setupRoutes() {
 	// Intercept (condition lists + held queue)
 	s.mux.HandleFunc("/api/intercept", s.handleIntercept)
 	s.mux.HandleFunc("/api/proxy/passthrough", s.handleTlsPassthrough)
+	s.mux.HandleFunc("/api/proxy/options", s.handleProxyOptions)
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
 	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)

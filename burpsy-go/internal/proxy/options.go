@@ -74,6 +74,18 @@ var OptionKeys = []OptionKey{
 	OptStripAcceptEncoding,
 }
 
+// KnownOption reports whether a wire-name key is one of the editable options. The
+// API's PUT validates the whole patch through this before applying any of it, so a
+// request with one bad key changes nothing.
+func KnownOption(key OptionKey) bool {
+	for _, known := range OptionKeys {
+		if known == key {
+			return true
+		}
+	}
+	return false
+}
+
 // ErrUnknownOption is returned by Set for a key that is not in OptionKeys. The
 // handler turns it into a 400 naming the key, because silently accepting an
 // unknown option is how a client ends up believing it has enabled something.
