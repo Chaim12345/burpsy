@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@cosmicstack/mercury-agent": "^1.2.2",
+    "g": "^2.0.1"
+  }
+}

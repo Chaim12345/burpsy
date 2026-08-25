@@ -17,6 +17,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/intercept"
+	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
@@ -242,11 +243,23 @@ func main() {
 		passiveScanner = scanner.NewPassiveScanner(store, logger)
 	}
 
-	// Create proxy config
+	// Create proxy config.
+	//
+	// The intercept engine and the match-and-replace rule set are both created here and handed to
+	// *both* the proxy and the web server below, each as one shared object rather than a copy. This
+	// is the same move the intercept engine already makes, and it is load-bearing for match & replace:
+	// the Match & Replace page mutates this exact RuleSet through PUT /api/tools/rules, and the proxy
+	// reads it on every request and response. Give the two sides separate RuleSets and the page would
+	// render (and persist) a list the proxy had quietly stopped honouring — which was in fact the bug,
+	// because the proxy's field was never set at all and every rule an operator edited was a
+	// live-traffic no-op. WithMatchReplace on the web server (below) must run before WithPersist, so a
+	// restored ruleset lands in this shared object.
 	interceptEngine := intercept.NewEngine()
+	matchReplaceRules := matchreplace.NewRuleSet()
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
+		WithMatchReplace(matchReplaceRules).
 		WithLogger(logger).
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
@@ -316,6 +329,10 @@ func main() {
 		// passthrough rules live: two copies would let the UI describe a list the
 		// relay no longer obeys.
 		WithTlsPolicy(tlsPolicy).
+		// The same RuleSet the proxy config holds, so an edit on the Match & Replace page reaches
+		// live traffic. Set before WithPersist (below) so a rule set restored from -db is loaded
+		// into this shared object rather than one the proxy never sees.
+		WithMatchReplace(matchReplaceRules).
 		// So /ca.crt can serve it. Read here rather than in the web server because this is where the
 		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
 		// for a client that already trusts the CA, and the operator gets told why the download is
