@@ -57,13 +57,73 @@ type AuthorisedSender struct {
 	host    string
 	port    uint16
 	tls     bool
+	pace    Pacer
 	sent    atomic.Int64
 	refused atomic.Int64
+}
+
+// Pacer bounds how fast and how concurrently sends leave this sender.
+//
+// # Why the interface lives here and the implementation does not
+//
+// The one limiter in this tree is intruder.RateLimiter, and package intruder imports this one — so
+// this package cannot import it back. An interface with a single method is the whole fix: the
+// limiter grows a Pace method of this shape (see intruder.RateLimiter.Pace) and satisfies this
+// without either package learning about the other. What must not happen is a second limiter written
+// here to avoid the import; two limiters of one shape drift, and the one that drifts is always the
+// one nobody's tests measure.
+//
+// # Why an AuthorisedSender is the right place for it
+//
+// The audit path has no driver loop. An intruder attack has one place that decides to send the next
+// request, so a limiter goes there; the scanner has dozens of checks each calling
+// ActiveScanner.probeGate(...).Send(...) directly, and there is no single line that would bound them
+// all. But every one of those calls goes through an AuthorisedSender built at one construction
+// point, which makes *this* the chokepoint — the same argument that put the scope check here.
+// Pacing and authorising are then the same unforgettable step rather than two conventions.
+type Pacer interface {
+	// Pace blocks until this send may go out, returning the function that gives the slot back. It
+	// returns an error only when ctx ends first, and on error nothing must be released — a caller
+	// that got an error never held a slot.
+	Pace(ctx context.Context) (release func(), err error)
 }
 
 // NewAuthorisedSender binds a scope gate and a raw sender to one named target.
 func NewAuthorisedSender(scope ScopeChecker, net *Sender, host string, port uint16, tls bool) *AuthorisedSender {
 	return &AuthorisedSender{scope: scope, net: net, host: host, port: port, tls: tls}
+}
+
+// WithPace bounds every send that leaves this sender by a resource pool's limits, and returns the
+// sender so it reads as one expression at the construction point.
+//
+// nil is a supported state and the default: with no pacer, `pacing` below is one nil check and every
+// code path behaves exactly as it did before this existed. That is deliberate — the repeater, the
+// session macro runner and the intruder all keep their current behaviour (the intruder because it
+// already paces itself in its driver loop, and pacing it twice would apply one pool's delay per
+// request and then again per send).
+func (a *AuthorisedSender) WithPace(p Pacer) *AuthorisedSender {
+	a.pace = p
+	return a
+}
+
+// pacing acquires this send's slot, returning a release function that is always safe to call.
+//
+// It is called *after* the scope decision and before the dial, which is the only correct order: a
+// refused request is not traffic, so it must not spend a pool's budget or wait for a slot, and a
+// pool with one concurrent request would otherwise let a stream of out-of-scope requests serialise
+// behind each other for no reason.
+func (a *AuthorisedSender) pacing(ctx context.Context) (func(), error) {
+	if a.pace == nil {
+		return func() {}, nil
+	}
+	release, err := a.pace.Pace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return func() {}, nil
+	}
+	return release, nil
 }
 
 // Send checks the request bytes against the scope, then — and only then — writes them.
@@ -86,6 +146,11 @@ func (a *AuthorisedSender) SendAs(ctx context.Context, raw []byte, pref Protocol
 		a.refused.Add(1)
 		return AuthorisedResult{}, err
 	}
+	release, err := a.pacing(ctx)
+	if err != nil {
+		return AuthorisedResult{}, err
+	}
+	defer release()
 	start := time.Now()
 	resp, outcome, err := a.net.SendRawOutcome(ctx, a.host, a.port, a.tls, raw, pref)
 	if err != nil {
@@ -136,6 +201,11 @@ func (a *AuthorisedSender) SendRequest(ctx context.Context, req *Request) (*Resp
 		a.refused.Add(1)
 		return nil, err
 	}
+	release, err := a.pacing(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	resp, err := a.net.Send(ctx, bound)
 	if err != nil {
 		return nil, err

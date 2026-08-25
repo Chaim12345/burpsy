@@ -34,6 +34,14 @@ type ActiveScanner struct {
 	// auditCfg is the budget/breaker configuration, when an operator set one explicitly. Nil defers
 	// to AuditConfig, which derives it from ScanConfig.
 	auditCfg *AuditConfig
+	// pace bounds how fast and how concurrently probes leave this scanner: a named resource pool's
+	// limits, attached to every AuthorisedSender probeGate hands out. Nil means unpaced, which is
+	// exactly what every audit did before pools existed.
+	//
+	// Note what this does *not* do: it does not bound how many items AuditSession works on at once
+	// (ScanConfig.MaxConcurrency still does), because Burp's dialog says "max concurrent requests"
+	// and an item can send many. Bounding items would let a pool of two send twenty.
+	pace sender.Pacer
 	// corpus holds the loaded BCheck corpus's active checks (given host/path/request/insertion
 	// point), dispatched by the audit engine exactly like the built-in table entries. Nil until
 	// WithCorpusChecks supplies one — a process without --bchecks audits the built-ins only, so
@@ -284,6 +292,19 @@ func (s *ActiveScanner) WithSender(snd *sender.Sender) *ActiveScanner {
 	return s
 }
 
+// WithPace bounds every probe this scanner sends by a resource pool's limits.
+//
+// Attached to the scanner rather than passed per audit because the bound has to be *shared*: two
+// concurrent audits under one pool must contend for the same in-flight slots and spend the same
+// rate budget, or the pool bounds each audit and not the target. The caller therefore builds one
+// limiter per pool and hands the same one in — see web.Server.scannerFor.
+//
+// nil clears it, and nil is the default. An audit with no pool runs exactly as it always did.
+func (s *ActiveScanner) WithPace(p sender.Pacer) *ActiveScanner {
+	s.pace = p
+	return s
+}
+
 // WithToolRunner attaches the allowlist runner `run tool` statements dispatch
 // through. Without one, corpus checks that need a tool are counted at load and
 // excluded from the dispatch set — see corpusActiveChecks. Attaching a runner
@@ -379,12 +400,18 @@ func (noEngagementScope) MayContainHost(string, uint16, bool) bool { return true
 
 // probeGate binds the engagement scope and this scanner's sender to one exchange's authority, so
 // every probe at it is authorised against the bytes it will actually put on the wire.
+//
+// It is also where a resource pool takes effect. Dozens of checks call this and then Send, and there
+// is no line above them all that could bound the traffic — but every one of them gets its sender
+// from here, so attaching the pacer at this one construction point bounds all of them. A fresh
+// AuthorisedSender per call is fine and the shared limiter is the whole point: the senders are
+// per-exchange, the bound is per-pool.
 func (s *ActiveScanner) probeGate(exchange *core.Exchange) *sender.AuthorisedSender {
 	var gate sender.ScopeChecker = noEngagementScope{}
 	if s.scope != nil {
 		gate = s.scope
 	}
-	return sender.NewAuthorisedSender(gate, s.sender, exchange.Host, exchange.Port, exchange.TLS)
+	return sender.NewAuthorisedSender(gate, s.sender, exchange.Host, exchange.Port, exchange.TLS).WithPace(s.pace)
 }
 
 // sendTestRequest dispatches a crafted test request through the sender when

@@ -178,6 +178,17 @@ func (a *AuthorisedSender) sendFrameProgram(
 		return res, fmt.Errorf("refused: this build cannot act on verdict %d", int(res.Authorisation.Verdict))
 	}
 
+	// Paced after the authorisation switch above and before the dial, matching Send: a refused
+	// program never spends a pool's budget, and a program that will go out holds its slot for the
+	// whole dial-write-read window because that window is what "in flight" means. This is a
+	// connection-level send with no driver loop above it, which is precisely the case the pacer
+	// exists for — the "Hidden HTTP 2" check reaches the wire through here and nowhere else.
+	release, err := a.pacing(ctx)
+	if err != nil {
+		return res, err
+	}
+	defer release()
+
 	conn, negotiated, err := a.dialForProgram(ctx, forceH2)
 	if err != nil {
 		return res, err
