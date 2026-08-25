@@ -70,7 +70,7 @@ func (s *ActiveScanner) JwtWeakCoverage() JwtCoverage {
 // pending exchange has no evidence in it either way, and counting it as a response examined would
 // pad the denominator behind every claim SCAN-02 makes.
 func (s *ActiveScanner) checkJWTWeak(ctx context.Context, exchange *core.Exchange) []*Finding {
-	if !s.config.CheckJwtWeak || exchange == nil || exchange.Response == nil {
+	if !s.ConfigSnapshot().CheckJwtWeak || exchange == nil || exchange.Response == nil {
 		return nil
 	}
 	_, check := s.nativeChecks()
@@ -90,7 +90,7 @@ func (s *ActiveScanner) checkJWTWeak(ctx context.Context, exchange *core.Exchang
 // checkJSVulns runs SCAN-01 over one captured exchange's response body, matching known-vulnerable
 // library versions by range arithmetic against the vendored retire.js corpus.
 func (s *ActiveScanner) checkJSVulns(ctx context.Context, exchange *core.Exchange) []*Finding {
-	if !s.config.CheckJSVulns {
+	if !s.ConfigSnapshot().CheckJSVulns {
 		return nil
 	}
 	path, contentType, body, ok := jsAssetOf(s.store, exchange)

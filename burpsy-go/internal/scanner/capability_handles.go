@@ -96,6 +96,8 @@ func (l *lazyBrowser) Close() error {
 // provider leaves the switch alone, so a process with no engine does not turn a knob that gates
 // nothing.
 func (s *ActiveScanner) WithBrowserProvider(p BrowserProvider) *ActiveScanner {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.browsers = p
 	if p != nil && s.config != nil {
 		s.config.CheckDOM = true

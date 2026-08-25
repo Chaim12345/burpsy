@@ -124,7 +124,7 @@ func (s *ActiveScanner) RenderStoredTargets(ctx context.Context) (StoredDOMRende
 	if s.stored == nil {
 		return out, fmt.Errorf("stored DOM render: no stored-input ledger, so nothing was planted to look for")
 	}
-	if !domChecksEnabled(s.config) {
+	if snap := s.ConfigSnapshot(); !domChecksEnabled(&snap) {
 		out.Declined = "DOM checks are not enabled for this scan, so no page was rendered"
 		return out, nil
 	}

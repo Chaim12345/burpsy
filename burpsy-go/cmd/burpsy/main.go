@@ -278,6 +278,20 @@ func main() {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
 
+	// Persisted scan-config overrides apply last, after the flag chain: what the operator set
+	// through /api/scanner/config in a previous run is a later decision than what this process was
+	// launched with, and it must win. A database that never saved overrides leaves the flag-built
+	// defaults untouched.
+	if persistStore != nil {
+		saved, err := persistStore.LoadScanConfig()
+		if err != nil {
+			logger.Warn("Failed to load saved scan configuration; using launch defaults", zap.Error(err))
+		} else if saved != nil {
+			activeScanner.UpdateScanConfig(func(c *scanner.ScanConfig) { *c = *saved })
+			logger.Info("Applied persisted scan-configuration overrides")
+		}
+	}
+
 	// Start web server
 	webServer := web.NewServer(store, scope).
 		WithLogger(logger).

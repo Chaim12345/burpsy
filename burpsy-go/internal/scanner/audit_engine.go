@@ -69,17 +69,21 @@ var activeCheckSet = nativeActiveCheckSet()
 // bits describe different checks for different items. That also fixes the snapshot point for the
 // corpus: a corpus loaded mid-session joins the next run, never a run already in flight.
 func (s *ActiveScanner) enabledChecks() []activeCheck {
-	if s == nil || s.config == nil {
+	if s == nil {
 		return nil
 	}
-	out := make([]activeCheck, 0, len(activeCheckSet)+len(s.corpus))
+	cfg := s.ConfigSnapshot()
+	s.mu.RLock()
+	corpus := s.corpus
+	s.mu.RUnlock()
+	out := make([]activeCheck, 0, len(activeCheckSet)+len(corpus))
 	for _, c := range activeCheckSet {
-		if c.enabled(s.config) {
+		if c.enabled(&cfg) {
 			out = append(out, c)
 		}
 	}
-	if s.config.CheckCorpus {
-		out = append(out, s.corpusActiveChecks()...)
+	if cfg.CheckCorpus {
+		out = append(out, s.corpusActiveChecks(corpus)...)
 	}
 	return out
 }
@@ -535,8 +539,9 @@ func (s *ActiveScanner) AuditConfig() AuditConfig {
 		return *s.auditCfg
 	}
 	cfg := DefaultAuditConfig()
-	if s.config != nil && s.config.Timeout > 0 {
-		cfg.TimeBudget = s.config.Timeout
+	snap := s.ConfigSnapshot()
+	if snap.Timeout > 0 {
+		cfg.TimeBudget = snap.Timeout
 	}
 	return cfg
 }
@@ -612,8 +617,8 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 	var paused atomic.Bool
 
 	workers := 1
-	if s.config != nil && s.config.MaxConcurrency > 1 {
-		workers = s.config.MaxConcurrency
+	if snap := s.ConfigSnapshot(); snap.MaxConcurrency > 1 {
+		workers = snap.MaxConcurrency
 		if workers > len(exchangeIDs) {
 			workers = len(exchangeIDs)
 		}

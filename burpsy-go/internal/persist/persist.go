@@ -20,6 +20,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/organizer"
+	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"go.uber.org/zap"
@@ -1196,6 +1197,32 @@ func (s *Store) LoadTlsPassthrough() ([]string, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// SaveScanConfig persists the scan-configuration overrides as one settings value. Same reasoning
+// as SaveTlsPassthrough: one small JSON blob with no per-row identity, saved whole by the web
+// endpoint after every edit so the durable copy cannot drift from what the running scanner obeys.
+func (s *Store) SaveScanConfig(cfg scanner.ScanConfig) error {
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("scanconfig.overrides", string(encoded))
+}
+
+// LoadScanConfig restores the persisted overrides. Absence of state yields a nil config and no
+// error — an old database simply means "use NewActiveScanner's defaults", and a nil lets the
+// caller skip the apply instead of clobbering those defaults with a zero struct.
+func (s *Store) LoadScanConfig() (*scanner.ScanConfig, error) {
+	v, err := s.getSetting("scanconfig.overrides")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	cfg := &scanner.ScanConfig{}
+	if err := json.Unmarshal([]byte(v), cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
 // ---- Restore -----------------------------------------------------------------------------------

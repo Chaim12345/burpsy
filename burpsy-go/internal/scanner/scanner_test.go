@@ -124,3 +124,23 @@ func TestAuditFallsBackToStoredResponse(t *testing.T) {
 		t.Errorf("finding = %q, want the catalog row name %q", findings[0].Name, "File path traversal")
 	}
 }
+
+// A runtime config edit lands atomically from a concurrent dispatcher's point of view: the count
+// is read through the same snapshot discipline the audit uses, so this fails under -race if any
+// reader reaches straight into s.config while PUT /api/scanner/config writes.
+func TestRuntimeConfigEditIsAtomicAgainstTheDispatchCount(t *testing.T) {
+	s := NewActiveScanner(core.NewTrafficStore(), zap.NewNop())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2000; i++ {
+			s.UpdateScanConfig(func(c *ScanConfig) { c.CheckXXE = i%2 == 0 })
+			_ = s.ActiveCheckCount()
+		}
+	}()
+	for i := 0; i < 2000; i++ {
+		_ = s.ConfigSnapshot()
+		_ = s.ActiveCheckCount()
+	}
+	<-done
+}

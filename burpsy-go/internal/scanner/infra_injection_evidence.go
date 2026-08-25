@@ -26,19 +26,19 @@ const (
 	// baseline already carried the discriminator, or the timing was too noisy. It is
 	// NOT a clean result.
 	//
-	// KNOWN GAP, stated because it is load-bearing for how much this type is worth: nothing
-	// currently HONOURS that sentence. BestEvidence returns confirmed=false for Inconclusive, and
-	// every caller then does `if !res.confirmed { return nil, nil }` — so a probe that could not be
-	// judged is reported identically to a target that is clean. `res.coverage.Inconclusive` is
-	// rendered only inside buildInjectionFinding, i.e. only once something ELSE already confirmed,
-	// which is exactly the case where it does not matter.
+	// This used to be silence, and the distinction was worth nothing: BestEvidence returns
+	// confirmed=false for Inconclusive, every caller then did `if !res.confirmed { return nil, nil }`,
+	// and res.coverage.Inconclusive was rendered only inside buildInjectionFinding — i.e. only once
+	// something ELSE had already confirmed, which is exactly the case where it does not matter. A
+	// probe that could not be judged was reported identically to a target that is clean.
 	//
-	// The consequence: an Inconclusive verdict is silence, not a caveat. Any argument that some
-	// conservative choice "only downgrades a finding to Inconclusive" is therefore an argument that
-	// it downgrades the finding to nothing. Closing this needs the count surfaced on the no-finding
-	// path — an AuditOutcome field for unmeasurable probes, or an informational finding naming the
-	// endpoint and the reason — and until then the honest reading of a clean injection result is
-	// "no confirmation", not "not vulnerable".
+	// It is now carried all the way out. injectionResult.unresolved wraps errCheckInconclusive
+	// (bcheck_runner.go), the audit engine counts that as Ran plus Unmeasurable rather than as a
+	// failure — so the breaker does not trip on it — and AuditOutcome.Summary renders
+	// "N check(s) undecided, not clean". The tests holding this in place are
+	// TestAPoisonedBaselineReportsUndecidedRatherThanClean (infra_injection_test.go) and
+	// TestADeferredStoredClaimIsCountedUndecidedNotFailed (stored_lifecycle_test.go). So a clean
+	// injection result now means "probes ran and found nothing", and an undecided one says so.
 	InjectionEvidenceInconclusive
 	// InjectionEvidenceErrorSignature means an error the baseline did not produce.
 	InjectionEvidenceErrorSignature

@@ -40,8 +40,8 @@ func sendProbe(ctx context.Context, gate probeGate, raw []byte, budget time.Dura
 // probeBudgetFor reads the per-probe timeout from the scanner's config, returning
 // zero (inherit the audit deadline) when config is unset.
 func probeBudgetFor(s *ActiveScanner) time.Duration {
-	if s == nil || s.config == nil {
+	if s == nil {
 		return 0
 	}
-	return s.config.ProbeTimeout
+	return s.ConfigSnapshot().ProbeTimeout
 }

@@ -20,6 +20,10 @@ import (
 
 // ActiveScanner performs active security scanning.
 type ActiveScanner struct {
+	// mu guards config and corpus. Both are read on every audit's dispatch path and, since the
+	// scan configuration became runtime-editable, written from the web layer while audits run —
+	// readers take a value snapshot so a mid-audit edit is atomic from the check's point of view.
+	mu     sync.RWMutex
 	store  *core.TrafficStore
 	logger *zap.Logger
 	config *ScanConfig
@@ -224,15 +228,53 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 			CheckPathTraversal: true,
 			CheckSSRF:          true,
 			CheckXXE:           false,
+			// Passive families default ON: they are network-free response analysis, which is what
+			// "passive scanning" means in Burp and what an operator expects a scanner to do without
+			// being asked. Every one stays switchable at runtime via /api/scanner/config.
+			CheckHeaders:         true,
+			CheckPassivePosture:  true,
+			CheckPassiveAnalysis: true,
+			CheckHostDiscovery:   true,
 		},
 		findings: make([]*Finding, 0),
 	}
 }
 
-// WithConfig sets the scan configuration.
+// WithConfig sets the scan configuration. The pointer is installed under the config lock; after
+// this call the scanner owns mutation discipline for the struct, so callers must treat their
+// ScanConfig as handed over rather than as a live handle to keep editing.
 func (s *ActiveScanner) WithConfig(config *ScanConfig) *ActiveScanner {
+	s.mu.Lock()
 	s.config = config
+	s.mu.Unlock()
 	return s
+}
+
+// ConfigSnapshot returns a value copy of the scan configuration, taken atomically. Readers that
+// want a stable view across a long audit take one snapshot at entry instead of re-reading fields
+// that an operator may be flipping underneath them.
+func (s *ActiveScanner) ConfigSnapshot() ScanConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.config == nil {
+		return ScanConfig{}
+	}
+	return *s.config
+}
+
+// UpdateScanConfig applies fn to the live configuration under the write lock and returns the
+// confirmed result. This is the runtime door /api/scanner/config PUT walks through; fn mutates
+// the pointed-to struct directly and validation belongs to the caller that decoded the request.
+func (s *ActiveScanner) UpdateScanConfig(fn func(*ScanConfig)) ScanConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.config == nil {
+		fn(&ScanConfig{})
+		s.config = &ScanConfig{}
+		return *s.config
+	}
+	fn(s.config)
+	return *s.config
 }
 
 // WithSender sets the HTTP sender used to dispatch test requests.
@@ -261,10 +303,12 @@ func (s *ActiveScanner) WithToolRunner(r bcheck.ToolRunner) *ActiveScanner {
 // The checks come from the same LoadDir that built the passive scanner — the audit engine and
 // the passive scanner must never disagree about which corpus is loaded.
 func (s *ActiveScanner) WithCorpusChecks(checks []*bcheck.Check) *ActiveScanner {
+	s.mu.Lock()
 	s.corpus = checks
 	if s.config != nil && len(checks) > 0 {
 		s.config.CheckCorpus = true
 	}
+	s.mu.Unlock()
 	return s
 }
 
