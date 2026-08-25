@@ -67,6 +67,17 @@ type Server struct {
 	// crawls retains recent crawl reports, keyed by the task id that produced them, so the dashboard
 	// row and the coverage report are one identity rather than two numbers to correlate by hand.
 	crawls *crawlRuns
+	// discoveries retains recent content-discovery runs, keyed by task id for the same reason crawls
+	// are — see api_discovery.go.
+	discoveries *discoveryRuns
+	// externalTools is the operator's -tools allowlist, the one that also gates `run tool` bchecks.
+	// Nil means external delegation is off, and /api/discovery refuses and says which name is missing
+	// rather than answering with an empty result. The server never builds one: which binary may be
+	// executed against a client's system is operator policy, like the corpus.
+	externalTools map[string]string
+	// blindxss is the blind-XSS callback channel, or nil when none was configured. Nil is a supported
+	// state and is reported as such — see api_blindxss.go on why an empty hit list is not an answer.
+	blindxss *blindXSSChannel
 	// events is the DASH-02 event log: what the tool *did*, as opposed to toolLog's what-it-*sent*.
 	// Two logs because they count different things — see internal/dash/events.go.
 	events *dash.EventLog
@@ -110,6 +121,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		intercept:          intercept.NewEngine(),
 		tasks:              dash.NewRegistry(),
 		crawls:             newCrawlRuns(),
+		discoveries:        newDiscoveryRuns(),
 		events:             dash.NewEventLog(),
 		live:               newEventHub(),
 	}
@@ -177,6 +189,20 @@ func (s *Server) WithSender(snd *sender.Sender) *Server {
 // corpus itself.
 func (s *Server) WithToolRunner(r bcheck.ToolRunner) *Server {
 	s.toolRunner = r
+	return s
+}
+
+// WithExternalTools attaches the operator's -tools allowlist, as the raw name=path map, for the
+// surfaces that delegate a whole phase to an external binary rather than running one per insertion
+// point — today /api/discovery and its `ffuf`.
+//
+// It is the same map WithToolRunner's runner was built from, and it is passed separately rather than
+// read back out of the runner because the two consume it differently: bcheck.ToolRunner is an
+// interface that resolves a name per statement, while extscan.Config wants the map itself so it can
+// answer "could this tool run at all" before any work is registered. Passing nil (no -tools) leaves
+// delegation off and the route reporting which name is missing.
+func (s *Server) WithExternalTools(tools map[string]string) *Server {
+	s.externalTools = tools
 	return s
 }
 
@@ -436,6 +462,16 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
 	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
 	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
+	// Content discovery: Burp's "Discover content" engagement tool, delegated to ffuf. Registered
+	// beside the crawl because they answer the same operator question from opposite ends — a crawl
+	// follows what the application links to, a sweep guesses what it does not.
+	s.mux.HandleFunc("/api/discovery", s.handleDiscovery)
+
+	// The blind-XSS callback channel: the listener's state, and minting a correlation payload to plant.
+	// Two patterns because they are two operations, and the mint is a POST because it changes what the
+	// listener will answer for.
+	s.mux.HandleFunc("/api/blindxss", s.handleBlindXSS)
+	s.mux.HandleFunc("/api/blindxss/payload", s.handleBlindXSSPayload)
 
 	// Dashboard: running tasks, the activity log, and every summary count with its
 	// found/skipped/errored/gated breakdown.

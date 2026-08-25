@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/blindxss"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/intercept"
@@ -43,7 +44,17 @@ func main() {
 	// Tool execution is operator policy because it runs arbitrary external binaries.
 	// The same allowlist also gates `burpsy extscan`, which delegates a whole scan phase to ffuf or
 	// nuclei rather than running a tool per insertion point. One flag, one policy decision.
-	toolsFlag := flag.String("tools", "", "allowlist external tools for `run tool` bchecks and for `extscan`: sqlmap=/usr/bin/sqlmap,ffuf=ffuf,nuclei=nuclei (comma-separated name=path)")
+	// The same allowlist also gates POST /api/discovery, which is `extscan`'s ffuf phase reached from
+	// the console's site map instead of from the command line. One flag, one policy decision, whichever
+	// surface asks.
+	toolsFlag := flag.String("tools", "", "allowlist external tools for `run tool` bchecks, `extscan` and /api/discovery: sqlmap=/usr/bin/sqlmap,ffuf=ffuf,nuclei=nuclei (comma-separated name=path)")
+	// The blind-XSS callback channel. Off unless an address is given, because binding a socket that a
+	// third party's browser is expected to reach is an engagement decision and not a default: the
+	// payload runs in a real person's session, and the only thing that justifies it is that somebody
+	// deliberately set this up. With no address the /api/blindxss surface reports that it is unwired
+	// rather than answering with an empty callback list.
+	blindXSSBind := flag.String("blindxss", "", "bind a blind-XSS callback listener on this address (e.g. 0.0.0.0:8088); off when empty")
+	blindXSSURL := flag.String("blindxss-url", "", "the externally reachable origin planted blind-XSS payloads load from, when it differs from -blindxss (e.g. http://collab.example.net:8088)")
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
@@ -305,6 +316,15 @@ func main() {
 		}
 	}
 
+	// The blind-XSS callback channel, bound before the web server so the API can report either the live
+	// listener or the reason there is none. A bind failure is deliberately not fatal: everything else
+	// this process does still works, and the honest outcome is a surface that says "no channel, because
+	// X" rather than a refusal to start.
+	blindXSSListener, blindXSSErr := startBlindXSS(ctx, *blindXSSBind, *blindXSSURL, logger)
+	if blindXSSListener != nil {
+		defer blindXSSListener.Close()
+	}
+
 	// Start web server
 	webServer := web.NewServer(store, scope).
 		WithLogger(logger).
@@ -333,6 +353,15 @@ func main() {
 		// live traffic. Set before WithPersist (below) so a rule set restored from -db is loaded
 		// into this shared object rather than one the proxy never sees.
 		WithMatchReplace(matchReplaceRules).
+		// The raw -tools map, for the surfaces that delegate a whole phase to an external binary rather
+		// than one tool per insertion point: POST /api/discovery runs ffuf. Without -tools that route
+		// refuses and names the missing tool, which is the difference between "not configured" and "this
+		// target has nothing to find".
+		WithExternalTools(toolAllowlist).
+		// The blind-XSS callback channel, or the reason there is none. Both arguments carry information:
+		// a bind failure must reach the API as a reason, because an endpoint that answered with an empty
+		// callback list would be claiming it listened.
+		WithBlindXSS(blindXSSListener, blindXSSErr).
 		// So /ca.crt can serve it. Read here rather than in the web server because this is where the
 		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
 		// for a client that already trusts the CA, and the operator gets told why the download is
@@ -451,6 +480,47 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 			name, len(scanner.BuiltInConfigs))
 	}
 	return preset.Apply(base), nil
+}
+
+// startBlindXSS binds the blind-XSS callback listener, or explains why it could not.
+//
+// Three outcomes, and all three are reported rather than two of them collapsing: no address is
+// (nil, nil) — the channel was never asked for; a bind failure is (nil, err) — it was asked for and
+// could not be had; success is (listener, nil). The web server turns each into a different sentence at
+// /api/blindxss, which is the whole point: an endpoint that answered with an empty callback list in
+// any of the first two cases would be claiming it listened and heard nothing.
+//
+// The failure is logged and returned rather than fatal. internal/blindxss states the contract as "a
+// caller MUST surface a bind failure and MUST NOT report a clean result" — surfacing it is what this
+// does, and taking the whole process down over an auxiliary listener would be a worse answer than a
+// proxy that runs with one capability visibly unavailable.
+func startBlindXSS(ctx context.Context, bind, baseURL string, logger *zap.Logger) (*blindxss.Listener, error) {
+	bind = strings.TrimSpace(bind)
+	if bind == "" {
+		if strings.TrimSpace(baseURL) != "" {
+			// A base URL with nothing bound is a configuration mistake worth naming: the operator
+			// described where payloads should call home to and never opened the socket.
+			logger.Warn("-blindxss-url was given without -blindxss, so no callback listener was bound",
+				zap.String("url", baseURL))
+		}
+		return nil, nil
+	}
+	listener, err := blindxss.NewListener(ctx, blindxss.Options{Addr: bind, BaseURL: baseURL})
+	if err != nil {
+		logger.Warn("blind-XSS callback listener could not bind, so /api/blindxss will report the "+
+			"channel as unavailable rather than as quiet", zap.String("addr", bind), zap.Error(err))
+		return nil, err
+	}
+	logger.Info("blind-XSS callback listener bound",
+		zap.String("addr", listener.Addr().String()), zap.String("base_url", listener.BaseURL()))
+	if strings.TrimSpace(baseURL) == "" {
+		// Worth a line, because it is the difference between a channel that works on an engagement and
+		// one that only works from this host. internal/blindxss documents the same caveat.
+		logger.Warn("no -blindxss-url was given, so planted payloads will name this host's own bound "+
+			"address; set it whenever the rendering browser reaches this listener by another address",
+			zap.String("base_url", listener.BaseURL()))
+	}
+	return listener, nil
 }
 
 // readCACert reads the CA certificate the proxy signs with, for the web server to serve at /ca.crt.
