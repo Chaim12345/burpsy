@@ -78,6 +78,9 @@ type NucleiResult struct {
 	Outcome Outcome
 	Target  Target
 	Hits    []TemplateHit
+	// OutOfScope counts hits the engagement scope does not authorise, dropped from
+	// Hits and counted here for the same reason FFUFResult.OutOfScope is.
+	OutOfScope int
 	// Err explains every outcome but OutcomeCompleted, and is nil for that one.
 	Err error
 	// Command is the argv actually executed.
@@ -191,7 +194,7 @@ func RunNuclei(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Ta
 		}
 	}
 
-	res.Hits = filterHitsInScope(scope, target, hits)
+	res.Hits, res.OutOfScope = filterHitsInScope(scope, target, hits)
 	res.Outcome = OutcomeCompleted
 	return res
 }
@@ -265,17 +268,19 @@ func hitOf(rec nucleiRecord) TemplateHit {
 // filterHitsInScope drops any hit whose path the scope does not authorise, for
 // the same reason RunFFUF filters discoveries: a template that wandered outside
 // the engagement must not report as though burpsy meant to go there.
-func filterHitsInScope(scope ScopeAuthoriser, target Target, in []TemplateHit) []TemplateHit {
+func filterHitsInScope(scope ScopeAuthoriser, target Target, in []TemplateHit) (kept []TemplateHit, dropped int) {
 	if scope == nil {
-		return nil
+		return nil, len(in)
 	}
 	out := make([]TemplateHit, 0, len(in))
 	for _, h := range in {
 		if scope.Contains(target.Host, target.Port, h.Path, target.IsTLS) {
 			out = append(out, h)
+			continue
 		}
+		dropped++
 	}
-	return out
+	return out, dropped
 }
 
 // MapSeverity translates nuclei's severity string into burpsy's own severity

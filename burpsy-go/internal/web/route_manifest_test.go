@@ -114,6 +114,24 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack, subPath: "0",
 		summary: "run an active audit over one captured exchange, by id (0 is valid — see HONEST-05)",
 	},
+	"/api/blindxss": {
+		// riskCredential, not riskRead, and the classification is the interesting part. A blind-XSS
+		// callback carries `document.cookie` as the victim's browser saw it — a session token belonging
+		// to someone who is very often not the engagement's subject. That is the definition of this
+		// class ("the output is secret, not the call dangerous"), and reading it as riskRead would let an
+		// unattended caller pull third-party session material without confirming.
+		methods: []string{"GET"}, risk: riskCredential,
+		summary: "the blind-XSS channel: whether it is listening and why not, every payload minted " +
+			"through it, and the callbacks recorded against them",
+	},
+	"/api/blindxss/payload": {
+		// Local: minting a token changes what the listener will answer for and sends nothing outbound.
+		// The traffic a payload eventually causes comes from a victim's browser, not from here — which
+		// is exactly why the response states that an unfired payload is outstanding rather than clean.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "mint one blind-XSS correlation payload to plant: the token, the script URL and the " +
+			"script tag carrying it",
+	},
 	"/api/crawl": {
 		// GET reports the last crawl's coverage report; POST starts one.
 		methods: []string{"GET", "POST"}, risk: riskAttack,
@@ -122,6 +140,15 @@ var manifest = map[string]route{
 	"/api/dashboard": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "running tasks, the activity log, and every coverage summary with its breakdown",
+	},
+	"/api/discovery": {
+		// riskAttack for the same reason /api/crawl is: a POST hands a wordlist to ffuf, which then
+		// sends one request per word — unbounded traffic at the target, chosen by a file rather than by
+		// the caller. The GET is a read, but the manifest classifies a pattern and the stronger of the
+		// two verbs is the one an unattended caller has to confirm.
+		methods: []string{"GET", "POST"}, risk: riskAttack,
+		summary: "GET: the ffuf allowlist state and the retained discovery runs. POST: sweep a host's " +
+			"path space with a wordlist (Burp's \"Discover content\")",
 	},
 	"/api/events": {
 		methods: []string{"GET"}, risk: riskRead,
@@ -571,12 +598,16 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	sort.Strings(destructive)
 
 	wantAttack := []string{
-		"/api/audit/", "/api/crawl", "/api/intruder/run", "/api/scanner/audit",
+		"/api/audit/", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
 		"/api/scanner/live", "/api/sequencer/capture",
 	}
 	wantScope := []string{"/api/scope"}
+	// /api/blindxss is in this class because a callback carries the victim browser's `document.cookie`.
+	// It is the first entry here whose secret is not a credential burpsy holds but a third party's,
+	// which is a stronger reason to require confirmation rather than a weaker one.
 	wantCredential := []string{
-		"/api/session/cookies", "/api/session/login", "/api/session/rules", "/api/session/rules/",
+		"/api/blindxss", "/api/session/cookies", "/api/session/login", "/api/session/rules",
+		"/api/session/rules/",
 	}
 	equal := func(name string, got, want []string) {
 		if strings.Join(got, " ") != strings.Join(want, " ") {

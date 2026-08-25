@@ -94,6 +94,12 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 		rows = append(rows, ffufRows...)
 		fmt.Fprintf(ctx.out, "ffuf: %d path(s) discovered, %d report row(s)\n",
 			len(res.Discoveries), len(ffufRows))
+		// Printed rather than left implicit in a shrunken count: a run that found
+		// forty paths and dropped thirty-nine of them as out of engagement reads
+		// identically to one that found one, unless the drop is stated.
+		if res.OutOfScope > 0 {
+			fmt.Fprintf(ctx.out, "ffuf: %d reported path(s) dropped as outside the engagement scope\n", res.OutOfScope)
+		}
 	}
 
 	if sub == "nuclei" || sub == "all" {
@@ -121,6 +127,9 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 		nucleiRows := res.Rows()
 		rows = append(rows, nucleiRows...)
 		fmt.Fprintf(ctx.out, "nuclei: %d template hit(s), %d report row(s)\n", len(res.Hits), len(nucleiRows))
+		if res.OutOfScope > 0 {
+			fmt.Fprintf(ctx.out, "nuclei: %d reported hit(s) dropped as outside the engagement scope\n", res.OutOfScope)
+		}
 	}
 
 	// The runners cannot number their own rows: neither knows the other ran, and

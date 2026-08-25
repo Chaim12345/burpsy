@@ -62,6 +62,15 @@ type FFUFResult struct {
 	Outcome     Outcome
 	Target      Target
 	Discoveries []Discovery
+	// OutOfScope counts paths ffuf reported that the engagement scope does not
+	// authorise, and which were therefore dropped from Discoveries.
+	//
+	// Counted rather than merely dropped: len(Discoveries) is then a count of what
+	// this run is willing to report, and OutOfScope is what it declined to, so the
+	// two together account for everything the tool said. A silent filter would let
+	// a run that discarded forty paths render identically to one that found forty
+	// fewer, which is the exact collapse Outcome exists to prevent one level up.
+	OutOfScope int
 	// Err explains every outcome but OutcomeCompleted, and is nil for that one.
 	Err error
 	// Command is the argv actually executed, for the provenance a delegated
@@ -185,7 +194,7 @@ func RunFFUF(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Targ
 	// The requests are already sent by this point — that is the cost of
 	// delegation, and Authorise is what keeps it bounded — but a result outside
 	// the engagement must not enter a report as though burpsy meant to fetch it.
-	res.Discoveries = filterInScope(scope, target, discoveries)
+	res.Discoveries, res.OutOfScope = filterInScope(scope, target, discoveries)
 	res.Outcome = OutcomeCompleted
 	return res
 }
@@ -214,18 +223,23 @@ func parseFFUF(doc []byte) ([]Discovery, error) {
 	return discoveries, nil
 }
 
-// filterInScope drops any discovery whose path the scope does not authorise.
-func filterInScope(scope ScopeAuthoriser, target Target, in []Discovery) []Discovery {
+// filterInScope drops any discovery whose path the scope does not authorise, and
+// returns how many it dropped so the caller can report the drop instead of the
+// count quietly shrinking. A nil scope authorises nothing, so everything is
+// dropped and the whole set is reported as such.
+func filterInScope(scope ScopeAuthoriser, target Target, in []Discovery) (kept []Discovery, dropped int) {
 	if scope == nil {
-		return nil
+		return nil, len(in)
 	}
 	out := make([]Discovery, 0, len(in))
 	for _, d := range in {
 		if scope.Contains(target.Host, target.Port, d.Path, target.IsTLS) {
 			out = append(out, d)
+			continue
 		}
+		dropped++
 	}
-	return out
+	return out, dropped
 }
 
 // Rows renders the run as report rows.

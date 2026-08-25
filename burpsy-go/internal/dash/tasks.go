@@ -53,6 +53,10 @@ const (
 	// KindCrawl is one crawl from a seed URL. Named here rather than in the crawler so the crawler
 	// depends on this package and not the other way round.
 	KindCrawl Kind = "crawl"
+	// KindDiscovery is one content-discovery sweep delegated to an external tool (ffuf). Named here
+	// for the same reason KindCrawl is: internal/extscan is a leaf that knows nothing about this
+	// registry, and the web handler that drives it should not have to invent a kind string.
+	KindDiscovery Kind = "discovery"
 	// KindSequencerCapture is one sequencer capture: N requests sent to accumulate N session tokens.
 	// The first consumer of Handle.WithCancel, because "stop the capture" is a button an operator
 	// reaches for and the route behind it used to answer `{"stopped": true}` without a loop to stop.
