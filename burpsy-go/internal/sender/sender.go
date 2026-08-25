@@ -2,6 +2,7 @@
 package sender
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -11,22 +12,32 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
-	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // Sender handles HTTP request sending.
 type Sender struct {
+	// mu guards client, config and net together, because they are one decision: the transport is built
+	// from the other two, so a reader that saw a new setting and an old client would dial with a
+	// timeout nothing configured.
+	//
+	// It also fixes a race that was already here. WithTimeout and WithTLSVerify mutated
+	// client.Timeout and the transport's TLSClientConfig in place, which is a data race against any
+	// concurrent Send — and the fields they wrote are exactly the ones the settings surface now
+	// changes at runtime, so leaving them unguarded would have turned a latent race into a routine one.
+	mu     sync.RWMutex
 	client *http.Client
 	config *SenderConfig
+	net    NetworkSettings
 	// protocols is what this sender has learnt about each authority's ALPN, plus the protocol-coverage
 	// counters. One per Sender rather than one per authority handle, so an intruder run and the scan
-	// that preceded it share what either of them discovered — see protocol.go.
+	// that preceded it share what either of them discovered — see protocol.go. Its own state is
+	// atomic, so it is deliberately outside mu.
 	protocols *ProtocolCache
 }
 
@@ -82,17 +93,67 @@ func NewSender(config *SenderConfig) *Sender {
 	if config == nil {
 		config = DefaultSenderConfig()
 	}
+	settings := networkFromConfig(config)
+	return &Sender{
+		client:    buildClient(config, settings),
+		config:    config,
+		net:       settings,
+		protocols: newProtocolCache(),
+	}
+}
 
+// networkFromConfig derives the starting network settings from a SenderConfig, so every existing caller
+// keeps the behaviour it had before these settings existed.
+//
+// SenderConfig.Timeout becomes the total bound, because that is what it was: it set both the client
+// timeout and the dialer timeout, and the client timeout is the one that bounded the exchange.
+//
+// # Connect gets 10s, and that is a deliberate change
+//
+// Two literals disagreed about the connect bound. The transport's DialContext used config.Timeout
+// (30 seconds by default) while its TLSHandshakeTimeout was 10 seconds, so a plaintext dial had three
+// times the budget of a TLS handshake for no stated reason. A single named setting has to pick one, and
+// 10s is the right pick: a TCP connect that has not completed in ten seconds is not going to, and the
+// tighter of two accidental values is the one that was actually deliberate. The alternative — taking
+// the looser 30s — would have widened a bound nobody asked to widen in order to avoid admitting the
+// literals disagreed.
+//
+// A caller that asked for a *shorter* total than that keeps it: clamping connect down to the total is
+// what preserves `&SenderConfig{Timeout: 3 * time.Second}` meaning a three-second dial, which is what
+// several tests rely on.
+func networkFromConfig(config *SenderConfig) NetworkSettings {
+	settings := DefaultNetworkSettings()
+	total := int(config.Timeout / time.Millisecond)
+	settings.Timeouts.TotalMS = total
+	if total > 0 && settings.Timeouts.ConnectMS > total {
+		settings.Timeouts.ConnectMS = total
+	}
+	return settings
+}
+
+// buildClient builds the typed path's http.Client for one (config, settings) pair.
+//
+// Split out of NewSender because ApplyNetwork has to build a new one: http.Transport's timeouts are
+// read when a connection is established rather than on every request, so mutating the live transport's
+// fields would both race with in-flight sends and leave already-idle connections on the old values. A
+// fresh transport per settings change costs one connection pool, which is the honest price of a
+// timeout change that actually takes effect.
+func buildClient(config *SenderConfig, settings NetworkSettings) *http.Client {
 	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   config.Timeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		// The dial is wrapped rather than handed over so the hostname-resolution table applies to the
+		// typed path too. The transport hands us the address it computed from the URL; we substitute
+		// only the host part, which leaves the TLS ServerName the transport derived from that same URL
+		// untouched — the override is meant to change where the request goes, never which vhost it
+		// asks for.
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return settings.dialer().DialContext(ctx, network, settings.overrideAddr(addr))
+		},
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
+		TLSHandshakeTimeout:   time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
+		ResponseHeaderTimeout: time.Duration(settings.Timeouts.ReadMS) * time.Millisecond,
+		ExpectContinueTimeout: time.Duration(settings.Continue.ExpectTimeoutMS) * time.Millisecond,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: !config.TLSVerify,
 		},
@@ -112,17 +173,59 @@ func NewSender(config *SenderConfig) *Sender {
 		}
 	}
 
-	return &Sender{
-		client: &http.Client{
-			Transport: transport,
-			Timeout:   config.Timeout,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+	return &http.Client{
+		Transport: transport,
+		Timeout:   settings.exchangeTimeout(),
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
-		config:    config,
-		protocols: newProtocolCache(),
 	}
+}
+
+// Network reports the settings this sender is currently applying.
+func (s *Sender) Network() NetworkSettings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.net
+}
+
+// ApplyNetwork installs new network settings and rebuilds the typed path's transport for them.
+//
+// It validates first and changes nothing on refusal: a half-applied settings document — the new
+// timeouts in force and the new resolution table not, say — is a state no operator asked for and none
+// could diagnose. Sends already in flight finish on the old client, which is the only coherent
+// answer for a request whose dial already happened under the old rules.
+func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
+	normalised := settings.Normalise()
+	if err := normalised.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.net = normalised
+	s.client = buildClient(s.config, normalised)
+	return nil
+}
+
+// httpClient returns the client to send one typed request with.
+func (s *Sender) httpClient() *http.Client {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.client
+}
+
+// tlsVerify reports whether certificate verification is on, under the lock that guards config.
+func (s *Sender) tlsVerify() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.TLSVerify
+}
+
+// userAgent is the User-Agent header a request with none of its own is given.
+func (s *Sender) userAgent() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.UserAgent
 }
 
 // Protocols reports which protocol carried this sender's sends, why the HTTP/1.1 ones did, and what is
@@ -166,9 +269,19 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 // dialTLS opens one TLS connection with the given ALPN offer, through the shared negotiation logic the
 // proxy's upstream leg uses. Certificate verification follows SenderConfig.TLSVerify, unlike the proxy's
 // leg — see internal/alpn.
+//
+// The two arguments alpn.Dialer.Dial takes for what looks like one thing are why the hostname-resolution
+// table can work at all on TLS: serverName stays the host the operator named, so SNI and certificate
+// verification are still about that name, while addr is where the bytes go. An override that rewrote
+// both would test whatever the address serves by default instead of the vhost under test.
 func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string) (*tls.Conn, string, error) {
-	dialer := alpn.Dialer{InsecureSkipVerify: !s.config.TLSVerify, Timeout: s.config.Timeout}
-	return dialer.Dial(ctx, host, net.JoinHostPort(host, strconv.Itoa(int(port))), offer)
+	settings := s.Network()
+	dialer := alpn.Dialer{
+		InsecureSkipVerify: !s.tlsVerify(),
+		Timeout:            time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
+		Resolver:           settings.Resolution.resolver(),
+	}
+	return dialer.Dial(ctx, host, settings.dialAddress(host, port), offer)
 }
 
 // Request represents a raw HTTP request.
@@ -251,10 +364,17 @@ func (s *Sender) Render(req *Request) ([]byte, error) {
 		host = target.Host
 	}
 
+	dropExpect := s.Network().Continue.RemoveExpect
 	headers := make(map[string]string, len(req.Headers)+1)
 	haveUserAgent := false
 	for k, v := range req.Headers {
 		if strings.EqualFold(k, "Host") {
+			continue
+		}
+		// Dropped here as well as in Send, so the rendered bytes the scope gate reads are the bytes the
+		// transport will write. A header stripped on only one of the two paths is how a gate comes to
+		// authorise a request that is not the one sent.
+		if dropExpect && strings.EqualFold(k, "Expect") {
 			continue
 		}
 		if strings.EqualFold(k, "User-Agent") {
@@ -262,10 +382,10 @@ func (s *Sender) Render(req *Request) ([]byte, error) {
 		}
 		headers[k] = v
 	}
-	if !haveUserAgent && s.config.UserAgent != "" {
+	if agent := s.userAgent(); !haveUserAgent && agent != "" {
 		// Mirrors what Send fills in, so the rendered request is the one that would be sent rather
 		// than one header short of it.
-		headers["User-Agent"] = s.config.UserAgent
+		headers["User-Agent"] = agent
 	}
 	names := make([]string, 0, len(headers))
 	for k := range headers {
@@ -318,10 +438,19 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	if httpReq.Header.Get("User-Agent") == "" {
-		httpReq.Header.Set("User-Agent", s.config.UserAgent)
+		httpReq.Header.Set("User-Agent", s.userAgent())
 	}
 
-	httpResp, err := s.client.Do(httpReq)
+	// The typed path is the one place a request header is removed on the operator's instruction, and
+	// only here: the raw path carries the operator's own bytes, and stripping a header out of those
+	// would be this package editing a probe it was asked to send verbatim. A peer that stalls on
+	// Expect: 100-continue is what the setting is for, and a caller who wants that behaviour on raw
+	// bytes edits the bytes.
+	if s.Network().Continue.RemoveExpect {
+		httpReq.Header.Del("Expect")
+	}
+
+	httpResp, err := s.httpClient().Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -463,7 +592,7 @@ func (s *Sender) SendRawOutcome(
 	}
 
 	if plan.wantH2 && negotiated == alpn.H2 {
-		s.setDeadline(ctx, conn)
+		s.setDeadline(ctx, conn, host)
 		resp, err := sendOverH2(ctx, conn, plan.http2)
 		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), err)
 		return resp, out, err
@@ -485,7 +614,7 @@ func (s *Sender) SendRawOutcome(
 			}
 		}
 	}
-	resp, err := s.writeHTTP1(ctx, conn, plan.http1)
+	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
 	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, err)
 	return resp, out, err
 }
@@ -585,23 +714,33 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 
 // sendHTTP1Plain dials cleartext and writes one request.
 func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte) ([]byte, error) {
-	dialer := &net.Dialer{Timeout: s.config.Timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	settings := s.Network()
+	conn, err := settings.dialer().DialContext(ctx, "tcp", settings.dialAddress(host, port))
 	if err != nil {
 		return nil, fmt.Errorf("connection failed: %w", err)
 	}
 	defer conn.Close()
-	return s.writeHTTP1(ctx, conn, raw)
+	return s.writeHTTP1(ctx, conn, host, raw)
 }
 
 // writeHTTP1 writes one request on an open connection and reads exactly one response back.
-func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, raw []byte) ([]byte, error) {
-	s.setDeadline(ctx, conn)
+//
+// host is carried in rather than read off the connection because it decides two things the address
+// cannot: whether this authority's responses are declared open-ended, and — under a resolution
+// override — the connection's remote address is not the host at all.
+func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw []byte) ([]byte, error) {
+	settings := s.Network()
+	s.setDeadline(ctx, conn, host)
 	if _, err := conn.Write(raw); err != nil {
 		return nil, fmt.Errorf("write failed: %w", err)
 	}
-	// Read exactly one response; keep-alive connections never EOF.
-	response, err := httputil.ReadHTTPResponse(conn)
+	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
+	// the response — see read.go.
+	response, err := readResponse(
+		bufio.NewReader(conn),
+		settings.Continue.Understand100,
+		settings.Streaming.isStreaming(host),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("read failed: %w", err)
 	}
@@ -609,28 +748,45 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, raw []byte) ([]b
 }
 
 // setDeadline bounds one exchange by the context's deadline when it has one, and by the configured
-// timeout otherwise. The context wins because a caller that set one is describing the whole operation,
-// which the configured per-send timeout knows nothing about.
-func (s *Sender) setDeadline(ctx context.Context, conn net.Conn) {
+// read timeout otherwise. The context wins because a caller that set one is describing the whole
+// operation, which the configured per-send timeout knows nothing about.
+//
+// The per-send bound now comes from NetworkSettings.readTimeout rather than one Timeout standing in for
+// everything, which is what lets a declared streaming host wait longer than an ordinary one without
+// every other send waiting that long too. Zero means no deadline of our own — the previous code could
+// not express that, because a zero SenderConfig.Timeout set a deadline in the past and failed every
+// read instantly.
+func (s *Sender) setDeadline(ctx context.Context, conn net.Conn, host string) {
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 		return
 	}
-	conn.SetDeadline(time.Now().Add(s.config.Timeout))
+	if bound := s.Network().readTimeout(host); bound > 0 {
+		conn.SetDeadline(time.Now().Add(bound))
+	}
 }
 
-// WithTimeout sets the timeout for the sender.
+// WithTimeout sets the total timeout for the sender, rebuilding the transport so the change reaches
+// connections opened after it.
 func (s *Sender) WithTimeout(timeout time.Duration) *Sender {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.config.Timeout = timeout
-	s.client.Timeout = timeout
+	s.net.Timeouts.TotalMS = int(timeout / time.Millisecond)
+	if total := s.net.Timeouts.TotalMS; total > 0 && s.net.Timeouts.ConnectMS > total {
+		s.net.Timeouts.ConnectMS = total
+	}
+	s.client = buildClient(s.config, s.net)
 	return s
 }
 
 // WithTLSVerify sets TLS verification.
 func (s *Sender) WithTLSVerify(verify bool) *Sender {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.config.TLSVerify = verify
-	if transport, ok := s.client.Transport.(*http.Transport); ok {
-		transport.TLSClientConfig.InsecureSkipVerify = !verify
-	}
+	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
+	// every handshake, including one happening on another goroutine right now.
+	s.client = buildClient(s.config, s.net)
 	return s
 }

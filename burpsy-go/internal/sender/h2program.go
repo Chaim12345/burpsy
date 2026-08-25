@@ -187,7 +187,7 @@ func (a *AuthorisedSender) sendFrameProgram(
 
 	res.Sent = program.Encode()
 	res.Started = time.Now()
-	a.net.setDeadline(ctx, conn)
+	a.net.setDeadline(ctx, conn, a.host)
 	if _, err := conn.Write(res.Sent); err != nil {
 		res.Duration = time.Since(res.Started)
 		return res, fmt.Errorf("writing the frame program: %w", err)
