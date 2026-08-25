@@ -176,6 +176,19 @@ const burpEditorKeys = Prec.high(
  */
 type MessageView = "pretty" | "raw" | "hex" | "render" | "graphql" | "jwt" | "params";
 
+// The tab bar's labels, keyed by view. Kept next to the type so a view added to the
+// union fails to compile here first — a tab that renders its key instead of a label is
+// exactly the kind of half-wired view this editor shipped with once already.
+const VIEW_LABELS: Record<MessageView, string> = {
+  pretty: "Pretty",
+  raw: "Raw",
+  hex: "Hex",
+  render: "Render",
+  graphql: "GraphQL",
+  jwt: "JWT",
+  params: "Params",
+};
+
 /**
  * Raw HTTP message editor with Burp's message-editor views.
  *
@@ -340,6 +353,34 @@ export function HttpEditor({
             sandbox=""
             srcDoc={bodyOf(value)}
           />
+        ) : active === "hex" ? (
+          <HexEditor
+            value={shown}
+            onChange={editable ? onChange : undefined}
+            label={label}
+            onRevealInRaw={
+              views
+                ? (selection) => {
+                    // Hex indexes bytes; Raw indexes UTF-16 code units over the same
+                    // message. The reveal maps the selected byte range to the character
+                    // range Raw will scroll to, which is what byteOffsetToCharIndex
+                    // exists for — without it a selection past a multibyte character
+                    // lands one or more characters off.
+                    setReveal({
+                      from: byteOffsetToCharIndex(value, selection.from),
+                      to: byteOffsetToCharIndex(value, selection.to),
+                    });
+                    setView("raw");
+                  }
+                : undefined
+            }
+          />
+        ) : active === "graphql" && graphql ? (
+          <GraphQLView document={graphql} />
+        ) : active === "jwt" && jwt ? (
+          <JwtView report={jwt} />
+        ) : active === "params" && params ? (
+          <ParamsView report={params} />
         ) : (
           <CodeMirror
             value={shown}
@@ -350,6 +391,13 @@ export function HttpEditor({
             theme={editorTheme}
             extensions={extensions}
             placeholder={placeholder}
+            onCreateEditor={(view) => {
+              // The reveal effect below needs the mounted view to exist; the epoch bump
+              // re-runs it when the editor mounts after the reveal was already set — the
+              // hex-selection-then-switch-tabs path hits exactly that order.
+              cmViewRef.current = view;
+              setCmEpoch((epoch) => epoch + 1);
+            }}
             basicSetup={{
               lineNumbers: true,
               foldGutter: false,
@@ -364,8 +412,8 @@ export function HttpEditor({
           />
         )}
       </div>
-      {editable && active !== "raw" ? (
-        <div className="editor-note">Editing happens on the Raw view, which is the exact bytes.</div>
+      {editable && active !== "raw" && active !== "hex" ? (
+        <div className="editor-note">Editing happens on the Raw and Hex views, which are the exact bytes.</div>
       ) : null}
     </div>
   );
