@@ -16,6 +16,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/session"
 )
 
 // BrowserProvider hands out a shared headless browser. It is an interface so a check's tests
@@ -132,6 +133,44 @@ func (s *ActiveScanner) StoredLedgerHandle() *StoredLedger {
 		return nil
 	}
 	return s.stored
+}
+
+// The four accessors below mirror StoredLedgerHandle: nil-safe reads of the capability
+// handles, so a surface (Settings' capability report, a test) can state what the shipped
+// binary actually wired instead of inferring it from flags. Nil is a supported state and
+// the checks' own error paths already say "no X configured for this scan" — these exist
+// so the wiring question has a direct answer.
+
+// ProvenanceLedgerHandle returns the provenance ledger, or nil when none was installed.
+func (s *ActiveScanner) ProvenanceLedgerHandle() *ProvenanceLedger {
+	if s == nil {
+		return nil
+	}
+	return s.provenance
+}
+
+// SessionCoordinatorHandle returns the session coordinator, or nil when none was installed.
+func (s *ActiveScanner) SessionCoordinatorHandle() *session.Coordinator {
+	if s == nil {
+		return nil
+	}
+	return s.sessions
+}
+
+// JsLibraryCheckHandle returns the JS-library vulnerability check, or nil when none was installed.
+func (s *ActiveScanner) JsLibraryCheckHandle() *JsLibraryCheck {
+	if s == nil {
+		return nil
+	}
+	return s.jsLib
+}
+
+// JwtWeakSecretCheckHandle returns the JWT weak-secret check, or nil when none was installed.
+func (s *ActiveScanner) JwtWeakSecretCheckHandle() *JwtWeakSecretCheck {
+	if s == nil {
+		return nil
+	}
+	return s.jwtWeak
 }
 
 // CloseCapabilities releases every scan-scoped external handle: the browser and the collaborator

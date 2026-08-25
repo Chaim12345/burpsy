@@ -167,11 +167,22 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		// and refuses any probe whose own URL leaves the engagement. WithCorpusChecks is a no-op
 		// when no corpus was loaded, so the built-in table is the whole set then. WithToolRunner
 		// carries the -tools allowlist; a nil runner keeps tool checks counted-but-excluded.
+		//
+		// The five capability handles below close the gap where the engine could do work the
+		// shipped binary could never reach: without the ledger the 10 stored/second-order checks
+		// refuse, without the coordinator access-control and CSRF refuse, without the JS/JWT
+		// checks those families refuse despite vendored data compiled into the binary. The
+		// session coordinator is ctx.sess itself — the same single-handle rule as Scope — so the
+		// session rules the CLI edits govern the scanner's comparisons too.
 		scanner: scanner.NewActiveScanner(store, logger).
 			WithSender(sender.NewSender(senderCfg)).
 			WithScope(scope).
 			WithCorpusChecks(corpusChecks).
-			WithToolRunner(toolRunner),
+			WithToolRunner(toolRunner).
+			WithStoredLedger(scanner.NewStoredLedger()).
+			WithProvenanceLedger(scanner.NewProvenanceLedger()).
+			WithJsLibraryCheck(scanner.NewJsLibraryCheck(scanner.VendoredJsVulnDb())).
+			WithJwtWeakSecretCheck(scanner.NewJwtWeakSecretCheck(scanner.BundledJwtWordlist())),
 		mr:        matchreplace.NewRuleSet(),
 		toolLog:   toollog.New(),
 		organizer: organizer.New(),
@@ -187,6 +198,11 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 	if domOpts != nil {
 		ctx.scanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
+	// The session coordinator is attached here rather than in the literal above because ctx.sess
+	// does not exist yet inside it. Sharing the CLI's instance — not a copy — is the same
+	// single-handle rule as Scope: session rules the CLI edits govern the scanner's
+	// access-control and CSRF comparisons too.
+	ctx.scanner.WithSessionCoordinator(ctx.sess)
 	// Before loadState, which restores persisted findings: SetDedupPolicy rebuilds the index anyway,
 	// but installing it first means the restore builds the right keys the first time.
 	ctx.findings.SetDedupPolicy(scanner.DedupPolicy())

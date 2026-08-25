@@ -24,6 +24,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/web"
 	"go.uber.org/zap"
 )
@@ -276,6 +277,12 @@ func main() {
 			BinaryPath: *collaboratorClient,
 		})
 	}
+
+	// One session coordinator for every surface that compares or edits session state — the same
+	// single-handle rule as Scope: the web Session page's rules and the scanner's access-control
+	// and CSRF comparisons must govern and be governed by one rule set. A copy would let the page
+	// describe rules the scanner quietly stopped honouring.
+	sessionCoord := session.NewCoordinator(logger)
 	if *bchecksDir != "" {
 		ps, err := scanner.LoadDir(*bchecksDir, store, scope, logger)
 		if err != nil {
@@ -338,6 +345,16 @@ func main() {
 		WithCorpusChecks(passiveScanner.ActiveChecks()).
 		WithToolRunner(toolRunner).
 		WithOOBProvider(oobProvider).
+		// The capability handles this binary used to leave unwired: without the ledger the 10
+		// stored/second-order checks refuse; without the coordinator, access-control and CSRF
+		// refuse; without the JS/JWT checks those families refuse despite data compiled into the
+		// binary. Each constructs unconditionally — the ledgers are in-memory and bounded, the JS
+		// corpus is vendored and parsed once per process, the JWT wordlist is the compiled-in list.
+		WithStoredLedger(scanner.NewStoredLedger()).
+		WithProvenanceLedger(scanner.NewProvenanceLedger()).
+		WithSessionCoordinator(sessionCoord).
+		WithJsLibraryCheck(scanner.NewJsLibraryCheck(scanner.VendoredJsVulnDb())).
+		WithJwtWeakSecretCheck(scanner.NewJwtWeakSecretCheck(scanner.BundledJwtWordlist())).
 		WithAuditConfig(auditConfig)
 	if domOpts != nil {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
@@ -398,6 +415,10 @@ func main() {
 		// live traffic. Set before WithPersist (below) so a rule set restored from -db is loaded
 		// into this shared object rather than one the proxy never sees.
 		WithMatchReplace(matchReplaceRules).
+		// The same session coordinator the scanner holds, so the Session page's rules and the
+		// scanner's access-control/CSRF comparisons are one rule set. Without this the server
+		// would quietly build its own no-op-logged coordinator and the two surfaces would drift.
+		WithSessionCoordinator(sessionCoord).
 		// The raw -tools map, for the surfaces that delegate a whole phase to an external binary rather
 		// than one tool per insertion point: POST /api/discovery runs ffuf. Without -tools that route
 		// refuses and names the missing tool, which is the difference between "not configured" and "this
