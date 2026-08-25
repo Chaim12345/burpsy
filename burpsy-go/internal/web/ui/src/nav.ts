@@ -3,7 +3,6 @@ import {
   Braces,
   ChartNoAxesCombined,
   Combine,
-  RadioTower,
   Crosshair,
   FileClock,
   Gauge,
@@ -17,8 +16,8 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { IssueDefinitionsPage } from "./pages/advisories";
+import { AuditQueuePage } from "./pages/auditqueue";
 import { ComparerPage } from "./pages/comparer";
-import { CollaboratorPage } from "./pages/collaborator";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
 import { DiscoverPage } from "./pages/discover";
@@ -83,6 +82,7 @@ export const TOOLS: NavTool[] = [
     leaves: [
       { id: "sitemap", label: "Site map", description: "Hosts, paths, and observed behaviour", page: SiteMapPage },
       { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
+      { id: "auditqueue", label: "Audit queue", description: "What the active audit did with each exchange, and why any were skipped", page: AuditQueuePage },
       {
         id: "advisories",
         label: "Issue definitions",
@@ -154,20 +154,6 @@ export const TOOLS: NavTool[] = [
     icon: Combine,
     hotkey: "8",
     leaves: [{ id: "comparer", label: "Comparer", description: "Byte-level differences", page: ComparerPage }],
-  },
-  {
-    id: "collaborator",
-    label: "Collaborator",
-    icon: RadioTower,
-    hotkey: "9",
-    leaves: [
-      {
-        id: "collaborator",
-        label: "Collaborator",
-        description: "Out-of-band interactions and blind-XSS callbacks",
-        page: CollaboratorPage,
-      },
-    ],
   },
   {
     id: "logger",

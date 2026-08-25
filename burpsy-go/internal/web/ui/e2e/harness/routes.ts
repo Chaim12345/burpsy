@@ -29,6 +29,7 @@ export const ROUTES: Route[] = [
   { id: "dashboard", label: "Dashboard", h1: "Dashboard", tool: "dashboard", hotkey: "1" },
   { id: "sitemap", label: "Site map", h1: "Site map", tool: "target", hotkey: "2" },
   { id: "scanner", label: "Issues", h1: "Issues", tool: "target" },
+  { id: "auditqueue", label: "Audit queue", h1: "Audit queue", tool: "target" },
   { id: "advisories", label: "Issue definitions", h1: "Issue definitions", tool: "target" },
   { id: "scope", label: "Scope", h1: "Scope", tool: "target" },
   { id: "intercept", label: "Intercept", h1: "Intercept", tool: "proxy", hotkey: "3" },
