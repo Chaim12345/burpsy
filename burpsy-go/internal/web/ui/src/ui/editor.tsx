@@ -3,9 +3,10 @@ import { openSearchPanel } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
 import { Copy, Download, WrapText } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
+import { byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
 import {
   base64Decode,
   base64Encode,
@@ -15,7 +16,9 @@ import {
   urlEncodeKeyChars,
 } from "../lib/transforms";
 import { cn } from "../lib/cn";
+import { HexEditor } from "./hex-editor";
 import { IconButton } from "./primitives";
+import { GraphQLView, JwtView, ParamsView } from "./typed-views";
 
 const START_LINE = Decoration.mark({ class: "cm-http-start" });
 const HEADER_NAME = Decoration.mark({ class: "cm-http-header-name" });
@@ -171,15 +174,22 @@ const burpEditorKeys = Prec.high(
  * inspection (history detail), because operators expect the same affordances —
  * line numbers, find, wrapping — in both.
  */
-type MessageView = "pretty" | "raw" | "hex" | "render";
+type MessageView = "pretty" | "raw" | "hex" | "render" | "graphql" | "jwt" | "params";
 
 /**
  * Raw HTTP message editor with Burp's message-editor views.
  *
- * Raw is the only editable view — it is the exact bytes. Pretty reformats the body
- * only, Hex is a read-only dump, and Render shows the response in a sandboxed
- * iframe. Editing stays on Raw deliberately: a reformatted body is not the bytes
- * that were sent, and silently sending the reformatted version would be a lie.
+ * Raw and Hex are the editable views, and they are editable for opposite reasons:
+ * Raw is the exact bytes as text, Hex is the exact bytes as bytes. Pretty reformats
+ * the body only, Render shows the response in a sandboxed iframe, and GraphQL, JWT
+ * and Params read a structure out of the message without offering to write one back.
+ * Editing never happens on a derived view: a reformatted body is not the bytes that
+ * were sent, and silently sending the reformatted version would be a lie.
+ *
+ * Every tab past Raw and Hex is conditional. Pretty appears only when reformatting
+ * would change something; Render only for an HTML response; GraphQL, JWT and Params
+ * only when the message actually carries one. A tab that is present on every message
+ * and empty on all but a few teaches an operator to ignore the tab strip.
  */
 export function HttpEditor({
   value,
@@ -230,15 +240,51 @@ export function HttpEditor({
   const prettied = useMemo(() => (views ? prettyMessage(value) : value), [views, value]);
   const canPretty = views && prettied !== value;
 
+  // The typed views follow Pretty's discipline: each detector returns null unless the
+  // message really carries the thing, and the tab exists only when it does. All three
+  // are skipped outright for non-HTTP payloads, which is also what keeps them off the
+  // per-keystroke path in the decoder and the WebSocket panes.
+  const graphql = useMemo(() => (views ? detectGraphQL(value) : null), [views, value]);
+  const jwt = useMemo(() => (views ? findJwts(value) : null), [views, value]);
+  const params = useMemo(() => (views ? paramsOf(value) : null), [views, value]);
+
   const available: MessageView[] = views
-    ? (["pretty", "raw", "hex", ...(renderable ? (["render"] as MessageView[]) : [])] as MessageView[]).filter(
-        (candidate) => candidate !== "pretty" || canPretty,
-      )
+    ? ([
+        ...(canPretty ? ["pretty"] : []),
+        "raw",
+        "hex",
+        ...(renderable ? ["render"] : []),
+        ...(graphql ? ["graphql"] : []),
+        ...(jwt && jwt.tokens.length ? ["jwt"] : []),
+        ...(params && params.rows.length ? ["params"] : []),
+      ] as MessageView[])
     : [];
 
   // Fall back to Raw if the current view stops being available for a new message.
   const active: MessageView = available.length === 0 || available.includes(view) ? view : "raw";
-  const shown = active === "pretty" ? prettied : active === "hex" ? hexDump(value) : value;
+  const shown = active === "pretty" ? prettied : value;
+  // What the toolbar's Copy hands over. Hex still copies a dump — that is what an
+  // operator pasting into a ticket wants, and it is why message.ts's read-only
+  // hexDump did not go away when the view became editable.
+  const clipboard = active === "pretty" ? prettied : active === "hex" ? hexDump(value) : value;
+
+  // A Hex selection handed to the Raw view. The byte range is mapped to a character
+  // range on the way, because the two views index the same message differently.
+  const cmViewRef = useRef<EditorView | null>(null);
+  const [cmEpoch, setCmEpoch] = useState(0);
+  const [reveal, setReveal] = useState<{ from: number; to: number } | null>(null);
+  useEffect(() => {
+    if (!reveal || active !== "raw") return;
+    const cm = cmViewRef.current;
+    // No view yet means CodeMirror has not mounted for this switch; cmEpoch bumps on
+    // creation, which re-runs this effect rather than dropping the selection.
+    if (!cm) return;
+    const from = Math.min(reveal.from, cm.state.doc.length);
+    const to = Math.min(reveal.to, cm.state.doc.length);
+    cm.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
+    cm.focus();
+    setReveal(null);
+  }, [reveal, active, cmEpoch]);
 
   return (
     <div className={cn("editor-shell", className)}>
@@ -255,7 +301,7 @@ export function HttpEditor({
                 className={candidate === active ? "editor-view editor-view-active" : "editor-view"}
                 onClick={() => setView(candidate)}
               >
-                {candidate}
+                {VIEW_LABELS[candidate]}
               </button>
             ))}
           </div>
@@ -263,7 +309,10 @@ export function HttpEditor({
         <span className="editor-meta">{formatBytes(bytes)}</span>
         <div className="editor-bar-actions">
           {actions}
-          {active !== "render" ? (
+          {/* Wrapping is a CodeMirror setting, so the toggle is offered only on the two
+              views CodeMirror renders. It used to be hidden for Render alone, which left
+              a dead control on Hex. */}
+          {active === "pretty" || active === "raw" ? (
             <IconButton
               label={wrap ? "Disable wrapping" : "Enable wrapping"}
               size="small"
@@ -273,7 +322,7 @@ export function HttpEditor({
               <WrapText size={13} />
             </IconButton>
           ) : null}
-          <IconButton label="Copy message" size="small" onClick={() => void copyToClipboard(shown)}>
+          <IconButton label="Copy message" size="small" onClick={() => void copyToClipboard(clipboard)}>
             <Copy size={13} />
           </IconButton>
           <IconButton label="Save to file" size="small" onClick={() => downloadText(filename, value)}>
