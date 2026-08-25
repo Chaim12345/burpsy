@@ -16,7 +16,7 @@ import (
 //
 // # Why this exists
 //
-// `setupRoutes` is 49 `mux.HandleFunc` calls in one function, and until now nothing checked it. A
+// `setupRoutes` is 51 `mux.HandleFunc` calls in one function, and until now nothing checked it. A
 // route deleted or renamed in a refactor produced a 404 in production — discovered by an operator
 // clicking something that used to work, with no test going red anywhere. That is a bad failure for a
 // surface the UI is written against, and a worse one for the API surface this port is in the middle of
@@ -104,11 +104,21 @@ type route struct {
 }
 
 // manifest is every route this server registers. Keep it sorted by pattern; the test enforces that,
-// because a 49-entry map that is not sorted is a merge conflict generator.
+// because a 51-entry map that is not sorted is a merge conflict generator.
 var manifest = map[string]route{
 	"/": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the operator console: index.html, app.js, style.css, and the SPA catch-all",
+	},
+	"/api/advisories": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the issue-definition catalogue as index rows, filterable by ?q= and ?severity=",
+	},
+	"/api/advisories/": {
+		// 00100200 is SQL injection — a real type index, so the 405 test exercises the path a caller
+		// actually sends rather than a segment that would 404 before reaching the verb guard.
+		methods: []string{"GET"}, risk: riskRead, subPath: "00100200",
+		summary: "one issue definition in full, by hexadecimal type index",
 	},
 	"/api/audit/": {
 		methods: []string{"POST"}, risk: riskAttack, subPath: "0",
@@ -404,7 +414,7 @@ func Test_every_route_pattern_is_a_literal(t *testing.T) {
 	}
 }
 
-// Sorted, because an unsorted 49-entry literal is a merge-conflict generator: two areas appending
+// Sorted, because an unsorted 51-entry literal is a merge-conflict generator: two areas appending
 // their routes at the end of a map both touch the same line.
 func Test_the_manifest_is_sorted_by_pattern(t *testing.T) {
 	got := make([]string, 0, len(manifest))
