@@ -66,6 +66,8 @@ export const keys = {
   blindxss: ["blindxss"] as const,
   proxyOptions: ["proxy", "options"] as const,
   networkSettings: ["network", "settings"] as const,
+  pools: ["pools"] as const,
+  schedules: ["schedules"] as const,
 };
 
 /**

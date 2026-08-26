@@ -284,6 +284,24 @@ var manifest = map[string]route{
 			"opt-in redirect policy, 100-continue and open-ended response handling; PUT is a partial " +
 			"patch that refuses an unknown key by name and persists what it accepts",
 	},
+	// Both pool routes are riskScope rather than riskLocal, and the reason is the whole point of the
+	// class: a pool decides how hard every tool that names it may hit the target, so raising one from
+	// two concurrent requests to two hundred arms every future crawl, audit and attack to send far
+	// more traffic than the operator who set the pool authorised. That is the same kind of decision as
+	// /api/scanner/config's audit families — it changes what this process is allowed to send — and it
+	// is not made visible by the traffic at the moment it is made, which is exactly when an unattended
+	// caller should have to confirm. Classifying a saved-limits editor as an ordinary local write
+	// would be reading "sends nothing itself" as "harmless".
+	"/api/pools": {
+		methods: []string{"GET", "POST"}, risk: riskScope,
+		summary: "the saved named resource pools, with which of each pool's bounds every tool path can " +
+			"actually honour; POST saves a new one",
+	},
+	"/api/pools/": {
+		methods: []string{"PUT", "DELETE"}, risk: riskScope, subPath: "nonesuch",
+		summary: "replace or delete one pool by name; a DELETE is refused while a schedule still " +
+			"references it, naming the schedules",
+	},
 	"/api/protocols": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded",
@@ -337,6 +355,22 @@ var manifest = map[string]route{
 	"/api/scanner/live": {
 		methods: []string{"GET", "POST"}, risk: riskAttack,
 		summary: "the live sweep over newly-completed proxied traffic; POST opts in",
+	},
+	// riskAttack, on both, and not because a POST here sends anything: it arms something that will.
+	// A saved schedule starts a crawl or an audit against a live target at a wall-clock time with
+	// nobody watching, which is strictly more than /api/crawl does — a crawl launched now is at least
+	// observed. Deferring an attack is not a way to make launching it cheaper, and a class assigned by
+	// "did this call put bytes on the wire" would let an unattended caller arm a nightly scan without
+	// the confirmation it needs to launch one.
+	"/api/schedules": {
+		methods: []string{"GET", "POST"}, risk: riskAttack,
+		summary: "the saved scheduled tasks, what the clock has done with them (fired, failed, missed, " +
+			"unstarted) and the missed-window policy; POST arms a new one",
+	},
+	"/api/schedules/": {
+		methods: []string{"PUT", "DELETE"}, risk: riskAttack, subPath: "nonesuch",
+		summary: "replace or delete one schedule by name; a replace re-arms the timing and keeps the " +
+			"run counters",
 	},
 	"/api/scope": {
 		methods: []string{"GET", "POST"}, risk: riskScope,
@@ -702,13 +736,22 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		// row does not make it cheaper than a first audit — AuditWithin gives it a fresh admission
 		// ledger precisely so that it is not.
 		"/api/scanner/audit-items/",
-		"/api/scanner/live", "/api/sequencer/capture",
+		"/api/scanner/live",
+		// The two schedule routes arm a crawl or an audit to run unattended at a wall-clock time. See
+		// their manifest entries: deferring an attack does not make arming it a lesser act than
+		// launching one, and the run happens with nobody watching.
+		"/api/schedules", "/api/schedules/",
+		"/api/sequencer/capture",
 	}
-	// /api/network/settings joins this class because a resolution override sends a request the scope
-	// authorised by name to an address the operator chose. The scope still says yes or no about the
-	// name, so nothing here escapes the gate — but where the bytes land is no longer what DNS says, and
-	// an unattended caller writing that table is making an engagement-shaped decision.
-	wantScope := []string{"/api/config/import", "/api/network/settings", "/api/scanner/config", "/api/scope"}
+	// The pool routes join this class because a pool decides how hard every tool that names it may
+	// hit the target; /api/network/settings joins it because a resolution override sends a request
+	// the scope authorised by name to an address the operator chose. Neither escapes the gate — the
+	// scope still says yes or no about the name — but both change where the authorised bytes land,
+	// which is an engagement-shaped decision an unattended caller must confirm.
+	wantScope := []string{
+		"/api/config/import", "/api/network/settings", "/api/pools", "/api/pools/", "/api/scanner/config",
+		"/api/scope",
+	}
 	// /api/blindxss is in the credential class because a callback carries the victim browser's
 	// `document.cookie`. It is the first entry there whose secret is not a credential burpsy holds
 	// but a third party's, which is a stronger reason to require confirmation rather than a weaker

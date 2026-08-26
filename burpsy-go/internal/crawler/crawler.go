@@ -243,6 +243,18 @@ type Config struct {
 	Limits Limits
 	// RequestsPerSecond caps the request rate. Zero takes DefaultRequestsPerSecond.
 	RequestsPerSecond float64
+	// Pool is a resolved named resource pool's limits, or nil for this package's own defaults.
+	//
+	// It is the *resolved* RateLimit rather than a pool name because this package has no business
+	// looking names up: the caller that holds the registry resolves once — see internal/pool — and
+	// hands the answer down. Set, it overrides RequestsPerSecond and replaces the per-host
+	// DefaultAutoThrottle with the pool's own.
+	//
+	// One of a pool's three bounds cannot be honoured here and is not silently dropped: MaxInFlight.
+	// The crawl loop sends one request and waits for the response before building the next, so a
+	// ceiling above 1 bounds nothing. Report.Pool says which pool ran and Report.PoolConcurrency
+	// records the ceiling that did not apply, and pool.Support() states the same thing on the API.
+	Pool *intruder.RateLimit
 	// UserAgent is the User-Agent header sent. Empty takes DefaultUserAgent.
 	UserAgent string
 	// Headers are extra request headers, sent on every request — a Cookie header from a
@@ -307,6 +319,15 @@ type Report struct {
 	FormSubmission bool `json:"form_submission"`
 	// RobotsPolicy is the constant of the same name — carried, not implied.
 	RobotsPolicy string `json:"robots_policy"`
+	// Pool is the named resource pool this crawl ran under, empty when it ran under this package's
+	// own defaults. Carried so a report can say what bounded it rather than leaving the reader to
+	// infer a rate from timestamps.
+	Pool string `json:"pool,omitempty"`
+	// PoolConcurrency is the pool's max-concurrent-requests ceiling, when a pool set one. Present
+	// *because* it was not honoured: the crawl loop is sequential, so this records the bound that did
+	// not apply. An operator who set 8 and sees 8 here alongside a sequential crawl has been told the
+	// truth; a field omitted because it was unused would have told them nothing.
+	PoolConcurrency int `json:"pool_concurrency,omitempty"`
 
 	// Fetched, Refused, Failed and NotCaptured partition every request the loop attempted, exactly
 	// once each. Fetched counts requests that reached the shared capture path; Refused counts the
@@ -425,8 +446,19 @@ type Crawler struct {
 	limiter      *intruder.RateLimiter
 	hostLimiters map[string]*intruder.RateLimiter
 	requestsPer  float64
-	skips        *skipLedger
-	logger       *zap.Logger
+	// rateCapped says whether requestsPer is a cap at all. Only a named pool can turn the cap off,
+	// and the two facts have to travel together — a bare 0 would otherwise read as "zero requests a
+	// second", which is a stall rather than an absence of a limit.
+	rateCapped bool
+	// throttle is the per-host AutoThrottle, from the pool when there is one. nil is throttling off.
+	throttle *intruder.AutoThrottle
+	// poolName and poolConcurrency are carried for the report only: the name so a crawl can say what
+	// bounded it, and the concurrency ceiling so it can say which of that pool's bounds it could not
+	// honour. Neither is read on the request path.
+	poolName        string
+	poolConcurrency int
+	skips           *skipLedger
+	logger          *zap.Logger
 
 	// senders caches one AuthorisedSender per origin. Cached because AuthorisedSender counts its own
 	// sends and refusals per target, and building a fresh one per request would throw those counters
@@ -572,9 +604,42 @@ func New(cfg Config) (*Crawler, error) {
 		loginPage = re
 	}
 
-	rps := cfg.RequestsPerSecond
-	if rps <= 0 {
-		rps = DefaultRequestsPerSecond
+	// Three states, not two: a rate this crawl was given, this package's default, and — only ever
+	// from a named pool — no rate cap at all. The third is why `capped` exists rather than a bare
+	// float: a pool whose delay between requests is zero is an operator saying "concurrency only",
+	// and folding that into DefaultRequestsPerSecond would impose a cap they explicitly did not set.
+	// It is safe here in a way it would not be elsewhere because the loop is sequential: "no rate
+	// cap" on this path still means one request at a time.
+	rps, capped := cfg.RequestsPerSecond, cfg.RequestsPerSecond > 0
+	if !capped {
+		rps, capped = DefaultRequestsPerSecond, true
+	}
+	// The per-host throttle comes from the pool when there is one, so switching automatic throttling
+	// off in a pool switches it off here. That is a real loss of protection for an unattended crawl
+	// and it is the operator's own instruction, made in a dialog that says so, rather than a default
+	// this package quietly overrides.
+	throttle := intruder.DefaultAutoThrottle()
+	poolName := ""
+	poolConcurrency := 0
+	if p := cfg.Pool; p != nil {
+		poolName = p.Name
+		poolConcurrency = p.MaxInFlight
+		throttle = p.AutoThrottle
+		if p.PerSecond != nil {
+			rps, capped = *p.PerSecond, true
+		} else {
+			rps, capped = 0, false
+		}
+	}
+	// perSecond hands each limiter its own pointer. One shared pointer would be a single mutable
+	// rate behind every limiter in the crawl, which is a bug waiting for the first caller that
+	// writes through it.
+	perSecond := func() *float64 {
+		if !capped {
+			return nil
+		}
+		v := rps
+		return &v
 	}
 	maxRecords := cfg.MaxSkipRecords
 	if maxRecords == 0 {
@@ -593,7 +658,9 @@ func New(cfg Config) (*Crawler, error) {
 		// count the loop would ignore. Burst of 1 is strict spacing, which is what politeness means
 		// for an unattended traversal. No AutoThrottle on the aggregate limiter: a 429 belongs to the
 		// host that sent it, so throttling lives on the per-host limiters instead.
-		limiter: intruder.NewRateLimiter(&intruder.RateLimit{PerSecond: &rps, Burst: 1, MaxInFlight: 1, Name: "crawl"}),
+		limiter: intruder.NewRateLimiter(&intruder.RateLimit{
+			PerSecond: perSecond(), Burst: 1, MaxInFlight: 1, Name: limiterName("crawl", poolName),
+		}),
 		skips:   newSkipLedger(maxRecords),
 		logger:  logger,
 		senders: make(map[string]*sender.AuthorisedSender),
@@ -607,6 +674,10 @@ func New(cfg Config) (*Crawler, error) {
 		hostLimiters:      make(map[string]*intruder.RateLimiter),
 		robotsSeeded:      make(map[string]bool),
 		requestsPer:       rps,
+		rateCapped:        capped,
+		throttle:          throttle,
+		poolName:          poolName,
+		poolConcurrency:   poolConcurrency,
 		retention:         retention,
 		loginPage:         loginPage,
 	}
@@ -621,6 +692,17 @@ func New(cfg Config) (*Crawler, error) {
 		c.credentialOrigins[originKey(s)] = true
 	}
 	return c, nil
+}
+
+// limiterName labels a limiter with what it bounds and, when a named pool is in force, which pool
+// that is. The name reaches an operator through AttackReport.Pool and the limiter's own PoolName, so
+// "crawl:api.example.com:443 (out-of-hours)" answers both halves of "what slowed this down" without
+// the reader having to correlate two fields.
+func limiterName(scope, pool string) string {
+	if pool == "" {
+		return scope
+	}
+	return scope + " (" + pool + ")"
 }
 
 // unavailablePreFetch returns the queried fields that no frontier URL can answer. Derived from the
@@ -677,6 +759,10 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		RetentionQuery: c.cfg.RetentionQuery,
 		FormSubmission: c.cfg.SubmitForms,
 		RobotsPolicy:   RobotsPolicy,
+		// Both from the crawler rather than from cfg, so what is reported is the pool the limiters
+		// were actually built from and not the pool the caller meant to pass.
+		Pool:            c.poolName,
+		PoolConcurrency: c.poolConcurrency,
 	}
 	lim := LimitReport{Limits: c.limits}
 
@@ -1444,12 +1530,17 @@ func (c *Crawler) limiterFor(u *url.URL) *intruder.RateLimiter {
 	if l, ok := c.hostLimiters[key]; ok {
 		return l
 	}
-	per := c.requestsPer
+	var per *float64
+	if c.rateCapped {
+		v := c.requestsPer
+		per = &v
+	}
 	l := intruder.NewRateLimiter(&intruder.RateLimit{
-		PerSecond: &per, Burst: 1, MaxInFlight: 1, Name: "crawl:" + key,
+		PerSecond: per, Burst: 1, MaxInFlight: 1, Name: limiterName("crawl:"+key, c.poolName),
 		// A run of 429s or 503s from one host halves the rate at that host for the next fifty grants.
 		// An unattended crawl needs this: nobody is watching to notice the target asking for mercy.
-		AutoThrottle: intruder.DefaultAutoThrottle(),
+		// A named pool supplies its own reaction here, including "none" — see Config.Pool.
+		AutoThrottle: c.throttle,
 	})
 	c.hostLimiters[key] = l
 	return l

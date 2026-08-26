@@ -6,6 +6,18 @@ import { useScannerConfig, useSaveScannerConfig, useStats } from "../lib/data";
 import { useScannerConfigs } from "../lib/data.attack";
 import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
 import type { HostOverride, NetworkPatch, NetworkSettings, RedirectMode, ResolutionPolicy } from "../lib/data.network";
+import {
+  useDeletePool,
+  useDeleteSchedule,
+  usePools,
+  useSavePool,
+  useSaveSchedule,
+  useSchedules,
+  useUpdatePool,
+  useUpdateSchedule,
+  type Pool,
+  type Schedule,
+} from "../lib/data.pools";
 import { useCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
 import { SHORTCUT_GROUPS } from "../lib/shortcuts";
@@ -13,7 +25,7 @@ import type { FrameProgramResponse } from "../lib/types.policy";
 import type { ScannerConfig } from "../lib/types";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 const THEMES: { value: Theme; label: string }[] = [
@@ -1301,6 +1313,8 @@ export function SettingsPage(): JSX.Element {
       />
       <ProxySettingsSection />
       <TlsPassthroughSection />
+      <ResourcePoolsSection />
+      <ScheduledTasksSection />
       <ProtocolSection />
       <NetworkSection />
       <AuditChecksSection />
@@ -1311,5 +1325,634 @@ export function SettingsPage(): JSX.Element {
       <CertificateSection />
       <DiagnosticsSection />
     </div>
+  );
+}
+
+/**
+ * Named resource pools: Burp's configPanelResourcePools.
+ *
+ * The panel's job beyond New/Edit/Delete is the support table. A pool is a
+ * promise made here and kept three layers away in three tools, and one of them
+ * cannot keep all of it — the crawl loop is sequential, so a concurrency
+ * ceiling above 1 bounds nothing there. That exception is served as data by
+ * GET /api/pools and rendered, so an operator who sets 8 concurrent requests
+ * can see which tools will actually send 8 without reading any Go.
+ */
+function poolRate(pool: Pool): string {
+  if (pool.delay_ms <= 0) return "no rate cap";
+  const perSecond = 1000 / pool.delay_ms;
+  return `${formatCount(pool.delay_ms)} ms apart (${perSecond.toFixed(perSecond < 10 ? 2 : 0)}/s)`;
+}
+
+const BLANK_POOL: Pool = { name: "", max_concurrent: 10, delay_ms: 50, throttle: { increment_ms: 50 } };
+
+function PoolDialog({
+  open,
+  onOpenChange,
+  editing,
+  initial,
+  onSubmit,
+  pending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  editing: string | null;
+  initial: Pool;
+  onSubmit: (pool: Pool) => void;
+  pending: boolean;
+}): JSX.Element {
+  const [name, setName] = useState(initial.name);
+  const [maxConcurrent, setMaxConcurrent] = useState(String(initial.max_concurrent));
+  const [delay, setDelay] = useState(String(initial.delay_ms));
+  const [throttle, setThrottle] = useState(Boolean(initial.throttle));
+  const [increment, setIncrement] = useState(String(initial.throttle?.increment_ms ?? 50));
+
+  // Keyed on `initial` by the caller, so the form is remounted per pool rather
+  // than syncing state in an effect.
+  const delayMs = Number(delay) || 0;
+  // Automatic throttling works by increasing the delay between requests, and
+  // there is no multiple of zero larger than zero — so the combination is
+  // refused here as well as by the server, rather than sent to be rejected.
+  const throttleImpossible = throttle && delayMs <= 0;
+
+  return (
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={editing ? `Edit pool ${editing}` : "New resource pool"}
+      description="These limits bound every tool that names this pool, and are shared between them."
+    >
+      <div className="form-grid">
+        <Field label="Name" hint="What a tool references. Tools name a pool by this and nothing else.">
+          {(id) => <Input id={id} value={name} onChange={(event) => setName(event.target.value)} />}
+        </Field>
+        <Field label="Max concurrent requests" hint="At least 1. Zero would deadlock rather than throttle.">
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={1}
+              value={maxConcurrent}
+              onChange={(event) => setMaxConcurrent(event.target.value)}
+            />
+          )}
+        </Field>
+        <Field label="Delay between requests (ms)" hint="0 is no rate cap — concurrency alone bounds the tool.">
+          {(id) => <Input id={id} type="number" min={0} value={delay} onChange={(event) => setDelay(event.target.value)} />}
+        </Field>
+        <Field label="Automatic throttling" hint="Increases the delay when the target answers 429 or 503.">
+          {(id) => (
+            <Switch id={id} label="Automatic throttling" checked={throttle} onCheckedChange={setThrottle} />
+          )}
+        </Field>
+        {throttle ? (
+          <Field label="Increase delay in increments of (ms)" hint="Must be above 0: a throttle that adds nothing is off.">
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={1}
+                value={increment}
+                onChange={(event) => setIncrement(event.target.value)}
+              />
+            )}
+          </Field>
+        ) : null}
+      </div>
+      {throttleImpossible ? (
+        <p className="field-hint">
+          Automatic throttling needs a non-zero delay between requests: it works by increasing that delay, and there is
+          no multiple of zero larger than zero.
+        </p>
+      ) : null}
+      <div className="page-actions">
+        <Button variant="outline" onClick={() => onOpenChange(false)}>
+          Cancel
+        </Button>
+        <Button
+          disabled={pending || !name.trim() || throttleImpossible}
+          onClick={() =>
+            onSubmit({
+              name: name.trim(),
+              max_concurrent: Number(maxConcurrent) || 1,
+              delay_ms: delayMs,
+              throttle: throttle ? { increment_ms: Number(increment) || 1 } : null,
+            })
+          }
+        >
+          {editing ? "Save pool" : "Create pool"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+export function ResourcePoolsSection(): JSX.Element {
+  const { data, error, isFetching, isLoading, refetch } = usePools();
+  const save = useSavePool();
+  const update = useUpdatePool();
+  const remove = useDeletePool();
+  const [dialog, setDialog] = useState<{ editing: string | null; initial: Pool } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const fail = (failure: unknown, fallback: string) =>
+    toast.error(failure instanceof Error ? failure.message : fallback);
+
+  const pools = data?.pools ?? [];
+  const unhonoured = data?.support.filter((row) => !row.max_concurrent || !row.delay || !row.throttle) ?? [];
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Resource pools"
+        detail="Saved limits every tool can reference by name, instead of each run re-specifying its own."
+        actions={
+          <>
+            {data ? (
+              <Badge tone={data.count ? "good" : "neutral"}>
+                {data.count === 1 ? "1 pool" : `${formatCount(data.count)} pools`}
+              </Badge>
+            ) : null}
+            <Button
+              variant="outline"
+              size="small"
+              onClick={() => setDialog({ editing: null, initial: data?.default ?? BLANK_POOL })}
+            >
+              <Plus size={13} />
+              New pool
+            </Button>
+            <RefreshButton onClick={() => void refetch()} loading={isFetching} />
+          </>
+        }
+      />
+      {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+      {isLoading ? <LoadingPanel label="Loading resource pools" /> : null}
+      {data && pools.length === 0 ? (
+        <Empty
+          title="No pools are saved"
+          detail="Every tool runs under its own documented default until a pool is saved and named."
+        />
+      ) : null}
+      {pools.length ? (
+        <SimpleTable headers={["Pool", "Max concurrent", "Delay between requests", "Automatic throttling", "Referenced by", ""]}>
+          {pools.map((pool) => {
+            const users = data?.in_use[pool.name] ?? [];
+            return (
+              <tr key={pool.name}>
+                <td>
+                  <code>{pool.name}</code>
+                </td>
+                <td>
+                  <span className="cell-num">{formatCount(pool.max_concurrent)}</span>
+                </td>
+                <td>{poolRate(pool)}</td>
+                <td>
+                  {pool.throttle ? (
+                    <Badge tone="good">+{formatCount(pool.throttle.increment_ms)} ms</Badge>
+                  ) : (
+                    <Badge tone="neutral">off</Badge>
+                  )}
+                </td>
+                <td>
+                  {users.length ? (
+                    <span title={users.join(", ")}>
+                      {users.length === 1 ? "1 schedule" : `${formatCount(users.length)} schedules`}
+                    </span>
+                  ) : (
+                    <span className="field-hint">nothing</span>
+                  )}
+                </td>
+                <td>
+                  <Toolbar>
+                    <Button
+                      variant="outline"
+                      size="small"
+                      onClick={() => setDialog({ editing: pool.name, initial: pool })}
+                    >
+                      Edit
+                    </Button>
+                    <IconButton
+                      label={`Delete pool ${pool.name}`}
+                      size="small"
+                      disabled={remove.isPending}
+                      onClick={() => setConfirmDelete(pool.name)}
+                    >
+                      <Trash2 size={13} />
+                    </IconButton>
+                  </Toolbar>
+                </td>
+              </tr>
+            );
+          })}
+        </SimpleTable>
+      ) : null}
+
+      {data ? (
+        <>
+          <SectionHeading
+            title="What each tool honours"
+            detail={
+              unhonoured.length === 0
+                ? `${data.support.length === 1 ? "1 tool" : `${formatCount(data.support.length)} tools`} accept a pool, and every one enforces all three bounds.`
+                : `${data.support.length === 1 ? "1 tool" : `${formatCount(data.support.length)} tools`} accept a pool; ${
+                    unhonoured.length === 1 ? "1 cannot honour" : `${formatCount(unhonoured.length)} cannot honour`
+                  } every bound.`
+            }
+          />
+          <SimpleTable headers={["Tool", "Route", "Max concurrent", "Delay", "Throttling", "Why not"]}>
+            {data.support.map((row) => (
+              <tr key={row.route}>
+                <td>{row.tool}</td>
+                <td>
+                  <code>{row.route}</code>
+                </td>
+                <td>
+                  <Badge tone={row.max_concurrent ? "good" : "warn"}>{row.max_concurrent ? "enforced" : "no effect"}</Badge>
+                </td>
+                <td>
+                  <Badge tone={row.delay ? "good" : "warn"}>{row.delay ? "enforced" : "no effect"}</Badge>
+                </td>
+                <td>
+                  <Badge tone={row.throttle ? "good" : "warn"}>{row.throttle ? "enforced" : "no effect"}</Badge>
+                </td>
+                <td>{row.detail ? row.detail : <span className="field-hint">nothing is unenforced</span>}</td>
+              </tr>
+            ))}
+          </SimpleTable>
+        </>
+      ) : null}
+
+      {dialog ? (
+        <PoolDialog
+          key={dialog.editing ?? "new"}
+          open
+          onOpenChange={(open) => (open ? undefined : setDialog(null))}
+          editing={dialog.editing}
+          initial={dialog.initial}
+          pending={save.isPending || update.isPending}
+          onSubmit={(pool) => {
+            const done = () => {
+              toast.success(dialog.editing ? `Saved ${pool.name}` : `Created ${pool.name}`);
+              setDialog(null);
+            };
+            if (dialog.editing) {
+              update.mutate({ name: dialog.editing, pool }, { onSuccess: done, onError: (e) => fail(e, "Edit failed") });
+            } else {
+              save.mutate(pool, { onSuccess: done, onError: (e) => fail(e, "Create failed") });
+            }
+          }}
+        />
+      ) : null}
+
+      <Modal
+        open={confirmDelete !== null}
+        onOpenChange={(open) => (open ? undefined : setConfirmDelete(null))}
+        title={confirmDelete ? `Delete pool ${confirmDelete}?` : "Delete pool?"}
+        description="Any tool run that named this pool will have to name another one."
+      >
+        <div className="page-actions">
+          <Button variant="outline" onClick={() => setConfirmDelete(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            disabled={remove.isPending}
+            onClick={() => {
+              const name = confirmDelete;
+              if (!name) return;
+              remove.mutate(name, {
+                onSuccess: () => {
+                  toast.success(`Deleted ${name}`);
+                  setConfirmDelete(null);
+                },
+                // A pool a schedule still references is refused, and the refusal
+                // names the schedules — shown as-is rather than replaced with a
+                // generic failure, because the message is the fix.
+                onError: (failure) => fail(failure, "Delete failed"),
+              });
+            }}
+          >
+            <Trash2 size={13} />
+            Delete pool
+          </Button>
+        </div>
+      </Modal>
+    </Card>
+  );
+}
+
+/**
+ * Scheduled tasks: Burp's configPanelScheduledTasks and configPanelTaskAutoStart.
+ *
+ * Two things here are load-bearing beyond the list. First, `running`: a list of
+ * armed schedules served by a process with no ticker would look armed while
+ * nothing could ever fire, so that is stated rather than assumed. Second, the
+ * missed-window policy, served as prose by the API — an occurrence that came
+ * due while burpsy was down does not fire late, and an operator who learns
+ * that from an incident learned it too late.
+ */
+function localDateTimeValue(ms: number): string {
+  const at = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+function ScheduleDialog({
+  open,
+  onOpenChange,
+  editing,
+  initial,
+  kinds,
+  pools,
+  onSubmit,
+  pending,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  editing: string | null;
+  initial: Schedule | null;
+  kinds: string[];
+  pools: string[];
+  onSubmit: (schedule: Partial<Schedule>) => void;
+  pending: boolean;
+}): JSX.Element {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [kind, setKind] = useState(initial?.kind ?? kinds[0] ?? "");
+  const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [first, setFirst] = useState(localDateTimeValue(initial?.first_ms ?? Date.now() + 3_600_000));
+  const [repeat, setRepeat] = useState((initial?.interval_secs ?? 0) > 0);
+  const [intervalHours, setIntervalHours] = useState(String((initial?.interval_secs ?? 86_400) / 3600));
+  const [pool, setPool] = useState(initial?.pool ?? "");
+  const [params, setParams] = useState(initial?.params ? JSON.stringify(initial.params, null, 2) : "");
+
+  // Parsed here so a malformed blob is caught before it is armed rather than at
+  // the hour it was armed for.
+  let paramsError = "";
+  if (params.trim()) {
+    try {
+      JSON.parse(params);
+    } catch (failure) {
+      paramsError = failure instanceof Error ? failure.message : "The parameters are not valid JSON";
+    }
+  }
+  const firstMs = first ? new Date(first).getTime() : 0;
+
+  return (
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={editing ? `Edit schedule ${editing}` : "New scheduled task"}
+      description="Starts registered work at a wall-clock time, or repeatedly. Editing the timing re-arms it."
+    >
+      <div className="form-grid">
+        <Field label="Name">
+          {(id) => <Input id={id} value={name} onChange={(event) => setName(event.target.value)} />}
+        </Field>
+        <Field label="What to start" hint="Only what this build can actually start is offered.">
+          {(id) => (
+            <Select id={id} value={kind} onChange={(event) => setKind(event.target.value)}>
+              {kinds.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+        <Field label="First run">
+          {(id) => <Input id={id} type="datetime-local" value={first} onChange={(event) => setFirst(event.target.value)} />}
+        </Field>
+        <Field label="Enabled" hint="Off keeps the schedule and stops it firing.">
+          {(id) => <Switch id={id} label="Enabled" checked={enabled} onCheckedChange={setEnabled} />}
+        </Field>
+        <Field label="Repeat" hint="Off runs it once.">
+          {(id) => <Switch id={id} label="Repeat" checked={repeat} onCheckedChange={setRepeat} />}
+        </Field>
+        {repeat ? (
+          <Field label="Every (hours)" hint="At least 1 minute; an interval shorter than a run would overlap itself.">
+            {(id) => (
+              <Input
+                id={id}
+                type="number"
+                min={0.5}
+                step="0.5"
+                value={intervalHours}
+                onChange={(event) => setIntervalHours(event.target.value)}
+              />
+            )}
+          </Field>
+        ) : null}
+        <Field label="Resource pool" hint="What bounds the run. Blank leaves the tool on its own defaults.">
+          {(id) => (
+            <Select id={id} value={pool} onChange={(event) => setPool(event.target.value)}>
+              <option value="">the tool&apos;s own defaults</option>
+              {pools.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
+      </div>
+      <Field
+        label="Parameters (JSON)"
+        hint={
+          kind === "crawl"
+            ? 'A crawl request, e.g. {"seeds":["https://target.test/"],"max_requests":500}'
+            : 'An audit request, e.g. {"exchange_id":12,"config":"thorough"}'
+        }
+      >
+        {(id) => (
+          <Textarea id={id} rows={5} value={params} onChange={(event) => setParams(event.target.value)} />
+        )}
+      </Field>
+      {paramsError ? <p className="field-hint">{paramsError}</p> : null}
+      <div className="page-actions">
+        <Button variant="outline" onClick={() => onOpenChange(false)}>
+          Cancel
+        </Button>
+        <Button
+          disabled={pending || !name.trim() || !kind || !firstMs || Boolean(paramsError)}
+          onClick={() =>
+            onSubmit({
+              name: name.trim(),
+              kind,
+              enabled,
+              first_ms: firstMs,
+              interval_secs: repeat ? Math.round((Number(intervalHours) || 24) * 3600) : 0,
+              pool: pool || undefined,
+              params: params.trim() ? JSON.parse(params) : undefined,
+            })
+          }
+        >
+          {editing ? "Save schedule" : "Create schedule"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+export function ScheduledTasksSection(): JSX.Element {
+  const { data, error, isFetching, isLoading, refetch } = useSchedules();
+  const save = useSaveSchedule();
+  const update = useUpdateSchedule();
+  const remove = useDeleteSchedule();
+  const [dialog, setDialog] = useState<{ editing: string | null; initial: Schedule | null } | null>(null);
+
+  const fail = (failure: unknown, fallback: string) =>
+    toast.error(failure instanceof Error ? failure.message : fallback);
+
+  const schedules = data?.schedules ?? [];
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Scheduled tasks"
+        detail="Start a crawl or an audit at a wall-clock time, or on an interval. The schedule survives a restart."
+        actions={
+          <>
+            {data ? (
+              <Badge tone={data.running ? "good" : "warn"}>{data.running ? "clock running" : "clock not running"}</Badge>
+            ) : null}
+            {data ? (
+              <Badge tone={data.count ? "good" : "neutral"}>
+                {data.count === 1 ? "1 schedule" : `${formatCount(data.count)} schedules`}
+              </Badge>
+            ) : null}
+            <Button
+              variant="outline"
+              size="small"
+              disabled={!data || data.kinds.length === 0}
+              onClick={() => setDialog({ editing: null, initial: null })}
+            >
+              <Plus size={13} />
+              New schedule
+            </Button>
+            <RefreshButton onClick={() => void refetch()} loading={isFetching} />
+          </>
+        }
+      />
+      {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+      {isLoading ? <LoadingPanel label="Loading scheduled tasks" /> : null}
+      {data && !data.running ? (
+        <p className="field-hint">
+          Nothing in this process is consulting the clock, so no schedule below can fire. The scheduler starts with the
+          web server.
+        </p>
+      ) : null}
+      {data ? (
+        <div className="metric-grid wide">
+          <Metric label="Fired" value={formatCount(data.totals.fired)} detail="Occurrences whose work was started" />
+          <Metric
+            label="Failed"
+            value={formatCount(data.totals.failed)}
+            tone={data.totals.failed ? "bad" : "neutral"}
+            detail="Of those, the starts that returned an error"
+          />
+          <Metric
+            label="Missed"
+            value={formatCount(data.totals.missed)}
+            tone={data.totals.missed ? "warn" : "neutral"}
+            detail="Came due while nothing was running"
+          />
+          <Metric
+            label="Unstartable"
+            value={formatCount(data.totals.unstarted)}
+            tone={data.totals.unstarted ? "bad" : "neutral"}
+            detail="Due for something this build cannot start"
+          />
+        </div>
+      ) : null}
+      {data && schedules.length === 0 ? (
+        <Empty title="Nothing is scheduled" detail="A saved schedule starts work at a time you choose and survives a restart." />
+      ) : null}
+      {schedules.length ? (
+        <SimpleTable headers={["Schedule", "Starts", "Next run", "Repeat", "Pool", "Runs", "Missed", "Last note", ""]}>
+          {schedules.map((schedule) => (
+            <tr key={schedule.name}>
+              <td>
+                <code>{schedule.name}</code>
+                {schedule.enabled ? null : (
+                  <>
+                    {" "}
+                    <Badge tone="neutral">off</Badge>
+                  </>
+                )}
+              </td>
+              <td>{schedule.kind}</td>
+              <td>{schedule.next_ms ? new Date(schedule.next_ms).toLocaleString() : <span className="field-hint">no next run</span>}</td>
+              <td>
+                {schedule.interval_secs > 0 ? `every ${formatDuration(schedule.interval_secs * 1000)}` : "once"}
+              </td>
+              <td>{schedule.pool ? <code>{schedule.pool}</code> : <span className="field-hint">tool defaults</span>}</td>
+              <td>
+                {/* Runs and failures together: 30 runs with 30 failures is a
+                    schedule failing every night, and either number alone reads
+                    as healthy. */}
+                <span className="cell-num">{formatCount(schedule.runs)}</span>
+                {schedule.failures ? <Badge tone="bad">{formatCount(schedule.failures)} failed</Badge> : null}
+              </td>
+              <td>
+                <span className="cell-num">{formatCount(schedule.missed)}</span>
+              </td>
+              <td>{schedule.last_note ? schedule.last_note : <span className="field-hint">nothing yet</span>}</td>
+              <td>
+                <Toolbar>
+                  <Button
+                    variant="outline"
+                    size="small"
+                    onClick={() => setDialog({ editing: schedule.name, initial: schedule })}
+                  >
+                    Edit
+                  </Button>
+                  <IconButton
+                    label={`Delete schedule ${schedule.name}`}
+                    size="small"
+                    disabled={remove.isPending}
+                    onClick={() =>
+                      remove.mutate(schedule.name, {
+                        onSuccess: () => toast.success(`Deleted ${schedule.name}`),
+                        onError: (failure) => fail(failure, "Delete failed"),
+                      })
+                    }
+                  >
+                    <Trash2 size={13} />
+                  </IconButton>
+                </Toolbar>
+              </td>
+            </tr>
+          ))}
+        </SimpleTable>
+      ) : null}
+      {data ? <p className="field-hint">{data.missed_window_policy}</p> : null}
+
+      {dialog ? (
+        <ScheduleDialog
+          key={dialog.editing ?? "new"}
+          open
+          onOpenChange={(open) => (open ? undefined : setDialog(null))}
+          editing={dialog.editing}
+          initial={dialog.initial}
+          kinds={data?.kinds ?? []}
+          pools={data?.pools ?? []}
+          pending={save.isPending || update.isPending}
+          onSubmit={(schedule) => {
+            const done = () => {
+              toast.success(dialog.editing ? `Saved ${schedule.name}` : `Created ${schedule.name}`);
+              setDialog(null);
+            };
+            if (dialog.editing) {
+              update.mutate(
+                { name: dialog.editing, schedule },
+                { onSuccess: done, onError: (e) => fail(e, "Edit failed") },
+              );
+            } else {
+              save.mutate(schedule, { onSuccess: done, onError: (e) => fail(e, "Create failed") });
+            }
+          }}
+        />
+      ) : null}
+    </Card>
   );
 }
