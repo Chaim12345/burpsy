@@ -46,6 +46,16 @@ export function RepeaterPage(): JSX.Element {
   const [viewing, setViewing] = useState<Record<string, number | null>>({});
   const [handingOff, setHandingOff] = useState(false);
   const [inspector, setInspector] = useState(true);
+  /**
+   * Which half of the exchange the Inspector is pointed at.
+   *
+   * The request half is editable — it is a draft, and that is the whole point of
+   * the tool. The response half is not, and rather than render fields that
+   * swallow keystrokes it says why (see `readOnlyNote` below). Offering only the
+   * request would have been the easier answer, but an operator who wants to read
+   * a Set-Cookie out of the response should not have to count bytes in Raw.
+   */
+  const [inspecting, setInspecting] = useState<"request" | "response">("request");
   const send = useRepeaterSend();
 
   const active = useMemo(() => tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null, [tabs, activeId]);
@@ -306,7 +316,28 @@ export function RepeaterPage(): JSX.Element {
           value={result?.response ?? (send.isPending ? "Waiting for the response…" : "Send the request to see the response bytes.")}
           filename="repeater-response.txt"
         />
-        {inspector ? <Inspector raw={active.request} label="Inspector · request" /> : null}
+        {inspector ? (
+          // Pointed at the response with nothing to show yet, it falls back to the
+          // request rather than rendering a pane of empty sections that looks like
+          // a parse failure.
+          inspecting === "request" || !result ? (
+            <Inspector
+              raw={active.request}
+              label="Inspector · request"
+              onChange={(next) => updateRepeaterTab(active.id, { request: next })}
+              onSwitch={result ? () => setInspecting("response") : undefined}
+              switchLabel="Inspect the response"
+            />
+          ) : (
+            <Inspector
+              raw={result.response}
+              label="Inspector · response"
+              readOnlyNote="A response that has already arrived cannot be edited — change the request and send it again."
+              onSwitch={() => setInspecting("request")}
+              switchLabel="Inspect the request"
+            />
+          )
+        ) : null}
       </div>
     </div>
   );

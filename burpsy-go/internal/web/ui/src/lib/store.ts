@@ -4,6 +4,18 @@ import { persist } from "zustand/middleware";
 export type Theme = "light" | "dark" | "system";
 export type Density = "comfortable" | "compact";
 
+/** Which side of the editor pair the Inspector docks to — Burp's inspectorSettingsDock{Left,Right}. */
+export type InspectorDock = "left" | "right";
+/**
+ * The state sections open in, Burp's `configPanelDefaultInspectorPanelState`.
+ *
+ * "auto" opens the sections that actually have rows, which is the useful default:
+ * a request with no query string should not cost a line of screen to say so.
+ * "collapsed" opens nothing, for an operator who wants to drive it from the
+ * keyboard and expand only what they are looking for.
+ */
+export type InspectorPanelState = "auto" | "collapsed";
+
 export interface RepeaterTab {
   id: string;
   name: string;
@@ -33,6 +45,8 @@ interface AppState {
   density: Density;
   paletteOpen: boolean;
   shortcutsOpen: boolean;
+  inspectorDock: InspectorDock;
+  inspectorPanelState: InspectorPanelState;
 
   repeaterTabs: RepeaterTab[];
   activeRepeaterTab: string | null;
@@ -48,6 +62,8 @@ interface AppState {
   setDensity: (density: Density) => void;
   setPaletteOpen: (open: boolean) => void;
   setShortcutsOpen: (open: boolean) => void;
+  setInspectorDock: (dock: InspectorDock) => void;
+  setInspectorPanelState: (state: InspectorPanelState) => void;
 
   openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; fromExchange?: number }) => string;
   updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
@@ -68,6 +84,8 @@ export const useApp = create<AppState>()(
       density: "compact",
       paletteOpen: false,
       shortcutsOpen: false,
+      inspectorDock: "right",
+      inspectorPanelState: "auto",
       repeaterTabs: [],
       activeRepeaterTab: null,
       intruderSeed: null,
@@ -80,6 +98,8 @@ export const useApp = create<AppState>()(
       setDensity: (density) => set({ density }),
       setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
       setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+      setInspectorDock: (inspectorDock) => set({ inspectorDock }),
+      setInspectorPanelState: (inspectorPanelState) => set({ inspectorPanelState }),
 
       openRepeaterTab: ({ name, target, protocol = "https", request, fromExchange }) => {
         const id = nextId();
@@ -116,6 +136,11 @@ export const useApp = create<AppState>()(
       partialize: (state) => ({
         theme: state.theme,
         density: state.density,
+        // Where the Inspector sits and how much of it is open are layout choices an
+        // operator makes once. Persisted here rather than under a `burpsy.*` key of
+        // their own so there is exactly one place per-browser UI state lives.
+        inspectorDock: state.inspectorDock,
+        inspectorPanelState: state.inspectorPanelState,
         repeaterTabs: state.repeaterTabs,
         activeRepeaterTab: state.activeRepeaterTab,
       }),
