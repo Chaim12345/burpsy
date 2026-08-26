@@ -23,13 +23,19 @@ who quotes a single "% of Burp" figure for this project is quoting something nob
 measured. What follows is a **vector**, reported per surface.
 
 Second, and more important than any count: **published claims about this codebase cannot be
-used as evidence.** Across two waves, analysts falsified **five denominators** and **one
-categorical feature claim**, and found defects the trackers recorded as working. The failure
-mode is consistent — a tick asserts that a control **exists**; nothing measured that the
-control **behaves**. §6 documents this, because it is the finding most likely to cause the
-next wrong decision, and **the fifth falsified denominator was published by this analysis**
-(§6.1a) — which is the strongest evidence available that the failure mode is structural
-rather than a previous team's carelessness.
+used as evidence — including this report's own.** Across four waves, analysts falsified
+**five denominators**, **one categorical feature claim**, and **one API route that never
+existed**, and found defects the trackers recorded as working. The failure mode is consistent
+— a tick asserts that a control **exists**; nothing measured that the control **behaves**.
+
+**Three of those falsifications are ours.** The fifth denominator (§6.1a), the phantom route
+`/api/proxy/matchreplace` that four documents cited as observed (§3.1), and a false "never
+used" claim that under-priced a §9 fix by a whole tier (§6.8). We then audited our own
+citations and found **1 false claim in 13 sampled** (§6.8). This is the strongest evidence
+available that the failure mode is **structural** rather than a previous team's carelessness:
+a team explicitly hunting this exact error, with a written rulebook, still committed it three
+times. §6 documents the mechanism, because it is the finding most likely to cause the next
+wrong decision.
 
 Third, the counterweight, which is real and which a hostile reading would miss: **where
 burpsy has not built something, it overwhelmingly renders nothing rather than something
@@ -45,9 +51,16 @@ this report: **burpsy's characteristic failure is reporting success for work it 
 do.** An audit that never sent a header probe says `Audited`. A discovery sweep that POSTed
 to `/robots.txt` and got a 405 says `state=audited, skipped=0, note: None`. A session
 validity rule that never evaluated its second condition says `Valid`, and the authenticated
-scan that depends on it quietly runs logged out (§3.1a). None of these throw,
-none log, none show a warning. That is a far more dangerous property in a security tool than
-any missing feature, because **a missing feature is visible and a false clean is not.**
+scan that depends on it quietly runs logged out (§3.1a). A thirteenth Repeater tab opens
+successfully and destroys the first (§6.7b). None of these throw, none log, none show a
+warning. That is a far more dangerous property in a security tool than any missing feature,
+because **a missing feature is visible and a false clean is not.**
+
+And the same sentence describes this report's own three errors, which is why §6.8 and §10 are
+in it. A phantom route, a "never used" symbol that was used, and a reconstruction that inverted
+a finding are all **reporting success for work we did not do** — we did not open the endpoint,
+did not walk to the producer, did not re-read the evidence. The pathology under audit turned
+out to be a property of *measuring under deadline*, not of this codebase.
 
 ---
 
@@ -182,10 +195,17 @@ configurable scanner. **This, not the missing tabs, is the deepest structural ga
 ## 3. Broken, not merely missing (STATE 5)
 
 The most damaging category: reachable code that does something other than what its
-contract promises. **Confirmed live count: 4** — three in the scanner (§3.0.3) and one in
-session handling (§3.1a), every one proven by running it and pasting real output. A fifth
-(§3.1) was live when wave 1 proved it and has since been fixed; it is retained because it is
-this report's best worked example of the failure mode and because the fix is exemplary.
+contract promises. **Confirmed live count: 5** — three in the scanner (§3.0.3), one in
+session handling (§3.1a), and one in the Repeater UI (§6.7b, the silent 12-tab eviction),
+every one proven by running it and pasting real output. A sixth (§3.1) was live when wave 1
+proved it and has since been fixed; it is retained because it is this report's best worked
+example of the failure mode and because the fix is exemplary.
+
+**The count went up in the final wave, and that is the number to pay attention to.** §6.7b was
+found by an agent sent to answer a *positive* question — "do Repeater tabs isolate properly?"
+— which they do. The defect was adjacent to the answer. Every wave of this analysis found
+STATE 5 defects in surfaces the previous wave had cleared, including the wave that went looking
+for good news. **5 is a floor.**
 
 **Start with §3.1a.** It is the most damaging finding in this report, it was nearly lost
 between two contradictory records of the same workstream, and it is live at HEAD.
@@ -380,7 +400,22 @@ how this system fails, and because the fix's quality is only legible against it.
 
 Detail and proof: `W1-broken-behaviour.md`. Summary:
 
-`/api/proxy/matchreplace` accepts `rule_type` values `request_param_name` and
+> **Route-name correction (W7b, verified independently at `415564e`).** Every prior telling of
+> this finding — this report and three evidence files — called the endpoint
+> **`/api/proxy/matchreplace`**. **That route does not exist and never did.** The real routes
+> are `/api/tools/rules` and `/api/tools/rules/test` (`web/server.go:789-790`). The phantom
+> path appears in **zero** non-markdown files in the repo: it existed only in our own prose,
+> where it propagated by copying.
+>
+> Control, because a negative grep needs one: `/api/proxy/*` is a real prefix — `passthrough`
+> and `options` live there (`server.go:740-741`) — so the search would have found the route
+> had it existed. This is a **sixth false artefact, and the third of ours** (§6.1a, §6.8,
+> here). It is also the most embarrassing kind: a plausible-sounding API path, invented by
+> nobody in particular, that four documents then cited as though observed. Note what saved it
+> from being caught earlier — nothing did. It was found only because someone was asked to go
+> *use* the endpoint rather than describe it.
+
+The endpoint (`/api/tools/rules`) accepts `rule_type` values `request_param_name` and
 `request_param_value`. The API lists them (`api_toolkit.go:566-567`), parses them into a
 valid Target with a **nil error** (`api_toolkit.go:595-598`), installs them into the
 **live proxy ruleset**, and answers `200 {"compiled":N}`. The engine's `applyOne` has **no
@@ -818,6 +853,68 @@ invented here. It is that **rigour is applied per-site rather than per-class**, 
 developer writes the careful version and the careless version within a few lines of each
 other. That is a cheaper problem to fix than a skill gap, and it is what §9.1 addresses.
 
+### 6.7a A coverage table that credits the wrong primitive (W7a)
+
+Two records disagreed: `scanner/infra_coverage.go:281` lists `Client-side prototype pollution`
+under `WiredIssues` for the **`js-execution-tier`** row (`File: internal/jsexec/jsexec.go`),
+while §4.1 measured `internal/jsexec` as the tree's **only STATE 2 package**. Per ADR rule 11,
+this was re-run rather than resolved by preference — and **both records were right about
+different things.**
+
+- `internal/jsexec` **is** STATE 2. Proven better than grep can: **delete the package and
+  `go build ./...` and `go vet ./...` both stay at exit 0** (46 packages → 45).
+- `Client-side prototype pollution` **is** STATE 4 — it fires, proven behaviourally against
+  the bundled vulnapp's `/dm/proto`, with the safe counterpart staying quiet as a control.
+- **And the row still detects with `internal/jsexec` deleted from the tree.** The detection
+  belongs to `domexec` (`checks_dom_extra.go:25-44` → `checks_dom.go:186-201`); the coverage
+  table credits `jsexec` for work `domexec` does. Verified here independently: the only
+  producer of that finding string is `checks_dom_extra.go:39`.
+
+**Two guard-test holes let this sit green,** and they are the interesting part: `File:` is only
+checked **non-empty** (`infra_coverage_test.go:14`), and `TestEveryWiredIssueIsActuallyRunnable`
+verifies the *issue* is runnable — never that the *named primitive* is why. Demonstrated by
+experiment: pointing `File:` at a nonexistent path keeps every guard green; deleting the row
+and reassigning its issue to `dom-execution-harness` keeps the pinned
+`InfraWiredIssueCount() == 139` green; deleting it *without* reassigning yields 138, which is
+the arithmetic control proving the count is otherwise sound. **139 is correct. `jsexec`
+contributes zero to it.**
+
+**Severity, deliberately not inflated.** The tempting read is "a security tool tells operators
+a check ran when it cannot run" — a STATE 5 reporting layer. **It is not that.** `WiredIssues`
+has **no operator-facing consumer**: verified here that the only references to
+`InfraPrimitives` / `InfraWiredIssueCount` are *inside `infra_coverage.go` itself* — zero
+elsewhere in Go, zero `/api` route, zero in `ui/src`, and `docs/` is not embedded. Positive
+control: 78 live `scanner.X` references exist in `internal/web`, so the corpus does carry real
+cross-package use. **This is documentation drift with a repo-internal audience.** It matters
+because the table is the thing a future planner would trust to decide what is already built —
+not because a user sees it today.
+
+A second false statement rides along: `checks_dom_extra.go:6-8` claims "two tiers (goja and a
+real browser)"; **only one runs.** Disambiguation, since this is exactly where §10 trap #2
+strikes: `internal/scanner` *does* import `goja/parser` for static AST work
+(`xss_jscontext.go:28`), but the goja **runtime** appears only in `jsexec.go:48`. The import is
+real; the tier is not.
+
+**The original open question — "is wiring it blocked by anything beyond scheduling?" — was the
+wrong question.** The row already works. The residual work is re-attribution, two comment
+fixes, and closing the guard-test hole. `jsexec`'s genuinely unbuilt purpose is its
+**Chrome-less fallback**, which is a real capability gap and should be recorded as one.
+
+### 6.7b A silent 12-tab ceiling in Repeater (W7b) — new STATE 5
+
+Found while confirming that Repeater tabs are genuinely isolated (they are — §8 item 8).
+`store.ts:146`: `openRepeaterTab` appends the new tab and then applies **`.slice(-12)`**.
+
+Opening a 13th tab **silently discards the oldest**, with no toast, no confirmation, and no
+entry in the reopen stack that exists precisely to protect drafts. Proven behaviourally by
+driving the committed store: *oldest tab A still present? `false`. Recoverable from reopen
+stack? `false`.* An operator with twelve tabs of hand-built requests loses the first one by
+opening a thirteenth, and finds out later.
+
+This is the same shape as everything else in §3: **the product reports success for work it did
+not do** — here, "tab opened" while a different tab was destroyed. It is also cheap to fix
+honestly: refuse, or evict into the reopen stack, or say so.
+
 ### 6.8 We turned the audit on ourselves, and it found things
 
 Having spent six sections establishing that this repo's claims do not survive checking, the
@@ -832,7 +929,7 @@ file, no paths that moved. Cheap to run and worth keeping — it is `grep -oE` p
 (§10 trap #4) was a file that existed, at the right path, saying the *opposite* of what cited
 it. So we re-read the cited code behind the load-bearing claims — everything backing §9's top
 fixes, plus every STATE 2 verdict §9 asks someone to act on — and asked whether it says what
-we said it says. **10 claims checked:**
+we said it says. **13 claims checked:**
 
 | Claim | Citation | Verdict |
 |---|---|---|
@@ -846,10 +943,12 @@ we said it says. **10 claims checked:**
 | §2.1 Intruder `PayloadGenerator` has zero non-test callers | `intruder/intruder.go:346-387` | **Holds.** Only its own declarations and methods. |
 | §6.1a `advisory.Catalogue.ByName` has zero non-test callers | `advisory/advisory.go:216` | **Holds, including the trap it warns about** — the competing hits really are `scanner.BuiltInConfigByName` (`api_scanner_configs.go:124`), a different symbol in a different package. |
 | §2.1 `inspectorPanelState`/`inspectorDock` are written and never read | `ui/src/lib/store.ts` | **Holds.** Declared `:65-66`, defaulted `:123-124`, setters `:140-141`, persisted `:287-288` — and referenced by no other file. |
+| §2.2 `Export configuration` ships only scope + intercept + session | `web/api_config.go:48-67` | **Holds exactly.** The `configBundle` is populated with `Scope`, `Intercept` and `SessionRules` and nothing else, then encoded. |
+| §2.1 row 80 — the sender's `tls.Config` pins neither version nor ciphers | `sender/sender.go:242-244` | **Holds, and understates itself.** Only `InsecureSkipVerify` is set. The report cited one path; there are **two**, and `alpn.Dialer` (`alpn/alpn.go:182-188`) sets only `ServerName`, `InsecureSkipVerify` and `NextProtos`. **Neither** path constrains TLS version or cipher suite. |
 | §3.0.3c `AuditItemPointNoChecks` "is never used" | `scanner/audit_items.go:188-190` | **FALSE — corrected in place.** Produced live via `Resolve`→`resolvePoints`→`pointStatusFor:602`. |
 | §9 item 3 is a cheap status swap | (derived) | **FALSE — re-priced.** Point status is per-*item* and stamped onto every point; the fix needs new per-point accounting. |
 
-**1 of 10 sampled claims was wrong, and it took a §9 priority estimate down with it.** The
+**1 of 13 sampled claims was wrong, and it took a §9 priority estimate down with it.** The
 error was **trap #1 for the third time**: we grepped an identifier, found the declaration and
 the `switch` arms, and concluded "never used" without walking two frames up to the producer.
 
@@ -863,7 +962,7 @@ Four things follow, and they are the honest reading:
 1. **The structural pass is necessary and nearly worthless on its own.** It scored 100% on a
    document containing a false claim. A citation audit that only checks that files exist
    measures tidiness, not truth.
-2. **A 1-in-10 semantic error rate is this report's own floor, not its ceiling** — 60
+2. **A 1-in-13 semantic error rate is this report's own floor, not its ceiling** — 57
    citations went unsampled, and the sample was deliberately drawn from the *most*
    scrutinised claims, so it is biased optimistic. §7's "read this as a floor, not a
    measurement" applies to the document as much as to the product. Anyone acting on a claim
@@ -909,9 +1008,22 @@ Four things follow, and they are the honest reading:
   exemplar defect had been **fixed** while we still called it live (§3.1). Full results in
   §6.6-6.7.
 
+- **W7a + W7b — the last four open questions, and a self-audit.** Sent to *close* §8 items
+  rather than open new ground; between them they closed items **3, 8, 10** and corrected the
+  premise of item **7** (§8), while turning up **a new STATE 5** (§6.7b), **a misattributed
+  coverage row** (§6.7a), and **a route name that never existed** (§3.1). In parallel, this
+  report's own citations were audited: 70/70 resolve structurally, **1 of 13 false**
+  semantically (§6.8).
+
 **Nothing remains open from the original plan.** What the report still does not know is
 listed in §8, and the largest item there is no longer a workstream that can be run — it is
 the ~170 scanner evaluators that would each need a live target to exercise.
+
+**The final wave is the strongest evidence for reading this as a floor.** Both W7 agents were
+sent to *close* questions, and both found new defects on the way — one of them while
+confirming that a feature works correctly. The two questions that closed cleanly
+(Repeater isolation, prototype-pollution detection) both closed **in burpsy's favour**, and
+both had a defect sitting immediately beside the good news.
 
 **A closing note on completeness.** Every wave found defects in surfaces the previous wave
 called clean, *including surfaces this analysis called clean*. Wave 3 found a live STATE 5
@@ -961,9 +1073,17 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
    the shipped resources do not contain one (`selected_issues` enumerates 15 distinct
    `type_index` across all presets). This is recorded as *deliberately not determined*
    rather than estimated. **Do not let anyone fill this in without new evidence.**
-3. **Field incidence of the match/replace STATE 5 defect.** It is reachable via the public
-   API but not from the UI dropdown (only 5 targets, `matchreplace.tsx:18-23`). Whether any
-   extension, script or CI job actually sends those values is unknown.
+3. ~~**Field incidence of the match/replace STATE 5 defect.**~~ **CLOSED (W7b) — incidence is
+   zero, and the defect is no longer a defect.** Every occurrence of `request_param_name` /
+   `request_param_value` in the repo is implementation, Go test, or docs prose; the only
+   sender of a `rule_type` is `matchreplace.tsx`, which offers 5 triple-constrained targets.
+   The API now **refuses both by name with a 400** (`api_toolkit.go:628-635`, verified here)
+   and the engine no-ops instead of body-rewriting, closing even the hand-edited-config
+   bypass. **Reclassify: STATE 4 plus a documented STATE 0 capability gap** (5 of 7 Burp
+   `rule_type`s implemented) — *not* a live defect. See also the route-name correction in §3.1.
+   Residual, and it is a real gap: **no e2e script touches match/replace at all.** Positive
+   control — 89 `curl`s across 10 shell scripts hit ~14 distinct `/api/` paths, and
+   `/api/tools/rules` is not among them.
 4. **Intruder "section-marker parsing"** — no such distinct feature found in
    `internal/intruder`; only the existing `§marker§` payload-position parsing, already
    wired via `/api/intruder/run`. Flagged rather than guessed.
@@ -974,17 +1094,45 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
    and re-covers the second** (§6.6-6.7). This item is closed as a workstream; what remains
    is that the two original waves' *specific* findings were never recovered, so anything they
    found and neither W3 nor W4 re-found is still unknown.
-8. **Whether burpsy's Repeater supports multiple concurrent isolated tabs** the way Burp's
-   tab manager (`secondarySuiteTabBar`) does. W3 flagged this rather than guessing a ratio —
-   leaf-counting cannot answer it.
+7. ~~**The Collaborator mint-payload fix** is recorded as verified in a surviving summary,
+   but the summary was truncated before its evidence.~~ **PREMISE CORRECTED (W7a).** The
+   summary is commit `361deb0` and it is **not truncated** — the message is complete and
+   simply carries **no evidence and no test** (`git show --name-only`: three UI files). The
+   finding narrows from "unproven capability" to something more specific and worse: minting
+   **works** (`web/api_collaborator.go:502`, correlation id a `crypto/rand` DNS label at
+   `:278`, wired via 5 routes at `server.go:721-725`, present in the embedded `dist/app.js`
+   with positive and negative controls), and driving it in a scratch copy gave correct
+   distinct addresses, 409 unconfigured, 503 broken, and no mint on status read. But **there
+   are zero committed behavioural tests on that route** — no `api_collaborator_test.go` — for
+   a `riskEgress` endpoint that spawns a subprocess and triggers a public DNS registration.
+   **Still NOT DETERMINED:** real public-DNS resolution and interaction attribution, which is
+   precisely what `361deb0` claimed.
+8. ~~**Whether burpsy's Repeater supports multiple concurrent isolated tabs.**~~ **CLOSED
+   (W7b) — parity achieved, and this is a genuine positive finding.** Proven behaviourally,
+   not by reading: the committed store was extracted and driven, and editing tab A's request
+   buffer left B and C byte-identical; per-tab target and per-send options are independent;
+   switching tabs mutates nothing. Every mutator is keyed by tab id (`store.ts:151-154`) and
+   the editor writes back under `active.id` (`repeater.tsx:515-519`). **This is not a tab
+   strip over shared state** — which was the specific failure mode worth checking, because it
+   would have looked identical from the outside. Per-tab back/forward history is real
+   (`repeater.tsx:63-65`, with an `N/M` counter at `:358-382`), and `repeaterTabs` /
+   `repeaterGroups` genuinely rehydrate and drive chrome (`:420-470`) — so the write-only
+   pathology really is confined to `inspectorDock` / `inspectorPanelState`. **But see §6.7b:
+   the same code path silently evicts the 13th tab.**
 9. **Burp-side depth for the Discover/Learn tool.** Not enumerated in any available Burp-side
    document, so no ratio is offered for that row.
-10. **Whether wiring `jsexec`'s prototype-pollution check is blocked by anything beyond
-   scheduling.** `infra_coverage.go:269-274` implies the browser blocker it cites is already
-   retired by `domexec`, which suggests it is not blocked — but that was not verified
-   end to end.
-7. **The Collaborator mint-payload fix** is recorded as verified in a surviving summary,
-   but the summary was truncated before its evidence. The claim stands unproven here.
+10. ~~**Whether wiring `jsexec`'s prototype-pollution check is blocked by anything beyond
+   scheduling.**~~ **CLOSED (W7a) — the question was wrong.** Nothing blocks it because
+   **the check already works, and `jsexec` is not what makes it work.** Full treatment in
+   §6.7a, including the two guard-test holes that kept the misattribution green and the
+   reason this is documentation drift rather than a STATE 5 reporting layer. `jsexec`'s
+   genuinely unbuilt capability is its **Chrome-less fallback**.
+11. **Whether the Collaborator route resolves against real public DNS**, and whether
+   interactions attribute correctly to the minting client. Split out of item 7 because it is
+   the part that remains open, and it needs live external infrastructure to answer.
+12. **Whether Repeater's isolation holds at the DOM layer.** W7b's proof drove the **store**,
+   which is where isolation would break — but no e2e test opens a second tab, so the
+   rendered-component path is unmeasured. Named rather than assumed from the store result.
 
 ---
 
@@ -1038,7 +1186,7 @@ security tool; everything after is parity work.
    in-tree), and apply the same binding to `internal/proxy/options.go:372-386`, where 3 tests
    bind the option *listing* and **0** bind the *applier*.
 
-5. **Gate `bun run check` and the Playwright e2e suite in CI.** 118 frontend test
+5. **Gate `bun run check` and the Playwright e2e suite in CI.** *(W7b adds a specific hole: no e2e script touches match/replace at all — 89 curls across 10 scripts hit ~14 `/api/` paths, and `/api/tools/rules` is not one. And no e2e opens a second Repeater tab, which is why §8 item 12 stays open.)* 118 frontend test
    assertions, two typechecks and two token-drift checks are committed and never executed.
    The Go half of this project has real gates including live `ffuf`/`nuclei` tests; the
    frontend half has none. This is the highest value-per-line change available — the tests
@@ -1056,6 +1204,25 @@ security tool; everything after is parity work.
 10. **Make `Export configuration` honest** (§2.2). It ships 3 of ~11 subsystems under a name
    that implies all of them. Either export everything or write a manifest into the file and
    say "partial" in the UI. Cheapest fix with the worst untreated failure mode in the report.
+10a. **Fix the silent 12-tab Repeater eviction** (§6.7b). Promoted into the top group by
+   harm, not by size: it is a live STATE 5 that **destroys operator work** with no warning and
+   no undo, and the reopen stack it bypasses already exists. Refuse the 13th tab, or evict into
+   the reopen stack, or say so in the UI — any of the three beats today. `store.ts:146`.
+
+10b. **Re-attribute the `js-execution-tier` coverage row and close the guard-test hole**
+   (§6.7a). The row credits `internal/jsexec` for a detection that `domexec` performs, and the
+   check still fires with `jsexec` deleted from the tree. Low urgency — there is **no
+   operator-facing consumer**, so nothing lies to a user today — but do it before anyone plans
+   from that table, because a planner reading it would conclude a STATE 2 package is load-bearing
+   and leave it alone. Fix the two guard holes at the same time: assert `File:` **resolves** (not
+   merely non-empty), and assert the **named primitive** is why the issue is runnable, not just
+   that it is. Also correct `checks_dom_extra.go:6-8`, which claims two tiers where one runs.
+
+10c. **Add a behavioural test to the Collaborator mint route** (§8 item 7). No
+   `api_collaborator_test.go` exists for a `riskEgress` endpoint that spawns a subprocess and
+   triggers a public DNS registration. The scratch-copy run gave correct behaviour, so this is
+   about *keeping* it, cheaply, at the layer that has none.
+
 11. **Fix or delete the Decoder `guess_alphabets` checkbox** (§5.1). It is the only proven
    decorative control in ~80. Small, and it takes the count to zero.
 12. **Give scanning a front door** (§7.1). The capability exists and is fragmented across

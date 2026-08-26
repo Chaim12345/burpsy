@@ -1,3 +1,16 @@
+<!-- ROUTE-NAME CORRECTION (added 2026-08-26, W7b) -->
+
+> **This file refers to `/api/proxy/matchreplace`. That route does not exist and never did.**
+> The real endpoints are `/api/tools/rules` and `/api/tools/rules/test` (`web/server.go:789-790`).
+> The phantom path appears in **zero** non-markdown files in this repo — it existed only in our
+> prose, and spread by copying between documents. Control: `/api/proxy/*` is a genuine prefix
+> (`passthrough`, `options` at `server.go:740-741`), so a search would have found the route had
+> it existed. Left in place below rather than rewritten, so the error stays visible; see
+> §3.1 of the master report. Per ADR rule 14, this note exists because a cited evidence file
+> must not contradict the report that cites it.
+
+---
+
 <!-- PROVENANCE — read this before citing anything below. -->
 
 > **This file was restored on 2026-08-26.** Until then, `docs/parity/W1-broken-behaviour.md`
