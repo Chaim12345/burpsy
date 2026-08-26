@@ -438,6 +438,47 @@ more than one field set and tell the operator to use `All{}`. The second is smal
 400 rather than a behaviour change, and matches the refusal pattern `targetToCategory`
 already uses (§3.1).
 
+### 3.1c Repeater tabs are per-tab in storage but share one send-in-flight state — **LIVE (W7b)**
+
+Closes §8 item 8 ("whether Repeater supports multiple concurrent isolated tabs"). Answer:
+**partially — data is isolated, live-send status is not.**
+
+`RepeaterTab` state (target, request, options, response history) is correctly keyed by
+`tab.id` throughout `lib/store.ts` (e.g. `openRepeaterTab`/`updateRepeaterTab`/
+`closeRepeaterTab`, `store.ts:143-208`) and `repeater.tsx`'s `history`/`viewing` maps are
+keyed `[tab.id]` (`repeater.tsx:125,129,155,167,204-206`). That much matches Burp's per-tab
+model.
+
+But the in-flight send state is a single mutation instance for the whole page, not one per
+tab: `const send = useRepeaterSend()` is called once at component scope
+(`repeater.tsx:78`), and `useRepeaterSend` is a plain `useMutation` with no tab key
+(`lib/data.tools.ts:17-21`). Its `isPending`/`error` are read directly, unscoped by
+`active.id`, at:
+- `repeater.tsx:404` — Send button `disabled={send.isPending}`
+- `repeater.tsx:406` — button label flips to "Sending…"
+- `repeater.tsx:508` — `send.error` renders `ErrorNotice` for whichever tab is active *now*
+- `repeater.tsx:524` — response pane falls back to "Waiting for the response…" from
+  `send.isPending`, not from whether *this* tab has a request in flight
+
+**Failure scenario:** send from Tab A against a slow target (still pending), switch to Tab
+B. Tab B's Send button is disabled and its response pane reads "Waiting for the
+response…" even though Tab B never sent anything — the in-flight state of Tab A bleeds into
+Tab B's UI. Worse, the `mod+Enter` hotkey (`repeater.tsx:137-145`) calls `submit(active)`
+with no `send.isPending` guard at all, so it can fire a second `send.mutate()` on the same
+shared mutation object while the first is still outstanding — the two calls' `onSuccess`
+closures still write to the correct `history[tab.id]` (proven safe by inspection at
+:124-129), but the single shared `isPending`/`error` displayed while both are in flight
+belongs to whichever call the hook is currently tracking, not necessarily the active tab's.
+
+This is genuinely different from Burp's `secondarySuiteTabBar`, where each tab's send state
+is its own. Not a decorative control (§5.1's category) and not a silent-default coercion
+(§3.2's pattern) — a third shape: **isolated data, shared transient UI state.**
+
+**Fix shape:** key the mutation (or at minimum its displayed `isPending`/`error`) by
+`active.id`, e.g. one `useMutation` per tab via a `Map`/`Record<string, …>` keyed on
+`tab.id`, or gate the hotkey and button on "is *this* tab's own last-known pending id equal
+to its currently in-flight send" rather than on the hook's global status.
+
 ### 3.2 The bug class, generalised
 
 > An API-layer vocabulary — a string→enum parser, a switch on a `type` field, an accepted
@@ -867,9 +908,22 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
    the shipped resources do not contain one (`selected_issues` enumerates 15 distinct
    `type_index` across all presets). This is recorded as *deliberately not determined*
    rather than estimated. **Do not let anyone fill this in without new evidence.**
-3. **Field incidence of the match/replace STATE 5 defect.** It is reachable via the public
-   API but not from the UI dropdown (only 5 targets, `matchreplace.tsx:18-23`). Whether any
-   extension, script or CI job actually sends those values is unknown.
+3. ~~**Field incidence of the match/replace STATE 5 defect.**~~ **CLOSED this wave (W7b).**
+   The defect itself is fixed at `638c480` (§3.1) — `targetToCategory` now refuses
+   `request_param_name`/`request_param_value` with a 400 naming the accepted vocabulary
+   (`internal/web/api_toolkit.go:626-633`), rather than silently falling through to a
+   whole-body rewrite. For in-repo incidence: a repo-wide grep for
+   `request_param_name|request_param_value|RequestParamName|RequestParamValue` across
+   `*.go|*.tsx|*.ts|*.json|*.md|*.yaml|*.yml` returns hits only in the engine vocabulary
+   itself (`api_toolkit.go`), its guarding tests (`matchreplace_target_test.go`,
+   `unapplied_target_test.go`), and the parity report docs — **zero** in the UI
+   (`matchreplace.tsx` never emits either string; confirmed by grep on that file), zero in
+   any CI config, sample config, or e2e fixture. So within this codebase the field incidence
+   was and remains **zero** — nothing here ever sent those two `rule_type` values. Whether an
+   external extension or script in the wild ever did remains genuinely unknowable from this
+   repo and is not claimed. `TestTheParamTargetsAreRefusedAsUnimplementedNotUnknown`
+   (`matchreplace_target_test.go:177`) and `TestEveryEngineTargetHasANameAndOnlyAppliableOnesRoundTrip`
+   (`matchreplace_target_test.go:139`) pin the refusal.
 4. **Intruder "section-marker parsing"** — no such distinct feature found in
    `internal/intruder`; only the existing `§marker§` payload-position parsing, already
    wired via `/api/intruder/run`. Flagged rather than guessed.
@@ -878,9 +932,15 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
    features actually behave", "audit the other four reports for unsupported claims"). Their
    findings are lost, not absent. W3 has since re-covered the first; W4 re-covers the second
    and is still in flight.
-8. **Whether burpsy's Repeater supports multiple concurrent isolated tabs** the way Burp's
-   tab manager (`secondarySuiteTabBar`) does. W3 flagged this rather than guessing a ratio —
-   leaf-counting cannot answer it.
+8. ~~**Whether burpsy's Repeater supports multiple concurrent isolated tabs** the way Burp's
+   tab manager (`secondarySuiteTabBar`) does.~~ **CLOSED this wave (W7b) — §3.1c.** Per-tab
+   *data* (target/request/options/history) is correctly isolated by `tab.id`
+   (`store.ts:143-208`, `repeater.tsx:125,129,155,167,204-206`). Per-tab *send-in-flight UI
+   state* is not: `useRepeaterSend()` is one shared mutation for the whole page
+   (`repeater.tsx:78`; `lib/data.tools.ts:17-21`), so its `isPending`/`error` bleed across
+   tabs at `repeater.tsx:404,406,508,524`, and the `mod+Enter` hotkey
+   (`repeater.tsx:137-145`) can fire a second concurrent send with no pending guard at all.
+   New STATE 5, live at HEAD, filed at §3.1c.
 9. **Burp-side depth for the Discover/Learn tool.** Not enumerated in any available Burp-side
    document, so no ratio is offered for that row.
 10. **Whether wiring `jsexec`'s prototype-pollution check is blocked by anything beyond
