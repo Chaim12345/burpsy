@@ -5,11 +5,12 @@ import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
 import { useRepeaterSend } from "../lib/data.tools";
 import { useApp, type RepeaterTab } from "../lib/store";
-import type { Exchange, RepeaterResult } from "../lib/types";
+import type { Exchange, RepeaterRedirects, RepeaterResult } from "../lib/types";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader } from "../ui/layout";
 import { Badge, Button, Empty, ErrorNotice, Field, IconButton, Input, Tooltip } from "../ui/primitives";
+import { SimpleTable } from "../ui/table";
 
 const DEFAULT_TARGET = "https://example.com:443";
 
@@ -300,6 +301,7 @@ export function RepeaterPage(): JSX.Element {
         </div>
 
         {send.error ? <ErrorNotice error={send.error} onRetry={() => submit(active)} /> : null}
+        {result?.redirects ? <RedirectChain chain={result.redirects} /> : null}
       </div>
 
       <div className={inspector ? "editor-grid-inspected" : "editor-grid"}>
@@ -339,6 +341,60 @@ export function RepeaterPage(): JSX.Element {
           )
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The redirect chain a send produced.
+ *
+ * Rendered only when there was one, and it distinguishes the three outcomes that matter: a chain that
+ * completed, a chain something stopped, and a chain that could not be evaluated. Collapsing those into
+ * "1 redirect" would lose the only fact the operator needs — whether the hop was refused by scope, held
+ * back by the policy, or followed to a real response.
+ */
+function RedirectChain({ chain }: { chain: RepeaterRedirects }): JSX.Element {
+  const followed = chain.hops.filter((hop) => hop.followed).length;
+  return (
+    <div className="stack" style={{ marginTop: 10 }}>
+      <div className="toolbar">
+        <Badge tone={chain.complete ? "good" : "warn"}>
+          {chain.complete ? "chain complete" : "chain stopped"}
+        </Badge>
+        <Badge>mode: {chain.mode}</Badge>
+        <Badge>
+          {chain.sent} request{chain.sent === 1 ? "" : "s"} sent
+        </Badge>
+        <Badge>
+          {followed} of {chain.hops.length} hop{chain.hops.length === 1 ? "" : "s"} followed
+        </Badge>
+        {chain.final_status ? <Badge tone={statusTone(chain.final_status)}>final {chain.final_status}</Badge> : null}
+      </div>
+      {chain.error ? (
+        <p className="field-hint">
+          The chain could not be evaluated, so nothing here says whether a redirect was followed:{" "}
+          {chain.error}
+        </p>
+      ) : null}
+      <SimpleTable headers={["From", "Status", "Location", "Followed", "Why not"]}>
+        {chain.hops.map((hop, index) => (
+          <tr key={`${hop.from}-${index}`}>
+            <td>
+              <code>{hop.from}</code>
+            </td>
+            <td>
+              <span className="cell-num">{hop.status}</span>
+            </td>
+            <td>
+              <code>{hop.to ?? hop.location}</code>
+            </td>
+            <td>
+              <Badge tone={hop.followed ? "good" : "warn"}>{hop.followed ? "sent" : "not sent"}</Badge>
+            </td>
+            <td>{hop.reason ? hop.reason : <span className="cell-dim">—</span>}</td>
+          </tr>
+        ))}
+      </SimpleTable>
     </div>
   );
 }

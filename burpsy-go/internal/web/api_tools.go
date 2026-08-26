@@ -45,6 +45,33 @@ type repeaterSendResp struct {
 	RequestMsgID  uint64          `json:"request_msg_id"`
 	ResponseMsgID uint64          `json:"response_msg_id"`
 	ExchangeID    core.ExchangeID `json:"exchange_id"`
+	// Redirects is the chain this send produced, and it is present only when the response was a 30x.
+	//
+	// `response` above stays the response to the request the operator wrote — that is the contract
+	// Repeater has, and replacing those bytes with a later hop's would hide the Set-Cookie and the
+	// Location an operator opened Repeater to look at. So the chain is reported alongside rather than
+	// substituted, with every hop saying whether it was followed and why not when it was not. A nil
+	// field means "not a redirect"; a field present with `followed: false` on every hop means the
+	// policy or the scope stopped it, which are different facts and are named differently.
+	Redirects *repeaterRedirects `json:"redirects,omitempty"`
+}
+
+// repeaterRedirects is the follow outcome as the panel reads it.
+type repeaterRedirects struct {
+	// Mode is the policy that was in force, so a chain that followed nothing says whether that is
+	// because following is off or because something refused it.
+	Mode string `json:"mode"`
+	// Sent counts every request this exchange put on the wire, the operator's own included.
+	Sent int `json:"sent"`
+	// Complete is false when the chain was still redirecting when it stopped.
+	Complete bool                 `json:"complete"`
+	Hops     []sender.RedirectHop `json:"hops"`
+	// FinalStatus is the status of the last response received, which differs from `status` above
+	// whenever a hop was actually followed.
+	FinalStatus int `json:"final_status"`
+	// Error is set when the chain could not be evaluated at all — the response was unreadable, say.
+	// Reported rather than dropped: "we did not look" must not render as "there was nothing to follow".
+	Error string `json:"error,omitempty"`
 }
 
 func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +186,45 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		RequestMsgID:  uint64(reqMsgID),
 		ResponseMsgID: uint64(respMsgID),
 		ExchangeID:    ex.ID,
+		Redirects:     s.followRepeaterRedirects(ctx, host, port, tls, []byte(req.Request), rawResp),
 	})
+}
+
+// followRepeaterRedirects applies the network settings' redirect policy to a send that already happened.
+//
+// Returns nil when the response is not a redirect, so the field is absent for the ordinary case rather
+// than present and empty — a client can treat its presence as "there was a chain here".
+//
+// The hops go through sender.AuthorisedSender, which is what makes offering this safe: the repeater's own
+// gate on the first request is host-level by design, but a hop is a request a Location chose, so it is
+// authorised on its rendered bytes for the authority it names. Under the default RedirectNever nothing
+// is sent and the answer records that the policy is what stopped it — so an operator who never opens the
+// Network panel gets one request per click, exactly as before.
+func (s *Server) followRepeaterRedirects(
+	ctx context.Context, host string, port uint16, tls bool, raw, rawResp []byte,
+) *repeaterRedirects {
+	mode := string(s.sender.Network().Redirects.Mode)
+	authorised := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
+	result, err := authorised.FollowRedirectsAfter(ctx, raw, rawResp)
+	if err != nil {
+		// The send succeeded and this did not, so the exchange still stands. Naming the failure is the
+		// honest option: a nil here would say "not a redirect", which is a claim we cannot make.
+		return &repeaterRedirects{Mode: mode, Sent: 1, Hops: []sender.RedirectHop{}, Error: err.Error()}
+	}
+	if len(result.Hops) == 0 {
+		return nil
+	}
+	final := 0
+	if result.Final != nil {
+		final = result.Final.StatusCode
+	}
+	return &repeaterRedirects{
+		Mode:        mode,
+		Sent:        result.Sent,
+		Complete:    result.Complete,
+		Hops:        result.Hops,
+		FinalStatus: final,
+	}
 }
 
 // ---- Intruder ----------------------------------------------------------------------------------

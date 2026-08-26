@@ -21,6 +21,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"go.uber.org/zap"
@@ -1223,6 +1224,47 @@ func (s *Store) LoadScanConfig() (*scanner.ScanConfig, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// SaveNetworkSettings persists the network settings as one settings value.
+//
+// Same shape as SaveScanConfig and for the same reason: one small document with no per-row identity,
+// written whole by the web endpoint after every accepted edit. Written whole also settles what a
+// removed row means — an override deleted from the table is absent from the next save rather than
+// lingering as a row nothing referenced, which is what an incremental API would have had to remember.
+//
+// The value stored is the *confirmed* settings the sender is running, not the patch that produced them,
+// so a restore reproduces the state the operator last saw rather than replaying a sequence of edits.
+func (s *Store) SaveNetworkSettings(n sender.NetworkSettings) error {
+	encoded, err := json.Marshal(n)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("network.settings", string(encoded))
+}
+
+// LoadNetworkSettings restores the persisted network settings.
+//
+// Absence yields a nil and no error — an old database means "use sender's own defaults", and a nil lets
+// the caller skip the apply rather than overwrite those defaults with a zero struct whose every timeout
+// is zero. That distinction is load-bearing here in a way it is not for most settings: a zero-valued
+// NetworkSettings is not a neutral starting point, it is "no connect bound, no read bound, redirects
+// with an unnamed mode", and applying one would be refused by Validate at best and silently change
+// every timeout at worst.
+//
+// A stored document that no longer parses is returned as an error rather than dropped. Refuse-by-default
+// on unparseable input: an operator whose resolution overrides failed to load must be told, because the
+// alternative is requests quietly going where DNS points instead of where they said.
+func (s *Store) LoadNetworkSettings() (*sender.NetworkSettings, error) {
+	v, err := s.getSetting("network.settings")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	out := &sender.NetworkSettings{}
+	if err := json.Unmarshal([]byte(v), out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ---- Restore -----------------------------------------------------------------------------------

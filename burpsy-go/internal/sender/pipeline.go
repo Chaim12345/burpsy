@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"net"
 	"net/textproto"
-	"strconv"
 	"strings"
 	"time"
 
@@ -162,8 +161,12 @@ func readFramedResponse(br *bufio.Reader) (raw []byte, framing string, complete 
 // probe into a no-op instead of a refusal.
 func (s *Sender) dialOne(ctx context.Context, host string, port uint16, useTLS bool) (net.Conn, error) {
 	if !useTLS {
-		dialer := &net.Dialer{Timeout: s.config.Timeout}
-		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+		// The same dialer and the same resolution table as every other plaintext dial in this package:
+		// a probe that ignored the hostname-resolution override would be sent to a different machine
+		// from the ordinary request it is being compared against, which is the one thing a smuggling
+		// probe cannot afford.
+		settings := s.Network()
+		conn, err := settings.dialer().DialContext(ctx, "tcp", settings.dialAddress(host, port))
 		if err != nil {
 			return nil, fmt.Errorf("connection failed: %w", err)
 		}
@@ -197,7 +200,7 @@ func (s *Sender) SendPipelined(ctx context.Context, host string, port uint16, us
 	// One deadline for the whole batch, set once, exactly like writeHTTP1 sets one for its single
 	// exchange: SendPipelined is one connection carrying one unit of work, and re-arming the deadline
 	// per read would let a large batch's total duration grow without the bound the caller asked for.
-	s.setDeadline(ctx, conn)
+	s.setDeadline(ctx, conn, host)
 
 	// stoppedWriting is the index of the first request never written onto the socket, or
 	// len(raws) when every request went out: a write failure on a shared connection is fatal to
@@ -258,7 +261,7 @@ func (s *Sender) SendKeepAlive(ctx context.Context, host string, port uint16, us
 	exchanges := make([]PipelinedExchange, len(raws))
 	for i, raw := range raws {
 		exchanges[i].Raw = raw
-		s.setDeadline(ctx, conn)
+		s.setDeadline(ctx, conn, host)
 		if _, werr := conn.Write(raw); werr != nil {
 			exchanges[i].ReadErr = fmt.Errorf("request %d of %d not sent: %w", i, len(raws), werr)
 			continue
@@ -292,7 +295,7 @@ func (s *Sender) TimedRead(ctx context.Context, host string, port uint16, useTLS
 	}
 	defer conn.Close()
 
-	s.setDeadline(ctx, conn)
+	s.setDeadline(ctx, conn, host)
 	if _, err = conn.Write(raw); err != nil {
 		return nil, false, fmt.Errorf("write failed: %w", err)
 	}

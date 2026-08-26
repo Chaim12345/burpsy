@@ -65,6 +65,7 @@ export const keys = {
   collaboratorInteractions: ["collaborator", "interactions"] as const,
   blindxss: ["blindxss"] as const,
   proxyOptions: ["proxy", "options"] as const,
+  networkSettings: ["network", "settings"] as const,
 };
 
 /**

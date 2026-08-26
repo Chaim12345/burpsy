@@ -127,6 +127,14 @@ type Dialer struct {
 	// Timeout bounds the whole dial including the handshake. Zero means no timeout of its own — the
 	// context is then the only bound, which is what the proxy relies on.
 	Timeout time.Duration
+	// Resolver is the resolver the underlying TCP dial uses to turn addr's host into an address. Nil
+	// means the system resolver, which is what every caller wanted until network settings gained a
+	// lookup policy (see sender.ResolutionSettings).
+	//
+	// It is a property of the caller rather than of the dial for the same reason the two knobs above
+	// are: a sender whose operator named a resolver must use it for every dial it makes, and a proxy
+	// leg that never had one must keep not having one.
+	Resolver *net.Resolver
 }
 
 // Dial connects to addr, offering exactly the protocols in offer, and returns the connection with the
@@ -146,7 +154,10 @@ func (d Dialer) Dial(ctx context.Context, serverName, addr string, offer []strin
 	if len(offer) > 0 {
 		cfg.NextProtos = offer
 	}
-	dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: d.Timeout}, Config: cfg}
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: d.Timeout, Resolver: d.Resolver},
+		Config:    cfg,
+	}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, "", err

@@ -341,12 +341,41 @@ func main() {
 		}
 	}()
 
+	// One sender for the scanner and the web server, where there were two.
+	//
+	// The two were a defect the network-settings surface made visible rather than caused. /api/network/settings
+	// writes the sender the web server holds; with a second sender inside the scanner, a resolution
+	// override an operator typed would have applied to Repeater and not to audit probes — a panel
+	// claiming the whole process dials 10.0.0.1 while half of it still asked DNS. Sharing is also what
+	// sender.go's own comment on the protocol cache asks for: "an intruder run and the scan that
+	// preceded it share what either of them discovered". Sharing is safe because Sender guards its
+	// config and client behind a mutex and its protocol cache is atomic.
+	httpSender := sender.NewSender(sender.DefaultSenderConfig())
+
+	// Persisted network settings apply before either consumer sends anything. Same precedence argument
+	// as the scan-config restore below: what the operator set through the API in a previous run is a
+	// later decision than this process's compiled-in defaults. A refusal is logged and the defaults
+	// stand — a settings document that no longer validates must not stop the binary from starting, but
+	// it must not be half-applied either, and ApplyNetwork is all-or-nothing.
+	if persistStore != nil {
+		saved, err := persistStore.LoadNetworkSettings()
+		if err != nil {
+			logger.Warn("Failed to load saved network settings; using defaults", zap.Error(err))
+		} else if saved != nil {
+			if err := httpSender.ApplyNetwork(*saved); err != nil {
+				logger.Warn("Saved network settings were refused; using defaults", zap.Error(err))
+			} else {
+				logger.Info("Applied persisted network settings")
+			}
+		}
+	}
+
 	// Hoisted out of the builder chain below because the DOM engine is conditional: -dom names one,
 	// and without it every DOM-based check reports a missing capability — which is what this binary
 	// did unconditionally until the flag existed. The provider is lazy, so an audit whose check set
 	// contains no DOM check never starts a browser.
 	activeScanner := scanner.NewActiveScanner(store, logger).
-		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithSender(httpSender).
 		WithScope(scope).
 		WithCorpusChecks(passiveScanner.ActiveChecks()).
 		WithToolRunner(toolRunner).
@@ -392,7 +421,7 @@ func main() {
 	// Start web server
 	webServer := web.NewServer(store, scope).
 		WithLogger(logger).
-		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithSender(httpSender).
 		// WithScope is not optional here even though ActiveScanner treats it as such: without it this
 		// scanner's probes are authorised against nothing, and this is the scanner every /api/audit call
 		// uses. The web server only builds a scoped one of its own when none was attached, so leaving it
