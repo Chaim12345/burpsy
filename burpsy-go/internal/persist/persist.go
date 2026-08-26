@@ -262,6 +262,22 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("exchanges", "source", "TEXT"); err != nil {
 		return err
 	}
+	// exchanges gained mime because the History MIME column and its type filter had been shipped
+	// against a field nothing ever populated — the filter matched no row for any value an operator
+	// could pick, and emptied the table instead of saying so. The value is the response's media type,
+	// computed once at capture from bytes already in hand (core.MimeEssence) rather than derived at
+	// list time, because /api/history must not open a response body to render a row.
+	//
+	// NULL and "" both read back as "" and neither is an error. That is the same shape as highlight,
+	// and here it collapses two states that the row itself keeps apart anyway: a legacy row written
+	// before this column existed, and a response that named no Content-Type. Neither can be told from
+	// the other by this column, and neither needs to be — response_msg is what distinguishes "nothing
+	// came back" from "something came back untyped", which is the distinction a reader actually acts
+	// on. Backfilling old rows is deliberately not attempted: it would mean reading every stored
+	// response at startup, which is the exact cost this column exists to avoid paying at list time.
+	if err := s.addColumn("exchanges", "mime", "TEXT"); err != nil {
+		return err
+	}
 	// findings gained a target and a param set, both for deduplication (core.FindingStore.Add). The
 	// target is the second half of the dedup key, so without it a restored finding cannot attract new
 	// occurrences after a restart — it would start a second finding beside itself. params is the set
@@ -409,12 +425,12 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
-		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
-		ex.Highlight, string(ex.Source))
+		ex.Highlight, string(ex.Source), ex.Mime)
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -512,7 +528,7 @@ func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
 func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
-		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source
+		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -533,12 +549,18 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		var durationUs sql.NullInt64
 		var highlight sql.NullString
 		var source sql.NullString
+		var mime sql.NullString
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
-			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source); err != nil {
+			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime); err != nil {
 			return nil, err
 		}
 		ex.Highlight = highlight.String
+		// NullString rather than string for the same reason source uses one: a row written before the
+		// column existed scans as NULL, and scanning NULL into a string is an error that would fail the
+		// whole restore of a legacy database rather than losing one cell of it. "" is the right reading
+		// — this build cannot know what type that response declared, and will not guess.
+		ex.Mime = mime.String
 		// NULL reads back as the unattributed zero value, not a guess: see the migrate note on this
 		// column. History keeps such rows — losing the attribution must not masquerade as tool traffic
 		// being dropped.

@@ -682,9 +682,13 @@ func (f *queryFilter) match(ex *core.Exchange) bool {
 	return f.expr.Match(filteredExchangeQuery{store: f.store, ex: ex})
 }
 
-// filteredExchangeQuery binds a store so Body() can resolve the request message. Mime is not
-// carried on the exchange and stays empty, which the query evaluator reads as "absent" — so every
-// `mime` comparison, `!=` included, is false here rather than some of them matching every row.
+// filteredExchangeQuery binds a store so Body() can resolve the request message.
+//
+// Mime used to be hardcoded empty here, with a comment explaining that the exchange did not carry
+// it. That was true and it made every `mime` comparison in a /api/history?q= query false — so the
+// DSL field the grammar advertises, and that reference.ts documents to the operator, silently
+// matched nothing at all. core.Exchange.Mime now carries it, denormalised at capture, so the
+// comparison is answered from the index row without resolving a response.
 type filteredExchangeQuery struct {
 	store *core.TrafficStore
 	ex    *core.Exchange
@@ -699,7 +703,11 @@ func (f filteredExchangeQuery) Status() int {
 	}
 	return int(*f.ex.Status)
 }
-func (f filteredExchangeQuery) Mime() string { return "" }
+
+// Mime is the stored media type, "" when the response declared none or has not arrived. The query
+// evaluator reads "" as absent, so every comparison on it stays false rather than half of them
+// matching every untyped row — which is the right reading for both of those cases.
+func (f filteredExchangeQuery) Mime() string { return f.ex.Mime }
 func (f filteredExchangeQuery) Body() []byte {
 	msg, err := f.store.Get(f.ex.Request)
 	if err != nil {

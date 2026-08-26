@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -295,16 +294,23 @@ func (q *auditedExchangeQuery) response() *core.StoredMessage {
 
 // Mime is the response Content-Type with any parameters stripped, so `mime = "text/html"` matches
 // `text/html; charset=utf-8` — the form servers actually send.
+//
+// The stored value first, because since core.Exchange carries Mime this is the same answer without
+// resolving the response at all. The fallback is not dead code: a row restored from a database
+// written before the mime column existed has an empty Mime and real response bytes, and reading the
+// header is strictly better than reporting "absent" for a response whose type is right there. Both
+// paths go through core.MimeFromContentType so the two cannot reduce the value differently — the
+// local strip-and-trim that used to live here also did not fold case, which made this row's `mime`
+// comparison disagree with the History column beside it on a server sending `text/HTML`.
 func (q *auditedExchangeQuery) Mime() string {
+	if q.ex.Mime != "" {
+		return q.ex.Mime
+	}
 	msg := q.response()
 	if msg == nil {
 		return ""
 	}
-	raw := string(msg.Header("Content-Type"))
-	if i := strings.IndexByte(raw, ';'); i >= 0 {
-		raw = raw[:i]
-	}
-	return strings.TrimSpace(raw)
+	return core.MimeFromContentType(string(msg.Header("Content-Type")))
 }
 
 func (q *auditedExchangeQuery) Body() []byte {

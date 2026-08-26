@@ -94,7 +94,21 @@ export interface Exchange {
   tls: boolean;
   /** The HTTP version the exchange used: "Http1" or "Http2". Never "http"/"https". */
   protocol: string;
-  mime?: string;
+  /**
+   * The response's media type, parameters stripped and lowercased — `"text/html"` for a response
+   * whose header read `Content-Type: text/HTML; charset=utf-8`. Always present on the wire
+   * (`api_types.go`'s `exchangeView` populates it unconditionally), so not optional — same as
+   * `highlight` below.
+   *
+   * `""` is two different facts and must not be rendered as one. Either no response arrived, or a
+   * response arrived declaring no usable Content-Type. `response === null` is what separates them,
+   * and every consumer here goes through `mimeLabel` in `history.tsx` rather than deciding again.
+   *
+   * It was declared here as `mime?: string` for some time while nothing on the wire set it, which is
+   * how a MIME column that rendered empty for every row, and a type filter that emptied the table
+   * for every value, both passed as shipped features.
+   */
+  mime: string;
   source?: string;
   notes?: string | null;
   related?: number[];

@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, X } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent } from "react";
-import { formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
+import { formatBytes, formatDuration, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import { useSitemapDetailed } from "../lib/data.observe";
 import { useExchangeActions } from "../lib/actions";
@@ -332,7 +332,10 @@ export function SiteMapPage(): JSX.Element {
         accessorKey: "mime",
         header: "MIME",
         size: 90,
-        cell: (info) => <span className="cell-dim">{info.getValue<string | undefined>() || "—"}</span>,
+        // Same dead column as History's, populated by the same fix, and rendered through the same
+        // helper so the two pages cannot come to disagree about what an empty MIME means: an em dash
+        // when no response arrived, "untyped" when one did and named no Content-Type.
+        cell: (info) => <span className="cell-dim">{mimeLabel(info.row.original)}</span>,
       },
       {
         accessorKey: "duration_ms",

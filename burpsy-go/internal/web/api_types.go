@@ -41,9 +41,18 @@ type ExchangeView struct {
 	Path        string          `json:"path"`
 	Status      *uint16         `json:"status"`
 	ResponseLen int             `json:"response_len"`
-	StartedMs   uint64          `json:"started_ms"`
-	DurationMs  uint64          `json:"duration_ms"`
-	Notes       *string         `json:"notes"`
+	// Mime is the response's media type, parameters stripped and lowercased ("text/html"), or "" when
+	// the response declared none — or when there is no response, which `response: null` is what
+	// distinguishes. The UI's History MIME column and type filter are the consumers, and they had both
+	// been shipping against this field before it existed on the wire at all.
+	//
+	// Carried on the index row rather than resolved per row, and that is not an optimisation detail:
+	// exchangeView is handed only a *core.Exchange and has no store access precisely so that listing
+	// 100k exchanges cannot start reading response bodies. See core.Exchange.Mime.
+	Mime       string  `json:"mime"`
+	StartedMs  uint64  `json:"started_ms"`
+	DurationMs uint64  `json:"duration_ms"`
+	Notes      *string `json:"notes"`
 	// Highlight is the operator's colour tag, "" when unset. See core.ValidHighlights for the
 	// vocabulary; PATCH /api/exchange/{id} is the only writer.
 	Highlight string `json:"highlight"`
@@ -117,6 +126,7 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		Path:        ex.Path,
 		Status:      ex.Status,
 		ResponseLen: ex.ResponseLen,
+		Mime:        ex.Mime,
 		StartedMs:   ex.StartedMs,
 		// Millis, not the raw microseconds: this field's JSON shape predates core.ExchangeDuration and
 		// stays exactly as it was. See the note under ExchangeView for what that cannot express.

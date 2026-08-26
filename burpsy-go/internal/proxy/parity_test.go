@@ -80,7 +80,16 @@ var exchangeFieldRules = map[string]fieldRule{
 	// per leg below, because it is the property that actually broke — is that ResponseLen describes the
 	// message the row points at.
 	"ResponseLen": rulePopulated,
-	"StartedMs":   rulePopulated,
+	// Identical, and it is the stronger claim on purpose — note that it is a stronger claim than the
+	// ResponseLen rule immediately above, for a reason. ResponseLen has to be rulePopulated because the
+	// crawler's sender re-renders the response it parsed and the byte count shifts by whatever the
+	// stdlib transport normalised. The *media type* does not shift: it is what the origin declared, and
+	// core.MimeEssence strips parameters and folds case, which is exactly the normalisation the
+	// re-render could otherwise introduce. So a proxied and a crawled fetch of the same resource must
+	// agree here, and a leg that started deriving the type from something other than the response's own
+	// Content-Type is what this catches.
+	"Mime":      ruleIdentical,
+	"StartedMs": rulePopulated,
 	// The two legs time different work — a relayed exchange and a crawler fetch — so their durations are
 	// not comparable and no rule here can say anything about the *value*. What must hold for both is that
 	// they measured at all, and that is asserted explicitly per leg below rather than through

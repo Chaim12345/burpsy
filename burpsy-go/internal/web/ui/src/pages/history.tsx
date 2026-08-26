@@ -3,7 +3,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { useExchangeActions, exchangeUrl } from "../lib/actions";
-import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, relativeTime, statusTone } from "../lib/api";
+import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useHistory, useMessage, useStats } from "../lib/data";
 import { useScopeView } from "../lib/data.policy";
@@ -39,6 +39,19 @@ const MIME_TYPES = [
 ];
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+/**
+ * Whether a row can be classified by content type at all.
+ *
+ * A row with no type is not "binary" and is not any other bucket — it is unclassified, and the type
+ * filter must exclude it from every specific value rather than let the `binary` branch sweep it up.
+ * That branch is written as "not text-ish", so before `mime` was populated it matched literally every
+ * row; now that empty is a real answer it would still swallow every untyped and every response-less
+ * row and present them to the operator as a confident claim that the body is binary.
+ */
+function isTyped(row: Exchange): boolean {
+  return row.mime !== "";
+}
 
 /**
  * Escape a value for a double-quoted DSL string literal (query.go's lexer takes \", \\, \n, \t, \r).
@@ -397,12 +410,48 @@ export function HistoryPage(): JSX.Element {
     (showList.length > 0 ? 1 : 0) + (hideList.length > 0 ? 1 : 0) +
     (searchMatcher ? 1 : 0);
 
+  /**
+   * Every narrowing currently in force, named as an operator would name it.
+   *
+   * This exists because a filter that empties the table must say which filter did it. The MIME filter
+   * was the case that proved it: selecting any type cleared the table for every row in the capture
+   * (the field it matched on was never populated), and the page reported that as "No traffic captured
+   * yet — point a client at the proxy", which is a statement about the proxy and was false. The count
+   * line and the empty state both read this list, so neither can drift from what is actually applied.
+   *
+   * `filtersActive` deliberately stays as it is: it counts only the "More filters" popover's contents,
+   * because it is the badge on that button. This is the whole set, top-bar controls included.
+   */
+  const activeFilterNames = useMemo(() => {
+    const names: string[] = [];
+    if (method !== "all") names.push(`method ${method}`);
+    if (mime !== "all") names.push(`type ${MIME_TYPES.find((mt) => mt.value === mime)?.label ?? mime}`);
+    if (status !== "all") names.push(`status ${STATUS_BUCKETS.find((sb) => sb.value === status)?.label ?? status}`);
+    if (hideNoResponse) names.push("hiding rows with no response");
+    if (scopeOnly) names.push("in-scope only");
+    if (searchMatcher) names.push(searchNegate ? "search (inverted)" : "search");
+    if (onlyParameterized) names.push("with query parameters");
+    if (onlyCommented) names.push("commented");
+    if (onlyHighlighted) names.push("highlighted");
+    if (showList.length > 0) names.push(`showing ${showList.join(", ")}`);
+    if (hideList.length > 0) names.push(`hiding ${hideList.join(", ")}`);
+    return names;
+  }, [
+    method, mime, status, hideNoResponse, scopeOnly, searchMatcher, searchNegate,
+    onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
+  ]);
+
   const rows = useMemo(() => {
     const all = data ?? [];
     return all.filter((row) => {
       if (method !== "all" && row.method !== method) return false;
       if (mime !== "all") {
-        const exMime = (row.mime ?? "").toLowerCase();
+        // A row with no type answers no question about its type, so it matches no specific value —
+        // including "binary". See isTyped: the binary branch is a negation, and letting an untyped or
+        // response-less row through it would report "this body is binary" about a response whose type
+        // nobody knows.
+        if (!isTyped(row)) return false;
+        const exMime = row.mime.toLowerCase();
         if (mime === "binary") {
           // Binary = everything that is not a text-ish content type.
           if (
@@ -553,7 +602,17 @@ export function HistoryPage(): JSX.Element {
         accessorKey: "mime",
         header: "Type",
         size: 92,
-        cell: (info) => <span className="cell-dim">{info.getValue<string | undefined>() || "—"}</span>,
+        // accessorKey (not accessorFn) so sorting still orders by the raw media type rather than by
+        // the rendered word — "untyped" must not sort in among the u's as though it were a type. The
+        // row is reached through info.row.original because the label needs `response` too.
+        cell: (info) => {
+          const row = info.row.original;
+          return (
+            <span className="cell-dim" title={row.mime || (row.response === null ? "No response was captured" : "The response declared no Content-Type")}>
+              {mimeLabel(row)}
+            </span>
+          );
+        },
       },
       {
         id: "extension",
@@ -845,14 +904,22 @@ export function HistoryPage(): JSX.Element {
             }
             loading={isFetching && !data}
             empty={
-              <Empty
-                title={term ? "No exchange matches this filter" : "No traffic captured yet"}
-                detail={
-                  term
-                    ? "Relax the filter, or clear it to see the whole capture."
-                    : "Point a client at the proxy and install the CA certificate to start capturing HTTPS."
-                }
-              />
+              // The condition is "did any filter narrow this", not "is there a search term". Keying it
+              // on `term` alone meant every other filter — the MIME one above all — emptied the table
+              // and was answered with "No traffic captured yet. Point a client at the proxy", which is
+              // a claim about the proxy, was false whenever a filter was responsible, and sent the
+              // operator to check their client setup over a dropdown they had set themselves.
+              activeFilterNames.length > 0 ? (
+                <Empty
+                  title="No exchange matches these filters"
+                  detail={`Nothing in the ${formatCount(data?.length ?? 0)} loaded rows matches ${activeFilterNames.join(" + ")}. Relax or clear a filter to see more of the capture.`}
+                />
+              ) : (
+                <Empty
+                  title="No traffic captured yet"
+                  detail="Point a client at the proxy and install the CA certificate to start capturing HTTPS."
+                />
+              )
             }
           />
         }
@@ -887,6 +954,19 @@ export function HistoryPage(): JSX.Element {
           {" "}
           {rows.length === 1 ? "row" : "rows"}
         </div>
+        {/* The fourth clause, and the same reasoning as the three numbers above: zero is the count
+            that most needs a cause attached. "0 of 300 loaded rows" is true and still reads as an
+            empty capture, so when a filter is what produced the zero, the filter is named here.
+            Kept to the zero case on purpose - naming the active filters on every render would be
+            noise beside a count that already explains itself.
+
+            --fg, not --warn: this is a neutral statement of cause, and the yellow token is a
+            14px-on-paper contrast risk in a status bar the axe suite currently passes clean. */}
+        {rows.length === 0 && (data?.length ?? 0) > 0 && activeFilterNames.length > 0 ? (
+          <div style={{ color: "var(--fg)" }} title="Which filters are responsible for the empty table">
+            no match for {activeFilterNames.join(" + ")}
+          </div>
+        ) : null}
         <div title="Sum of response bytes for the visible rows">
           {formatBytes(rows.reduce((sum, row) => sum + (row.response_len ?? 0), 0))} in responses
         </div>

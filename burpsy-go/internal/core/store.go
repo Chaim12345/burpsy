@@ -301,7 +301,30 @@ type Exchange struct {
 	Path        string
 	Status      *uint16
 	ResponseLen int
-	StartedMs   uint64
+	// Mime is the response's media type with parameters stripped and lowercased — "text/html" for a
+	// response whose header read `Content-Type: text/HTML; charset=utf-8`. See MimeEssence, which is
+	// the only thing that computes it.
+	//
+	// # Why it is stored on the row rather than derived when asked for
+	//
+	// For exactly the reason Status and ResponseLen are, and it is worth naming because deriving it
+	// looks free: the Content-Type header is right there in the response bytes. It is not free,
+	// because of where it would be read. /api/history serves an index row per exchange and never a
+	// payload, so listing 100,000 captured exchanges touches no response body at all — that property
+	// is the reason the wire shape is a view of ids and lengths, and internal/web/exchangeView is
+	// handed only an *Exchange with no access to the message store precisely so it cannot break it.
+	// A MIME column filled in at list time would read 100,000 response heads off disk to render one
+	// screen of 24-pixel rows, turning the cheapest endpoint in the tool into the most expensive.
+	// So the answer is computed once, where the bytes are already in hand, and carried.
+	//
+	// # Empty is two different facts, and this field cannot tell them apart
+	//
+	// "" means either "no response yet" or "a response that named no usable Content-Type". Consumers
+	// must not render those identically: Response (nil or not) is what separates them, and it is
+	// already on the row and already on the wire, so no second field is needed. The UI's History and
+	// Sitemap columns both rely on exactly that pair — see the mimeLabel note in ui/src/lib/api.ts.
+	Mime      string
+	StartedMs uint64
 	// Duration is how long the exchange took, or the explicit "nobody measured this". See
 	// ExchangeDuration for why it is not a millisecond count.
 	Duration ExchangeDuration

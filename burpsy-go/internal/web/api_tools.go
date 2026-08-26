@@ -172,10 +172,13 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		Path:        firstLinePath(req.Request),
 		Status:      status,
 		ResponseLen: len(rawResp),
-		StartedMs:   uint64(sendStarted.UnixMilli()),
-		Duration:    core.MeasuredDuration(elapsed),
-		Request:     reqMsgID,
-		Response:    &respMsgID,
+		// From the bytes that just came back, for the same reason ResponseLen is taken here: history
+		// serves index rows and must not reopen a response to type it. See core.Exchange.Mime.
+		Mime:      core.MimeEssence(rawResp),
+		StartedMs: uint64(sendStarted.UnixMilli()),
+		Duration:  core.MeasuredDuration(elapsed),
+		Request:   reqMsgID,
+		Response:  &respMsgID,
 		// What actually carried the send, not what the request bytes asked for. outcome.Downgrade says why
 		// it was HTTP/1.1 when it was, and Sender.Protocols counts it across every surface.
 		Protocol: outcome.Protocol,

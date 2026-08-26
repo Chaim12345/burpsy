@@ -98,6 +98,35 @@ export function statusTone(status: number | null | undefined): "neutral" | "good
   return "neutral";
 }
 
+/**
+ * How a row's `mime` renders, and the one place that decides it.
+ *
+ * `mime === ""` covers two different facts, and rendering both as a blank cell is what this exists to
+ * prevent. An operator reading an empty MIME cell cannot tell "nothing came back yet" from "the
+ * server answered and named no type", and would reasonably read the second as a bug in burpsy rather
+ * than a fact about the server. `response` is what distinguishes them and it is already on the index
+ * row, so telling the truth here costs no new wire field:
+ *
+ *  - no response at all -> an em dash, the same glyph every other column uses for "not applicable".
+ *    The Status column already reads `pending` on such a row, so the two agree.
+ *  - a response that declared no Content-Type -> "untyped", a word rather than a punctuation mark,
+ *    because it is a positive statement about the response and not an absence.
+ *  - otherwise the media type itself.
+ *
+ * It lives here rather than in history.tsx because the sitemap has the identical column, and one page
+ * importing a helper from another page is how two pages come to disagree about what an empty cell
+ * means. The parameter is structural, not `Exchange`, so this module keeps its existing shape-typed
+ * style and nothing has to import types.ts to call it.
+ *
+ * The CSV export deliberately does NOT go through this: `historyToCSV` writes the raw value, because a
+ * spreadsheet cell reading "untyped" or "—" would be a value no server ever sent, and an empty cell
+ * is how a CSV says "no value".
+ */
+export function mimeLabel(row: { mime?: string; response: number | null }): string {
+  if (row.mime) return row.mime;
+  return row.response === null ? "—" : "untyped";
+}
+
 export async function copyToClipboard(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text);
