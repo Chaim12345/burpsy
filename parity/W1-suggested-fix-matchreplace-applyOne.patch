@@ -1,0 +1,213 @@
+commit 9194df6b78adc37a4745f02838e28c9c9023f6f3
+Author: burpsy <chaim.shuster@cymotive.com>
+Date:   Wed Aug 26 17:52:09 2026 +0300
+
+    fix(matchreplace): an unimplemented target must change nothing, not rewrite the body
+    
+    `applyOne` implements five of the seven Targets. TargetRequestParamName and
+    TargetRequestParamValue have no case, and the default was `return applyBody(r, raw)` —
+    so a parameter rule was silently executed as a **whole-body substring rewrite**.
+    
+    That is not a missing feature behaving conservatively. It is a rule doing something the
+    operator did not select, to live traffic, while the API answered 200 and reported it
+    compiled.
+    
+    The proof, now a test:
+    
+        rule:  {request_param_name, literal, "secret" -> "harmless"}
+        in:    user=admin&secret=hunter2&nonsecret=keep
+        out:   user=admin&harmless=hunter2&nonharmless=keep
+                                           ^^^^^^^^^^
+    
+    `nonsecret` became `nonharmless`. An unrelated parameter was renamed, because a body
+    rewrite has no concept of a parameter and a substring match does not respect field
+    boundaries. Both param targets produced byte-identical output, which is itself the
+    evidence that neither is implemented — a real applier would treat a name rule and a value
+    rule differently.
+    
+    ## Why this is mine
+    
+    I widened the accepted rule_type vocabulary in 4469cf1 to include both param targets, and
+    justified it in that commit message with "the engine already matches on them
+    (matchreplace.go:129)". Line 129 is `targetsDir`, which says which *direction* a target
+    belongs to. The applier is `applyOne`, and it had no case for either.
+    
+    So I verified against one function and asserted about another, and reintroduced the exact
+    defect that commit was written to fix — a tolerant default turning an unsupported input
+    into a valid-looking wrong answer applied to real requests. Found by an analyst agent that
+    proved it behaviourally against a scratch copy of the package rather than by reading, which
+    is the only reason it surfaced: `internal/matchreplace` tests passed throughout.
+    
+    ## The fix
+    
+    An unimplemented target returns the bytes unchanged. A rule that does nothing shows up in
+    the counters as unchanged and can be chased; a rule that quietly rewrites the wrong bytes
+    cannot.
+    
+    `targetsDir` still lists the param targets as request-direction. That remains a true
+    statement about which direction they belong to, and it is not a claim that they can be
+    applied — conflating those two is what produced this defect, so the comment now says so
+    where the next reader will look.
+    
+    ## Tests
+    
+    `TestAParamNameRuleDoesNotRewriteUnrelatedParameters` asserts the exact collision above and
+    would have failed before this change.
+    
+    `TestTheImplementedTargetsStillApply` is the guard that matters more: a no-op default is
+    correct only for targets with no applier, so without it this change could have quietly
+    disabled every real rule and the suite would still have gone green.
+    
+    The web layer's half — refusing those two rule_types at the API boundary instead of
+    accepting them — follows separately. This commit makes the engine safe on its own, so the
+    two are independently useful and this one does not depend on the other landing.
+    
+    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+diff --git a/burpsy-go/internal/matchreplace/matchreplace.go b/burpsy-go/internal/matchreplace/matchreplace.go
+index 092ad59..43c8135 100644
+--- a/burpsy-go/internal/matchreplace/matchreplace.go
++++ b/burpsy-go/internal/matchreplace/matchreplace.go
+@@ -248,7 +248,26 @@ func applyOne(r *Rule, raw []byte) []byte {
+ 	case TargetRequestFirstLine:
+ 		return applyFirstLine(r, raw)
+ 	default:
+-		return applyBody(r, raw)
++		// An unimplemented target changes nothing.
++		//
++		// This used to be `return applyBody(r, raw)`. Five of the seven Targets have a case
++		// above; TargetRequestParamName and TargetRequestParamValue have none, so both fell
++		// here and were applied as **whole-body substring rewrites**.
++		//
++		// That is worse than not implementing them. A param-name rule replacing "secret"
++		// with "harmless" against `user=admin&secret=hunter2&nonsecret=keep` produced
++		// `user=admin&harmless=hunter2&nonharmless=keep` — it rewrote `nonsecret`, an
++		// unrelated parameter, because a body rewrite has no concept of a parameter. The
++		// operator selected one parameter and got a substring collision on live traffic.
++		//
++		// A rule that does nothing shows up in the counters as unchanged and can be chased.
++		// A rule that quietly rewrites the wrong bytes cannot. `targetsDir` still lists the
++		// param targets as request-direction, which is a true statement about direction and
++		// not a claim that they can be applied — conflating those two produced this defect.
++		//
++		// When the param appliers land, add their cases above and this branch stops being
++		// reachable.
++		return raw
+ 	}
+ }
+ 
+diff --git a/burpsy-go/internal/matchreplace/unapplied_target_test.go b/burpsy-go/internal/matchreplace/unapplied_target_test.go
+new file mode 100644
+index 0000000..4c48569
+--- /dev/null
++++ b/burpsy-go/internal/matchreplace/unapplied_target_test.go
+@@ -0,0 +1,109 @@
++package matchreplace
++
++import "testing"
++
++// ---- an unimplemented target must change nothing --------------------------------------
++//
++// `applyOne` implements five of the seven Targets. TargetRequestParamName and
++// TargetRequestParamValue have no case, and the default used to be
++// `return applyBody(r, raw)` — so a parameter rule was silently executed as a whole-body
++// substring rewrite.
++//
++// That is not a missing feature behaving conservatively. It is a rule doing something the
++// operator did not ask for, to live traffic, while the API reported it compiled.
++
++// The exact collision that proved the defect: renaming one parameter also renamed an
++// unrelated one whose name merely contains the match string.
++func TestAParamNameRuleDoesNotRewriteUnrelatedParameters(t *testing.T) {
++	rule, err := NewRule(TargetRequestParamName, CategoryLiteral, "secret", "harmless", "")
++	if err != nil {
++		t.Fatalf("NewRule: %v", err)
++	}
++	rs := NewRuleSet()
++	rs.SetRules([]*Rule{rule})
++
++	const body = "user=admin&secret=hunter2&nonsecret=keep"
++	got := string(rs.Apply(DirRequest, []byte(body)))
++
++	// The old behaviour produced "user=admin&harmless=hunter2&nonharmless=keep": `nonsecret`
++	// became `nonharmless` because a body rewrite has no concept of a parameter.
++	if got == "user=admin&harmless=hunter2&nonharmless=keep" {
++		t.Fatal("a param-name rule was applied as a whole-body rewrite and renamed the " +
++			"unrelated parameter `nonsecret` — this is the defect, still present")
++	}
++	if got != body {
++		t.Fatalf("an unimplemented target changed the bytes:\n  in:  %s\n  out: %s\n"+
++			"until applyOne implements this target it must be a no-op", body, got)
++	}
++}
++
++// Both param targets behave identically, which is itself evidence that neither is
++// implemented — a real applier would treat a name rule and a value rule differently.
++func TestBothParamTargetsAreNoOps(t *testing.T) {
++	const body = "user=admin&secret=hunter2"
++	for _, target := range []Target{TargetRequestParamName, TargetRequestParamValue} {
++		rule, err := NewRule(target, CategoryLiteral, "secret", "harmless", "")
++		if err != nil {
++			t.Fatalf("NewRule(%d): %v", int(target), err)
++		}
++		rs := NewRuleSet()
++		rs.SetRules([]*Rule{rule})
++		if got := string(rs.Apply(DirRequest, []byte(body))); got != body {
++			t.Errorf("Target %d altered the request: %q", int(target), got)
++		}
++	}
++}
++
++// The five implemented targets must be unaffected by making the default a no-op.
++//
++// Without this, the fix above could quietly disable every real rule and the suite would
++// still pass — a no-op default is only correct for targets that have no applier.
++func TestTheImplementedTargetsStillApply(t *testing.T) {
++	cases := []struct {
++		name   string
++		target Target
++		dir    Direction
++		in     string
++	}{
++		{"request body", TargetRequestBody, DirRequest,
++			"POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 7\r\n\r\nfind me"},
++		{"request header", TargetRequestHeader, DirRequest,
++			"GET /x HTTP/1.1\r\nX-A: find\r\n\r\n"},
++		{"request first line", TargetRequestFirstLine, DirRequest,
++			"GET /find HTTP/1.1\r\nHost: h\r\n\r\n"},
++		{"response body", TargetResponseBody, DirResponse,
++			"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nfind me"},
++		{"response header", TargetResponseHeader, DirResponse,
++			"HTTP/1.1 200 OK\r\nX-A: find\r\n\r\n"},
++	}
++	for _, c := range cases {
++		rule, err := NewRule(c.target, CategoryLiteral, "find", "GOT", "")
++		if err != nil {
++			t.Fatalf("%s: NewRule: %v", c.name, err)
++		}
++		rs := NewRuleSet()
++		rs.SetRules([]*Rule{rule})
++		got := string(rs.Apply(c.dir, []byte(c.in)))
++		if got == c.in {
++			t.Errorf("%s: the rule did not fire — the no-op default may have swallowed an "+
++				"implemented target\n  in: %q", c.name, c.in)
++			continue
++		}
++		if !contains(got, "GOT") {
++			t.Errorf("%s: replacement missing from output %q", c.name, got)
++		}
++	}
++}
++
++func contains(hay, needle string) bool {
++	return len(hay) >= len(needle) && indexOf(hay, needle) >= 0
++}
++
++func indexOf(hay, needle string) int {
++	for i := 0; i+len(needle) <= len(hay); i++ {
++		if hay[i:i+len(needle)] == needle {
++			return i
++		}
++	}
++	return -1
++}

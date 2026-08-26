@@ -197,19 +197,55 @@ tracker. That corpus **excludes bundled `io/**` libraries**. A negative grep in 
 corpus is precisely how a false "N/A" became a ratified project fact. Hence TAXONOMY rule
 3: **every negative grep requires a positive control.**
 
-### 6.3 The green build proves less than it appears to
+### 6.3 The green build does not test the frontend at all
 
-CI has exactly two workflows and gates **only** gofmt, go build, go vet, go test
-(`.github/workflows/go.yml:84-103`).
+**Re-verified by me directly at `749ddbd`, not taken from an analyst** — this claim is
+load-bearing, and the version I inherited understated it.
 
-- **No TypeScript typecheck.** `bun run check` (`tsc --noEmit`) exists in
-  `ui/package.json`; **nothing invokes it.**
-- **No e2e.** `behaviour.spec.ts` (32 blocks) is not referenced anywhere in `.github/**`.
+CI has exactly two workflows (`go.yml`, `release.yml`). `go.yml` gates four things:
+`gofmt`, `go build ./...`, `go vet ./...`, `go test ./... -count=1 -timeout 1700s`
+(`.github/workflows/go.yml:84-103`). The Go side is gated *well* — CI even provisions
+Chrome and installs `ffuf` and `nuclei` with a nuclei template corpus so the live extscan
+tests actually run (`go.yml:47,71,76`).
 
-So any "verified working" claim resting on `tsc` or on `behaviour.spec.ts` rests on an
-**ungated manual run** that may not have happened since. Per TAXONOMY rule 4, **not gated**
-is a different statement from **not working** — but for a frontend of this size, an
-unenforced typecheck means the UI's correctness is not measured by the build at all.
+The frontend has **no gate whatsoever.** `burpsy-go/internal/web/ui/package.json` defines:
+
+```
+"check": "tsc --noEmit && node scripts/gen-tokens.mjs --check && bun run check:tokens
+          && bun run test:scripts && bun run test:lib"
+```
+
+Nothing in `.github/**` invokes it. Verified by a repo-wide grep at HEAD for
+`bun run check|tsc --noEmit|playwright|behaviour.spec` scoped to `.github/` — **zero
+hits**, with the positive control that the same grep finds the Go steps it should.
+
+So the following is written, committed, and **never executed by CI**:
+
+| Ungated check | Scale |
+|---|---|
+| `tsc --noEmit` | the entire TypeScript frontend |
+| `bun test src/lib` | **4 files, 72 test blocks** (`history-derive`, `hotkeys`, `message`, `mime-label`) |
+| Playwright e2e | **6 spec files, 46 test blocks** — behaviour 32, routes 5, a11y 3, menubar 2, scope 2, screenshots 2 |
+| e2e `tsc --noEmit -p .` | the e2e suite's own typecheck |
+| `gen-tokens --check` | design-token drift |
+| `check:tokens` | closed-token check |
+
+**118 frontend test assertions exist and none of them gate anything.** Two token-drift
+checks and two typechecks likewise.
+
+Two consequences worth separating carefully:
+
+1. Per TAXONOMY rule 4, **not gated is not the same as not working.** These tests may well
+   pass right now. Nobody would find out if they stopped.
+2. But the honesty consequence is direct: any "verified working" claim in a tracker that
+   rests on `tsc` or on `behaviour.spec.ts` rests on **a manual run somebody did once, on
+   an unknown commit.** Given §6.4 — one of the seven working-while-broken items *was* a
+   typecheck step that had never once executed — that is exactly the evidence class this
+   project has already been burned by.
+
+The asymmetry is the actionable part. This is not a project without testing discipline;
+the Go half has real gates including live-network tests. The frontend half has 118
+assertions sitting outside the wall. Gating `bun run check` is one line of YAML.
 
 ### 6.4 The pattern
 
@@ -273,8 +309,11 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
    the published `rule_type` vocabulary is handled by `applyOne`. A table-driven test over
    the vocabulary constant makes the whole bug class structurally unrepresentable. Cheapest
    high-value change in the report.
-2. **Gate `bun run check` in CI.** The command exists and is not run. One line of YAML
-   converts an unenforced hope into a gate, and §6.3 stops being true.
+2. **Gate `bun run check` and the Playwright e2e suite in CI.** 118 frontend test
+   assertions, two typechecks and two token-drift checks are committed and never executed.
+   The Go half of this project has real gates including live `ffuf`/`nuclei` tests; the
+   frontend half has none. This is the highest value-per-line change available — the tests
+   are already written.
 3. **Wire the Myers diff engine** into `handleToolsCompare` and un-hide the granularity
    control. Deleting a weaker reimplementation is a negative-diff improvement.
 4. **Decide about `/api/discovery`** — give it a UI or delete it. A working ffuf backend
