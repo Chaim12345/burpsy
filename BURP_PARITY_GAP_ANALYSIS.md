@@ -1,6 +1,7 @@
 # Burp-Parity Gap Analysis: burpsy vs Burp Suite 2026.7.1
 
-**Status:** consolidating — W2/W3/W4/W5 in flight, sections marked PENDING below.
+**Status:** consolidating — W3, W5 and W6's denominator folded in; W2, W4 and W6's
+numerator still in flight, marked PENDING in §7.
 **Author:** CTO, from six analyst workstreams.
 **Reference:** `/root/burp-re`, a teardown of Burp Suite 2026.7.1 including its shipped jar resources.
 **burpsy baselines:** wave 1 at `ede8f1f`, wave 2 at `a619c9a`, this consolidation authored at `9194df6`.
@@ -42,7 +43,18 @@ command recorded. Rows are **not** commensurable.
 | **Intruder attack types** | 4 | 4 | **4/4 parity** | High |
 | **Extender / Montoya UI hooks** | 3 registration points | 13 `userInterface()` points | **3/13**, self-documented | High — `internal/extension/protocol.go:19-33` |
 | **Burp AI** | absent | 881 first-party classes + 306 bundled MCP classes | **0/881** | High — and the tracker's "N/A" is false, §6 |
-| **Config panels** | not enumerated | ~90 top-level (from 134 identifiers, 108 candidates) | **NOT DETERMINED** | Low — largest open denominator |
+| **Config panels** | numerator in flight (W6b) | **85 top-level** (derived from 134 identifiers by a 4-step documented collapse) | **?/85** | Denominator now High; numerator still open |
+| **Internal packages reachable** | 29 / 37 routed; 1 wholly unreachable | n/a — burpsy-internal measure | **1 STATE 2 package, 4 STATE 2 sub-capabilities, 2 STATE 3 routes** | High — `go list` import census, not grep |
+
+The config-panel row moved from "NOT DETERMINED" to a **hard denominator of 85** this wave.
+W6 collapsed Burp's 134 distinct `configPanel*` identifiers in four reproducible steps:
+25 leaf widgets removed by suffix (→109), mechanical prefix collapse of documented
+sub-controls (→95), manual semantic collapse of two Intruder payload/grep-extract clusters
+(→87), and exclusion of `configPanelTitle`/`configPanelDescription` as per-panel template
+chrome (→85). **If you reject step 4 the denominator is 87; if you reject step 3 as well it
+is 95.** All three are reproducible from the commands in `W6-config-panels.md`. This report
+uses 85 and says so at every total — which is the standard the four falsified denominators
+in §6.1 failed to meet.
 
 ### The sharpest single gap
 
@@ -143,7 +155,43 @@ Work already paid for that no user can reach. Full detail in
   ruling out a search miss. Compounding this, burpsy's "Discover" leaf is a
   **deliberately-substituted documentation page** — so the tab exists, the backend works,
   and they are not connected.
-- **Swept clean:** the other 22 `internal/**` packages have no zero-importer orphans.
+### 4.1 The sweep is now complete — all 37 internal packages (W5)
+
+Wave 1 swept 22 packages by grep. W5 completed it across **all 37**, using `go list` — the
+compiler's own import graph — rather than grep, which is the right instrument for this
+question and caught a case grep would have missed.
+
+| Category | Count | Which |
+|---|---|---|
+| STATE 2, whole package | **1** | `internal/jsexec` |
+| STATE 2, sub-capability | **3 new + 1 inherited** | tlsprobe cipher/protocol analysis; `advisory.Catalogue.ByName`; http2 `Malformation` vocabulary (residue); `tools/comparer.go` (inherited) |
+| STATE 3 | **1 new + 1 inherited** | `/api/intercept/drop-all` (new); `/api/discovery` (re-confirmed independently) |
+| STATE 5 found by W5 | **0** | the only STATE 5 remains §3.1, found by W1 |
+| Packages reached by ≥1 route | 29 / 37 | |
+| Packages with no route, by design | 8 / 37 | alpn, domexec, httputil, jsexec, tlsprobe, upstreamtest, vulnapp, web |
+| Routes with zero production-UI reference | **4 / 81** | 2 documented legacy aliases + the 2 STATE 3 rows |
+
+**The coherence check is what makes this table trustworthy.** Every per-package UI shortfall
+is fully accounted for by those same 4 unreferenced routes — no package has an unexplained
+gap. That is a property the data either has or does not have, and it has it.
+
+**`internal/jsexec` — STATE 2, whole package, and honestly labelled.** 14 exported symbols,
+316 lines, a working goja-backed prototype-pollution sandbox. Zero importers of *any* kind
+— the only package in the repo with neither a production nor a test importer outside itself.
+Its single external mention is a **string literal in a coverage table**
+(`internal/scanner/infra_coverage.go:274`), not an import. Critically, that file's own header
+(`:1-17`) says a row appearing there means *"we now have the machinery"* and explicitly **not**
+*"we now detect this,"* calling the conflation "exactly the dishonest counting this project
+forbids." So jsexec is a **self-declared** built-but-unwired primitive. Report it as STATE 2
+capability debt; **do not report it as a false claim.** The distinction matters and §6 would
+be wrong to absorb it.
+
+**`/api/intercept/drop-all` — STATE 3, new.** Backend complete: routed at `server.go:758`,
+in the manifest at `route_manifest_test.go:281`, handler
+(`api_intercept.go:130-145`) calls `intercept.DropAll` and returns a real count. The UI never
+calls it. The positive control here is unusually strong — all three sibling
+`/api/intercept/*` routes match on the identical grep in the identical directory, and
+`drop-all` alone is absent. That is a UI path never built, not a search miss.
 
 ---
 
@@ -166,13 +214,54 @@ Two divergences are **undocumented** and should be recorded as decisions or reve
 - **Replayer** — absent. Burp's own string table offers little to compare against, so the
   cost of matching it is itself undetermined.
 
-### Honesty is inconsistent, and that is a real defect
+### 5.1 The UI is unusually honest — 1 decorative control in ~80 (W3)
 
-`UpstreamProxySection` self-reports `wired`, `attached` and `persisted`, and warns the
-user when persistence requires `-db` (`settings.tsx:1610-1624`). That is exemplary.
-`PlatformAuthSection` (`settings.network.tsx:44`) works but **discloses no persistence
-state at all**. Same product, same release, opposite candour. The good pattern exists —
-it just is not enforced anywhere.
+This is the report's main **counter-finding**, and it is load-bearing, because a gap
+analysis that only finds bad news has stopped measuring and started arguing.
+
+W3 swept **24 pages and ~80+ distinct controls** looking for *decorative controls* — a
+control that renders, accepts input, returns 200, and whose value the backend never reads.
+That is the UI-layer form of the §3 bug class and the most user-hostile defect a tool like
+this can have.
+
+**It found exactly one.** Every other writable control traced to a Go handler that reads and
+acts on that exact field, or the UI **says so in its own copy**.
+
+**The one:** Decoder's *"guess base64 / hex alphabets"* checkbox
+(`decoder.tsx:104-109`) serializes to `guess_alphabets` (`data.workbench.ts:120-134`),
+unmarshals into `req.Guess` (`api_toolkit.go:938`), and is passed to `smartDecode`
+(`:947`) — which **takes the parameter and never references it in the body**
+(`:1000-1024`). The four decode layers run in the same fixed order either way. It fails
+silently, with a 200 and plausible-looking output, on a security-analysis toggle. Fix or
+delete it; both are small.
+
+**The other 12** are limitations the UI **discloses to the operator itself**, and they are
+not defects — they are the opposite:
+
+- `comparer.tsx:254-259` states the server only does byte-level diffing and **deliberately
+  omits a granularity selector "rather than one that silently does the same thing."**
+- `matchreplace.tsx:18-24` restricts the dropdown to the 5 implemented targets.
+- `settings.tsx:1929-1962` names per-tool resource bounds that have **no effect** (crawl's
+  sequential loop cannot honour concurrency > 1) rather than implying uniform enforcement.
+- `dashboard.tsx:207-211` disables the unbuilt scan cards with "not built yet."
+- `extensions.tsx:183-190` shows "needs a message" instead of a broken Run button.
+- `settings.tsx:485-508` marks the DOM engine read-only **and says why** (race risk).
+
+That is a team that has internalised the difference between *exists* and *behaves* **at the
+UI layer** — the exact discipline §6 finds missing at the tracker layer. The disclosure
+habit is real and should be protected; it is the cheapest quality asset this project has.
+
+**But it is a convention, not a mechanism, and conventions decay.** `UpstreamProxySection`
+self-reports `wired`/`attached`/`persisted` and warns when persistence requires `-db`
+(`settings.tsx:1610-1624`) — exemplary. `PlatformAuthSection` (`settings.network.tsx:44`)
+works but **discloses no persistence state at all**. Same product, same release, opposite
+candour. Nothing enforces the good pattern, so the gap between the best and worst surfaces
+will widen, not close.
+
+**The honest reading of §3 + §5.1 together:** the defects found are *few and structural*,
+not *many and sloppy*. That is a much better position to be in — and it is why the
+recommendation in §9.1 is to make the bug class unrepresentable rather than to audit
+harder.
 
 ---
 
@@ -181,14 +270,50 @@ it just is not enforced anywhere.
 The most consequential section. Every item was falsified by an analyst against Burp's own
 artefacts.
 
-### 6.1 Four false denominators
+### 6.1 Five false denominators — the fifth is ours
 
 | Published claim | Truth | How it broke |
 |---|---|---|
 | "137 `configPanel*`" | **134** distinct | `grep -c` counted 135 (one duplicate row, `configPanelClosingBehavior`); nobody ran `sort -u`. Also: 26 of the 134 are leaf widgets, so 134 is not a *panel* count either — 108 candidates, ~90 top-level. |
 | "960+ `setName()` per `map_root.tsv`" | `map_root.tsv` contains `setName` **exactly once** (line 6678) | **Fabricated provenance.** The real named-widget surface is 1069 unique `setName("literal")` in `out/clean/renamed_final/`, 1059 in `out/readable_strict/`. Right ballpark, wrong corpus, invented citation. |
 | "15/15 tool tabs" | **12/15 overlap** | Both sides have 15; they are not the same 15. Burp-only: SCANNER, BURP_AI, REPLAYER. burpsy-only: decoder, session, settings. Counting cardinality instead of intersection. |
-| "183 advisories reachable" | 183 bundled, **181 index-reachable** | Two files declare a neighbour's `typeIndex` — in **Burp's own data** (React2Shell→Perl 1052160, Bambda→BCheck 150994944). Honest form: 183/183 bundled, 181/183 index-reachable, 2 shadowed-by-design, reachable by name. |
+| "183 advisories reachable" | 183 bundled, **181 index-reachable** | Two files declare a neighbour's `typeIndex` — in **Burp's own data** (React2Shell→Perl 1052160, Bambda→BCheck 150994944). Honest form: 183/183 bundled, 181/181 addressable by index, 2 shadowed-by-design. |
+| **"…and the 2 shadowed are reachable BY NAME"** — *this analysis, wave 1* | **Not at the product surface** | See §6.1a. Our own correction, found by W5 in wave 2. |
+
+#### 6.1a The fifth one is ours, and that is the most important sentence in this report
+
+Wave 1 of *this analysis* published, as verified shared context, that the 2 shadowed
+advisories are "reachable BY NAME." W5 falsified it in wave 2.
+
+`(*Catalogue).ByName` (`internal/advisory/advisory.go:216`) has **zero non-test callers**.
+Its only references are two test files — one of which,
+`TestShadowedDefinitionsRemainReachableByName` (`index_collision_test.go:92,98`), proves
+the *Go API* can reach them, which is exactly what made the claim feel verified. But the
+live path resolves by index only: `handleAdvisoryDetail`
+(`api_advisories.go:198-210`) parses the URL segment as hex and calls `ByIndex`; there is no
+name branch, and the UI agrees (`data.advisory.ts:51` requests
+`` `/api/advisories/${typeIndex ?? ""}` ``). So for a shared index, the reader gets the
+winner's definition.
+
+**Honest restatement:** 183 bundled, 181 addressable by index, and the 2 shadowed
+definitions are reachable **only through a Go API that nothing but a test calls.**
+
+Two things make this the load-bearing item in §6:
+
+1. **A green test was mistaken for a reachable feature.** The test was correct; it tested
+   the Go API, not the product. This is the §6.4 pattern — *exists* measured instead of
+   *behaves* — committed by analysts who had explicitly written that rule down. The pattern
+   is not a competence failure by the previous team. It is the default outcome of measuring
+   the wrong layer, and it will happen again to whoever reads this next.
+2. **A naive `grep ByName` returns ~50 hits and looks alive.** Nearly all are
+   `scanner.ByName` and `scanner.BuiltInConfigByName` — *different functions in a different
+   package*, both genuinely live. Only a method-vs-function distinction separates the dead
+   one from the live ones. Per TAXONOMY rule 3 a negative grep needs a positive control;
+   this case shows the mirror hazard — **a positive grep needs disambiguation.**
+
+This report therefore holds its own wave-1 output to the same standard as the trackers it
+criticises, and the reader should extend that suspicion to everything here that was not
+proven behaviourally.
 
 ### 6.2 A false categorical claim, and the trap that ratified it
 
@@ -292,22 +417,53 @@ instance.
 
 ---
 
-## 7. PENDING — wave 2 in flight
+## 7. Landed this wave, and what is still open
 
-Four workstreams were running when this consolidation was written. Their absence is
-recorded rather than papered over:
+**Landed (folded into §2, §4.1, §5.1, §6.1a above):**
 
-- **W2 — scanner reality check.** Can the 183-row issue catalogue actually *fire*? Bundled
-  and index-reachable are established; **firing is not.**
-- **W3 — UI surface parity.** Which burpsy controls are decorative? Directly tests the
-  gap between existence and behaviour that §6 says the trackers cannot see.
-- **W4 — test-suite honesty audit.** What does the green build actually prove? Extends §6.3
-  from gates to test content.
-- **W5 — STATE 2/3 sweep** across all 37 internal packages. R1-C swept 22 for
-  zero-importer orphans; this completes it.
+- **W3 — UI surface parity.** 24 pages, ~80+ controls. 1 decorative control, 12
+  honestly-disclosed limitations, Scanner anomaly resolved (§5.1, §7.1).
+- **W5 — STATE 2/3 sweep.** All 37 internal packages by `go list` import census. Completed
+  wave 1's partial 22-package grep sweep and **corrected one of our own claims** (§6.1a).
+- **W6 (denominator half).** Burp's config-panel count reduced to a defensible **85**, with
+  the two alternative readings (87, 95) and their derivations preserved.
 
-Until these land, this report **understates** the gap. Every wave so far has found defects
-in surfaces the previous wave called clean.
+**Still open:**
+
+- **W2 — scanner reality check.** Can the catalogue actually *fire*? Bundled and
+  index-addressable are established; **firing is not.** Note the trap this workstream exists
+  to avoid: 183 bundled advisory *definitions* is not 183 implemented *checks*. A definition
+  is a text blurb. Conflating the two would be a sixth false denominator, produced by us.
+- **W4 — test-suite honesty audit.** What does the green Go suite prove, given §6.3
+  establishes the frontend is ungated entirely? Specifically: how much of the suite is
+  shape-only, and where else does the §3.2 accepted-but-unhandled shape occur?
+- **W6b — the config-panel numerator.** 85 panels enumerated against burpsy. Closes the
+  largest remaining item in §8.
+
+Until these land this report **understates** the gap. Every wave so far has found defects in
+surfaces the previous wave called clean — including, this wave, in surfaces *this analysis*
+called clean.
+
+### 7.1 Scanner is reachable — but it has no front door
+
+W3 resolved the §2 Scanner anomaly, and the resolution is more interesting than "missing."
+
+Scanning is **not** unreachable. `nav.ts:89` places `scanner.tsx` as a leaf **inside Target**,
+titled *"Issues"* — a findings viewer. But it also carries genuinely working launch controls
+in an Audit-settings modal (`scanner.tsx:676-736`): a **Targeted audit** button
+(→ `POST /api/scanner/audit`) and a **Live active audit** toggle (→ `handleScannerLive`),
+both verified on both sides.
+
+The real gap is **fragmentation**. Scan launching is split across three pages — Dashboard's
+New-scan modals, Site map's Crawl button, and a narrow single-exchange control buried in
+Target→Issues' settings modal — while scan *configuration* lives somewhere else again
+(`settings.tsx:556-671`). Burp has one consolidated tool; burpsy has the same capability
+with no front door.
+
+So `SCANNER` being "Burp-only" in the §2 tool-tab overlap row is correct **at the nav-tab
+level** and must not be read as "scanning is unreachable." It isn't. Combined with §2's
+4/77 config-key finding, the accurate statement is: **burpsy can scan, cannot be told much
+about how to scan, and offers no single place to do it.**
 
 ---
 
@@ -315,9 +471,16 @@ in surfaces the previous wave called clean.
 
 Named explicitly per TAXONOMY rule 6, rather than guessed:
 
-1. **~87 of ~90 Burp top-level config panels** were never individually behaviour-verified.
-   **The largest open denominator in this analysis.** Only 3 were checked.
-2. **Whether the 183 advisories can fire.** Bundled ≠ reachable ≠ firing. W2 pending.
+1. **82 of 85 Burp top-level config panels** are not yet mapped to a burpsy equivalent.
+   The *denominator* is now settled at 85 (§2); the *numerator* is W6b, in flight. Only 3
+   panels are individually verified. Still the largest open item, but it is now a bounded
+   one.
+2. **Whether the advisory catalogue can fire.** Bundled ≠ index-addressable ≠ firing, and
+   **≠ implemented as a check**. W2 pending.
+2a. **Whether burpsy's scanner injects at Burp's 8 insertion-point types.** Named here
+   because §2 establishes the config keys are unrepresentable, which is a *configuration*
+   finding; whether the engine injects there at all is a separate, unmeasured question.
+   W2 pending.
 3. **Field incidence of the match/replace STATE 5 defect.** It is reachable via the public
    API but not from the UI dropdown (only 5 targets, `matchreplace.tsx:18-23`). Whether any
    extension, script or CI job actually sends those values is unknown.
@@ -327,13 +490,25 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
 5. **Cost of Replayer parity** — Burp's string table gives too little to size it.
 6. **Two wave-1 workstreams produced no recoverable output** ("verify claimed-working
    features actually behave", "audit the other four reports for unsupported claims"). Their
-   findings are lost, not absent. W3 and W4 re-cover that ground.
+   findings are lost, not absent. W3 has since re-covered the first; W4 re-covers the second
+   and is still in flight.
+8. **Whether burpsy's Repeater supports multiple concurrent isolated tabs** the way Burp's
+   tab manager (`secondarySuiteTabBar`) does. W3 flagged this rather than guessing a ratio —
+   leaf-counting cannot answer it.
+9. **Burp-side depth for the Discover/Learn tool.** Not enumerated in any available Burp-side
+   document, so no ratio is offered for that row.
+10. **Whether wiring `jsexec`'s prototype-pollution check is blocked by anything beyond
+   scheduling.** `infra_coverage.go:269-274` implies the browser blocker it cites is already
+   retired by `domexec`, which suggests it is not blocked — but that was not verified
+   end to end.
 7. **The Collaborator mint-payload fix** is recorded as verified in a surviving summary,
    but the summary was truncated before its evidence. The claim stands unproven here.
 
 ---
 
 ## 9. What I would do next, in order
+
+*(Numbering: §9.1 is the item §5.1 refers to.)*
 
 1. **Fix the match/replace STATE 5 defect by propagating a pattern this codebase already
    invented.** Do not design a new guard — copy `internal/scanner/audit.go`. That file
@@ -367,5 +542,36 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
 6. **Delete or re-derive every ratio in the existing trackers.** Four of four checked
    denominators were wrong. The prior is now that an unverified number in this repo is
    wrong, and a wrong number is worse than none.
-7. **Enumerate the ~90 config panels** and close item 8.1. Until then, the config-surface
-   gap is genuinely unmeasured.
+7. **Finish enumerating the 85 config panels** (W6b) and close §8.1. The denominator is now
+   settled; only the mapping is missing.
+8. **Fix or delete the Decoder `guess_alphabets` checkbox** (§5.1). It is the only proven
+   decorative control in ~80. Small, and it takes the count to zero.
+9. **Give scanning a front door** (§7.1). The capability exists and is fragmented across
+   three pages. This is an information-architecture change, not an engine change, and it is
+   likely the largest perceived-parity gain per unit of work in this report.
+10. **Turn the UI's disclosure convention into a mechanism** (§5.1). Twelve surfaces
+    voluntarily admit their own limits and one does not (`PlatformAuthSection`). A convention
+    that good deserves enforcement — a lint, a required prop, anything — before it decays.
+11. **Decide about `/api/intercept/drop-all`** (§4.1): build the UI affordance or drop the
+    route. Same argument as `/api/discovery`, smaller.
+
+---
+
+## 10. Standing methodological warnings for whoever reads this next
+
+The three traps this analysis actually fell into, as opposed to the ones it anticipated:
+
+1. **A passing test proves the layer it tests, not the layer users touch.**
+   `TestShadowedDefinitionsRemainReachableByName` is green, correct, and was cited as
+   evidence for a product claim that is false (§6.1a).
+2. **A positive grep needs disambiguation as much as a negative grep needs a control.**
+   `grep ByName` returns ~50 live-looking hits for a function with zero non-test callers,
+   because a different package exports a similarly-named symbol (§6.1a).
+3. **A bundled artefact is not a reachable feature is not an implemented capability.** This
+   chain broke twice already — 183 advisories (bundled ≠ addressable) and the MCP "N/A"
+   (§6.2) — and W2 is where it can break a third time if "183 definitions" is ever reported
+   as "183 checks."
+
+And the one that destroyed two waves of work: **deliverables written inside
+`.orchestry/workspaces/**` are reaped.** Everything durable in this analysis lives in
+`/root/burpsy-parity/` or in git. Nowhere else.
