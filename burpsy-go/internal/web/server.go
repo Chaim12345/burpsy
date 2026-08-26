@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -13,8 +14,10 @@ import (
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/persist"
+	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/schedule"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
@@ -79,6 +82,17 @@ type Server struct {
 	// longer in force — findings and the task log are the durable record.
 	auditItems *scanner.AuditItemLedger
 	tasks      *dash.Registry
+	// pools is the operator's saved resource pools: named limits every tool can reference instead of
+	// re-specifying its own. Never nil — an empty registry is the honest starting state, and every
+	// tool runs under its own documented default until a pool is saved and named.
+	pools *pool.Registry
+	// schedules is the saved set of scheduled tasks plus the clock decisions over them. The kinds it
+	// can start are registered in registerScheduleKinds; nothing consults the clock until
+	// ListenAndServe starts runScheduler, which is why schedulerRunning is served on the API.
+	schedules *schedule.Runner
+	// schedulerRunning says whether anything is ticking. Atomic because it is written by
+	// ListenAndServe's scheduler goroutine and read by a request handler.
+	schedulerRunning atomic.Bool
 	// crawls retains recent crawl reports, keyed by the task id that produced them, so the dashboard
 	// row and the coverage report are one identity rather than two numbers to correlate by hand.
 	crawls *crawlRuns
@@ -143,6 +157,8 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		intercept:          intercept.NewEngine(),
 		auditItems:         scanner.NewAuditItemLedger(scanner.DefaultAuditItemCap),
 		tasks:              dash.NewRegistry(),
+		pools:              pool.New(),
+		schedules:          schedule.NewRunner(),
 		crawls:             newCrawlRuns(),
 		discoveries:        newDiscoveryRuns(),
 		events:             dash.NewEventLog(),
@@ -161,6 +177,10 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 	// replaces, so installing it anywhere re-entrant would double-count.
 	store.ObserveExchanges(func(*core.Exchange) { s.live.notify(changeHistory) })
 	store.OnWsChange(func() { s.live.notify(changeWS) })
+	// Registered before any restore can happen, so a schedule loaded from disk finds its kind already
+	// known. The runner refuses a kind it cannot start, and a restore that ran first would have
+	// nothing to check against.
+	s.registerScheduleKinds()
 	s.followLive()
 	s.setupRoutes()
 	return s
@@ -230,7 +250,17 @@ func (s *Server) WithExternalTools(tools map[string]string) *Server {
 }
 
 // WithScanner sets the active scanner used by the audit endpoint.
+//
+// The pool pacer is attached here rather than left to the caller, for the same reason
+// SetDedupPolicy is installed in followLive: it is knowledge this package has and the process that
+// builds a scanner does not. Without it an audit that named a resource pool would run unpaced while
+// the reply said which pool it ran under — a lie of exactly the shape this unit exists to remove.
+// The pacer reads the pool from the audit's own context, so one scanner serves every pool; see
+// api_scanner_audit.go's auditContext.
 func (s *Server) WithScanner(scan *scanner.ActiveScanner) *Server {
+	if scan != nil {
+		scan = scan.WithPace(pool.ContextPacer{})
+	}
 	s.scanner = scan
 	return s
 }
@@ -320,8 +350,52 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 			s.logger.Warn("failed to restore web-owned state", zap.Error(err))
 		}
 		s.toolLog.SetPersistenceSink(p.SaveToolLog)
+		s.restorePools(p)
 	}
 	return s
+}
+
+// restorePools loads the saved pools and schedules and installs their write-through sinks.
+//
+// Not part of persist.Store.Restore, which is already seven positional stores wide and is called by
+// main.go for the shared state: these two are owned entirely by this server, so it asks for them
+// itself. See internal/persist/pools.go.
+//
+// Every refusal is logged with its reason and then counted, matching the session-rule restore: a
+// pool that vanished in silence would leave a schedule referencing a name nothing holds, and the
+// scheduled run would fall back to bounds nobody chose at the hour nobody is watching. The order is
+// pools first, then schedules, so a schedule's pool reference resolves against the set that was
+// actually restored rather than against an empty one.
+func (s *Server) restorePools(p *persist.Store) {
+	pools, err := p.LoadPools()
+	if err != nil {
+		s.logger.Warn("failed to load saved resource pools", zap.Error(err))
+	} else if refused := s.pools.Restore(pools); len(refused) > 0 {
+		for _, rerr := range refused {
+			s.logger.Warn("a saved resource pool was refused on load", zap.Error(rerr))
+		}
+		s.logger.Warn("saved resource pools were not fully restored",
+			zap.Int("restored", s.pools.Len()), zap.Int("refused", len(refused)))
+	}
+	schedules, err := p.LoadSchedules()
+	if err != nil {
+		s.logger.Warn("failed to load saved schedules", zap.Error(err))
+	} else if refused := s.schedules.Restore(schedules); len(refused) > 0 {
+		for _, rerr := range refused {
+			s.logger.Warn("a saved schedule was refused on load", zap.Error(rerr))
+		}
+		s.logger.Warn("saved schedules were not fully restored",
+			zap.Int("restored", s.schedules.Len()), zap.Int("refused", len(refused)))
+	}
+	// Installed after the restore, not before: a sink armed first would fire on the restore itself and
+	// write the loaded set straight back — harmless for pools, but for schedules it would persist the
+	// set *before* the first tick had a chance to act on a missed window, and a crash in between would
+	// then have rewritten nothing. Arming afterwards means the first write is a real change.
+	//
+	// Both persist the whole ordered list, matching SaveSessionRules: the lists are operator-sized
+	// (200 each), so a diff would be more machinery than it saves.
+	s.pools.OnChange(func() { p.SavePools(s.pools.List()) })
+	s.schedules.OnChange(func() { p.SaveSchedules(s.schedules.List()) })
 }
 
 // ---- write-through helpers ---------------------------------------------------------------------
@@ -504,6 +578,16 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intercept", s.handleIntercept)
 	s.mux.HandleFunc("/api/proxy/passthrough", s.handleTlsPassthrough)
 	s.mux.HandleFunc("/api/proxy/options", s.handleProxyOptions)
+
+	// Named resource pools and scheduled tasks: Burp's configPanelResourcePools and
+	// configPanelScheduledTasks. Two patterns each, for the reason the session-rule and audit-item
+	// routes have two: the exact path is the collection (list, create) and the subtree is one object
+	// by name (replace, delete). A name is operator prose and reaches the URL percent-encoded — see
+	// pathName.
+	s.mux.HandleFunc("/api/pools", s.handlePools)
+	s.mux.HandleFunc("/api/pools/", s.handlePoolDetail)
+	s.mux.HandleFunc("/api/schedules", s.handleSchedules)
+	s.mux.HandleFunc("/api/schedules/", s.handleScheduleDetail)
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
 	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)
@@ -580,6 +664,13 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		<-ctx.Done()
 		server.Shutdown(context.Background())
 	}()
+
+	// The clock starts here and not in NewServer, deliberately: a Server built directly — which every
+	// test in this package does — must have no ticker, so no schedule can fire behind a test's back
+	// and every schedule test drives Tick at an instant it chose. It also ties the scheduler's
+	// lifetime to the serving lifetime, so a shutdown stops it with everything else rather than
+	// leaving a goroutine starting audits against a process that is closing.
+	go s.runScheduler(ctx, schedule.DefaultResolution)
 
 	s.logger.Info("web server listening", zap.String("addr", addr))
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

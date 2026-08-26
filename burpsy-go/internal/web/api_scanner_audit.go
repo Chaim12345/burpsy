@@ -18,6 +18,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"go.uber.org/zap"
@@ -30,6 +31,30 @@ type scannerAuditReq struct {
 	// Config names one of scanner.BuiltInConfigs to run under. Empty means the server default. An
 	// unknown name is refused rather than ignored — see Server.resolveAuditConfig.
 	Config string `json:"config,omitempty"`
+	// Pool names a saved resource pool to bound this audit's probes. Empty means unpaced, which is
+	// how every audit ran before pools existed — the audit path had no rate limit at all, which is
+	// the gap a named pool closes here.
+	//
+	// It bounds *requests*, not items: scanner.ScanConfig.MaxConcurrency still decides how many items
+	// an audit works on at once, because Burp's dialog says "max concurrent requests" and one item can
+	// send many. An unknown name is refused rather than defaulted — see Server.poolLimiter.
+	Pool string `json:"pool,omitempty"`
+}
+
+// auditContext binds a named pool's limiter to this audit's context, so every probe the checks send
+// is paced by it.
+//
+// A context value rather than a field on the scanner, because the scanner is shared and long-lived
+// while the pool is per-audit: mutating its pacer per request would let two concurrent audits under
+// two different pools race, and the loser would run under bounds nobody chose. The limiter itself is
+// shared per pool name, so two audits under one pool contend for the same slots rather than getting
+// four concurrent requests each out of a pool of four. See internal/pool/limiter.go.
+func (s *Server) auditContext(ctx context.Context, poolName string) (context.Context, error) {
+	limiter, err := s.poolLimiter(poolName)
+	if err != nil {
+		return nil, err
+	}
+	return pool.WithLimiter(ctx, limiter), nil
 }
 
 // handleScannerAudit is the legacy /api/scanner/audit alias for /api/audit/{id}.
@@ -55,8 +80,13 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, cerr.Error(), http.StatusBadRequest)
 		return
 	}
+	ctx, perr := s.auditContext(r.Context(), req.Pool)
+	if perr != nil {
+		http.Error(w, perr.Error(), http.StatusNotFound)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.runAudit(r.Context(), req.ExchangeID, cfg, named))
+	json.NewEncoder(w).Encode(s.runAudit(ctx, req.ExchangeID, cfg, named))
 }
 
 // handleAuditByPath serves POST /api/audit/{id}, running an active scan over one exchange.
@@ -91,8 +121,13 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, cerr.Error(), http.StatusBadRequest)
 		return
 	}
+	ctx, perr := s.auditContext(r.Context(), req.Pool)
+	if perr != nil {
+		http.Error(w, perr.Error(), http.StatusNotFound)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.runAudit(r.Context(), core.ExchangeID(id), cfg, named))
+	json.NewEncoder(w).Encode(s.runAudit(ctx, core.ExchangeID(id), cfg, named))
 }
 
 // auditTarget names one audited exchange for the task list, falling back to the id when the exchange
@@ -126,7 +161,7 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 		// an out-of-scope exchange before it plans any work. The corpus's active checks ride along
 		// when a passive scanner (loaded via --bchecks) is attached — the same source main.go wires
 		// explicitly, so an unwired server and a wired one cannot disagree about which checks run.
-		active := scanner.NewActiveScanner(s.store, s.logger).WithScope(s.scope)
+		active := scanner.NewActiveScanner(s.store, s.logger).WithScope(s.scope).WithPace(pool.ContextPacer{})
 		if s.passiveScanner != nil {
 			active = active.WithCorpusChecks(s.passiveScanner.ActiveChecks())
 		}

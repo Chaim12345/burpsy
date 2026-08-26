@@ -267,6 +267,10 @@ type Registry struct {
 	mu    sync.RWMutex
 	order []string
 	byKey map[string]Pool
+	// limiters is the one live limiter per pool, built on first use and dropped when the pool it was
+	// built from changes. See limiter.go for why a shared object needs a shared limiter, and why an
+	// edit applies to the next run rather than to work already in flight.
+	limiters map[string]*intruder.RateLimiter
 	// onChange fires after every mutation, so the owner can persist and notify without every call
 	// site remembering to. Never called while mu is held.
 	onChange func()
@@ -274,7 +278,9 @@ type Registry struct {
 
 // New creates an empty registry. Empty is the honest starting state: no pool has been saved, and
 // every tool runs under its own documented default until one is.
-func New() *Registry { return &Registry{byKey: map[string]Pool{}} }
+func New() *Registry {
+	return &Registry{byKey: map[string]Pool{}, limiters: map[string]*intruder.RateLimiter{}}
+}
 
 // OnChange installs the post-mutation hook. One slot; re-installing replaces.
 func (r *Registry) OnChange(fn func()) {
@@ -357,6 +363,10 @@ func (r *Registry) Update(name string, p Pool) error {
 		}
 	}
 	r.byKey[to] = p
+	// Both keys, because a rename moves the pool: the old name must stop resolving to a limiter, and
+	// the new one must not inherit one built from bounds that have just been replaced.
+	r.dropLimiter(from)
+	r.dropLimiter(to)
 	r.mu.Unlock()
 	r.notify()
 	return nil
@@ -371,6 +381,7 @@ func (r *Registry) Remove(name string) bool {
 		return false
 	}
 	delete(r.byKey, k)
+	r.dropLimiter(k)
 	kept := r.order[:0]
 	for _, existing := range r.order {
 		if existing != k {
@@ -475,6 +486,9 @@ func (r *Registry) Restore(pools []Pool) []error {
 	}
 	r.mu.Lock()
 	r.order, r.byKey = order, byKey
+	// Every cached limiter goes, not just the ones whose pool changed: Restore replaces the whole set,
+	// so a limiter surviving it would be enforcing bounds from a set that is no longer the saved one.
+	r.limiters = map[string]*intruder.RateLimiter{}
 	r.mu.Unlock()
 	return refused
 }

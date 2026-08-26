@@ -16,6 +16,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/query"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
@@ -268,6 +269,80 @@ type intruderRunReq struct {
 	TimeoutMS      *uint64                   `json:"timeout_ms"`
 }
 
+// intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
+//
+// # Why a name cannot coexist with inline limits
+//
+// `pool` used to be a label and nothing else — intruder.RateLimit documents Name as "an identifier,
+// not a handle: nothing here looks it up" — so a request could carry a pool name and its own rps and
+// have both accepted, with only the name reaching the report. Now the name resolves to saved bounds,
+// which makes that combination a contradiction: two answers to "how fast may this attack run", one
+// of which would be dropped, and an AttackReport that names the pool in both cases. So it is
+// refused, naming both halves.
+//
+// # Why an unknown name is refused rather than treated as a label
+//
+// The old behaviour would make a deleted or renamed pool run the attack at whatever inline default
+// was in play, while the report said the pool's name — an attack running faster than the operator
+// authorised, describing itself as bounded. pool.ErrNoSuchPool exists for exactly this, and the
+// error names the pools that *are* saved so the fix is in the message.
+func (s *Server) intruderLimits(req intruderRunReq) (intruder.RateLimit, error) {
+	named := req.Pool != nil && strings.TrimSpace(*req.Pool) != ""
+	if named {
+		if req.RPS != nil || req.MaxInFlight != nil || req.AutoThrottle != nil {
+			return intruder.RateLimit{}, fmt.Errorf(
+				"this attack names the pool %q and also sets its own limits; the pool already states "+
+					"rps, max_in_flight and automatic throttling, so send one or the other",
+				strings.TrimSpace(*req.Pool))
+		}
+		limit, err := s.pools.Limit(strings.TrimSpace(*req.Pool))
+		if err != nil {
+			return intruder.RateLimit{}, fmt.Errorf("%w (saved pools: %s)", err, availablePools(s.pools))
+		}
+		return limit, nil
+	}
+
+	// The inline form, unchanged. Bounded at BOTH ends: a rate below one request per two minutes is
+	// not a rate anyone means, and there is deliberately no way to turn the rate cap off over HTTP.
+	// (A saved pool can express "no rate cap, concurrency only" because it is an object an operator
+	// deliberately configured; a per-call parameter that could do it would be one typo away.)
+	rps := intruderDefaultRPS
+	if req.RPS != nil {
+		if *req.RPS < intruderMinRPS {
+			return intruder.RateLimit{}, fmt.Errorf("rps must be at least %v, got %v", intruderMinRPS, *req.RPS)
+		}
+		rps = math.Min(*req.RPS, 1000.0)
+	}
+	maxInFlight := 10
+	if req.MaxInFlight != nil {
+		maxInFlight = *req.MaxInFlight
+	}
+	maxInFlight = clampInt(maxInFlight, 1, intruderMaxInFlightCeiling)
+	limits := intruder.NewRateLimit(&rps, 1, maxInFlight)
+	// An empty-string pool is still allowed to label the attack, which is what it always did: the
+	// name is carried into the report and looked up only when it is not empty.
+	if req.Pool != nil {
+		limits = limits.Named(*req.Pool)
+	}
+	if at := req.AutoThrottle; at != nil {
+		if len(at.Statuses) > intruderMaxThrottleStatuses {
+			return intruder.RateLimit{}, fmt.Errorf("auto_throttle lists %d statuses, more than the %d allowed",
+				len(at.Statuses), intruderMaxThrottleStatuses)
+		}
+		limits = limits.WithAutoThrottle(at)
+	}
+	return limits, nil
+}
+
+// intruderLimitStatus maps a limit failure to its status: a named pool that is not saved is 404,
+// because the request is well formed and the world is not what the caller thought.
+func intruderLimitStatus(err error) int {
+	if errors.Is(err, pool.ErrNoSuchPool) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadRequest
+}
+
 // AttemptView is the legacy one-position form's row.
 type AttemptView struct {
 	Payload     string  `json:"payload"`
@@ -405,32 +480,14 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if at := req.AutoThrottle; at != nil && len(at.Statuses) > intruderMaxThrottleStatuses {
-		http.Error(w, fmt.Sprintf("auto_throttle lists %d statuses, more than the %d allowed", len(at.Statuses), intruderMaxThrottleStatuses), http.StatusBadRequest)
+	// A named pool and inline limits are two ways of saying the same thing, and an attack may use
+	// either — a pool is a resolution step in front of the inline form, not a replacement for it. What
+	// it may not do is say both: the operator would have typed two different sets of bounds and had
+	// one of them silently ignored, with the report naming the pool either way.
+	limits, lerr := s.intruderLimits(req)
+	if lerr != nil {
+		http.Error(w, lerr.Error(), intruderLimitStatus(lerr))
 		return
-	}
-
-	// Bounded at BOTH ends: a rate below one request per two minutes is not a rate anyone means,
-	// and there is deliberately no way to turn the rate cap off over HTTP.
-	rps := intruderDefaultRPS
-	if req.RPS != nil {
-		if *req.RPS < intruderMinRPS {
-			http.Error(w, fmt.Sprintf("rps must be at least %v, got %v", intruderMinRPS, *req.RPS), http.StatusBadRequest)
-			return
-		}
-		rps = math.Min(*req.RPS, 1000.0)
-	}
-	maxInFlight := 10
-	if req.MaxInFlight != nil {
-		maxInFlight = *req.MaxInFlight
-	}
-	maxInFlight = clampInt(maxInFlight, 1, intruderMaxInFlightCeiling)
-	limits := intruder.NewRateLimit(&rps, 1, maxInFlight)
-	if req.Pool != nil {
-		limits = limits.Named(*req.Pool)
-	}
-	if at := req.AutoThrottle; at != nil {
-		limits = limits.WithAutoThrottle(at)
 	}
 	bound := intruderDefaultBound
 	if legacy {

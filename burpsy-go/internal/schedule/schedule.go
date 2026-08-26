@@ -121,6 +121,16 @@ type Schedule struct {
 	// package's whole missed-window decision exists to make visible.
 	Runs   int `json:"runs"`
 	Missed int `json:"missed"`
+	// Failures counts firings whose Starter returned an error, and is a subset of Runs rather than an
+	// alternative to it.
+	//
+	// Both counts exist because "it fired" and "it worked" are different facts and an operator needs
+	// both. A nightly audit whose target moved fires every night and fails every night: counting only
+	// Runs shows 30 and reads as healthy, counting only failures shows 30 and reads as never having
+	// started. Runs 30 / Failures 30 is the only pair that says what is actually happening. This is
+	// the same reason the crawler's Report partitions fetched/refused/failed/not-captured instead of
+	// reporting one total.
+	Failures int `json:"failures"`
 	// LastNote is what the last firing (or refusal to fire) said about itself.
 	LastNote string `json:"last_note,omitempty"`
 }
@@ -206,7 +216,7 @@ type Fired struct {
 	// Err set and Missed 0 is a kind with no registered Starter.
 	Started bool `json:"started"`
 	// Missed is how many occurrences this decision wrote off. See the package docs.
-	Missed int `json:"missed"`
+	Missed int    `json:"missed"`
 	Note   string `json:"note,omitempty"`
 	Err    string `json:"error,omitempty"`
 }
@@ -220,6 +230,7 @@ type Runner struct {
 	grace     time.Duration
 	onChange  func()
 	fired     int
+	failed    int
 	missed    int
 	unstarted int
 }
@@ -372,7 +383,8 @@ func (r *Runner) Update(name string, s Schedule) error {
 			}
 		}
 	}
-	s.Runs, s.Missed, s.LastRunMs, s.LastNote = existing.Runs, existing.Missed, existing.LastRunMs, existing.LastNote
+	s.Runs, s.Failures, s.Missed = existing.Runs, existing.Failures, existing.Missed
+	s.LastRunMs, s.LastNote = existing.LastRunMs, existing.LastNote
 	r.byKey[to] = &s
 	r.mu.Unlock()
 	r.notify()
@@ -457,19 +469,21 @@ func (r *Runner) UsingPool(pool string) []string {
 	return out
 }
 
-// Totals is the runner's own count of what it has done: firings, occurrences written off, and
-// occurrences that were due for a kind nothing could start.
+// Totals is the runner's own count of what it has done. Four numbers, because there are four
+// outcomes and every occurrence this runner considered lands in exactly one of the last three:
+// it fired, it was written off as missed, or nothing could start it. `failed` is a subset of
+// `fired` — see Runner.record — and is the one number that is not part of that partition.
 //
 // Reported rather than derived from the schedule list because the list is mutable — deleting a
 // schedule that missed four nights should not make those four nights un-missed in the process's own
 // account of itself.
-func (r *Runner) Totals() (fired, missed, unstarted int) {
+func (r *Runner) Totals() (fired, failed, missed, unstarted int) {
 	if r == nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.fired, r.missed, r.unstarted
+	return r.fired, r.failed, r.missed, r.unstarted
 }
 
 // Restore replaces the saved set with a persisted one, and reports what it refused.
@@ -586,22 +600,34 @@ func (r *Runner) Tick(now time.Time) []Fired {
 //
 // A Starter that returned an error still counts as a run: it happened, it is in LastNote, and
 // pretending it did not would make a schedule that fails every night look like one that has never
-// fired. `unstarted` is the separate count for an occurrence nothing could start at all — a
-// different fault with a different fix, kept apart for the same reason persist keeps session-rule id
-// collisions apart from validation refusals.
-func (r *Runner) record(name string, nowMs int64, unstarted bool, note string) {
+// fired. So `ok` does not decide *whether* to count the run — it decides whether to also count a
+// failure, and Schedule.Failures is a subset of Schedule.Runs.
+//
+// `unstarted` is the third outcome and not a kind of failure: an occurrence nothing in this build
+// could start never ran at all, so it increments neither Runs nor Failures. The distinction is the
+// whole reason this function takes two bools rather than one — "the work ran and returned an error"
+// and "there was no work to run" have different causes and different fixes (a broken target versus a
+// schedule naming a kind this binary does not have), and collapsing them would tell an operator
+// their audit is failing when in fact it never happened. Kept apart for the same reason persist
+// keeps session-rule id collisions apart from validation refusals.
+func (r *Runner) record(name string, nowMs int64, ok, unstarted bool, note string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := r.byKey[skey(name)]
 	if s == nil {
 		return
 	}
-	if unstarted {
+	switch {
+	case unstarted:
 		r.unstarted++
-	} else {
+	default:
 		s.Runs++
 		s.LastRunMs = nowMs
 		r.fired++
+		if !ok {
+			s.Failures++
+			r.failed++
+		}
 	}
 	if note != "" {
 		s.LastNote = note

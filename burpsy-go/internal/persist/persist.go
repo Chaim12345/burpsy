@@ -168,6 +168,13 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
+	// Resource pools and scheduled tasks, kept in pools.go beside their own load and save so the
+	// three halves of one round trip are read together. Applied as a second statement rather than
+	// appended to the string above for that reason alone — CREATE TABLE IF NOT EXISTS is idempotent
+	// either way.
+	if _, err := s.db.Exec(poolSchema); err != nil {
+		return fmt.Errorf("create pool schema: %w", err)
+	}
 	// messages gained (segment, offset, length) when the store stopped keeping
 	// payload bytes on the heap: with a capture directory the bytes are already
 	// durable in a segment file, so mirroring them into SQLite as well stored
