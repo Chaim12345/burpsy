@@ -274,5 +274,16 @@ export interface ToolLogView {
   dropped: number;
   /** Per-tool histogram over every match, seeded with every known tool. */
   counts: Record<string, number>;
+  /**
+   * The capture axis: which tools are being recorded at all, distinct from the
+   * display axis. A tool missing (false) has its requests sent and deliberately
+   * not kept — see `uncaptured`. Not to be collapsed into `counts`: capture is
+   * destructive, display is not.
+   */
+  capturing: Record<string, boolean>;
+  /** Per-tool count of requests capture refused. Only ever moves forward. */
+  uncaptured: Record<string, number>;
+  /** Sum of `uncaptured`, so the count line can say the whole loss at once. */
+  uncaptured_total: number;
   entries: ToolLogRow[];
 }

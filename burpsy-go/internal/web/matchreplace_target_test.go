@@ -131,7 +131,12 @@ func TestAMissingRuleTypeIsRefusedAsMissing(t *testing.T) {
 //
 // This test walks every declared Target rather than an enumerated list of names, so adding a
 // Target to the engine without teaching both directions about it fails here by name.
-func TestEveryEngineTargetRoundTripsThroughItsWireName(t *testing.T) {
+//
+// Every Target must still have a NAME — that is what keeps a stored rule readable. But only
+// the appliable ones round-trip back into a Target, because `applyOne` implements five of the
+// seven. The two param targets are named and refused, which is the honest pairing: the console
+// can display a param rule truthfully while the API declines to install one.
+func TestEveryEngineTargetHasANameAndOnlyAppliableOnesRoundTrip(t *testing.T) {
 	all := []matchreplace.Target{
 		matchreplace.TargetRequestHeader,
 		matchreplace.TargetRequestBody,
@@ -147,7 +152,15 @@ func TestEveryEngineTargetRoundTripsThroughItsWireName(t *testing.T) {
 			t.Errorf("Target %d has no wire name: matchReplaceTargetName returned %q", int(target), name)
 			continue
 		}
+		_, unapplied := matchReplaceUnappliedTargets[name]
 		back, err := targetToCategory(name)
+		if unapplied {
+			if err == nil {
+				t.Errorf("Target %d (%q) has no applier in applyOne but targetToCategory accepted it; "+
+					"installing it would apply a whole-body rewrite", int(target), name)
+			}
+			continue
+		}
 		if err != nil {
 			t.Errorf("Target %d renders as %q, which targetToCategory refuses: %v", int(target), name, err)
 			continue
@@ -155,6 +168,47 @@ func TestEveryEngineTargetRoundTripsThroughItsWireName(t *testing.T) {
 		if back != target {
 			t.Errorf("round trip of Target %d via %q produced Target %d", int(target), name, int(back))
 		}
+	}
+}
+
+// The refusal must explain itself, because "unknown rule_type" would be false: the Target
+// exists and is named. What is missing is the applier, and an operator who is told the value
+// is unknown will go looking for a typo instead of for the feature.
+func TestTheParamTargetsAreRefusedAsUnimplementedNotUnknown(t *testing.T) {
+	for _, name := range []string{"request_param_name", "request_param_value"} {
+		_, err := targetToCategory(name)
+		if err == nil {
+			t.Errorf("%s was accepted; applyOne has no case for it", name)
+			continue
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "unknown rule_type") {
+			t.Errorf("%s is reported as unknown: %q — it is declared, just not appliable", name, msg)
+		}
+		if !strings.Contains(msg, "no applier") {
+			t.Errorf("%s refusal does not say why: %q", name, msg)
+		}
+		// The accepted list must not advertise what it refuses.
+		if strings.Contains(strings.SplitN(msg, "Accepted values are", 2)[len(strings.SplitN(msg, "Accepted values are", 2))-1], name) {
+			t.Errorf("%s appears in its own accepted-values list: %q", name, msg)
+		}
+	}
+}
+
+// The whole-list PUT must refuse a param rule outright rather than installing something that
+// rewrites unrelated bytes. This is the end-to-end guard on the defect.
+func TestAParamRulePutIsRefusedAndInstallsNothing(t *testing.T) {
+	ts := newTestServer()
+	body := `{"rules":[{"rule_type":"request_param_name","enabled":true,"string_match":"secret","string_replace":"harmless"}]}`
+	req := httptest.NewRequest(http.MethodPut, "/api/tools/rules", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	ts.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT of a param-name rule = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := len(ts.matchReplace.Rules()); got != 0 {
+		t.Fatalf("a refused param rule installed %d rules into the live set", got)
 	}
 }
 
@@ -171,11 +225,27 @@ func TestAnUnmappedTargetSaysSoRatherThanClaimingRequestBody(t *testing.T) {
 	}
 }
 
-// A param rule survives GET → PUT unchanged. This is the concrete failure the two fixes above
-// combine to prevent, driven through the real handlers rather than the helpers.
-func TestAParamRuleSurvivesAGetPutRoundTrip(t *testing.T) {
+// A param rule already in the live set reads back truthfully, and PUTting it is refused.
+//
+// This test previously asserted the opposite — that the round trip succeeded — and that
+// assertion was the bug wearing a test's clothes. I wrote it in 4469cf1 to prove the API
+// accepted param rules, without checking whether the engine could apply one. It could not:
+// `applyOne` has no case for either param target, so an accepted rule became a whole-body
+// substring rewrite.
+//
+// The corrected contract splits read from write, and that split is the point:
+//
+//   - GET must name the rule honestly. A rule sitting in the live set is a fact, and
+//     reporting a param rule as `request_body` would hide it.
+//   - PUT must refuse it. Installing it would rewrite bytes the operator did not select.
+//
+// So a GET → PUT round trip of a param rule 400s, and that is correct rather than a
+// regression. The asymmetry is what an honest API looks like when the engine is behind the
+// vocabulary.
+func TestAParamRuleReadsBackHonestlyButCannotBeInstalled(t *testing.T) {
 	ts := newTestServer()
 
+	// Constructed directly through the engine, which is the only way one can exist now.
 	rule, err := matchreplace.NewRule(matchreplace.TargetRequestParamValue, matchreplace.CategoryLiteral, "secret", "REDACTED", "")
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
@@ -195,11 +265,13 @@ func TestAParamRuleSurvivesAGetPutRoundTrip(t *testing.T) {
 	if len(got.Config.Rules) != 1 {
 		t.Fatalf("GET returned %d rules, want 1", len(got.Config.Rules))
 	}
+	// The read side stays honest: named for what it is, not folded into request_body.
 	if got.Config.Rules[0].RuleType != "request_param_value" {
-		t.Fatalf("a param-value rule read back as %q", got.Config.Rules[0].RuleType)
+		t.Fatalf("a param-value rule read back as %q; the read path must not disguise it",
+			got.Config.Rules[0].RuleType)
 	}
 
-	// PUT the GET answer straight back, byte for byte, and the live set must be unchanged.
+	// The write side refuses it, and the live set is left exactly as it was.
 	encoded, err := json.Marshal(got.Config)
 	if err != nil {
 		t.Fatalf("re-encode: %v", err)
@@ -207,15 +279,15 @@ func TestAParamRuleSurvivesAGetPutRoundTrip(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPut, "/api/tools/rules", strings.NewReader(string(encoded)))
 	rec = httptest.NewRecorder()
 	ts.mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("PUT of the GET answer = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT of a param rule = %d, want 400 — accepting it would install a "+
+			"whole-body rewrite (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "no applier") {
+		t.Errorf("the refusal does not explain itself: %q", rec.Body.String())
 	}
 	live := ts.matchReplace.Rules()
-	if len(live) != 1 {
-		t.Fatalf("the round trip left %d rules, want 1", len(live))
-	}
-	if live[0].Target != matchreplace.TargetRequestParamValue {
-		t.Fatalf("the round trip turned a param-value rule into Target %d (%s)",
-			int(live[0].Target), matchReplaceTargetName(live[0].Target))
+	if len(live) != 1 || live[0].Target != matchreplace.TargetRequestParamValue {
+		t.Fatalf("the refused PUT disturbed the live set: %d rules", len(live))
 	}
 }

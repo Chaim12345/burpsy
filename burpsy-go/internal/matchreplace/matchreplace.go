@@ -248,7 +248,27 @@ func applyOne(r *Rule, raw []byte) []byte {
 	case TargetRequestFirstLine:
 		return applyFirstLine(r, raw)
 	default:
-		return applyBody(r, raw)
+		// An unimplemented target did not fire. `nil` is this function's contract for that —
+		// see Apply, which only sets `changed` when applyOne returns non-nil.
+		//
+		// This used to be `return applyBody(r, raw)`. Five of the seven Targets have a case
+		// above; TargetRequestParamName and TargetRequestParamValue have none, so both fell
+		// here and were applied as **whole-body substring rewrites**. A param-name rule
+		// replacing "secret" with "harmless" against
+		// `user=admin&secret=hunter2&nonsecret=keep` produced
+		// `user=admin&harmless=hunter2&nonharmless=keep` — it renamed `nonsecret`, an
+		// unrelated parameter, because a body rewrite has no concept of a field boundary.
+		//
+		// `nil` and not `raw`: an earlier attempt at this fix returned `raw`, which is
+		// non-nil and therefore reads as "the rule fired". That would have marked the
+		// message changed, counted a modification that never happened, and run
+		// fixContentLength over an untouched body — trading a wrong rewrite for a wrong
+		// count. It was reverted, correctly.
+		//
+		// `targetsDir` still lists the param targets as request-direction. That is a true
+		// statement about direction and not a claim that they can be applied; conflating
+		// those two is what produced the original defect.
+		return nil
 	}
 }
 

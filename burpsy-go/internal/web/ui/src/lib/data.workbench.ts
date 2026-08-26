@@ -200,3 +200,24 @@ export function useLoadMessage() {
 
 export const useToolLogView = (filter: string, search: string, limit = 1_000) =>
   useResource<ToolLogView>(workbenchKeys.toolLog(filter, search, limit), `/api/tools/log${query({ limit, filter, search })}`);
+
+/**
+ * Toggle one tool's capture axis. This is the destructive arm, so the UI must
+ * show it as such — turning capture off means that tool's next requests are
+ * sent and deliberately not recorded, and only the `uncaptured` counter will
+ * say so. Mutates via POST /api/tools/log; invalidates the logger read (and
+ * the dashboard's, under the same "toollog" prefix) so the new axis is shown.
+ */
+export const useSetToolLogCapture = () => {
+  const queryClient = useQueryClient();
+  return useMutation<Record<string, boolean>, Error, { tool: string; on: boolean }>({
+    mutationFn: ({ tool, on }) =>
+      api<Record<string, boolean>>("/api/tools/log", json("POST", { tool, on })),
+    onSuccess: () => {
+      // Invalidate every filter/search combination under the "toollog" prefix,
+      // matching workbenchKeys.toolLog's shape, so the refreshed read reflects
+      // the new capture axis regardless of the currently-selected filters.
+      void queryClient.invalidateQueries({ queryKey: ["toollog"] });
+    },
+  });
+};

@@ -507,10 +507,14 @@ var manifest = map[string]route{
 	},
 	"/api/tools/log": {
 		// DELETE clears the whole log, which nothing documented and nothing had classified until the
-		// 405 test found the verb reachable. See riskDestructive.
-		methods: []string{"GET", "DELETE"}, risk: riskDestructive,
-		summary: "GET: every request this process sent, per tool, with what it dropped at the bound. " +
-			"DELETE: clears it, discarding the record of what was sent to the target",
+		// 405 test found the verb reachable. See riskDestructive. POST toggles one tool's capture
+		// axis — the destructive *incoming* arm: switching a tool off means its next requests are
+		// sent and deliberately not recorded, so it is a local-write to a destructive fact rather
+		// than a destructive act in itself.
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskDestructive,
+		summary: "GET: every request this process sent, per tool, with what it dropped at the bound and " +
+			"the capture axis (which tools are recorded at all, and how many requests went unrecorded). " +
+			"POST: turn one tool's capture on or off. DELETE: clears it, discarding the record of what was sent to the target",
 	},
 	"/api/tools/organizer": {
 		methods: []string{"GET", "POST"}, risk: riskLocal,

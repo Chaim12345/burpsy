@@ -564,10 +564,18 @@ var matchReplaceTargetNames = []string{
 	"request_header",
 	"request_body",
 	"request_first_line",
-	"request_param_name",
-	"request_param_value",
 	"response_header",
 	"response_body",
+}
+
+// matchReplaceUnappliedTargets are rule_types the engine declares but cannot apply.
+//
+// They are refused with their own message rather than being reported as unknown, because
+// "unknown rule_type" would be a lie: the Target exists, `targetsDir` routes it, and
+// `matchReplaceTargetName` can name it. What is missing is the applier.
+var matchReplaceUnappliedTargets = map[string]string{
+	"request_param_name":  "TargetRequestParamName",
+	"request_param_value": "TargetRequestParamValue",
 }
 
 // targetToCategory maps the UI's rule_type to the engine's Target.
@@ -584,6 +592,24 @@ var matchReplaceTargetNames = []string{
 // ordinary tolerant-parser bug because the affected surface is the proxy: the wrong answer
 // was applied to real requests, not merely displayed. A rule the engine cannot express is
 // now a 400 that names what is accepted.
+//
+// # And why request_param_name / request_param_value are refused
+//
+// I added those two here in 4469cf1 and it was wrong. My justification was that "the engine
+// already matches on them (matchreplace.go:129)" — but that line is `targetsDir`, which says
+// which *direction* a target belongs to. The applier is `applyOne`, and it has no case for
+// either: both fell through to `default: return applyBody(...)`.
+//
+// So accepting them turned a parameter rule into a whole-body substring rewrite. A
+// param-name rule replacing "secret" with "harmless" against
+// `user=admin&secret=hunter2&nonsecret=keep` yielded `user=admin&harmless=hunter2&nonharmless=keep`
+// — it rewrote `nonsecret`, an unrelated parameter, and answered 200 with a compiled count.
+// I reintroduced the very defect the rest of this comment describes, by verifying against
+// one function and asserting about another.
+//
+// They are refused until the appliers exist, and refused *by name* rather than as unknown,
+// because the Target is real — what is missing is the code that applies it. A declined path
+// beats a plausible-looking wrong one.
 func targetToCategory(ruleType string) (matchreplace.Target, error) {
 	switch ruleType {
 	case "request_first_line":
@@ -592,10 +618,6 @@ func targetToCategory(ruleType string) (matchreplace.Target, error) {
 		return matchreplace.TargetRequestHeader, nil
 	case "request_body":
 		return matchreplace.TargetRequestBody, nil
-	case "request_param_name":
-		return matchreplace.TargetRequestParamName, nil
-	case "request_param_value":
-		return matchreplace.TargetRequestParamValue, nil
 	case "response_header":
 		return matchreplace.TargetResponseHeader, nil
 	case "response_body":
@@ -603,6 +625,13 @@ func targetToCategory(ruleType string) (matchreplace.Target, error) {
 	case "":
 		return 0, fmt.Errorf("rule_type is required; accepted values are %s", strings.Join(matchReplaceTargetNames, ", "))
 	default:
+		if engineName, unapplied := matchReplaceUnappliedTargets[ruleType]; unapplied {
+			return 0, fmt.Errorf(
+				"rule_type %q is declared by the engine as %s but has no applier yet, so a rule "+
+					"using it would be applied as a whole-body rewrite and could change unrelated "+
+					"parameters; refused until it is implemented. Accepted values are %s",
+				ruleType, engineName, strings.Join(matchReplaceTargetNames, ", "))
+		}
 		return 0, fmt.Errorf("unknown rule_type %q; accepted values are %s", ruleType, strings.Join(matchReplaceTargetNames, ", "))
 	}
 }
@@ -821,17 +850,57 @@ type toolLogResp struct {
 	Dropped uint64         `json:"dropped"`
 	Counts  map[string]int `json:"counts"`
 	Entries []toolLogEntry `json:"entries"`
+	// Capturing is the capture axis: which tools are being recorded at all,
+	// distinct from the display axis the caller filters by. A tool absent here
+	// is a tool whose requests were sent and deliberately not kept.
+	Capturing map[string]bool `json:"capturing"`
+	// Uncaptured reports, per tool, how many requests capture refused. The
+	// honest-counting counterpart of the capture axis: switching a tool off must
+	// read as "N requests not captured", never as a short log.
+	Uncaptured map[string]uint64 `json:"uncaptured"`
+	// UncapturedTotal is the sum of Uncaptured, so a caller showing 20 of 4000
+	// can also say how many request-gone-forever the log is silent about.
+	UncapturedTotal uint64 `json:"uncaptured_total"`
 }
 
 func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.toolLogGet(w, r)
+	case http.MethodPost:
+		s.toolLogSetCapture(w, r)
 	case http.MethodDelete:
 		s.toolLogClear(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// toolLogSetCaptureReq toggles the capture axis for one tool. The tool is a
+// name (from Tool.String()), never an ordinal: ordinals are the durable
+// mirror's stability contract, and the wire has always used names.
+type toolLogSetCaptureReq struct {
+	Tool string `json:"tool"`
+	On   bool   `json:"on"`
+}
+
+// toolLogSetCapture serves POST /api/tools/log — the destructive arm of the
+// two axes: turning a tool's capture off means its next requests are sent and
+// deliberately not recorded, and the uncaptured counters start counting them.
+func (s *Server) toolLogSetCapture(w http.ResponseWriter, r *http.Request) {
+	var req toolLogSetCaptureReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "body must be JSON with tool and on", http.StatusBadRequest)
+		return
+	}
+	tool, ok := toollog.ToolFromName(req.Tool)
+	if !ok {
+		http.Error(w, "unknown tool", http.StatusBadRequest)
+		return
+	}
+	s.toolLog.SetCapturing(tool, req.On)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{req.Tool + ".capturing": s.toolLog.Capturing(tool)})
 }
 
 // toolLogGet serves GET /api/tools/log?filter=&search=&limit=.
@@ -882,13 +951,26 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	capturing := make(map[string]bool, len(toollog.ToolAll))
+	uncaptured := make(map[string]uint64, len(toollog.ToolAll))
+	var uncapturedTotal uint64
+	for _, t := range toollog.ToolAll {
+		capturing[t.String()] = s.toolLog.Capturing(t)
+		n := s.toolLog.Uncaptured(t)
+		uncaptured[t.String()] = n
+		uncapturedTotal += n
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(toolLogResp{
-		Total:   len(matched),
-		Shown:   len(view),
-		Dropped: s.toolLog.Dropped(),
-		Counts:  counts,
-		Entries: view,
+		Total:           len(matched),
+		Shown:           len(view),
+		Dropped:         s.toolLog.Dropped(),
+		Counts:          counts,
+		Entries:         view,
+		Capturing:       capturing,
+		Uncaptured:      uncaptured,
+		UncapturedTotal: uncapturedTotal,
 	})
 }
 
