@@ -36,6 +36,10 @@ type repeaterSendReq struct {
 	// be traced back to the capture it came from. A pointer because exchange 0 is a real exchange and
 	// is very often the first thing sent to Repeater.
 	FromExchange *core.ExchangeID `json:"from_exchange,omitempty"`
+	// Options carries the per-send overrides (Burp Repeater's config-override menu). Nil means the
+	// standing behaviour in full — the zero options are the defaults, so an absent object and an
+	// empty one mean the same thing.
+	Options *repeaterSendOptions `json:"options,omitempty"`
 }
 
 // repeaterSendResp mirrors repeater.ts's SendResp.
@@ -99,6 +103,21 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Empty request", http.StatusBadRequest)
 		return
 	}
+	// Options are validated before anything else they could affect: a send that half-applied an
+	// options object would put bytes on the wire shaped by an option the caller believes was
+	// something else. The error names the refused key, per the proxy-options contract.
+	var opts repeaterSendOptions
+	if req.Options != nil {
+		opts = *req.Options
+		if err := opts.validate(); err != nil {
+			http.Error(w, "refused: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	// The transforms run before the scope gate on the transformed bytes — though the gate is
+	// host-level and no transform changes the authority, so this ordering is about the stored
+	// exchange recording what actually went out, not about which bytes the gate saw.
+	rawRequest := opts.applyToRequest([]byte(req.Request), s.cookieHeaderFor(host, port, tls))
 	// The repeater sends to whatever target the operator types, so it is gated
 	// by scope for the same reason the intruder is: a scope the operator set to
 	// constrain outbound traffic must not be bypassable by sending raw bytes
@@ -117,11 +136,9 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
 	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
 	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
-	// replayed captured h2 bytes, and would now be wrong far more often.
 	ctx := r.Context()
 	sendStarted := time.Now()
-	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, host, port, tls, []byte(req.Request),
-		sender.ProtocolPreferenceAuto)
+	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, host, port, tls, rawRequest, opts.protocolPreference())
 	elapsed := time.Since(sendStarted)
 	if err != nil {
 		// Surface the dial/parse error to the UI so Repeater is not silently empty.
@@ -136,7 +153,7 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 	// must not be silently swallowed: an exchange referencing a non-existent
 	// message ID would 404 in history lookups. Log and degrade rather than
 	// advertise a bad id.
-	reqMsgID, err := s.store.Put([]byte(req.Request), core.DirectionRequest)
+	reqMsgID, err := s.store.Put(rawRequest, core.DirectionRequest)
 	if err != nil {
 		s.logger.Error("repeater: failed to store request", zap.Error(err))
 	}
@@ -187,11 +204,12 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		RequestMsgID:  uint64(reqMsgID),
 		ResponseMsgID: uint64(respMsgID),
 		ExchangeID:    ex.ID,
-		Redirects:     s.followRepeaterRedirects(ctx, host, port, tls, []byte(req.Request), rawResp),
+		Redirects:     s.followRepeaterRedirects(ctx, host, port, tls, rawRequest, rawResp, opts),
 	})
 }
 
-// followRepeaterRedirects applies the network settings' redirect policy to a send that already happened.
+// followRepeaterRedirects applies this send's redirect policy to a send that already happened — the
+// per-send override when one was given, otherwise the network settings' standing policy.
 //
 // Returns nil when the response is not a redirect, so the field is absent for the ordinary case rather
 // than present and empty — a client can treat its presence as "there was a chain here".
@@ -202,11 +220,13 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 // is sent and the answer records that the policy is what stopped it — so an operator who never opens the
 // Network panel gets one request per click, exactly as before.
 func (s *Server) followRepeaterRedirects(
-	ctx context.Context, host string, port uint16, tls bool, raw, rawResp []byte,
+	ctx context.Context, host string, port uint16, tls bool, raw, rawResp []byte, opts repeaterSendOptions,
 ) *repeaterRedirects {
-	mode := string(s.sender.Network().Redirects.Mode)
+	standing := s.sender.Network().Redirects
+	policy := opts.redirectPolicy(standing)
+	mode := string(policy.Mode)
 	authorised := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
-	result, err := authorised.FollowRedirectsAfter(ctx, raw, rawResp)
+	result, err := authorised.FollowRedirectsAfterPolicy(ctx, raw, rawResp, policy)
 	if err != nil {
 		// The send succeeded and this did not, so the exchange still stands. Naming the failure is the
 		// honest option: a nil here would say "not a redirect", which is a claim we cannot make.
@@ -226,6 +246,16 @@ func (s *Server) followRepeaterRedirects(
 		Hops:        result.Hops,
 		FinalStatus: final,
 	}
+}
+
+// cookieHeaderFor returns the session coordinator's cookie header for the target, or empty when
+// there is no coordinator — a nil check, not a hope: the coordinator is an optional capability and
+// a nil dereference here would take the whole send down for an option that is off by default.
+func (s *Server) cookieHeaderFor(host string, port uint16, tls bool) string {
+	if s.sessionCoordinator == nil {
+		return ""
+	}
+	return s.sessionCoordinator.CookieHeader(host, port, tls)
 }
 
 // ---- Intruder ----------------------------------------------------------------------------------
