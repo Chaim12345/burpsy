@@ -273,7 +273,7 @@ The practical consequence: **anyone testing an API through the proxy browses mos
 so burpsy POSTs to `/robots.txt`, `/openapi.json`, `/swagger.json` and ~20 other static
 paths and reports clean on every one.
 
-And the correct primitive already exists **two functions away**: `sendTestRequestBody`
+And the correct primitive already exists **as the immediately next function**: `sendTestRequestBody`
 (`scanner.go:546`) takes an explicit method, and its comment (`:541-545`) says it exists
 "for probes that need a specific method … rather than the exchange's own method." This is
 the §6.5 pattern again — *the antidote is in-tree and unpropagated.*
@@ -830,36 +830,57 @@ file, no paths that moved. Cheap to run and worth keeping — it is `grep -oE` p
 
 **Pass 2 — semantic, sampled.** Structural resolution is the weaker check: the W1 failure
 (§10 trap #4) was a file that existed, at the right path, saying the *opposite* of what cited
-it. So we re-read the cited code behind the highest-stakes claims — the ones backing §9's
-top-priority fixes — and asked whether it says what we said it says. Of **6** claims checked:
+it. So we re-read the cited code behind the load-bearing claims — everything backing §9's top
+fixes, plus every STATE 2 verdict §9 asks someone to act on — and asked whether it says what
+we said it says. **10 claims checked:**
 
 | Claim | Citation | Verdict |
 |---|---|---|
 | §3.1a session validity is first-stated-field-wins | `session/session.go:38-118` | **Holds exactly.** `StatusIs` returns unconditionally at `:42-52`; every later field unreachable for that rule. |
+| §3.0.3a `sendTestRequestFull` reuses the exchange's method | `scanner/scanner.go:507-539` | **Holds exactly.** `Method: exchange.Method` at `:515`. Confirmed concretely by `checks_reflection3.go:227` probing a fixed `/trace.axd`. |
+| §3.0.3a the correct primitive exists nearby | `scanner/scanner.go:546` | **Holds** — understated, in fact: `sendTestRequestBody` is the *immediately next* function, not "two functions away", and its comment `:541-545` states its rationale. |
 | §6.5 the antidote is a single-source-of-truth table | `scanner/audit.go:567-580` | **Holds.** The comment even states the anti-drift rationale itself. |
 | §6.5 the reflective guard test exists | `scanner/audit_test.go:513` | **Holds.** Genuinely reflects over `BuiltInConfig`. |
-| §6.7 `options.go` binds listing, not applier | `proxy/options.go:372-386` | Holds. |
-| §3.0.3c `AuditItemPointNoChecks` "is never used" | `scanner/audit_items.go:188-190` | **FALSE — corrected in place.** It is produced live via `Resolve`→`resolvePoints`→`pointStatusFor:602`. |
+| §6.7 `options.go` binds listing, not applier | `proxy/options.go:372-386` | **Holds.** |
+| §4 Myers diff engine has zero non-test callers | `tools/comparer.go:99,109` | **Holds.** Only its own declarations. Positive control: `tools.NewDecoder()` *is* found live at `api_toolkit.go:1026`, so the method can see live use of that package. |
+| §2.1 Intruder `PayloadGenerator` has zero non-test callers | `intruder/intruder.go:346-387` | **Holds.** Only its own declarations and methods. |
+| §6.1a `advisory.Catalogue.ByName` has zero non-test callers | `advisory/advisory.go:216` | **Holds, including the trap it warns about** — the competing hits really are `scanner.BuiltInConfigByName` (`api_scanner_configs.go:124`), a different symbol in a different package. |
+| §2.1 `inspectorPanelState`/`inspectorDock` are written and never read | `ui/src/lib/store.ts` | **Holds.** Declared `:65-66`, defaulted `:123-124`, setters `:140-141`, persisted `:287-288` — and referenced by no other file. |
+| §3.0.3c `AuditItemPointNoChecks` "is never used" | `scanner/audit_items.go:188-190` | **FALSE — corrected in place.** Produced live via `Resolve`→`resolvePoints`→`pointStatusFor:602`. |
 | §9 item 3 is a cheap status swap | (derived) | **FALSE — re-priced.** Point status is per-*item* and stamped onto every point; the fix needs new per-point accounting. |
 
-**1 of 6 sampled claims was wrong, and it took a §9 priority estimate down with it.** The
+**1 of 10 sampled claims was wrong, and it took a §9 priority estimate down with it.** The
 error was **trap #1 for the third time**: we grepped an identifier, found the declaration and
 the `switch` arms, and concluded "never used" without walking two frames up to the producer.
 
-Three things follow, and they are the honest reading:
+Notably, **every STATE 2 verdict sampled held** — including the one §6.1a had already caught
+itself getting wrong. The unwired findings are the sturdiest part of this report, which makes
+sense: "zero non-test callers" is a claim an import census can settle mechanically, and the
+method was applied with a positive control each time.
+
+Four things follow, and they are the honest reading:
 
 1. **The structural pass is necessary and nearly worthless on its own.** It scored 100% on a
    document containing a false claim. A citation audit that only checks that files exist
    measures tidiness, not truth.
-2. **A 1-in-6 semantic error rate is this report's own floor, not its ceiling** — 64 citations
-   went unsampled. §7's "read this as a floor, not a measurement" applies to the document
-   as much as to the product. Anyone acting on a claim here should re-read its citation
-   first; that is now cheap, because every citation resolves.
+2. **A 1-in-10 semantic error rate is this report's own floor, not its ceiling** — 60
+   citations went unsampled, and the sample was deliberately drawn from the *most*
+   scrutinised claims, so it is biased optimistic. §7's "read this as a floor, not a
+   measurement" applies to the document as much as to the product. Anyone acting on a claim
+   here should re-read its citation first; that is now cheap, because all 70 resolve.
 3. **The error was in a fix estimate, which is the most dangerous place to be wrong.** A
    wrong severity gets argued about; a wrong *cost* silently changes what gets scheduled. An
    under-priced defect is deferred by ordinary good planning, and nothing ever re-checks the
    estimate. Worth stating plainly: **this report's cost estimates are the least-verified
-   numbers in it**, and unlike its denominators, none of them were independently re-derived.
+   numbers in it**, and unlike its denominators, not one was independently re-derived.
+4. **The auditor fell into the trap mid-audit, which is the most useful datum here.** While
+   checking the `sendTestRequestFull` claim, `grep 'func sendTestRequestFull'` returned
+   **nothing** — because it is a method, so the real declaration reads
+   `func (s *ActiveScanner) sendTestRequestFull`. For about a minute the priority-#2 fix
+   looked like it cited a function that did not exist. Only the standing rule — *a negative
+   grep needs a positive control* — caught it. That rule is in §10 because earlier waves
+   needed it; it earned its place again here, against the person auditing for exactly this
+   class of error. **Treat the rules in §10 as operational, not commemorative.**
 
 ---
 
@@ -986,7 +1007,7 @@ security tool; everything after is parity work.
 2. **Fix `sendTestRequestFull`'s method reuse (§3.0.3a).** Also live, also silent, also in a
    default-ON family. Discovery probes inherit the base exchange's HTTP method, so anyone
    testing an API through the proxy gets `POST /robots.txt` → 405 → "clean." The correct
-   primitive, `sendTestRequestBody`, sits **two functions away** and its comment says exactly
+   primitive, `sendTestRequestBody`, sits **immediately below it** and its comment says exactly
    why it exists. Seven call sites, including the HTTP-PUT check's own verification GET.
 
 3. **Fix the duplicate-advisory and false-`Audited` reporting (§3.0.3b, §3.0.3c).** Both
