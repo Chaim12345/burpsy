@@ -291,10 +291,40 @@ buckets — which corrupts any triage that sorts by severity or counts by total.
 **(c) Header insertion points labelled "Audited" while nothing probes them.** The ledger
 enumerates with 4 kinds (`audit_engine.go:849`) but admitted checks walk 3, so
 `User-Agent`, `Accept` and `Proxy-Connection` display **`Audited`** when zero of 36–64
-probes touched a header. The status vocabulary **already contains the right answer** —
-`AuditItemPointNoChecks` (`audit_items.go:188-190`) — and it is never used. The documenting
-comment's own sentence, "the four kinds the native injection evaluators walk," is false at
-defaults.
+probes touched a header. The documenting comment's own sentence, "the four kinds the native
+injection evaluators walk," is false at defaults.
+
+> **Correction (verified at `210f73f`).** This subsection originally added: *"the status
+> vocabulary already contains the right answer — `AuditItemPointNoChecks`
+> (`audit_items.go:188-190`) — and it is never used."* **Both halves of that are wrong**, and
+> the corrected version is a sharper finding with a much larger fix estimate.
+>
+> **It is used, on a live path.** `AuditItemLedger.Resolve` (`audit_items.go:525`, a public
+> method) → `resolvePoints` (`:574`) → `pointStatusFor` (`:601`) returns
+> `AuditItemPointNoChecks` at `:602-603` whenever `row.UnitsPlanned == 0`. The original claim
+> came from grepping the identifier and reading the declaration and the `switch` arms as the
+> only hits — **trap #1 again**: the producer was two frames up the call chain from where we
+> looked.
+>
+> **And "just use it" cannot fix (c).** `UnitsPlanned` is an **item-level** field
+> (`:343`). `AuditItemPoint` (`:252-262`) carries only `Kind`, `Name`, `Status`, `Detail` —
+> **no per-point probe accounting at all**. So `pointStatusFor` decides one status per *item*
+> from item-level evidence, and `resolvePoints` then stamps that single status onto **every**
+> point in the row (`:576-582`). The structure is therefore *incapable* of distinguishing
+> "this point was probed" from "a sibling point was probed": when 36-64 probes ran, every
+> enumerated point gets `AuditItemPointCovered` → **`Audited`**, including the three header
+> kinds nothing touched.
+>
+> **Consequence for §9 item 3.** The right value existing is not the fix. Reporting (c)
+> honestly requires **adding per-point probe accounting to `AuditItemPoint`** and keying the
+> status off it — a data-model and plumbing change, not a status swap. The defect is exactly
+> as real as described; the repair is a tier more expensive than we first priced it, and a
+> fixer who trusted the original sentence would have gone looking for a missing `case` that
+> was never the problem.
+>
+> Note what this near-miss demonstrates: the item ranked **#3 by harm** and was described as
+> nearly free. Under-pricing a fix is its own kind of false claim — it is how real defects
+> get deferred, because the estimate stops matching the work and nobody re-checks.
 
 All three share one shape, and it is the shape of this entire report: **the product reports
 success for work it did not do.**
@@ -788,6 +818,49 @@ invented here. It is that **rigour is applied per-site rather than per-class**, 
 developer writes the careful version and the careless version within a few lines of each
 other. That is a cheaper problem to fix than a skill gap, and it is what §9.1 addresses.
 
+### 6.8 We turned the audit on ourselves, and it found things
+
+Having spent six sections establishing that this repo's claims do not survive checking, the
+obvious question is whether *this document's* claims do. Two passes at `210f73f`:
+
+**Pass 1 — structural, exhaustive.** Extracted all **70** distinct `file:line` citations in
+this report and resolved every one against the tree: does the file exist, and does it have
+that many lines? **70 / 70 passed.** No dangling citations, no line numbers off the end of a
+file, no paths that moved. Cheap to run and worth keeping — it is `grep -oE` plus a loop.
+
+**Pass 2 — semantic, sampled.** Structural resolution is the weaker check: the W1 failure
+(§10 trap #4) was a file that existed, at the right path, saying the *opposite* of what cited
+it. So we re-read the cited code behind the highest-stakes claims — the ones backing §9's
+top-priority fixes — and asked whether it says what we said it says. Of **6** claims checked:
+
+| Claim | Citation | Verdict |
+|---|---|---|
+| §3.1a session validity is first-stated-field-wins | `session/session.go:38-118` | **Holds exactly.** `StatusIs` returns unconditionally at `:42-52`; every later field unreachable for that rule. |
+| §6.5 the antidote is a single-source-of-truth table | `scanner/audit.go:567-580` | **Holds.** The comment even states the anti-drift rationale itself. |
+| §6.5 the reflective guard test exists | `scanner/audit_test.go:513` | **Holds.** Genuinely reflects over `BuiltInConfig`. |
+| §6.7 `options.go` binds listing, not applier | `proxy/options.go:372-386` | Holds. |
+| §3.0.3c `AuditItemPointNoChecks` "is never used" | `scanner/audit_items.go:188-190` | **FALSE — corrected in place.** It is produced live via `Resolve`→`resolvePoints`→`pointStatusFor:602`. |
+| §9 item 3 is a cheap status swap | (derived) | **FALSE — re-priced.** Point status is per-*item* and stamped onto every point; the fix needs new per-point accounting. |
+
+**1 of 6 sampled claims was wrong, and it took a §9 priority estimate down with it.** The
+error was **trap #1 for the third time**: we grepped an identifier, found the declaration and
+the `switch` arms, and concluded "never used" without walking two frames up to the producer.
+
+Three things follow, and they are the honest reading:
+
+1. **The structural pass is necessary and nearly worthless on its own.** It scored 100% on a
+   document containing a false claim. A citation audit that only checks that files exist
+   measures tidiness, not truth.
+2. **A 1-in-6 semantic error rate is this report's own floor, not its ceiling** — 64 citations
+   went unsampled. §7's "read this as a floor, not a measurement" applies to the document
+   as much as to the product. Anyone acting on a claim here should re-read its citation
+   first; that is now cheap, because every citation resolves.
+3. **The error was in a fix estimate, which is the most dangerous place to be wrong.** A
+   wrong severity gets argued about; a wrong *cost* silently changes what gets scheduled. An
+   under-priced defect is deferred by ordinary good planning, and nothing ever re-checks the
+   estimate. Worth stating plainly: **this report's cost estimates are the least-verified
+   numbers in it**, and unlike its denominators, none of them were independently re-derived.
+
 ---
 
 ## 7. Landed this wave, and what is still open
@@ -919,8 +992,14 @@ security tool; everything after is parity work.
 3. **Fix the duplicate-advisory and false-`Audited` reporting (§3.0.3b, §3.0.3c).** Both
    corrupt triage rather than testing: one inflates counts and splits a single condition
    across two severities; the other tells the operator a header insertion point was audited
-   when nothing probed it. For the second, the correct status value —
-   `AuditItemPointNoChecks` — **already exists and is never used.**
+   when nothing probed it.
+
+   **Re-priced — see the correction in §3.0.3c.** (b) is cheap. (c) is **not**: the status
+   value `AuditItemPointNoChecks` is already produced on a live path, and the reason it
+   cannot answer (c) is that point status is decided *per item* and stamped onto *every*
+   point, because `AuditItemPoint` carries no per-point probe accounting. Fixing (c) means
+   adding that accounting — plumbing, not a `case`. Do (b) first; scope (c) properly before
+   committing to it.
 
 4. **Make the bug class unrepresentable, by propagating the *mechanism* and not just the
    convention (§6.5, §6.5a).** Do not design a new guard — this team already invented it.
