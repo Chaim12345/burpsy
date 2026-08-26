@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Braces, Copy, Eraser, Hash, Play, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, formatBytes } from "../lib/api";
+import { useApp } from "../lib/store";
 import {
   DECODE_LAYERS,
   ENCODE_ENCODINGS,
@@ -209,6 +210,19 @@ export function DecoderPage(): JSX.Element {
   const [steps, setSteps] = useState<TransformStep[]>(() => [newTransformStep("decode", "auto")]);
   const [view, setView] = useState<"text" | "hex">("text");
   const pipeline = useTransformPipeline();
+
+  // A hand-off from another surface (History's "Send to Decoder") lands as a seed rather than a
+  // URL param, because the input is arbitrary bytes no router should carry. Consumed once and
+  // cleared: leaving it set would re-overwrite the operator's edits on every remount.
+  const decoderSeed = useApp((state) => state.decoderSeed);
+  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
+  useEffect(() => {
+    if (!decoderSeed) return;
+    setInput(decoderSeed.input);
+    setDecoderSeed(null);
+    toast.info(`Loaded ${decoderSeed.label} into Decoder`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decoderSeed]);
 
   const run = pipeline.data;
   const inputBytes = useMemo(() => new TextEncoder().encode(input).length, [input]);

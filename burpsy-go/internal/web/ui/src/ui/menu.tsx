@@ -15,6 +15,9 @@ export interface MenuAction {
 
 export interface MenuGroup {
   id: string;
+  /** Optional non-interactive section title rendered above the group's items — Burp's
+   *  "Engagement tools" style heading. Groups without one keep the separator-only look. */
+  title?: string;
   actions: MenuAction[];
 }
 
@@ -27,6 +30,7 @@ function renderItems(
   return visible.map((group, index) => (
     <div key={group.id}>
       {index > 0 ? <Separator className="menu-separator" /> : null}
+      {group.title ? <div className="menu-group-title">{group.title}</div> : null}
       {group.actions.map((action) => {
         const Icon = action.icon;
         return (

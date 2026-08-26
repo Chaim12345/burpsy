@@ -72,6 +72,9 @@ interface AppState {
   repeaterGroups: RepeaterGroup[];
   intruderSeed: IntruderSeed | null;
   comparerSlots: { a: string; b: string };
+  /** Set when another page hands the Decoder an input to transform. Session-only, like
+   *  intruderSeed: a stale payload surviving a reload would masquerade as current work. */
+  decoderSeed: { label: string; input: string } | null;
   /** Set when another page asks History to focus one exchange. */
   historyFocus: number | null;
   /** Set when another page pushes a filter expression into History. */
@@ -103,6 +106,7 @@ interface AppState {
   setRepeaterTabOptions: (tabId: string, options: RepeaterSendOptions) => void;
 
   setIntruderSeed: (seed: IntruderSeed | null) => void;
+  setDecoderSeed: (seed: { label: string; input: string } | null) => void;
   setComparerSlot: (slot: "a" | "b", value: string) => void;
   focusExchange: (id: number | null) => void;
   setHistoryQuery: (value: string) => void;
@@ -123,6 +127,7 @@ export const useApp = create<AppState>()(
       closedRepeaterTabs: [],
       repeaterGroups: [],
       intruderSeed: null,
+      decoderSeed: null,
       comparerSlots: { a: "", b: "" },
       historyFocus: null,
       historyQuery: "",
@@ -264,6 +269,7 @@ export const useApp = create<AppState>()(
         })),
 
       setIntruderSeed: (intruderSeed) => set({ intruderSeed }),
+      setDecoderSeed: (decoderSeed) => set({ decoderSeed }),
       setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
       focusExchange: (historyFocus) => set({ historyFocus }),
       setHistoryQuery: (historyQuery) => set({ historyQuery }),
