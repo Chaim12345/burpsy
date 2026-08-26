@@ -26,7 +26,7 @@ import {
 } from "../lib/data.network";
 import { useCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
-import { actionForChord, chordFor, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
+import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
 import type { FrameProgramResponse } from "../lib/types.policy";
 import type { ScannerConfig } from "../lib/types";

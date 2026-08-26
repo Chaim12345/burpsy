@@ -14,9 +14,10 @@
  * flattening them into "save failed" would throw away the only thing that
  * tells the operator what to fix.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { api, json } from "./api";
-import { keys } from "./data";
+import { keys, useInvalidate, useResource } from "./data";
+import type { NetworkProxyUpdate, NetworkProxyView } from "./types.policy";
 
 export type ResolutionPolicy = "system" | "resolver";
 export type RedirectMode = "never" | "on_site" | "in_scope" | "always";
@@ -97,10 +98,6 @@ export function useSaveNetworkSettings() {
   });
 }
 
-import { useMutation, type UseQueryResult } from "@tanstack/react-query";
-import { api, json } from "./api";
-import { keys, useInvalidate, useResource } from "./data";
-import type { NetworkProxyUpdate, NetworkProxyView } from "./types.policy";
 
 /**
  * The upstream proxy / SOCKS chain (Unit 9), for the Settings panel.

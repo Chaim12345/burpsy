@@ -14,7 +14,7 @@
  * Every read and write is wrapped: a private window, cleared site data or a browser set to
  * block storage all throw on access, and a hotkey table is not worth a blank page.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { KEYMAP_STORAGE_KEY, chordFor, type Chord, type Keymap } from "./shortcuts";
 
 let current: Keymap = load();

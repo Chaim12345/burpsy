@@ -147,7 +147,11 @@ export function validateChord(raw: string): { chord: Chord } | { error: string }
   if (!mods.includes("mod") && !mods.includes("alt")) {
     return { error: "Must include mod (Ctrl/Cmd) or alt — a bare key would fire while typing" };
   }
-  return { chord: [...["mod", "alt", "shift"].filter((m) => mods.includes(m)), keys[0]].join("+") };
+  // Canonical modifier order, typed as the literal union so the array is not widened to string[]
+  // — that widening is what let this line typecheck-fail once typescript was actually available.
+  const ORDER = ["mod", "alt", "shift"] as const;
+  const ordered = ORDER.filter((m) => mods.includes(m));
+  return { chord: [...ordered, keys[0]!].join("+") };
 }
 
 /** A chord rendered as the key caps the modal and the table show. */
