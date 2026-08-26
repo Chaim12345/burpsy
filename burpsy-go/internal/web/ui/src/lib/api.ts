@@ -131,6 +131,23 @@ export function downloadText(filename: string, text: string, type = "text/plain"
  * index rows (ids and byte lengths, never bodies) — all /api/history ever hands
  * out — so an export can never quietly copy message payloads.
  */
+/** Extension of a path's last segment, lower-cased, or "" when it has none. */
+function csvExtension(path: string): string {
+  const cut = path.indexOf("?");
+  const route = cut === -1 ? path : path.slice(0, cut);
+  const segment = route.slice(route.lastIndexOf("/") + 1);
+  const dot = segment.lastIndexOf(".");
+  return dot > 0 && dot < segment.length - 1 ? segment.slice(dot + 1).toLowerCase() : "";
+}
+
+/** Query-parameter count. A bare `?` is zero, not one empty parameter. */
+function csvQueryCount(path: string): number {
+  const cut = path.indexOf("?");
+  if (cut === -1) return 0;
+  const query = path.slice(cut + 1);
+  return query === "" ? 0 : query.split("&").filter((pair) => pair !== "").length;
+}
+
 export function historyToCSV(exchanges: {
   id: number;
   started_ms: number;
@@ -142,8 +159,17 @@ export function historyToCSV(exchanges: {
   response_len: number;
   mime?: string;
   duration_ms: number;
+  tls?: boolean;
+  notes?: string | null;
 }[]): string {
-  const headers = ["ID", "Timestamp", "Method", "Host", "Port", "Path", "Status", "Length", "MIME", "Duration"];
+  // Extension and Query are derived here rather than read off the row, for the same reason the
+  // history table derives them: they are a property of the path, which the export already has.
+  // Both doors -- this button and the desktop shell's File > Export History -- render through this
+  // one helper precisely so the CSV and the table cannot disagree about what a column means.
+  const headers = [
+    "ID", "Timestamp", "Method", "Host", "Port", "Path", "Extension", "Query", "TLS",
+    "Status", "Length", "MIME", "Duration", "Comment",
+  ];
   const rows = exchanges.map((ex) => [
     ex.id,
     new Date(ex.started_ms).toISOString(),
@@ -151,10 +177,14 @@ export function historyToCSV(exchanges: {
     ex.host,
     ex.port,
     ex.path,
+    csvExtension(ex.path),
+    csvQueryCount(ex.path),
+    ex.tls === undefined ? "" : ex.tls ? "yes" : "no",
     ex.status ?? "",
     ex.response_len,
     ex.mime ?? "",
     ex.duration_ms,
+    (ex.notes ?? "").replace(/"/g, '""'),
   ]);
   return [headers, ...rows].map((row) => row.map((cell) => `"${cell}"`).join(",")).join("\n");
 }

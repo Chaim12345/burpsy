@@ -3,9 +3,9 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { useExchangeActions, exchangeUrl } from "../lib/actions";
-import { downloadText, formatBytes, formatDuration, historyToCSV, relativeTime, statusTone } from "../lib/api";
+import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
-import { useAnnotateExchange, useDebounced, useHistory, useMessage } from "../lib/data";
+import { useAnnotateExchange, useDebounced, useHistory, useMessage, useStats } from "../lib/data";
 import { useScopeView } from "../lib/data.policy";
 import { QUERY_PANEL } from "../lib/reference";
 import { useApp } from "../lib/store";
@@ -14,7 +14,7 @@ import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
-import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar, Tooltip } from "../ui/primitives";
+import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Toolbar, Tooltip } from "../ui/primitives";
 import { ReferencePanelView } from "../ui/reference";
 import { VirtualTable, type Column } from "../ui/table";
 
@@ -193,6 +193,36 @@ function HighlightPicker({ value, onChange }: { value: string; onChange: (next: 
 
 /** design/jsx/comment-indicator-default.jsx. Decorative glyph plus a screen-reader-only label —
  *  "a row has a note" is information, not decoration, so it cannot be aria-hidden outright. */
+/**
+ * Extension and query-parameter count, derived from the row's own path.
+ *
+ * Both come from `path`, which carries the query string (verified against a live capture:
+ * `/search?q=test&page=2` arrives whole). Deriving here rather than widening the wire is the
+ * point: `internal/web/AGENTS.md` states that /api/history returns index rows and never touches
+ * a body, so anything a row can compute for itself must not become a server round trip.
+ *
+ * `params` counts QUERY parameters only. Burp's Params column also counts body parameters, and
+ * that is deliberately not matched: the body is not on the index row, and reading one per row to
+ * fill a column is exactly the regression the index/payload split exists to prevent. The column
+ * is labelled "Query" for that reason — a column called "Params" that silently ignored body
+ * parameters would be a wrong number rather than a narrower one.
+ */
+export function pathParts(path: string): { extension: string; queryCount: number } {
+  const cut = path.indexOf("?");
+  const route = cut === -1 ? path : path.slice(0, cut);
+  const query = cut === -1 ? "" : path.slice(cut + 1);
+
+  // Extension is read from the last segment only, so a dot in a directory name does not become
+  // one. A trailing dot, a dotfile, and a segment that is all dots have no extension.
+  const segment = route.slice(route.lastIndexOf("/") + 1);
+  const dot = segment.lastIndexOf(".");
+  const extension = dot > 0 && dot < segment.length - 1 ? segment.slice(dot + 1).toLowerCase() : "";
+
+  // A bare `?` is zero parameters, not one empty one.
+  const queryCount = query === "" ? 0 : query.split("&").filter((pair) => pair !== "").length;
+  return { extension, queryCount };
+}
+
 function CommentIndicator(): JSX.Element {
   return (
     <span className="comment-indicator" title="Has a note">
@@ -257,10 +287,28 @@ export function HistoryPage(): JSX.Element {
   const [inspector, setInspector] = useState(true);
   const [scopeOnly, setScopeOnly] = useState(false);
   const [hideNoResponse, setHideNoResponse] = useState(false);
+  // Burp's remaining row-type filters (proxyHttpShowOnly*Checkbox). Each is "show only", so all
+  // off means no restriction -- the same polarity Burp uses, so a fresh page hides nothing.
+  const [onlyParameterized, setOnlyParameterized] = useState(false);
+  const [onlyCommented, setOnlyCommented] = useState(false);
+  const [onlyHighlighted, setOnlyHighlighted] = useState(false);
+  // Extension include/exclude, comma-separated, matched against the derived extension.
+  const [showExtensions, setShowExtensions] = useState("");
+  const [hideExtensions, setHideExtensions] = useState("");
+  // Search modifiers over the existing term (proxyHttpSearch*Checkbox). An invalid regex is
+  // reported in place rather than silently matching nothing.
+  const [searchCase, setSearchCase] = useState(false);
+  const [searchRegex, setSearchRegex] = useState(false);
+  const [searchNegate, setSearchNegate] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [note, setNote] = useState("");
 
   const debouncedTerm = useDebounced(term, 260);
   const { data, error, isFetching, refetch } = useHistory(debouncedTerm, limit);
+  // The captured total, so a limit-truncated view cannot read as the whole capture. DESIGN.md is
+  // explicit that a count the data does not support is a defect, and "500 rows" on a 12,000-row
+  // capture is exactly that -- the operator concludes they have seen everything.
+  const stats = useStats();
   const actions = useExchangeActions();
   const scope = useScopeView();
   const annotate = useAnnotateExchange();
@@ -310,6 +358,45 @@ export function HistoryPage(): JSX.Element {
     injectedFragment.current = wanted;
   }, [scopeOnly, scopeFragment]);
 
+  // Extension lists, normalised once: lower-cased, dot-stripped, blanks dropped, so "PNG", ".png"
+  // and " png " are one entry.
+  const parseExtList = (raw: string) =>
+    raw.split(",").map((e) => e.trim().toLowerCase().replace(/^\./, "")).filter((e) => e !== "");
+  const showList = useMemo(() => parseExtList(showExtensions), [showExtensions]);
+  const hideList = useMemo(() => parseExtList(hideExtensions), [hideExtensions]);
+
+  // The search term compiled into a predicate, plus the reason it could not be. An invalid regex
+  // is the case that matters: silently matching nothing would read as "no such traffic", which is
+  // the difference between an empty result and a broken filter.
+  const { searchMatcher, searchError } = useMemo(() => {
+    const needle = debouncedTerm.trim();
+    if (needle === "" || !searchRegex && !searchCase && !searchNegate) {
+      // No modifiers in play: the DSL box already handles plain terms server-side.
+      if (needle === "" || !searchRegex) return { searchMatcher: null, searchError: null };
+    }
+    if (searchRegex) {
+      try {
+        const re = new RegExp(needle, searchCase ? "" : "i");
+        return { searchMatcher: (hay: string) => re.test(hay), searchError: null };
+      } catch (failure) {
+        return {
+          searchMatcher: null,
+          searchError: failure instanceof Error ? failure.message : "invalid regular expression",
+        };
+      }
+    }
+    const cmp = searchCase ? needle : needle.toLowerCase();
+    return {
+      searchMatcher: (hay: string) => (searchCase ? hay : hay.toLowerCase()).includes(cmp),
+      searchError: null,
+    };
+  }, [debouncedTerm, searchRegex, searchCase, searchNegate]);
+
+  const filtersActive =
+    (onlyParameterized ? 1 : 0) + (onlyCommented ? 1 : 0) + (onlyHighlighted ? 1 : 0) +
+    (showList.length > 0 ? 1 : 0) + (hideList.length > 0 ? 1 : 0) +
+    (searchMatcher ? 1 : 0);
+
   const rows = useMemo(() => {
     const all = data ?? [];
     return all.filter((row) => {
@@ -334,9 +421,29 @@ export function HistoryPage(): JSX.Element {
       // Only needed when the scope could not be written into the query above (a wildcard pattern) —
       // when it could, the server already returned only in-scope rows and this is a no-op re-check.
       if (scopeOnly && !scopeFragment && !isHostInScope(row.host, scope.data)) return false;
+
+      const { extension, queryCount } = pathParts(row.path);
+      if (onlyParameterized && queryCount === 0) return false;
+      if (onlyCommented && (row.notes ?? "").trim() === "") return false;
+      if (onlyHighlighted && (row.highlight ?? "") === "") return false;
+      if (showList.length > 0 && !showList.includes(extension)) return false;
+      if (hideList.length > 0 && hideList.includes(extension)) return false;
+
+      if (searchMatcher) {
+        // Search runs over the fields a row actually carries. It deliberately does NOT reach into
+        // request or response bodies: those are not on the index row, and fetching 500 of them to
+        // colour a filter would undo the split that makes a 100k-row history cheap. The label on
+        // the control says so.
+        const haystack = `${row.method} ${row.host} ${row.path} ${row.mime ?? ""} ${row.notes ?? ""}`;
+        const hit = searchMatcher(haystack);
+        if (hit === searchNegate) return false;
+      }
       return true;
     });
-  }, [data, method, status, mime, hideNoResponse, scopeOnly, scopeFragment, scope.data]);
+  }, [
+    data, method, status, mime, hideNoResponse, scopeOnly, scopeFragment, scope.data,
+    onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList, searchMatcher, searchNegate,
+  ]);
 
   // CSV export — client-side from the loaded rows; no server endpoint needed
   // because the page already holds the index rows in memory. The CSV shape is
@@ -447,6 +554,41 @@ export function HistoryPage(): JSX.Element {
         header: "Type",
         size: 92,
         cell: (info) => <span className="cell-dim">{info.getValue<string | undefined>() || "—"}</span>,
+      },
+      {
+        id: "extension",
+        header: "Ext",
+        size: 66,
+        accessorFn: (row: Exchange) => pathParts(row.path).extension,
+        cell: (info) => <span className="cell-dim">{info.getValue<string>() || "—"}</span>,
+      },
+      {
+        // "Query", not Burp's "Params": this counts query parameters only, because body
+        // parameters are not on the index row. See pathParts.
+        id: "query",
+        header: "Query",
+        size: 68,
+        accessorFn: (row: Exchange) => pathParts(row.path).queryCount,
+        cell: (info) => {
+          const n = info.getValue<number>();
+          return <span className="cell-num">{n === 0 ? "—" : formatCount(n)}</span>;
+        },
+      },
+      {
+        accessorKey: "tls",
+        header: "TLS",
+        size: 60,
+        cell: (info) => (info.getValue<boolean>() ? <Badge tone="good">TLS</Badge> : <span className="cell-dim">—</span>),
+      },
+      {
+        id: "comment",
+        header: "Comment",
+        size: 180,
+        accessorFn: (row: Exchange) => row.notes ?? "",
+        cell: (info) => {
+          const text = info.getValue<string>();
+          return text === "" ? <span className="cell-dim">—</span> : <span title={text}>{text}</span>;
+        },
       },
       {
         accessorKey: "response_len",
@@ -610,6 +752,14 @@ export function HistoryPage(): JSX.Element {
           <FilterToggle pressed={hideNoResponse} onPressedChange={setHideNoResponse}>
             Hide items without responses
           </FilterToggle>
+          <Button
+            variant={filtersActive > 0 ? "outline" : "quiet"}
+            size="small"
+            aria-expanded={filterOpen}
+            onClick={() => setFilterOpen(true)}
+          >
+            More filters{filtersActive > 0 ? ` (${filtersActive})` : ""}
+          </Button>
           <Select aria-label="Status filter" title="Status filter" value={status} onChange={(event) => setStatus(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
             {STATUS_BUCKETS.map((bucket) => (
               <option key={bucket.value} value={bucket.value}>
@@ -724,9 +874,18 @@ export function HistoryPage(): JSX.Element {
           color: "var(--fg-dim)",
         }}
       >
-        <div title="Rows visible after the current filters">
-          <strong style={{ color: "var(--fg)" }}>{rows.length.toLocaleString()}</strong>
-          {data && rows.length !== data.length ? ` of ${data.length.toLocaleString()}` : ""} rows
+        <div title="Rows visible after the current filters, of those loaded, of everything captured">
+          <strong style={{ color: "var(--fg)" }}>{formatCount(rows.length)}</strong>
+          {data && rows.length !== data.length ? ` of ${formatCount(data.length)} loaded` : ""}
+          {/* Three numbers, not one: filtered, loaded, captured. They differ for different reasons -
+              a filter narrowed the view, the row limit truncated the fetch, or neither - and
+              collapsing them hides which. The captured figure is omitted rather than guessed when
+              /api/stats has not answered. */}
+          {stats.data && data && stats.data.exchanges > data.length
+            ? `, ${formatCount(stats.data.exchanges)} captured`
+            : ""}
+          {" "}
+          {rows.length === 1 ? "row" : "rows"}
         </div>
         <div title="Sum of response bytes for the visible rows">
           {formatBytes(rows.reduce((sum, row) => sum + (row.response_len ?? 0), 0))} in responses
@@ -742,6 +901,79 @@ export function HistoryPage(): JSX.Element {
       </div>
 
       <QueryHelp open={helpOpen} onOpenChange={setHelpOpen} />
+      <Modal
+        open={filterOpen}
+        onOpenChange={setFilterOpen}
+        title="More filters"
+        description="Applied over the rows already loaded. These narrow what is shown; they do not change what was captured."
+      >
+        <div className="stack">
+          <div>
+            <div className="shortcut-group">Show only</div>
+            <Checkbox checked={onlyParameterized} onCheckedChange={setOnlyParameterized} label="Parameterized requests" />
+            <Checkbox checked={onlyCommented} onCheckedChange={setOnlyCommented} label="Commented items" />
+            <Checkbox checked={onlyHighlighted} onCheckedChange={setOnlyHighlighted} label="Highlighted items" />
+            <p className="field-hint">
+              Parameterized counts query parameters only — the body is not on a history row, so a body-only
+              POST does not match.
+            </p>
+          </div>
+
+          <div className="form-grid">
+            <Field label="Show only extensions" hint="Comma-separated, e.g. php,asp. Empty shows every extension.">
+              {(id) => (
+                <Input id={id} value={showExtensions} onChange={(event) => setShowExtensions(event.target.value)} placeholder="php,asp,jsp" />
+              )}
+            </Field>
+            <Field label="Hide extensions" hint="Comma-separated, e.g. css,png,js. Applied after the show list.">
+              {(id) => (
+                <Input id={id} value={hideExtensions} onChange={(event) => setHideExtensions(event.target.value)} placeholder="css,png,gif,js" />
+              )}
+            </Field>
+          </div>
+
+          <div>
+            <div className="shortcut-group">Search modifiers</div>
+            <Checkbox checked={searchCase} onCheckedChange={setSearchCase} label="Case sensitive" />
+            <Checkbox checked={searchRegex} onCheckedChange={setSearchRegex} label="Regular expression" />
+            <Checkbox
+              checked={searchNegate}
+              onCheckedChange={setSearchNegate}
+              label="Negative match — show rows that do NOT match"
+            />
+            {searchError ? (
+              <ErrorNotice error={new Error(`Search regex rejected: ${searchError}`)} />
+            ) : null}
+            <p className="field-hint">
+              Searches method, host, path, MIME and comment. Not request or response bodies: those are not
+              carried on a history row, and fetching them per row to colour a filter would undo what makes a
+              large capture cheap to list.
+            </p>
+          </div>
+
+          <Toolbar>
+            <Button
+              variant="quiet"
+              size="small"
+              onClick={() => {
+                setOnlyParameterized(false);
+                setOnlyCommented(false);
+                setOnlyHighlighted(false);
+                setShowExtensions("");
+                setHideExtensions("");
+                setSearchCase(false);
+                setSearchRegex(false);
+                setSearchNegate(false);
+              }}
+            >
+              Show all
+            </Button>
+            <Button variant="primary" size="small" onClick={() => setFilterOpen(false)}>
+              Done
+            </Button>
+          </Toolbar>
+        </div>
+      </Modal>
     </div>
   );
 }

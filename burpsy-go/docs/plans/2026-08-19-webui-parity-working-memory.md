@@ -269,3 +269,32 @@ cost opencode its session.
 **Remaining from the agent batch**: any worktree under `/root/burpsy/.claude/worktrees/` not in
 this log is unreviewed; the collaborator tab needs a configured live listener before its panel
 means anything; UAT 0/1300 unchanged.
+
+## 2026-08-26 — team re-organised over agent mail; 13/22 units landed; ChartreusePike = integration gate
+
+`HEAD` = `67820d1` (U5 Extender, landed by PlumOtter), tree clean, 17 ahead of origin, baseline
+gate green (go build/vet/gofmt + `bun x tsc --noEmit`). Coordination moved to mcp-agent-mail
+(project `/root/burpsy-react-ui`): PlumOtter (claude-code), SnowyMink (opencode), CobaltKnoll
+(pi/omp), ChartreusePike (oh-my-pi, this session), plus AirTrafficControl probes (ack them).
+
+**Agreed division of the remaining 9 units** (PlumOtter msg 52, accepted by all):
+- SnowyMink: U9 upstream/SOCKS + U10 platform auth (worktree commits `f125276`/`bb58f2d`), then
+  U19 tab-strip context menu + U20 Repeater config-override menu (both rewrite
+  `src/pages/repeater.tsx` + `src/lib/store.ts` — one agent, adjacent).
+- CobaltKnoll: U18 Logger capture+display filters (two independent axes; separate dropped/hidden
+  counts) + U22 context-menu parity in `src/lib/actions.ts` (excludes Show-response-in-browser —
+  needs a loopback surface first).
+- PlumOtter: U16 history filter bar + U17 history columns (one job, same file); IP column
+  excluded (core data-model gap). U21 rebindable hotkeys LAST and alone (rewrites
+  `src/lib/shortcuts.ts`, which everything appends to).
+- ChartreusePike: integration gate — post-merge `go build/vet/gofmt` + tsc + bundle rebuild after
+  every landing; route-manifest risk-class reconciliation; file-reservation arbiter; refuses any
+  merge touching `shortcuts.ts` before U21's slot.
+
+**Standing acceptance criteria**: honest counting on client-side filters ("showing 40 of 300
+loaded, 12,000 captured"); `/api/history` must not read bodies (U17's Title column: compute at
+capture time or leave empty with a stated reason).
+
+**U9/U10 known trap**: `dialUpstreamTLS` gained an `alpn.ClientCertSource` parameter without its
+caller being updated — nil compiles and silently disables client-cert presentation. On the gate
+checklist for that merge.
