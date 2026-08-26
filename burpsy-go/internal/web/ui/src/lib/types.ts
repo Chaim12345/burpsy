@@ -247,12 +247,26 @@ export interface InterceptState {
   held: HeldMessage[];
 }
 
+/**
+ * Per-send config overrides — Burp Repeater's config-override menu, carried on the send payload.
+ * Mirrors internal/web/repeaterSendOptions exactly; every field is optional and absent means
+ * "the standing behaviour". Deliberately absent from this shape: an ALPN override and a
+ * cookies-on-redirect switch — the backend refuses to offer switches that cannot be honest.
+ */
+export interface RepeaterSendOptions {
+  redirect_mode?: "" | "never" | "on_site" | "in_scope" | "always";
+  protocol_preference?: "" | "auto" | "http1";
+  process_cookies?: boolean;
+  strip_connection?: boolean;
+  normalize_line_endings?: boolean;
+  update_content_length?: boolean;
+}
+
 export interface RepeaterResult {
   status: number;
   duration_ms: number;
   response: string;
-  exchange_id: number;
-  /**
+  exchange_id: number;  /**
    * The redirect chain this send produced, present only when the response was a 30x.
    *
    * `response` above stays the response to the request the operator wrote, so this

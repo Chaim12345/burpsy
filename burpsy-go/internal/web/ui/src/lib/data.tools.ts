@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { api, json } from "./api";
-import type { RepeaterResult } from "./types";
+import type { RepeaterResult, RepeaterSendOptions } from "./types";
 import type { PointView } from "./types.tools";
 
 export interface IntruderRunRequest {
@@ -16,7 +16,7 @@ export interface IntruderRunRequest {
 
 export function useRepeaterSend() {
   return useMutation({
-    mutationFn: (body: { target: string; request: string; protocol: string; from_exchange?: number }) =>
+    mutationFn: (body: { target: string; request: string; protocol: string; from_exchange?: number; options?: RepeaterSendOptions }) =>
       api<RepeaterResult>("/api/repeater/send", json("POST", body)),
   });
 }

@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Columns3, Crosshair, Plus, Send, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Crosshair, Plus, RotateCcw, Send, SlidersHorizontal, X } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
 import { useRepeaterSend } from "../lib/data.tools";
 import { useApp, type RepeaterTab } from "../lib/store";
-import type { Exchange, RepeaterRedirects, RepeaterResult } from "../lib/types";
+import type { Exchange, RepeaterRedirects, RepeaterResult, RepeaterSendOptions } from "../lib/types";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader } from "../ui/layout";
-import { Badge, Button, Empty, ErrorNotice, Field, IconButton, Input, Tooltip } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Select, Tooltip } from "../ui/primitives";
+import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { SimpleTable } from "../ui/table";
 
 const DEFAULT_TARGET = "https://example.com:443";
@@ -33,6 +34,23 @@ export function RepeaterPage(): JSX.Element {
   const setActiveRepeaterTab = useApp((state) => state.setActiveRepeaterTab);
   const setIntruderSeed = useApp((state) => state.setIntruderSeed);
   const setRoute = useApp((state) => state.setRoute);
+
+  // U19: groups + reopen stack. U20: per-tab send options. All actions are individual selectors
+  // to match the house zustand style — no whole-store subscription that re-renders on any keypress
+  // anywhere in the app.
+  const closedTabs = useApp((state) => state.closedRepeaterTabs);
+  const groups = useApp((state) => state.repeaterGroups);
+  const closeOtherRepeaterTabs = useApp((state) => state.closeOtherRepeaterTabs);
+  const closeRepeaterTabsLeftOf = useApp((state) => state.closeRepeaterTabsLeftOf);
+  const closeRepeaterTabsRightOf = useApp((state) => state.closeRepeaterTabsRightOf);
+  const duplicateRepeaterTab = useApp((state) => state.duplicateRepeaterTab);
+  const reopenClosedRepeaterTab = useApp((state) => state.reopenClosedRepeaterTab);
+  const createRepeaterGroup = useApp((state) => state.createRepeaterGroup);
+  const renameRepeaterGroup = useApp((state) => state.renameRepeaterGroup);
+  const deleteRepeaterGroup = useApp((state) => state.deleteRepeaterGroup);
+  const toggleRepeaterGroup = useApp((state) => state.toggleRepeaterGroup);
+  const setRepeaterTabGroup = useApp((state) => state.setRepeaterTabGroup);
+  const setRepeaterTabOptions = useApp((state) => state.setRepeaterTabOptions);
 
   /**
    * Every response a tab has received, oldest first — not just the latest. Held in memory only;
@@ -59,6 +77,22 @@ export function RepeaterPage(): JSX.Element {
   const [inspecting, setInspecting] = useState<"request" | "response">("request");
   const send = useRepeaterSend();
 
+  // Bulk closes (close others / left / right) remove many tabs at once, so per-close cleanup in
+  // the click handlers no longer covers it. One pruning effect owns the invariant instead: the
+  // response history and the view position only ever hold keys for tabs that still exist.
+  useEffect(() => {
+    const alive = new Set(tabs.map((tab) => tab.id));
+    setHistory((current) => Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id))));
+    setViewing((current) => Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id))));
+  }, [tabs]);
+
+  const [renamingTab, setRenamingTab] = useState<string | null>(null);
+  const [tabRenameValue, setTabRenameValue] = useState("");
+  const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
+  const [groupRenameValue, setGroupRenameValue] = useState("");
+  /** Whether the config-override panel (U20) is open for the active tab. */
+  const [configOpen, setConfigOpen] = useState(false);
+
   const active = useMemo(() => tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null, [tabs, activeId]);
 
   useEffect(() => {
@@ -77,7 +111,15 @@ export function RepeaterPage(): JSX.Element {
 
   const submit = (tab: RepeaterTab) => {
     send.mutate(
-      { target: tab.target, request: tab.request, protocol: schemeOf(tab.target), from_exchange: tab.fromExchange },
+      {
+        target: tab.target,
+        request: tab.request,
+        protocol: schemeOf(tab.target),
+        from_exchange: tab.fromExchange,
+        // Absent options means "standing behaviour" — the backend validates and applies whatever
+        // arrives, so an empty object is never sent when the operator set nothing.
+        ...(tab.options ? { options: tab.options } : {}),
+      },
       {
         onSuccess: (result) => {
           setHistory((current) => ({ ...current, [tab.id]: [...(current[tab.id] ?? []), result] }));
@@ -115,7 +157,12 @@ export function RepeaterPage(): JSX.Element {
       if (!exchangeId) {
         const sent = await api<RepeaterResult>(
           "/api/repeater/send",
-          json("POST", { target: tab.target, request: tab.request, protocol: schemeOf(tab.target) }),
+          json("POST", {
+            target: tab.target,
+            request: tab.request,
+            protocol: schemeOf(tab.target),
+            ...(tab.options ? { options: tab.options } : {}),
+          }),
         );
         setHistory((current) => ({ ...current, [tab.id]: [...(current[tab.id] ?? []), sent] }));
         exchangeId = sent.exchange_id;
@@ -157,6 +204,140 @@ export function RepeaterPage(): JSX.Element {
   const activeHistory = history[active.id] ?? [];
   const viewIndex = viewing[active.id] ?? activeHistory.length - 1;
   const result = activeHistory[viewIndex];
+  /** How many overrides the active tab carries — shown on the Config trigger so a panel that is
+   *  closed cannot silently narrow what Send will do. */
+  const overrideCount = Object.keys(active.options ?? {}).length;
+
+  /**
+   * Merge a patch into the active tab's options, then drop every field whose value means
+   * "standing behaviour" (empty string, false). Absence on the wire IS the default: sending an
+   * explicit `false` would claim the operator chose something, when they merely unchecked it back.
+   */
+  const applyOptions = (patch: Partial<RepeaterSendOptions>) => {
+    if (!active) return;
+    const merged: RepeaterSendOptions = { ...(active.options ?? {}), ...patch };
+    for (const key of Object.keys(merged) as (keyof RepeaterSendOptions)[]) {
+      const value = merged[key];
+      if (value === undefined || value === "" || value === false) delete merged[key];
+    }
+    setRepeaterTabOptions(active.id, merged);
+  };
+
+  /**
+   * One tab trigger, wrapped in its own right-click menu. Built per tab rather than per strip so
+   * each item closes over that tab's id and position; disabled states are computed here too,
+   * because a menu that offers "close left" on the first tab is lying about the model.
+   */
+  const tabMenuGroups = (tab: RepeaterTab): MenuGroup[] => {
+    const index = tabs.findIndex((t) => t.id === tab.id);
+    return [
+      {
+        id: "edit",
+        actions: [
+          { id: "duplicate", label: "Duplicate tab", icon: Copy, onSelect: () => duplicateRepeaterTab(tab.id) },
+          {
+            id: "rename",
+            label: "Rename",
+            onSelect: () => {
+              setRenamingTab(tab.id);
+              setTabRenameValue(tab.name);
+            },
+          },
+          ...groups.map((group) => ({
+            id: `move-${group.id}`,
+            label: `Move to ${group.name}`,
+            onSelect: () => setRepeaterTabGroup(tab.id, group.id),
+          })),
+          ...(groups.length
+            ? [{ id: "ungroup", label: "Remove from group", disabled: !tab.groupId, onSelect: () => setRepeaterTabGroup(tab.id, null) }]
+            : []),
+        ],
+      },
+      {
+        id: "lifecycle",
+        actions: [
+          { id: "close", label: "Close", danger: true, onSelect: () => closeRepeaterTab(tab.id) },
+          { id: "close-others", label: "Close other tabs", disabled: tabs.length < 2, onSelect: () => closeOtherRepeaterTabs(tab.id) },
+          { id: "close-left", label: "Close tabs to the left", disabled: index <= 0, onSelect: () => closeRepeaterTabsLeftOf(tab.id) },
+          {
+            id: "close-right",
+            label: "Close tabs to the right",
+            disabled: index < 0 || index >= tabs.length - 1,
+            onSelect: () => closeRepeaterTabsRightOf(tab.id),
+          },
+          {
+            id: "reopen",
+            label: closedTabs.length ? `Reopen closed tab (${closedTabs.length})` : "Reopen closed tab",
+            icon: RotateCcw,
+            disabled: closedTabs.length === 0,
+            onSelect: reopenClosedRepeaterTab,
+          },
+          {
+            id: "new-group",
+            label: "New group with this tab",
+            onSelect: () => setRepeaterTabGroup(tab.id, createRepeaterGroup()),
+          },
+        ],
+      },
+    ];
+  };
+
+  const renderTabTrigger = (tab: RepeaterTab): JSX.Element => (
+    <ContextMenu groups={tabMenuGroups(tab)}>
+      <div
+        role="tab"
+        aria-selected={tab.id === active.id}
+        className="tabs-trigger"
+        data-state={tab.id === active.id ? "active" : undefined}
+        onClick={() => setActiveRepeaterTab(tab.id)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") setActiveRepeaterTab(tab.id);
+        }}
+        tabIndex={0}
+        title={tab.name}
+      >
+        {renamingTab === tab.id ? (
+          <Input
+            value={tabRenameValue}
+            autoFocus
+            onChange={(event) => setTabRenameValue(event.target.value)}
+            onBlur={() => commitTabRename(tab.id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commitTabRename(tab.id);
+              if (event.key === "Escape") setRenamingTab(null);
+            }}
+            style={{ maxWidth: "14ch", height: "1.4em", padding: "0 var(--s1)" }}
+            aria-label="Tab name"
+          />
+        ) : (
+          <span>{tab.name}</span>
+        )}
+        <button
+          type="button"
+          className="tab-close"
+          aria-label={`Close ${tab.name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            closeRepeaterTab(tab.id);
+          }}
+        >
+          <X size={11} />
+        </button>
+      </div>
+    </ContextMenu>
+  );
+
+  /** Bulk closes can orphan response history keys; the pruning effect above owns cleanup. */
+  const commitTabRename = (id: string) => {
+    updateRepeaterTab(id, { name: tabRenameValue.trim() || `Request ${tabs.length + 1}` });
+    setRenamingTab(null);
+  };
+
+  const ungrouped = tabs.filter((tab) => !tab.groupId || !groups.some((group) => group.id === tab.groupId));
+  const commitGroupRename = (groupId: string) => {
+    renameRepeaterGroup(groupId, groupRenameValue.trim() || "Group");
+    setRenamingGroup(null);
+  };
 
   return (
     <div className="page-fill">
@@ -213,6 +394,12 @@ export function RepeaterPage(): JSX.Element {
               >
                 <Columns3 size={13} />
               </IconButton>
+              <Tooltip content="Per-send overrides for this tab">
+                <Button variant="outline" aria-pressed={configOpen} onClick={() => setConfigOpen((open) => !open)}>
+                  <SlidersHorizontal size={14} />
+                  Config{overrideCount ? ` (${overrideCount})` : ""}
+                </Button>
+              </Tooltip>
               <Tooltip content="Send the current request (mod+Enter)">
                 <button type="button" className="button button-primary" onClick={() => submit(active)} disabled={send.isPending}>
                   <Send size={14} />
@@ -223,46 +410,64 @@ export function RepeaterPage(): JSX.Element {
           }
         />
 
-        <div className="tabs-list" role="tablist" aria-label="Repeater requests" style={{ marginTop: 10 }}>
-          {tabs.map((tab) => (
-            <div
-              key={tab.id}
-              role="tab"
-              aria-selected={tab.id === active.id}
-              className="tabs-trigger"
-              data-state={tab.id === active.id ? "active" : undefined}
-              onClick={() => setActiveRepeaterTab(tab.id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") setActiveRepeaterTab(tab.id);
-              }}
-              tabIndex={0}
-              title={tab.name}
-            >
-              <span>{tab.name}</span>
-              <button
-                type="button"
-                className="tab-close"
-                aria-label={`Close ${tab.name}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  closeRepeaterTab(tab.id);
-                  setHistory((current) => {
-                    const { [tab.id]: _removed, ...rest } = current;
-                    return rest;
-                  });
-                  setViewing((current) => {
-                    const { [tab.id]: _dropped, ...rest } = current;
-                    return rest;
-                  });
-                }}
-              >
-                <X size={11} />
-              </button>
-            </div>
-          ))}
-          <IconButton label="New request" size="small" onClick={newTab}>
-            <Plus size={13} />
-          </IconButton>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+          <div className="tabs-list" role="tablist" aria-label="Ungrouped Repeater requests">
+            {ungrouped.map(renderTabTrigger)}
+            <IconButton label="New request" size="small" onClick={newTab}>
+              <Plus size={13} />
+            </IconButton>
+          </div>
+          {groups.map((group) => {
+            const members = tabs.filter((tab) => tab.groupId === group.id);
+            return (
+              <div key={group.id} style={{ border: `1px solid ${group.color}`, borderRadius: 8, padding: 4 }}>
+                <div className="toolbar" style={{ gap: 6, padding: "2px 6px", alignItems: "center" }}>
+                  <IconButton
+                    label={group.collapsed ? `Expand ${group.name}` : `Collapse ${group.name}`}
+                    size="small"
+                    onClick={() => toggleRepeaterGroup(group.id)}
+                  >
+                    {group.collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                  </IconButton>
+                  <span aria-hidden style={{ width: 9, height: 9, borderRadius: "50%", background: group.color, flexShrink: 0 }} />
+                  {renamingGroup === group.id ? (
+                    <Input
+                      value={groupRenameValue}
+                      autoFocus
+                      onChange={(event) => setGroupRenameValue(event.target.value)}
+                      onBlur={() => commitGroupRename(group.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") commitGroupRename(group.id);
+                        if (event.key === "Escape") setRenamingGroup(null);
+                      }}
+                      style={{ maxWidth: "16ch", height: "1.4em", padding: "0 var(--s1)" }}
+                      aria-label="Group name"
+                    />
+                  ) : (
+                    // Double-click to rename, matching how the tab name field behaves elsewhere —
+                    // and keeping a single click free for collapse, which is the common action.
+                    <span
+                      title="Double-click to rename"
+                      style={{ cursor: "text" }}
+                      onDoubleClick={() => {
+                        setRenamingGroup(group.id);
+                        setGroupRenameValue(group.name);
+                      }}
+                    >
+                      {group.name}
+                    </span>
+                  )}
+                  <Badge>{members.length}</Badge>
+                  {/* Deleting a group keeps its tabs on purpose; saying so in place beats an operator discovering it. */}
+                  <span className="cell-dim">delete keeps tabs</span>
+                  <IconButton label={`Delete group ${group.name} (keeps its tabs)`} size="small" onClick={() => deleteRepeaterGroup(group.id)}>
+                    <X size={11} />
+                  </IconButton>
+                </div>
+                {!group.collapsed ? <div className="tabs-list">{members.map(renderTabTrigger)}</div> : null}
+              </div>
+            );
+          })}
         </div>
 
         <div className="toolbar" style={{ marginTop: 10 }}>
@@ -301,6 +506,7 @@ export function RepeaterPage(): JSX.Element {
         </div>
 
         {send.error ? <ErrorNotice error={send.error} onRetry={() => submit(active)} /> : null}
+        {configOpen ? <SendOptionsPanel options={active.options} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} /> : null}
         {result?.redirects ? <RedirectChain chain={result.redirects} /> : null}
       </div>
 
@@ -342,6 +548,81 @@ export function RepeaterPage(): JSX.Element {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * The per-send config-override panel (U20) — Burp's config-override menu, scoped to one tab.
+ *
+ * Every control writes into the tab's `options` object and unsetting a field removes it entirely:
+ * the backend's contract is that absent means "standing behaviour", so an explicit default would
+ * be a payload claiming choices the operator un-made. The two switches Burp ships that are NOT
+ * here are absent for reasons recorded in internal/web/repeater_options.go: no ALPN knob exists a
+ * raw-byte send could honour, and redirect hops do not replay cookies, so both checkboxes would
+ * be lies with labels.
+ */
+function SendOptionsPanel({
+  options,
+  onChange,
+  onReset,
+}: {
+  options?: RepeaterSendOptions;
+  onChange: (patch: Partial<RepeaterSendOptions>) => void;
+  onReset: () => void;
+}): JSX.Element {
+  return (
+    <Card style={{ marginTop: 10, padding: 12, display: "grid", gap: 10 }}>
+      <div className="toolbar">
+        <Field label="Follow redirections">
+          {(id) => (
+            <Select
+              id={id}
+              value={options?.redirect_mode ?? ""}
+              onChange={(event) => onChange({ redirect_mode: event.target.value as RepeaterSendOptions["redirect_mode"] })}
+            >
+              <option value="">Standing policy (Network settings)</option>
+              <option value="never">Never</option>
+              <option value="on_site">On-site only</option>
+              <option value="in_scope">In-scope only</option>
+              <option value="always">Always</option>
+            </Select>
+          )}
+        </Field>
+        <Field label="Protocol">
+          {(id) => (
+            <Select
+              id={id}
+              value={options?.protocol_preference ?? ""}
+              onChange={(event) => onChange({ protocol_preference: event.target.value as RepeaterSendOptions["protocol_preference"] })}
+            >
+              <option value="">Auto (negotiate)</option>
+              <option value="http1">Force HTTP/1.1</option>
+            </Select>
+          )}
+        </Field>
+        <Button variant="outline" onClick={onReset}>
+          <RotateCcw size={14} />
+          Reset overrides
+        </Button>
+      </div>
+      <div className="toolbar">
+        <Checkbox checked={!!options?.process_cookies} label="Process cookies in this request" onCheckedChange={(checked) => onChange({ process_cookies: checked })} />
+        <Checkbox checked={!!options?.strip_connection} label="Strip Connection headers" onCheckedChange={(checked) => onChange({ strip_connection: checked })} />
+        <Checkbox
+          checked={!!options?.normalize_line_endings}
+          label="Normalize line endings to CRLF"
+          onCheckedChange={(checked) => onChange({ normalize_line_endings: checked })}
+        />
+        <Checkbox
+          checked={!!options?.update_content_length}
+          label="Update Content-Length from body"
+          onCheckedChange={(checked) => onChange({ update_content_length: checked })}
+        />
+      </div>
+      <p className="field-hint">
+        Overrides ride on this one send; anything left unset uses the standing Network settings.
+      </p>
+    </Card>
   );
 }
 
