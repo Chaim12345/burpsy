@@ -58,6 +58,7 @@ export const keys = {
   scannerConfigs: ["scanner", "configs"] as const,
   scannerCoverage: ["scanner", "coverage"] as const,
   scannerLive: ["scanner", "live"] as const,
+  networkProxy: ["network", "proxy"] as const,
 };
 
 /**

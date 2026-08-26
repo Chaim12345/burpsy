@@ -127,6 +127,15 @@ type Dialer struct {
 	// Timeout bounds the whole dial including the handshake. Zero means no timeout of its own — the
 	// context is then the only bound, which is what the proxy relies on.
 	Timeout time.Duration
+	// Carry, when set, opens the TCP connection the TLS handshake runs over. Nil dials the address
+	// directly, which is what every caller did before upstream proxying existed.
+	//
+	// This is how an upstream proxy is reached without weakening anything: the TLS session stays
+	// end-to-end with the origin — the proxy carries opaque bytes and never sees the handshake — so
+	// certificate verification, ALPN and the negotiated protocol all mean exactly what they meant on a
+	// direct dial. A proxy applied *inside* the handshake would be a second man in the middle whose
+	// certificate the caller would then have to decide about, which is a different feature.
+	Carry func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // Dial connects to addr, offering exactly the protocols in offer, and returns the connection with the
@@ -146,6 +155,28 @@ func (d Dialer) Dial(ctx context.Context, serverName, addr string, offer []strin
 	if len(offer) > 0 {
 		cfg.NextProtos = offer
 	}
+	if d.Carry != nil {
+		// The carrier is dialled first, then the handshake runs on top of it. HandshakeContext rather
+		// than Handshake so a cancelled context still aborts, which tls.Dialer would have given us for
+		// free on the direct path.
+		carrier, err := d.Carry(ctx, "tcp", addr)
+		if err != nil {
+			return nil, "", err
+		}
+		tlsConn := tls.Client(carrier, cfg)
+		handshakeCtx := ctx
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline && d.Timeout > 0 {
+			var cancel context.CancelFunc
+			handshakeCtx, cancel = context.WithTimeout(ctx, d.Timeout)
+			defer cancel()
+		}
+		if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+			carrier.Close()
+			return nil, "", err
+		}
+		return tlsConn, tlsConn.ConnectionState().NegotiatedProtocol, nil
+	}
+
 	dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: d.Timeout}, Config: cfg}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {

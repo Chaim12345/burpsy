@@ -19,6 +19,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 	"github.com/burpsy-go/burpsy/internal/web"
 	"go.uber.org/zap"
 )
@@ -52,6 +53,14 @@ func main() {
 	passthroughDefaults := flag.Bool("tls-defaults", false, "preload common pinned hosts for passthrough")
 	storeVerify := flag.String("store-verify", "", "verify a capture directory and exit")
 
+	// Upstream proxy / SOCKS chaining (Unit 9). Both flags name proxies as URLs, because the scheme is
+	// what decides the protocol and a bare host:port would have to be guessed at — see upstream.Parse,
+	// which refuses one rather than assuming http://.
+	upstreamProxy := flag.String("upstream-proxy", "",
+		"route egress through an upstream proxy: http://, https://, socks5:// or socks4:// host:port (userinfo for credentials)")
+	upstreamProxyRules := flag.String("upstream-proxy-rule", "",
+		"per-destination upstream proxy rules, comma-separated pattern=URL (e.g. '*.internal=socks5://127.0.0.1:1080,api.example.com=direct'); first match wins, ahead of -upstream-proxy")
+
 	flag.Parse()
 
 	// Before anything is built: this either prints a list and exits, or resolves a name, or refuses one
@@ -62,11 +71,27 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Parsed here, before either mode runs, for the same reason as the scan configuration above: a
+	// mistyped proxy URL must stop the process at the command line, not become a rule that fails at
+	// dial time mid-engagement. Refuse-by-default is the whole point — an unusable proxy that silently
+	// became a direct connection is the one outcome an operator who configured a proxy did not ask for.
+	upstreamFlags, err := parseUpstreamFlags(*upstreamProxy, *upstreamProxyRules)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// CLI mode: when the first positional argument names a subcommand, drive the
 	// engines directly (no HTTP) and exit. Global flags above still parse, so
 	// `burpsy -db data.db history` reads the same database the proxy writes.
 	if flag.NArg() > 0 {
-		os.Exit(runCLI(flag.Arg(0), flag.Args()[1:], *captureDir, *segmentBytes, *scopeInclude, *scopeExclude, *dbFile, *bchecksDir, *toolsFlag))
+		// The CLI's senders get the flag-configured policy too. It is a third egress surface — `burpsy
+		// repeater`, `intruder run`, `audit` all dial through internal/sender — and a -upstream-proxy
+		// that covered the server's senders but not these would be the same half-covered settings
+		// defect Unit 9 exists to close. Flags only: the console's live edits live in the database the
+		// server writes, and a one-shot CLI invocation has no session to apply them to.
+		cliUpstream := upstream.NewPolicy()
+		applyUpstreamFlags(cliUpstream, upstreamFlags)
+		os.Exit(runCLI(flag.Arg(0), flag.Args()[1:], *captureDir, *segmentBytes, *scopeInclude, *scopeExclude, *dbFile, *bchecksDir, *toolsFlag, cliUpstream))
 	}
 
 	// Handle store verify subcommand
@@ -193,6 +218,36 @@ func main() {
 		findingStore.SetPersistenceSink(persistStore.SaveFinding)
 	}
 
+	// The upstream proxy policy every egress path in this process shares: the proxy listener's
+	// origin-facing leg and every sender built below hold this same object, so a rule edited in the
+	// console reaches both without a restart.
+	//
+	// Order is load-bearing. Persisted rules are restored first, then the flag-named ones are applied
+	// over them — and Policy.Set upserts by pattern, so a rule named on the command line that is
+	// already in the database replaces it in place rather than becoming a second, unreachable copy.
+	// Doing this the other way round would have Restore wipe the flags entirely.
+	upstreamPolicy := upstream.NewPolicy()
+	if persistStore != nil {
+		// Fatal, not a warning. Starting under a proxy policy we could not read means starting with
+		// traffic going somewhere the operator did not choose — including straight to the target — and
+		// that is not a decision to make behind their back.
+		if err := persistStore.LoadUpstreamProxy(upstreamPolicy); err != nil {
+			log.Fatalf("Failed to restore the upstream proxy policy: %v", err)
+		}
+	}
+	applyUpstreamFlags(upstreamPolicy, upstreamFlags)
+	if persistStore != nil && len(upstreamFlags) > 0 {
+		// Mirror the flag-named rules back, so they are in the database the console reads and edits
+		// rather than existing only in this process's memory. Without this the panel would show a rule
+		// it could remove but that would silently return on the next start.
+		persistStore.SaveUpstreamProxy(upstreamPolicy)
+	}
+	if !upstreamPolicy.Empty() {
+		logger.Info("upstream proxy policy active",
+			zap.String("default", upstreamPolicy.Default().Display()),
+			zap.Int("rules", len(upstreamPolicy.Rules())))
+	}
+
 	// Passive scanning is opt-in via --bchecks, mirroring the Rust CLI. Without
 	// it the built-in header/cookie checks still run so existing tests keep their
 	// expectations.
@@ -234,7 +289,11 @@ func main() {
 		WithLogger(logger).
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
-		WithIntercept(interceptEngine)
+		WithIntercept(interceptEngine).
+		// The listener's own upstream leg. This is the half of Unit 9 that is easy to forget: without
+		// it an operator sets a corporate proxy, watches the scanner's traffic take it, and never
+		// learns that everything their browser drove through the listener went out direct.
+		WithUpstreamProxy(upstreamPolicy)
 
 	// Start proxy server
 	ctx, cancel := context.WithCancel(context.Background())
@@ -249,9 +308,14 @@ func main() {
 	}()
 
 	// Start web server
+	//
+	// upstreamSenderConfig rather than DefaultSenderConfig at both sender sites below: these two are
+	// every request the console originates (repeater, intruder, session macros, sequencer captures) and
+	// every active-audit probe, and a settings panel that covered the proxy listener but not these
+	// would be the same half-covered defect from the other side.
 	webServer := web.NewServer(store, scope).
 		WithLogger(logger).
-		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithSender(sender.NewSender(upstreamSenderConfig(upstreamPolicy))).
 		// WithScope is not optional here even though ActiveScanner treats it as such: without it this
 		// scanner's probes are authorised against nothing, and this is the scanner every /api/audit call
 		// uses. The web server only builds a scoped one of its own when none was attached, so leaving it
@@ -265,7 +329,7 @@ func main() {
 		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
 		// checks counted-but-excluded.
 		WithScanner(scanner.NewActiveScanner(store, logger).
-			WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+			WithSender(sender.NewSender(upstreamSenderConfig(upstreamPolicy))).
 			WithScope(scope).
 			WithCorpusChecks(passiveScanner.ActiveChecks()).
 			WithToolRunner(toolRunner).
@@ -277,7 +341,10 @@ func main() {
 		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
 		// for a client that already trusts the CA, and the operator gets told why the download is
 		// missing instead of the link silently staying hidden.
-		WithCACertPEM(readCACert(*interceptTLS, *caDir, logger))
+		WithCACertPEM(readCACert(*interceptTLS, *caDir, logger)).
+		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually
+		// consulted rather than a copy — and so its `attached` field can report both surfaces truthfully.
+		WithUpstreamProxy(upstreamPolicy)
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
@@ -343,6 +410,93 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 			name, len(scanner.BuiltInConfigs))
 	}
 	return preset.Apply(base), nil
+}
+
+// upstreamFlagRule is one validated entry from -upstream-proxy / -upstream-proxy-rule.
+//
+// An empty pattern is the default arm (-upstream-proxy), which is why the two flags parse into one
+// slice: applying them is then a single ordered pass and there is no second code path for the default
+// to drift down.
+type upstreamFlagRule struct {
+	pattern string
+	proxy   string
+}
+
+// parseUpstreamFlags validates both upstream-proxy flags and returns what to apply, in order.
+//
+// Every proxy URL is run through upstream.Parse here rather than at apply time, so the whole flag set
+// is judged before any of it takes effect: a command line with a good default and one typo'd rule is
+// refused entirely rather than starting under half of what the operator asked for.
+//
+// The rule syntax is `pattern=URL`, split on the *first* '=' — a proxy URL can contain '=' in a
+// password, and splitting on the last one would silently mangle exactly the credentials that must not
+// be guessed at.
+func parseUpstreamFlags(def, rules string) ([]upstreamFlagRule, error) {
+	var out []upstreamFlagRule
+	if strings.TrimSpace(def) != "" {
+		if _, err := upstream.Parse(def); err != nil {
+			return nil, fmt.Errorf("-upstream-proxy: %w", err)
+		}
+		out = append(out, upstreamFlagRule{proxy: def})
+	}
+	for _, entry := range strings.Split(rules, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		pattern, proxyURL, found := strings.Cut(entry, "=")
+		if !found {
+			return nil, fmt.Errorf("-upstream-proxy-rule %q is not pattern=URL; write for example '*.internal=socks5://127.0.0.1:1080'",
+				entry)
+		}
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			return nil, fmt.Errorf("-upstream-proxy-rule %q names no host pattern; use * for every destination", entry)
+		}
+		// "direct" and the empty value are legal and mean "exempt this pattern from the default", which
+		// is the only way to keep one host off a broad proxy rule. upstream.Parse accepts both.
+		if _, err := upstream.Parse(proxyURL); err != nil {
+			return nil, fmt.Errorf("-upstream-proxy-rule for %q: %w", pattern, err)
+		}
+		out = append(out, upstreamFlagRule{pattern: pattern, proxy: proxyURL})
+	}
+	return out, nil
+}
+
+// applyUpstreamFlags installs already-validated flag rules onto a policy.
+//
+// No error return, and that is the point of splitting it from parseUpstreamFlags: everything here was
+// parsed at the command line, so the only way Set or SetDefault could fail is a bug in this pairing
+// rather than anything an operator typed. Set upserts by pattern, which is what makes re-applying flags
+// over restored database rules a dedup rather than a duplication.
+func applyUpstreamFlags(policy *upstream.Policy, rules []upstreamFlagRule) {
+	for _, rule := range rules {
+		if rule.pattern == "" {
+			if err := policy.SetDefault(rule.proxy); err != nil {
+				// Unreachable: parseUpstreamFlags already accepted this exact string.
+				log.Fatalf("upstream proxy default %q passed validation then failed to apply: %v",
+					rule.proxy, err)
+			}
+			continue
+		}
+		if _, err := policy.Set(rule.pattern, rule.proxy); err != nil {
+			log.Fatalf("upstream proxy rule for %q passed validation then failed to apply: %v",
+				rule.pattern, err)
+		}
+	}
+}
+
+// upstreamSenderConfig is DefaultSenderConfig with the process's upstream proxy policy attached.
+//
+// A helper rather than a literal at each site because there are two of them here and one more in the
+// CLI, and the field being set is exactly the thing that was dead before Unit 9 — SenderConfig.ProxyURL
+// was read by nothing configurable, and every construction site used DefaultSenderConfig(). Upstream
+// rather than ProxyURL: the policy is shared by reference, so a console edit reaches senders already
+// built, which a URL string copied into a config could never do.
+func upstreamSenderConfig(policy *upstream.Policy) *sender.SenderConfig {
+	config := sender.DefaultSenderConfig()
+	config.Upstream = policy
+	return config
 }
 
 // readCACert reads the CA certificate the proxy signs with, for the web server to serve at /ca.crt.

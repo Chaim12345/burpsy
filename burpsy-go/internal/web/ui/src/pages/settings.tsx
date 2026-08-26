@@ -4,6 +4,12 @@ import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import { useStats } from "../lib/data";
 import {
+  useClearNetworkProxy,
+  useNetworkProxy,
+  useRemoveNetworkProxyRule,
+  useSaveNetworkProxy,
+} from "../lib/data.network";
+import {
   useCaCert,
   useEventHubStats,
   useProtocols,
@@ -485,6 +491,251 @@ function DiagnosticsSection(): JSX.Element {
   );
 }
 
+/**
+ * Upstream proxy servers and SOCKS (Unit 9) — Burp's two Network panels as one list.
+ *
+ * The two notices at the top are the point of the section, not decoration. `attached`
+ * names the egress surfaces actually holding the policy, because "will this rule
+ * apply?" is not answerable from the rule itself: a build wired for senders but not
+ * for the proxy listener would otherwise look global and cover half the traffic.
+ * `persisted` says whether an edit outlives the process, which matters for a panel
+ * whose changes would otherwise silently be for this run only.
+ */
+function UpstreamProxySection(): JSX.Element {
+  const { data, error, isFetching, isLoading, refetch } = useNetworkProxy();
+  const save = useSaveNetworkProxy();
+  const remove = useRemoveNetworkProxyRule();
+  const clear = useClearNetworkProxy();
+  const [pattern, setPattern] = useState("");
+  const [proxy, setProxy] = useState("");
+  const [defaultProxy, setDefaultProxy] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  const fail = (failure: unknown, fallback: string) =>
+    toast.error(failure instanceof Error ? failure.message : fallback);
+
+  const addRule = () => {
+    const host = pattern.trim();
+    if (!host || !proxy.trim()) {
+      toast.error("A rule needs a host pattern and a proxy URL");
+      return;
+    }
+    save.mutate(
+      { pattern: host, proxy: proxy.trim() },
+      {
+        onSuccess: () => {
+          toast.success(`${host} routed through ${proxy.trim()}`);
+          setPattern("");
+          setProxy("");
+        },
+        // The server refuses an unparseable URL rather than storing a rule that would fail at dial
+        // time, so its message is the useful one and is shown verbatim.
+        onError: (failure: unknown) => fail(failure, "The proxy URL was refused"),
+      },
+    );
+  };
+
+  const saveDefault = () => {
+    const value = defaultProxy.trim();
+    save.mutate(
+      { default: value },
+      {
+        onSuccess: () => {
+          toast.success(value ? `Default upstream proxy set to ${value}` : "Default upstream proxy cleared");
+          setDefaultProxy("");
+        },
+        onError: (failure: unknown) => fail(failure, "The default proxy URL was refused"),
+      },
+    );
+  };
+
+  const busy = save.isPending || remove.isPending || clear.isPending;
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Upstream proxy and SOCKS"
+        detail="Where this tool's traffic goes on its way out. Ordered rules, first match wins; the default carries whatever no rule matched."
+        actions={
+          <>
+            {data ? (
+              <Badge tone={data.empty ? "neutral" : "info"}>{data.empty ? "no proxy configured" : "proxying"}</Badge>
+            ) : null}
+            <Button
+              variant="outline"
+              size="small"
+              onClick={() => setConfirmClear(true)}
+              disabled={!data || data.empty || busy}
+            >
+              <Trash2 size={13} />
+              Clear all
+            </Button>
+            <RefreshButton onClick={() => void refetch()} loading={isFetching} />
+          </>
+        }
+      />
+      {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+      {isLoading ? <LoadingPanel label="Loading upstream proxy policy" /> : null}
+
+      {data && !data.wired ? (
+        <div className="notice notice-warn">
+          <span>
+            No upstream proxy policy is wired into this process, so a rule saved here would be consulted by
+            nothing. Start burpsy with <code>-upstream-proxy</code> or <code>-upstream-proxy-rule</code> to
+            enable it.
+          </span>
+        </div>
+      ) : null}
+
+      {data?.wired ? (
+        <>
+          <div className="notice">
+            <span>
+              {data.attached.length
+                ? `These rules reach: ${data.attached.join(", ")}.`
+                : "No egress surface holds this policy, so these rules currently reach nothing."}{" "}
+              {data.persisted
+                ? "Edits are mirrored to the database and survive a restart."
+                : "Edits apply to this run only — start with -db to persist them."}
+            </span>
+          </div>
+          <p className="field-hint">
+            Accepted schemes: {data.schemes.join(", ")}. A bare host:port is refused rather than assumed to be
+            HTTP. Credentials go in the URL as <code>user:pass@host:port</code> and are never shown or served
+            back — a rule with them set is marked below. <code>socks4://</code> has no password field on the
+            wire, so a password with it is refused rather than dropped.
+          </p>
+        </>
+      ) : null}
+
+      {data?.wired ? (
+        <Toolbar>
+          <Field label="Default upstream proxy" hint="Carries every destination no rule below matches. Empty or “direct” clears it.">
+            {(id) => (
+              <Input
+                id={id}
+                value={defaultProxy}
+                placeholder={data.default === "direct" ? "direct" : data.default}
+                onChange={(event) => setDefaultProxy(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") saveDefault();
+                }}
+              />
+            )}
+          </Field>
+          <Button variant="outline" onClick={saveDefault} disabled={busy}>
+            Set default
+          </Button>
+          <Badge tone={data.default === "direct" ? "neutral" : "info"}>
+            now: {data.default}
+            {data.default_has_credentials ? " (authenticated)" : ""}
+          </Badge>
+        </Toolbar>
+      ) : null}
+
+      {data?.wired ? (
+        <Toolbar>
+          <Field label="Host pattern" hint="api.example.com, *.example.com, or * for everything.">
+            {(id) => (
+              <Input
+                id={id}
+                value={pattern}
+                placeholder="*.internal.example.com"
+                onChange={(event) => setPattern(event.target.value)}
+              />
+            )}
+          </Field>
+          <Field label="Proxy URL" hint="Use “direct” to exempt this pattern from the default.">
+            {(id) => (
+              <Input
+                id={id}
+                value={proxy}
+                placeholder="socks5://127.0.0.1:1080"
+                onChange={(event) => setProxy(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") addRule();
+                }}
+              />
+            )}
+          </Field>
+          <Button onClick={addRule} disabled={busy}>
+            <Plus size={13} />
+            Add rule
+          </Button>
+        </Toolbar>
+      ) : null}
+
+      {data?.wired && data.rules.length === 0 ? (
+        <Empty
+          title="No per-destination rules"
+          detail="Every destination takes the default above. Add a rule to send one host somewhere else, or “direct” to keep one off the default."
+        />
+      ) : null}
+      {data && data.rules.length > 0 ? (
+        <SimpleTable headers={["Host pattern", "Upstream proxy", "Protocol", "Auth", ""]}>
+          {data.rules.map((rule) => (
+            <tr key={rule.pattern}>
+              <td>
+                <code>{rule.pattern}</code>
+              </td>
+              <td>
+                <code>{rule.proxy}</code>
+              </td>
+              <td>
+                <Badge tone={rule.direct ? "neutral" : "info"}>{rule.kind}</Badge>
+              </td>
+              <td>
+                <span className="cell-dim">{rule.has_credentials ? "credentials set" : "—"}</span>
+              </td>
+              <td>
+                <IconButton
+                  label={`Remove the upstream proxy rule for ${rule.pattern}`}
+                  size="small"
+                  disabled={busy}
+                  onClick={() =>
+                    remove.mutate(rule.pattern, {
+                      onSuccess: () => toast.success(`Removed the rule for ${rule.pattern}`),
+                      onError: (failure: unknown) => fail(failure, "The rule could not be removed"),
+                    })
+                  }
+                >
+                  <Trash2 size={13} />
+                </IconButton>
+              </td>
+            </tr>
+          ))}
+        </SimpleTable>
+      ) : null}
+
+      <Modal
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear every upstream proxy rule?"
+        description="Every rule and the default go. Traffic then dials origins directly from both the proxy listener and this tool's own senders."
+      >
+        <div className="page-actions">
+          <Button variant="outline" onClick={() => setConfirmClear(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              clear.mutate(undefined, {
+                onSuccess: () => toast.success("Upstream proxy policy cleared"),
+                onError: (failure: unknown) => fail(failure, "The policy could not be cleared"),
+              });
+              setConfirmClear(false);
+            }}
+          >
+            <Trash2 size={13} />
+            Clear all
+          </Button>
+        </div>
+      </Modal>
+    </Card>
+  );
+}
+
 export function SettingsPage(): JSX.Element {
   return (
     <div className="page">
@@ -493,6 +744,7 @@ export function SettingsPage(): JSX.Element {
         description="Protocol reporting, appearance, the CA certificate, and the console's own diagnostics. Scope lives under Target."
       />
       <ProtocolSection />
+      <UpstreamProxySection />
       <AppearanceSection />
       <CertificateSection />
       <DiagnosticsSection />

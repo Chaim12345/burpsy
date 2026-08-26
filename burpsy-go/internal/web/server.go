@@ -18,6 +18,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
 	"github.com/burpsy-go/burpsy/internal/toollog"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 )
 
@@ -64,6 +65,12 @@ type Server struct {
 	// every existing test constructs a Server directly — see api_sequencer_capture.go.
 	captures    *sequencerCaptures
 	captureOnce sync.Once
+	// upstreamProxy is the per-destination upstream proxy policy /api/network/proxy edits. Held by
+	// reference and shared with internal/proxy's listener and every sender this process builds, so an
+	// edit reaches the next dial on both egress paths without a restart. Nil means the process was
+	// built without one, and the handler reports that rather than pretending an edit would take
+	// effect — see handleNetworkProxy.
+	upstreamProxy *upstream.Policy
 	// live is the change-event hub behind /api/events: every store the UI reads signals it, and it
 	// coalesces those signals into "this kind changed" frames the browser refetches on. See events.go
 	// for why the frames carry no data and why the producer side is atomics only.
@@ -225,6 +232,20 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 	return s
 }
 
+// WithUpstreamProxy attaches the upstream proxy policy /api/network/proxy edits.
+//
+// The same object the proxy listener and every sender hold, so an edit made in the console applies to
+// the next connection either of them opens. Passing nil leaves the route reporting that no policy is
+// wired, which is the honest answer for a process built without one: a settings panel that accepted
+// rules nothing consults would be the exact defect Unit 9 exists to close.
+func (s *Server) WithUpstreamProxy(policy *upstream.Policy) *Server {
+	s.upstreamProxy = policy
+	if policy != nil {
+		policy.Attach("web")
+	}
+	return s
+}
+
 // ---- write-through helpers ---------------------------------------------------------------------
 
 // The state below is replaced wholesale on each mutation (small tables), so the
@@ -246,6 +267,12 @@ func (s *Server) persistMatchReplace() {
 func (s *Server) persistSessionRules() {
 	if s.persist != nil {
 		s.persist.SaveSessionRules(s.sessionCoordinator.AllRules())
+	}
+}
+
+func (s *Server) persistUpstreamProxy() {
+	if s.persist != nil && s.upstreamProxy != nil {
+		s.persist.SaveUpstreamProxy(s.upstreamProxy)
 	}
 }
 
@@ -380,6 +407,9 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
+
+	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).
+	s.mux.HandleFunc("/api/network/proxy", s.handleNetworkProxy)
 
 	// Site map
 	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)

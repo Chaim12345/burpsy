@@ -21,6 +21,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 )
 
@@ -90,7 +91,7 @@ func registerCLI(cmds ...*cliCommand) {
 // same passive set the proxy would run. tools is the -tools allowlist (name=path,
 // comma-separated) for `run tool` statements; empty keeps tool checks counted
 // but excluded from the audit set.
-func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) (*cliContext, error) {
+func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string, upstreamPolicy *upstream.Policy) (*cliContext, error) {
 	logger := zap.NewNop()
 	var store *core.TrafficStore
 	var err error
@@ -124,6 +125,10 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		logger.Info("bchecks loaded", zap.String("dir", bchecksDir), zap.String("report", ps.Report().Summary()))
 	}
 	senderCfg := sender.DefaultSenderConfig()
+	// Every sender this context builds — the repeater, the intruder's per-request senders and the
+	// active scanner's — shares the one policy, so -upstream-proxy covers the CLI's egress as
+	// completely as it covers the server's. Nil is the ordinary unconfigured case and dials directly.
+	senderCfg.Upstream = upstreamPolicy
 	// The -tools allowlist becomes a runner only if something was configured. A malformed entry
 	// refuses construction here, before any scan — a typo must not surface mid-scan as checks
 	// that silently cannot run. Nil keeps tool checks counted-but-excluded (see
@@ -186,7 +191,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 }
 
 // runCLI dispatches to a subcommand and exits. Returns the process exit code.
-func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) int {
+func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string, upstreamPolicy *upstream.Policy) int {
 	if name == "help" || name == "-h" || name == "--help" {
 		printCLIHelp()
 		return 0
@@ -196,7 +201,7 @@ func runCLI(name string, args []string, captureDir string, segmentBytes uint64, 
 		fmt.Fprintf(os.Stderr, "burpsy: unknown command %q (see \"burpsy help\")\n", name)
 		return 2
 	}
-	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools)
+	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, upstreamPolicy)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "burpsy: %v\n", err)
 		return 1
@@ -214,7 +219,7 @@ func printCLIHelp() {
 	fmt.Println("Server mode (default, no command): run the proxy and web UI.")
 	fmt.Println("Server flags: -proxy -web -capture-dir -scope-include -scope-exclude",
 		"-intercept-tls -ca-dir -segment-bytes -tls-passthrough -tls-passthrough-port",
-		"-tls-defaults -store-verify -bchecks -tools")
+		"-tls-defaults -store-verify -bchecks -tools -upstream-proxy -upstream-proxy-rule")
 	fmt.Println()
 	fmt.Println("Commands (drive engines directly, no HTTP):")
 	fmt.Println()

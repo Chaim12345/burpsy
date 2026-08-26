@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
@@ -270,9 +269,7 @@ func (a *AuthorisedSender) programRequestURL(req burpsyhttp2.ProgramRequest) str
 // which for that probe is the entire finding.
 func (a *AuthorisedSender) dialForProgram(ctx context.Context, forceH2 bool) (net.Conn, string, error) {
 	if !a.tls {
-		dialer := &net.Dialer{Timeout: a.net.config.Timeout}
-		conn, err := dialer.DialContext(ctx, "tcp",
-			net.JoinHostPort(a.host, strconv.Itoa(int(a.port))))
+		conn, err := a.net.dialPlain(ctx, a.host, a.port)
 		if err != nil {
 			return nil, "", fmt.Errorf("connection failed: %w", err)
 		}

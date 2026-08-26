@@ -43,6 +43,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -126,8 +127,7 @@ func wsStripNote(removed []string) *string {
 // strippedExtensions carries whatever stripWsHandshake removed from the request,
 // so the exchange can say the handshake was rewritten.
 func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, startTime time.Time, strippedExtensions []string) {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	upstream, err := net.Dial("tcp", addr)
+	upstream, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return
 	}

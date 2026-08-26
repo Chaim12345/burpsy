@@ -18,6 +18,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
 	"github.com/burpsy-go/burpsy/internal/httputil"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 )
 
 // Sender handles HTTP request sending.
@@ -28,6 +29,13 @@ type Sender struct {
 	// counters. One per Sender rather than one per authority handle, so an intruder run and the scan
 	// that preceded it share what either of them discovered — see protocol.go.
 	protocols *ProtocolCache
+	// upstream is the resolved upstream proxy policy every dial in this file goes through, and nil
+	// only when neither SenderConfig.ProxyURL nor SenderConfig.Upstream was set.
+	upstream *upstream.Policy
+	// upstreamErr is a proxy configuration this sender cannot honour. Non-nil makes every dial fail
+	// with it: an operator who configured a proxy must not have their traffic go out direct because
+	// the configuration was unusable. See NewSender.
+	upstreamErr error
 }
 
 // SenderConfig holds configuration for the sender.
@@ -46,10 +54,18 @@ type SenderConfig struct {
 	// Explicit, never ambient. The transport used to carry http.ProxyFromEnvironment, so an
 	// $HTTP_PROXY exported for any unrelated reason silently re-routed burpsy's own attack traffic
 	// through a third party that no scope decision was ever made about — and the authority actually
-	// dialled is the one thing AuthorisedSender exists to pin down. burpsy's proxy listener does not
-	// route through this field (internal/proxy dials origins itself), so nothing in the tool
-	// depended on the old behaviour.
-	ProxyURL  string
+	// dialled is the one thing AuthorisedSender exists to pin down.
+	//
+	// It is the *whole-sender* proxy: a single destination-independent upstream. Set Upstream instead
+	// for per-destination rules; the two are equivalent when Upstream has one default rule and no
+	// patterns, and NewSender folds a ProxyURL into exactly that so there is one resolution path
+	// rather than two. Setting both is a configuration error and NewSender refuses to guess between
+	// them — see NewSender.
+	ProxyURL string
+	// Upstream is the per-destination upstream proxy policy this sender's egress follows: an ordered
+	// host-pattern list with a default, shared by reference so a live edit through
+	// /api/network/proxy reaches every sender holding it. Nil dials origins directly.
+	Upstream  *upstream.Policy
 	UserAgent string
 }
 
@@ -78,16 +94,33 @@ func DefaultSenderConfig() *SenderConfig {
 //
 // Burp's Repeater does not follow redirects by default either, so an operator sees the 30x rather
 // than its consequence.
+// # Every dial goes through the upstream proxy policy, not only the typed one
+//
+// SenderConfig.ProxyURL used to configure http.Transport.Proxy and nothing else, which covered exactly
+// one of this package's five dial sites: Send's typed path. SendRaw, the pipelined desync probes, the
+// frame-program path and the ALPN discovery handshake all opened their own sockets and ignored it. A
+// proxy setting that covers the repeater but not the smuggling probe is the "partial result looking
+// complete" defect in its purest form, so the policy is resolved once here and every dial in this
+// package — see dialPlain and dialTLS — goes through it.
+//
+// The typed path keeps net/http's own HTTP-proxy handling (absolute-form for cleartext, CONNECT for
+// TLS) because that is ordinary client behaviour over bytes net/http composed itself. The raw paths
+// tunnel with CONNECT instead, because their bytes are operator-authored and frequently malformed on
+// purpose — see upstream.Proxy.DialContext. SOCKS is applied in the dialer for both, so there is one
+// SOCKS implementation rather than net/http's for one path and ours for the others.
 func NewSender(config *SenderConfig) *Sender {
 	if config == nil {
 		config = DefaultSenderConfig()
 	}
 
+	policy, policyErr := resolveUpstream(config)
+
 	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   config.Timeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		// upstream.Dialer with a nil policy is a plain net.Dialer, so an unconfigured sender dials
+		// exactly as it always did. KeepAlive is dropped from the dialer here: it is a property of the
+		// direct TCP dial and there is no equivalent to set on a CONNECT tunnel or a SOCKS relay, so
+		// carrying it on one arm and not the others would make idle behaviour depend on the proxy kind.
+		DialContext:           upstream.Dialer{Policy: policy, Timeout: config.Timeout}.DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
@@ -97,19 +130,14 @@ func NewSender(config *SenderConfig) *Sender {
 			InsecureSkipVerify: !config.TLSVerify,
 		},
 	}
-
-	if config.ProxyURL != "" {
-		proxyURL, err := url.Parse(config.ProxyURL)
-		if err != nil {
-			// A proxy the operator asked for and that cannot be used must fail the send, not
-			// silently become a direct connection: "my traffic went straight to the target" is the
-			// one outcome an operator who configured a proxy did not ask for.
-			transport.Proxy = func(*http.Request) (*url.URL, error) {
-				return nil, fmt.Errorf("sender proxy URL %q is unusable: %w", config.ProxyURL, err)
-			}
-		} else {
-			transport.Proxy = http.ProxyURL(proxyURL)
-		}
+	if policyErr != nil {
+		// A proxy the operator asked for and that cannot be used must fail the send, not silently
+		// become a direct connection: "my traffic went straight to the target" is the one outcome an
+		// operator who configured a proxy did not ask for. Transport.Proxy is the earliest hook that
+		// can refuse the typed path; the raw paths refuse in dialPlain/dialTLS.
+		transport.Proxy = func(*http.Request) (*url.URL, error) { return nil, policyErr }
+	} else if policy != nil {
+		transport.Proxy = policy.HTTPProxyForRequest
 	}
 
 	return &Sender{
@@ -120,9 +148,51 @@ func NewSender(config *SenderConfig) *Sender {
 				return http.ErrUseLastResponse
 			},
 		},
-		config:    config,
-		protocols: newProtocolCache(),
+		config:      config,
+		protocols:   newProtocolCache(),
+		upstream:    policy,
+		upstreamErr: policyErr,
 	}
+}
+
+// resolveUpstream turns the two proxy fields into the one policy every dial follows.
+//
+// Both set is refused rather than resolved by precedence: ProxyURL and Upstream are two answers to
+// "where does this sender's traffic go", and picking one would send traffic somewhere the operator did
+// not unambiguously ask for. A ProxyURL alone becomes a policy with that default and no patterns,
+// which is the same thing expressed once.
+func resolveUpstream(config *SenderConfig) (*upstream.Policy, error) {
+	if config.ProxyURL != "" && config.Upstream != nil {
+		return nil, fmt.Errorf("sender has both ProxyURL %q and an upstream proxy policy; set one",
+			config.ProxyURL)
+	}
+	if config.Upstream != nil {
+		config.Upstream.Attach("sender")
+		return config.Upstream, nil
+	}
+	if config.ProxyURL == "" {
+		return nil, nil
+	}
+	policy := upstream.NewPolicy()
+	if err := policy.SetDefault(config.ProxyURL); err != nil {
+		return nil, fmt.Errorf("sender proxy URL is unusable: %w", err)
+	}
+	policy.Attach("sender")
+	return policy, nil
+}
+
+// dialPlain opens one cleartext TCP connection to an authority, through the upstream proxy policy.
+//
+// The single cleartext dial site for this whole package: sendHTTP1Plain, dialOne's cleartext arm and
+// dialForProgram's cleartext arm all come here, so a proxy setting cannot cover some of them and not
+// others. That was the state before — three independent net.Dialers, none of which had heard of
+// SenderConfig.ProxyURL.
+func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.Conn, error) {
+	if s.upstreamErr != nil {
+		return nil, s.upstreamErr
+	}
+	dialer := upstream.Dialer{Policy: s.upstream, Timeout: s.config.Timeout}
+	return dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 }
 
 // Protocols reports which protocol carried this sender's sends, why the HTTP/1.1 ones did, and what is
@@ -166,8 +236,19 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 // dialTLS opens one TLS connection with the given ALPN offer, through the shared negotiation logic the
 // proxy's upstream leg uses. Certificate verification follows SenderConfig.TLSVerify, unlike the proxy's
 // leg — see internal/alpn.
+//
+// The upstream proxy carries the connection, not the handshake: alpn.Dialer.Carry gets the tunnel and
+// the TLS session is still end-to-end with the origin, so the certificate verified and the protocol
+// negotiated are the origin's own. A proxy that terminated TLS here would be reporting its own ALPN as
+// the target's.
 func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string) (*tls.Conn, string, error) {
+	if s.upstreamErr != nil {
+		return nil, "", s.upstreamErr
+	}
 	dialer := alpn.Dialer{InsecureSkipVerify: !s.config.TLSVerify, Timeout: s.config.Timeout}
+	if s.upstream != nil && !s.upstream.Empty() {
+		dialer.Carry = upstream.Dialer{Policy: s.upstream, Timeout: s.config.Timeout}.DialContext
+	}
 	return dialer.Dial(ctx, host, net.JoinHostPort(host, strconv.Itoa(int(port))), offer)
 }
 
@@ -585,8 +666,7 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 
 // sendHTTP1Plain dials cleartext and writes one request.
 func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte) ([]byte, error) {
-	dialer := &net.Dialer{Timeout: s.config.Timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	conn, err := s.dialPlain(ctx, host, port)
 	if err != nil {
 		return nil, fmt.Errorf("connection failed: %w", err)
 	}

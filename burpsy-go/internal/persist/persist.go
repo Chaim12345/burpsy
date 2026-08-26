@@ -22,6 +22,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 
 	_ "modernc.org/sqlite"
@@ -1103,6 +1104,63 @@ func (s *Store) getSetting(key string) (string, error) {
 		return "", nil
 	}
 	return v, err
+}
+
+// ---- Upstream proxy ----------------------------------------------------------------------------
+
+// upstreamProxyKey is the settings row the upstream proxy policy lives in.
+//
+// A key/value row rather than a table of its own, following matchreplace.update_content_length and the
+// scan-config override: the whole policy is a handful of strings replaced wholesale on every edit, so a
+// table would buy ordering and per-row updates that nothing here needs, and would need a migration the
+// settings row does not.
+const upstreamProxyKey = "network.proxy"
+
+// SaveUpstreamProxy mirrors the upstream proxy policy into the settings row, replacing whatever was
+// there.
+//
+// # Credentials are written in the clear, and that is stated rather than hidden
+//
+// The snapshot carries any proxy password, because a policy restored without it would come back looking
+// configured and start failing authentication — the same class of lie as a rule that silently stopped
+// proxying. The database this writes to already holds every captured request, Authorization headers
+// included, so it is not a new secret-bearing artefact; it does mean the -db file must be treated as
+// engagement material. The API never serves these values back and no log line carries them — see
+// upstream.Proxy.Display, and upstream.Proxy.Raw for why this is the one caller that sees them.
+func (s *Store) SaveUpstreamProxy(policy *upstream.Policy) {
+	raw, err := json.Marshal(policy.Snapshot())
+	if err != nil {
+		s.log("upstream proxy marshal", err)
+		return
+	}
+	if err := s.setSetting(upstreamProxyKey, string(raw)); err != nil {
+		s.log("upstream proxy", err)
+	}
+}
+
+// LoadUpstreamProxy restores the upstream proxy policy from the settings row into policy.
+//
+// An absent row is not an error and leaves the policy untouched: no row means no proxy was ever
+// configured, which is the same state as a fresh policy. A row that does not parse *is* an error and is
+// returned rather than swallowed — the caller decides whether to start under a policy it could not
+// read, and starting with traffic silently going out direct is not a decision to make behind an
+// operator's back.
+func (s *Store) LoadUpstreamProxy(policy *upstream.Policy) error {
+	if policy == nil {
+		return nil
+	}
+	raw, err := s.getSetting(upstreamProxyKey)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", upstreamProxyKey, err)
+	}
+	if raw == "" {
+		return nil
+	}
+	var snap upstream.Snapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		return fmt.Errorf("stored upstream proxy policy is not readable JSON: %w", err)
+	}
+	return policy.Restore(snap)
 }
 
 // ---- Restore -----------------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 
 ## Purpose
 
-The engine: 31 packages under a single Go module, playing the role the 13 Rust crates play in
+The engine: 32 packages under a single Go module, playing the role the 13 Rust crates play in
 `../../crates/`. There are no Cargo-style manifest boundaries here — the split is enforced by Go's
 package graph and by convention — but the same rule holds: `core` owns the store and knows nothing
 about networks, `bcheck` is a pure interpreter with no transport, and `sender` is the only package
@@ -46,10 +46,13 @@ component is *not* allowed to reach, same as on the Rust side.
 | [`vulnapp/`](vulnapp/AGENTS.md) | A deliberately vulnerable in-process app plus a manifest pairing each endpoint with the catalog row it should trigger |
 | [`web/`](web/AGENTS.md) | The JSON API and the embedded React single-page UI |
 | `httputil/` | Shared HTTP/1.x framing helpers (`ReadHTTPResponse`, chunked/Content-Length aware) used by `proxy` and `sender`. Single file — no `AGENTS.md` of its own; see below |
+| `upstream/` | The one place that decides which upstream proxy (HTTP/HTTPS CONNECT, SOCKS4/4a/5) carries an egress connection, and the one place that dials it. Ordered host-pattern rules with a default; held by reference so `sender` and `proxy` share one policy and a live edit reaches both. Refuses an unparseable proxy URL rather than falling back to a direct dial. Single file plus `upstreamtest/` — no `AGENTS.md` of its own; see below |
 | `toollog/` | Records every request burpsy's tools (Repeater, Intruder, Scanner, Sequencer, Comparer, Session, Decoder, Crawler) sent, kept separate from proxy history. Single file — no `AGENTS.md` of its own; see below |
 
-`httputil` and `toollog` are single-file helper packages, covered here rather than with their own
-`AGENTS.md` — the same "one per meaningful unit, don't dilute with boilerplate" rule the Rust
+`httputil`, `toollog` and `upstream` are single-file packages, covered here rather than with their own
+`AGENTS.md` (`upstream`'s package comment carries its own rationale at length; `upstream/upstreamtest`
+is its in-process proxy harness, used by `upstream`, `sender` and `proxy` so the three cannot diverge
+in what they consider a proxied egress) — the same "one per meaningful unit, don't dilute with boilerplate" rule the Rust
 `crates/` hierarchy follows for its own trivial directories.
 
 ## For AI Agents
@@ -98,7 +101,7 @@ crate spine.
 ### External
 
 Declared once in `../go.mod`. Notable non-stdlib dependencies and the package that owns each:
-`golang.org/x/net/http2` (`http2`, `sender`), `chromedp`/`cdproto` (`domexec`), `dop251/goja`
+`golang.org/x/net/http2` (`http2`, `sender`), `golang.org/x/net/proxy` (`upstream`'s SOCKS5 dial), `chromedp`/`cdproto` (`domexec`), `dop251/goja`
 (`jsexec`), `PuerkitoBio/goquery` (`crawler`), `projectdiscovery/wappalyzergo` (`crawler`/`advisory`),
 `modernc.org/sqlite` (`persist`), `mvdan.cc/sh` (`bcheck`'s `run tool`), `go.uber.org/zap` (logging,
 used broadly).

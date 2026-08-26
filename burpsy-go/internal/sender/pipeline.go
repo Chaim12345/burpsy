@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"net"
 	"net/textproto"
-	"strconv"
 	"strings"
 	"time"
 
@@ -162,8 +161,7 @@ func readFramedResponse(br *bufio.Reader) (raw []byte, framing string, complete 
 // probe into a no-op instead of a refusal.
 func (s *Sender) dialOne(ctx context.Context, host string, port uint16, useTLS bool) (net.Conn, error) {
 	if !useTLS {
-		dialer := &net.Dialer{Timeout: s.config.Timeout}
-		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+		conn, err := s.dialPlain(ctx, host, port)
 		if err != nil {
 			return nil, fmt.Errorf("connection failed: %w", err)
 		}
