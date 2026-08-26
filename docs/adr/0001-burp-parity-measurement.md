@@ -125,6 +125,47 @@ walking a slice of seven. It will pass forever; an eighth target changes nothing
 reads to a reviewer exactly like the real thing. Exhaustiveness must be derived — `reflect`,
 `go/ast`, or an `iota` sentinel — or it is decoration.
 
+**13. When an artefact is lost, label it unrecoverable. Never re-derive it from memory under
+the original's filename.**
+
+Rule 11 says contradictory records mean re-run the measurement. This is the rule that stops
+the contradiction being manufactured in the first place. When W1's evidence was destroyed with
+a reaped workspace, the analyst rewrote a 72-line summary from memory and gave it the
+original's path. It inverted the finding — asserting `session` "came back clean" — and it then
+sat at `docs/parity/W1-broken-behaviour.md`, the **git-canonical evidence file cited by the
+report's worst finding**, through three commits and a merge. Anyone who followed the citation
+trail correctly would have concluded the defect was fabricated.
+
+A summary written from memory is not a lossy copy of evidence; it is a different kind of
+object, and giving it the evidence's filename is what makes it dangerous. If a summary must
+exist, name the file as a summary and state what it could not recover.
+
+**14. After citing an evidence file, re-read it and confirm it says what you just said it
+says.**
+
+The corollary of rule 13, and it is nearly free. The W1 contradiction was one `grep session`
+away for three commits. Nobody ran it, because citing a file feels like having checked it.
+
+Note the generalisation: rule 5 (*a passing test proves the layer it tests, not the layer
+users touch*) turns out not to be about tests. It is about **any artefact trusted for a claim
+it does not support** — a green test, a bundled resource, a positive grep, or your own prose.
+All four traps this audit fell into are that one shape.
+
+**15. Cost estimates are claims, and they need the same treatment as ratios.**
+
+A self-audit of this report's own citations found 1 false claim in 10 sampled, and the damage
+was not the false statement — it was the fix estimate resting on it. §3.0.3c said the correct
+status value "already exists and is never used," making the repair sound like a one-line swap
+at priority #3. In fact the value is produced on a live path, and the reason it cannot answer
+the defect is structural: point status is decided per *item* and stamped onto every point,
+with no per-point accounting to key on. The real fix is plumbing.
+
+**A wrong severity gets argued about; a wrong cost silently changes what gets scheduled**,
+because an under-priced defect is deferred by ordinary good planning and nothing re-checks the
+estimate. Estimates were the least-verified numbers in this audit and the only category never
+independently re-derived. State the mechanism the estimate assumes, so the estimate can be
+falsified like any other claim.
+
 ## Consequences
 
 **Accepted costs.** Behavioural proof is materially more expensive than reading code —
