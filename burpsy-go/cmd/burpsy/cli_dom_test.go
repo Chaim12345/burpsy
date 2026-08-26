@@ -71,7 +71,7 @@ func TestDomEngineFlagNamesAnEngineOrRefusesATypo(t *testing.T) {
 // What proves the wiring is the scanner's own report of whether it has the capability: the
 // provider is lazy, so an engine can be configured — and observed — without launching anything.
 func TestCLIContextWiresTheDomEngineIntoTheActiveScanner(t *testing.T) {
-	plain, err := newCLIContext("", 1<<20, "*", "", "", "", "", "")
+	plain, err := newCLIContext("", 1<<20, "*", "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("newCLIContext (no -dom): %v", err)
 	}
@@ -79,7 +79,7 @@ func TestCLIContextWiresTheDomEngineIntoTheActiveScanner(t *testing.T) {
 		t.Error("a context built without -dom claims a DOM capability; a scan would then report DOM results it cannot produce")
 	}
 
-	wired, err := newCLIContext("", 1<<20, "*", "", "", "", "", "chrome")
+	wired, err := newCLIContext("", 1<<20, "*", "", "", "", "", "chrome", nil)
 	if err != nil {
 		t.Fatalf("newCLIContext (-dom chrome): %v", err)
 	}

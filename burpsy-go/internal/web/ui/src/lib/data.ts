@@ -73,6 +73,7 @@ export const keys = {
   extensions: ["extensions"] as const,
   extensionConsole: (name: string, limit: number) => ["extensions", "console", name, limit] as const,
   extensionApis: ["extensions", "apis"] as const,
+  networkProxy: ["network", "proxy"] as const,
 };
 
 /**

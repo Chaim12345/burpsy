@@ -310,6 +310,21 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
 	},
+	"/api/network/proxy": {
+		// riskLocal by the letter of its definition — it mutates settings and sends nothing — and by
+		// precedent: /api/tools/rules rewrites every proxied request and is classified here too.
+		//
+		// Recorded because there is a real argument for more: a rule set here redirects all future
+		// egress, credentials and session cookies included, through a host the caller chose, which is
+		// an exfiltration primitive in a way that editing a rewrite rule is not. It is left at
+		// riskLocal rather than promoted quietly, because the confirmation-worthy sets below are
+		// asserted deliberately and moving a route into one is a decision, not a side effect. A future
+		// reader who wants it confirmed should add it to wantScope (or a new class) and say why here.
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal,
+		summary: "the upstream proxy / SOCKS chain both egress paths follow: ordered host-pattern rules " +
+			"with a default. POST upserts a rule and/or the default, DELETE removes one by exact pattern " +
+			"(404 when absent) or clears all with ?all=true",
+	},
 	"/api/network/settings": {
 		// riskScope, not riskLocal, and the reason is the hostname-resolution table. The scope gate
 		// authorises a *name*; an override decides which machine that name's authorised bytes are

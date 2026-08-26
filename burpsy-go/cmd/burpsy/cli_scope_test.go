@@ -35,7 +35,7 @@ func cliTargetHostPort(t *testing.T, raw string) (string, uint16) {
 // scopedCLI builds a CLI context whose scope includes only `allowed`, with output discarded.
 func scopedCLI(t *testing.T, allowed string) (*cliContext, *bytes.Buffer) {
 	t.Helper()
-	ctx, err := newCLIContext("", 1<<20, allowed, "", "", "", "", "")
+	ctx, err := newCLIContext("", 1<<20, allowed, "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("newCLIContext: %v", err)
 	}

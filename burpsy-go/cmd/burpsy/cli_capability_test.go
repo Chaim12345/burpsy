@@ -17,7 +17,7 @@ import "testing"
 // report would read.
 
 func TestCLIContextWiresEveryCapabilityHandle(t *testing.T) {
-	ctx, err := newCLIContext("", 1<<20, "*", "", "", "", "", "")
+	ctx, err := newCLIContext("", 1<<20, "*", "", "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("newCLIContext: %v", err)
 	}

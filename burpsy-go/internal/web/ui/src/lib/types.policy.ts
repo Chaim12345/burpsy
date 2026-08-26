@@ -275,3 +275,43 @@ export interface PassthroughView {
   patterns: string[];
 }
 
+/* --- upstream proxy servers and SOCKS (Unit 9) ---------------------------- */
+
+/**
+ * One upstream proxy rule. `proxy` is always the server's redacted rendering
+ * (`socks5://***@host:1080` when credentials are set) — the API never serves a
+ * password back, so there is nothing here to accidentally put on screen.
+ */
+export interface NetworkProxyRule {
+  pattern: string;
+  proxy: string;
+  kind: string;
+  has_credentials: boolean;
+  /** A rule that exempts its pattern from a broader default. */
+  direct: boolean;
+}
+
+export interface NetworkProxyView {
+  /** False means no policy object is wired, so an edit would be consulted by nothing. */
+  wired: boolean;
+  rules: NetworkProxyRule[];
+  default: string;
+  default_kind: string;
+  default_has_credentials: boolean;
+  /** Distinguishes "nothing configured" from "rules that all resolve to direct". */
+  empty: boolean;
+  /** Egress surfaces holding this policy: "sender", "proxy", "web". */
+  attached: string[];
+  /** Whether edits survive a restart (false with no -db). */
+  persisted: boolean;
+  credentials_supported: boolean;
+  /** Accepted URL schemes, named by the server's own parser. */
+  schemes: string[];
+}
+
+/** POST body. `default` omitted leaves the default alone; "" or "direct" clears it. */
+export interface NetworkProxyUpdate {
+  pattern?: string;
+  proxy?: string;
+  default?: string;
+}

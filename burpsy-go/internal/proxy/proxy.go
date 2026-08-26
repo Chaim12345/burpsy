@@ -27,6 +27,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	upstreamproxy "github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 )
 
@@ -446,6 +447,11 @@ type ProxyConfig struct {
 	// rules and the Accept-Encoding strip. Never nil after NewProxyConfig, and the
 	// same pointer the web API holds — see WithOptions and internal/proxy/options.go.
 	options *Options
+	// upstream is the per-destination upstream proxy policy this proxy's origin-facing leg follows.
+	// Nil dials origins directly, which is what this package did before the policy existed. Shared by
+	// reference with internal/sender and with the /api/network/proxy handler, so an edit made in the
+	// console reaches this leg without a restart — see internal/upstream.
+	upstream *upstreamproxy.Policy
 }
 
 // NewProxyConfig creates a new proxy configuration.
@@ -484,6 +490,21 @@ func (c *ProxyConfig) WithTlsPolicy(policy *TlsPolicy) *ProxyConfig {
 // web server for exactly the reason it shares one intercept.Engine.
 func (c *ProxyConfig) WithMatchReplace(rs *matchreplace.RuleSet) *ProxyConfig {
 	c.matchReplace = rs
+	return c
+}
+
+// WithUpstreamProxy routes this proxy's origin-facing leg through an upstream proxy policy.
+//
+// The policy is held by reference and consulted per dial, so a rule added through
+// /api/network/proxy applies to the next connection this listener opens — a restart would be the wrong
+// shape for a setting an operator changes while a browser is pointed at the proxy. Attach records that
+// this surface holds it, which is what lets the API report that a rule reaches the listener and not
+// only burpsy's own senders.
+func (c *ProxyConfig) WithUpstreamProxy(policy *upstreamproxy.Policy) *ProxyConfig {
+	c.upstream = policy
+	if policy != nil {
+		policy.Attach("proxy")
+	}
 	return c
 }
 
@@ -685,7 +706,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 	}
 
 	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	upstream, negotiated, err := dialUpstreamTLS(host, addr, offer)
+	upstream, negotiated, err := s.dialUpstreamTLS(host, addr, offer)
 	if err != nil {
 		s.config.logger.Error("upstream TLS dial failed", zap.String("host", host), zap.Error(err))
 		return
@@ -937,8 +958,11 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 }
 
 func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
-	// Connect to upstream
-	upstreamConn, err := net.Dial("tcp", target)
+	// Connect to upstream, through the configured upstream proxy when one covers this destination.
+	// A blind tunnel is the one leg that passes the client's own CONNECT target through unchanged: it
+	// is the only string the client gave us, and re-deriving it from a parse would risk tunnelling
+	// somewhere other than where the client asked.
+	upstreamConn, err := s.dialUpstreamAddr(context.Background(), target)
 	if err != nil {
 		clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		return
@@ -1423,8 +1447,7 @@ func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 }
 
 func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16) {
-	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	upstreamConn, err := net.Dial("tcp", addr)
+	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return
 	}
@@ -1466,8 +1489,7 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 }
 
 func (s *Server) forwardRequest(requestData []byte, host string, port uint16) ([]byte, error) {
-	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	upstreamConn, err := net.Dial("tcp", addr)
+	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return nil, err
 	}
