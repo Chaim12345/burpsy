@@ -83,6 +83,7 @@ command recorded. Rows are **not** commensurable.
 | **Scanner: does it fire** | 58 active checks, 64 real probes, High findings emitted | n/a | **STATE 4, all 3 launch paths** | High — **behaviourally proven**, real targets, pasted output |
 | **Scanner: check breadth** | 183 descriptors registered, **58 admitted at defaults** (3 active injection / 5 active discovery / 50 network-free) | **no honest denominator exists** in Burp's shipped resources | **58/183 admitted; no N/M vs Burp is offered** | High on burpsy side; Burp side deliberately refused |
 | **Scanner: insertion points** | **3 of 8** at defaults, 5 of 8 all-on, **0 of 6** relocation types | 8 types + 6 relocation | **3/8**, though `bcheck` implements all 15 kinds | High — greps positive-controlled |
+| **Repeater: concurrent isolated tabs** | isolated tabs + per-tab history, **capped at 12 silently** | `secondarySuiteTabBar`, uncapped | **parity on isolation**; STATE 5 on the cap (§6.7b) | High — **behaviourally proven**, store driven directly |
 
 The config-panel row moved from "NOT DETERMINED" to a **fully mapped 41/85** this wave — it
 was the largest open item in the entire analysis and is now closed. §2.1 reads the
@@ -381,8 +382,14 @@ The fix is better than the one I reverted, and the difference is instructive:
   What is missing is the applier."
 - Three tests guard it, including `internal/web/matchreplace_target_test.go:139`.
 
-**So this is now a CAPABILITY GAP — 5 of 7 rule_types implemented — not a defect.** The
-STATE 5 count for the report is therefore **3, all in the scanner**, not 4.
+**So this is now a CAPABILITY GAP — 5 of 7 rule_types implemented — not a defect.** Removing
+it took the STATE 5 count to **3, all in the scanner**.
+
+> *(That was the count when this subsection was written, and it did not stay true: §3.1a's
+> session defect was recovered afterwards and §6.7b's Repeater eviction was found in the final
+> wave, so **the live count is 5** — see §3. Left visible rather than silently overwritten,
+> because a count that only ever moved **upward**, in a report specifically hunting for this
+> category, is itself the finding.)*
 
 The author's own commit comment is the most valuable artefact this analysis produced, because
 it diagnoses the reasoning error rather than just the bug: *"I added those two here in
@@ -550,7 +557,7 @@ question and caught a case grep would have missed.
 | STATE 2, whole package | **1** | `internal/jsexec` |
 | STATE 2, sub-capability | **3 new + 1 inherited** | tlsprobe cipher/protocol analysis; `advisory.Catalogue.ByName`; http2 `Malformation` vocabulary (residue); `tools/comparer.go` (inherited) |
 | STATE 3 | **1 new + 1 inherited** | `/api/intercept/drop-all` (new); `/api/discovery` (re-confirmed independently) |
-| STATE 5 found by W5 | **0** | the only STATE 5 remains §3.1, found by W1 |
+| STATE 5 found by W5 | **0** | true when W5 ran; the live count has since risen to **5** (§3) |
 | Packages reached by ≥1 route | 29 / 37 | |
 | Packages with no route, by design | 8 / 37 | alpn, domexec, httputil, jsexec, tlsprobe, upstreamtest, vulnapp, web |
 | Routes with zero production-UI reference | **4 / 81** | 2 documented legacy aliases + the 2 STATE 3 rows |
@@ -998,9 +1005,10 @@ Four things follow, and they are the honest reading:
 
 - **W2 — scanner reality check.** The only workstream that stood up live targets and ran
   real scans. Answered the question affirmatively (§3.0) and found **three of the report's
-  four STATE 5 defects** in the process. It also declined to state a Burp-side check-count
-  denominator because none honestly exists — the single best methodological decision made in
-  this analysis, and the one that avoided a sixth false denominator authored by us.
+  five live STATE 5 defects** in the process. It also declined to state a Burp-side
+  check-count denominator because none honestly exists — the single best methodological
+  decision made in this analysis. It avoided a false denominator authored by us; three others
+  got through anyway (§1).
 
 - **W4 — test-suite honesty audit.** 2,213 tests measured, two AST passes over 316
   switches, and **two corrections to this report**: §6.5's "the antidote never propagated"
