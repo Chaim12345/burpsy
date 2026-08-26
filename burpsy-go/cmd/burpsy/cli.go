@@ -268,6 +268,16 @@ func sortedCLINames() []string {
 // yields nil (no runner). A malformed entry is an error — a typo in a name or
 // path must refuse construction, not surface mid-scan as a tool that never ran.
 func parseToolAllowlist(s string) (map[string]string, error) {
+	return parseNamePathAllowlist("-tools", s)
+}
+
+// parseNamePathAllowlist is the shared name=path,name=path parser behind -tools and -plugins.
+//
+// One parser because the two flags are the same decision made twice: which executables on this machine
+// may this process run. Sharing it means a fix to the format (a trimmed space, a rejected duplicate)
+// cannot land for one flag and not the other. The flag name is threaded through only so the error names
+// the flag the operator actually typed.
+func parseNamePathAllowlist(flagName, s string) (map[string]string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, nil
@@ -281,10 +291,10 @@ func parseToolAllowlist(s string) (map[string]string, error) {
 		name, path, ok := strings.Cut(pair, "=")
 		name, path = strings.TrimSpace(name), strings.TrimSpace(path)
 		if !ok || name == "" || path == "" {
-			return nil, fmt.Errorf("bad -tools entry %q: want name=path", pair)
+			return nil, fmt.Errorf("bad %s entry %q: want name=path", flagName, pair)
 		}
 		if _, dup := out[name]; dup {
-			return nil, fmt.Errorf("duplicate -tools entry %q", name)
+			return nil, fmt.Errorf("duplicate %s entry %q", flagName, name)
 		}
 		out[name] = path
 	}

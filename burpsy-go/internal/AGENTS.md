@@ -5,7 +5,7 @@
 
 ## Purpose
 
-The engine: 31 packages under a single Go module, playing the role the 13 Rust crates play in
+The engine: 32 packages under a single Go module, playing the role the 13 Rust crates play in
 `../../crates/`. There are no Cargo-style manifest boundaries here — the split is enforced by Go's
 package graph and by convention — but the same rule holds: `core` owns the store and knows nothing
 about networks, `bcheck` is a pure interpreter with no transport, and `sender` is the only package
@@ -43,6 +43,7 @@ component is *not* allowed to reach, same as on the Rust side.
 | [`persist/`](persist/AGENTS.md) | The SQLite write-through mirror of the authoritative in-memory stores (history, findings, scope, rules) |
 | [`advisory/`](advisory/AGENTS.md) | The issue-definition catalogue: Burp's 183 knowledge-base entries turning a finding's name into remediation text |
 | [`dash/`](dash/AGENTS.md) | The dashboard's shared vocabulary and runtime state — honest counts, an observe-only task registry, a bounded event log |
+| [`extension/`](extension/AGENTS.md) | The plugin host behind the EXTENDER tab: operator-allowlisted executables run as child processes speaking newline-delimited JSON-RPC. Deliberately not a Montoya implementation — three registration points have an honest web analogue and the other ten hand Burp a Swing object |
 | [`vulnapp/`](vulnapp/AGENTS.md) | A deliberately vulnerable in-process app plus a manifest pairing each endpoint with the catalog row it should trigger |
 | [`web/`](web/AGENTS.md) | The JSON API and the embedded React single-page UI |
 | `httputil/` | Shared HTTP/1.x framing helpers (`ReadHTTPResponse`, chunked/Content-Length aware) used by `proxy` and `sender`. Single file — no `AGENTS.md` of its own; see below |

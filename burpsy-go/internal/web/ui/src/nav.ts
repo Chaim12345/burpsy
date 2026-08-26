@@ -8,6 +8,7 @@ import {
   FileClock,
   Gauge,
   NotebookTabs,
+  Plug,
   Radar,
   Repeat2,
   Settings,
@@ -23,6 +24,7 @@ import { CollaboratorPage } from "./pages/collaborator";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
 import { DiscoverPage } from "./pages/discover";
+import { ExtenderApisPage, ExtenderOptionsPage, ExtensionsPage } from "./pages/extensions";
 import { HistoryPage } from "./pages/history";
 import { InterceptPage } from "./pages/intercept";
 import { IntruderPage } from "./pages/intruder";
@@ -199,6 +201,34 @@ export const TOOLS: NavTool[] = [
     icon: ShieldCheck,
     leaves: [
       { id: "session", label: "Session", description: "Login macros and recovery behaviour", page: SessionPage },
+    ],
+  },
+  {
+    // The Extender's three sub-tabs. Burp has four; the fourth is the BApp Store, which is a hosted
+    // catalogue this tool has no counterpart for - see pages/extensions.tsx for why a tab listing
+    // nothing would be worse than no tab at all.
+    id: "extender",
+    label: "Extender",
+    icon: Plug,
+    leaves: [
+      {
+        id: "extensions",
+        label: "Extensions",
+        description: "Local JSON-RPC plugins, their consoles and what they registered",
+        page: ExtensionsPage,
+      },
+      {
+        id: "extenderoptions",
+        label: "Options",
+        description: "How a plugin is admitted, and the bounds it runs under",
+        page: ExtenderOptionsPage,
+      },
+      {
+        id: "extenderapis",
+        label: "APIs",
+        description: "The JSON-RPC contract a plugin is written against",
+        page: ExtenderApisPage,
+      },
     ],
   },
   {

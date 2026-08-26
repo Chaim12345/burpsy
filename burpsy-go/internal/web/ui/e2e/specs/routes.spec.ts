@@ -90,6 +90,8 @@ test.describe("routes", () => {
     // failed for a correct UI, which teaches the next reader to edit the number instead of looking.
     const proxyLeaves = ROUTES.filter((route) => route.tool === "proxy").length;
     expect(proxyLeaves).toBeGreaterThan(1); // otherwise this test is asserting nothing
+    // Proxy owns four leaves, Repeater one. The row is conditional, and a regression that always
+    // renders it eats a row of vertical space on ten of the twenty routes.
     await gotoRoute(page, ROUTES.find((route) => route.id === "history")!);
     await expect(page.locator("nav.sub-tabs")).toBeVisible();
     await expect(page.locator("nav.sub-tabs button")).toHaveCount(proxyLeaves);

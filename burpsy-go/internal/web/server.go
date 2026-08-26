@@ -10,6 +10,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/extension"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/organizer"
@@ -126,6 +127,11 @@ type Server struct {
 	// with. Lazy for the same reasons as captures above.
 	collaborator     *collaboratorHub
 	collaboratorOnce sync.Once
+	// extensions is the plugin host: the operator's -plugins allowlist and the child processes it
+	// admits. Lazily replaced by an empty host on first use (extensionOnce), so a Server built without
+	// one reports an allowlist of zero rather than 503 — see api_extensions.go.
+	extensions    *extension.Host
+	extensionOnce sync.Once
 	// live is the change-event hub behind /api/events: every store the UI reads signals it, and it
 	// coalesces those signals into "this kind changed" frames the browser refetches on. See events.go
 	// for why the frames carry no data and why the producer side is atomics only.
@@ -246,6 +252,24 @@ func (s *Server) WithToolRunner(r bcheck.ToolRunner) *Server {
 // delegation off and the route reporting which name is missing.
 func (s *Server) WithExternalTools(tools map[string]string) *Server {
 	s.externalTools = tools
+	return s
+}
+
+// WithExtensions attaches the plugin host the EXTENDER routes drive.
+//
+// Supplied from the command line like the -tools allowlist and for the same reason: which executables
+// may run is operator policy, and the web server has no business inventing one. Passing nil leaves the
+// lazily built empty host in place, which reports an allowlist of zero rather than disabling the
+// surface — the Extensions tab must be able to say "nothing is allowlisted, here is the flag".
+//
+// The caller keeps the host and is responsible for Close: the processes outlive any one request and
+// have to be stopped when the process is, which the web server's shutdown path does not model.
+func (s *Server) WithExtensions(host *extension.Host) *Server {
+	if host != nil {
+		s.extensions = host
+		// Marked done so extensionHost() does not replace a real host with an empty one on first use.
+		s.extensionOnce.Do(func() {})
+	}
 	return s
 }
 
@@ -643,6 +667,15 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/ws/connections", s.handleWSConnections)
 	s.mux.HandleFunc("/api/ws/history", s.handleWSHistory)
 	s.mux.HandleFunc("/api/ws/message/", s.handleWSMessage)
+
+	// Extender: the plugin host. Six exact patterns rather than one subtree — see api_extensions.go for
+	// why, and for why there is no BApp Store route.
+	s.mux.HandleFunc("/api/extensions", s.handleExtensions)
+	s.mux.HandleFunc("/api/extensions/apis", s.handleExtensionAPIs)
+	s.mux.HandleFunc("/api/extensions/console", s.handleExtensionConsole)
+	s.mux.HandleFunc("/api/extensions/invoke", s.handleExtensionInvoke)
+	s.mux.HandleFunc("/api/extensions/load", s.handleExtensionLoad)
+	s.mux.HandleFunc("/api/extensions/unload", s.handleExtensionUnload)
 
 	// Scanner report export: /api/report/{json|sarif|html}
 	s.mux.HandleFunc("/api/report/", s.handleReport)

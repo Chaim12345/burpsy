@@ -16,7 +16,7 @@ import (
 //
 // # Why this exists
 //
-// `setupRoutes` is 51 `mux.HandleFunc` calls in one function, and until now nothing checked it. A
+// `setupRoutes` is one long run of `mux.HandleFunc` calls in one function, and until now nothing checked it. A
 // route deleted or renamed in a refactor produced a 404 in production — discovered by an operator
 // clicking something that used to work, with no test going red anywhere. That is a bad failure for a
 // surface the UI is written against, and a worse one for the API surface this port is in the middle of
@@ -82,6 +82,17 @@ const (
 	riskDestructive riskClass = "destructive"
 	// riskAsset serves a static asset (the UI, the CA certificate).
 	riskAsset riskClass = "asset"
+	// riskExecute runs operator-supplied code in this process's privileges: it starts a plugin from the
+	// -plugins allowlist as a child process, or invokes something that plugin registered.
+	//
+	// Its own class because none of the others fits and folding it into one of them would understate
+	// it. riskLocal is defined as writing burpsy's own state, and this writes nothing; riskEgress and
+	// riskAttack are about what leaves for the target, and a plugin may send nothing at all. What makes
+	// it confirmation-worthy is the direction the others do not cover: the code on the far side is not
+	// this program's, and after a load it is running until something stops it. The gate is the same as
+	// scanner's `run tool` — the request names an allowlist key, never a path — so this class marks
+	// "the operator already authorised this binary; a caller still has to mean it".
+	riskExecute riskClass = "execute"
 )
 
 // route is one registered pattern and what it accepts.
@@ -104,7 +115,7 @@ type route struct {
 }
 
 // manifest is every route this server registers. Keep it sorted by pattern; the test enforces that,
-// because a 51-entry map that is not sorted is a merge conflict generator.
+// because a map this size that is not sorted is a merge conflict generator.
 var manifest = map[string]route{
 	"/": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -217,6 +228,33 @@ var manifest = map[string]route{
 	"/api/exchanges/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "legacy alias for /api/exchange/ — kept because the Rust UI shipped against it",
+	},
+	"/api/extensions": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "every allowlisted plugin, the state breakdown across them, and the policy in force",
+	},
+	"/api/extensions/apis": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the JSON-RPC contract a plugin is written against, generated from the dispatched method set",
+	},
+	"/api/extensions/console": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "one plugin's output and error consoles, with what the bound dropped",
+	},
+	"/api/extensions/invoke": {
+		// riskExecute, not riskLocal: this runs a registration inside an operator-supplied process and
+		// hands it engagement data.
+		methods: []string{"POST"}, risk: riskExecute,
+		summary: "run one registration a loaded plugin declared: a context-menu item, a menu action, or an editor tab",
+	},
+	"/api/extensions/load": {
+		// The one route on this API that starts a process. See riskExecute.
+		methods: []string{"POST"}, risk: riskExecute,
+		summary: "start one allowlisted plugin as a child process and complete the JSON-RPC handshake",
+	},
+	"/api/extensions/unload": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "stop a running plugin: ask it to exit, then close its stdin, then kill it",
 	},
 	"/api/findings": {
 		methods: []string{"GET"}, risk: riskRead,
@@ -563,7 +601,7 @@ func Test_every_route_pattern_is_a_literal(t *testing.T) {
 	}
 }
 
-// Sorted, because an unsorted 51-entry literal is a merge-conflict generator: two areas appending
+// Sorted, because an unsorted literal of this size is a merge-conflict generator: two areas appending
 // their routes at the end of a map both touch the same line.
 func Test_the_manifest_is_sorted_by_pattern(t *testing.T) {
 	got := make([]string, 0, len(manifest))
@@ -686,6 +724,7 @@ func Test_every_route_declares_a_risk_class_and_a_summary(t *testing.T) {
 	valid := map[riskClass]bool{
 		riskRead: true, riskLocal: true, riskEgress: true, riskAttack: true,
 		riskScope: true, riskCredential: true, riskAsset: true, riskDestructive: true,
+		riskExecute: true,
 	}
 	for pattern, spec := range manifest {
 		if !valid[spec.risk] {
@@ -711,7 +750,7 @@ func Test_every_route_declares_a_risk_class_and_a_summary(t *testing.T) {
 // of the confirmation-worthy list — the count is stated, and changing it is a deliberate edit with a
 // reason, not a side effect.
 func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testing.T) {
-	var attack, scope, credential, destructive []string
+	var attack, scope, credential, destructive, execute []string
 	for pattern, spec := range manifest {
 		switch spec.risk {
 		case riskAttack:
@@ -722,12 +761,15 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 			credential = append(credential, pattern)
 		case riskDestructive:
 			destructive = append(destructive, pattern)
+		case riskExecute:
+			execute = append(execute, pattern)
 		}
 	}
 	sort.Strings(attack)
 	sort.Strings(scope)
 	sort.Strings(credential)
 	sort.Strings(destructive)
+	sort.Strings(execute)
 
 	wantAttack := []string{
 		"/api/audit/", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
@@ -772,4 +814,8 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	equal("scope", scope, wantScope)
 	equal("credential", credential, wantCredential)
 	equal("destructive", destructive, []string{"/api/tools/log"})
+	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
+	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
+	// something new can reach exec, which is a decision to make on purpose.
+	equal("execute", execute, []string{"/api/extensions/invoke", "/api/extensions/load"})
 }
