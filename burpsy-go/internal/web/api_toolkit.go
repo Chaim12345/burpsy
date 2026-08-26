@@ -556,7 +556,34 @@ type matchReplaceGetResp struct {
 	Config           matchReplaceSetSpec `json:"config"`
 }
 
+// matchReplaceTargetNames is the accepted rule_type vocabulary, in the engine's own
+// declaration order. It is the single list both directions use: targetToCategory refuses
+// anything outside it, and the error names it so a caller learns the vocabulary from the
+// rejection rather than from the source.
+var matchReplaceTargetNames = []string{
+	"request_header",
+	"request_body",
+	"request_first_line",
+	"request_param_name",
+	"request_param_value",
+	"response_header",
+	"response_body",
+}
+
 // targetToCategory maps the UI's rule_type to the engine's Target.
+//
+// # Why the unknown case is an error and not a default
+//
+// It used to return `0, nil`, and both call sites discarded the error with `target, _ :=`.
+// `matchreplace.Target` is an iota enum whose zero value is TargetRequestHeader, so a
+// misspelled or unsupported rule_type did not fail — it silently produced a rule that
+// rewrote **request headers on live traffic**. The operator asked to rewrite one thing and
+// got a rule against another, with a 200 and a `{"compiled":N}` that counted it as accepted.
+//
+// That is the exact failure mode this project is built against, and it was worse than an
+// ordinary tolerant-parser bug because the affected surface is the proxy: the wrong answer
+// was applied to real requests, not merely displayed. A rule the engine cannot express is
+// now a 400 that names what is accepted.
 func targetToCategory(ruleType string) (matchreplace.Target, error) {
 	switch ruleType {
 	case "request_first_line":
@@ -565,12 +592,18 @@ func targetToCategory(ruleType string) (matchreplace.Target, error) {
 		return matchreplace.TargetRequestHeader, nil
 	case "request_body":
 		return matchreplace.TargetRequestBody, nil
+	case "request_param_name":
+		return matchreplace.TargetRequestParamName, nil
+	case "request_param_value":
+		return matchreplace.TargetRequestParamValue, nil
 	case "response_header":
 		return matchreplace.TargetResponseHeader, nil
 	case "response_body":
 		return matchreplace.TargetResponseBody, nil
+	case "":
+		return 0, fmt.Errorf("rule_type is required; accepted values are %s", strings.Join(matchReplaceTargetNames, ", "))
 	default:
-		return 0, nil
+		return 0, fmt.Errorf("unknown rule_type %q; accepted values are %s", ruleType, strings.Join(matchReplaceTargetNames, ", "))
 	}
 }
 
@@ -617,8 +650,15 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rules := make([]*matchreplace.Rule, 0, len(set.Rules))
-	for _, spec := range set.Rules {
-		target, _ := targetToCategory(spec.RuleType)
+	for i, spec := range set.Rules {
+		// Rejected before any rule is installed, and the index is named: this is a
+		// whole-list PUT, so a rule the engine cannot express must leave the live set
+		// untouched rather than replacing it with a partially-correct one.
+		target, err := targetToCategory(spec.RuleType)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Rule %d: %s", i, err.Error()), http.StatusBadRequest)
+			return
+		}
 		cat := matchreplace.CategoryLiteral
 		if spec.Category == "regex" {
 			cat = matchreplace.CategoryRegex
@@ -638,6 +678,19 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]int{"compiled": len(rules)})
 }
 
+// matchReplaceTargetName is targetToCategory's inverse, and must stay total over the
+// engine's enum.
+//
+// TargetRequestParamName and TargetRequestParamValue were missing and fell through to a
+// `return "request_body"` default, so a param rule read back as a body rule. Combined with
+// PUT's old coercion that made the round trip actively destructive: GET a param rule, PUT it
+// back unchanged, and it became a body rule against live traffic. Both are named now.
+//
+// The default no longer guesses. An enum value with no wire name is a build where this
+// function was not updated alongside the engine, and answering "request_body" would let that
+// omission reach the operator disguised as a real rule; the string says what happened
+// instead, and the round-trip test in api_toolkit_test.go asserts every declared Target maps
+// to a name that targetToCategory accepts back.
 func matchReplaceTargetName(t matchreplace.Target) string {
 	switch t {
 	case matchreplace.TargetRequestFirstLine:
@@ -646,12 +699,16 @@ func matchReplaceTargetName(t matchreplace.Target) string {
 		return "request_header"
 	case matchreplace.TargetRequestBody:
 		return "request_body"
+	case matchreplace.TargetRequestParamName:
+		return "request_param_name"
+	case matchreplace.TargetRequestParamValue:
+		return "request_param_value"
 	case matchreplace.TargetResponseHeader:
 		return "response_header"
 	case matchreplace.TargetResponseBody:
 		return "response_body"
 	default:
-		return "request_body"
+		return fmt.Sprintf("unrecognised_target_%d", int(t))
 	}
 }
 
@@ -683,8 +740,15 @@ func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	rules := make([]*matchreplace.Rule, 0, len(req.DraftRules))
-	for _, spec := range req.DraftRules {
-		target, _ := targetToCategory(spec.RuleType)
+	for i, spec := range req.DraftRules {
+		// The dry-run path refuses the same input the live path refuses. If it coerced
+		// where the live path rejects, the preview would be a demonstration of behaviour
+		// the operator can never actually install — the one thing a dry run must not do.
+		target, err := targetToCategory(spec.RuleType)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Draft rule %d: %s", i, err.Error()), http.StatusBadRequest)
+			return
+		}
 		cat := matchreplace.CategoryLiteral
 		if spec.Category == "regex" {
 			cat = matchreplace.CategoryRegex

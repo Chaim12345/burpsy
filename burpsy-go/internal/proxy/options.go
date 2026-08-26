@@ -135,6 +135,21 @@ type Counters struct {
 	// change to the framing the origin chose, and an operator comparing burpsy's
 	// history against a packet capture should be able to see that it happened.
 	Dechunked uint64 `json:"dechunked"`
+	// ModifiedUnrecorded is the subset of Modified that scope kept out of history:
+	// the rules rewrote the bytes the client received, and no exchange exists to
+	// show it.
+	//
+	// It exists because without it Modified is unreconcilable. The rules run on all
+	// traffic through the listener — that is what a listener-level rule means, and it
+	// is the same ordering applyRequestRules already uses so an out-of-scope forward
+	// sends the bytes the recorded path would — but only in-scope exchanges are
+	// stored. So an operator reading "responses_modified: 40" could search all of
+	// history, find four modified responses, and have no way to learn whether the
+	// other thirty-six were a counter bug or a scope decision. This says which.
+	//
+	// Modified - ModifiedUnrecorded is the number findable in history, by
+	// construction.
+	ModifiedUnrecorded uint64 `json:"responses_modified_unrecorded"`
 }
 
 // Options is the live option set. Safe for concurrent use: the proxy reads it once
@@ -154,6 +169,7 @@ type Options struct {
 	relayedHTTP2           atomic.Uint64
 	acceptEncodingStripped atomic.Uint64
 	dechunked              atomic.Uint64
+	modifiedUnrecorded     atomic.Uint64
 }
 
 // NewOptions returns an option set with every rule off.
@@ -228,7 +244,23 @@ func (o *Options) Counters() Counters {
 		RelayedHTTP2:           o.relayedHTTP2.Load(),
 		AcceptEncodingStripped: o.acceptEncodingStripped.Load(),
 		Dechunked:              o.dechunked.Load(),
+		ModifiedUnrecorded:     o.modifiedUnrecorded.Load(),
 	}
+}
+
+// NoteUnrecordedModification records that one response the rules rewrote will not appear
+// in history, because scope excluded the exchange.
+//
+// Called by the proxy rather than inferred inside ApplyResponse, because ApplyResponse is
+// handed bytes and nothing else: whether the exchange that owns them gets stored is a
+// scope decision made by the caller, and the option set has no way to see it. The caller
+// only calls this when the bytes actually changed, so the counter stays a subset of
+// Modified rather than a count of out-of-scope traffic.
+func (o *Options) NoteUnrecordedModification() {
+	if o == nil {
+		return
+	}
+	o.modifiedUnrecorded.Add(1)
 }
 
 // NoteRelayedHTTP2 records that one HTTP/2 response went past without the response

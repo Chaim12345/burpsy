@@ -935,7 +935,18 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// a Match & Replace rule is a pattern the operator wrote against the origin's
 	// own bytes, and running "remove all JavaScript" first would delete the text
 	// their rule was written to find. See applyResponseRules.
-	responseData = s.applyResponseRules(responseData)
+	//
+	// Before the scope check, deliberately and unchanged: these are listener-level
+	// rules, so scope decides what is retained and never what is rewritten. What is
+	// new is that an out-of-scope rewrite is now *counted* as unrecorded — this
+	// function has always rewritten out-of-scope HTTPS responses and then skipped the
+	// record below, which left Counters.Modified including responses no history search
+	// could ever turn up. See applyResponseRulesUnrecorded.
+	if inScope {
+		responseData = s.applyResponseRules(responseData)
+	} else {
+		responseData = s.applyResponseRulesUnrecorded(responseData)
+	}
 
 	// Intercept: hold the response before it reaches the client.
 	var notes *string
@@ -1037,6 +1048,11 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 		Protocol:  core.ProtocolHTTP1,
 		StartedMs: uint64(time.Now().UnixMilli()),
 		Source:    core.SourceProxy,
+		// Mime is deliberately left empty, and this is the one site where that is not a degraded
+		// answer. A blind tunnel has no response bytes at all — that is the whole point of the row, as
+		// the comment above explains — so there is no Content-Type to read and nothing to derive one
+		// from. It is also the row with no Response, so a consumer can tell this "" ("nothing came
+		// back") from a response that declared no type: see core.Exchange.Mime.
 	}
 	s.config.store.AddExchange(exchange)
 
@@ -1285,6 +1301,26 @@ func (s *Server) applyResponseRules(responseData []byte) []byte {
 	return s.config.options.ApplyResponse(responseData)
 }
 
+// applyResponseRulesUnrecorded is applyResponseRules for a response whose exchange scope
+// will keep out of history.
+//
+// The rules still run — see forwardOnly for why that is the point rather than an oversight
+// — but a rewrite that leaves no trace in history would make Counters.Modified a number the
+// operator cannot reconcile against anything they can look at. So the one thing this adds is
+// the note: the rewrite happened, and here is the reason you will not find it.
+//
+// The comparison is on the slice header and contents both, via bytes.Equal, because
+// ApplyResponse returns its input unchanged when no rule matched — reference equality would
+// be the cheaper test but would silently stop counting the moment ApplyResponse started
+// returning a copy.
+func (s *Server) applyResponseRulesUnrecorded(responseData []byte) []byte {
+	out := s.config.options.ApplyResponse(responseData)
+	if !bytes.Equal(responseData, out) {
+		s.config.options.NoteUnrecordedModification()
+	}
+	return out
+}
+
 // applyRequestRules runs the request-direction options over one outgoing request.
 //
 // Called in the same slot as the WebSocket extension strip — after intercept, before
@@ -1503,13 +1539,31 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 		if err != nil {
 			return
 		}
-		clientConn.Write(append(head, body...))
+		clientConn.Write(s.applyResponseRulesUnrecorded(append(head, body...)))
 		return
 	}
 
 	// Copy exactly one response back; keep-alive connections never EOF.
+	//
+	// The response modification rules run here too, and that is the fix for a real
+	// asymmetry rather than a nicety. handleTLSResponse has always applied them before
+	// its own `if inScope` check, so an out-of-scope HTTPS response was rewritten; this
+	// path returned early and wrote the origin's bytes through untouched, so an
+	// out-of-scope plaintext response was not. Same option, same scope verdict, opposite
+	// behaviour decided by whether the destination happened to use TLS.
+	//
+	// The direction of the fix is set by what these rules are. "Remove all JavaScript"
+	// and "remove <object> tags" are defensive — an operator turns them on to stop
+	// content reaching their browser — and a defence that silently lapses for part of the
+	// traffic is worse than one that is off, because the panel says it is on. It is also
+	// what applyRequestRules already documents for the request direction: rules run
+	// before the scope check so an out-of-scope forward sends exactly the bytes the
+	// recorded path would. Scope decides what is *retained*, never what is *rewritten*.
+	//
+	// Unrecorded, hence the counter: nothing here is stored, so the rewrite is real but
+	// invisible in history, and Counters.ModifiedUnrecorded is what makes it accountable.
 	if resp, err := readHTTPResponse(upstreamConn); err == nil {
-		clientConn.Write(resp)
+		clientConn.Write(s.applyResponseRulesUnrecorded(resp))
 	}
 }
 
