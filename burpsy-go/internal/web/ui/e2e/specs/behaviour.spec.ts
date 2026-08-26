@@ -651,6 +651,11 @@ test.describe("the editable Inspector — Unit 14", () => {
     // in `finally` no matter how this test ends — leaving it on would hang every later
     // test's traffic behind a held message nobody forwards.
     await page.request.post("/api/intercept/enable", { data: { enabled: true } });
+    // The master switch alone holds NOTHING. intercept.NewEngine() leaves both direction
+    // lists zero-valued, so List.Active is false, and a list that is off holds no messages
+    // regardless of the master switch (internal/intercept/intercept.go:151-161). Activating
+    // the request list with no rules is the "unconditional" state -- hold everything inbound.
+    await page.request.put("/api/intercept/rules/requests", { data: { active: true, rules: [] } });
     let inFlight: Promise<string> | null = null;
     try {
       await gotoRoute(page, route("intercept"));
@@ -680,6 +685,7 @@ test.describe("the editable Inspector — Unit 14", () => {
       expect(body).not.toContain("/held-original");
     } finally {
       await page.request.post("/api/intercept/enable", { data: { enabled: false } });
+      await page.request.put("/api/intercept/rules/requests", { data: { active: false, rules: [] } });
       await page.request.post("/api/intercept/drop-all", { data: {} }).catch(() => null);
       // A request still parked in the proxy would keep its socket open into teardown.
       if (inFlight) await inFlight.catch(() => null);
