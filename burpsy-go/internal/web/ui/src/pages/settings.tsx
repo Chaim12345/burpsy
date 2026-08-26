@@ -1,9 +1,11 @@
-import { useState } from "react";
-import { Download, Plus, Radar, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Download, Plus, Radar, RotateCcw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import { useScannerConfig, useSaveScannerConfig, useStats } from "../lib/data";
 import { useScannerConfigs } from "../lib/data.attack";
+import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
+import type { HostOverride, NetworkPatch, NetworkSettings, RedirectMode, ResolutionPolicy } from "../lib/data.network";
 import { useCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
 import { SHORTCUT_GROUPS } from "../lib/shortcuts";
@@ -700,6 +702,423 @@ function ScannerSettingsSection(): JSX.Element {
   );
 }
 
+// Burp's Settings → Network, as one section: hostname resolution, the DNS lookup policy, the three
+// timeouts, the redirect policy, 100-continue and open-ended responses.
+//
+// One draft over the whole document with one Save, rather than a control that PUTs on every keystroke.
+// The reason is the server's own refusal rules: connect_ms must not exceed total_ms, and a resolution
+// override needs a host AND an address before it can validate. Saving per field would make an operator
+// raising both timeouts hit a refusal halfway through a legal edit, and would refuse a half-typed
+// override row on every character. So the draft is local until Save, and Save sends only the sections
+// that actually changed.
+function NetworkSection(): JSX.Element {
+  const { data, error, isFetching, isLoading, refetch } = useNetworkSettings();
+  const save = useSaveNetworkSettings();
+
+  const [draft, setDraft] = useState<NetworkSettings | null>(null);
+  /** The server state the draft was adopted from; the dirty check compares against it. */
+  const [baseline, setBaseline] = useState("");
+  const [newHost, setNewHost] = useState("");
+  const [newAddress, setNewAddress] = useState("");
+
+  const dirty = draft !== null && JSON.stringify(draft) !== baseline;
+
+  // Adopt server state only while the operator has nothing unsaved, the same rule matchreplace.tsx
+  // follows: a background refetch must never discard edits that are not yet persisted.
+  useEffect(() => {
+    if (!data) return;
+    // The nulls the wire uses for "no rows" become arrays here, so every control below can treat the
+    // two lists the same way. Normalising on adoption also keeps the dirty check honest — comparing a
+    // draft holding [] against a baseline holding null would report unsaved changes on a fresh load.
+    const normalised: NetworkSettings = {
+      ...data.settings,
+      resolution: { ...data.settings.resolution, overrides: data.settings.resolution.overrides ?? [] },
+      streaming: { ...data.settings.streaming, hosts: data.settings.streaming.hosts ?? [] },
+    };
+    const next = JSON.stringify(normalised);
+    if (next === baseline) return;
+    if (draft !== null && JSON.stringify(draft) !== baseline) return;
+    setDraft(normalised);
+    setBaseline(next);
+  }, [data, baseline, draft]);
+
+  const overrides = draft?.resolution.overrides ?? [];
+  const streamingHosts = draft?.streaming.hosts ?? [];
+
+  const patchSection = <S extends keyof NetworkSettings>(section: S, changes: Partial<NetworkSettings[S]>) =>
+    setDraft((current) => (current === null ? current : { ...current, [section]: { ...current[section], ...changes } }));
+
+  const setOverrides = (next: HostOverride[]) => patchSection("resolution", { overrides: next });
+
+  const addOverride = () => {
+    const host = newHost.trim();
+    const address = newAddress.trim();
+    if (!host || !address) return;
+    setOverrides([...overrides, { host: host.toLowerCase(), address, enabled: true }]);
+    setNewHost("");
+    setNewAddress("");
+  };
+
+  const onRevert = () => {
+    if (!baseline) return;
+    setDraft(JSON.parse(baseline) as NetworkSettings);
+  };
+
+  // Only the sections that changed are sent. A full-document PUT would work, but it would also
+  // overwrite a section another tab had just edited with whatever this page last read — the partial
+  // patch is what makes two panels on one server safe.
+  const onSave = () => {
+    if (draft === null || !baseline) return;
+    const base = JSON.parse(baseline) as NetworkSettings;
+    const patch: NetworkPatch = {};
+    for (const section of Object.keys(draft) as (keyof NetworkSettings)[]) {
+      if (JSON.stringify(draft[section]) !== JSON.stringify(base[section])) {
+        patch[section] = draft[section] as never;
+      }
+    }
+    if (Object.keys(patch).length === 0) return;
+    save.mutate(patch, {
+      onSuccess: () => toast.success("Network settings applied"),
+      // The server's refusals name the field and the limit. Passed through rather than replaced with
+      // a generic message, because the message is the only thing that says what to change.
+      onError: (failure: unknown) =>
+        toast.error(failure instanceof Error ? failure.message : "Network settings were refused"),
+    });
+  };
+
+  const following = draft !== null && draft.redirects.mode !== "never";
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Network"
+        detail="Hostname resolution, DNS lookup, timeouts, redirections and open-ended responses. These bind every request this process sends — Repeater, Intruder, scanner probes and the crawler alike."
+        actions={
+          <>
+            {dirty ? <Badge tone="warn">unsaved changes</Badge> : <Badge tone="good">saved</Badge>}
+            <Button variant="outline" size="small" onClick={onRevert} disabled={!dirty}>
+              <RotateCcw size={13} />
+              Revert
+            </Button>
+            <Button size="small" onClick={onSave} disabled={!dirty || save.isPending}>
+              <Save size={13} />
+              Save
+            </Button>
+            <RefreshButton onClick={() => void refetch()} loading={isFetching} />
+          </>
+        }
+      />
+      {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+      {isLoading ? <LoadingPanel label="Loading network settings" /> : null}
+
+      {draft && data ? (
+        <>
+          <h4>Hostname resolution</h4>
+          <div className="notice">
+            <span>
+              An override sends requests for a host to an address of your choosing. The TLS SNI and the{" "}
+              <code>Host</code> header keep the hostname, so this reaches a named vhost at an address DNS
+              does not point at — a pre-cutover deployment, or a service reachable only by IP. The address
+              must be an IP: an override replaces the lookup, so it has to end at an address.
+            </span>
+          </div>
+
+          <Toolbar>
+            <Field label="Host" hint="Exact name, no wildcard">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={newHost}
+                  onChange={(event) => setNewHost(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") addOverride();
+                  }}
+                  placeholder="staging.example.test"
+                  style={{ maxWidth: "var(--w-sm)" }}
+                />
+              )}
+            </Field>
+            <Field label="Address" hint="IPv4 or IPv6 literal">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={newAddress}
+                  onChange={(event) => setNewAddress(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") addOverride();
+                  }}
+                  placeholder="10.0.0.7"
+                  style={{ maxWidth: "var(--w-sm)" }}
+                />
+              )}
+            </Field>
+            <Button disabled={!newHost.trim() || !newAddress.trim()} onClick={addOverride}>
+              <Plus size={13} />
+              Add override
+            </Button>
+          </Toolbar>
+
+          {overrides.length === 0 ? (
+            <Empty
+              title="No resolution overrides"
+              detail="Every hostname is resolved by the lookup policy below. Add an override to send one host somewhere DNS does not point."
+            />
+          ) : (
+            <SimpleTable headers={["On", "Host", "Address", ""]}>
+              {overrides.map((entry, index) => (
+                <tr key={`${entry.host}-${index}`}>
+                  <td>
+                    <Switch
+                      checked={entry.enabled}
+                      label={`Apply the override for ${entry.host}`}
+                      onCheckedChange={(on) =>
+                        setOverrides(overrides.map((row, i) => (i === index ? { ...row, enabled: on } : row)))
+                      }
+                    />
+                  </td>
+                  <td>
+                    <code>{entry.host}</code>
+                  </td>
+                  <td>
+                    <code>{entry.address}</code>
+                  </td>
+                  <td>
+                    <IconButton
+                      label={`Remove the override for ${entry.host}`}
+                      size="small"
+                      onClick={() => setOverrides(overrides.filter((_, i) => i !== index))}
+                    >
+                      <Trash2 size={13} />
+                    </IconButton>
+                  </td>
+                </tr>
+              ))}
+            </SimpleTable>
+          )}
+
+          <h4>DNS lookup</h4>
+          <Toolbar>
+            <Field label="Lookup policy" hint="Where a hostname's address comes from">
+              {(id) => (
+                <Select
+                  id={id}
+                  value={draft.resolution.policy}
+                  onChange={(event) => patchSection("resolution", { policy: event.target.value as ResolutionPolicy })}
+                  style={{ maxWidth: "var(--w-sm)" }}
+                >
+                  <option value="system">System resolver</option>
+                  <option value="resolver">A resolver I name</option>
+                </Select>
+              )}
+            </Field>
+            <Field label="Resolver address" hint="Bare address takes port 53">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={draft.resolution.resolver}
+                  disabled={draft.resolution.policy !== "resolver"}
+                  onChange={(event) => patchSection("resolution", { resolver: event.target.value })}
+                  placeholder="10.0.0.53"
+                  style={{ maxWidth: "var(--w-sm)" }}
+                />
+              )}
+            </Field>
+            <Field label="Lookup timeout (ms)">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={0}
+                  value={draft.resolution.timeout_ms}
+                  onChange={(event) => patchSection("resolution", { timeout_ms: Number(event.target.value) })}
+                  style={{ maxWidth: "var(--w-xs)" }}
+                />
+              )}
+            </Field>
+          </Toolbar>
+          <p className="field-hint">
+            A named resolver has to be an IP address: a resolver reachable only by name would need a lookup
+            of its own, which is the thing being configured.
+          </p>
+
+          <h4>Timeouts</h4>
+          <div className="notice">
+            <span>
+              Three bounds because they fail differently. A connect timeout means the host is not there, a
+              read timeout means it is there and silent, and a total timeout means the whole exchange
+              overran. Zero means no bound of its own. The connect and read bounds must not exceed the
+              total, or the total would expire first and neither would ever apply.
+            </span>
+          </div>
+          <Toolbar>
+            <Field label="Connect (ms)" hint="TCP connect and TLS handshake">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={0}
+                  value={draft.timeouts.connect_ms}
+                  onChange={(event) => patchSection("timeouts", { connect_ms: Number(event.target.value) })}
+                  style={{ maxWidth: "var(--w-xs)" }}
+                />
+              )}
+            </Field>
+            <Field label="Read (ms)" hint="Wait for a response to begin">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={0}
+                  value={draft.timeouts.read_ms}
+                  onChange={(event) => patchSection("timeouts", { read_ms: Number(event.target.value) })}
+                  style={{ maxWidth: "var(--w-xs)" }}
+                />
+              )}
+            </Field>
+            <Field label="Total (ms)" hint="Dial through last body byte">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={0}
+                  value={draft.timeouts.total_ms}
+                  onChange={(event) => patchSection("timeouts", { total_ms: Number(event.target.value) })}
+                  style={{ maxWidth: "var(--w-xs)" }}
+                />
+              )}
+            </Field>
+          </Toolbar>
+
+          <h4>Redirections</h4>
+          <div className="notice">
+            <span>
+              Off by default, and that is a design position rather than a gap. A 30x <em>is</em> the
+              response: auditing a login flow needs the redirect and its <code>Set-Cookie</code>, not the
+              page three hops later. Following also multiplies traffic at the client's expense and hides
+              findings, because a redirect to an error page reads as a clean 200. Every hop that is
+              followed is re-authorised against scope on the bytes about to be written, so a hop the scope
+              refuses is refused rather than sent — including under <strong>Always</strong>, which means
+              "apply no extra filter of my own", never "send what scope forbids".
+            </span>
+          </div>
+          <Toolbar>
+            <Field label="Follow redirects" hint="Burp's four modes">
+              {(id) => (
+                <Select
+                  id={id}
+                  value={draft.redirects.mode}
+                  onChange={(event) => patchSection("redirects", { mode: event.target.value as RedirectMode })}
+                  style={{ maxWidth: "var(--w-sm)" }}
+                >
+                  <option value="never">Never</option>
+                  <option value="on_site">On-site only</option>
+                  <option value="in_scope">In-scope only</option>
+                  <option value="always">Always (still scope-checked)</option>
+                </Select>
+              )}
+            </Field>
+            <Field label="Max hops" hint={`Bounded to ${data.accepted.max_redirect_hops}`}>
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={1}
+                  max={data.accepted.max_redirect_hops}
+                  value={draft.redirects.max_hops}
+                  disabled={!following}
+                  onChange={(event) => patchSection("redirects", { max_hops: Number(event.target.value) })}
+                  style={{ maxWidth: "var(--w-xs)" }}
+                />
+              )}
+            </Field>
+          </Toolbar>
+
+          <h4>100-continue</h4>
+          <div className="stack">
+            <Switch
+              checked={draft.continue.understand_100_continue}
+              label="Read past an interim 1xx to the final response"
+              onCheckedChange={(on) => patchSection("continue", { understand_100_continue: on })}
+            />
+            <Switch
+              checked={draft.continue.remove_expect_header}
+              label="Strip Expect: 100-continue from outbound requests"
+              onCheckedChange={(on) => patchSection("continue", { remove_expect_header: on })}
+            />
+            <Field label="Expect-continue timeout (ms)" hint="How long to wait for a 100 before sending the body">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={0}
+                  value={draft.continue.expect_continue_timeout_ms}
+                  onChange={(event) =>
+                    patchSection("continue", { expect_continue_timeout_ms: Number(event.target.value) })
+                  }
+                  style={{ maxWidth: "var(--w-xs)" }}
+                />
+              )}
+            </Field>
+          </div>
+          <p className="field-hint">
+            A <code>100 Continue</code> is not the response, it is the peer saying "go on" — so reading past
+            it is on by default. A <code>101</code> is never skipped: it is an upgrade, and the bytes after
+            it belong to another protocol. Stripping the header only affects the typed send path; raw bytes
+            are sent verbatim, so edit the bytes to change them.
+          </p>
+
+          <h4>Open-ended responses</h4>
+          <div className="notice">
+            <span>
+              Hosts whose responses do not end — an event stream, a long poll. Declaring one bounds its read
+              by the timeout below and returns what arrived; without the declaration it is
+              indistinguishable from a hung target, and the whole response comes back as an error. Patterns
+              match a hostname exactly or as <code>*.example.com</code>, which also matches the bare domain.
+            </span>
+          </div>
+          <Toolbar>
+            <Field label="Streaming host pattern">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={draft.streaming.hosts?.join(", ") ?? ""}
+                  onChange={(event) =>
+                    patchSection("streaming", {
+                      hosts: event.target.value
+                        .split(",")
+                        .map((entry) => entry.trim())
+                        .filter((entry) => entry !== ""),
+                    })
+                  }
+                  placeholder="*.events.example.test, live.example.test"
+                  style={{ maxWidth: "var(--w-lg)" }}
+                />
+              )}
+            </Field>
+            <Field label="Open-ended timeout (ms)">
+              {(id) => (
+                <Input
+                  id={id}
+                  type="number"
+                  min={0}
+                  value={draft.streaming.timeout_ms}
+                  onChange={(event) => patchSection("streaming", { timeout_ms: Number(event.target.value) })}
+                  style={{ maxWidth: "var(--w-xs)" }}
+                />
+              )}
+            </Field>
+          </Toolbar>
+          <p className="field-hint">
+            {streamingHosts.length === 0
+              ? "No host is declared open-ended. Every response is read under the timeouts above."
+              : `${streamingHosts.length} pattern${streamingHosts.length === 1 ? "" : "s"} declared open-ended.`}
+          </p>
+        </>
+      ) : null}
+    </Card>
+  );
+}
+
 function HotkeysSection(): JSX.Element {
   return (
     <Card>
@@ -883,6 +1302,7 @@ export function SettingsPage(): JSX.Element {
       <ProxySettingsSection />
       <TlsPassthroughSection />
       <ProtocolSection />
+      <NetworkSection />
       <AuditChecksSection />
       <ScannerSettingsSection />
       <DomEngineSection />

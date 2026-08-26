@@ -19,7 +19,10 @@ never reached on refusal.
 
 | File | Description |
 |------|-------------|
-| `sender.go` | `Sender`, `SenderConfig`, `NewSender` — the raw transport over `net/http`. Redirects are never followed and there is no knob to re-enable them; `ProxyURL` is explicit, never `$HTTP_PROXY` |
+| `sender.go` | `Sender`, `SenderConfig`, `NewSender` — the raw transport over `net/http`. The transport never follows 30x and there is still no knob to make it; `ProxyURL` is explicit, never `$HTTP_PROXY`. `Network`/`ApplyNetwork` are the live settings surface, and `mu` guards `client`/`config`/`net` as one decision |
+| `network.go` | `NetworkSettings` — the one named surface for resolution overrides, DNS lookup policy, the three timeouts, redirect policy, 100-continue and open-ended responses. `Validate` refuses; `Normalise` is what both the API and persistence read through |
+| `read.go` | `readResponse` — reads one *final* response: skips interim 1xx (never 101), and for a declared streaming host returns what arrived instead of the deadline error |
+| `redirect.go` | `FollowRedirects` — the opt-in redirect follower. Every hop is a fresh `AuthorisedSender` bound to the new authority |
 | `authorised.go` | `AuthorisedSender`, `ScopeChecker`, `AuthorisedResult`. `Send`(raw) and `SendRequest`(*Request) both run `AuthoriseRaw` on the request line before the dial and feed the same `Sent`/`Refused` counters |
 | `protocol.go` | ALPN/protocol negotiation, downgrade and rewrite reporting, and the per-`Sender` `ProtocolCache`. `planH2` decides whether raw HTTP/1 bytes can be carried as HTTP/2 |
 | `pipeline.go` | `SendPipelined`, `SendKeepAlive`, `TimedRead` — HTTP/1.1-only single-socket sends for request-smuggling / desync probes. `dialOne` offers only HTTP/1.1 on TLS so h2 cannot silently turn a probe into a no-op |
@@ -37,9 +40,26 @@ never reached on refusal.
   readability and wrong-authority refusals; a request that cleared scope but failed at the transport
   is neither `Sent` nor `Refused` and is reported by the caller. Counters are `atomic.Int64` so one
   `AuthorisedSender` is safe to share across concurrent callers (`TestConcurrentSendsDoNotLoseCounters`).
-- **Redirects: no knob, deliberately.** `NewSender`'s transport does not follow 30x and there is no
-  config field to switch it on — a follow inside the transport would dial the next hop with no scope
-  gate. A caller that wants the next hop builds a fresh `AuthorisedSender` bound to the new authority.
+- **Redirects: still no knob *in the transport*, and that is the load-bearing half.** `NewSender`'s
+  transport does not follow 30x and there is no config field to switch it on, because a follow inside
+  the transport would dial the next hop with no scope gate. What `redirect.go` adds is the opposite
+  construction, not a reversal: `AuthorisedSender.FollowRedirects` builds a fresh `AuthorisedSender`
+  bound to each new authority, so every hop is authorised on the same terms as a first request. There
+  is no path through it that reaches a socket without `AuthoriseRaw` — which is the only reason
+  following can be offered at all. It is off by default (`RedirectNever`), because a 30x *is* the
+  response: an operator auditing a login flow needs the redirect and its `Set-Cookie`, following
+  multiplies traffic at the client's expense, and a redirect to an error page reads as a clean 200.
+  `RedirectAlways` does **not** mean "unauthorised" — it means "apply no extra on-site or scope-shaped
+  filter of my own", and the scope still decides. `TestAnOutOfScopeRedirectHopIsRefusedRatherThanFollowed`
+  pins that, counting arrivals on a second listener rather than trusting a struct field.
+- **Network settings are live and shared.** `ApplyNetwork` validates and applies as a unit — never half
+  a document — and rebuilds the typed path's `http.Client`, because `http.Transport` reads its timeouts
+  when a connection is established rather than per request. `cmd/burpsy` builds **one** `Sender` for the
+  scanner and the web server: two would mean a resolution override an operator typed applied to Repeater
+  and not to audit probes. The hostname-resolution table changes only the **address** dialled; SNI and
+  the `Host` header keep the operator's name, which is why `alpn.Dialer.Dial` takes `serverName` and
+  `addr` separately. `/api/network/settings` is the endpoint, and it persists via `internal/persist`'s
+  `settings` table under `network.settings`.
 - **`ProxyURL` is explicit egress only.** The transport does not carry `http.ProxyFromEnvironment`;
   an ambient `$HTTP_PROXY` must not silently re-route attack traffic through an un-scoped third party.
 - **Pipelining is HTTP/1.1 only, on purpose.** `dialOne` offers `alpn.EgressOffer(false)` because

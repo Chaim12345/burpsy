@@ -1,8 +1,11 @@
 package sender
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -74,12 +77,94 @@ type FollowResult struct {
 // FollowResult.Complete is false. A caller that ignores everything but Final still gets the response
 // this sender actually received, never a fabricated one.
 func (a *AuthorisedSender) FollowRedirects(ctx context.Context, req *Request) (*FollowResult, error) {
-	settings := a.net.Network()
-	policy := settings.Redirects
+	target, err := effectiveTarget(req)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.SendRequest(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	result := &FollowResult{Sent: 1, Final: resp}
+	a.followChain(ctx, result, a, req, target, resp)
+	return result, nil
+}
 
-	current := a
-	next := req
-	result := &FollowResult{}
+// FollowRedirectsAfter follows the chain that begins at a response the caller already has.
+//
+// # Why the caller keeps its own first send
+//
+// Repeater's contract is that the bytes the operator typed are the bytes that go out, and its scope
+// gate is deliberately host-level because it does not parse the request line — the operator owns it.
+// An entry point that did the first send itself would have to choose one of those for every caller and
+// would quietly change the other. So this takes the request bytes and the response bytes of a send that
+// already happened, and decides only what comes next.
+//
+// Every hop it does send goes through a fresh AuthorisedSender bound to that hop's authority, so the
+// hops are gated on their rendered bytes even though the first request was not. That asymmetry is the
+// right way round: the first request is the operator's own, and a hop is a request a possibly-hostile
+// Location asked for.
+//
+// FollowResult.Sent counts the caller's send as the first, so it is the total this exchange put on the
+// wire rather than the number this function added. When the policy is RedirectNever, no hop is sent and
+// the result is one unfollowed hop naming the policy — which is what makes wiring this in safe.
+func (a *AuthorisedSender) FollowRedirectsAfter(ctx context.Context, raw, rawResp []byte) (*FollowResult, error) {
+	resp, err := responseFromRaw(rawResp)
+	if err != nil {
+		// The bytes came back but cannot be read as a response, so there is no status to decide from.
+		// Returned as an error rather than as a complete chain: the caller already holds the response it
+		// is going to show, and a silent "complete" here would claim this function looked and found
+		// nothing to follow when in fact it could not look.
+		return nil, fmt.Errorf("the response cannot be read well enough to decide a redirect from: %w", err)
+	}
+	result := &FollowResult{Sent: 1, Final: resp}
+
+	// Answered before the request bytes are parsed, because this runs on every send a caller makes and
+	// the overwhelming majority are not redirects. redirectLocation is the one place that decides what
+	// counts as one, so short-circuiting here reuses that decision rather than restating it.
+	if _, isRedirect := redirectLocation(resp); !isRedirect {
+		result.Complete = true
+		return result, nil
+	}
+
+	req, rerr := requestFromRaw(raw, a)
+	if rerr != nil {
+		if location, isRedirect := redirectLocation(resp); isRedirect {
+			result.Hops = append(result.Hops, RedirectHop{
+				From:     formatAuthority(a.host, a.port, a.tls),
+				Status:   resp.StatusCode,
+				Location: location,
+				Reason: "the request bytes cannot be read well enough to build the next hop from them: " +
+					rerr.Error(),
+			})
+			return result, nil
+		}
+		result.Complete = true
+		return result, nil
+	}
+	target, terr := effectiveTarget(req)
+	if terr != nil {
+		return nil, terr
+	}
+	a.followChain(ctx, result, a, req, target, resp)
+	return result, nil
+}
+
+// followChain is the hop loop both entry points share: it is handed the response to the request already
+// sent, and decides and performs every hop after it.
+//
+// Shared rather than duplicated because every rule in here is a security rule — the scope gate per hop,
+// the budget, the loop key, the credential drop — and two copies would be two places for one of them to
+// go missing. `current` and `next` describe the request that produced `resp`.
+func (a *AuthorisedSender) followChain(
+	ctx context.Context,
+	result *FollowResult,
+	current *AuthorisedSender,
+	next *Request,
+	target *url.URL,
+	resp *Response,
+) {
+	policy := a.net.Network().Redirects
 
 	// Where we have already been, so a chain that cycles is named as a loop rather than reported as a
 	// budget that ran out. Keyed on a canonical authority-and-path rather than on the URL string,
@@ -87,26 +172,14 @@ func (a *AuthorisedSender) FollowRedirects(ctx context.Context, req *Request) (*
 	// is still a loop — comparing the strings would miss exactly the cycle a hostile Location can build
 	// out of alternating spellings.
 	visited := make(map[string]struct{}, policy.MaxHops+1)
+	visited[visitKey(current.host, current.port, current.tls, target.RequestURI())] = struct{}{}
 
 	for {
-		target, err := effectiveTarget(next)
-		if err != nil {
-			return nil, err
-		}
 		from := absoluteURL(current, target)
-		visited[visitKey(current.host, current.port, current.tls, target.RequestURI())] = struct{}{}
-
-		resp, err := current.SendRequest(ctx, next)
-		if err != nil {
-			return nil, err
-		}
-		result.Sent++
-		result.Final = resp
-
 		location, isRedirect := redirectLocation(resp)
 		if !isRedirect {
 			result.Complete = true
-			return result, nil
+			return
 		}
 
 		hop := RedirectHop{From: from, Status: resp.StatusCode, Location: location}
@@ -115,25 +188,25 @@ func (a *AuthorisedSender) FollowRedirects(ctx context.Context, req *Request) (*
 			hop.Reason = fmt.Sprintf("the %d names no Location, so there is no next hop to send",
 				resp.StatusCode)
 			result.Hops = append(result.Hops, hop)
-			return result, nil
+			return
 		}
 		if policy.Mode == RedirectNever {
 			hop.Reason = "redirects.mode is \"never\", so the 30x is the response"
 			result.Hops = append(result.Hops, hop)
-			return result, nil
+			return
 		}
 		if len(result.Hops) >= policy.MaxHops {
 			hop.Reason = fmt.Sprintf("redirects.max_hops is %d and this chain has used them all",
 				policy.MaxHops)
 			result.Hops = append(result.Hops, hop)
-			return result, nil
+			return
 		}
 
 		candidate, candidateURL, err := redirectRequest(next, target, resp.StatusCode, location)
 		if err != nil {
 			hop.Reason = err.Error()
 			result.Hops = append(result.Hops, hop)
-			return result, nil
+			return
 		}
 		hop.To = candidateURL.String()
 
@@ -141,19 +214,19 @@ func (a *AuthorisedSender) FollowRedirects(ctx context.Context, req *Request) (*
 		if err != nil {
 			hop.Reason = err.Error()
 			result.Hops = append(result.Hops, hop)
-			return result, nil
+			return
 		}
 
 		if _, seen := visited[visitKey(nextHost, nextPort, nextTLS, candidateURL.RequestURI())]; seen {
 			hop.Reason = "this chain has already been to " + hop.To + ", so it is looping"
 			result.Hops = append(result.Hops, hop)
-			return result, nil
+			return
 		}
 
 		if reason := filterHop(policy.Mode, current, nextHost, nextPort, nextTLS); reason != "" {
 			hop.Reason = reason
 			result.Hops = append(result.Hops, hop)
-			return result, nil
+			return
 		}
 
 		// The authoritative gate for this hop. A fresh AuthorisedSender bound to the new authority,
@@ -171,18 +244,103 @@ func (a *AuthorisedSender) FollowRedirects(ctx context.Context, req *Request) (*
 			if serr := a.scope.AuthoriseRaw(nextHost, nextPort, nextTLS, raw); serr != nil {
 				hop.Reason = serr.Error()
 				result.Hops = append(result.Hops, hop)
-				// Counted as a refusal on the sender that would have sent it, so the chain's refusals
-				// show up in the same counters every other refused request does.
-				hopSender.refused.Add(1)
+				// Counted on the sender the caller holds, so the chain's refusals show up in the same
+				// counters every other refused request does. Not also on hopSender: that sender is
+				// discarded on this path, so incrementing it would record the refusal nowhere.
 				a.refused.Add(1)
-				return result, nil
+				return
 			}
 		}
 
+		// The hop is sent here rather than at the top of the loop so the loop is entered with a response
+		// already in hand — which is what lets a raw first send share this machinery.
+		hopResp, err := hopSender.SendRequest(ctx, candidate)
+		if err != nil {
+			// The hop cleared every gate and then failed at the transport. That is not a refusal and not
+			// a completed chain: Final stays the 30x that named it, and the reason says what happened.
+			hop.Reason = "the hop was authorised but could not be sent: " + err.Error()
+			result.Hops = append(result.Hops, hop)
+			return
+		}
 		hop.Followed = true
 		result.Hops = append(result.Hops, hop)
-		current, next = hopSender, candidate
+		result.Sent++
+		result.Final = hopResp
+
+		nextTarget, terr := effectiveTarget(candidate)
+		if terr != nil {
+			// Unreachable: candidate's URL was built by redirectRequest and already parsed by
+			// authorityOf above. Handled rather than ignored because the alternative is a nil deref on
+			// the next iteration.
+			return
+		}
+		visited[visitKey(nextHost, nextPort, nextTLS, nextTarget.RequestURI())] = struct{}{}
+		current, next, target, resp = hopSender, candidate, nextTarget, hopResp
 	}
+}
+
+// responseFromRaw parses raw response bytes into the view the redirect decision needs.
+//
+// http.ReadResponse rather than a hand-rolled split: the status line and header folding rules are
+// exactly where a hand-rolled parser gets a hostile response wrong, and this decides whether another
+// request is sent. Headers are flattened to the map sender.Response carries; a repeated header keeps
+// the first value, matching redirectLocation's own "first Location wins" reading.
+func responseFromRaw(raw []byte) (*Response, error) {
+	parsed, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(raw)), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer parsed.Body.Close()
+	headers := make(map[string]string, len(parsed.Header))
+	for name, values := range parsed.Header {
+		if len(values) > 0 {
+			headers[name] = values[0]
+		}
+	}
+	return &Response{
+		StatusCode: parsed.StatusCode,
+		Status:     parsed.Status,
+		Headers:    headers,
+		Version:    parsed.Proto,
+	}, nil
+}
+
+// requestFromRaw reads the request the operator's raw bytes describe, so a hop can be built from it.
+//
+// Only ever used to construct the *next* hop — the raw bytes themselves are sent verbatim by
+// FollowRedirectsRaw. The authority comes from the bound sender rather than from the bytes: a raw
+// request carries a Host header and an origin-form target, which together do not say whether the
+// connection was TLS or what port it used, and the sender is bound to the authority that answered.
+func requestFromRaw(raw []byte, a *AuthorisedSender) (*Request, error) {
+	parsed, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(raw)))
+	if err != nil {
+		return nil, err
+	}
+	defer parsed.Body.Close()
+	body, err := io.ReadAll(parsed.Body)
+	if err != nil {
+		return nil, err
+	}
+	scheme := "http"
+	if a.tls {
+		scheme = "https"
+	}
+	headers := make(map[string]string, len(parsed.Header))
+	for name, values := range parsed.Header {
+		if len(values) > 0 {
+			headers[name] = values[0]
+		}
+	}
+	return &Request{
+		Method:  parsed.Method,
+		URL:     scheme + "://" + hostPortFor(a.host, a.port, a.tls) + parsed.URL.RequestURI(),
+		Host:    a.host,
+		Port:    a.port,
+		TLS:     a.tls,
+		Path:    parsed.URL.RequestURI(),
+		Headers: headers,
+		Body:    body,
+	}, nil
 }
 
 // filterHop applies the policy arm that is not the scope check, returning the reason to stop or "".

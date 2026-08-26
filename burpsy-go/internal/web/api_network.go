@@ -1,0 +1,273 @@
+package web
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sort"
+
+	"github.com/burpsy-go/burpsy/internal/sender"
+	"go.uber.org/zap"
+)
+
+// ---- Network settings --------------------------------------------------------------------------
+//
+// Burp's Settings → Network, as one endpoint: hostname resolution, the DNS lookup policy, the three
+// timeouts, the redirect policy, 100-continue handling and open-ended responses.
+//
+// GET answers the whole live state. PUT is a partial patch over the nested document — a section the
+// body omits is untouched, a key a section omits is untouched — and an unknown key at either level is
+// refused by name. That refusal is the point rather than politeness: every key here decides where
+// bytes go or how long we wait for them, so a typo silently ignored would leave the operator reading
+// a panel that agrees with them and a sender that does not.
+//
+// The patch is validated in full and applied as one unit. sender.ApplyNetwork changes nothing on a
+// refusal, so a body with one bad value leaves the previous settings entirely in force; there is no
+// state in which half the document is live.
+
+// networkSettingsView is one answer: the live settings, plus what the endpoint will accept.
+//
+// `accepted` travels with the state for the same reason /api/proxy/options ships its key list — a
+// panel that hardcoded the enum arms would drift from the server the first time one was added, and
+// the refusal messages name these values, so the client can show them without guessing.
+type networkSettingsView struct {
+	Settings sender.NetworkSettings `json:"settings"`
+	Accepted networkAcceptedView    `json:"accepted"`
+}
+
+type networkAcceptedView struct {
+	ResolutionPolicies []string `json:"resolution_policies"`
+	RedirectModes      []string `json:"redirect_modes"`
+	MaxTimeoutMS       int      `json:"max_timeout_ms"`
+	MaxRedirectHops    int      `json:"max_redirect_hops"`
+	MaxHostOverrides   int      `json:"max_host_overrides"`
+	MaxStreamingHosts  int      `json:"max_streaming_hosts"`
+	// Keys is every patchable dotted key, sorted. The unknown-key refusal points at this list, so it
+	// has to be derived from the same table that decides the refusal rather than typed out beside it.
+	Keys []string `json:"keys"`
+}
+
+func networkAccepted() networkAcceptedView {
+	keys := make([]string, 0, 16)
+	for section, fields := range networkPatchFields {
+		for key := range fields {
+			keys = append(keys, section+"."+key)
+		}
+	}
+	sort.Strings(keys)
+	return networkAcceptedView{
+		ResolutionPolicies: []string{string(sender.ResolutionSystem), string(sender.ResolutionResolver)},
+		RedirectModes: []string{
+			string(sender.RedirectNever), string(sender.RedirectOnSite),
+			string(sender.RedirectInScope), string(sender.RedirectAlways),
+		},
+		MaxTimeoutMS:      sender.MaxTimeoutMS,
+		MaxRedirectHops:   sender.MaxRedirectHops,
+		MaxHostOverrides:  sender.MaxHostOverrides,
+		MaxStreamingHosts: sender.MaxStreamingHosts,
+		Keys:              keys,
+	}
+}
+
+// networkPatchFields is the whole writable surface, keyed section then field, exactly as the wire
+// spells them. A setting that is not in this table cannot be written, and its dotted name here is the
+// name a refusal uses — which is what keeps the error message and the accepted-key list from being two
+// independent claims about the same thing.
+//
+// Each applier decodes into the field it owns and returns a message naming what the key wants. The
+// value bounds are NOT checked here: sender.NetworkSettings.Validate owns them, and duplicating a
+// bound is how the two copies come to disagree. Only the shape — number, string, list — is decided at
+// this layer, because a JSON string where a number belongs cannot reach Validate at all.
+var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, json.RawMessage) error{
+	"resolution": {
+		"overrides": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			var out []sender.HostOverride
+			if err := strictUnmarshal(raw, &out); err != nil {
+				return fmt.Errorf("wants a list of {host, address, enabled} objects: %v", err)
+			}
+			n.Resolution.Overrides = out
+			return nil
+		},
+		"policy": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				return fmt.Errorf("wants a policy name as a string")
+			}
+			n.Resolution.Policy = sender.ResolutionPolicy(s)
+			return nil
+		},
+		"resolver": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchString(raw, &n.Resolution.Resolver)
+		},
+		"timeout_ms": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchInt(raw, &n.Resolution.TimeoutMS)
+		},
+	},
+	"timeouts": {
+		"connect_ms": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchInt(raw, &n.Timeouts.ConnectMS)
+		},
+		"read_ms":  func(n *sender.NetworkSettings, raw json.RawMessage) error { return patchInt(raw, &n.Timeouts.ReadMS) },
+		"total_ms": func(n *sender.NetworkSettings, raw json.RawMessage) error { return patchInt(raw, &n.Timeouts.TotalMS) },
+	},
+	"redirects": {
+		"mode": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				return fmt.Errorf("wants a mode name as a string")
+			}
+			n.Redirects.Mode = sender.RedirectMode(s)
+			return nil
+		},
+		"max_hops": func(n *sender.NetworkSettings, raw json.RawMessage) error { return patchInt(raw, &n.Redirects.MaxHops) },
+	},
+	"continue": {
+		"understand_100_continue": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.Continue.Understand100)
+		},
+		"remove_expect_header": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.Continue.RemoveExpect)
+		},
+		"expect_continue_timeout_ms": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchInt(raw, &n.Continue.ExpectTimeoutMS)
+		},
+	},
+	"streaming": {
+		"hosts": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			var out []string
+			if err := json.Unmarshal(raw, &out); err != nil {
+				return fmt.Errorf("wants a list of host patterns")
+			}
+			n.Streaming.Hosts = out
+			return nil
+		},
+		"timeout_ms": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchInt(raw, &n.Streaming.TimeoutMS)
+		},
+	},
+}
+
+func patchInt(raw json.RawMessage, into *int) error {
+	var n int
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return fmt.Errorf("wants a whole number of milliseconds")
+	}
+	*into = n
+	return nil
+}
+
+func patchBool(raw json.RawMessage, into *bool) error {
+	var b bool
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return fmt.Errorf("wants true or false")
+	}
+	*into = b
+	return nil
+}
+
+func patchString(raw json.RawMessage, into *string) error {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return fmt.Errorf("wants a string")
+	}
+	*into = s
+	return nil
+}
+
+// strictUnmarshal decodes with unknown object fields refused.
+//
+// Used for the override list because a misspelled member — `addr` for `address` — would otherwise
+// decode to an entry with an empty address. Validate would then refuse it, which is not wrong, but the
+// message would say the address is missing when what is actually wrong is the key that was typed. The
+// stricter decode names the real mistake.
+func strictUnmarshal(raw json.RawMessage, into any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	return dec.Decode(into)
+}
+
+// handleNetworkSettings serves GET/PUT /api/network/settings.
+func (s *Server) handleNetworkSettings(w http.ResponseWriter, r *http.Request) {
+	// Verb dispatch first, matching handleScannerConfig and handleProxyOptions: a wrong verb is 405
+	// whatever the process is carrying, and the manifest test holds the route to that.
+	switch r.Method {
+	case http.MethodGet:
+		if s.sender == nil {
+			http.Error(w, "No sender is attached to this server, so there are no network settings to manage", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, networkSettingsView{Settings: s.sender.Network(), Accepted: networkAccepted()})
+	case http.MethodPut:
+		if s.sender == nil {
+			http.Error(w, "No sender is attached to this server, so there are no network settings to manage", http.StatusServiceUnavailable)
+			return
+		}
+		s.applyNetworkSettingsPatch(w, r)
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Request) {
+	var patch map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		http.Error(w, "Body must be a JSON object of network setting sections", http.StatusBadRequest)
+		return
+	}
+	if len(patch) == 0 {
+		http.Error(w, "Body must set at least one network setting", http.StatusBadRequest)
+		return
+	}
+
+	// The patch is built on top of the live settings, so an omitted key keeps the value it has rather
+	// than reverting to a default. A patch merged against DefaultNetworkSettings instead would turn
+	// every single-key edit into a silent reset of everything else.
+	next := s.sender.Network()
+	for section, body := range patch {
+		fields, known := networkPatchFields[section]
+		if !known {
+			http.Error(w, fmt.Sprintf("unknown network settings section %q; the sections are listed under "+
+				"\"accepted\" in the GET answer", section), http.StatusBadRequest)
+			return
+		}
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(body, &members); err != nil {
+			http.Error(w, fmt.Sprintf("section %q must be a JSON object of settings", section),
+				http.StatusBadRequest)
+			return
+		}
+		for key, raw := range members {
+			apply, ok := fields[key]
+			if !ok {
+				http.Error(w, fmt.Sprintf("unknown network setting %q; the keys are listed under "+
+					"\"accepted\" in the GET answer", section+"."+key), http.StatusBadRequest)
+				return
+			}
+			if err := apply(&next, raw); err != nil {
+				http.Error(w, fmt.Sprintf("key %q %v", section+"."+key, err), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	// One apply for the whole document. ApplyNetwork normalises, validates and refuses as a unit, so
+	// the failure below means nothing changed — which is why the operator can retry a corrected body
+	// against a sender still in the state the panel last showed.
+	if err := s.sender.ApplyNetwork(next); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	confirmed := s.sender.Network()
+	if s.persist != nil {
+		if err := s.persist.SaveNetworkSettings(confirmed); err != nil {
+			// The live sender already has the edit, so this answers 200: the operator's immediate
+			// intent took effect and only its durability is in doubt. Reported rather than swallowed,
+			// matching /api/scanner/config.
+			s.logger.Warn("network settings persist failed", zap.Error(err))
+		}
+	}
+	writeJSON(w, http.StatusOK, networkSettingsView{Settings: confirmed, Accepted: networkAccepted()})
+}

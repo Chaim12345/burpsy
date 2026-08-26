@@ -272,6 +272,18 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
 	},
+	"/api/network/settings": {
+		// riskScope, not riskLocal, and the reason is the hostname-resolution table. The scope gate
+		// authorises a *name*; an override decides which machine that name's authorised bytes are
+		// delivered to. Writing one therefore changes what the engagement can reach without changing
+		// what the scope says — which is riskScope's definition, "it removes the thing that says no",
+		// arrived at from the other direction. The redirect mode belongs in the same class for the
+		// plainer reason that it turns one authorised request into a chain of them.
+		methods: []string{"GET", "PUT"}, risk: riskScope,
+		summary: "hostname resolution overrides, DNS lookup policy, connect/read/total timeouts, the " +
+			"opt-in redirect policy, 100-continue and open-ended response handling; PUT is a partial " +
+			"patch that refuses an unknown key by name and persists what it accepts",
+	},
 	"/api/protocols": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded",
@@ -692,7 +704,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		"/api/scanner/audit-items/",
 		"/api/scanner/live", "/api/sequencer/capture",
 	}
-	wantScope := []string{"/api/config/import", "/api/scanner/config", "/api/scope"}
+	// /api/network/settings joins this class because a resolution override sends a request the scope
+	// authorised by name to an address the operator chose. The scope still says yes or no about the
+	// name, so nothing here escapes the gate — but where the bytes land is no longer what DNS says, and
+	// an unattended caller writing that table is making an engagement-shaped decision.
+	wantScope := []string{"/api/config/import", "/api/network/settings", "/api/scanner/config", "/api/scope"}
 	// /api/blindxss is in the credential class because a callback carries the victim browser's
 	// `document.cookie`. It is the first entry there whose secret is not a credential burpsy holds
 	// but a third party's, which is a stronger reason to require confirmation rather than a weaker

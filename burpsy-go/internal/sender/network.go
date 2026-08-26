@@ -70,7 +70,7 @@ type HostOverride struct {
 type ResolutionSettings struct {
 	// Overrides is consulted before any resolver is. First enabled match on an exact,
 	// case-insensitive hostname wins.
-	Overrides []HostOverride `json:"overrides"`
+	Overrides []HostOverride   `json:"overrides"`
 	Policy    ResolutionPolicy `json:"policy"`
 	// Resolver is the address queries go to under ResolutionResolver. A bare address takes port 53.
 	Resolver string `json:"resolver"`

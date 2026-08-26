@@ -504,6 +504,12 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intercept", s.handleIntercept)
 	s.mux.HandleFunc("/api/proxy/passthrough", s.handleTlsPassthrough)
 	s.mux.HandleFunc("/api/proxy/options", s.handleProxyOptions)
+
+	// Network settings — resolution, timeouts, redirects, 100-continue, open-ended responses. Not
+	// under /api/proxy/: these bind the sender every request-originating surface sends through, so a
+	// name suggesting they were the proxy's would be wrong about who obeys them.
+	s.mux.HandleFunc("/api/network/settings", s.handleNetworkSettings)
+
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
 	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)

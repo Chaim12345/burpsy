@@ -252,6 +252,37 @@ export interface RepeaterResult {
   duration_ms: number;
   response: string;
   exchange_id: number;
+  /**
+   * The redirect chain this send produced, present only when the response was a 30x.
+   *
+   * `response` above stays the response to the request the operator wrote, so this
+   * reports the chain rather than substituting it — the Location and Set-Cookie on a
+   * 30x are usually the thing being looked at. Absent means "not a redirect"; present
+   * with every hop unfollowed means the policy or the scope stopped it, and `reason`
+   * says which.
+   */
+  redirects?: RepeaterRedirects;
+}
+
+export interface RepeaterRedirectHop {
+  from: string;
+  status: number;
+  location: string;
+  to?: string;
+  followed: boolean;
+  reason?: string;
+}
+
+export interface RepeaterRedirects {
+  mode: string;
+  /** Every request this exchange put on the wire, the operator's own included. */
+  sent: number;
+  /** False when the chain was still redirecting when it stopped. */
+  complete: boolean;
+  hops: RepeaterRedirectHop[];
+  final_status: number;
+  /** Set when the chain could not be evaluated at all, so "did not look" never renders as "nothing to follow". */
+  error?: string;
 }
 
 export interface InsertionPoint {
