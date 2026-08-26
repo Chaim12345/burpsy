@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -613,6 +614,34 @@ func main() {
 				if !existing[p] {
 					tlsPolicy.AddPassthrough(p)
 				}
+			}
+		}
+		// Runtime edits to the proxy's response-modification switches survive restarts.
+		// Without this, every switch the operator turned on in Proxy → Options came back
+		// off after a restart while the panel still rendered a working panel — the
+		// silent-revert failure this project treats as a defect rather than a limitation.
+		//
+		// A key in the saved document that this build does not recognise is logged by
+		// name and skipped. That is the honest handling of a retired or renamed option:
+		// applying it is impossible, and dropping it without a word would leave the
+		// operator with a switch that disappeared and no way to find out why.
+		if saved, err := persistStore.LoadProxyOptions(); err != nil {
+			logger.Warn("could not restore proxy response-modification switches", zap.Error(err))
+		} else {
+			var unknown []string
+			applied := 0
+			for key, on := range saved {
+				if err := proxyOptions.Set(proxy.OptionKey(key), on); err != nil {
+					unknown = append(unknown, key)
+					continue
+				}
+				applied++
+			}
+			if len(unknown) > 0 {
+				sort.Strings(unknown)
+				logger.Warn("ignored unrecognised proxy options while restoring",
+					zap.Strings("keys", unknown),
+					zap.Int("applied", applied))
 			}
 		}
 	}

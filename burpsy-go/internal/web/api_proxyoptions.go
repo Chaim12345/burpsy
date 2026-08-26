@@ -83,6 +83,15 @@ func (s *Server) handleProxyOptions(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Mirror the confirmed flag set to the durable store, best-effort like every
+		// other persistence sink here: an unavailable mirror costs restart fidelity and
+		// must not fail an edit the relay has already applied. Written after the whole
+		// batch rather than per key, so the saved document is a state the relay was
+		// actually in — a per-key save would persist intermediate states that no
+		// request ever produced.
+		if s.persist != nil {
+			s.persist.SaveProxyOptions(s.proxyOptions.Snapshot())
+		}
 		writeJSON(w, http.StatusOK, s.viewProxyOptions())
 
 	default:

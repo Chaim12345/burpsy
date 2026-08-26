@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"go.uber.org/zap"
@@ -102,6 +103,46 @@ func driveThroughProxy(t *testing.T, srv *Server, host string, port int) string 
 	return string(body)
 }
 
+// waitForExchanges polls until the store holds `want` exchanges, or fails.
+//
+// Necessary because the record is not ordered with respect to the client's read.
+// `completeResponse` writes the response to the client and only *then* calls `s.record`
+// (proxy.go: `clientConn.Write(responseData)` precedes `s.record(...)`), so
+// driveThroughProxy returns as soon as io.ReadAll finishes — which can be before the
+// recording goroutine has run at all.
+//
+// Asserting immediately therefore passed in isolation and failed under load, which is
+// exactly what a full-suite run reported: "recorded 0 exchanges, want 1". The fix belongs
+// in the test rather than in the proxy: the write-then-record order is deliberate (the
+// client must not wait on bookkeeping), so the observable event the test can synchronise
+// on is the store's contents, not the response body.
+func waitForExchanges(t *testing.T, store *core.TrafficStore, want int) []*core.Exchange {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var got []*core.Exchange
+	for time.Now().Before(deadline) {
+		got = store.Exchanges()
+		if len(got) >= want {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("after 5s the store holds %d exchanges, want %d", len(got), want)
+	return nil
+}
+
+// settleThenCountExchanges gives any pending record a chance to land, then reports the count.
+//
+// The mirror of waitForExchanges, for the assertions that want *zero*. Those cannot
+// false-fail on a slow record — they can false-*pass*, reporting success because the
+// record had not happened yet rather than because it never will. A fixed settle is the
+// honest way to assert an absence: there is no event to wait for when the correct
+// behaviour is that nothing happens.
+func settleThenCountExchanges(store *core.TrafficStore) int {
+	time.Sleep(250 * time.Millisecond)
+	return len(store.Exchanges())
+}
+
 // The defect, driven end to end: an out-of-scope plaintext response used to reach the browser
 // with its JavaScript intact while the option said it had been removed.
 func TestResponseRulesApplyToOutOfScopePlaintextTraffic(t *testing.T) {
@@ -137,7 +178,7 @@ func TestResponseRulesApplyToOutOfScopePlaintextTraffic(t *testing.T) {
 	if c.ModifiedUnrecorded != 1 {
 		t.Errorf("ModifiedUnrecorded = %d, want 1 — an out-of-scope rewrite leaves no history row and must say so", c.ModifiedUnrecorded)
 	}
-	if got := len(store.Exchanges()); got != 0 {
+	if got := settleThenCountExchanges(store); got != 0 {
 		t.Errorf("out-of-scope traffic recorded %d exchanges, want 0", got)
 	}
 }
@@ -175,13 +216,14 @@ func TestAnInScopeRewriteIsNotCountedAsUnrecorded(t *testing.T) {
 	if c.ModifiedUnrecorded != 0 {
 		t.Errorf("ModifiedUnrecorded = %d, want 0 — this exchange is in history, so the rewrite is findable", c.ModifiedUnrecorded)
 	}
-	if got := len(store.Exchanges()); got != 1 {
-		t.Fatalf("in-scope traffic recorded %d exchanges, want 1", got)
+	recorded := waitForExchanges(t, store, 1)
+	if len(recorded) != 1 {
+		t.Fatalf("in-scope traffic recorded %d exchanges, want 1", len(recorded))
 	}
 	// The recorded bytes are the rewritten bytes: what history shows must be what the client
 	// received. This is the existing invariant, asserted here because the new unrecorded branch
 	// runs alongside it and must not have changed which bytes get stored.
-	stored := store.Exchanges()[0]
+	stored := recorded[0]
 	if stored.Response == nil {
 		t.Fatal("the recorded exchange has no response")
 	}

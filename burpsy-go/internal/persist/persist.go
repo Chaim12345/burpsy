@@ -1381,6 +1381,54 @@ func (s *Store) LoadScanConfig() (*scanner.ScanConfig, error) {
 	return cfg, nil
 }
 
+// SaveProxyOptions persists the proxy response-modification switches as one settings value.
+//
+// Same shape and reasoning as SaveTlsPassthrough: one small flag document with no per-row
+// identity, written whole by the web endpoint after every accepted edit so the durable copy
+// cannot drift from what the relay obeys.
+//
+// # What is deliberately not saved
+//
+// The outcome counters. They are the record of what this process observed — considered,
+// modified, skipped-compressed, skipped-not-HTML — and restoring them would present another
+// run's observations as this one's. `options.go` keeps the counters precisely so a rule that
+// fired zero times is distinguishable from a rule that was never allowed to look; a restored
+// non-zero count would destroy exactly that distinction on the first request after a restart.
+// Flags are configuration and survive; counters are measurement and start at zero.
+func (s *Store) SaveProxyOptions(flags map[string]bool) {
+	if flags == nil {
+		flags = map[string]bool{}
+	}
+	encoded, err := json.Marshal(flags)
+	if err != nil {
+		s.log("proxy options encode", err)
+		return
+	}
+	if err := s.setSetting("proxy.options", string(encoded)); err != nil {
+		s.log("proxy options save", err)
+	}
+}
+
+// LoadProxyOptions restores the persisted switches. A database that never saved any yields a
+// nil map and no error: absence of state is "every rule off", which is what NewOptions already
+// built, so the caller skips the apply rather than writing a pile of explicit falses.
+//
+// Unknown keys are returned as they were stored rather than filtered here. The caller owns the
+// vocabulary and is the only layer that can say *which* key it did not recognise — dropping
+// them silently at this level would turn a renamed or retired option into a switch that
+// vanished without explanation, and the restore path reports them instead.
+func (s *Store) LoadProxyOptions() (map[string]bool, error) {
+	v, err := s.getSetting("proxy.options")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	out := map[string]bool{}
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SaveNetworkSettings persists the network settings as one settings value.
 //
 // Same shape as SaveScanConfig and for the same reason: one small document with no per-row identity,
