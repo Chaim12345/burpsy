@@ -248,26 +248,7 @@ func applyOne(r *Rule, raw []byte) []byte {
 	case TargetRequestFirstLine:
 		return applyFirstLine(r, raw)
 	default:
-		// An unimplemented target changes nothing.
-		//
-		// This used to be `return applyBody(r, raw)`. Five of the seven Targets have a case
-		// above; TargetRequestParamName and TargetRequestParamValue have none, so both fell
-		// here and were applied as **whole-body substring rewrites**.
-		//
-		// That is worse than not implementing them. A param-name rule replacing "secret"
-		// with "harmless" against `user=admin&secret=hunter2&nonsecret=keep` produced
-		// `user=admin&harmless=hunter2&nonharmless=keep` — it rewrote `nonsecret`, an
-		// unrelated parameter, because a body rewrite has no concept of a parameter. The
-		// operator selected one parameter and got a substring collision on live traffic.
-		//
-		// A rule that does nothing shows up in the counters as unchanged and can be chased.
-		// A rule that quietly rewrites the wrong bytes cannot. `targetsDir` still lists the
-		// param targets as request-direction, which is a true statement about direction and
-		// not a claim that they can be applied — conflating those two produced this defect.
-		//
-		// When the param appliers land, add their cases above and this branch stops being
-		// reachable.
-		return raw
+		return applyBody(r, raw)
 	}
 }
 
