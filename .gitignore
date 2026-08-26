@@ -51,3 +51,11 @@ burpsy-go/internal/web/ui/scripts/openpencil-cli
 # runtime + agent state (never track)
 burpsy.log
 .omo/
+.env
+cursor.mcp.json
+gemini.mcp.json
+.omp/mcp.json
+opencode.json
+
+# Orchestry state
+.orchestry
