@@ -1,6 +1,9 @@
 # Burp-Parity Gap Analysis: burpsy vs Burp Suite 2026.7.1
 
-**Status:** consolidating — W2/W3/W4/W5 in flight, sections marked PENDING below.
+**Status:** COMPLETE. All six workstreams landed and folded in (W0-W6b).
+**Baseline for this final pass:** `638c480`. Findings proven at earlier SHAs are labelled
+with the SHA they were proven at, and re-checked at `638c480` where status could have moved
+— one had (§3.1).
 **Author:** CTO, from six analyst workstreams.
 **Reference:** `/root/burp-re`, a teardown of Burp Suite 2026.7.1 including its shipped jar resources.
 **burpsy baselines:** wave 1 at `ede8f1f`, wave 2 at `a619c9a`, this consolidation authored at `9194df6`.
@@ -19,12 +22,32 @@ class counts, tool tabs and advisory definitions cannot be summed into one ratio
 who quotes a single "% of Burp" figure for this project is quoting something nobody
 measured. What follows is a **vector**, reported per surface.
 
-Second, and more important than any count: **this codebase's own trackers cannot be used
-as evidence.** Across two waves, analysts falsified **four published denominators** and
-**one categorical feature claim**, and found defects that trackers recorded as working.
-The failure mode is consistent — a tracker tick asserts that a control **exists**; it never
-measured that the control **behaves**. Section 6 documents this, because it is the finding
-most likely to cause the next wrong decision.
+Second, and more important than any count: **published claims about this codebase cannot be
+used as evidence.** Across two waves, analysts falsified **five denominators** and **one
+categorical feature claim**, and found defects the trackers recorded as working. The failure
+mode is consistent — a tick asserts that a control **exists**; nothing measured that the
+control **behaves**. §6 documents this, because it is the finding most likely to cause the
+next wrong decision, and **the fifth falsified denominator was published by this analysis**
+(§6.1a) — which is the strongest evidence available that the failure mode is structural
+rather than a previous team's carelessness.
+
+Third, the counterweight, which is real and which a hostile reading would miss: **where
+burpsy has not built something, it overwhelmingly renders nothing rather than something
+fake.** Zero stubs across 85 config panels (§2.1); one decorative control across ~80 tool
+controls, against twelve limitations the UI discloses in its own copy (§5.1). And **the
+scanner genuinely works** — 58 checks, 64 real HTTP probes, real High-severity findings,
+proven by running it (§3.0). The defects found are **few and structural, not many and
+sloppy** — which is why §9 recommends making a bug class unrepresentable rather than
+auditing harder.
+
+Fourth, the sentence that ties the STATE 5 defects together and is the real thesis of
+this report: **burpsy's characteristic failure is reporting success for work it did not
+do.** An audit that never sent a header probe says `Audited`. A discovery sweep that POSTed
+to `/robots.txt` and got a 405 says `state=audited, skipped=0, note: None`. A session
+validity rule that never evaluated its second condition says `Valid`, and the authenticated
+scan that depends on it quietly runs logged out (§3.1a). None of these throw,
+none log, none show a warning. That is a far more dangerous property in a security tool than
+any missing feature, because **a missing feature is visible and a false clean is not.**
 
 ---
 
@@ -42,7 +65,95 @@ command recorded. Rows are **not** commensurable.
 | **Intruder attack types** | 4 | 4 | **4/4 parity** | High |
 | **Extender / Montoya UI hooks** | 3 registration points | 13 `userInterface()` points | **3/13**, self-documented | High — `internal/extension/protocol.go:19-33` |
 | **Burp AI** | absent | 881 first-party classes + 306 bundled MCP classes | **0/881** | High — and the tracker's "N/A" is false, §6 |
-| **Config panels** | not enumerated | ~90 top-level (from 134 identifiers, 108 candidates) | **NOT DETERMINED** | Low — largest open denominator |
+| **Config panels** | 41 wired (29 plain + 12 caveated) | **85 top-level** (derived from 134 identifiers by a 4-step documented collapse) | **41/85 wired (48%)**, 36 absent, 3 unwired, 5 unreachable, **0 stubs** | High — both sides recounted independently by two analysts |
+| **Internal packages reachable** | 29 / 37 routed; 1 wholly unreachable | n/a — burpsy-internal measure | **1 STATE 2 package, 4 STATE 2 sub-capabilities, 2 STATE 3 routes** | High — `go list` import census, not grep |
+| **Scanner: does it fire** | 58 active checks, 64 real probes, High findings emitted | n/a | **STATE 4, all 3 launch paths** | High — **behaviourally proven**, real targets, pasted output |
+| **Scanner: check breadth** | 183 descriptors registered, **58 admitted at defaults** (3 active injection / 5 active discovery / 50 network-free) | **no honest denominator exists** in Burp's shipped resources | **58/183 admitted; no N/M vs Burp is offered** | High on burpsy side; Burp side deliberately refused |
+| **Scanner: insertion points** | **3 of 8** at defaults, 5 of 8 all-on, **0 of 6** relocation types | 8 types + 6 relocation | **3/8**, though `bcheck` implements all 15 kinds | High — greps positive-controlled |
+
+The config-panel row moved from "NOT DETERMINED" to a **fully mapped 41/85** this wave — it
+was the largest open item in the entire analysis and is now closed. §2.1 reads the
+distribution; the row-by-row table is in `W6-config-panels.md`.
+
+The denominator was derived as follows and then **independently re-derived, name for name, by
+a second analyst** — the only figure in this report to get that treatment, and it earned it by
+being the one four prior trackers got wrong.
+W6 collapsed Burp's 134 distinct `configPanel*` identifiers in four reproducible steps:
+25 leaf widgets removed by suffix (→109), mechanical prefix collapse of documented
+sub-controls (→95), manual semantic collapse of two Intruder payload/grep-extract clusters
+(→87), and exclusion of `configPanelTitle`/`configPanelDescription` as per-panel template
+chrome (→85). **If you reject step 4 the denominator is 87; if you reject step 3 as well it
+is 95.** All three are reproducible from the commands in `W6-config-panels.md`. This report
+uses 85 and says so at every total — which is the standard the four falsified denominators
+in §6.1 failed to meet.
+
+### 2.1 The config surface, fully mapped — and what its shape says
+
+85 panels, every one classified, with positive controls for every negative grep and pasted
+output for four behavioural test runs.
+
+| State | Count | Share |
+|---|---|---|
+| 0 ABSENT | **36** | 42% |
+| 1 STUB | **0** | 0% |
+| 2 UNWIRED | **3** | 4% |
+| 3 UNREACHABLE from UI | **5** | 6% |
+| 4 WIRED | **41** | 48% (29 plain + 12 with a recorded caveat) |
+| 5 BROKEN | **0** *(none proven — not a correctness claim)* | 0% |
+
+The **36 absences are stable under all three candidate denominators** (85, 87, 95); only the
+wired/unwired split moves. That robustness is worth more than the precision of any single
+percentage.
+
+**Zero stubs is the healthiest number in this report.** Where burpsy has not built a config
+panel it renders **nothing** — not a screen that looks live. The high absence count is
+therefore absence taken honestly rather than laundered into a stub, and it is the same
+discipline §5.1 finds in the tool pages. A 42% absence rate with 0% stubs is a substantially
+better position than a lower absence rate padded with placeholders.
+
+**The absences are mostly structural, and they describe what burpsy chose to be:**
+Burp-the-desktop-app panels with no browser meaning (closing behaviour, temp-file location,
+project backup — 5 rows); the JVM extension estate (Java/Python/Ruby environments — 4 rows,
+already covered by the self-documented 3-of-13 Montoya gap); message-editor and Inspector
+*display* panels where the capability exists and only its *configurability* is missing (8
+rows). Those are not parity debt in any meaningful sense.
+
+**Two absences are genuine capability holes, and one is undisclosed:**
+- **WebSocket interception** (rows 53–55). `grep 'WebSocket' internal/intercept/` → 0 hits,
+  positive control applied. WS traffic is proxied, recorded and viewable but **can never be
+  held**, and no WS match/replace target exists.
+- **TLS negotiation control** (row 80). The sender's only `tls.Config` sets neither
+  `MinVersion` nor `CipherSuites` — burpsy cannot be pointed at a legacy-TLS target, and
+  cannot be constrained away from one. That is a real testing limitation and **nothing in
+  the UI says so.**
+
+**The 3 unwired rows are the TAXONOMY failure mode in its purest form** — code that reads as
+finished, is commented as finished, is *named after the Burp panel it implements*, and has no
+caller. `inspectorPanelState`/`inspectorDock` are declared, defaulted, given setters, and
+persisted to localStorage **under a comment explaining why they deserve persistence** — and
+nothing in 13,354 lines of React reads them. The whole `PayloadGenerator`
+(`internal/intruder/intruder.go:346-387` — numbers, file lists, custom lists, plus a committed
+regression fix for an inverted-range panic) has zero non-test callers; **Intruder takes pasted
+text only.** Note what makes these diagnosable: `repeaterGroups` sits in the same store file
+with identical persistence treatment and *is* read. The difference is invisible from the
+store and only visible from a caller grep — which is exactly why §6.1a happened.
+
+### 2.2 The finding an operator would actually be burned by
+
+**`Export configuration` is silently partial.** It downloads a file named
+`burpsy-config.json` containing scope rules, intercept lists and session rules — and nothing
+else (`internal/web/api_config.go:48-67`). Network settings, proxy options, match/replace
+rules, resource pools, schedules, scanner config, platform authentication and client
+certificates are **all dropped without a word**. The menu item does not say "partial," the
+file does not record what it omitted, and the import result counts only the three sections it
+knows about.
+
+This is not STATE 5 — nothing behaves incorrectly, and it is not claimed as a correctness
+defect. It is worse in practice than most STATE 5s: carrying that file to a new machine and
+believing your engagement configuration travelled with it is a mistake the product actively
+does nothing to prevent, and the failure is discovered later, during work, when the missing
+settings matter. **Highest-value single fix in the config surface**, and it is a
+one-line-per-subsystem change plus an honest manifest.
 
 ### The sharpest single gap
 
@@ -71,9 +182,171 @@ configurable scanner. **This, not the missing tabs, is the deepest structural ga
 ## 3. Broken, not merely missing (STATE 5)
 
 The most damaging category: reachable code that does something other than what its
-contract promises. Confirmed count in the surfaces swept so far: **1**.
+contract promises. **Confirmed live count: 4** — three in the scanner (§3.0.3) and one in
+session handling (§3.1a), every one proven by running it and pasting real output. A fifth
+(§3.1) was live when wave 1 proved it and has since been fixed; it is retained because it is
+this report's best worked example of the failure mode and because the fix is exemplary.
 
-### 3.1 match/replace param targets silently rewrite the whole body — LIVE
+**Start with §3.1a.** It is the most damaging finding in this report, it was nearly lost
+between two contradictory records of the same workstream, and it is live at HEAD.
+
+**Read §3.0 first.** The scanner's headline is *positive*, and the STATE 5 findings below
+are defects in a working engine, not evidence of a hollow one.
+
+### 3.0 The scanner fires — this is the report's biggest positive finding
+
+W2 stood up real targets and ran real scans. `POST /api/audit/0` on a proxied exchange
+returned `{"active_checks": 58, "summary": "10 found, and nothing was skipped, errored or
+gated"}`, and **the target's own request log showed 64 genuine HTTP probes** — `?q='`,
+`?id='`, `q="><svg id=zxss… onload=alert(1)>`, `q=../../../etc/passwd`, traversal payloads
+spliced into cookies. Two **High** findings (SQL injection on query `id` and body `user`;
+reflected XSS on query `q`) reached `/api/issues`. The live-audit toggle works end to end
+(issues 26 → 38 from one proxied URL, no further user action). **All three launch paths are
+STATE 4.**
+
+That matters because §2's 4/77 config finding could easily be misread as "the scanner is a
+shell." It is not. It is a working scanner that cannot be configured and cannot be aimed.
+
+**But the check count is 58, not 183.** All 183 registry descriptors are runnable and none
+are declined (`check_registry_declined.go:26-28` returns empty) — and shipped defaults turn
+on only 8 of 21 family switches (`scanner.go:230-246`), admitting **58**. The server says so
+itself: `"active_checks": 58`. Of those 58: **3 genuine active injection checks, 5 active
+discovery, 50 network-free response analysers.**
+
+W2 **refused to state a Burp-side check-count denominator**, because Burp's shipped
+resources do not contain an honest one (`selected_issues` enumerates only 15 distinct
+`type_index` across all presets). That refusal is correct and is the behaviour §6 asks for.
+So there is **no "N of M checks" ratio in this report** — anyone who publishes one has
+invented the M.
+
+**And "183 runnable descriptors" must never be restated as "183 checks work."** W2 drove
+roughly **11** distinct checks to a real finding; the other ~170 evaluators were never
+individually exercised. That is the sixth-false-denominator trap, and it was avoided by an
+inch.
+
+### 3.0.1 The insertion-point gap is worse than the config gap
+
+§2 shows burpsy cannot be *told* where to inject. W2 shows where it actually injects:
+**3 of Burp's 8 insertion-point types at defaults, 5 of 8 with everything on, and 0 of the 6
+relocation types ever.**
+
+The damning part is that the capability exists. `bcheck/insertion.go` implements **all 15
+kinds** correctly — the scanner simply never asks for them.
+`DefaultProbeInsertionKinds` (`probe_harness.go:40`) is 4 kinds, and the only default-on
+checks walk `coreInjectionKinds` = **3** (`checks_core_injection.go:52`). Greps for the
+other 11 kind strings return 0 in production code, positive-controlled against `bcheck` and
+`internal/intruder/points.go`.
+
+**burpsy's Intruder covers Burp's insertion-point surface; its Scanner does not.** The same
+repo contains both. This is STATE 2 for 11 of 15 kinds, and it is the single largest
+capability gap in the scanner.
+
+### 3.0.2 burpsy's "passive scanning" is not passive
+
+The largest behavioural divergence from Burp that W2 found. **50 of the 58 default checks
+are network-free analysis that only runs when a user explicitly launches an audit on a
+specific exchange.** Merely proxying a URL yields 5 findings, from a legacy hardcoded
+`PassiveScanner` (`scanner.go:669`, `capture.go:298`). The *same exchange* after an audit
+yields 15.
+
+In Burp, passive analysis of proxied traffic is continuous and automatic. In burpsy, most of
+what looks like passive scanning is audit-gated. An operator who browses a site and reads
+the Issues view is seeing a third of what the engine could already tell them, with nothing
+indicating the rest is one click away.
+
+### 3.0.3 The three scanner STATE 5 defects
+
+**(a) Host-discovery probes reuse the base exchange's HTTP method — default-ON, silent.**
+`sendTestRequestFull` (`scanner.go:507-539`) builds probes with `Method: exchange.Method`
+(`:515`) — the method of whatever request happened to be the audit's base. Proven: two
+identical origins serving `GET /robots.txt → 200` and `POST /robots.txt → 405`. From a GET
+base exchange burpsy sent `GET /robots.txt` and reported **`Robots.txt file`**; from a POST
+base it sent `POST /robots.txt` and reported nothing — while the item's own outcome read
+`state=audited, ran=58, skipped=0, send_failures=0, note: None`.
+
+**A silent miss reported as a clean, complete audit, in a default-ON family.** Six more call
+sites share the primitive, including — with real irony — the HTTP-PUT check's *verification
+GET* (`checks_discovery.go:185`), whose own finding text says "a subsequent GET of the same
+path."
+
+The practical consequence: **anyone testing an API through the proxy browses mostly POSTs**,
+so burpsy POSTs to `/robots.txt`, `/openapi.json`, `/swagger.json` and ~20 other static
+paths and reports clean on every one.
+
+And the correct primitive already exists **two functions away**: `sendTestRequestBody`
+(`scanner.go:546`) takes an explicit method, and its comment (`:541-545`) says it exists
+"for probes that need a specific method … rather than the exchange's own method." This is
+the §6.5 pattern again — *the antidote is in-tree and unpropagated.*
+
+This also violates a rule the package wrote for itself. `checks_injection.go:6-11`:
+***"'we could not look' is not 'we looked and found nothing'."*** Here it is, silently, at
+defaults.
+
+**(b) The same advisory reported twice, at two severities.** Grouping `/api/issues` by
+`(url, advisory.type_index)`: `005009a0` appears as both `Low | Missing X-Frame-Options
+Header` and `Informational | Frameable response (potential Clickjacking)` on the same URL,
+across three URLs. Issue counts are inflated and one condition lands in two severity
+buckets — which corrupts any triage that sorts by severity or counts by total.
+
+**(c) Header insertion points labelled "Audited" while nothing probes them.** The ledger
+enumerates with 4 kinds (`audit_engine.go:849`) but admitted checks walk 3, so
+`User-Agent`, `Accept` and `Proxy-Connection` display **`Audited`** when zero of 36–64
+probes touched a header. The status vocabulary **already contains the right answer** —
+`AuditItemPointNoChecks` (`audit_items.go:188-190`) — and it is never used. The documenting
+comment's own sentence, "the four kinds the native injection evaluators walk," is false at
+defaults.
+
+All three share one shape, and it is the shape of this entire report: **the product reports
+success for work it did not do.**
+
+### 3.0.4 Two scanner STATE 2 items
+
+- **`CheckPhase` is a six-value taxonomy with one value ever assigned** (`PhaseActive`).
+  Burp's 5 scan types cannot be represented at all while this stays unpopulated.
+- **`NativeCheckCoverage()` — the per-check operator report — has zero non-test callers.**
+  Consequence: a default burpsy tells the operator **"no passive checks loaded"** while 58
+  checks are running. The one surface that would have exposed everything in §3.0.1–3.0.3 to
+  a user is the surface nobody wired.
+
+### 3.1 match/replace param targets silently rewrote the whole body — **FIXED at `638c480`**
+
+**Status correction, and it is a correction to *this report*.** W1 proved this defect live at
+`a619c9a`. It was fixed at **`638c480`** while this analysis was running, and §3.1 continued
+to say "LIVE" for two waves after that stopped being true. W4 caught it. **I verified both
+halves myself before accepting the correction** — this report has now been wrong about a
+defect's status in both directions, and neither error was caught by re-reading; both were
+caught by someone going and looking.
+
+The fix is better than the one I reverted, and the difference is instructive:
+
+- `applyOne`'s `default:` now returns **`nil`**, not `raw`
+  (`internal/matchreplace/matchreplace.go:242-272`). The comment explains why `raw` was
+  wrong: it is non-nil and therefore reads as "the rule fired," which "would have marked the
+  message changed, counted a modification that never happened, and run `fixContentLength`
+  over an untouched body — **trading a wrong rewrite for a wrong count.**" That is precisely
+  why commit `9194df6` was reverted at `8700e2e`, and the revert was correct.
+- The API now **refuses the two targets by name**, not as unknown
+  (`internal/web/api_toolkit.go:576-579, 613-637`), because "unknown rule_type would be a
+  lie: the Target exists, `targetsDir` routes it, and `matchReplaceTargetName` can name it.
+  What is missing is the applier."
+- Three tests guard it, including `internal/web/matchreplace_target_test.go:139`.
+
+**So this is now a CAPABILITY GAP — 5 of 7 rule_types implemented — not a defect.** The
+STATE 5 count for the report is therefore **3, all in the scanner**, not 4.
+
+The author's own commit comment is the most valuable artefact this analysis produced, because
+it diagnoses the reasoning error rather than just the bug: *"I added those two here in
+`4469cf1` and it was wrong. My justification was that 'the engine already matches on them
+(matchreplace.go:129)' — but that line is `targetsDir`, which says which direction a target
+belongs to. The applier is `applyOne` … **I reintroduced the very defect the rest of this
+comment describes, by verifying against one function and asserting about another.**"*
+
+That is the same error as §6.1a — verifying at the wrong layer — committed independently by
+a developer and by this analysis's own wave 1, in the same codebase, within days. It is
+strong evidence the failure is structural, not personal.
+
+**The original finding is preserved below**, because a fixed defect is still evidence about
+how this system fails, and because the fix's quality is only legible against it.
 
 Detail and proof: `W1-broken-behaviour.md`. Summary:
 
@@ -92,7 +365,7 @@ result: user=admin&harmless=hunter2&nonharmless=keep
                                     ^^^^^^^^^^^^^ unrelated parameter corrupted
 ```
 
-`request_param_value` yields **byte-identical** output, proving neither is implemented.
+`request_param_value` yielded **byte-identical** output, proving neither was implemented.
 
 Three things make this worth reading twice:
 
@@ -101,11 +374,69 @@ Three things make this worth reading twice:
    guard was added for garbage and missed the two **known-but-unimplemented** values in
    the project's own published vocabulary. Both analysts were right; only the reconciliation
    is correct.
-2. **The tests pass.** `internal/matchreplace` is green at HEAD. Nothing covers
-   accepted-but-unhandled targets.
+2. **The tests passed.** `internal/matchreplace` was green throughout. Nothing covered
+   accepted-but-unhandled targets — which is exactly what the three new tests now do.
 3. **The code comment is false.** `matchreplace.tsx:17` claims unknown targets "silently
    become a no-op rule." Wrong twice: these two are *accepted*, and `default` is a
    **body-wide rewrite**, not a no-op.
+
+### 3.1a Session validity rules evaluate only their first stated field — **LIVE, and the worst defect in this report**
+
+**Provenance matters here.** Shared context `parity_w1` recorded this as W1's *worst*
+finding. `W1-broken-behaviour.md` — reconstructed by the same analyst after the workspace
+reap — says the opposite: *"1 confirmed STATE 5 in scope. All other accepted-vs-handled
+tables across `intercept`, `netauth`, `session` … came back clean."* Two records of one
+workstream, in direct contradiction, and **the finding appeared in neither the master report
+nor any surviving evidence file.** It was very nearly lost outright.
+
+**I resolved it by running it myself at `638c480`.** Production tree untouched; scratch copy
+of the module at `/tmp/bgproof`.
+
+`ValidityRule.Evaluate` (`internal/session/session.go:38-118`) is a **first-stated-field-wins
+if-chain**, not a conjunction. `StatusIs` is checked first and **returns unconditionally** —
+every later field is dead code for that rule.
+
+The web API unmarshals free-form operator JSON straight into the struct
+(`internal/web/api_session.go:337-341`), so a rule stating both conditions is accepted:
+
+```
+$ go test ./internal/session/ -run TestCTO -v
+
+=== RUN   TestCTO_FirstFieldWins_LoggedOutPageReportsValid
+    rule wire form : {"status_is":200,"body_not_contains":"Please log in"}
+    response       : status=200 body="<html><body>Please log in to continue</body></html>"
+    Evaluate()     : 0                        <-- Valid (session.go:22, Valid = iota)
+--- FAIL: DEFECT CONFIRMED: body_not_contains never evaluated
+
+=== RUN   TestCTO_Control_AllComposesCorrectly
+    All{} composition on the same input: 1    <-- Invalid, the correct answer
+--- PASS
+```
+
+**The operator writes "the response must be 200 **and** must not say 'Please log in'." The
+engine reads only the first half and reports the logged-out login page as a valid session.**
+
+Why this outranks everything else here:
+
+1. **The blast radius is every authenticated finding.** `recovery.go:198,325,375,381` gate
+   re-login on `Evaluate(...) == Valid`. A rule that always says Valid means the scanner
+   never re-authenticates — so **an authenticated scan silently degrades into an
+   unauthenticated one**, and every check in §3.0 runs against logged-out responses. The
+   audit still reports `state=audited, skipped=0`. This is §1's thesis at its most dangerous:
+   a clean bill of health over work that never happened.
+2. **The correct construct exists and works.** `All{}` composes properly — the control proves
+   it. A flat two-field rule is the intuitive way to write it and the one that silently fails.
+   Nothing refuses it, and `dtoToRule`'s own comment says a malformed validity block is
+   refused "because a broken validity rule silently re-logging in on every request would be
+   worse than an error." **The refusal it describes is exactly the one that is missing.**
+3. **It survived a workstream, a reap, a reconstruction and two consolidation passes** — and
+   was recovered only because §1 cited it from memory and the citation didn't match any
+   evidence. That is luck, not process.
+
+**Fix shape:** either evaluate all stated fields conjunctively, or refuse a flat rule with
+more than one field set and tell the operator to use `All{}`. The second is smaller, is a
+400 rather than a behaviour change, and matches the refusal pattern `targetToCategory`
+already uses (§3.1).
 
 ### 3.2 The bug class, generalised
 
@@ -143,7 +474,43 @@ Work already paid for that no user can reach. Full detail in
   ruling out a search miss. Compounding this, burpsy's "Discover" leaf is a
   **deliberately-substituted documentation page** — so the tab exists, the backend works,
   and they are not connected.
-- **Swept clean:** the other 22 `internal/**` packages have no zero-importer orphans.
+### 4.1 The sweep is now complete — all 37 internal packages (W5)
+
+Wave 1 swept 22 packages by grep. W5 completed it across **all 37**, using `go list` — the
+compiler's own import graph — rather than grep, which is the right instrument for this
+question and caught a case grep would have missed.
+
+| Category | Count | Which |
+|---|---|---|
+| STATE 2, whole package | **1** | `internal/jsexec` |
+| STATE 2, sub-capability | **3 new + 1 inherited** | tlsprobe cipher/protocol analysis; `advisory.Catalogue.ByName`; http2 `Malformation` vocabulary (residue); `tools/comparer.go` (inherited) |
+| STATE 3 | **1 new + 1 inherited** | `/api/intercept/drop-all` (new); `/api/discovery` (re-confirmed independently) |
+| STATE 5 found by W5 | **0** | the only STATE 5 remains §3.1, found by W1 |
+| Packages reached by ≥1 route | 29 / 37 | |
+| Packages with no route, by design | 8 / 37 | alpn, domexec, httputil, jsexec, tlsprobe, upstreamtest, vulnapp, web |
+| Routes with zero production-UI reference | **4 / 81** | 2 documented legacy aliases + the 2 STATE 3 rows |
+
+**The coherence check is what makes this table trustworthy.** Every per-package UI shortfall
+is fully accounted for by those same 4 unreferenced routes — no package has an unexplained
+gap. That is a property the data either has or does not have, and it has it.
+
+**`internal/jsexec` — STATE 2, whole package, and honestly labelled.** 14 exported symbols,
+316 lines, a working goja-backed prototype-pollution sandbox. Zero importers of *any* kind
+— the only package in the repo with neither a production nor a test importer outside itself.
+Its single external mention is a **string literal in a coverage table**
+(`internal/scanner/infra_coverage.go:274`), not an import. Critically, that file's own header
+(`:1-17`) says a row appearing there means *"we now have the machinery"* and explicitly **not**
+*"we now detect this,"* calling the conflation "exactly the dishonest counting this project
+forbids." So jsexec is a **self-declared** built-but-unwired primitive. Report it as STATE 2
+capability debt; **do not report it as a false claim.** The distinction matters and §6 would
+be wrong to absorb it.
+
+**`/api/intercept/drop-all` — STATE 3, new.** Backend complete: routed at `server.go:758`,
+in the manifest at `route_manifest_test.go:281`, handler
+(`api_intercept.go:130-145`) calls `intercept.DropAll` and returns a real count. The UI never
+calls it. The positive control here is unusually strong — all three sibling
+`/api/intercept/*` routes match on the identical grep in the identical directory, and
+`drop-all` alone is absent. That is a UI path never built, not a search miss.
 
 ---
 
@@ -166,13 +533,54 @@ Two divergences are **undocumented** and should be recorded as decisions or reve
 - **Replayer** — absent. Burp's own string table offers little to compare against, so the
   cost of matching it is itself undetermined.
 
-### Honesty is inconsistent, and that is a real defect
+### 5.1 The UI is unusually honest — 1 decorative control in ~80 (W3)
 
-`UpstreamProxySection` self-reports `wired`, `attached` and `persisted`, and warns the
-user when persistence requires `-db` (`settings.tsx:1610-1624`). That is exemplary.
-`PlatformAuthSection` (`settings.network.tsx:44`) works but **discloses no persistence
-state at all**. Same product, same release, opposite candour. The good pattern exists —
-it just is not enforced anywhere.
+This is the report's main **counter-finding**, and it is load-bearing, because a gap
+analysis that only finds bad news has stopped measuring and started arguing.
+
+W3 swept **24 pages and ~80+ distinct controls** looking for *decorative controls* — a
+control that renders, accepts input, returns 200, and whose value the backend never reads.
+That is the UI-layer form of the §3 bug class and the most user-hostile defect a tool like
+this can have.
+
+**It found exactly one.** Every other writable control traced to a Go handler that reads and
+acts on that exact field, or the UI **says so in its own copy**.
+
+**The one:** Decoder's *"guess base64 / hex alphabets"* checkbox
+(`decoder.tsx:104-109`) serializes to `guess_alphabets` (`data.workbench.ts:120-134`),
+unmarshals into `req.Guess` (`api_toolkit.go:938`), and is passed to `smartDecode`
+(`:947`) — which **takes the parameter and never references it in the body**
+(`:1000-1024`). The four decode layers run in the same fixed order either way. It fails
+silently, with a 200 and plausible-looking output, on a security-analysis toggle. Fix or
+delete it; both are small.
+
+**The other 12** are limitations the UI **discloses to the operator itself**, and they are
+not defects — they are the opposite:
+
+- `comparer.tsx:254-259` states the server only does byte-level diffing and **deliberately
+  omits a granularity selector "rather than one that silently does the same thing."**
+- `matchreplace.tsx:18-24` restricts the dropdown to the 5 implemented targets.
+- `settings.tsx:1929-1962` names per-tool resource bounds that have **no effect** (crawl's
+  sequential loop cannot honour concurrency > 1) rather than implying uniform enforcement.
+- `dashboard.tsx:207-211` disables the unbuilt scan cards with "not built yet."
+- `extensions.tsx:183-190` shows "needs a message" instead of a broken Run button.
+- `settings.tsx:485-508` marks the DOM engine read-only **and says why** (race risk).
+
+That is a team that has internalised the difference between *exists* and *behaves* **at the
+UI layer** — the exact discipline §6 finds missing at the tracker layer. The disclosure
+habit is real and should be protected; it is the cheapest quality asset this project has.
+
+**But it is a convention, not a mechanism, and conventions decay.** `UpstreamProxySection`
+self-reports `wired`/`attached`/`persisted` and warns when persistence requires `-db`
+(`settings.tsx:1610-1624`) — exemplary. `PlatformAuthSection` (`settings.network.tsx:44`)
+works but **discloses no persistence state at all**. Same product, same release, opposite
+candour. Nothing enforces the good pattern, so the gap between the best and worst surfaces
+will widen, not close.
+
+**The honest reading of §3 + §5.1 together:** the defects found are *few and structural*,
+not *many and sloppy*. That is a much better position to be in — and it is why the
+recommendation in §9.1 is to make the bug class unrepresentable rather than to audit
+harder.
 
 ---
 
@@ -181,14 +589,50 @@ it just is not enforced anywhere.
 The most consequential section. Every item was falsified by an analyst against Burp's own
 artefacts.
 
-### 6.1 Four false denominators
+### 6.1 Five false denominators — the fifth is ours
 
 | Published claim | Truth | How it broke |
 |---|---|---|
 | "137 `configPanel*`" | **134** distinct | `grep -c` counted 135 (one duplicate row, `configPanelClosingBehavior`); nobody ran `sort -u`. Also: 26 of the 134 are leaf widgets, so 134 is not a *panel* count either — 108 candidates, ~90 top-level. |
 | "960+ `setName()` per `map_root.tsv`" | `map_root.tsv` contains `setName` **exactly once** (line 6678) | **Fabricated provenance.** The real named-widget surface is 1069 unique `setName("literal")` in `out/clean/renamed_final/`, 1059 in `out/readable_strict/`. Right ballpark, wrong corpus, invented citation. |
 | "15/15 tool tabs" | **12/15 overlap** | Both sides have 15; they are not the same 15. Burp-only: SCANNER, BURP_AI, REPLAYER. burpsy-only: decoder, session, settings. Counting cardinality instead of intersection. |
-| "183 advisories reachable" | 183 bundled, **181 index-reachable** | Two files declare a neighbour's `typeIndex` — in **Burp's own data** (React2Shell→Perl 1052160, Bambda→BCheck 150994944). Honest form: 183/183 bundled, 181/183 index-reachable, 2 shadowed-by-design, reachable by name. |
+| "183 advisories reachable" | 183 bundled, **181 index-reachable** | Two files declare a neighbour's `typeIndex` — in **Burp's own data** (React2Shell→Perl 1052160, Bambda→BCheck 150994944). Honest form: 183/183 bundled, 181/181 addressable by index, 2 shadowed-by-design. |
+| **"…and the 2 shadowed are reachable BY NAME"** — *this analysis, wave 1* | **Not at the product surface** | See §6.1a. Our own correction, found by W5 in wave 2. |
+
+#### 6.1a The fifth one is ours, and that is the most important sentence in this report
+
+Wave 1 of *this analysis* published, as verified shared context, that the 2 shadowed
+advisories are "reachable BY NAME." W5 falsified it in wave 2.
+
+`(*Catalogue).ByName` (`internal/advisory/advisory.go:216`) has **zero non-test callers**.
+Its only references are two test files — one of which,
+`TestShadowedDefinitionsRemainReachableByName` (`index_collision_test.go:92,98`), proves
+the *Go API* can reach them, which is exactly what made the claim feel verified. But the
+live path resolves by index only: `handleAdvisoryDetail`
+(`api_advisories.go:198-210`) parses the URL segment as hex and calls `ByIndex`; there is no
+name branch, and the UI agrees (`data.advisory.ts:51` requests
+`` `/api/advisories/${typeIndex ?? ""}` ``). So for a shared index, the reader gets the
+winner's definition.
+
+**Honest restatement:** 183 bundled, 181 addressable by index, and the 2 shadowed
+definitions are reachable **only through a Go API that nothing but a test calls.**
+
+Two things make this the load-bearing item in §6:
+
+1. **A green test was mistaken for a reachable feature.** The test was correct; it tested
+   the Go API, not the product. This is the §6.4 pattern — *exists* measured instead of
+   *behaves* — committed by analysts who had explicitly written that rule down. The pattern
+   is not a competence failure by the previous team. It is the default outcome of measuring
+   the wrong layer, and it will happen again to whoever reads this next.
+2. **A naive `grep ByName` returns ~50 hits and looks alive.** Nearly all are
+   `scanner.ByName` and `scanner.BuiltInConfigByName` — *different functions in a different
+   package*, both genuinely live. Only a method-vs-function distinction separates the dead
+   one from the live ones. Per TAXONOMY rule 3 a negative grep needs a positive control;
+   this case shows the mirror hazard — **a positive grep needs disambiguation.**
+
+This report therefore holds its own wave-1 output to the same standard as the trackers it
+criticises, and the reader should extend that suspicion to everything here that was not
+proven behaviourally.
 
 ### 6.2 A false categorical claim, and the trap that ratified it
 
@@ -281,33 +725,126 @@ still renders." `Test_every_built_in_config_field_has_a_key_row` (`audit_test.go
 reflects over the struct and fails when a field has no row, because "a field with no row is
 neither applied nor listed."
 
-That is a structural fix for exactly the defect class of §3. The match/replace vocabulary
-two packages away has an API list, a separate engine switch, and no test binding them —
-and carries a live traffic-corrupting bug as a direct result.
+That is a structural fix for exactly the defect class of §3.
 
-The implication for planning: the constraint here is **not** engineering judgement, which
-is demonstrably good. It is that good local decisions are not being propagated into
-conventions. That is a cheaper problem to fix than a skill gap, and §9.1 is the first
-instance.
+### 6.5a Correction: the antidote **did** propagate — the *mechanism* didn't (W4)
+
+W4 measured this properly instead of assuming, and the earlier framing above was too harsh.
+There are **12 structurally exhaustive tests across 7 packages** — the convention spread
+widely. But **5 of the newer ones assert against a hand-typed list** rather than reflecting
+over the source of truth, including `matchreplace_target_test.go:139`, whose own comment
+claims it "walks every declared Target" while it walks a **hand-typed slice of 7**.
+
+That is a meaningfully different diagnosis with a different fix. A hand-typed exhaustive
+test is not a weaker version of a reflective one — **it is the same silent-drift bug the
+pattern was invented to kill, wearing the pattern's clothes.** It passes forever; adding an
+eighth Target changes nothing; and it reads, to a reviewer, exactly like the real thing.
+
+The tools to do it properly are already in-tree: `reflect`, `go/ast`, and the
+`fieldCount = iota` sentinel (`query.go:147`). **The convention propagated and the rigour did
+not**, and the comment on the weakest instance is what makes it dangerous rather than merely
+incomplete.
+
+### 6.6 What the green build actually proves (W4)
+
+- **2,213 tests / 243 files / 46 packages, all green, ~8 min.** Coverage **69.0%
+  per-package, 77.7% whole-tree**. This is a genuinely well-tested Go codebase and the
+  report should say so plainly.
+- **One real hole: `cmd/burpsy` at 15.8%** — and it holds **18 of the 59** string-vocabulary
+  `switch`-with-`default` sites in the tree, the densest concentration of the exact
+  construct that produced §3.1. Lowest coverage sitting on highest-risk shape.
+- **W4 avoided authoring a sixth false denominator.** `internal/httputil` reads **0%**
+  per-package and **82%** cross-package — reporting the 0% would have been another
+  wrong-corpus artefact. It is a maintainability observation, not a coverage gap.
+- **No `-race` anywhere in CI**, while two of the only two genuinely assertion-free tests in
+  the suite (`scanner_test.go:131`, `sitemap/concurrent_test.go:19`) are documented as
+  failing *under* `-race`. The suite contains its own unread warning.
+- **Shape vs behaviour, from burpsy's own `riskClass` manifest (82 routes, 20
+  config-mutating): 14 of the 20 have no `internal/web` test observing an effect**, and 61%
+  of API tests assert only against the API's own reply. That is the §6.4 pattern rendered as
+  a coverage statistic — a shape test **cannot** catch "accepted, 200, did the wrong thing"
+  by construction, which is why 2,213 green tests coexisted with §3.1 and §3.1a.
+
+### 6.7 Three more instances of the bug class, found systematically (W4)
+
+Two AST passes over 316 switches (→ 59 string-vocabulary-with-default; 61 partial enum
+switches, all survivors hand-read). **No second live instance of the §3.1 defect** — all 8
+parser/consumer pairs verified matched. But three near-misses of the same family:
+
+- **`internal/proxy/options.go:372-386`** — appliers are `if enabled[K]` with no
+  exhaustiveness binding. **3 tests bind the option *listing* to `OptionKeys`; 0 bind the
+  *applier*.** `responseRules` appears in **no test at all**. A newly added option would
+  list, set, return 200 — and do nothing. This is §3.1 with the safety catch left off.
+- **`category` — 3 unvalidated two-value coercions** (`api_toolkit.go:692,782`,
+  `api_intercept.go:167`) defaulting in **opposite directions** (matchreplace → literal,
+  intercept → regex), untested, sitting **five lines** from the `rule_type` code that
+  validates properly. Same file, same author, same day, opposite rigour.
+- **`internal/bcheck/parser.go:388-411`** — tolerant metadata default, while **the same
+  file** refuses properly at `:668-689`.
+
+The implication for planning: the constraint is **not** engineering judgement, which is
+demonstrably good — the antidote, the refusal pattern, and the reflective test were all
+invented here. It is that **rigour is applied per-site rather than per-class**, so the same
+developer writes the careful version and the careless version within a few lines of each
+other. That is a cheaper problem to fix than a skill gap, and it is what §9.1 addresses.
 
 ---
 
-## 7. PENDING — wave 2 in flight
+## 7. Landed this wave, and what is still open
 
-Four workstreams were running when this consolidation was written. Their absence is
-recorded rather than papered over:
+**Landed (folded into §2, §4.1, §5.1, §6.1a above):**
 
-- **W2 — scanner reality check.** Can the 183-row issue catalogue actually *fire*? Bundled
-  and index-reachable are established; **firing is not.**
-- **W3 — UI surface parity.** Which burpsy controls are decorative? Directly tests the
-  gap between existence and behaviour that §6 says the trackers cannot see.
-- **W4 — test-suite honesty audit.** What does the green build actually prove? Extends §6.3
-  from gates to test content.
-- **W5 — STATE 2/3 sweep** across all 37 internal packages. R1-C swept 22 for
-  zero-importer orphans; this completes it.
+- **W3 — UI surface parity.** 24 pages, ~80+ controls. 1 decorative control, 12
+  honestly-disclosed limitations, Scanner anomaly resolved (§5.1, §7.1).
+- **W5 — STATE 2/3 sweep.** All 37 internal packages by `go list` import census. Completed
+  wave 1's partial 22-package grep sweep and **corrected one of our own claims** (§6.1a).
+- **W6 + W6b — the config surface, end to end.** Denominator settled at **85** (alternatives
+  87 and 95 preserved), then independently re-derived name-for-name by a second analyst, then
+  every row mapped: **41 wired / 36 absent / 3 unwired / 5 unreachable / 0 stubs** (§2.1).
+  This closes what was the largest open item in the analysis.
 
-Until these land, this report **understates** the gap. Every wave so far has found defects
-in surfaces the previous wave called clean.
+- **W2 — scanner reality check.** The only workstream that stood up live targets and ran
+  real scans. Answered the question affirmatively (§3.0) and found **three of the report's
+  four STATE 5 defects** in the process. It also declined to state a Burp-side check-count
+  denominator because none honestly exists — the single best methodological decision made in
+  this analysis, and the one that avoided a sixth false denominator authored by us.
+
+- **W4 — test-suite honesty audit.** 2,213 tests measured, two AST passes over 316
+  switches, and **two corrections to this report**: §6.5's "the antidote never propagated"
+  was wrong (it propagated as a convention but not as a mechanism, §6.5a), and §3.1's
+  exemplar defect had been **fixed** while we still called it live (§3.1). Full results in
+  §6.6-6.7.
+
+**Nothing remains open from the original plan.** What the report still does not know is
+listed in §8, and the largest item there is no longer a workstream that can be run — it is
+the ~170 scanner evaluators that would each need a live target to exercise.
+
+**A closing note on completeness.** Every wave found defects in surfaces the previous wave
+called clean, *including surfaces this analysis called clean*. Wave 3 found a live STATE 5
+(§3.1a) that two earlier passes had recorded as clean, and found it only because a citation
+in §1 didn't match any evidence file. **This report should be read as a floor, not a
+measurement.**
+
+### 7.1 Scanner is reachable — but it has no front door
+
+W3 resolved the §2 Scanner anomaly, and the resolution is more interesting than "missing."
+
+Scanning is **not** unreachable. `nav.ts:89` places `scanner.tsx` as a leaf **inside Target**,
+titled *"Issues"* — a findings viewer. But it also carries genuinely working launch controls
+in an Audit-settings modal (`scanner.tsx:676-736`): a **Targeted audit** button
+(→ `POST /api/scanner/audit`) and a **Live active audit** toggle (→ `handleScannerLive`),
+both verified on both sides.
+
+The real gap is **fragmentation**. Scan launching is split across three pages — Dashboard's
+New-scan modals, Site map's Crawl button, and a narrow single-exchange control buried in
+Target→Issues' settings modal — while scan *configuration* lives somewhere else again
+(`settings.tsx:556-671`). Burp has one consolidated tool; burpsy has the same capability
+with no front door.
+
+So `SCANNER` being "Burp-only" in the §2 tool-tab overlap row is correct **at the nav-tab
+level** and must not be read as "scanning is unreachable." It isn't. Combined with §2's
+4/77 config-key finding, the accurate statement is: **burpsy can scan, cannot be told much
+about how to scan, and offers no single place to do it.**
 
 ---
 
@@ -315,9 +852,21 @@ in surfaces the previous wave called clean.
 
 Named explicitly per TAXONOMY rule 6, rather than guessed:
 
-1. **~87 of ~90 Burp top-level config panels** were never individually behaviour-verified.
-   **The largest open denominator in this analysis.** Only 3 were checked.
-2. **Whether the 183 advisories can fire.** Bundled ≠ reachable ≠ firing. W2 pending.
+1. ~~**~87 of ~90 Burp top-level config panels** never verified.~~ **CLOSED this wave.**
+   All 85 mapped — §2.1. Residual: no panel was proven STATE 5, because proving a config
+   panel *wrong* (as opposed to absent or unwired) needs behavioural runs this pass did not
+   have budget for on all 41 wired rows. **0 BROKEN is therefore "none proven," not "none
+   exist"** — the distinction §6.4 exists to protect.
+2. ~~**Whether the advisory catalogue can fire.**~~ **CLOSED** — it fires (§3.0). Residual,
+   and important: **roughly 11 of ~183 evaluators were actually driven to a finding.** The
+   other ~170 are *runnable descriptors*, which is a claim about registration, not about
+   correctness. **"183 runnable" must never be restated as "183 checks work."**
+2a. ~~**Whether burpsy's scanner injects at Burp's 8 insertion-point types.**~~ **CLOSED** —
+   3 of 8 at defaults, 5 of 8 all-on, 0 of 6 relocation types (§3.0.1).
+2b. **Whether Burp has an honest check-count denominator at all.** W2 looked and concluded
+   the shipped resources do not contain one (`selected_issues` enumerates 15 distinct
+   `type_index` across all presets). This is recorded as *deliberately not determined*
+   rather than estimated. **Do not let anyone fill this in without new evidence.**
 3. **Field incidence of the match/replace STATE 5 defect.** It is reachable via the public
    API but not from the UI dropdown (only 5 targets, `matchreplace.tsx:18-23`). Whether any
    extension, script or CI job actually sends those values is unknown.
@@ -327,7 +876,17 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
 5. **Cost of Replayer parity** — Burp's string table gives too little to size it.
 6. **Two wave-1 workstreams produced no recoverable output** ("verify claimed-working
    features actually behave", "audit the other four reports for unsupported claims"). Their
-   findings are lost, not absent. W3 and W4 re-cover that ground.
+   findings are lost, not absent. W3 has since re-covered the first; W4 re-covers the second
+   and is still in flight.
+8. **Whether burpsy's Repeater supports multiple concurrent isolated tabs** the way Burp's
+   tab manager (`secondarySuiteTabBar`) does. W3 flagged this rather than guessing a ratio —
+   leaf-counting cannot answer it.
+9. **Burp-side depth for the Discover/Learn tool.** Not enumerated in any available Burp-side
+   document, so no ratio is offered for that row.
+10. **Whether wiring `jsexec`'s prototype-pollution check is blocked by anything beyond
+   scheduling.** `infra_coverage.go:269-274` implies the browser blocker it cites is already
+   retired by `domexec`, which suggests it is not blocked — but that was not verified
+   end to end.
 7. **The Collaborator mint-payload fix** is recorded as verified in a surviving summary,
    but the summary was truncated before its evidence. The claim stands unproven here.
 
@@ -335,37 +894,102 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
 
 ## 9. What I would do next, in order
 
-1. **Fix the match/replace STATE 5 defect by propagating a pattern this codebase already
-   invented.** Do not design a new guard — copy `internal/scanner/audit.go`. That file
-   solves precisely this problem: `builtInConfigKeys` is the single table both the engine
-   overlay and the operator-facing listing read from, its comment
-   (`audit.go:567-580`) explains that a hand-maintained second copy "drifts silently,
-   because a listing that is missing a key still renders," and
-   `Test_every_built_in_config_field_has_a_key_row` (`audit_test.go:513`) reflects over the
-   struct and **fails** if a field has no row — "a field with no row is neither applied nor
-   listed." It even distinguishes *this preset leaves the budget alone* from *this engine
-   has no budget*.
+*(Numbering: §9.1 is the item §5.1 refers to.)*
 
-   That is the exact antidote to the accepted-but-unhandled bug class, written by this
-   team, sitting two packages away from the defect it would have prevented. Apply it to the
-   `rule_type` vocabulary: one table, engine switch and API vocabulary both derived from
-   it, one reflective test asserting `accepted == handled`. This makes the bug class
-   **structurally unrepresentable** rather than fixed case by case — and it is the single
-   highest-leverage change in this report.
-2. **Gate `bun run check` and the Playwright e2e suite in CI.** 118 frontend test
+**Ordered by expected harm, not by effort.** The first three are correctness defects in a
+security tool; everything after is parity work.
+
+1. **Fix session validity evaluation (§3.1a).** Live at HEAD, and the only defect here whose
+   blast radius is *every finding of an authenticated scan*. An operator's two-condition rule
+   is read as a one-condition rule, the logged-out page reports `Valid`, the scanner never
+   re-authenticates, and the audit still says `skipped=0`. Smallest correct fix: **refuse a
+   flat rule with more than one field set** and point the operator at `All{}`, which already
+   composes correctly. That is a 400, not a behaviour change, and it matches the refusal
+   pattern `targetToCategory` already uses. Evaluating all stated fields conjunctively is the
+   larger, better fix; either beats today.
+
+2. **Fix `sendTestRequestFull`'s method reuse (§3.0.3a).** Also live, also silent, also in a
+   default-ON family. Discovery probes inherit the base exchange's HTTP method, so anyone
+   testing an API through the proxy gets `POST /robots.txt` → 405 → "clean." The correct
+   primitive, `sendTestRequestBody`, sits **two functions away** and its comment says exactly
+   why it exists. Seven call sites, including the HTTP-PUT check's own verification GET.
+
+3. **Fix the duplicate-advisory and false-`Audited` reporting (§3.0.3b, §3.0.3c).** Both
+   corrupt triage rather than testing: one inflates counts and splits a single condition
+   across two severities; the other tells the operator a header insertion point was audited
+   when nothing probed it. For the second, the correct status value —
+   `AuditItemPointNoChecks` — **already exists and is never used.**
+
+4. **Make the bug class unrepresentable, by propagating the *mechanism* and not just the
+   convention (§6.5, §6.5a).** Do not design a new guard — this team already invented it.
+   `builtInConfigKeys` (`internal/scanner/audit.go:567-580`) is a single table from which
+   both the engine overlay and the operator-facing listing derive, precisely so they cannot
+   drift; `Test_every_built_in_config_field_has_a_key_row` (`audit_test.go:513`) reflects
+   over the struct and **fails** when a field has no row.
+
+   The nuance W4 added is the important part: the *convention* propagated to 12 tests across
+   7 packages, but **5 of the newer ones assert against hand-typed lists** — including one
+   whose comment claims it "walks every declared Target" while walking a slice of 7. A
+   hand-typed exhaustive test is not a weaker version of a reflective one; it is the same
+   silent-drift bug wearing the pattern's clothes. Convert those 5 to reflect over the source
+   of truth (`reflect`, `go/ast` and the `fieldCount = iota` sentinel are all already
+   in-tree), and apply the same binding to `internal/proxy/options.go:372-386`, where 3 tests
+   bind the option *listing* and **0** bind the *applier*.
+
+5. **Gate `bun run check` and the Playwright e2e suite in CI.** 118 frontend test
    assertions, two typechecks and two token-drift checks are committed and never executed.
    The Go half of this project has real gates including live `ffuf`/`nuclei` tests; the
    frontend half has none. This is the highest value-per-line change available — the tests
    are already written.
-3. **Wire the Myers diff engine** into `handleToolsCompare` and un-hide the granularity
+6. **Wire the Myers diff engine** into `handleToolsCompare` and un-hide the granularity
    control. Deleting a weaker reimplementation is a negative-diff improvement.
-4. **Decide about `/api/discovery`** — give it a UI or delete it. A working ffuf backend
+7. **Decide about `/api/discovery`** — give it a UI or delete it. A working ffuf backend
    sitting behind a documentation page is the worst of both: maintenance cost, zero user
    value.
-5. **Record the Burp AI and Replayer omissions as explicit decisions.** They are almost
+8. **Record the Burp AI and Replayer omissions as explicit decisions.** They are almost
    certainly correct calls; being undocumented is what makes them debt.
-6. **Delete or re-derive every ratio in the existing trackers.** Four of four checked
-   denominators were wrong. The prior is now that an unverified number in this repo is
+9. **Delete or re-derive every ratio in the existing trackers.** Five of five checked
+   denominators were wrong, including one this analysis published itself (§6.1a). The prior is now that an unverified number in this repo is
    wrong, and a wrong number is worse than none.
-7. **Enumerate the ~90 config panels** and close item 8.1. Until then, the config-surface
-   gap is genuinely unmeasured.
+10. **Make `Export configuration` honest** (§2.2). It ships 3 of ~11 subsystems under a name
+   that implies all of them. Either export everything or write a manifest into the file and
+   say "partial" in the UI. Cheapest fix with the worst untreated failure mode in the report.
+11. **Fix or delete the Decoder `guess_alphabets` checkbox** (§5.1). It is the only proven
+   decorative control in ~80. Small, and it takes the count to zero.
+12. **Give scanning a front door** (§7.1). The capability exists and is fragmented across
+   three pages. This is an information-architecture change, not an engine change, and it is
+   likely the largest perceived-parity gain per unit of work in this report.
+13. **Turn the UI's disclosure convention into a mechanism** (§5.1). Twelve surfaces
+    voluntarily admit their own limits and one does not (`PlatformAuthSection`). A convention
+    that good deserves enforcement — a lint, a required prop, anything — before it decays.
+14. **Decide about `/api/intercept/drop-all`** (§4.1): build the UI affordance or drop the
+    route. Same argument as `/api/discovery`, smaller.
+15. **Wire the Intruder `PayloadGenerator`** (§2.1). Numbers, file lists and custom lists are
+    written, tested, bug-fixed — and unreachable. Intruder currently accepts pasted text
+    only, which is a conspicuous gap against a tool whose entire purpose is payload
+    generation. Burp ships 48 `.pay` wordlists to burpsy's 0 (§2); this is the code path
+    that would consume them.
+16. **Disclose the TLS negotiation limitation** (§2.1, row 80), and decide whether to fix it.
+    Not being able to point the sender at a legacy-TLS target is a real constraint on what
+    engagements this tool can run, and today an operator discovers it by failing.
+
+---
+
+## 10. Standing methodological warnings for whoever reads this next
+
+The three traps this analysis actually fell into, as opposed to the ones it anticipated:
+
+1. **A passing test proves the layer it tests, not the layer users touch.**
+   `TestShadowedDefinitionsRemainReachableByName` is green, correct, and was cited as
+   evidence for a product claim that is false (§6.1a).
+2. **A positive grep needs disambiguation as much as a negative grep needs a control.**
+   `grep ByName` returns ~50 live-looking hits for a function with zero non-test callers,
+   because a different package exports a similarly-named symbol (§6.1a).
+3. **A bundled artefact is not a reachable feature is not an implemented capability.** This
+   chain broke twice already — 183 advisories (bundled ≠ addressable) and the MCP "N/A"
+   (§6.2) — and W2 is where it can break a third time if "183 definitions" is ever reported
+   as "183 checks."
+
+And the one that destroyed two waves of work: **deliverables written inside
+`.orchestry/workspaces/**` are reaped.** Everything durable in this analysis lives in
+`/root/burpsy-parity/` or in git. Nowhere else.

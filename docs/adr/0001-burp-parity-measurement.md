@@ -1,6 +1,6 @@
 # ADR 0001 — How we measure Burp parity, and why trackers are not evidence
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-08-26 with rules 9-12 after the final audit wave)
 - **Date:** 2026-08-26
 - **Author:** CTO
 - **Context artefacts:** `BURP_PARITY_GAP_ANALYSIS.md`, `/root/burpsy-parity/TAXONOMY.md`
@@ -14,7 +14,11 @@ trackers to be **actively misleading**, not merely stale.
 
 Falsified during the audit:
 
-- **Four of four checked denominators were wrong.** "137 `configPanel*`" (really 134, and
+- **Five of five checked denominators were wrong — and the fifth was published by the
+  audit itself**, in wave 1, by analysts who had already written rules 1-8 down. That is the
+  strongest available evidence that this failure mode is structural rather than a previous
+  team's carelessness, and it is why rules 9-12 were added after the final wave.
+- **Four of the five were inherited from the trackers.** "137 `configPanel*`" (really 134, and
   not a panel count at all). "960+ `setName()` per `map_root.tsv`" (that file contains
   `setName` exactly once — fabricated provenance). "15/15 tool tabs" (both sides have 15;
   only 12 intersect). "183 advisories reachable" (183 bundled, 181 index-reachable).
@@ -78,6 +82,48 @@ reports across three attempts, **the only one that survived intact was the one c
 to git** — the others survive as 2000-character truncations, and two are lost entirely.
 Working notes therefore live outside the orchestrator's tree
 (`/root/burpsy-parity/`), and any artefact that matters is committed.
+
+**9. Verify at the layer the claim is about.**
+
+Every wrong claim this audit produced or inherited shares one shape: *evidence was gathered
+at one layer and asserted about another.*
+
+- A tracker tick proved a control **exists**, and was read as proving it **behaves**.
+- `TestShadowedDefinitionsRemainReachableByName` proved the **Go API** can reach a
+  definition, and was published as proving the **product** can. It cannot — the HTTP route
+  resolves by index only.
+- A developer verified against `targetsDir` (which says a target's *direction*) and asserted
+  about `applyOne` (which *applies* it), and by their own written account "reintroduced the
+  very defect the rest of this comment describes."
+
+So: name the layer a claim is about, and gather the evidence *there*. A green test is
+evidence about the code it calls, nothing more.
+
+**10. A positive grep needs disambiguation, exactly as a negative grep needs a control.**
+
+Rule 4 guards against a grep that wrongly returns nothing. Its mirror is equally dangerous:
+`grep ByName` returns ~50 live-looking hits for a method with **zero non-test callers**,
+because a different package exports similarly-named functions that *are* live. Before citing
+grep hits as evidence a symbol is used, confirm the hits are the symbol in question.
+
+**11. Contradictory records are an open question, not a tie to break.**
+
+Two records of workstream W1 disagreed about whether the session package was clean. The
+later, tidier one said clean. It was wrong, and the defect it dismissed
+(`ValidityRule.Evaluate`, §3.1a) is the most damaging finding in the audit — an
+authenticated scan silently running unauthenticated.
+
+When records conflict, **re-run the measurement.** Do not prefer the more recent, the more
+confident, or the better-formatted. Either finding could be the survivor of a lossy
+reconstruction, and the tidier one is if anything more suspect.
+
+**12. A hand-typed "exhaustive" test is not a weak exhaustive test — it is the bug.**
+
+Twelve structurally exhaustive tests exist across seven packages, and five assert against a
+hand-typed list, including one whose comment claims it "walks every declared Target" while
+walking a slice of seven. It will pass forever; an eighth target changes nothing; and it
+reads to a reviewer exactly like the real thing. Exhaustiveness must be derived — `reflect`,
+`go/ast`, or an `iota` sentinel — or it is decoration.
 
 ## Consequences
 

@@ -1,0 +1,39 @@
+package session
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestCTO_FirstFieldWins_LoggedOutPageReportsValid(t *testing.T) {
+	wire := []byte(`{"status_is":200,"body_not_contains":"Please log in"}`)
+	var vr *ValidityRule
+	if err := json.Unmarshal(wire, &vr); err != nil {
+		t.Fatalf("the API would have accepted this; unmarshal failed: %v", err)
+	}
+	if vr.StatusIs == nil || vr.BodyNotContains == "" {
+		t.Fatalf("both fields should be populated, got %+v", vr)
+	}
+	loggedOut := []byte(`<html><body>Please log in to continue</body></html>`)
+	got := vr.Evaluate(200, map[string]string{}, loggedOut)
+	t.Logf("rule wire form : %s", wire)
+	t.Logf("response       : status=200 body=%q", loggedOut)
+	t.Logf("Evaluate()     : %v", got)
+	if got == Valid {
+		t.Errorf("DEFECT CONFIRMED: reported Valid for a logged-out page; body_not_contains never evaluated. got=%v", got)
+	}
+}
+
+func TestCTO_Control_AllComposesCorrectly(t *testing.T) {
+	s := 200
+	vr := &ValidityRule{All: []*ValidityRule{
+		{StatusIs: &s},
+		{BodyNotContains: "Please log in"},
+	}}
+	loggedOut := []byte(`<html><body>Please log in to continue</body></html>`)
+	got := vr.Evaluate(200, map[string]string{}, loggedOut)
+	t.Logf("All{} composition on the same input: %v", got)
+	if got != Invalid {
+		t.Errorf("control failed: All{} should be Invalid, got %v", got)
+	}
+}
