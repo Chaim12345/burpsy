@@ -381,13 +381,16 @@ export function DashboardPage(): JSX.Element {
 
       {issues.data ? (
         <div className="metric-grid wide">
-          {(["high", "medium", "low", "info"] as const).map((severity) => (
+          {/* Critical was missing from this row while core.Severity has had it all along, so a
+              critical finding was counted by the API and shown by nothing. The tiles now mirror
+              the severity ladder rather than a subset of it. */}
+          {(["critical", "high", "medium", "low", "info"] as const).map((severity) => (
             <Metric
               key={severity}
               label={`${severity} findings`}
               value={formatCount(issues.data!.counts?.[severity] ?? 0)}
               tone={
-                severity === "high" && (issues.data!.counts?.high ?? 0) > 0
+                (severity === "critical" || severity === "high") && (issues.data!.counts?.[severity] ?? 0) > 0
                   ? "bad"
                   : severity === "medium" && (issues.data!.counts?.medium ?? 0) > 0
                     ? "warn"
@@ -395,6 +398,16 @@ export function DashboardPage(): JSX.Element {
               }
             />
           ))}
+          {/* A severity the API did not recognise is surfaced rather than left out of the row: the
+              defect this replaced was exactly a class of finding that no tile accounted for. */}
+          {issues.data.counts?.unrecognised ? (
+            <Metric
+              label="unrecognised severity"
+              value={formatCount(issues.data.counts.unrecognised)}
+              tone="warn"
+              detail="reported by the API under a name this row does not know"
+            />
+          ) : null}
         </div>
       ) : null}
 

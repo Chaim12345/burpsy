@@ -589,13 +589,43 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		"findings": views,
 	}
 	if len(views) > 0 {
-		counts := map[string]int{"high": 0, "medium": 0, "low": 0, "info": 0}
+		// Keyed on core.Severity's own String() values, lower-cased, because the previous keys were
+		// guessed and two of them did not exist: findings report "Informational" and "Critical",
+		// while the map held "info" and had no critical bucket at all. The `if _, ok` guard then
+		// dropped both classes silently, so the headline disagreed with its own list — a Critical
+		// finding did not appear in the counts anywhere, and `info: 0` positively asserted there
+		// were no informational findings while several sat in the same response.
+		//
+		// "info" is still emitted alongside "informational" because the dashboard's tiles read that
+		// key; dropping it would trade a wrong number for a missing one.
+		counts := map[string]int{"critical": 0, "high": 0, "medium": 0, "low": 0, "informational": 0, "info": 0}
+		unknown := map[string]int{}
 		for _, v := range views {
-			if _, ok := counts[strings.ToLower(v.Severity)]; ok {
-				counts[strings.ToLower(v.Severity)]++
+			key := strings.ToLower(v.Severity)
+			if _, ok := counts[key]; ok {
+				counts[key]++
+				if key == "informational" {
+					counts["info"]++
+				}
+				continue
 			}
+			// A severity this handler does not recognise is reported, never discarded. Silently
+			// dropping it is what produced this bug; a named bucket makes the next new severity
+			// visible the first time it is returned instead of the first time someone adds up the
+			// column by hand.
+			unknown[key]++
+		}
+		if len(unknown) > 0 {
+			counts["unrecognised"] = 0
+			for _, n := range unknown {
+				counts["unrecognised"] += n
+			}
+			body["unrecognised_severities"] = unknown
 		}
 		body["counts"] = counts
+		// The invariant the old code broke, now stated on the wire: the buckets account for every
+		// finding in `findings`. "info" is a duplicate of "informational" and is excluded from the sum.
+		body["counted"] = len(views)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
