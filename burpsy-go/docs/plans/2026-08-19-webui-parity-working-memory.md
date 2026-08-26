@@ -233,3 +233,39 @@ covers far more. This is the next increment: decide the shipped defaults deliber
   future features: recharts (dashboard activity/severity charts) and golang.org/x/time/rate
   (intruder/scan throttling). Everything else (RHF, dnd-kit, validator, errgroup, SSE lib) either
   duplicates working hand-rolled code or has no consumer today — no dep without a user.
+
+## 2026-08-25 (later) — the agent worktrees are merged: proxy options, audit queue, collaborator, discover, issue definitions
+
+Five parallel agent worktrees (from a credit-exhausted opencode ultraworker session) were
+reviewed, merged one at a time into `ui-react-comparison`, and gated. Landed:
+
+- **U12 proxy options** (`132f924`/`c23198e`/`8c9ea01`): `proxy.Options.Set/Snapshot/Counters/
+  KnownOption`, `GET/PUT /api/proxy/options` (flat map PUT, validate-all-before-apply, 400 names
+  the refused key), and the Proxy-settings leaf — six switches + outcome counters, route in
+  routes.ts AND nav.ts (routes.spec.ts asserts the palette matches routes.ts exactly).
+  Test contract: `newTestServerWithProxyOptions` builds `NewServer(...).WithProxyOptions(...)`.
+- **U6 audit queue** (`514d838`/`1688d22`): `/api/scanner/audit-items` + SCANNER-tab queue card —
+  what the audit did per item and why anything was skipped.
+- **U1 match/replace live** (`bd6908`/`0bcdb83`): match/replace reaches live traffic via the
+  shared `matchReplaceRules` pointer.
+- **U7 issue definitions** (`495b17b`/`e25623f`): Issue definitions catalogue page (Burp's
+  browseable catalogue, not just findings).
+- **U8 discover** (`5ebb83c`): Discover tab + in-app operator reference pane (the console
+  explains itself).
+- **U4 collaborator** (`d9d93aeb`-era `361deb0`/`9094fab`): collaborator tab in nav, cache keys,
+  bundle; `data.collab.ts` hooks; fufuf/nuclei discovery from the server.
+- **`dd93aeb`**: main.go wires the five capability handles (stored-input ledger, provenance
+  ledger, session coordinator, CheckJSLibs, CheckJWTWeak) — the shipped binary stops refusing
+  work its engine can do.
+
+**Merge-method lessons** (reusable): (1) the gate catches what eyeballing misses — missing route
+registrations, imports from modules that don't export the symbol (`api`/`json` live in ./api not
+./data), missing cache-key registry entries, pages without PageHeader (the route sweep requires
+an `<h1>` per route); (2) predictable collisions between sibling agents: both declare
+`mintedPayload` with different shapes, manifest splice order matters (collaborator sorts before
+config); (3) merge one worktree at a time, gate between each — the batch-then-fix alternative
+cost opencode its session.
+
+**Remaining from the agent batch**: any worktree under `/root/burpsy/.claude/worktrees/` not in
+this log is unreviewed; the collaborator tab needs a configured live listener before its panel
+means anything; UAT 0/1300 unchanged.
