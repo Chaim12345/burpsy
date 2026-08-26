@@ -1,7 +1,7 @@
 # Burp-Parity Gap Analysis: burpsy vs Burp Suite 2026.7.1
 
-**Status:** consolidating — W3, W5 and W6's denominator folded in; W2, W4 and W6's
-numerator still in flight, marked PENDING in §7.
+**Status:** consolidating — W3, W5 and the full W6/W6b config-panel map folded in.
+W2 (can the scanner fire) and W4 (test-suite honesty) remain in flight; see §7.
 **Author:** CTO, from six analyst workstreams.
 **Reference:** `/root/burp-re`, a teardown of Burp Suite 2026.7.1 including its shipped jar resources.
 **burpsy baselines:** wave 1 at `ede8f1f`, wave 2 at `a619c9a`, this consolidation authored at `9194df6`.
@@ -20,12 +20,21 @@ class counts, tool tabs and advisory definitions cannot be summed into one ratio
 who quotes a single "% of Burp" figure for this project is quoting something nobody
 measured. What follows is a **vector**, reported per surface.
 
-Second, and more important than any count: **this codebase's own trackers cannot be used
-as evidence.** Across two waves, analysts falsified **four published denominators** and
-**one categorical feature claim**, and found defects that trackers recorded as working.
-The failure mode is consistent — a tracker tick asserts that a control **exists**; it never
-measured that the control **behaves**. Section 6 documents this, because it is the finding
-most likely to cause the next wrong decision.
+Second, and more important than any count: **published claims about this codebase cannot be
+used as evidence.** Across two waves, analysts falsified **five denominators** and **one
+categorical feature claim**, and found defects the trackers recorded as working. The failure
+mode is consistent — a tick asserts that a control **exists**; nothing measured that the
+control **behaves**. §6 documents this, because it is the finding most likely to cause the
+next wrong decision, and **the fifth falsified denominator was published by this analysis**
+(§6.1a) — which is the strongest evidence available that the failure mode is structural
+rather than a previous team's carelessness.
+
+Third, the counterweight, which is real and which a hostile reading would miss: **where
+burpsy has not built something, it overwhelmingly renders nothing rather than something
+fake.** Zero stubs across 85 config panels (§2.1); one decorative control across ~80 tool
+controls, against twelve limitations the UI discloses in its own copy (§5.1). The defects
+found are **few and structural, not many and sloppy** — which is why §9 recommends making a
+bug class unrepresentable rather than auditing harder.
 
 ---
 
@@ -43,10 +52,16 @@ command recorded. Rows are **not** commensurable.
 | **Intruder attack types** | 4 | 4 | **4/4 parity** | High |
 | **Extender / Montoya UI hooks** | 3 registration points | 13 `userInterface()` points | **3/13**, self-documented | High — `internal/extension/protocol.go:19-33` |
 | **Burp AI** | absent | 881 first-party classes + 306 bundled MCP classes | **0/881** | High — and the tracker's "N/A" is false, §6 |
-| **Config panels** | numerator in flight (W6b) | **85 top-level** (derived from 134 identifiers by a 4-step documented collapse) | **?/85** | Denominator now High; numerator still open |
+| **Config panels** | 41 wired (29 plain + 12 caveated) | **85 top-level** (derived from 134 identifiers by a 4-step documented collapse) | **41/85 wired (48%)**, 36 absent, 3 unwired, 5 unreachable, **0 stubs** | High — both sides recounted independently by two analysts |
 | **Internal packages reachable** | 29 / 37 routed; 1 wholly unreachable | n/a — burpsy-internal measure | **1 STATE 2 package, 4 STATE 2 sub-capabilities, 2 STATE 3 routes** | High — `go list` import census, not grep |
 
-The config-panel row moved from "NOT DETERMINED" to a **hard denominator of 85** this wave.
+The config-panel row moved from "NOT DETERMINED" to a **fully mapped 41/85** this wave — it
+was the largest open item in the entire analysis and is now closed. §2.1 reads the
+distribution; the row-by-row table is in `W6-config-panels.md`.
+
+The denominator was derived as follows and then **independently re-derived, name for name, by
+a second analyst** — the only figure in this report to get that treatment, and it earned it by
+being the one four prior trackers got wrong.
 W6 collapsed Burp's 134 distinct `configPanel*` identifiers in four reproducible steps:
 25 leaf widgets removed by suffix (→109), mechanical prefix collapse of documented
 sub-controls (→95), manual semantic collapse of two Intruder payload/grep-extract clusters
@@ -55,6 +70,74 @@ chrome (→85). **If you reject step 4 the denominator is 87; if you reject step
 is 95.** All three are reproducible from the commands in `W6-config-panels.md`. This report
 uses 85 and says so at every total — which is the standard the four falsified denominators
 in §6.1 failed to meet.
+
+### 2.1 The config surface, fully mapped — and what its shape says
+
+85 panels, every one classified, with positive controls for every negative grep and pasted
+output for four behavioural test runs.
+
+| State | Count | Share |
+|---|---|---|
+| 0 ABSENT | **36** | 42% |
+| 1 STUB | **0** | 0% |
+| 2 UNWIRED | **3** | 4% |
+| 3 UNREACHABLE from UI | **5** | 6% |
+| 4 WIRED | **41** | 48% (29 plain + 12 with a recorded caveat) |
+| 5 BROKEN | **0** *(none proven — not a correctness claim)* | 0% |
+
+The **36 absences are stable under all three candidate denominators** (85, 87, 95); only the
+wired/unwired split moves. That robustness is worth more than the precision of any single
+percentage.
+
+**Zero stubs is the healthiest number in this report.** Where burpsy has not built a config
+panel it renders **nothing** — not a screen that looks live. The high absence count is
+therefore absence taken honestly rather than laundered into a stub, and it is the same
+discipline §5.1 finds in the tool pages. A 42% absence rate with 0% stubs is a substantially
+better position than a lower absence rate padded with placeholders.
+
+**The absences are mostly structural, and they describe what burpsy chose to be:**
+Burp-the-desktop-app panels with no browser meaning (closing behaviour, temp-file location,
+project backup — 5 rows); the JVM extension estate (Java/Python/Ruby environments — 4 rows,
+already covered by the self-documented 3-of-13 Montoya gap); message-editor and Inspector
+*display* panels where the capability exists and only its *configurability* is missing (8
+rows). Those are not parity debt in any meaningful sense.
+
+**Two absences are genuine capability holes, and one is undisclosed:**
+- **WebSocket interception** (rows 53–55). `grep 'WebSocket' internal/intercept/` → 0 hits,
+  positive control applied. WS traffic is proxied, recorded and viewable but **can never be
+  held**, and no WS match/replace target exists.
+- **TLS negotiation control** (row 80). The sender's only `tls.Config` sets neither
+  `MinVersion` nor `CipherSuites` — burpsy cannot be pointed at a legacy-TLS target, and
+  cannot be constrained away from one. That is a real testing limitation and **nothing in
+  the UI says so.**
+
+**The 3 unwired rows are the TAXONOMY failure mode in its purest form** — code that reads as
+finished, is commented as finished, is *named after the Burp panel it implements*, and has no
+caller. `inspectorPanelState`/`inspectorDock` are declared, defaulted, given setters, and
+persisted to localStorage **under a comment explaining why they deserve persistence** — and
+nothing in 13,354 lines of React reads them. The whole `PayloadGenerator`
+(`internal/intruder/intruder.go:346-387` — numbers, file lists, custom lists, plus a committed
+regression fix for an inverted-range panic) has zero non-test callers; **Intruder takes pasted
+text only.** Note what makes these diagnosable: `repeaterGroups` sits in the same store file
+with identical persistence treatment and *is* read. The difference is invisible from the
+store and only visible from a caller grep — which is exactly why §6.1a happened.
+
+### 2.2 The finding an operator would actually be burned by
+
+**`Export configuration` is silently partial.** It downloads a file named
+`burpsy-config.json` containing scope rules, intercept lists and session rules — and nothing
+else (`internal/web/api_config.go:48-67`). Network settings, proxy options, match/replace
+rules, resource pools, schedules, scanner config, platform authentication and client
+certificates are **all dropped without a word**. The menu item does not say "partial," the
+file does not record what it omitted, and the import result counts only the three sections it
+knows about.
+
+This is not STATE 5 — nothing behaves incorrectly, and it is not claimed as a correctness
+defect. It is worse in practice than most STATE 5s: carrying that file to a new machine and
+believing your engagement configuration travelled with it is a mistake the product actively
+does nothing to prevent, and the failure is discovered later, during work, when the missing
+settings matter. **Highest-value single fix in the config surface**, and it is a
+one-line-per-subsystem change plus an honest manifest.
 
 ### The sharpest single gap
 
@@ -425,8 +508,10 @@ instance.
   honestly-disclosed limitations, Scanner anomaly resolved (§5.1, §7.1).
 - **W5 — STATE 2/3 sweep.** All 37 internal packages by `go list` import census. Completed
   wave 1's partial 22-package grep sweep and **corrected one of our own claims** (§6.1a).
-- **W6 (denominator half).** Burp's config-panel count reduced to a defensible **85**, with
-  the two alternative readings (87, 95) and their derivations preserved.
+- **W6 + W6b — the config surface, end to end.** Denominator settled at **85** (alternatives
+  87 and 95 preserved), then independently re-derived name-for-name by a second analyst, then
+  every row mapped: **41 wired / 36 absent / 3 unwired / 5 unreachable / 0 stubs** (§2.1).
+  This closes what was the largest open item in the analysis.
 
 **Still open:**
 
@@ -437,9 +522,6 @@ instance.
 - **W4 — test-suite honesty audit.** What does the green Go suite prove, given §6.3
   establishes the frontend is ungated entirely? Specifically: how much of the suite is
   shape-only, and where else does the §3.2 accepted-but-unhandled shape occur?
-- **W6b — the config-panel numerator.** 85 panels enumerated against burpsy. Closes the
-  largest remaining item in §8.
-
 Until these land this report **understates** the gap. Every wave so far has found defects in
 surfaces the previous wave called clean — including, this wave, in surfaces *this analysis*
 called clean.
@@ -471,10 +553,11 @@ about how to scan, and offers no single place to do it.**
 
 Named explicitly per TAXONOMY rule 6, rather than guessed:
 
-1. **82 of 85 Burp top-level config panels** are not yet mapped to a burpsy equivalent.
-   The *denominator* is now settled at 85 (§2); the *numerator* is W6b, in flight. Only 3
-   panels are individually verified. Still the largest open item, but it is now a bounded
-   one.
+1. ~~**~87 of ~90 Burp top-level config panels** never verified.~~ **CLOSED this wave.**
+   All 85 mapped — §2.1. Residual: no panel was proven STATE 5, because proving a config
+   panel *wrong* (as opposed to absent or unwired) needs behavioural runs this pass did not
+   have budget for on all 41 wired rows. **0 BROKEN is therefore "none proven," not "none
+   exist"** — the distinction §6.4 exists to protect.
 2. **Whether the advisory catalogue can fire.** Bundled ≠ index-addressable ≠ firing, and
    **≠ implemented as a check**. W2 pending.
 2a. **Whether burpsy's scanner injects at Burp's 8 insertion-point types.** Named here
@@ -542,8 +625,9 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
 6. **Delete or re-derive every ratio in the existing trackers.** Four of four checked
    denominators were wrong. The prior is now that an unverified number in this repo is
    wrong, and a wrong number is worse than none.
-7. **Finish enumerating the 85 config panels** (W6b) and close §8.1. The denominator is now
-   settled; only the mapping is missing.
+7. **Make `Export configuration` honest** (§2.2). It ships 3 of ~11 subsystems under a name
+   that implies all of them. Either export everything or write a manifest into the file and
+   say "partial" in the UI. Cheapest fix with the worst untreated failure mode in the report.
 8. **Fix or delete the Decoder `guess_alphabets` checkbox** (§5.1). It is the only proven
    decorative control in ~80. Small, and it takes the count to zero.
 9. **Give scanning a front door** (§7.1). The capability exists and is fragmented across
@@ -554,6 +638,14 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
     that good deserves enforcement — a lint, a required prop, anything — before it decays.
 11. **Decide about `/api/intercept/drop-all`** (§4.1): build the UI affordance or drop the
     route. Same argument as `/api/discovery`, smaller.
+12. **Wire the Intruder `PayloadGenerator`** (§2.1). Numbers, file lists and custom lists are
+    written, tested, bug-fixed — and unreachable. Intruder currently accepts pasted text
+    only, which is a conspicuous gap against a tool whose entire purpose is payload
+    generation. Burp ships 48 `.pay` wordlists to burpsy's 0 (§2); this is the code path
+    that would consume them.
+13. **Disclose the TLS negotiation limitation** (§2.1, row 80), and decide whether to fix it.
+    Not being able to point the sender at a legacy-TLS target is a real constraint on what
+    engagements this tool can run, and today an operator discovers it by failing.
 
 ---
 
