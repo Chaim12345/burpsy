@@ -31,7 +31,7 @@
  *     closed — the code won and the row is absent.
  */
 
-import { SHORTCUT_GROUPS } from "./shortcuts";
+import { chordKeys, shortcutGroups, type Keymap } from "./shortcuts";
 
 /** One term and what it means. `keys` renders as <Kbd> chips instead of monospace text. */
 export interface ReferenceRow {
@@ -51,9 +51,9 @@ export interface ReferenceBlock {
 export interface ReferencePanel {
   id: string;
   title: string;
-  summary: string;
+    summary: string;
   /** Where in the tree this material is maintained, so a reader can check it. */
-  source: string;
+    source: string;
   blocks?: ReferenceBlock[];
   rows: ReferenceRow[];
 }
@@ -111,9 +111,9 @@ export const QUERY_REFUSALS: { query: string; why: string }[] = [
 export const QUERY_PANEL: ReferencePanel = {
   id: "query",
   title: "Query language",
-  summary:
+    summary:
     "The filter grammar over captured traffic. One small closed typed language, shared by the History filter box and the CLI's history --query.",
-  source: "internal/query — grammar and rationale in query.go's package doc",
+    source: "internal/query — grammar and rationale in query.go's package doc",
   blocks: [
     { label: "Grammar", body: QUERY_GRAMMAR },
     { label: "Examples", body: QUERY_EXAMPLES.map((entry) => entry.query).join("\n") },
@@ -189,9 +189,9 @@ given host then
 export const BCHECK_PANEL: ReferencePanel = {
   id: "bcheck",
   title: "BCheck syntax",
-  summary:
+    summary:
     "PortSwigger's check DSL, parsed and evaluated in full. Burp's scan checks are largely data rather than code, so one interpreter inherits the published corpus instead of porting hundreds of Java checks.",
-  source: "internal/bcheck (parser.go, bcheck.go, active.go); docs/BCHECK-COVERAGE.md",
+    source: "internal/bcheck (parser.go, bcheck.go, active.go); docs/BCHECK-COVERAGE.md",
   blocks: [{ label: "A complete check", body: BCHECK_SKELETON }],
   rows: [
     {
@@ -270,9 +270,9 @@ export const BCHECK_PANEL: ReferencePanel = {
 export const LIMITS_PANEL: ReferencePanel = {
   id: "limits",
   title: "What burpsy does not do",
-  summary:
+    summary:
     "Every row is a decision, not a defect — and each one is a way a result can be narrower than it looks. Read this before reading a quiet scan as an absent vulnerability.",
-  source: "ROADMAP.md § Deliberately out of scope; burpsy-go/ui-gaps.md; each row re-checked against the code",
+    source: "ROADMAP.md § Deliberately out of scope; burpsy-go/ui-gaps.md; each row re-checked against the code",
   rows: [
     {
       term: "Out-of-band BCheck checks",
@@ -362,9 +362,9 @@ export const LIMITS_PANEL: ReferencePanel = {
 export const DOCS_PANEL: ReferencePanel = {
   id: "docs",
   title: "Shipped documentation",
-  summary:
+    summary:
     "Files in the repository, not URLs. The console serves no documentation route, so these are paths to open in a checkout rather than links that would 404 here.",
-  source: "burpsy-go/docs/",
+    source: "burpsy-go/docs/",
   rows: [
     { term: "docs/QUICKSTART.md", detail: "Clone to a running headless proxy and JSON API, including CA installation and BCheck loading." },
     { term: "docs/JSON-API.md", detail: "Every route, derived from setupRoutes and the canonical route manifest rather than written by hand." },
@@ -387,16 +387,23 @@ export const DOCS_PANEL: ReferencePanel = {
  * this is a third renderer of one list, which is fine, where a third
  * hand-maintained list would not be.
  */
-export const SHORTCUT_PANELS: ReferencePanel[] = SHORTCUT_GROUPS.map((group) => ({
-  id: `keys-${group.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-  title: `Keyboard — ${group.title}`,
-  summary: "mod is ⌘ on macOS and Ctrl elsewhere. A binding that differs from Burp's says why.",
-  source: "src/lib/shortcuts.ts — the same registry behind the ? sheet and Settings → Hotkeys",
-  rows: group.rows.map((row) => ({ term: row.keys.join(" + "), detail: row.label, keys: row.keys, note: row.note })),
-}));
+export function shortcutPanels(keymap: Keymap): ReferencePanel[] {
+  return shortcutGroups().map((group) => ({
+    id: `keys-${group.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    title: `Keyboard — ${group.title}`,
+    summary: "mod is ⌘ on macOS and Ctrl elsewhere. A binding that differs from Burp's says why.",
+    source: "src/lib/shortcuts.ts — the same registry behind the ? sheet and Settings → Hotkeys",
+    rows: group.rows.map((row) => {
+      const keys = chordKeys(row, keymap);
+      return { term: keys.join(" + "), detail: row.label, keys, note: row.note };
+    }),
+  }));
+}
 
 /** Every panel, in reading order: the gaps first, because they change how the rest is read. */
-export const REFERENCE_PANELS: ReferencePanel[] = [LIMITS_PANEL, QUERY_PANEL, BCHECK_PANEL, ...SHORTCUT_PANELS, DOCS_PANEL];
+export function referencePanels(keymap: Keymap): ReferencePanel[] {
+  return [LIMITS_PANEL, QUERY_PANEL, BCHECK_PANEL, ...shortcutPanels(keymap), DOCS_PANEL];
+}
 
 /* --- search --------------------------------------------------------------- */
 

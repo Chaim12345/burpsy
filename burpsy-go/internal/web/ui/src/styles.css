@@ -1572,7 +1572,10 @@ tbody td {
 
 .shortcut-row {
   display: grid;
-  grid-template-columns: 130px minmax(0, 1fr);
+  /* Third column for the Edit/Reset controls. auto rather than a fixed width so a row with no
+     controls -- the fixed bindings, which are most of them -- gives its space back to the label
+     instead of leaving a column-shaped hole down the table. */
+  grid-template-columns: 130px minmax(0, 1fr) auto;
   gap:var(--s2);
   align-items: center;
   padding:var(--s1) 0;
@@ -1583,6 +1586,18 @@ tbody td {
 .shortcut-row > div {
   display: flex;
   gap:var(--s1);
+}
+
+.shortcut-actions {
+  display: flex;
+  gap:var(--s1);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* The capture field is narrow on purpose: it holds one chord, never a sentence. */
+.shortcut-actions .input {
+  max-width: var(--w-sm);
 }
 
 /* ===========================================================================

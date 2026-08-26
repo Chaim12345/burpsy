@@ -26,7 +26,8 @@ import {
 } from "../lib/data.network";
 import { useCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
-import { SHORTCUT_GROUPS } from "../lib/shortcuts";
+import { actionForChord, chordFor, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
+import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
 import type { FrameProgramResponse } from "../lib/types.policy";
 import type { ScannerConfig } from "../lib/types";
 import { DetailList } from "../ui/json";
@@ -1138,35 +1139,158 @@ function NetworkSection(): JSX.Element {
   );
 }
 
+/**
+ * One editable row. Capture is a keydown on a focused input rather than a text field the
+ * operator types "mod+k" into: Burp captures the keystroke, and asking someone to spell a
+ * chord is asking them to learn this file's vocabulary.
+ */
+function HotkeyRow({ action, keymap }: { action: ShortcutAction; keymap: Record<string, string | null> }): JSX.Element {
+  const [editing, setEditing] = useState(false);
+  const [captured, setCaptured] = useState<string>("");
+  const [problem, setProblem] = useState<string | null>(null);
+  const overridden = Object.prototype.hasOwnProperty.call(keymap, action.id);
+  const keys = chordKeys(action, keymap);
+
+  const commit = (raw: string) => {
+    const checked = validateChord(raw);
+    if ("error" in checked) {
+      setProblem(checked.error);
+      return;
+    }
+    // Duplicate detection, naming the holder — Burp's own wording is "This hotkey is already
+    // assigned to ...". Silently stealing the chord would leave two rows claiming one key and
+    // whichever registered last winning, which is not a thing the table could then explain.
+    const clash = actionForChord(keymap, checked.chord, action.id);
+    if (clash) {
+      setProblem(`Already assigned to "${clash.label}"`);
+      return;
+    }
+    setChord(action.id, checked.chord);
+    setEditing(false);
+    setCaptured("");
+    setProblem(null);
+  };
+
+  return (
+    <div className="shortcut-row">
+      <div>
+        {keys.map((key, i) => (
+          <span key={`${key}-${i}`}>
+            {i > 0 ? "+" : null}
+            <Kbd>{key}</Kbd>
+          </span>
+        ))}
+      </div>
+      <span>
+        {action.label}
+        {action.note ? <small className="shortcut-note">{action.note}</small> : null}
+        {!action.rebindable ? <small className="shortcut-note">Fixed — not reassignable</small> : null}
+        {problem ? <small className="shortcut-note">{problem}</small> : null}
+      </span>
+      <span className="shortcut-actions">
+        {action.rebindable ? (
+          editing ? (
+            <>
+              <Input
+                aria-label={`New keystroke for ${action.label}`}
+                autoFocus
+                readOnly
+                value={captured}
+                placeholder="Press a combination"
+                onKeyDown={(event) => {
+                  event.preventDefault();
+                  if (event.key === "Escape") {
+                    setEditing(false);
+                    setCaptured("");
+                    setProblem(null);
+                    return;
+                  }
+                  const chord = chordFromEvent(event);
+                  setCaptured(chord);
+                  setProblem(null);
+                  if (event.key === "Enter" && captured !== "") commit(captured);
+                }}
+              />
+              <Button size="small" variant="primary" disabled={captured === ""} onClick={() => commit(captured)}>
+                Apply
+              </Button>
+              <Button size="small" variant="quiet" onClick={() => { setEditing(false); setCaptured(""); setProblem(null); }}>
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="small" variant="quiet" onClick={() => { setEditing(true); setProblem(null); }}>
+                Edit
+              </Button>
+              {overridden ? (
+                <Button size="small" variant="quiet" onClick={() => resetChord(action.id)}>
+                  Reset
+                </Button>
+              ) : null}
+            </>
+          )
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
 function HotkeysSection(): JSX.Element {
+  const keymap = useKeymap();
+  const [term, setTerm] = useState("");
+  const groups = useMemo(() => {
+    const needle = term.trim().toLowerCase();
+    return shortcutGroups()
+      .map((group) => ({
+        title: group.title,
+        rows: group.rows.filter(
+          (row) =>
+            needle === "" ||
+            row.label.toLowerCase().includes(needle) ||
+            row.group.toLowerCase().includes(needle) ||
+            chordKeys(row, keymap).join("+").toLowerCase().includes(needle),
+        ),
+      }))
+      .filter((group) => group.rows.length > 0);
+  }, [term, keymap]);
+
+  const rebindable = shortcutGroups().flatMap((g) => g.rows).filter((r) => r.rebindable).length;
+  const fixed = shortcutGroups().flatMap((g) => g.rows).length - rebindable;
+  const overrides = Object.keys(keymap).length;
+  const shown = groups.reduce((n, g) => n + g.rows.length, 0);
+
   return (
     <Card>
       <SectionHeading
         title="Hotkeys"
-        detail="The full binding set, the same list the ? modal shows. mod is ⌘ on macOS and Ctrl elsewhere; bindings that had to differ from Burp say why."
+        detail="mod is ⌘ on macOS and Ctrl elsewhere. Stored in this browser; it does not travel with the capture."
+        actions={overrides > 0 ? <Button size="small" variant="quiet" onClick={resetAllChords}>Reset all</Button> : undefined}
       />
+      <Field label="Search hotkeys" hint="Matches the action, its group, or the keys themselves.">
+        {(id) => <Input id={id} value={term} onChange={(event) => setTerm(event.target.value)} placeholder="repeater, palette, mod+k" />}
+      </Field>
+      {/* Three counts, because they answer three different questions: how many can be changed,
+          how many cannot, and how many the operator has changed. A single "22 shortcuts" would
+          hide the fact that most of these rows have no Edit button and say why. */}
+      <p className="field-hint">
+        {formatCount(rebindable)} reassignable, {formatCount(fixed)} fixed
+        {overrides > 0 ? `, ${formatCount(overrides)} changed from the default` : ""}
+        {term.trim() !== "" ? ` — showing ${formatCount(shown)}` : ""}
+      </p>
       <div className="shortcut-table">
-        {SHORTCUT_GROUPS.map((group) => (
-          <div key={group.title}>
-            <div className="shortcut-group">{group.title}</div>
-            {group.rows.map((entry) => (
-              <div className="shortcut-row" key={entry.label}>
-                <div>
-                  {entry.keys.map((key, i) => (
-                    <span key={key}>
-                      {i > 0 ? "+" : null}
-                      <Kbd>{key}</Kbd>
-                    </span>
-                  ))}
-                </div>
-                <span>
-                  {entry.label}
-                  {entry.note ? <small className="shortcut-note">{entry.note}</small> : null}
-                </span>
-              </div>
-            ))}
-          </div>
-        ))}
+        {groups.length === 0 ? (
+          <Empty title="No matching hotkey" detail="Nothing matches that search." />
+        ) : (
+          groups.map((group) => (
+            <div key={group.title}>
+              <div className="shortcut-group">{group.title}</div>
+              {group.rows.map((row) => (
+                <HotkeyRow key={row.id} action={row} keymap={keymap} />
+              ))}
+            </div>
+          ))
+        )}
       </div>
     </Card>
   );

@@ -1,6 +1,7 @@
 import { Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { REFERENCE_PANELS, countRows, filterPanels } from "../lib/reference";
+import { countRows, filterPanels, referencePanels } from "../lib/reference";
+import { useKeymap } from "../lib/keymap";
 import { PageHeader } from "../ui/layout";
 import { Badge, Empty, IconButton, Input, Toolbar } from "../ui/primitives";
 import { ReferencePanelView, panelAnchor } from "../ui/reference";
@@ -31,8 +32,13 @@ import { ReferencePanelView, panelAnchor } from "../ui/reference";
 export function DiscoverPage(): JSX.Element {
   const [term, setTerm] = useState("");
 
-  const panels = useMemo(() => filterPanels(REFERENCE_PANELS, term), [term]);
-  const total = useMemo(() => countRows(REFERENCE_PANELS), []);
+  // Subscribed, so a rebind in Settings shows here too. Discover exists to tell the operator
+  // what the keys are; printing the shipped defaults after they changed one would make it the
+  // least trustworthy page in the console.
+  const keymap = useKeymap();
+  const all = useMemo(() => referencePanels(keymap), [keymap]);
+  const panels = useMemo(() => filterPanels(all, term), [all, term]);
+  const total = useMemo(() => countRows(all), [all]);
   const shown = countRows(panels);
 
   return (

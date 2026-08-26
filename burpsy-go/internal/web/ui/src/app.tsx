@@ -29,7 +29,8 @@ import { useCaCert } from "./lib/data.policy";
 import { onDesktopEvent } from "./lib/runtime";
 import { resolveTheme, useApp } from "./lib/store";
 import type { Exchange } from "./lib/types";
-import { SHORTCUT_GROUPS } from "./lib/shortcuts";
+import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
+import { useChord, useKeymap } from "./lib/keymap";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
 import { DropdownMenu, type MenuGroup } from "./ui/menu";
@@ -38,16 +39,17 @@ import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
 
 function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
+  const keymap = useKeymap();
   return (
     <Modal open={open} onOpenChange={onOpenChange} title="Keyboard shortcuts" description="mod is ⌘ on macOS and Ctrl elsewhere.">
       <div className="shortcut-table">
-        {SHORTCUT_GROUPS.map((group) => (
+        {shortcutGroups().map((group) => (
           <div key={group.title}>
             <div className="shortcut-group">{group.title}</div>
-            {group.rows.map((entry) => (
-              <div className="shortcut-row" key={entry.label}>
+            {group.rows.map((entry: ShortcutAction) => (
+              <div className="shortcut-row" key={entry.id}>
                 <div>
-                  {entry.keys.map((key, i) => (
+                  {chordKeys(entry, keymap).map((key, i) => (
                     <span key={key}>{i > 0 ? "+" : null}<Kbd>{key}</Kbd></span>
                   ))}
                 </div>
@@ -222,24 +224,53 @@ function App(): JSX.Element {
     };
   }, [navigate, toggleTheme, exportHistoryCSV, setPaletteOpen, setShortcutsOpen]);
 
+  const paletteChord = useChord("nav.palette");
+  const shortcutsChord = useChord("help.shortcuts");
+  const themeChord = useChord("view.toggleTheme");
+  const nextToolChord = useChord("nav.nextTool");
+  const prevToolChord = useChord("nav.prevTool");
+
+  // Burp's Ctrl+Alt+Left / Ctrl+Alt+Right. Cycling is a separate action from alt+1…0 because
+  // there are thirteen tools and ten digits: four tabs are reachable only this way.
+  const cycleTool = useCallback(
+    (delta: number) => {
+      const tools = TOOLS;
+      const currentTool = toolOf(route);
+      const at = tools.findIndex((entry) => entry.id === currentTool.id);
+      if (at === -1) return;
+      // Wraps, because a cycle that stops at the ends makes the last tab unreachable from the
+      // first without counting.
+      const next = tools[(at + delta + tools.length) % tools.length]!;
+      navigate(entryLeaf(next));
+    },
+    [route, navigate],
+  );
+  useHotkeys(nextToolChord, (event) => { event.preventDefault(); cycleTool(1); },
+    { enableOnFormTags: true }, [nextToolChord, cycleTool]);
+  useHotkeys(prevToolChord, (event) => { event.preventDefault(); cycleTool(-1); },
+    { enableOnFormTags: true }, [prevToolChord, cycleTool]);
+
+  // Bound from the keymap, not a literal: the Settings table edits these, and a literal here
+  // would mean an operator's rebind changed the row the modal displays and nothing else.
   useHotkeys(
-    "mod+k",
+    paletteChord,
     (event) => {
       event.preventDefault();
       setPaletteOpen(true);
     },
     { enableOnFormTags: true },
+    [paletteChord, setPaletteOpen],
   );
 
-  useHotkeys("shift+slash", () => setShortcutsOpen(true));
+  useHotkeys(shortcutsChord, () => setShortcutsOpen(true), { enableOnFormTags: false }, [shortcutsChord]);
   useHotkeys(
-    "mod+shift+l",
+    themeChord,
     (event) => {
       event.preventDefault();
       toggleTheme();
     },
     { enableOnFormTags: true },
-    [toggleTheme],
+    [themeChord, toggleTheme],
   );
 
   const [importResult, setImportResult] = useState<{ ok: boolean; detail: string } | null>(null);
