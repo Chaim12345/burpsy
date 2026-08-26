@@ -927,10 +927,13 @@ honestly: refuse, or evict into the reopen stack, or say so.
 Having spent six sections establishing that this repo's claims do not survive checking, the
 obvious question is whether *this document's* claims do. Two passes at `210f73f`:
 
-**Pass 1 — structural, exhaustive.** Extracted all **70** distinct `file:line` citations in
+**Pass 1 — structural, exhaustive.** Extracted all distinct `file:line` citations in
 this report and resolved every one against the tree: does the file exist, and does it have
-that many lines? **70 / 70 passed.** No dangling citations, no line numbers off the end of a
-file, no paths that moved. Cheap to run and worth keeping — it is `grep -oE` plus a loop.
+that many lines? **70 / 70 passed** when first run, and **102 / 102** on re-run after this
+wave's additions — the citation count grew as findings landed, and the pass was re-run rather
+than quoted from memory. No dangling citations, no line numbers off the end of a file, no paths
+that moved. Cheap to run and worth keeping — it is `grep -oE` plus a loop, and re-running it is
+the only reason this paragraph does not still say 70.
 
 **Pass 2 — semantic, sampled.** Structural resolution is the weaker check: the W1 failure
 (§10 trap #4) was a file that existed, at the right path, saying the *opposite* of what cited
@@ -969,11 +972,11 @@ Four things follow, and they are the honest reading:
 1. **The structural pass is necessary and nearly worthless on its own.** It scored 100% on a
    document containing a false claim. A citation audit that only checks that files exist
    measures tidiness, not truth.
-2. **A 1-in-13 semantic error rate is this report's own floor, not its ceiling** — 57
+2. **A 1-in-13 semantic error rate is this report's own floor, not its ceiling** — 89
    citations went unsampled, and the sample was deliberately drawn from the *most*
    scrutinised claims, so it is biased optimistic. §7's "read this as a floor, not a
    measurement" applies to the document as much as to the product. Anyone acting on a claim
-   here should re-read its citation first; that is now cheap, because all 70 resolve.
+   here should re-read its citation first; that is now cheap, because all 102 resolve.
 3. **The error was in a fix estimate, which is the most dangerous place to be wrong.** A
    wrong severity gets argued about; a wrong *cost* silently changes what gets scheduled. An
    under-priced defect is deferred by ordinary good planning, and nothing ever re-checks the
@@ -1020,7 +1023,7 @@ Four things follow, and they are the honest reading:
   rather than open new ground; between them they closed items **3, 8, 10** and corrected the
   premise of item **7** (§8), while turning up **a new STATE 5** (§6.7b), **a misattributed
   coverage row** (§6.7a), and **a route name that never existed** (§3.1). In parallel, this
-  report's own citations were audited: 70/70 resolve structurally, **1 of 13 false**
+  report's own citations were audited: 102/102 resolve structurally, **1 of 13 false**
   semantically (§6.8).
 
 **Nothing remains open from the original plan.** What the report still does not know is
