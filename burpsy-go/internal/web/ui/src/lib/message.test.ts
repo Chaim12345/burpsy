@@ -26,6 +26,7 @@ import {
   headerSpans,
   jsonMemberSpans,
   parseMessage,
+  pairSpans,
   parsePairs,
   queryOf,
   querySpans,
@@ -43,13 +44,20 @@ import {
   startLineSpans,
 } from "./message";
 
-/** A CRLF request with a form body, which is the shape most of these act on. */
+/**
+ * A CRLF request with a form body, which is the shape most of these act on.
+ *
+ * Its Content-Length is the body's real byte count. That matters: a fixture that
+ * declared the wrong length would make every `fixContentLength` assertion below
+ * pass for the wrong reason — the writer would look like it had corrected the
+ * length when all it had done was correct the fixture.
+ */
 const FORM = [
   "POST /login?next=%2Fhome&debug=1 HTTP/1.1",
   "Host: shop.example",
   "Cookie: session=abc; theme=dark",
   "Content-Type: application/x-www-form-urlencoded",
-  "Content-Length: 25",
+  "Content-Length: 26",
   "",
   "user=admin&pass=hunter+two",
 ].join("\r\n");
@@ -72,7 +80,7 @@ describe("reading is unchanged by the span rewrite", () => {
       ["Host", "shop.example"],
       ["Cookie", "session=abc; theme=dark"],
       ["Content-Type", "application/x-www-form-urlencoded"],
-      ["Content-Length", "25"],
+      ["Content-Length", "26"],
     ]);
     expect(parseMessage(FORM).body).toBe("user=admin&pass=hunter+two");
 
@@ -134,14 +142,14 @@ describe("headers", () => {
     expect(removeHeaderAt(FORM, 1)).toBe(FORM.replace("Cookie: session=abc; theme=dark\r\n", ""));
 
     const last = removeHeaderAt(FORM, 3);
-    expect(last).toBe(FORM.replace("\r\nContent-Length: 25", ""));
+    expect(last).toBe(FORM.replace("\r\nContent-Length: 26", ""));
     expect(parseMessage(last).body).toBe(parseMessage(FORM).body);
     expect(parseMessage(last).headers).toHaveLength(3);
   });
 
   test("an added header lands at the end of the head with the message's own line ending", () => {
     expect(addHeader(FORM, "X-Trace", "1")).toBe(
-      FORM.replace("Content-Length: 25\r\n\r\n", "Content-Length: 25\r\nX-Trace: 1\r\n\r\n"),
+      FORM.replace("Content-Length: 26\r\n\r\n", "Content-Length: 26\r\nX-Trace: 1\r\n\r\n"),
     );
     const lf = "GET / HTTP/1.1\nHost: h\n\nbody";
     expect(addHeader(lf, "X", "1")).toBe("GET / HTTP/1.1\nHost: h\nX: 1\n\nbody");
@@ -306,7 +314,7 @@ describe("body parameters — JSON", () => {
     "POST /api HTTP/1.1",
     "Host: h",
     "Content-Type: application/json",
-    "Content-Length: 63",
+    "Content-Length: 66",
     "",
     '{\n  "2": "second",\n  "name": "ann",\n  "age": 30,\n  "tags": ["a"]\n}',
   ].join("\r\n");
@@ -331,7 +339,10 @@ describe("body parameters — JSON", () => {
   test("editing one member leaves the indentation and every other member alone", () => {
     const next = setBodyParamAt(json, 1, "name", "bob");
     expect(parseMessage(next).body).toBe('{\n  "2": "second",\n  "name": "bob",\n  "age": 30,\n  "tags": ["a"]\n}');
-    expect(parseMessage(next).headers).toContainEqual(["Content-Length", "63"]);
+    // "ann" and "bob" are the same width, so the length is left where it was
+    // rather than rewritten to the same number — the newlines and two-space
+    // indentation all survive, which is what "splice, never reflow" buys.
+    expect(parseMessage(next).headers).toContainEqual(["Content-Length", "66"]);
   });
 
   test("a number stays a number and a string stays a string", () => {
@@ -351,7 +362,10 @@ describe("body parameters — JSON", () => {
   });
 
   test("removing a member takes the comma with it, at either end", () => {
-    expect(parseMessage(removeBodyParamAt(json, 0)).body).toBe('{"name": "ann",\n  "age": 30,\n  "tags": ["a"]\n}');
+    // Removing the first member takes the comma AFTER it, so the "{\n  " that
+    // preceded it stays exactly as written. Reaching back to the brace instead
+    // would silently restyle a body the operator did not ask to restyle.
+    expect(parseMessage(removeBodyParamAt(json, 0)).body).toBe('{\n  "name": "ann",\n  "age": 30,\n  "tags": ["a"]\n}');
     expect(parseMessage(removeBodyParamAt(json, 3)).body).toBe('{\n  "2": "second",\n  "name": "ann",\n  "age": 30\n}');
     expect(parseMessage(removeBodyParamAt(json, 1)).body).toBe('{\n  "2": "second",\n  "age": 30,\n  "tags": ["a"]\n}');
   });
@@ -430,27 +444,33 @@ describe("the writers compose", () => {
     raw = setCookieAt(raw, 0, "session", "zzz");
     raw = addQueryParam(raw, "v", "2");
     raw = setBodyParamAt(raw, 1, "pass", "s3cret");
-    raw = removeHeaderAt(raw, 3); // Content-Type
+    // Index 2 is Content-Type: the appended X-Trace went to the END of the head,
+    // so it did not shift the headers that were already there.
+    raw = removeHeaderAt(raw, 2);
 
     const parsed = parseMessage(raw);
     expect(parsed.startLine).toBe("PUT /login?next=%2Fhome&debug=1&v=2 HTTP/1.1");
     expect(parsed.headers).toEqual([
       ["Host", "api.example"],
-      ["Cookie", "zzz=zzz"],
-      ["Content-Length", "23"],
+      // Editing cookie 0 by name and value rewrote only cookie 0; theme survived.
+      ["Cookie", "session=zzz; theme=dark"],
+      ["Content-Length", "22"],
       ["X-Trace", "abc"],
     ]);
     expect(parsed.body).toBe("user=admin&pass=s3cret");
   });
 
   test("parsePairs and pairSpans skip the same empty chunks", () => {
-    for (const input of ["", "a=1", "&a=1&&b=2&", "a", "=1", "a=1=2"]) {
-      expect(parsePairs(input)).toEqual(pairSpansPairs(input));
+    for (const input of ["", "a=1", "&a=1&&b=2&", "a", "=1", "a=1=2", "a=1&&&b=2"]) {
+      const spans = pairSpans(input);
+      expect(spans.map(({ name, value }) => [name, value])).toEqual(parsePairs(input));
+      // And every span really points at the chunk it claims, so the row an
+      // operator edits and the bytes that get spliced are the same chunk.
+      for (const span of spans) {
+        const chunk = input.slice(span.start, span.end);
+        expect(chunk).not.toContain("&");
+        expect(chunk.length).toBeGreaterThan(0);
+      }
     }
   });
 });
-
-/** parsePairs' output rebuilt from the spans, for the equivalence check above. */
-function pairSpansPairs(input: string): [string, string][] {
-  return parsePairs(input);
-}

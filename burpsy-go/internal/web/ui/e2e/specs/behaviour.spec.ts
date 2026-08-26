@@ -4,8 +4,10 @@
 // checked by reading a rendered colour, not by reading back the attribute it just set, because an
 // attribute no stylesheet consumes would satisfy the second and change nothing on screen.
 
+import { request as httpRequest } from "node:http";
 import { activePane, expect, gotoApp, gotoRoute, pinTheme, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
+import { readHarness } from "../harness/server";
 
 const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
 
@@ -459,6 +461,228 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
       // Single shared server for the whole file (workers: 1) — leaving this rule in place would take
       // every later test's traffic out of scope too.
       await page.request.post("/api/scope", { data: { action: "clear" } });
+    }
+
+    expect(consoleErrors).toEqual([]);
+  });
+});
+
+test.describe("the editable Inspector — Unit 14", () => {
+  /**
+   * A GET through the proxy that RESOLVES WITH THE BODY, unlike the harness's own
+   * viaProxy which only waits for the end of the stream. The body is the assertion:
+   * the throwaway origin echoes `ORIGIN-OK <method> <url>`, so reading it back is
+   * how a test learns what bytes the proxy actually forwarded — as opposed to what
+   * the console displayed, which is the thing under test and cannot vouch for itself.
+   *
+   * `agent: false` for the same reason the harness does it; see viaProxy's comment.
+   */
+  function proxyGet(proxyPort: number, url: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const target = new URL(url);
+      const request = httpRequest(
+        { host: "127.0.0.1", port: proxyPort, method: "GET", path: url, headers: { Host: target.host }, agent: false },
+        (response) => {
+          let body = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          response.once("end", () => resolve(body));
+        },
+      );
+      request.once("error", reject);
+      request.end();
+    });
+  }
+
+  test("an Inspector edit changes the request Repeater actually sends", async ({ page, consoleErrors }) => {
+    const { targetPort } = readHarness();
+    const origin = `http://127.0.0.1:${targetPort}`;
+    await gotoRoute(page, route("repeater"));
+
+    // A fresh browser has no persisted tabs, so the page opens on its empty state.
+    await page.getByRole("button", { name: "New request" }).first().click();
+    await page.getByLabel("Target", { exact: true }).fill(origin);
+
+    const requestEditor = page.locator(".editor-grid-inspected > *").first();
+    await expect(requestEditor).toContainText("GET /");
+
+    // Edit the request target through the Inspector, not the Raw view — the whole
+    // claim being tested is that the Inspector writes the message the tool sends.
+    const inspector = page.locator(".inspector");
+    const targetField = inspector.getByLabel("Request attributes value for Target");
+    await targetField.fill("/inspector-edited");
+    await inspector.getByRole("button", { name: "Apply" }).click();
+
+    // First: the edit reached the raw bytes, spliced rather than reflowed.
+    await expect(requestEditor).toContainText("GET /inspector-edited HTTP/1.1");
+    // And the field is no longer dirty, so Apply has gone.
+    await expect(inspector.getByRole("button", { name: "Apply" })).toHaveCount(0);
+
+    // Then the assertion that matters: send it, and let the ORIGIN say what it received.
+    // A console that displayed the edit but sent the old bytes passes the check above
+    // and fails this one.
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const responseEditor = page.locator(".editor-grid-inspected > *").nth(1);
+    await expect(responseEditor).toContainText("ORIGIN-OK GET /inspector-edited");
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("adding a header in the Inspector puts it on the wire", async ({ page, consoleErrors }) => {
+    const { targetPort } = readHarness();
+    await gotoRoute(page, route("repeater"));
+    await page.getByRole("button", { name: "New request" }).first().click();
+    await page.getByLabel("Target", { exact: true }).fill(`http://127.0.0.1:${targetPort}`);
+
+    const inspector = page.locator(".inspector");
+    // The headers section starts collapsed only when empty; a template request has a
+    // Host header, so it is open and its count is honest about what is in it.
+    const headers = inspector.locator(".inspector-section").filter({ hasText: "Request headers" });
+    await headers.getByRole("button", { name: "Add" }).click();
+    await headers.getByLabel("New Request headers name").fill("X-Inspector");
+    await headers.getByLabel("New Request headers value").fill("unit-14");
+    await headers.getByRole("button", { name: "Apply" }).click();
+
+    const requestEditor = page.locator(".editor-grid-inspected > *").first();
+    await expect(requestEditor).toContainText("X-Inspector: unit-14");
+
+    // And it comes back as a row of the Inspector's own headers section, which is the
+    // round trip: written into the bytes, then re-parsed out of them.
+    await expect(headers.getByLabel("Request headers value for X-Inspector")).toHaveValue("unit-14");
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("a Repeater response is inspectable but says why it is not editable", async ({ page, consoleErrors }) => {
+    const { targetPort } = readHarness();
+    await gotoRoute(page, route("repeater"));
+    await page.getByRole("button", { name: "New request" }).first().click();
+    await page.getByLabel("Target", { exact: true }).fill(`http://127.0.0.1:${targetPort}`);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+
+    const inspector = page.locator(".inspector");
+    await expect(inspector.getByLabel("Request attributes value for Method")).toBeVisible();
+
+    await inspector.getByRole("button", { name: "Inspect the response" }).click();
+
+    // The response's fields are readable — the Set-Cookie the origin sets is right there —
+    // and the pane states why they cannot be typed into, rather than offering a dead field.
+    await expect(inspector).toContainText("Response attributes");
+    await expect(inspector).toContainText("A response that has already arrived cannot be edited");
+    await expect(inspector.getByLabel(/Response attributes value for/)).toHaveCount(0);
+    await expect(inspector).toContainText("E2E_SESSION");
+
+    await inspector.getByRole("button", { name: "Inspect the request" }).click();
+    await expect(inspector.getByLabel("Request attributes value for Method")).toBeVisible();
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("the Inspector's decoder decodes a value and writes it back", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("repeater"));
+    await page.getByRole("button", { name: "New request" }).first().click();
+
+    const inspector = page.locator(".inspector");
+    // Put a percent-encoded query parameter on the request to have something to decode.
+    const query = inspector.locator(".inspector-section").filter({ hasText: "Query parameters" });
+    await query.getByRole("button", { name: "Add" }).click();
+    await query.getByLabel("New Query parameters name").fill("next");
+    await query.getByLabel("New Query parameters value").fill("%2Fhome%3Fa%3D1");
+    await query.getByRole("button", { name: "Apply" }).click();
+
+    // Encoding the value on the way in is the writers' job, so what is stored is the
+    // double-encoded form; the row reads back the once-decoded text.
+    const valueField = query.getByLabel("Query parameters value for next");
+    await expect(valueField).toHaveValue("%2Fhome%3Fa%3D1");
+
+    // Send it to the Selection section and run a URL decode over it.
+    await query.getByRole("button", { name: "Decode next" }).click();
+    const selection = inspector.locator(".inspector-selection");
+    await expect(selection.getByLabel("Selection text")).toHaveValue("%2Fhome%3Fa%3D1");
+
+    await selection.getByRole("button", { name: "Add decoder" }).click();
+    await selection.getByLabel("Decoder 1 encoding").selectOption("url-decode");
+    await expect(selection.getByLabel("Selection text")).toHaveValue("/home?a=1");
+
+    // Apply writes the DECODED text back into the parameter it came from.
+    await selection.getByRole("button", { name: "Apply" }).click();
+    await expect(query.getByLabel("Query parameters value for next")).toHaveValue("/home?a=1");
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("the Inspector dock preference survives a reload", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("repeater"));
+    await page.getByRole("button", { name: "New request" }).first().click();
+
+    const inspector = page.locator(".inspector");
+    await expect(inspector).toHaveClass(/inspector-dock-right/);
+
+    await inspector.getByRole("button", { name: "Inspector settings" }).click();
+    await page.getByRole("radio", { name: "Left" }).check();
+
+    // Docking left has to move the pane, not just relabel a setting: the Inspector's
+    // left edge must end up left of the request editor's.
+    await expect(inspector).toHaveClass(/inspector-dock-left/);
+    const inspectorBox = await inspector.boundingBox();
+    const editorBox = await page.locator(".editor-grid-inspected > .editor").first().boundingBox();
+    expect(inspectorBox!.x).toBeLessThan(editorBox!.x);
+
+    await page.reload();
+    await expect(page.locator("main h1")).toHaveText(/^Repeater/);
+    await expect(page.locator(".inspector")).toHaveClass(/inspector-dock-left/);
+
+    // Put it back: the store is persisted per browser profile, and Playwright reuses
+    // the context across tests in a file.
+    await page.locator(".inspector").getByRole("button", { name: "Inspector settings" }).click();
+    await page.getByRole("radio", { name: "Right" }).check();
+    await expect(page.locator(".inspector")).toHaveClass(/inspector-dock-right/);
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("an Inspector edit in Intercept changes the bytes actually forwarded", async ({ page, consoleErrors }) => {
+    const { proxyPort, targetPort } = readHarness();
+    const origin = `http://127.0.0.1:${targetPort}`;
+
+    // Interception is global to the one shared burpsy process, so it is turned back off
+    // in `finally` no matter how this test ends — leaving it on would hang every later
+    // test's traffic behind a held message nobody forwards.
+    await page.request.post("/api/intercept/enable", { data: { enabled: true } });
+    let inFlight: Promise<string> | null = null;
+    try {
+      await gotoRoute(page, route("intercept"));
+
+      // Fire the request and DO NOT await it: the proxy is holding it, so it only
+      // resolves once this test forwards it below.
+      inFlight = proxyGet(proxyPort, `${origin}/held-original`);
+
+      const row = page.locator("tr.data-row", { hasText: "/held-original" });
+      await expect(row).toBeVisible();
+      await row.click();
+
+      const inspector = page.locator(".inspector");
+      await inspector.getByLabel("Request attributes value for Target").fill("/forwarded-by-inspector");
+      await inspector.getByRole("button", { name: "Apply" }).click();
+
+      // The held-bytes editor is the buffer Forward sends, so the edit has to show there.
+      await expect(page.locator(".held-grid-inspected > *").first()).toContainText("GET /forwarded-by-inspector");
+
+      await page.getByRole("button", { name: "Forward" }).click();
+
+      // The origin is the witness. It echoes the path it was asked for, so this fails if
+      // the console showed the edit and forwarded the original bytes.
+      const body = await inFlight;
+      inFlight = null;
+      expect(body).toContain("ORIGIN-OK GET /forwarded-by-inspector");
+      expect(body).not.toContain("/held-original");
+    } finally {
+      await page.request.post("/api/intercept/enable", { data: { enabled: false } });
+      await page.request.post("/api/intercept/drop-all", { data: {} }).catch(() => null);
+      // A request still parked in the proxy would keep its socket open into teardown.
+      if (inFlight) await inFlight.catch(() => null);
     }
 
     expect(consoleErrors).toEqual([]);

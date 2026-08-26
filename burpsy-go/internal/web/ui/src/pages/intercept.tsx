@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
-import { ArrowDown, ArrowUp, Plus, Send, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Plus, Send, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatDuration } from "../lib/api";
 import { useInterceptControls } from "../lib/data";
@@ -13,6 +13,7 @@ import {
 } from "../lib/data.attack";
 import type { HeldMessageDetail, InterceptRuleSpec } from "../lib/types.attack";
 import { HttpEditor } from "../ui/editor";
+import { Inspector } from "../ui/inspector";
 import { PageHeader, SplitPane } from "../ui/layout";
 import {
   Badge,
@@ -323,6 +324,7 @@ export function InterceptPage(): JSX.Element {
   const [raw, setRaw] = useState("");
   const [fixContentLength, setFixContentLength] = useState(true);
   const [directionFilter, setDirectionFilter] = useState<"all" | "request" | "response">("all");
+  const [inspector, setInspector] = useState(true);
 
   const heldAll = data?.held ?? [];
   // Apply direction filter to the held queue — the operator can focus on
@@ -448,13 +450,34 @@ export function InterceptPage(): JSX.Element {
         </div>
         <div className="detail-actions">
           <Badge tone={selected.direction === "request" ? "info" : "good"}>{selected.direction}</Badge>
+          <IconButton
+            label={inspector ? "Hide Inspector" : "Show Inspector"}
+            size="small"
+            aria-pressed={inspector}
+            onClick={() => setInspector((current) => !current)}
+          >
+            <Columns3 size={13} />
+          </IconButton>
           <IconButton label="Clear selection" size="small" onClick={() => setSelectedId(null)}>
             <X size={13} />
           </IconButton>
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", minHeight: 0 }}>
-        <HttpEditor label="Held bytes" value={raw} onChange={setRaw} filename={`held-${selected.id}.txt`} />
+        <div className={inspector ? "held-grid-inspected" : "held-grid"}>
+          <HttpEditor label="Held bytes" value={raw} onChange={setRaw} filename={`held-${selected.id}.txt`} />
+          {/* The Inspector edits `raw` — the same buffer the Forward button sends — so an
+              edit made here is in the bytes that reach the client or the upstream, not a
+              second draft that has to be copied across. This is the surface where that
+              matters most: the message is held open and nothing else can change it. */}
+          {inspector ? (
+            <Inspector
+              raw={raw}
+              label={`Inspector · held ${selected.direction}`}
+              onChange={setRaw}
+            />
+          ) : null}
+        </div>
         <Toolbar style={{ borderTop: "1px solid var(--line)" }}>
           <Checkbox
             checked={fixContentLength}

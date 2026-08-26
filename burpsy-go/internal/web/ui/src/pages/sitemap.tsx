@@ -453,7 +453,13 @@ export function SiteMapPage(): JSX.Element {
           }
           filename={`exchange-${activeExchange.id}-response.txt`}
         />
-        {inspector ? <Inspector raw={request.data?.text ?? ""} label="Inspector · request" /> : null}
+        {inspector ? (
+          <Inspector
+            raw={request.data?.text ?? ""}
+            label="Inspector · request"
+            readOnlyNote="This request has already been sent, so it is read-only here. Send it to Repeater to change it and try again."
+          />
+        ) : null}
       </div>
     </div>
   ) : (
