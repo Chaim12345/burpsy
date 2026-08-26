@@ -38,6 +38,18 @@ func (s *Server) upstreamPolicy() *upstreamproxy.Policy {
 	return s.config.upstream
 }
 
+// clientCertSource is the per-host client-certificate source, or nil when none was configured.
+//
+// Nil-tolerant for the same reason upstreamPolicy is: this is reached from a dial that a test may
+// drive against a Server built without a full config, and a nil source is a supported state that
+// means "present no certificate" rather than an error.
+func (s *Server) clientCertSource() alpn.ClientCertSource {
+	if s == nil || s.config == nil {
+		return nil
+	}
+	return s.config.clientCerts
+}
+
 // upstreamDialer is the dialer every leg in this file uses.
 //
 // No timeout of its own: the relay legs here have never had a dial timeout — they rely on the OS
@@ -70,8 +82,18 @@ func (s *Server) dialUpstreamAddr(ctx context.Context, addr string) (net.Conn, e
 // certificate an operator cannot fix, and the client leg is presented with burpsy's own CA anyway. A
 // sender's egress leg follows SenderConfig.TLSVerify instead, which is why the choice is a field on
 // alpn.Dialer rather than a constant inside it.
+// clientCerts is the per-host client-certificate source, or nil. This is the leg that makes TLS
+// client authentication work through the proxy at all: the browser's own certificate cannot reach the
+// origin, because the browser is talking to burpsy's leaf and burpsy is opening a separate connection
+// onward. Before this existed, an app requiring a client certificate could only be reached by putting
+// its host on the TLS passthrough list — which is to say by giving up interception entirely, which is
+// the one thing the operator was using this tool to do.
+//
+// A method rather than a free function because the upstream proxy policy lives on the Server: both
+// legs of this dial — which proxy carries it, and which certificate it presents — are per-server
+// state, and threading either as a parameter would let one call site forget it.
 func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (*tls.Conn, string, error) {
-	dialer := alpn.Dialer{InsecureSkipVerify: true}
+	dialer := alpn.Dialer{InsecureSkipVerify: true, ClientCerts: s.clientCertSource()}
 	if policy := s.upstreamPolicy(); policy != nil && !policy.Empty() {
 		dialer.Carry = s.upstreamDialer().DialContext
 	}

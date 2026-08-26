@@ -86,7 +86,7 @@ func (a *AuthorisedSender) FollowRedirects(ctx context.Context, req *Request) (*
 		return nil, err
 	}
 	result := &FollowResult{Sent: 1, Final: resp}
-	a.followChain(ctx, result, a, req, target, resp)
+	a.followChain(ctx, result, a, req, target, resp, a.net.Network().Redirects)
 	return result, nil
 }
 
@@ -109,6 +109,18 @@ func (a *AuthorisedSender) FollowRedirects(ctx context.Context, req *Request) (*
 // wire rather than the number this function added. When the policy is RedirectNever, no hop is sent and
 // the result is one unfollowed hop naming the policy — which is what makes wiring this in safe.
 func (a *AuthorisedSender) FollowRedirectsAfter(ctx context.Context, raw, rawResp []byte) (*FollowResult, error) {
+	return a.FollowRedirectsAfterPolicy(ctx, raw, rawResp, a.net.Network().Redirects)
+}
+
+// FollowRedirectsAfterPolicy is FollowRedirectsAfter with the policy made explicit, for a caller whose
+// override lives outside the network settings — Repeater's per-send redirect-mode choice, which must
+// not have to mutate the global table (and be raced by every other sender in the process) to take
+// effect on one send. The rules are the caller's; the authorisation per hop never leaves this file.
+func (a *AuthorisedSender) FollowRedirectsAfterPolicy(
+	ctx context.Context,
+	raw, rawResp []byte,
+	policy RedirectSettings,
+) (*FollowResult, error) {
 	resp, err := responseFromRaw(rawResp)
 	if err != nil {
 		// The bytes came back but cannot be read as a response, so there is no status to decide from.
@@ -146,7 +158,7 @@ func (a *AuthorisedSender) FollowRedirectsAfter(ctx context.Context, raw, rawRes
 	if terr != nil {
 		return nil, terr
 	}
-	a.followChain(ctx, result, a, req, target, resp)
+	a.followChain(ctx, result, a, req, target, resp, policy)
 	return result, nil
 }
 
@@ -163,8 +175,8 @@ func (a *AuthorisedSender) followChain(
 	next *Request,
 	target *url.URL,
 	resp *Response,
+	policy RedirectSettings,
 ) {
-	policy := a.net.Network().Redirects
 
 	// Where we have already been, so a chain that cycles is named as a loop rather than reported as a
 	// budget that ran out. Keyed on a canonical authority-and-path rather than on the URL string,

@@ -114,6 +114,20 @@ func Single(negotiated string) []string {
 	return []string{negotiated}
 }
 
+// ClientCertSource supplies the TLS client certificate to present to one host, or nil when no
+// identity is bound to it.
+//
+// An interface with one method rather than a dependency on internal/netauth, which is where the
+// bindings and the PKCS#12 parsing actually live. This package is deliberately stdlib-only (see
+// AGENTS.md) because it sits underneath both the sender and the proxy: importing the credential
+// store here would drag PKCS#12 decoding into the dial path of every TLS connection burpsy makes,
+// and would invert the dependency direction — netauth is a policy holder, alpn is a transport
+// detail. The parsed certificate arrives ready to use; nothing here knows where it came from.
+type ClientCertSource interface {
+	// For returns the certificate bound to host, or nil. Called once per dial that requests one.
+	For(host string) *tls.Certificate
+}
+
 // Dialer opens TLS connections and reports what ALPN chose.
 //
 // A struct rather than a function with six arguments, because the two knobs are properties of the
@@ -144,6 +158,15 @@ type Dialer struct {
 	// direct dial. A proxy applied *inside* the handshake would be a second man in the middle whose
 	// certificate the caller would then have to decide about, which is a different feature.
 	Carry func(ctx context.Context, network, addr string) (net.Conn, error)
+	// ClientCerts, when set, is consulted for a client certificate to present when the peer asks for
+	// one. Nil — the default — means no certificate is ever offered, which is the behaviour every
+	// caller had before client TLS authentication existed.
+	//
+	// Per-Dialer rather than per-Dial because tls.CertificateRequestInfo does not carry the server
+	// name: crypto/tls hands the callback the acceptable CAs and signature schemes and nothing that
+	// identifies the peer, so the only place the host is still known is out here, where Dial was
+	// given it. A single shared tls.Config physically cannot do per-host selection for that reason.
+	ClientCerts ClientCertSource
 }
 
 // Dial connects to addr, offering exactly the protocols in offer, and returns the connection with the
@@ -162,6 +185,23 @@ func (d Dialer) Dial(ctx context.Context, serverName, addr string, offer []strin
 	}
 	if len(offer) > 0 {
 		cfg.NextProtos = offer
+	}
+	if d.ClientCerts != nil {
+		// GetClientCertificate rather than cfg.Certificates: it is only consulted when the peer
+		// actually sends a CertificateRequest, so a host with no binding costs one nil map lookup on
+		// the handshakes that ask and nothing at all on the ones that do not.
+		//
+		// Declining returns an empty tls.Certificate, never an error. A server may request a
+		// certificate from every client and still accept those that send none, so failing the
+		// handshake here would break targets that work fine today — an empty Certificate message is
+		// the TLS-level way to say "I have none", which is exactly what this dialler sent before
+		// client certificates existed.
+		cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			if found := d.ClientCerts.For(serverName); found != nil {
+				return found, nil
+			}
+			return &tls.Certificate{}, nil
+		}
 	}
 	if d.Carry != nil {
 		// The carrier is dialled first, then the handshake runs on top of it. HandshakeContext rather

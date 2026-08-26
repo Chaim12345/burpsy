@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/alpn"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
 	"github.com/burpsy-go/burpsy/internal/intercept"
@@ -440,6 +441,10 @@ type ProxyConfig struct {
 	findings     *core.FindingStore
 	intercept    *intercept.Engine
 	logger       *zap.Logger
+	// clientCerts supplies the TLS client certificate to present on the upstream
+	// leg of an intercepted connection. Nil — the default — means none is ever
+	// offered. See WithClientCerts.
+	clientCerts alpn.ClientCertSource
 	// stripWsExtensions removes the client's Sec-WebSocket-Extensions offer
 	// from a handshake before forwarding it. See WithStripWsExtensions.
 	stripWsExtensions bool
@@ -524,6 +529,26 @@ func (c *ProxyConfig) WithFindings(fs *core.FindingStore) *ProxyConfig {
 // requests and responses are held for the operator instead of forwarded.
 func (c *ProxyConfig) WithIntercept(engine *intercept.Engine) *ProxyConfig {
 	c.intercept = engine
+	return c
+}
+
+// WithClientCerts sets the per-host client-certificate source consulted on the
+// upstream leg of an intercepted TLS connection.
+//
+// Nil-means-off, and the nil case is the one to keep cheap: it is what every
+// session without a client certificate configured runs, and it must cost nothing
+// on a dial. alpn.Dialer installs no handshake callback at all when this is nil,
+// so the common path is byte-for-byte the dial the proxy made before.
+//
+// This is the leg that makes TLS client authentication work through the proxy.
+// The browser's own certificate cannot reach the origin — the browser is talking
+// to burpsy's leaf, and burpsy opens a second connection onward — so before this
+// existed the only way to reach such an app was to put its host on the TLS
+// passthrough list, which is to say to give up interception entirely. ROADMAP.md
+// lists exactly that as a reason hosts land on the passthrough list; this is the
+// answer to it.
+func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig {
+	c.clientCerts = source
 	return c
 }
 

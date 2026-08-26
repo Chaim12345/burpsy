@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/burpsy-go/burpsy/internal/alpn"
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/blindxss"
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -20,6 +21,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/extension"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/netauth"
 	"github.com/burpsy-go/burpsy/internal/oob"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/proxy"
@@ -303,6 +305,23 @@ func main() {
 			zap.String("default", upstreamPolicy.Default().Display()),
 			zap.Int("rules", len(upstreamPolicy.Rules())))
 	}
+	// Settings → Network: per-host HTTP credentials and per-host TLS client identities.
+	//
+	// Built here, before either server, because three places that cannot see each other
+	// read the same two stores: the web API edits them, every internal/sender egress
+	// presents them, and the proxy's upstream leg presents the certificate on an
+	// intercepted connection. One set of pointers threaded through all three is the only
+	// arrangement in which the panel and the wire agree; separate copies would give the
+	// operator a panel editing one and a request carrying another.
+	//
+	// Restored here rather than through persistStore.Restore for two reasons. The stores
+	// have to exist before the proxy config below, which Restore's call site does not; and
+	// rebuilding a client certificate means re-reading a PKCS#12 file that may have been
+	// deleted since, which produces per-row failures that must be reported rather than
+	// folded into one error. Restore has no shape for that, and widening its seven
+	// positional parameters to nine to add one that cannot use them would be worse than
+	// two explicit calls.
+	platformAuth, clientCerts, netAuthNotes := restoreNetworkAuth(persistStore, logger)
 
 	// Passive scanning is opt-in via --bchecks, mirroring the Rust CLI. Without
 	// it the built-in header/cookie checks still run so existing tests keep their
@@ -407,7 +426,12 @@ func main() {
 		// The listener's own upstream leg. This is the half of Unit 9 that is easy to forget: without
 		// it an operator sets a corporate proxy, watches the scanner's traffic take it, and never
 		// learns that everything their browser drove through the listener went out direct.
-		WithUpstreamProxy(upstreamPolicy)
+		WithUpstreamProxy(upstreamPolicy).
+		// The upstream leg of an intercepted TLS connection. Without this, an app requiring
+		// a client certificate could only be reached by putting its host on the TLS
+		// passthrough list — which is to say by giving up interception, which is the one
+		// thing the operator started this tool to do.
+		WithClientCerts(clientCerts)
 
 	// Start proxy server
 	ctx, cancel := context.WithCancel(context.Background())
@@ -430,7 +454,7 @@ func main() {
 	// sender.go's own comment on the protocol cache asks for: "an intruder run and the scan that
 	// preceded it share what either of them discovered". Sharing is safe because Sender guards its
 	// config and client behind a mutex and its protocol cache is atomic.
-	httpSender := sender.NewSender(upstreamSenderConfig(upstreamPolicy))
+	httpSender := sender.NewSender(egressSenderConfig(upstreamPolicy, platformAuth, clientCerts))
 
 	// Persisted network settings apply before either consumer sends anything. Same precedence argument
 	// as the scan-config restore below: what the operator set through the API in a previous run is a
@@ -563,7 +587,13 @@ func main() {
 		WithDOMEngine(*domEngine).
 		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually
 		// consulted rather than a copy — and so its `attached` field can report both surfaces truthfully.
-		WithUpstreamProxy(upstreamPolicy)
+		WithUpstreamProxy(upstreamPolicy).
+		// The same pointers the proxy and every sender above hold, so the panel edits what
+		// the wire presents. The notes carry the bindings that could not be rebuilt, so a
+		// PKCS#12 file deleted between sessions shows up on the panel rather than only in a
+		// log the operator is not reading.
+		WithNetAuth(platformAuth, clientCerts).
+		WithNetAuthRestoreNotes(netAuthNotes)
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
@@ -827,10 +857,70 @@ func applyUpstreamFlags(policy *upstream.Policy, rules []upstreamFlagRule) {
 // was read by nothing configurable, and every construction site used DefaultSenderConfig(). Upstream
 // rather than ProxyURL: the policy is shared by reference, so a console edit reaches senders already
 // built, which a URL string copied into a config could never do.
-func upstreamSenderConfig(policy *upstream.Policy) *sender.SenderConfig {
+func egressSenderConfig(policy *upstream.Policy, auth *netauth.Credentials, certs alpn.ClientCertSource) *sender.SenderConfig {
 	config := sender.DefaultSenderConfig()
 	config.Upstream = policy
+	config.PlatformAuth = auth
+	config.ClientCerts = certs
 	return config
+}
+
+// restoreNetworkAuth rebuilds the Settings → Network stores from the durable mirror,
+// returning them plus one note per row it could not rebuild.
+//
+// # Why a partial restore is the right answer, and why it must be reported
+//
+// Nothing here is fatal. A platform-authentication row written by a build that had a
+// scheme this one does not is dropped rather than coerced — coercing it to Basic would
+// send the operator's password to a host under a scheme they never chose — and a
+// client-certificate binding whose PKCS#12 file was deleted between sessions cannot be
+// rebuilt at all. Refusing to start over either would take the whole engagement down for
+// one stale row.
+//
+// But dropping them silently is the failure this codebase treats as a bug: the binding
+// was on the operator's panel yesterday, and a panel that lists it while no handshake
+// carries it is a partial result looking complete. So each failure comes back as a line
+// the panel shows, *and* goes to the log. Two sinks because the two readers are different
+// people at different times: the log is for afterwards, the panel is for the person who
+// can still fix it.
+//
+// A nil store — no -db — restores nothing and reports nothing, which is not a failure but
+// an empty first run.
+func restoreNetworkAuth(store *persist.Store, logger *zap.Logger) (*netauth.Credentials, *netauth.ClientCerts, []string) {
+	credentials := netauth.NewCredentials()
+	certs := netauth.NewClientCerts()
+	if store == nil {
+		return credentials, certs, nil
+	}
+
+	var notes []string
+	record := func(err error) {
+		notes = append(notes, err.Error())
+		logger.Warn("network authentication row could not be restored", zap.Error(err))
+	}
+
+	if rows, err := store.LoadPlatformAuth(); err != nil {
+		// A failed read of the whole table is one note, not none: the alternative is a panel
+		// that shows an empty rule list for a database that has rules in it.
+		record(fmt.Errorf("reading stored platform-authentication rules: %w", err))
+	} else {
+		restored, failures := netauth.RestoreCredentials(rows)
+		credentials = restored
+		for _, failure := range failures {
+			record(failure)
+		}
+	}
+
+	if rows, err := store.LoadClientCerts(); err != nil {
+		record(fmt.Errorf("reading stored client-certificate bindings: %w", err))
+	} else {
+		restored, failures := netauth.RestoreClientCerts(rows)
+		certs = restored
+		for _, failure := range failures {
+			record(failure)
+		}
+	}
+	return credentials, certs, notes
 }
 
 // readCACert reads the CA certificate the proxy signs with, for the web server to serve at /ca.crt.

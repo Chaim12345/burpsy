@@ -74,6 +74,8 @@ export const keys = {
   extensionConsole: (name: string, limit: number) => ["extensions", "console", name, limit] as const,
   extensionApis: ["extensions", "apis"] as const,
   networkProxy: ["network", "proxy"] as const,
+  networkAuth: ["network", "auth"] as const,
+  networkClientCerts: ["network", "client-certs"] as const,
 };
 
 /**

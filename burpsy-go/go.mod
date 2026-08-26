@@ -14,6 +14,7 @@ require (
 	golang.org/x/text v0.40.0
 	modernc.org/sqlite v1.55.0
 	mvdan.cc/sh/v3 v3.13.1
+	software.sslmate.com/src/go-pkcs12 v0.7.2
 )
 
 require (
