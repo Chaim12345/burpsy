@@ -19,6 +19,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/netauth"
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
@@ -141,6 +142,20 @@ CREATE TABLE IF NOT EXISTS organizer_items (
 	title     TEXT NOT NULL,
 	note      TEXT NOT NULL,
 	highlight TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS platform_auth (
+	ord      INTEGER PRIMARY KEY,
+	host     TEXT NOT NULL,
+	scheme   TEXT NOT NULL,
+	username TEXT NOT NULL,
+	password TEXT NOT NULL,
+	realm    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS client_certs (
+	ord        INTEGER PRIMARY KEY,
+	host       TEXT NOT NULL,
+	path       TEXT NOT NULL,
+	passphrase TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tool_log (
 	id          INTEGER PRIMARY KEY,
@@ -891,6 +906,116 @@ func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, bool, error) {
 		flag = v == "true"
 	}
 	return rules, flag, nil
+}
+
+// ---- Network authentication: platform credentials and client certificates ----------------------
+
+// The two tables written below are the only secret-bearing rows in this database.
+//
+// They hold plaintext: a platform-authentication password, and the passphrase to a
+// PKCS#12 file. That is a deliberate decision and it is stated here rather than in a
+// commit message nobody will find. There is no key-management story in this tool to
+// encrypt them under — no keyring dependency, no operator-supplied master
+// passphrase, no OS credential store binding — and a local obfuscation (an XOR, a
+// hard-coded AES key in the binary) would be trivially reversible by anyone holding
+// the file while looking like protection to the operator reading about it. The
+// honest arrangement is plaintext plus this notice: the SQLite mirror is
+// secret-bearing, and an operator who cannot accept that should run without -db,
+// which leaves the credentials in memory for the life of the process and nowhere
+// else.
+//
+// Note what is *not* stored: the decoded private key from a PKCS#12 file. Only the
+// path and the passphrase are kept, so the operator's file stays the single
+// authority for the identity and deleting it removes the identity everywhere —
+// rather than burpsy holding a second copy with a second lifetime that survives the
+// revocation.
+
+// SavePlatformAuth replaces the platform-authentication rule set.
+//
+// Order is preserved because it is semantic: netauth.Credentials is first-match-wins,
+// so a restore that reordered the rules would change which credential a host gets.
+func (s *Store) SavePlatformAuth(rows []netauth.CredentialRow) {
+	if _, err := s.db.Exec(`DELETE FROM platform_auth`); err != nil {
+		s.log("platform auth clear", err)
+		return
+	}
+	for i, row := range rows {
+		if _, err := s.db.Exec(
+			`INSERT OR REPLACE INTO platform_auth (ord, host, scheme, username, password, realm)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			i, row.Host, row.Scheme, row.Username, row.Password, row.Realm); err != nil {
+			// The op name carries the host but never the password. Every error path in this
+			// file goes through s.log to zap, which is exactly the sink a secret must not
+			// reach — a logged credential outlives the session in a file nobody redacts.
+			s.log("platform auth rule for "+row.Host, err)
+			return
+		}
+	}
+}
+
+// LoadPlatformAuth restores the persisted platform-authentication rows in rule order.
+//
+// Returns rows, not a live store: rebuilding the store is netauth.RestoreCredentials'
+// job, and it re-validates every row rather than trusting one. A row whose scheme this
+// build no longer implements must be dropped and named, not coerced into Basic, and
+// this package has no business deciding that.
+//
+// An empty database yields an empty slice and a nil error. "Nothing stored" is not a
+// failure — it is what a first run looks like.
+func (s *Store) LoadPlatformAuth() ([]netauth.CredentialRow, error) {
+	rows, err := s.db.Query(`SELECT host, scheme, username, password, realm FROM platform_auth ORDER BY ord`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []netauth.CredentialRow
+	for rows.Next() {
+		var row netauth.CredentialRow
+		if err := rows.Scan(&row.Host, &row.Scheme, &row.Username, &row.Password, &row.Realm); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// SaveClientCerts replaces the client-certificate binding set.
+func (s *Store) SaveClientCerts(rows []netauth.ClientCertRow) {
+	if _, err := s.db.Exec(`DELETE FROM client_certs`); err != nil {
+		s.log("client certs clear", err)
+		return
+	}
+	for i, row := range rows {
+		if _, err := s.db.Exec(
+			`INSERT OR REPLACE INTO client_certs (ord, host, path, passphrase) VALUES (?, ?, ?, ?)`,
+			i, row.Host, row.Path, row.Passphrase); err != nil {
+			s.log("client cert binding for "+row.Host, err)
+			return
+		}
+	}
+}
+
+// LoadClientCerts restores the persisted client-certificate bindings in match order.
+//
+// Same shape and same reason as LoadPlatformAuth: rows out, and
+// netauth.RestoreClientCerts re-reads each PKCS#12 file. A file the operator deleted
+// between sessions therefore fails at restore and is *reported*, rather than
+// producing a binding that sits on the panel and is never presented.
+func (s *Store) LoadClientCerts() ([]netauth.ClientCertRow, error) {
+	rows, err := s.db.Query(`SELECT host, path, passphrase FROM client_certs ORDER BY ord`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []netauth.ClientCertRow
+	for rows.Next() {
+		var row netauth.ClientCertRow
+		if err := rows.Scan(&row.Host, &row.Path, &row.Passphrase); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // ---- Session rules -----------------------------------------------------------------------------

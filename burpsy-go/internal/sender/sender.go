@@ -51,6 +51,38 @@ type SenderConfig struct {
 	// depended on the old behaviour.
 	ProxyURL  string
 	UserAgent string
+	// ClientCerts, when set, supplies the TLS client certificate to present to a host that asks for
+	// one. Nil means none is ever offered — the behaviour before client TLS authentication existed.
+	//
+	// The type is alpn's one-method interface, not internal/netauth's concrete store, so this package
+	// keeps its existing dependency set and a test can bind one certificate without building a
+	// credential store. Held here rather than on Sender because both dial paths need it and both read
+	// their knobs from the config.
+	ClientCerts alpn.ClientCertSource
+	// PlatformAuth, when set, is consulted for an Authorization header to present on the typed send
+	// path — Burp's Settings → Network → Platform authentication.
+	//
+	// Deliberately not applied to the raw-bytes path. SendRawOutcome's contract is that it sends what
+	// the caller wrote, verbatim, and the desync and smuggling probes this tool exists to send depend
+	// on that byte-for-byte fidelity; splicing a header into those bytes would change the framing the
+	// probe is measuring. A raw caller that wants a credential presented sets the header itself, which
+	// it is already constructing the request line by hand to do.
+	PlatformAuth PlatformAuth
+}
+
+// PlatformAuth is the per-host credential lookup the typed send path consults.
+//
+// An interface for the same reason ClientCerts is one: internal/netauth owns the rules, the schemes
+// and the secrets, and this package only needs to ask two questions of them. Satisfied by
+// *netauth.Credentials.
+type PlatformAuth interface {
+	// Authorization returns the header value to present for one request, and whether there is one.
+	// False is an ordinary answer, not a failure: a Digest rule has nothing to send until the host has
+	// challenged once.
+	Authorization(host, method, uri string) (string, bool)
+	// Learn records a challenge from a 401 so the next attempt can authenticate, reporting whether the
+	// challenge is usable. See netauth.Credentials.Learn.
+	Learn(host, wwwAuthenticate string) (bool, error)
 }
 
 // DefaultSenderConfig returns default sender configuration.
@@ -96,6 +128,41 @@ func NewSender(config *SenderConfig) *Sender {
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: !config.TLSVerify,
 		},
+	}
+
+	if config.ClientCerts != nil {
+		// The typed path does not go through dialTLS — it hands the whole exchange to
+		// http.Transport — so the client-certificate hook has to be installed here as well as
+		// there. TLSClientConfig cannot carry it: GetClientCertificate is not told which host it is
+		// being asked about (see alpn.Dialer.ClientCerts), and this transport is shared across every
+		// authority the sender talks to, so one shared callback could not choose per host.
+		// DialTLSContext is the hook that still knows the address.
+		//
+		// Installed only when a certificate source is attached, so a sender without one keeps the
+		// stdlib's own TLS setup byte for byte and this feature cannot regress the common path.
+		//
+		// config, not config.TLSVerify: WithTLSVerify mutates the config this closure was built from,
+		// so reading the field at dial time keeps the two paths in agreement. Capturing the bool would
+		// have frozen it, and WithTLSVerify would have silently stopped working for TLS sends.
+		transport.DialTLSContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("unusable TLS target %q: %w", addr, err)
+			}
+			dialer := alpn.Dialer{
+				InsecureSkipVerify: !config.TLSVerify,
+				Timeout:            config.Timeout,
+				ClientCerts:        config.ClientCerts,
+			}
+			// EgressOffer(true) matches ForceAttemptHTTP2 above: the transport inspects the negotiated
+			// protocol on the connection it is handed and uses h2 when ALPN chose it, so offering h2
+			// here keeps the protocol behaviour the same as the stdlib dial it replaces.
+			conn, _, err := dialer.Dial(ctx, host, addr, alpn.EgressOffer(true))
+			if err != nil {
+				return nil, err
+			}
+			return conn, nil
+		}
 	}
 
 	if config.ProxyURL != "" {
@@ -166,8 +233,16 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 // dialTLS opens one TLS connection with the given ALPN offer, through the shared negotiation logic the
 // proxy's upstream leg uses. Certificate verification follows SenderConfig.TLSVerify, unlike the proxy's
 // leg — see internal/alpn.
+// A client certificate configured for this host is presented here, which covers every raw-bytes TLS
+// path in the package at once: SendRawOutcome, ProtocolFor's discovery handshake, dialOne's
+// pipelining and desync probes, and dialForProgram's frame programs all funnel through this one
+// function.
 func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string) (*tls.Conn, string, error) {
-	dialer := alpn.Dialer{InsecureSkipVerify: !s.config.TLSVerify, Timeout: s.config.Timeout}
+	dialer := alpn.Dialer{
+		InsecureSkipVerify: !s.config.TLSVerify,
+		Timeout:            s.config.Timeout,
+		ClientCerts:        s.config.ClientCerts,
+	}
 	return dialer.Dial(ctx, host, net.JoinHostPort(host, strconv.Itoa(int(port))), offer)
 }
 
@@ -291,13 +366,61 @@ func (s *Sender) Render(req *Request) ([]byte, error) {
 // It stays exported because the active scanner reaches it through its own scope check
 // (ActiveScanner.sendTestRequest) and because AuthorisedSender.SendRequest is built on it. New
 // callers want the authorised entry point.
+// # Platform authentication
+//
+// A credential configured for the target's host is presented here — preemptively for Basic, and after
+// one challenge for Digest. See sendOnce and the retry below.
 func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
-	startTime := time.Now()
-
 	target, err := effectiveTarget(req)
 	if err != nil {
 		return nil, err
 	}
+
+	resp, challenges, err := s.sendOnce(ctx, req, target)
+	if err != nil {
+		return nil, err
+	}
+
+	// The Digest second leg. A 401 carrying a challenge is not a failure for a host we hold a
+	// credential for: it is the nonce the response has to be computed against, which is the only way
+	// Digest can work at all. Learn caches it and reports whether it is answerable; a second 401 with
+	// the same nonce means the credential itself was rejected, and Learn returns false so this cannot
+	// loop.
+	//
+	// Bounded at exactly one retry, deliberately. A loop bounded by an attempt count would keep
+	// sending the operator's credentials at a host that keeps refusing them, which on an engagement is
+	// how an account gets locked out.
+	if resp.StatusCode == http.StatusUnauthorized && s.config.PlatformAuth != nil && len(challenges) > 0 {
+		host, _, _, authErr := authorityOf(target.String())
+		if authErr == nil {
+			for _, challenge := range challenges {
+				usable, _ := s.config.PlatformAuth.Learn(host, challenge)
+				if !usable {
+					continue
+				}
+				retried, _, retryErr := s.sendOnce(ctx, req, target)
+				if retryErr != nil {
+					// The retry failed at the transport. The first response is real and already read, so
+					// it is returned rather than replaced by an error about a request the caller never
+					// asked for.
+					return resp, nil
+				}
+				return retried, nil
+			}
+		}
+	}
+	return resp, nil
+}
+
+// sendOnce performs exactly one typed exchange and reports any authentication challenges the response
+// carried.
+//
+// Split out of Send so the Digest retry is one more call rather than a second copy of the request
+// construction: two constructions of the same request is how a retry ends up differing from the
+// original in a way nobody intended. The body is rebuilt from req.Body on each call, which is what
+// makes a retry possible at all — an io.Reader would already be drained.
+func (s *Sender) sendOnce(ctx context.Context, req *Request, target *url.URL) (*Response, []string, error) {
+	startTime := time.Now()
 
 	var bodyReader io.Reader
 	if len(req.Body) > 0 {
@@ -306,7 +429,7 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, target.String(), bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	for k, v := range req.Headers {
@@ -321,15 +444,33 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 		httpReq.Header.Set("User-Agent", s.config.UserAgent)
 	}
 
+	// A caller's own Authorization header always wins. An operator editing a request in Repeater and
+	// typing a credential into it means that credential, and a per-host rule silently replacing it
+	// would make the request they are looking at not the request that goes out.
+	if s.config.PlatformAuth != nil && httpReq.Header.Get("Authorization") == "" {
+		if host, _, _, err := authorityOf(target.String()); err == nil {
+			method := req.Method
+			if method == "" {
+				method = http.MethodGet
+			}
+			// RequestURI, not the full URL: the Digest response hashes the request-target exactly as it
+			// appears on the request line, so any other rendering produces a hash the server cannot
+			// reproduce.
+			if value, ok := s.config.PlatformAuth.Authorization(host, method, target.RequestURI()); ok {
+				httpReq.Header.Set("Authorization", value)
+			}
+		}
+	}
+
 	httpResp, err := s.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer httpResp.Body.Close()
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	headers := make(map[string]string)
@@ -338,6 +479,11 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 			headers[k] = vv[0]
 		}
 	}
+
+	// Every WWW-Authenticate value, not just the first. A server may send Basic and Digest as two
+	// separate headers, and Response.Headers keeps only one value per name — so the map above would
+	// hide the Digest challenge behind the Basic one exactly when it is needed.
+	challenges := httpResp.Header.Values("Www-Authenticate")
 
 	duration := time.Since(startTime)
 
@@ -349,7 +495,7 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 		Version:    httpResp.Proto,
 		Duration:   duration,
 		Outcome:    s.observe(target, httpResp),
-	}, nil
+	}, challenges, nil
 }
 
 // observe records what the stdlib transport actually negotiated for one typed send.
@@ -618,6 +764,31 @@ func (s *Sender) setDeadline(ctx context.Context, conn net.Conn) {
 	}
 	conn.SetDeadline(time.Now().Add(s.config.Timeout))
 }
+
+// CarriesPlatformAuth reports whether this sender was built with a
+// platform-authentication lookup attached.
+//
+// # Why this is exported at all
+//
+// It exists so the panel can tell the operator the truth. Both network-authentication
+// sources are constructor-time properties of a Sender — the client-certificate hook is
+// installed into the http.Transport by NewSender, and an http.Transport must not have
+// its dial hooks rewritten after first use — so there is no honest way to attach one to
+// a running sender, and this package deliberately offers no method that pretends
+// otherwise.
+//
+// The consequence is a wiring order that can be got wrong: a Sender built without these
+// and a credential store the API can write to would give an operator a rule on the panel
+// that no request ever carries. That is precisely the "partial result looking complete"
+// failure this codebase treats as a bug, so the API asks these two questions and says
+// what it finds instead of assuming. cmd/burpsy builds every sender with both attached,
+// so the shipped binary answers true; a Server assembled without them answers false and
+// the panel says the rules are stored but not presented.
+func (s *Sender) CarriesPlatformAuth() bool { return s.config.PlatformAuth != nil }
+
+// CarriesClientCerts reports whether this sender was built with a client-certificate
+// source attached. See CarriesPlatformAuth for why this is a question worth asking.
+func (s *Sender) CarriesClientCerts() bool { return s.config.ClientCerts != nil }
 
 // WithTimeout sets the timeout for the sender.
 func (s *Sender) WithTimeout(timeout time.Duration) *Sender {

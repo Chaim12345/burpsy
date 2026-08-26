@@ -14,6 +14,7 @@ require (
 	golang.org/x/text v0.40.0
 	modernc.org/sqlite v1.55.0
 	mvdan.cc/sh/v3 v3.13.1
+	software.sslmate.com/src/go-pkcs12 v0.7.2
 )
 
 require (
@@ -32,6 +33,7 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.uber.org/multierr v1.10.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

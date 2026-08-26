@@ -189,6 +189,22 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
 	},
+	"/api/network/auth": {
+		// riskCredential, and not riskLocal, because that is what these rows are: an
+		// operator's account on the target. A GET cannot disclose the password — the wire
+		// shape has no field for it — but it does enumerate which accounts are configured
+		// against which hosts, and a POST arms every subsequent send to replay one. Both
+		// are things an unattended caller should have to ask about.
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskCredential,
+		summary: "platform authentication: per-host HTTP credentials (Basic and Digest; NTLM and Negotiate are not implemented). Never serves a password",
+	},
+	"/api/network/client-certs": {
+		// Same class for the same reason: a TLS client identity is a credential, and DELETE
+		// silently removing one would leave an app that had been reachable failing its
+		// handshake with nothing on the panel to explain it.
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskCredential,
+		summary: "client TLS certificates: PKCS#12 identities bound per host (PKCS#11 tokens are out of scope). Never serves a passphrase or key",
+	},
 	"/api/protocols": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded",
@@ -575,7 +591,12 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		"/api/scanner/live", "/api/sequencer/capture",
 	}
 	wantScope := []string{"/api/scope"}
+	// The two /api/network routes join this class because they hold the operator's own
+	// credentials for the target: an HTTP password and a TLS client identity. Neither
+	// route can serve the secret itself, but enumerating which accounts are bound to which
+	// hosts is a read worth confirming, and a write arms every later send to present one.
 	wantCredential := []string{
+		"/api/network/auth", "/api/network/client-certs",
 		"/api/session/cookies", "/api/session/login", "/api/session/rules", "/api/session/rules/",
 	}
 	equal := func(name string, got, want []string) {

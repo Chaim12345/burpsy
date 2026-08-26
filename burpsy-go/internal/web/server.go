@@ -11,6 +11,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/netauth"
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/scanner"
@@ -64,6 +65,18 @@ type Server struct {
 	// every existing test constructs a Server directly — see api_sequencer_capture.go.
 	captures    *sequencerCaptures
 	captureOnce sync.Once
+	// platformAuth and clientCerts are the Settings → Network stores: per-host HTTP
+	// credentials and per-host TLS client identities. Built lazily by platformAuthStore()
+	// and clientCertStore() so a directly-constructed Server never serves a nil one, and
+	// shared with internal/sender and the proxy when cmd/burpsy wires them — see
+	// WithNetAuth.
+	platformAuth *netauth.Credentials
+	clientCerts  *netauth.ClientCerts
+	netAuthOnce  sync.Once
+	// netAuthRestoreNotes is why a persisted client-certificate binding could not be
+	// rebuilt at startup, reported by the GET rather than dropped. See
+	// WithNetAuthRestoreNotes.
+	netAuthRestoreNotes []string
 	// live is the change-event hub behind /api/events: every store the UI reads signals it, and it
 	// coalesces those signals into "this kind changed" frames the browser refetches on. See events.go
 	// for why the frames carry no data and why the producer side is atomics only.
@@ -255,6 +268,98 @@ func (s *Server) persistOrganizer() {
 	}
 }
 
+// persistPlatformAuth and persistClientCerts mirror the network-authentication rules.
+//
+// These are the two write-through helpers that move a secret, so what they hand over is
+// worth naming: netauth's Secrets() accessors, which are the package's one deliberate
+// hole in "no secret leaves here" and exist for this caller and no other. Everything else
+// in the process reads the redacted views. internal/persist's own doc records why the
+// stored form is plaintext and what an operator should conclude from that.
+
+func (s *Server) persistPlatformAuth() {
+	if s.persist != nil {
+		s.persist.SavePlatformAuth(s.platformAuthStore().Secrets())
+	}
+}
+
+func (s *Server) persistClientCerts() {
+	if s.persist != nil {
+		s.persist.SaveClientCerts(s.clientCertStore().Secrets())
+	}
+}
+
+// platformAuthStore and clientCertStore return the attached store, building an empty one
+// on first use.
+//
+// Lazy rather than allocated in NewServer for the reason captureSet() is: every test in
+// this package constructs a Server directly and most never touch this surface. What they
+// buy over a nil check at each call site is that the handlers cannot serve a nil store —
+// GET answers an honestly empty list instead of panicking, and a POST to a Server that
+// nobody wired still stores the rule rather than dropping it. Whether the rule is
+// actually *presented* is a separate question, and one the GET answers out loud through
+// presented_on_egress rather than leaving to inference.
+func (s *Server) platformAuthStore() *netauth.Credentials {
+	s.netAuthOnce.Do(s.initNetAuth)
+	return s.platformAuth
+}
+
+func (s *Server) clientCertStore() *netauth.ClientCerts {
+	s.netAuthOnce.Do(s.initNetAuth)
+	return s.clientCerts
+}
+
+// initNetAuth fills in whichever of the two stores was never attached. One Once for both
+// because WithNetAuth sets both together, so there is one moment at which they are known.
+func (s *Server) initNetAuth() {
+	if s.platformAuth == nil {
+		s.platformAuth = netauth.NewCredentials()
+	}
+	if s.clientCerts == nil {
+		s.clientCerts = netauth.NewClientCerts()
+	}
+}
+
+// WithNetAuth attaches the platform-authentication rules and client-certificate bindings
+// the Network settings panel edits.
+//
+// # The stores are shared, and they have to be
+//
+// The same two pointers are read by three places that cannot see each other: this API
+// writes them, internal/sender presents them on every egress, and the proxy's upstream
+// leg presents the certificate on an intercepted connection. cmd/burpsy therefore builds
+// them once, before either server, and hands the same pointers to all three — see the
+// wiring there. Anything else would give the operator a panel editing one copy while the
+// wire carried another.
+//
+// The sender's half is a constructor-time property (sender.CarriesPlatformAuth explains
+// why an http.Transport's dial hook cannot honestly be rewritten later), so this method
+// deliberately does not try to retrofit an already-built sender. It attaches the stores
+// the API edits; whether the attached sender carries them is reported by the GET rather
+// than assumed by it.
+func (s *Server) WithNetAuth(credentials *netauth.Credentials, certs *netauth.ClientCerts) *Server {
+	if credentials != nil {
+		s.platformAuth = credentials
+	}
+	if certs != nil {
+		s.clientCerts = certs
+	}
+	s.netAuthOnce.Do(s.initNetAuth)
+	return s
+}
+
+// WithNetAuthRestoreNotes records why persisted client-certificate bindings could not be
+// rebuilt at startup, so GET /api/network/client-certs can report them.
+//
+// The restore happens in cmd/burpsy, before this server exists, and its failures are the
+// kind that must not be swallowed: a PKCS#12 file the operator deleted between sessions
+// leaves a binding that was on the panel yesterday and will never be presented again.
+// Carried here rather than logged and forgotten because the operator reading the panel is
+// the person who can fix it, and they are not reading the log.
+func (s *Server) WithNetAuthRestoreNotes(notes []string) *Server {
+	s.netAuthRestoreNotes = notes
+	return s
+}
+
 // organizerChanged mirrors the organizer and tells the live stream, and is what every organizer
 // mutation calls instead of persisting directly.
 //
@@ -374,6 +479,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/session/rules/", s.handleSessionRuleDetail)
 	s.mux.HandleFunc("/api/session/cookies", s.handleSessionCookies)
 	s.mux.HandleFunc("/api/session/login", s.handleSessionLogin)
+
+	// Network: platform authentication and client TLS certificates. Neither route ever
+	// serves a secret — see api_network.go.
+	s.mux.HandleFunc("/api/network/auth", s.handleNetworkAuth)
+	s.mux.HandleFunc("/api/network/client-certs", s.handleNetworkClientCerts)
 
 	// Intercept (condition lists + held queue)
 	s.mux.HandleFunc("/api/intercept", s.handleIntercept)

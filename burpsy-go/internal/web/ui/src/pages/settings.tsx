@@ -16,6 +16,7 @@ import type { FrameProgramResponse } from "../lib/types.policy";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, LinkButton, Metric, Modal, Select, Switch, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
+import { ClientCertificatesSection, PlatformAuthSection } from "./settings.network";
 
 const THEMES: { value: Theme; label: string }[] = [
   { value: "system", label: "Follow the system" },
@@ -490,9 +491,11 @@ export function SettingsPage(): JSX.Element {
     <div className="page">
       <PageHeader
         title="Settings"
-        description="Protocol reporting, appearance, the CA certificate, and the console's own diagnostics. Scope lives under Target."
+        description="Protocol reporting, network credentials, appearance, the CA certificate, and the console's own diagnostics. Scope lives under Target."
       />
       <ProtocolSection />
+      <PlatformAuthSection />
+      <ClientCertificatesSection />
       <AppearanceSection />
       <CertificateSection />
       <DiagnosticsSection />
