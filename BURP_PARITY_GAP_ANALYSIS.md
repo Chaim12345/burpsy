@@ -876,8 +876,10 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
 5. **Cost of Replayer parity** — Burp's string table gives too little to size it.
 6. **Two wave-1 workstreams produced no recoverable output** ("verify claimed-working
    features actually behave", "audit the other four reports for unsupported claims"). Their
-   findings are lost, not absent. W3 has since re-covered the first; W4 re-covers the second
-   and is still in flight.
+   findings are lost, not absent. W3 has since re-covered the first; **W4 has since landed
+   and re-covers the second** (§6.6-6.7). This item is closed as a workstream; what remains
+   is that the two original waves' *specific* findings were never recovered, so anything they
+   found and neither W3 nor W4 re-found is still unknown.
 8. **Whether burpsy's Repeater supports multiple concurrent isolated tabs** the way Burp's
    tab manager (`secondarySuiteTabBar`) does. W3 flagged this rather than guessing a ratio —
    leaf-counting cannot answer it.
@@ -977,7 +979,9 @@ security tool; everything after is parity work.
 
 ## 10. Standing methodological warnings for whoever reads this next
 
-The three traps this analysis actually fell into, as opposed to the ones it anticipated:
+The four traps this analysis actually fell into, as opposed to the ones it anticipated. All
+four are the same shape — **an artefact was trusted for a claim it does not actually support**
+— and the fourth is the one we caught ourselves committing:
 
 1. **A passing test proves the layer it tests, not the layer users touch.**
    `TestShadowedDefinitionsRemainReachableByName` is green, correct, and was cited as
@@ -989,6 +993,30 @@ The three traps this analysis actually fell into, as opposed to the ones it anti
    chain broke twice already — 183 advisories (bundled ≠ addressable) and the MCP "N/A"
    (§6.2) — and W2 is where it can break a third time if "183 definitions" is ever reported
    as "183 checks."
+4. **A reconstruction is not evidence — and it can silently invert a finding.** Found last,
+   and the worst of the four, because it happened inside our own citation trail. When W1's
+   original report was destroyed with a reaped workspace, the same analyst rewrote a 72-line
+   summary from memory. That summary asserted `session` "came back **clean**" — and it was
+   the **git-canonical evidence file** for this analysis while it said so, through three
+   commits and a merge. The full original, which proves the session-validity STATE 5 (§3.1a,
+   the worst defect in this report), survived only in a stale duplicate directory. A reader
+   who did the right thing — followed §3.1a's citation to its evidence file — would have been
+   told the defect did not exist.
+
+   Two rules follow, and they are cheap:
+   - **Label a lost artefact unrecoverable. Do not re-derive it from memory** and give the
+     re-derivation the original's filename. If a summary must be written, it goes in a file
+     named as a summary, and it says what it could not recover.
+   - **After citing an evidence file, re-read it and check it says what you just said it
+     says.** This contradiction was one `grep session` away for three commits. Note the
+     shape: this is trap #1 (a green artefact proving a different layer than claimed) applied
+     to our own prose instead of to the code — which is why §6.1a's lesson generalises
+     further than we first wrote it. The analysis kept auditing the repo's claims and stopped
+     auditing its own.
+
+   *(Fixed: `docs/parity/W1-broken-behaviour.md` now holds the full 375-line original behind
+   a provenance header; the duplicate root `parity/` directory that held the only good copy
+   is consolidated away. The reconstruction remains in git history at `6e83ced`.)*
 
 And the one that destroyed two waves of work: **deliverables written inside
 `.orchestry/workspaces/**` are reaped.** Everything durable in this analysis lives in
