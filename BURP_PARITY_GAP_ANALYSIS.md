@@ -46,6 +46,14 @@ command recorded. Rows are **not** commensurable.
 
 ### The sharpest single gap
 
+**burpsy side re-verified by me at `749ddbd`.** `BuiltInConfig`
+(`internal/scanner/audit.go:558-565`) carries exactly **4 overlayable knobs** —
+`ConsecutiveCheckFailuresToAbandonUnit`, `ConsecutiveUnitFailuresToFailItem`,
+`PauseSessionAfterFailedItems`, `MaximumAuditTimeMinutes` (`Name` is a label, not a knob).
+Their 4 `burpKey` mappings (`audit.go:594,601,608,615`) land in exactly **two** Burp
+sections: `scanner/error_handling` (3) and `scanner/audit_optimization` (1). The 4/77 and
+2/20 figures hold.
+
 Burp's scanner exposes `scanner.insertion_point_types` (8 keys — **WHERE** it injects) and
 `scanner.issues_reported` (12 keys — **WHICH** checks run). Neither is **representable at
 all** in burpsy's config model.
@@ -260,6 +268,28 @@ committed state.
 **A tick means a control exists. It has never meant the control behaves.** Treat every
 tracker row as a hypothesis to falsify.
 
+### 6.5 The antidote already exists in-tree
+
+The most useful thing found in this audit is not a gap. It is that **this team already
+solved the accepted-but-unhandled problem, correctly, and did not propagate the solution.**
+
+`internal/scanner/audit.go:567-580` documents a single-source-of-truth table
+(`builtInConfigKeys`) from which both the engine overlay and the operator-facing key
+listing are derived, precisely so the two cannot drift — with the reasoning stated: a
+hand-maintained second copy "drifts silently, because a listing that is missing a key
+still renders." `Test_every_built_in_config_field_has_a_key_row` (`audit_test.go:513`)
+reflects over the struct and fails when a field has no row, because "a field with no row is
+neither applied nor listed."
+
+That is a structural fix for exactly the defect class of §3. The match/replace vocabulary
+two packages away has an API list, a separate engine switch, and no test binding them —
+and carries a live traffic-corrupting bug as a direct result.
+
+The implication for planning: the constraint here is **not** engineering judgement, which
+is demonstrably good. It is that good local decisions are not being propagated into
+conventions. That is a cheaper problem to fix than a skill gap, and §9.1 is the first
+instance.
+
 ---
 
 ## 7. PENDING — wave 2 in flight
@@ -305,10 +335,23 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
 
 ## 9. What I would do next, in order
 
-1. **Fix the match/replace STATE 5 defect** and add a test asserting that every value in
-   the published `rule_type` vocabulary is handled by `applyOne`. A table-driven test over
-   the vocabulary constant makes the whole bug class structurally unrepresentable. Cheapest
-   high-value change in the report.
+1. **Fix the match/replace STATE 5 defect by propagating a pattern this codebase already
+   invented.** Do not design a new guard — copy `internal/scanner/audit.go`. That file
+   solves precisely this problem: `builtInConfigKeys` is the single table both the engine
+   overlay and the operator-facing listing read from, its comment
+   (`audit.go:567-580`) explains that a hand-maintained second copy "drifts silently,
+   because a listing that is missing a key still renders," and
+   `Test_every_built_in_config_field_has_a_key_row` (`audit_test.go:513`) reflects over the
+   struct and **fails** if a field has no row — "a field with no row is neither applied nor
+   listed." It even distinguishes *this preset leaves the budget alone* from *this engine
+   has no budget*.
+
+   That is the exact antidote to the accepted-but-unhandled bug class, written by this
+   team, sitting two packages away from the defect it would have prevented. Apply it to the
+   `rule_type` vocabulary: one table, engine switch and API vocabulary both derived from
+   it, one reflective test asserting `accepted == handled`. This makes the bug class
+   **structurally unrepresentable** rather than fixed case by case — and it is the single
+   highest-leverage change in this report.
 2. **Gate `bun run check` and the Playwright e2e suite in CI.** 118 frontend test
    assertions, two typechecks and two token-drift checks are committed and never executed.
    The Go half of this project has real gates including live `ffuf`/`nuclei` tests; the
