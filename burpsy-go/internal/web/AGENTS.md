@@ -30,6 +30,7 @@ here; do not assume it.
 | `api_toolkit.go` | Largest handler file (~1200 lines) — the decoder/encoder/hash/compare/organizer toolkit endpoints |
 | `api_session.go` | Session rules, cookies, and the login-macro runner (builds its own `AuthorisedSender`) |
 | `api_tools.go` | Repeater send and intruder points/run (the intruder builds one `AuthorisedSender` for the whole attack) |
+| `api_extensions.go` | The EXTENDER surface (`/api/extensions/*`): list, load, unload, the two consoles, the protocol contract, and one invocation. Six exact patterns rather than a subtree, and deliberately no BApp Store route — see the file's own comment |
 | `api_ws.go` | The WebSocket capture surface (`/api/ws/*`): index rows only, mirroring `wshistory.ts` |
 | `api_sequencer_capture.go`, `api_dashboard.go`, `api_capture.go`, `liveaudit.go` | Sequencer capture runs, dashboard summary counts, history/message/stats, and live-audit state |
 | `ui/` | The React UI: TypeScript source in `ui/src/`, bun-bundled to `ui/dist/app.js`. Owned elsewhere (see `../DESIGN.md`); do not add wire fields no consumer reads |

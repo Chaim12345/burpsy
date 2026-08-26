@@ -14,6 +14,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/extension"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/proxy"
@@ -41,6 +42,12 @@ func main() {
 	// The same allowlist also gates `burpsy extscan`, which delegates a whole scan phase to ffuf or
 	// nuclei rather than running a tool per insertion point. One flag, one policy decision.
 	toolsFlag := flag.String("tools", "", "allowlist external tools for `run tool` bchecks and for `extscan`: sqlmap=/usr/bin/sqlmap,ffuf=ffuf,nuclei=nuclei (comma-separated name=path)")
+	// Allowlist for the Extender: name=path pairs, comma-separated. A plugin is a local executable that
+	// speaks newline-delimited JSON-RPC on its stdin and stdout; there is no registry and no store, so
+	// this flag is the only way one is admitted. Nothing is started here — a load is an act the operator
+	// performs from the Extensions tab — and a name that is not on this list cannot be loaded at all,
+	// the same gate -tools puts in front of `run tool`.
+	pluginsFlag := flag.String("plugins", "", "allowlist burpsy plugins for the Extender: name=/path/to/plugin (comma-separated name=path)")
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
@@ -208,6 +215,20 @@ func main() {
 	if toolAllowlist != nil {
 		toolRunner = scanner.NewToolRunner(scanner.ToolRunnerConfig{Tools: toolAllowlist})
 	}
+
+	// The plugin host, built from -plugins for the same reason and at the same point as the tool
+	// allowlist: a malformed entry must refuse to start rather than surface later as a plugin the
+	// Extensions tab lists and cannot load. The host is always built, including with an empty
+	// allowlist — that is what lets the tab say "nothing is allowlisted, here is the flag" instead of
+	// reporting the feature as absent.
+	pluginAllowlist, perr := parseNamePathAllowlist("-plugins", *pluginsFlag)
+	if perr != nil {
+		log.Fatal(perr)
+	}
+	pluginHost := extension.NewHost(extension.Config{Plugins: pluginSpecs(pluginAllowlist), Logger: logger})
+	// Every child dies with this process. Deferred rather than left to the context cancel below because
+	// Close asks each plugin to stop and waits for it, which the bare cancel does not.
+	defer pluginHost.Close()
 	if *bchecksDir != "" {
 		ps, err := scanner.LoadDir(*bchecksDir, store, scope, logger)
 		if err != nil {
@@ -273,6 +294,9 @@ func main() {
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
+		// The Extender's plugin host. Attached rather than built by the web server because which
+		// executables may run is operator policy, exactly like -tools.
+		WithExtensions(pluginHost).
 		// So /ca.crt can serve it. Read here rather than in the web server because this is where the
 		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
 		// for a client that already trusts the CA, and the operator gets told why the download is
@@ -343,6 +367,23 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 			name, len(scanner.BuiltInConfigs))
 	}
 	return preset.Apply(base), nil
+}
+
+// pluginSpecs turns the -plugins allowlist into the host's launch specs.
+//
+// Path only: no args and no env from the flag. Splitting a flag value into an argv is a small shell,
+// and this is the one place a shell must not appear — the executable is run directly so that an
+// argument containing shell metacharacters is data. A plugin that needs an interpreter should be an
+// executable script with a shebang, which is what every language runtime already supports.
+func pluginSpecs(allowlist map[string]string) map[string]extension.PluginSpec {
+	if len(allowlist) == 0 {
+		return nil
+	}
+	specs := make(map[string]extension.PluginSpec, len(allowlist))
+	for name, path := range allowlist {
+		specs[name] = extension.PluginSpec{Path: path}
+	}
+	return specs
 }
 
 // readCACert reads the CA certificate the proxy signs with, for the web server to serve at /ca.crt.

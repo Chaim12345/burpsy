@@ -456,3 +456,76 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
     expect(consoleErrors).toEqual([]);
   });
 });
+
+test.describe("extender", () => {
+  test("the extensions tab says what a plugin is and that nothing is allowlisted", async ({
+    page,
+    consoleErrors,
+    failedRequests,
+  }) => {
+    // The harness starts burpsy without -plugins, which is the common case and the one that must not
+    // read as "this feature is missing". So the assertion is on what the empty state *says*: the flag
+    // that admits a plugin, and the absence of any store to browse.
+    await gotoRoute(page, route("extensions"));
+
+    await expect(page.getByText("No plugin is allowlisted", { exact: false }).first()).toBeVisible();
+    await expect(page.locator(".empty")).toContainText("-plugins");
+    await expect(page.locator(".empty")).toContainText("no registry");
+    // And the header states the substrate, so an operator does not go looking for a jar or a store.
+    await expect(page.locator(".page-header")).toContainText("JSON-RPC");
+    await expect(page.locator(".page-header")).toContainText("no store");
+
+    // An empty allowlist is a state, not a failure: the counts render and the table does not.
+    await expect(page.locator(".metric").filter({ hasText: "Allowlisted" })).toContainText("0");
+    await expect(page.locator("table")).toHaveCount(0);
+
+    expect(consoleErrors).toEqual([]);
+    expect(failedRequests).toEqual([]);
+  });
+
+  test("the options tab reports this process's bounds and that there is no store", async ({
+    page,
+    consoleErrors,
+  }) => {
+    await gotoRoute(page, route("extenderoptions"));
+
+    // Read from the running server rather than hardcoded: the same values the API serves.
+    const policy = await page.request.get("/api/extensions").then((response) => response.json());
+    expect(policy.policy.registry).toBeNull();
+
+    await expect(page.getByText("There is no store")).toBeVisible();
+    await expect(page.locator(".notice-warn")).toContainText("BApp Store");
+    // The two absences that are stated rather than left to be inferred.
+    await expect(page.getByText("never used")).toBeVisible();
+    await expect(page.locator("code", { hasText: "-plugins name=" })).toBeVisible();
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("the APIs tab renders exactly the method set the server dispatches", async ({
+    page,
+    consoleErrors,
+  }) => {
+    // The point of this one: the tab is generated from the host's method table, so a method added to
+    // the protocol appears here without anyone editing the page — and a page that had drifted into
+    // prose would fail this the moment the two disagreed.
+    const contract = await page.request.get("/api/extensions/apis").then((response) => response.json());
+    expect(contract.methods.length).toBeGreaterThan(0);
+
+    await gotoRoute(page, route("extenderapis"));
+
+    for (const method of contract.methods as { name: string }[]) {
+      await expect(page.locator("code", { hasText: method.name }).first()).toBeVisible();
+    }
+    // Three registration points, and the tab says why the other ten are absent.
+    expect(contract.kinds).toHaveLength(3);
+    // By role, not by text: the heading, its own detail line and one row of the unsupported table all
+    // talk about the ten registration points that hand Burp a Swing object, which is the point of the
+    // section — matching on the words would resolve to three elements.
+    await expect(page.getByRole("heading", { name: "Registration points" })).toBeVisible();
+    await expect(page.locator(".section-heading", { hasText: "Registration points" })).toContainText("Swing");
+    await expect(page.getByRole("heading", { name: "What a plugin cannot do" })).toBeVisible();
+
+    expect(consoleErrors).toEqual([]);
+  });
+});

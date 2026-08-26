@@ -1,4 +1,4 @@
-// Screenshots of every route, at both viewports, in both themes: 17 × 2 × 2 = 68 images.
+// Screenshots of every route, at both viewports, in both themes: 20 × 2 × 2 = 80 images.
 //
 // Why this exists rather than a note saying the design was reviewed: docs/ui-map/07-design-analysis.md
 // reports measurements taken out-of-tree that cannot be reproduced from this repository, and it

@@ -58,6 +58,15 @@ The `-tools name=path` allowlist is the only way a BCheck `run tool` statement c
 binary; a check naming a tool not on the list is refused, the same gate as the egress chokepoint.
 Tool execution runs arbitrary binaries, so it stays an explicit operator grant.
 
+`-plugins name=path` is the same decision for the Extender and shares its parser
+(`parseNamePathAllowlist`): a plugin is a local executable speaking newline-delimited JSON-RPC on its
+own stdin and stdout, and a name that is not on the list cannot be loaded from the UI or the API.
+Nothing is started at boot — `extension.NewHost` only records the allowlist, and a load is an act the
+operator performs — so `-plugins` never means "burpsy executed three binaries on startup". A spec
+carries the path alone: no args and no env are taken from the flag, because splitting a flag value
+into an argv is a small shell and the executable is run directly so that an argument containing shell
+metacharacters is data.
+
 ### CA material is written only under `-intercept-tls`
 
 A plain-HTTP session must not leave key material on disk it never needed. An unreadable `ca.crt` is a

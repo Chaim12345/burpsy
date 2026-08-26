@@ -58,6 +58,11 @@ export const keys = {
   scannerConfigs: ["scanner", "configs"] as const,
   scannerCoverage: ["scanner", "coverage"] as const,
   scannerLive: ["scanner", "live"] as const,
+  // Extender. The console key is parameterised by plugin and by line limit, and shares the
+  // ["extensions"] prefix so a load or an unload invalidates the row and the console together.
+  extensions: ["extensions"] as const,
+  extensionConsole: (name: string, limit: number) => ["extensions", "console", name, limit] as const,
+  extensionApis: ["extensions", "apis"] as const,
 };
 
 /**
