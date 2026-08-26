@@ -526,6 +526,9 @@ test.describe("the editable Inspector — Unit 14", () => {
     await page.getByRole("button", { name: "Send", exact: true }).click();
     const responseEditor = page.locator(".editor-grid-inspected > *").nth(1);
     await expect(responseEditor).toContainText("ORIGIN-OK GET /inspector-edited");
+  });
+});
+
 test.describe("extender", () => {
   test("the extensions tab says what a plugin is and that nothing is allowlisted", async ({
     page,
@@ -731,6 +734,8 @@ test.describe("extender", () => {
       // A request still parked in the proxy would keep its socket open into teardown.
       if (inFlight) await inFlight.catch(() => null);
     }
+  });
+
   test("the APIs tab renders exactly the method set the server dispatches", async ({
     page,
     consoleErrors,
