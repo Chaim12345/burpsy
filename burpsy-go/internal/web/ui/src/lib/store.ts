@@ -56,6 +56,43 @@ function nextId(): string {
   return `t${Date.now().toString(36)}${sequence}`;
 }
 
+/** How many Repeater tabs stay open at once, and how deep the reopen stack goes. */
+const REPEATER_TAB_CAP = 12;
+const REPEATER_REOPEN_CAP = 12;
+
+/**
+ * Enforce the open-tab ceiling without destroying work.
+ *
+ * `openRepeaterTab` and `duplicateRepeaterTab` used to end in a bare `.slice(-12)`. Opening a
+ * thirteenth tab therefore dropped the oldest one on the floor: no toast, no confirmation, and
+ * — the part that made it a data-loss bug rather than a UI wart — no entry on the reopen stack
+ * that exists precisely to protect request drafts. An operator with twelve tabs of hand-built
+ * requests lost the first by opening a thirteenth, and found out later.
+ *
+ * Every *close* path in this store already does the right thing: the removed tab goes onto
+ * `closedRepeaterTabs` so `reopenClosedRepeaterTab` can bring it back with its draft intact.
+ * A tab pushed out by the cap is a tab being closed, so it takes the same route. That keeps
+ * one rule for "a tab left the strip" instead of two that disagree.
+ *
+ * The cap stays. Removing it would trade a recoverable eviction for unbounded state, and the
+ * ceiling is not the defect — the silence was.
+ */
+function capRepeaterTabs(
+  tabs: RepeaterTab[],
+  closed: RepeaterTab[],
+): { repeaterTabs: RepeaterTab[]; closedRepeaterTabs: RepeaterTab[] } {
+  if (tabs.length <= REPEATER_TAB_CAP) {
+    return { repeaterTabs: tabs, closedRepeaterTabs: closed };
+  }
+  // Oldest-first, matching the left→right order the bulk closes push in, so reopen walks them
+  // back in the same direction regardless of how they left.
+  const evicted = tabs.slice(0, tabs.length - REPEATER_TAB_CAP);
+  return {
+    repeaterTabs: tabs.slice(tabs.length - REPEATER_TAB_CAP),
+    closedRepeaterTabs: [...closed, ...evicted].slice(-REPEATER_REOPEN_CAP),
+  };
+}
+
 interface AppState {
   route: string;
   theme: Theme;
@@ -143,7 +180,10 @@ export const useApp = create<AppState>()(
       openRepeaterTab: ({ name, target, protocol = "https", request, fromExchange }) => {
         const id = nextId();
         set((state) => ({
-          repeaterTabs: [...state.repeaterTabs, { id, name, target, protocol, request, fromExchange }].slice(-12),
+          ...capRepeaterTabs(
+            [...state.repeaterTabs, { id, name, target, protocol, request, fromExchange }],
+            state.closedRepeaterTabs,
+          ),
           activeRepeaterTab: id,
         }));
         return id;
@@ -208,7 +248,7 @@ export const useApp = create<AppState>()(
           const index = state.repeaterTabs.findIndex((tab) => tab.id === id);
           const next = [...state.repeaterTabs];
           next.splice(index + 1, 0, copy);
-          return { repeaterTabs: next.slice(-12), activeRepeaterTab: copy.id };
+          return { ...capRepeaterTabs(next, state.closedRepeaterTabs), activeRepeaterTab: copy.id };
         }),
       reopenClosedRepeaterTab: () =>
         set((state) => {
