@@ -288,8 +288,12 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 	switch parts[1] {
 	case "forward":
 		var req struct {
-			Raw              string `json:"raw"`
-			FixContentLength bool   `json:"fix_content_length"`
+			// A pointer so an explicitly empty string clears the payload while an absent key
+			// forwards what was held. On a WebSocket frame an empty payload is ordinary, and the
+			// old plain string treated "" as "unchanged" — so an operator who deleted the payload
+			// got the original forwarded, answered 200, with no sign the edit was discarded.
+			Raw              *string `json:"raw"`
+			FixContentLength bool    `json:"fix_content_length"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)

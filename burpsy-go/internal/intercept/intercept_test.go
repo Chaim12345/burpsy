@@ -53,7 +53,7 @@ func TestEngine_UnconditionalListHoldsEverything(t *testing.T) {
 		t.Fatalf("held = %+v", h)
 	}
 	// Resolve it so the map has no dangling entry.
-	if err := e.Forward(h.ID, "", false); err != nil {
+	if err := e.Forward(h.ID, nil, false); err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestEngine_HeldForwardCarriesEditedBytes(t *testing.T) {
 	edited := "GET /changed HTTP/1.1\r\nHost: a.test\r\n\r\n"
 	go func() {
 		time.Sleep(20 * time.Millisecond)
-		if err := e.Forward(h.ID, edited, false); err != nil {
+		if err := e.Forward(h.ID, ptr(edited), false); err != nil {
 			t.Errorf("Forward: %v", err)
 		}
 	}()
@@ -187,7 +187,7 @@ func TestEngine_ResolvingHeldMessageRemovesItFromTheMap(t *testing.T) {
 		if h == nil {
 			t.Fatalf("iteration %d: message not held", i)
 		}
-		if err := e.Forward(h.ID, "", false); err != nil {
+		if err := e.Forward(h.ID, nil, false); err != nil {
 			t.Fatalf("iteration %d: Forward: %v", i, err)
 		}
 	}
@@ -213,10 +213,10 @@ func TestEngine_SecondResolveIsIgnored(t *testing.T) {
 	e.SetEnabled(true)
 	e.SetRules(DirectionRequest, true, nil)
 	h := e.Hold(reqMessage("a.test", "GET", "/"))
-	if err := e.Forward(h.ID, "", false); err != nil {
+	if err := e.Forward(h.ID, nil, false); err != nil {
 		t.Fatalf("first Forward: %v", err)
 	}
-	if err := e.Forward(h.ID, "GET /again HTTP/1.1\r\n\r\n", false); err == nil {
+	if err := e.Forward(h.ID, ptr("GET /again HTTP/1.1\r\n\r\n"), false); err == nil {
 		t.Fatalf("second Forward succeeded, want error")
 	}
 	if err := e.Drop(h.ID, ""); err == nil {
@@ -226,7 +226,7 @@ func TestEngine_SecondResolveIsIgnored(t *testing.T) {
 
 func TestEngine_ForwardUnknownIDFails(t *testing.T) {
 	e := NewEngine()
-	if err := e.Forward(99, "", false); err == nil {
+	if err := e.Forward(99, nil, false); err == nil {
 		t.Fatalf("Forward on unknown id succeeded")
 	}
 }
@@ -325,7 +325,7 @@ func TestEngine_DropAllDropsEveryHeldMessageAndCountsOnlyItsOwn(t *testing.T) {
 	}
 	// Resolve one out from under DropAll: it must not be counted or re-resolved,
 	// because the proxy side of that message already has its answer.
-	if err := e.Forward(first.ID, "", false); err != nil {
+	if err := e.Forward(first.ID, nil, false); err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
 	if got := e.DropAll("clear the queue"); got != 1 {
@@ -344,3 +344,8 @@ func TestEngine_DropAllDropsEveryHeldMessageAndCountsOnlyItsOwn(t *testing.T) {
 		t.Fatalf("DropAll on an empty queue = %d, want 0", got)
 	}
 }
+
+// ptr is for the *string argument Forward now takes: nil means "forward unchanged", and a pointer
+// to the empty string means "clear the payload". Those were the same value before, which is the
+// defect this signature fixes.
+func ptr[T any](v T) *T { return &v }

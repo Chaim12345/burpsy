@@ -580,7 +580,27 @@ func (e *Engine) Get(id uint64) *Held {
 // bytes (the original when empty) to the proxy. fixContentLength rewrites the
 // Content-Length header to match the body, since editing a body without fixing
 // its length produces a corrupt exchange.
-func (e *Engine) Forward(id uint64, edited string, fixContentLength bool) error {
+// Forward resolves a held message as forwarded.
+//
+// edited nil means "unchanged" and sends the bytes as held. A non-nil pointer replaces them,
+// including a pointer to the empty string, which clears the payload.
+//
+// # Why a pointer
+//
+// This took a plain string, and treated "" as "unchanged". For HTTP that is harmless: an empty
+// request or response is meaningless, so nobody could want one. For a WebSocket frame an empty
+// payload is ordinary — a keepalive, a cleared field — and an operator who selected the payload and
+// deleted it got the ORIGINAL forwarded instead, with a 200 and no indication their edit had been
+// discarded. "Absent" and "empty" are different requests and are now different values.
+//
+// # Why fixContentLength is ignored for WebSocket
+//
+// The console's toggle defaults to on (intercept.tsx), and rewriteContentLength splits on the first
+// CRLFCRLF. A frame payload has no Content-Length, but a payload that happens to contain a blank
+// line looks like a header block to that function — so forwarding a held WebSocket message with the
+// default settings would have injected a Content-Length header into the middle of application data.
+// Skipped by direction, because the direction is a fact and the bytes are a guess.
+func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool) error {
 	e.mu <- struct{}{}
 	h := e.held[id]
 	<-e.mu
@@ -588,10 +608,10 @@ func (e *Engine) Forward(id uint64, edited string, fixContentLength bool) error 
 		return fmt.Errorf("no held message %d", id)
 	}
 	raw := h.Raw
-	if edited != "" {
-		raw = []byte(edited)
+	if edited != nil {
+		raw = []byte(*edited)
 	}
-	if fixContentLength {
+	if fixContentLength && !h.Direction.IsWebSocket() {
 		raw = rewriteContentLength(raw)
 	}
 	if !h.resolve(ActionForward, raw, "") {

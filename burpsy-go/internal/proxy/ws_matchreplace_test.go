@@ -153,7 +153,7 @@ func TestAWebSocketRuleAppliesBeforeInterceptionSeesTheMessage(t *testing.T) {
 	var offered []string
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		offered = append(offered, string(h.Raw))
-		_ = engine.Forward(h.ID, "", false)
+		_ = engine.Forward(h.ID, nil, false)
 	})
 	defer stop()
 

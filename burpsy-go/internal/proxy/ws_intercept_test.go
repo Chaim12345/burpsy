@@ -155,7 +155,7 @@ func TestAForwardedWebSocketFrameIsRelayedByteIdentically(t *testing.T) {
 	frame := core.EncodeWsFrame(core.WsOpcodeText, []byte(`{"msg":"hello"}`), &mask)
 
 	stop := wsOperator(engine, func(h *intercept.Held) {
-		_ = engine.Forward(h.ID, "", false)
+		_ = engine.Forward(h.ID, nil, false)
 	})
 	defer stop()
 
@@ -235,7 +235,7 @@ func TestAnEditedClientFrameIsReMaskedAndCarriesTheEdit(t *testing.T) {
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		// fixContentLength false: a WebSocket frame has no Content-Length, and asking the HTTP
 		// rewriter to find one in a JSON payload is how a frame gets mangled.
-		_ = engine.Forward(h.ID, edited, false)
+		_ = engine.Forward(h.ID, ptr(edited), false)
 	})
 	defer stop()
 
@@ -269,7 +269,7 @@ func TestAnEditedServerFrameGoesOutUnmasked(t *testing.T) {
 	const edited = `{"balance":999999}`
 
 	stop := wsOperator(engine, func(h *intercept.Held) {
-		_ = engine.Forward(h.ID, edited, false)
+		_ = engine.Forward(h.ID, ptr(edited), false)
 	})
 	defer stop()
 
@@ -334,7 +334,7 @@ func TestAFrameSplitAcrossReadsIsHeldOnceAndWhole(t *testing.T) {
 				len(h.Raw), len(payload))
 		}
 		offered++
-		_ = engine.Forward(h.ID, "", false)
+		_ = engine.Forward(h.ID, nil, false)
 	})
 	defer stop()
 
@@ -374,7 +374,7 @@ func TestSeveralFramesInOneReadAreEachHeldInOrder(t *testing.T) {
 	var seen []string
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		seen = append(seen, string(h.Raw))
-		_ = engine.Forward(h.ID, "", false)
+		_ = engine.Forward(h.ID, nil, false)
 	})
 	defer stop()
 
@@ -453,7 +453,7 @@ func TestAFragmentedMessageIsReassembledAndOfferedWhole(t *testing.T) {
 	var offered []string
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		offered = append(offered, string(h.Raw))
-		_ = engine.Forward(h.ID, "", false)
+		_ = engine.Forward(h.ID, nil, false)
 	})
 	defer stop()
 
@@ -487,7 +487,7 @@ func TestEditingAReassembledMessageSendsOneFrameWithTheEdit(t *testing.T) {
 	const edited = "REPLACED"
 
 	stop := wsOperator(engine, func(h *intercept.Held) {
-		_ = engine.Forward(h.ID, edited, false)
+		_ = engine.Forward(h.ID, ptr(edited), false)
 	})
 	defer stop()
 
@@ -549,7 +549,7 @@ func TestAPingBetweenFragmentsPassesThroughWithoutBreakingReassembly(t *testing.
 	var offered []string
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		offered = append(offered, string(h.Raw))
-		_ = engine.Forward(h.ID, "", false)
+		_ = engine.Forward(h.ID, nil, false)
 	})
 	defer stop()
 
@@ -705,3 +705,8 @@ func TestAnUnparseableFrameStreamStillRelaysWhatItBuffered(t *testing.T) {
 		t.Errorf("relayed % x, want % x — buffered bytes must still reach the peer", got, frame)
 	}
 }
+
+// ptr is for the *string argument Forward now takes: nil means "forward unchanged", and a pointer
+// to the empty string means "clear the payload". Those were the same value before, which is the
+// defect this signature fixes.
+func ptr[T any](v T) *T { return &v }
