@@ -1450,7 +1450,11 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizer.List()})
+		// organizerView, not organizer.List(): the console's in-scope/status/MIME filters need fields
+		// an organizer.Item does not have, and the resolution happens here because that is where the
+		// traffic store and the scope are. See api_organizer_view.go, particularly for what happens
+		// to an item whose exchange has been evicted.
+		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizerView()})
 	case http.MethodPost:
 		var req struct {
 			Exchange int `json:"exchange"`

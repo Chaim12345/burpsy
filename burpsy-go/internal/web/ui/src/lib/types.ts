@@ -397,12 +397,56 @@ export interface ToolLog {
   entries: LogEntry[];
 }
 
-export interface OrganizerItem {
+/**
+ * The editable half of an organizer item: what a save sends back.
+ *
+ * Split from OrganizerItem because the read shape now carries resolved fields — status, MIME, scope
+ * — that the server derives and a client must never send. Typing the save payload as the read shape
+ * made a write claim to carry a status, which is not the client's to state.
+ */
+export interface OrganizerEdit {
   id: number;
-  exchange: number;
   title: string;
   note: string;
   highlight: string;
+}
+
+/**
+ * A saved exchange, plus what the server resolved about it so the page can filter.
+ *
+ * The first five fields are the item as stored. Everything after `resolved` is a join against the
+ * traffic store and the scope, done server-side because that is where both live — see
+ * internal/web/api_organizer_view.go.
+ *
+ * # `resolved` is the field to read first
+ *
+ * The organizer outlives the traffic store: an exchange saved a thousand requests ago can be
+ * evicted while the note about it survives, which is much of the point of keeping notes. Such a row
+ * has no status, no MIME and no scope answer, and every optional field below is absent rather than
+ * zero — `status: 0`, `mime: ""` and `in_scope: false` are all *answers*, and this row has none to
+ * give. A filter must therefore let unresolved rows through rather than judge them, or it hides a
+ * note the operator wrote at exactly the moment they are looking for it.
+ */
+export interface OrganizerItem extends OrganizerEdit {
+  exchange: number;
+
+  /** False when the exchange is no longer in the traffic store; every field below is then absent. */
+  resolved: boolean;
+  host?: string;
+  port?: number;
+  method?: string;
+  path?: string;
+  /** Absent when the exchange has no response. A request that never came back is not a status of 0. */
+  status?: number;
+  /**
+   * Whether a response was recorded at all. This is what makes an empty `mime` readable: without it,
+   * "no response yet" and "a response that named no usable Content-Type" are the same empty string.
+   */
+  has_response: boolean;
+  /** Response media type, parameters stripped and lowercased ("text/html"). */
+  mime?: string;
+  /** Absent exactly when `resolved` is false — see the note above on why this is not a plain bool. */
+  in_scope?: boolean;
 }
 
 export interface TrafficRule {

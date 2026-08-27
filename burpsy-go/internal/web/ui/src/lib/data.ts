@@ -10,6 +10,7 @@ import type {
   MatchReplaceConfig,
   MatchReplaceResponse,
   MessageView,
+  OrganizerEdit,
   OrganizerItem,
   Scope,
   ScannerConfig,
@@ -336,7 +337,7 @@ export function useOrganizerMutations() {
       onSuccess: done,
     }),
     save: useMutation({
-      mutationFn: (item: OrganizerItem) => api<unknown>(`/api/tools/organizer/${item.id}`, json("POST", item)),
+      mutationFn: (item: OrganizerEdit) => api<unknown>(`/api/tools/organizer/${item.id}`, json("POST", item)),
       onSuccess: done,
     }),
     remove: useMutation({
