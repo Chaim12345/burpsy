@@ -1,6 +1,8 @@
 package web
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1079,26 +1081,116 @@ func decodeLayer(dec *tools.Decoder, encoding, input string) (string, []string, 
 }
 
 // smartDecode runs the input through the known layers in order until decoding stops changing it.
+// guessBase64 accepts the unpadded alphabets the strict decoder rejects.
+//
+// tools.Decoder.DecodeBase64 already tries standard and URL-safe, both *padded*. Raw
+// (unpadded) base64 is what every JWT segment uses, so on a tool whose operators paste
+// tokens all day the strict path fails on the single most common input.
+func guessBase64(dec *tools.Decoder, s string) (string, error) {
+	if out, err := dec.DecodeBase64(s); err == nil {
+		return out, nil
+	}
+	for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil {
+			return string(b), nil
+		}
+	}
+	return "", fmt.Errorf("not base64 under any known alphabet")
+}
+
+// guessHex accepts the separators the strict decoder does not.
+//
+// DecodeHex strips spaces and a single leading "0x". It rejects the framings a security tool
+// actually meets: colon-delimited fingerprints and MAC addresses (de:ad:be:ef), dash- or
+// comma-delimited dumps, per-byte 0x prefixes, and anything spanning lines.
+func guessHex(dec *tools.Decoder, s string) (string, error) {
+	if out, err := dec.DecodeHex(s); err == nil {
+		return out, nil
+	}
+	cleaned := strings.NewReplacer(
+		":", "", "-", "", ",", "", ".", "",
+		" ", "", "\t", "", "\n", "", "\r", "",
+		"0x", "", "0X", "",
+	).Replace(s)
+	if cleaned == "" || len(cleaned)%2 != 0 {
+		// An odd number of nibbles is not hex with separators removed; it is something else.
+		// Guessing a leading zero would invent a byte the operator never pasted.
+		return "", fmt.Errorf("not hex after removing separators")
+	}
+	b, err := hex.DecodeString(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("not hex after removing separators")
+	}
+	return string(b), nil
+}
+
+// smartDecode peels encoding layers off input, reporting which layers it removed.
+//
+// # guess is a real parameter now
+//
+// It used to be accepted and never referenced — the four steps ran in a fixed order whichever
+// way the Decoder's "guess base64 / hex alphabets" checkbox was set. The parity audit found it
+// as the *one* decorative control in roughly eighty (§5.1): it rendered, accepted input,
+// returned 200 and plausible output, and changed nothing. On a security-analysis toggle that
+// is the worst possible place for it, because the operator reads the output as evidence.
+//
+// Now it selects the alphabet-tolerant decoders above. Off keeps the strict behaviour exactly,
+// so nothing that worked before decodes differently; on additionally accepts unpadded base64
+// and separator-delimited hex.
+//
+// A guessed layer is *named* as guessed in the returned layer list — "base64 (guessed
+// alphabet)" rather than "base64". The operator is told which of their input's layers needed a
+// looser reading, because "this decoded cleanly" and "this decoded once I relaxed the
+// alphabet" are different facts about a payload, and on this tool the difference can matter.
+// plausibleDecode still gates every acceptance, so relaxing the alphabet does not relax the
+// bar for calling something decoded.
 func smartDecode(dec *tools.Decoder, input string, guess bool) (string, []string) {
 	current := input
 	var layers []string
+
+	// strictThenGuess returns the decoded value and whether the strict decoder had to be
+	// relaxed to get it. The bool is what lets the layer list stay honest about which reading
+	// succeeded, rather than reporting a guessed layer as if it had decoded cleanly.
+	strictThenGuess := func(strict, loose func(string) (string, error)) func(string) (string, bool, error) {
+		return func(s string) (string, bool, error) {
+			if out, err := strict(s); err == nil {
+				return out, false, nil
+			}
+			if !guess {
+				return "", false, fmt.Errorf("strict decode failed and alphabet guessing is off")
+			}
+			out, err := loose(s)
+			return out, err == nil, err
+		}
+	}
+	never := func(fn func(string) (string, error)) func(string) (string, bool, error) {
+		return func(s string) (string, bool, error) {
+			out, err := fn(s)
+			return out, false, err
+		}
+	}
+
 	steps := []struct {
 		name string
-		fn   func(string) (string, error)
+		fn   func(string) (string, bool, error)
 	}{
-		{"base64", dec.DecodeBase64},
-		{"url", dec.DecodeURL},
-		{"hex", dec.DecodeHex},
-		{"html", func(s string) (string, error) { return dec.DecodeHTML(s), nil }},
+		{"base64", strictThenGuess(dec.DecodeBase64, func(s string) (string, error) { return guessBase64(dec, s) })},
+		{"url", never(dec.DecodeURL)},
+		{"hex", strictThenGuess(dec.DecodeHex, func(s string) (string, error) { return guessHex(dec, s) })},
+		{"html", never(func(s string) (string, error) { return dec.DecodeHTML(s), nil })},
 	}
 	for _, step := range steps {
 		for i := 0; i < 3; i++ { // repeated layers (e.g. double-encoding)
-			next, err := step.fn(current)
+			next, guessed, err := step.fn(current)
 			if err != nil || next == current || !plausibleDecode(current, next) {
 				break
 			}
 			current = next
-			layers = append(layers, step.name)
+			name := step.name
+			if guessed {
+				name += " (guessed alphabet)"
+			}
+			layers = append(layers, name)
 		}
 	}
 	if len(layers) == 0 {
