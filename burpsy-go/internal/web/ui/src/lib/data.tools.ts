@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api, json } from "./api";
 import type { RepeaterResult, RepeaterSendOptions } from "./types";
-import type { PayloadSource, PointView } from "./types.tools";
+import type { PayloadRuleSpec, PayloadSource, PointView } from "./types.tools";
 
 export interface IntruderRunRequest {
   msg_id: number;
@@ -12,8 +12,23 @@ export interface IntruderRunRequest {
   points: number[];
   payload_sets?: string[][];
   payload_sources?: PayloadSource[];
+  payload_rules?: PayloadRuleSpec[];
+  /** Regular expressions, compiled by RE2 on the server — never literal strings. */
+  grep_match?: string;
+  grep_extract?: string;
   max_requests: number;
-  max_in_flight: number;
+  /**
+   * A saved resource pool by name (Burp's Resource pool sub-tab).
+   *
+   * Mutually exclusive with `max_in_flight`, `rps` and auto-throttle: the server refuses a request
+   * carrying both, because a pool already states those bounds and accepting two answers to "how
+   * fast may this attack run" would mean silently dropping one while the report named the pool.
+   * See Server.intruderLimits in internal/web/api_tools.go. `max_requests` is not part of that
+   * exclusion — it is the attack's size bound, not its rate — and still applies.
+   */
+  pool?: string;
+  max_in_flight?: number;
+  rps?: number;
 }
 
 /**

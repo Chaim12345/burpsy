@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { RepeaterSendOptions } from "./types";
+import type { AttackMode, PayloadRuleSpec, PointView, RunView } from "./types.tools";
 
 export type Theme = "light" | "dark" | "system";
 export type Density = "comfortable" | "compact";
@@ -48,6 +49,104 @@ export interface IntruderSeed {
   msgId: number | null;
   target: string;
   label: string;
+}
+
+/** How a grep pattern was typed: a literal to be quoted, or a regex sent as written. */
+export type GrepMatchMode = "simple" | "regex";
+
+/**
+ * A whole Intruder attack configuration.
+ *
+ * It lives here rather than in the page's `useState` because only one page is mounted at a time
+ * (app.tsx renders a single `<ActivePage />`), so component-local state meant that clicking any
+ * other nav entry destroyed the base request, the positions, all seven payload forms, the
+ * processing rules and the finished report — with no warning and no way back, since the
+ * configuration that would let the attack be re-run went with it (burpsy-react-ui-rby).
+ *
+ * Burp treats an attack as a durable object: each one opens in its own window and can be saved into
+ * the project file. This is the smaller version of that promise — one attack, but one that survives
+ * navigation and reload the way Repeater's drafts already do.
+ */
+export interface IntruderConfig {
+  msgId: string;
+  target: string;
+  label: string;
+  mode: AttackMode;
+  allPoints: boolean;
+  points: PointView[];
+  selected: number[];
+  payloadTexts: string[];
+  payloadTypes: ("list" | "numbers" | "file" | "brute_force" | "dates" | "custom_iterator" | "null")[];
+  payloadNumbers: { from: string; to: string; step: string }[];
+  payloadFiles: string[];
+  payloadBrute: { charset: string; min_len: string; max_len: string }[];
+  payloadDates: { from: string; to: string; step: string; format: string }[];
+  payloadCustom: { positions: string; separator: string }[];
+  payloadNulls: string[];
+  rules: PayloadRuleSpec[];
+  grepMatch: string;
+  grepMatchMode: GrepMatchMode;
+  grepExtract: string;
+  /** Empty means the inline limits below apply; a name binds the attack to a saved pool. */
+  poolName: string;
+  maxRequests: number;
+  maxInFlight: number;
+  rps: string;
+}
+
+/**
+ * What the browser knew about the payload sets at the moment an attack was launched.
+ *
+ * Kept beside the report so an attempt row's ordinal can be decoded into payload text after the
+ * fact. Snapshotted rather than read live because editing the payload forms after a run must not
+ * silently relabel the rows of a report those forms did not produce.
+ *
+ * `sets[i]` is null when the browser cannot name that set's payloads — a server-side file, or any
+ * set whose server-reported count disagrees with the browser's list, which is what a payload
+ * processing rule that skipped an item looks like from here.
+ */
+export interface IntruderPayloadSnapshot {
+  mode: AttackMode;
+  points: number;
+  sets: (string[] | null)[];
+}
+
+/** A finished attack: the report, and enough context to read it. */
+export interface IntruderRun {
+  view: RunView | null;
+  /** An older server's flat per-attempt array. Kept as-is; the page renders it as JSON. */
+  legacy: unknown;
+  snapshot: IntruderPayloadSnapshot | null;
+}
+
+export const DEFAULT_PAYLOADS = "admin\nroot\ntest\n' OR 1=1--\n../../etc/passwd";
+
+export function emptyIntruderConfig(): IntruderConfig {
+  return {
+    msgId: "",
+    target: "",
+    label: "",
+    mode: "sniper",
+    allPoints: false,
+    points: [],
+    selected: [],
+    payloadTexts: [DEFAULT_PAYLOADS],
+    payloadTypes: ["list"],
+    payloadNumbers: [{ from: "1", to: "100", step: "1" }],
+    payloadFiles: [""],
+    payloadBrute: [{ charset: "abc", min_len: "1", max_len: "3" }],
+    payloadDates: [{ from: "2024-01-01", to: "2024-12-31", step: "1", format: "yyyy-MM-dd" }],
+    payloadCustom: [{ positions: "a,b\nc,d", separator: "" }],
+    payloadNulls: ["10"],
+    rules: [],
+    grepMatch: "",
+    grepMatchMode: "simple",
+    grepExtract: "",
+    poolName: "",
+    maxRequests: 1000,
+    maxInFlight: 8,
+    rps: "",
+  };
 }
 
 let sequence = 0;
@@ -108,6 +207,13 @@ interface AppState {
   closedRepeaterTabs: RepeaterTab[];
   repeaterGroups: RepeaterGroup[];
   intruderSeed: IntruderSeed | null;
+  /** The one live Intruder attack configuration. Persisted — see IntruderConfig. */
+  intruder: IntruderConfig;
+  /** The last finished attack, or null when none has run. Persisted alongside its configuration:
+   *  a report that outlives the form is the half of burpsy-react-ui-rby that actually hurt. */
+  intruderRun: IntruderRun | null;
+  /** Which Intruder sub-tab is open, so returning to the page lands where it was left. */
+  intruderTab: string;
   comparerSlots: { a: string; b: string };
   /** Set when another page hands the Decoder an input to transform. Session-only, like
    *  intruderSeed: a stale payload surviving a reload would masquerade as current work. */
@@ -143,10 +249,47 @@ interface AppState {
   setRepeaterTabOptions: (tabId: string, options: RepeaterSendOptions) => void;
 
   setIntruderSeed: (seed: IntruderSeed | null) => void;
+  /** Patch the attack configuration. Takes an updater so the page's field setters compose. */
+  setIntruder: (next: IntruderConfig | ((current: IntruderConfig) => IntruderConfig)) => void;
+  setIntruderRun: (run: IntruderRun | null) => void;
+  setIntruderTab: (tab: string) => void;
   setDecoderSeed: (seed: { label: string; input: string } | null) => void;
   setComparerSlot: (slot: "a" | "b", value: string) => void;
   focusExchange: (id: number | null) => void;
   setHistoryQuery: (value: string) => void;
+}
+
+/**
+ * What survives a reload.
+ *
+ * Transient coordination flags must not: a stale one masquerades as current work. Layout
+ * preferences and drafted work should. A named export rather than an inline lambda so the rule can
+ * be asserted in a test — zustand's `persist` API is unreachable in an environment with no
+ * localStorage, which is every unit-test run.
+ */
+export function persistedWorkspace(state: AppState) {
+  return {
+    theme: state.theme,
+    density: state.density,
+    // Where the Inspector sits and how much of it is open are layout choices an
+    // operator makes once. Persisted here rather than under a `burpsy.*` key of
+    // their own so there is exactly one place per-browser UI state lives.
+    inspectorDock: state.inspectorDock,
+    inspectorPanelState: state.inspectorPanelState,
+    repeaterTabs: state.repeaterTabs,
+    activeRepeaterTab: state.activeRepeaterTab,
+    // Groups are layout the operator curates — same persistence class as tab drafts.
+    repeaterGroups: state.repeaterGroups,
+    // An Intruder attack is work, not a transient form: the configuration and the report it
+    // produced both survive navigation and reload. The report is bounded by the server's
+    // detail_limit (500 attempt rows), so this is tens of kilobytes, not unbounded growth.
+    intruder: state.intruder,
+    intruderRun: state.intruderRun,
+    intruderTab: state.intruderTab,
+    // Deliberately absent: closedRepeaterTabs, and every *Seed / focus / query flag. A reopen stack
+    // that survived a reload would resurrect drafts the operator closed days ago, and a persisted
+    // intruderSeed would re-seed Intruder on every load, overwriting the attack above.
+  };
 }
 
 export const useApp = create<AppState>()(
@@ -164,6 +307,9 @@ export const useApp = create<AppState>()(
       closedRepeaterTabs: [],
       repeaterGroups: [],
       intruderSeed: null,
+      intruder: emptyIntruderConfig(),
+      intruderRun: null,
+      intruderTab: "positions",
       decoderSeed: null,
       comparerSlots: { a: "", b: "" },
       historyFocus: null,
@@ -309,31 +455,16 @@ export const useApp = create<AppState>()(
         })),
 
       setIntruderSeed: (intruderSeed) => set({ intruderSeed }),
+      setIntruder: (next) =>
+        set((state) => ({ intruder: typeof next === "function" ? next(state.intruder) : next })),
+      setIntruderRun: (intruderRun) => set({ intruderRun }),
+      setIntruderTab: (intruderTab) => set({ intruderTab }),
       setDecoderSeed: (decoderSeed) => set({ decoderSeed }),
       setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
       focusExchange: (historyFocus) => set({ historyFocus }),
       setHistoryQuery: (historyQuery) => set({ historyQuery }),
     }),
-    {
-      name: "burpsy.workspace",
-      // Transient coordination flags must not survive a reload; layout preferences and
-      // Repeater drafts should.
-      partialize: (state) => ({
-        theme: state.theme,
-        density: state.density,
-        // Where the Inspector sits and how much of it is open are layout choices an
-        // operator makes once. Persisted here rather than under a `burpsy.*` key of
-        // their own so there is exactly one place per-browser UI state lives.
-        inspectorDock: state.inspectorDock,
-        inspectorPanelState: state.inspectorPanelState,
-        repeaterTabs: state.repeaterTabs,
-        activeRepeaterTab: state.activeRepeaterTab,
-        // Groups are layout the operator curates — same persistence class as tab drafts.
-        repeaterGroups: state.repeaterGroups,
-        // Deliberately absent: closedRepeaterTabs. A reopen stack that survives a reload would
-        // resurrect drafts the operator chose to close days ago, which reads as a bug, not a feature.
-      }),
-    },
+    { name: "burpsy.workspace", partialize: persistedWorkspace },
   ),
 );
 
