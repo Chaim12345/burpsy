@@ -638,12 +638,16 @@ export function InterceptPage(): JSX.Element {
               wsHoldable in internal/proxy/ws.go. */}
           <div className="notice" style={{ marginTop: 10 }}>
             <strong>What WebSocket interception does not hold.</strong> Control frames (ping, pong,
-            close) are always relayed: holding a ping stalls the peer's keepalive and holding a close
-            leaves a socket that cannot be ended. Fragmented messages and compressed frames are also
-            relayed untouched — a fragment is half a message, and a compressed payload is a DEFLATE
-            block rather than editable text. Compressed frames only occur if you have turned off
-            <code>Sec-WebSocket-Extensions</code> stripping in proxy options. Burp reassembles
-            fragments and inflates compressed frames; burpsy does not yet.
+            close) are always relayed: holding a ping stalls the peer&apos;s keepalive and holding a
+            close leaves a socket that cannot be ended. Compressed frames are relayed untouched too —
+            the payload is a DEFLATE block rather than editable text — and they only occur if you have
+            turned off <code>Sec-WebSocket-Extensions</code> stripping in proxy options. Burp inflates
+            them; burpsy does not yet.
+            <br />
+            Fragmented messages <em>are</em> reassembled and offered whole, so nothing is relayed until
+            the final fragment arrives. Forwarding without editing relays the original frames exactly
+            as they came; an edit is sent as one unfragmented frame. A message larger than 1&nbsp;MiB is
+            relayed unheld rather than buffered without bound.
           </div>
         </TabsContent>
       </Tabs>

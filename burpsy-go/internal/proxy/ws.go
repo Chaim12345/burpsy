@@ -25,9 +25,11 @@ package proxy
 //   - It holds absolutely for any direction without an active WebSocket rule
 //     list, which is the default and takes a byte-for-byte unchanged path.
 //   - It is deliberately suspended for a direction the operator has switched
-//     interception on for, and only for the frames that direction can hold:
-//     control frames, compressed frames and fragments are still relayed
-//     untouched. See wsHoldable.
+//     interception on for. Control frames are still always relayed immediately —
+//     holding a ping stalls the peer's keepalive and holding a close leaves a
+//     socket that cannot be ended — and so are compressed frames, whose payload
+//     is a DEFLATE block rather than anything an operator could edit.
+//     Fragmented messages ARE reassembled and held; see wsFragments.
 //
 // The tests in ws_intercept_test.go pin the inert cases with no operator
 // running, so anything that started holding a frame it should not would hang
@@ -313,6 +315,10 @@ func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst 
 	// wire, because they are the beginning of a frame whose remainder has not
 	// arrived. It is empty whenever interception is off.
 	var pending []byte
+	// frag accumulates a fragmented message so it can be offered whole. Per direction, because
+	// one message's fragments cannot interleave with another's on the same connection
+	// (RFC 6455 §5.4) — only control frames may appear between them.
+	var frag wsFragments
 	// degraded latches when frame boundaries can no longer be located. From then
 	// on this direction relays and never holds again: a hold decision needs to
 	// know where the frame is, and guessing would corrupt the stream. Latching is
@@ -332,7 +338,7 @@ func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst 
 			// Relaying a newer chunk ahead of an older partial frame would
 			// reorder the stream, which is worse than either path alone.
 			if !degraded && (holding || len(pending) > 0) {
-				fault, gone := s.wsIntercept(dir, &pending, chunk, dst, rs, exchangeID, fromClient, peer, stats)
+				fault, gone := s.wsIntercept(dir, &pending, chunk, dst, rs, exchangeID, fromClient, peer, stats, &frag)
 				if gone {
 					return ""
 				}
@@ -407,29 +413,6 @@ func (s *Server) wsInterceptDirection(fromClient bool) (intercept.Direction, boo
 	return dir, s.config.intercept.Rules(dir).Active
 }
 
-// wsHoldable reports whether a frame may be held, and when it may not, the
-// reason — which is recorded rather than dropped, because "this frame was not
-// offered to you" is a fact the operator needs in order to trust the ones that
-// were.
-//
-// Three kinds of frame are relayed untouched:
-//
-//   - Control frames. Holding a ping stalls the peer's keepalive and holding a
-//     close prevents the connection from shutting down; an operator staring at a
-//     held close frame would be watching a socket they can no longer end. Burp
-//     does not offer control frames for editing either.
-//   - Compressed frames, meaning any RSV bit set. With permessage-deflate the
-//     payload is a DEFLATE block, so showing it as text would be fiction and
-//     accepting an edit would put an invalid block on the wire. burpsy strips the
-//     extension offer from handshakes by default (see stripWsHandshake), so this
-//     case only arises when the operator has deliberately turned stripping off.
-//   - Fragmented frames, meaning FIN clear or a continuation opcode. A held
-//     fragment is half a message, and an edit to it cannot be length-checked
-//     against the rest, which has already gone.
-//
-// Each of these is a real gap against Burp, which reassembles fragments and
-// inflates compressed frames before offering them. They are refused out loud
-// here rather than half-supported.
 // wsIntercept consumes chunk on the frame-boundary path: it appends to pending,
 // then for every frame that is now whole decides whether to hold it, and puts
 // the result on the wire.
@@ -460,7 +443,7 @@ func (s *Server) wsInterceptDirection(fromClient bool) (intercept.Direction, boo
 //
 // Returns a fault when frame boundaries are lost, and connGone when the sink is
 // closed. A fault leaves pending intact for the caller to flush.
-func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []byte, dst net.Conn, rs *core.WsReassembler, exchangeID core.ExchangeID, fromClient bool, peer wsPeer, stats *wsCaptureStats) (string, bool) {
+func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []byte, dst net.Conn, rs *core.WsReassembler, exchangeID core.ExchangeID, fromClient bool, peer wsPeer, stats *wsCaptureStats, frag *wsFragments) (string, bool) {
 	*pending = append(*pending, chunk...)
 
 	for {
@@ -489,62 +472,179 @@ func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []b
 			*pending = nil
 		}
 
-		out, drop := s.wsDecideFrame(dir, hdr, frame, fromClient, peer)
+		// Zero or more frames out: a mid-message fragment relays nothing until the message is
+		// complete, and the final fragment may relay several at once. See wsFragments.
+		outs, drop := s.wsDecideFrames(dir, hdr, frame, fromClient, peer, frag)
 		if drop {
 			stats.dropped.Add(1)
 			continue
 		}
-		if _, werr := dst.Write(out); werr != nil {
-			return "", true
-		}
-		if cerr := rs.Feed(out); cerr != nil {
-			// The frame went out; only the index lost track. Same treatment as on
-			// the relay-first path.
-			return fmt.Sprintf("%s: %v", wsWhich(fromClient), cerr), false
+		for _, out := range outs {
+			if _, werr := dst.Write(out); werr != nil {
+				return "", true
+			}
+			if cerr := rs.Feed(out); cerr != nil {
+				// The frame went out; only the index lost track. Same treatment as on
+				// the relay-first path.
+				return fmt.Sprintf("%s: %v", wsWhich(fromClient), cerr), false
+			}
 		}
 	}
 }
 
-// wsDecideFrame offers one whole frame to the operator and returns the bytes to
-// relay, or drop=true when the operator dropped it.
+// wsFragments accumulates one fragmented message so it can be offered whole.
 //
-// frame is the complete frame as it arrived, header included. The returned slice
-// is either frame itself — the untouched case, which is the common one — or a
-// freshly encoded frame carrying the operator's edit.
-func (s *Server) wsDecideFrame(dir intercept.Direction, hdr *core.WsFrameHeader, frame []byte, fromClient bool, peer wsPeer) ([]byte, bool) {
-	if holdable, reason := wsHoldable(hdr); !holdable {
-		// Logged at Debug rather than recorded per frame: a busy socket would
-		// otherwise write a note for every ping. The aggregate is what matters
-		// and it is visible as a gap between relayed and held counts.
-		s.config.logger.Debug("websocket frame relayed without offering it for interception",
-			zap.String("direction", wsWhich(fromClient)), zap.String("reason", reason))
-		return frame, false
-	}
+// A fragmented message arrives as a data frame with FIN clear, then continuation frames, the last
+// with FIN set (RFC 6455 §5.4). Burp reassembles these before offering them; burpsy used to relay
+// them untouched, because a held fragment is half a message and an edit to it cannot be
+// length-checked against a remainder that has already gone.
+//
+// So on an intercepting direction nothing goes on the wire until the message is complete. That is a
+// real behavioural change — fragments are delayed rather than relayed as they arrive — and like
+// every other part of this path it applies only where the operator switched interception on.
+type wsFragments struct {
+	// active is set once a first fragment has been seen. Distinct from len(frames) > 0, because a
+	// message may legitimately carry an empty payload.
+	active bool
+	// opcode is the first fragment's; continuation frames do not carry one.
+	opcode core.WsOpcode
+	// payload is the unmasked, accumulated message.
+	payload []byte
+	// frames keeps the original frames in order, so a message forwarded unchanged is relayed exactly
+	// as it arrived rather than re-framed. That keeps "forwarded untouched" byte-identical to "never
+	// intercepted" — the same property the unfragmented path has.
+	frames [][]byte
+}
 
-	// The payload the operator sees is unmasked. Masking is a wire-level
-	// obfuscation with no security property — RFC 6455 §10.3 is explicit that it
-	// exists to defeat cache poisoning by intermediaries — so showing it masked
-	// would be showing noise.
+func (f *wsFragments) reset() {
+	f.active = false
+	f.opcode = 0
+	f.payload = nil
+	f.frames = nil
+}
+
+// add buffers one fragment, returning false when the message has outgrown the cap.
+func (f *wsFragments) add(hdr *core.WsFrameHeader, frame, payload []byte) bool {
+	if len(f.payload)+len(payload) > core.DefaultMaxWsMessageBytes {
+		return false
+	}
+	if !f.active {
+		f.active = true
+		f.opcode = hdr.Opcode
+	}
+	f.payload = append(f.payload, payload...)
+	// frame points into the read buffer, which the next read reuses, so it must be copied. Getting
+	// this wrong would corrupt the relay in a way that only appears under fragmentation.
+	kept := make([]byte, len(frame))
+	copy(kept, frame)
+	f.frames = append(f.frames, kept)
+	return true
+}
+
+// wsFramePayload returns a frame's payload, unmasked. Copied because the caller keeps it past the
+// next read, and because unmasking in place would corrupt the frame that may still be relayed.
+func wsFramePayload(hdr *core.WsFrameHeader, frame []byte) []byte {
 	payload := make([]byte, hdr.PayloadLen)
 	copy(payload, frame[hdr.HeaderLen:total(hdr)])
 	if hdr.Masked {
 		core.WsUnmask(payload, hdr.Mask, 0)
 	}
+	return payload
+}
 
+// wsDecideFrames handles one whole frame and returns the frames to relay, in order.
+//
+// A slice rather than a single frame, because of fragmentation: a mid-message fragment relays
+// nothing, and a final fragment may relay several frames at once when the operator forwarded the
+// message unchanged. drop=true means the operator dropped it and nothing goes on the wire.
+func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader, frame []byte, fromClient bool, peer wsPeer, frag *wsFragments) ([][]byte, bool) {
+	// Control frames may be interleaved inside a fragmented message (RFC 6455 §5.4), so they are
+	// handled first and must never disturb the accumulator. Holding a ping stalls the peer's
+	// keepalive; holding a close leaves a socket that cannot be ended. Burp does not offer them
+	// either.
+	if hdr.Opcode.IsControl() {
+		return [][]byte{frame}, false
+	}
+
+	// Compressed frames stay untouched: the payload is a DEFLATE block, so concatenating fragments
+	// would produce a longer DEFLATE block rather than a longer message, and offering it as editable
+	// text would be fiction. Only reachable when the operator disabled extension stripping.
+	if hdr.RSV != 0 {
+		if frag.active {
+			// A compressed frame mid-message means our model of this stream is wrong. Flush what is
+			// buffered rather than holding it forever, and stop reassembling.
+			out := append(frag.frames, frame)
+			frag.reset()
+			s.config.logger.Debug("websocket reassembly abandoned: compressed frame mid-message",
+				zap.String("direction", wsWhich(fromClient)))
+			return out, false
+		}
+		s.config.logger.Debug("websocket frame relayed without offering it for interception",
+			zap.String("direction", wsWhich(fromClient)), zap.String("reason", "compressed frame"))
+		return [][]byte{frame}, false
+	}
+
+	continuation := hdr.Opcode == core.WsOpcodeContinuation
+	fragmentStart := !hdr.FIN && !continuation
+
+	switch {
+	case fragmentStart, continuation && !hdr.FIN:
+		if continuation && !frag.active {
+			// A continuation with nothing to continue is a protocol error. Relay it and let the peers
+			// deal with it — inventing a message here would be worse than passing the fault along.
+			return [][]byte{frame}, false
+		}
+		if !frag.add(hdr, frame, wsFramePayload(hdr, frame)) {
+			// Over the cap: flush and give up on this message rather than buffering without bound.
+			// Same cap and same reasoning as the capture path.
+			out := append(frag.frames, frame)
+			frag.reset()
+			s.config.logger.Debug("websocket message too large to reassemble for interception",
+				zap.String("direction", wsWhich(fromClient)),
+				zap.Int("cap", core.DefaultMaxWsMessageBytes))
+			return out, false
+		}
+		// Incomplete, so there is nothing to offer and nothing to relay yet.
+		return nil, false
+
+	case continuation && hdr.FIN:
+		if !frag.active {
+			return [][]byte{frame}, false
+		}
+		if !frag.add(hdr, frame, wsFramePayload(hdr, frame)) {
+			out := append(frag.frames, frame)
+			frag.reset()
+			return out, false
+		}
+		opcode, payload, originals := frag.opcode, frag.payload, frag.frames
+		frag.reset()
+		return s.wsOfferMessage(dir, opcode, payload, originals, fromClient, peer)
+
+	default:
+		// An unfragmented data frame: FIN set, a data opcode. The common case.
+		return s.wsOfferMessage(dir, hdr.Opcode, wsFramePayload(hdr, frame), [][]byte{frame}, fromClient, peer)
+	}
+}
+
+// wsOfferMessage offers one complete message to the operator and returns what to relay.
+//
+// originals are the frames it arrived as — one for an unfragmented message, several for a
+// reassembled one — and they are relayed verbatim when the operator forwards without editing, so a
+// message that went through interception untouched is byte-identical to one that never entered it.
+// An edit is re-encoded as a single unfragmented frame, which is legal and is what Burp sends.
+func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, payload []byte, originals [][]byte, fromClient bool, peer wsPeer) ([][]byte, bool) {
 	held := s.config.intercept.Hold(&intercept.Message{
 		Direction: dir,
 		Host:      peer.host,
 		Port:      peer.port,
 		TLS:       peer.tls,
 		Path:      peer.path,
-		Opcode:    hdr.Opcode.Name(),
+		Opcode:    opcode.Name(),
 		Raw:       payload,
 	})
 	if held == nil {
-		// No rule matched, so this frame was never offered. Relay it exactly as it
-		// arrived rather than re-encoding it: an unmatched frame must be
-		// indistinguishable on the wire from one this proxy never inspected.
-		return frame, false
+		// No rule matched, so this was never offered. Relay exactly as it arrived.
+		return originals, false
 	}
 
 	action, edited := held.Wait()
@@ -552,49 +652,26 @@ func (s *Server) wsDecideFrame(dir intercept.Direction, hdr *core.WsFrameHeader,
 		return nil, true
 	}
 	if bytes.Equal(edited, payload) {
-		// Forwarded unchanged. Relay the original bytes, mask and all, so an
-		// untouched frame is byte-identical to what the peer sent.
-		return frame, false
+		return originals, false
 	}
 
-	// Edited. A client-to-server frame must be masked and a server-to-client
-	// frame must not be (RFC 6455 §5.1), and a peer receiving the wrong one is
-	// required to fail the connection — so the mask is decided by direction, not
-	// by what happened to arrive.
+	// A client-to-server frame must be masked and a server-to-client frame must not be
+	// (RFC 6455 §5.1). The direction decides, not what happened to arrive.
 	var mask *[4]byte
 	if fromClient {
 		var m [4]byte
 		if _, err := rand.Read(m[:]); err != nil {
-			// Without a fresh mask the only choices are an unmasked client frame,
-			// which the server must reject, or the operator's edit silently not
-			// happening. Neither is acceptable quietly, so the original frame goes
-			// on the wire and the failure is logged loudly.
-			s.config.logger.Error("could not generate a WebSocket mask; the operator's edit was NOT sent and the original frame was relayed instead",
+			s.config.logger.Error("could not generate a WebSocket mask; the operator's edit was NOT sent and the original message was relayed instead",
 				zap.Error(err), zap.String("direction", wsWhich(fromClient)))
-			return frame, false
+			return originals, false
 		}
 		mask = &m
 	}
-	return core.EncodeWsFrame(hdr.Opcode, edited, mask), false
+	return [][]byte{core.EncodeWsFrame(opcode, edited, mask)}, false
 }
 
 // total is the whole frame length for a parsed header.
 func total(hdr *core.WsFrameHeader) int { return hdr.HeaderLen + int(hdr.PayloadLen) }
-
-func wsHoldable(hdr *core.WsFrameHeader) (bool, string) {
-	switch {
-	case hdr.Opcode.IsControl():
-		return false, "control frame (" + hdr.Opcode.Name() + ")"
-	case hdr.RSV != 0:
-		return false, "compressed frame (RSV bits set); disable extension stripping only if you accept that compressed frames are not interceptable"
-	case hdr.Opcode == core.WsOpcodeContinuation:
-		return false, "continuation of a fragmented message"
-	case !hdr.FIN:
-		return false, "first fragment of a fragmented message"
-	default:
-		return true, ""
-	}
-}
 
 // drainWs writes every completed message to the index, or counts it as skipped
 // when scope excludes this connection right now.

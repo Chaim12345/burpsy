@@ -437,21 +437,172 @@ func TestCompressedFramesAreRelayedWithoutBeingHeld(t *testing.T) {
 	}
 }
 
-func TestFragmentedFramesAreRelayedWithoutBeingHeld(t *testing.T) {
+// Fragments are reassembled and offered as one message (issue a50). Before this they were relayed
+// untouched, because a held fragment is half a message; the test that pinned *that* behaviour lived
+// here and has been replaced by these, since the behaviour it protected is the thing that changed.
+func TestAFragmentedMessageIsReassembledAndOfferedWhole(t *testing.T) {
 	engine := holdEverything(t, intercept.DirectionWebSocketToServer)
 	srv := wsTestServer(engine)
 
-	// FIN clear on a text frame, then a continuation with FIN set: the two-fragment message.
+	// "abc" then "def" as one text message: FIN clear on the text frame, FIN set on the
+	// continuation. Unmasked for legibility; the masked path is covered by the edit test below.
 	first := []byte{0x01, 0x03, 'a', 'b', 'c'}
 	cont := []byte{0x80, 0x03, 'd', 'e', 'f'}
 	input := append(append([]byte{}, first...), cont...)
+
+	var offered []string
+	stop := wsOperator(engine, func(h *intercept.Held) {
+		offered = append(offered, string(h.Raw))
+		_ = engine.Forward(h.ID, "", false)
+	})
+	defer stop()
 
 	got, fault, _ := wsRun(t, srv, true, func(w io.Writer) { _, _ = w.Write(input) })
 	if fault != "" {
 		t.Fatalf("unexpected fault: %s", fault)
 	}
+	if len(offered) != 1 {
+		t.Fatalf("offered %d message(s) %v, want exactly 1 — fragments must be joined, not offered "+
+			"one at a time", len(offered), offered)
+	}
+	if offered[0] != "abcdef" {
+		t.Errorf("offered %q, want %q — the operator must see the whole message", offered[0], "abcdef")
+	}
+	// Forwarded unchanged, so the original framing is relayed verbatim: an untouched message must be
+	// byte-identical to one that never entered interception.
 	if !bytes.Equal(got, input) {
-		t.Errorf("a fragmented message was altered: got % x want % x", got, input)
+		t.Errorf("relayed % x, want % x — an unedited message must keep its original framing", got, input)
+	}
+}
+
+// Editing a reassembled message replaces it with one unfragmented frame carrying the edit. Legal
+// per RFC 6455, and what Burp sends.
+func TestEditingAReassembledMessageSendsOneFrameWithTheEdit(t *testing.T) {
+	engine := holdEverything(t, intercept.DirectionWebSocketToServer)
+	srv := wsTestServer(engine)
+
+	first := []byte{0x01, 0x03, 'a', 'b', 'c'}
+	cont := []byte{0x80, 0x03, 'd', 'e', 'f'}
+	input := append(append([]byte{}, first...), cont...)
+	const edited = "REPLACED"
+
+	stop := wsOperator(engine, func(h *intercept.Held) {
+		_ = engine.Forward(h.ID, edited, false)
+	})
+	defer stop()
+
+	got, fault, _ := wsRun(t, srv, true, func(w io.Writer) { _, _ = w.Write(input) })
+	if fault != "" {
+		t.Fatalf("unexpected fault: %s", fault)
+	}
+
+	opcode, payload, masked := wsDecodeOne(t, got)
+	if opcode != core.WsOpcodeText {
+		t.Errorf("opcode = %v, want text — the reassembled message's opcode comes from its FIRST "+
+			"fragment, not from the continuation", opcode)
+	}
+	if !masked {
+		t.Error("the edited client message went out unmasked; the server must fail the connection")
+	}
+	if string(payload) != edited {
+		t.Errorf("server received %q, want %q", payload, edited)
+	}
+}
+
+// Dropping a reassembled message must suppress every one of its fragments, not just the last.
+func TestDroppingAReassembledMessageSuppressesAllOfItsFragments(t *testing.T) {
+	engine := holdEverything(t, intercept.DirectionWebSocketToServer)
+	srv := wsTestServer(engine)
+
+	input := []byte{0x01, 0x03, 'a', 'b', 'c', 0x80, 0x03, 'd', 'e', 'f'}
+
+	stop := wsOperator(engine, func(h *intercept.Held) {
+		_ = engine.Drop(h.ID, "not this one")
+	})
+	defer stop()
+
+	got, fault, stats := wsRun(t, srv, true, func(w io.Writer) { _, _ = w.Write(input) })
+	if fault != "" {
+		t.Fatalf("unexpected fault: %s", fault)
+	}
+	if len(got) != 0 {
+		t.Errorf("%d bytes reached the peer for a dropped message: % x — an earlier fragment must "+
+			"not have been relayed before the operator decided", len(got), got)
+	}
+	if n := stats.dropped.Load(); n != 1 {
+		t.Errorf("dropped counter = %d, want 1 (one message, not one per fragment)", n)
+	}
+}
+
+// A control frame may be interleaved between fragments (RFC 6455 §5.4). It must pass straight
+// through — a ping held behind a half-received message would stall the peer's keepalive — and must
+// not disturb the message being assembled.
+func TestAPingBetweenFragmentsPassesThroughWithoutBreakingReassembly(t *testing.T) {
+	engine := holdEverything(t, intercept.DirectionWebSocketToServer)
+	srv := wsTestServer(engine)
+
+	first := []byte{0x01, 0x03, 'a', 'b', 'c'}
+	ping := []byte{0x89, 0x01, 'p'}
+	cont := []byte{0x80, 0x03, 'd', 'e', 'f'}
+	input := append(append(append([]byte{}, first...), ping...), cont...)
+
+	var offered []string
+	stop := wsOperator(engine, func(h *intercept.Held) {
+		offered = append(offered, string(h.Raw))
+		_ = engine.Forward(h.ID, "", false)
+	})
+	defer stop()
+
+	got, fault, _ := wsRun(t, srv, true, func(w io.Writer) { _, _ = w.Write(input) })
+	if fault != "" {
+		t.Fatalf("unexpected fault: %s", fault)
+	}
+	if len(offered) != 1 || offered[0] != "abcdef" {
+		t.Errorf("offered %v, want one message \"abcdef\" — the interleaved ping corrupted "+
+			"reassembly", offered)
+	}
+	// The ping must have gone out, and ahead of the message it interrupted: it was relayed
+	// immediately while the fragments were still being buffered.
+	if !bytes.Contains(got, ping) {
+		t.Errorf("the ping never reached the peer: % x", got)
+	}
+	if bytes.Index(got, ping) != 0 {
+		t.Errorf("the ping is at offset %d, want 0 — it should overtake the buffered fragments "+
+			"rather than wait behind them", bytes.Index(got, ping))
+	}
+}
+
+// A continuation with nothing to continue is a protocol error. Relay it and let the peers deal with
+// it, rather than inventing a message or holding it forever.
+func TestAnOrphanContinuationIsRelayedNotHeld(t *testing.T) {
+	engine := holdEverything(t, intercept.DirectionWebSocketToServer)
+	srv := wsTestServer(engine)
+
+	orphan := []byte{0x80, 0x03, 'x', 'y', 'z'}
+	// No operator: if this is held, the test times out rather than passing quietly.
+	got, fault, _ := wsRun(t, srv, true, func(w io.Writer) { _, _ = w.Write(orphan) })
+	if fault != "" {
+		t.Fatalf("unexpected fault: %s", fault)
+	}
+	if !bytes.Equal(got, orphan) {
+		t.Errorf("relayed % x, want % x", got, orphan)
+	}
+}
+
+// Compressed frames are still not held — the payload is a DEFLATE block, so joining fragments would
+// produce a longer DEFLATE block rather than a longer message.
+func TestCompressedFramesAreStillRelayedWithoutBeingHeld(t *testing.T) {
+	engine := holdEverything(t, intercept.DirectionWebSocketToServer)
+	srv := wsTestServer(engine)
+
+	// RSV1 set on an unfragmented text frame.
+	frame := []byte{0x81 | 0x40, 0x03, 'a', 'b', 'c'}
+	got, fault, _ := wsRun(t, srv, true, func(w io.Writer) { _, _ = w.Write(frame) })
+	if fault != "" {
+		t.Fatalf("unexpected fault: %s", fault)
+	}
+	if !bytes.Equal(got, frame) {
+		t.Errorf("a compressed frame was altered: got % x want % x", got, frame)
 	}
 }
 
