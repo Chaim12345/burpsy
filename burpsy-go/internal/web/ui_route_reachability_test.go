@@ -78,11 +78,18 @@ var uiRouteExempt = map[string]string{
 // The alternative was leaving the suite red, which within a day means the suite is ignored and this
 // test protects nothing.
 //
-// It is currently EMPTY, which is the goal state. The one entry it ever held —
-// /api/intercept/drop-all, found by this test on its very first run — has been fixed, and
-// TestNoKnownGapWasQuietlyFixed is what refused to let the entry stay behind afterwards. Both
-// directions of the list have now done their job on a real case.
-var uiRouteMissingSurface = map[string]string{}
+// It held one entry before — /api/intercept/drop-all, found by this test on its very first run — which
+// has been fixed, and TestNoKnownGapWasQuietlyFixed is what refused to let the entry stay behind
+// afterwards. Both directions of the list have now done their job on a real case.
+var uiRouteMissingSurface = map[string]string{
+	// The Go half of burpsy-react-ui-wub: an attack can now be paused, resumed and stopped, and its
+	// dashboard task is cancellable (which is a working stop button today, through /api/tasks/{id}/cancel).
+	// The Intruder page's own controls are the remaining half — intruder.tsx needs an AbortController on
+	// its run mutation, the way useRepeaterSend in the same module already has one, and buttons wired to
+	// these two routes. Listed here rather than exempted because nothing justifies the absence.
+	"/api/intruder/attacks":  "burpsy-react-ui-wub",
+	"/api/intruder/attacks/": "burpsy-react-ui-wub",
+}
 
 // uiSourceDirForRoutes is the console source tree.
 const uiSourceDirForRoutes = "ui/src"

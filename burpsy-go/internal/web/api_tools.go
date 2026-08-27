@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -465,6 +466,48 @@ type RunView struct {
 	Report      intruder.AttackReport `json:"report"`
 	Examples    []BucketExample       `json:"examples"`
 	PayloadSets []intruder.PayloadSet `json:"payload_sets"`
+	// SessionCookies says what the session cookie jar contributed to this attack. Always present, so
+	// "the jar was empty" and "the jar was never consulted" are not the same JSON — the reading that
+	// makes a whole unauthenticated attack look like a finding about the endpoint.
+	SessionCookies intruderSessionCookies `json:"session_cookies"`
+}
+
+// intruderSessionCookies reports the jar's contribution to one attack, by cookie name.
+//
+// Names only. Values are session tokens by construction, and an attack report is a document that gets
+// pasted into tickets — the same reason Coordinator.logExtraction never logs a resolved value.
+type intruderSessionCookies struct {
+	// Attached are the jar cookie names merged into every request, sorted.
+	Attached []string `json:"attached"`
+	// Exempt are cookie names the attack is fuzzing, which the jar deliberately did not overwrite.
+	// Burp's rule; see internal/web/intruder_cookies.go.
+	Exempt []string `json:"exempt"`
+	// JarEmpty distinguishes "the jar holds nothing for this authority" from "nothing was attached
+	// because every jar cookie was a fuzzed position". Both give an empty Attached list and mean
+	// different things about whether the attack was authenticated.
+	JarEmpty bool `json:"jar_empty"`
+}
+
+// intruderSessionCookieView builds the report from the same two inputs the send path used, so the
+// report cannot claim a cookie the wire did not carry.
+func intruderSessionCookieView(jarHeader string, exempt map[string]bool) intruderSessionCookies {
+	out := intruderSessionCookies{
+		Attached: []string{},
+		Exempt:   []string{},
+		JarEmpty: jarHeader == "",
+	}
+	for name := range exempt {
+		out.Exempt = append(out.Exempt, name)
+	}
+	for _, p := range parseCookieHeader(jarHeader) {
+		if p.name == "" || exempt[strings.ToLower(p.name)] {
+			continue
+		}
+		out.Attached = append(out.Attached, p.name)
+	}
+	sort.Strings(out.Attached)
+	sort.Strings(out.Exempt)
+	return out
 }
 
 // handleIntruderRun runs an attack: sniper, battering ram, pitchfork or cluster bomb.
@@ -611,6 +654,20 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// check never saw.
 	auth := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
 	ctx := r.Context()
+
+	// The session cookie jar, applied to every spliced request. Burp's jar "is shared between all of
+	// Burp's tools"; before this it reached only the Repeater, so an attack against an authenticated
+	// endpoint reported the login wall instead of the endpoint. Resolved once here rather than per
+	// request: an attack must ask the same question of every payload, and a jar that changed
+	// mid-attack would make the buckets incomparable.
+	//
+	// exemptCookies are the cookie names this attack is fuzzing. Burp: "when the Scanner or Intruder
+	// makes a request that manipulates a cookie […] the session handling action is not applied to
+	// that request." Refreshing the position being fuzzed from the jar would send the same request
+	// every time and produce one meaningless bucket. See internal/web/intruder_cookies.go.
+	jarHeader := s.cookieHeaderFor(host, port, tls)
+	exemptCookies := exemptCookieNames(selected)
+
 	send := func(raw []byte) (intruder.Sent, error) {
 		sctx := ctx
 		var cancel context.CancelFunc
@@ -618,6 +675,9 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			sctx, cancel = context.WithTimeout(ctx, timeout)
 			defer cancel()
 		}
+		// After the splice, never before: insertion points are byte spans into the base request, and
+		// a header added to the base would shift every span after it.
+		raw = applyJarCookies(raw, jarHeader, exemptCookies)
 		res, err := auth.Send(sctx, raw)
 		if err != nil {
 			return intruder.Sent{}, err
@@ -629,16 +689,49 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		return uint64(id)
 	}
 
+	control := intruder.NewControl()
 	attack := intruder.NewAttack(msg.Raw(), selected, resolved, plan).
 		WithLimits(limits).
-		WithGrep(grep)
+		WithGrep(grep).
+		WithControl(control)
 	// On the dashboard for the duration of the attack (DASH-01). The total is the plan's length —
 	// what will actually be sent — not the combination count, which is what the plan's bound already
 	// refused; the refusal shows up as the gated bucket on the result instead.
 	task := s.tasks.Start(dash.KindIntruder, fmt.Sprintf("%s %s:%d", kind, host, port), uint64(plan.Len()))
+
+	// Cancellable, at last. dash.Handle.WithCancel's own doc has named "intruder attack stop" as one
+	// of its three consumers since it was written, and this handler never called it — so
+	// Task.Cancellable() was false for every attack and the dashboard rendered no stop button for the
+	// one kind of task that can send 200,000 requests.
+	//
+	// Derived from r.Context() rather than context.Background(), unlike the sequencer capture: the
+	// attack runs inside this handler, so a client that disconnects mid-attack means an attack whose
+	// report nobody will read, and stopping it is right. The sequencer's capture outlives its request
+	// and needs the opposite.
+	taskCtx, cancelTask := task.WithCancel(ctx)
+	defer cancelTask()
+	attackDone := make(chan struct{})
+	defer close(attackDone)
+	control.StopOnContext(taskCtx, attackDone, "stopped from the dashboard")
+
+	// Registered for the duration, so /api/intruder/attacks/{id}/{pause|resume|stop} can reach it
+	// while this request is still holding the attack's response open.
+	s.attacks.add(&runningAttack{
+		taskID: task.ID(), kind: kind.String(), planned: plan.Len(),
+		target: fmt.Sprintf("%s:%d", host, port), control: control,
+	})
+	defer s.attacks.remove(task.ID())
+
 	report := intruder.Run(attack, send, record)
 	task.Advance(uint64(report.Sent + report.Failed))
-	task.Finish(report.Breakdown())
+	// Stop, not Finish, for an attack that was halted. A stopped run reported as done is a report over
+	// an unknown prefix of the payload set presented as a complete answer — dash.Task.Complete()
+	// exists to refuse exactly that, and it can only do so if the state it is given is honest.
+	if report.Status == intruder.StatusStopped {
+		task.Stop(report.Breakdown(), report.StopReason)
+	} else {
+		task.Finish(report.Breakdown())
+	}
 
 	if legacy {
 		rows := make([]AttemptView, 0, len(report.Attempts))
@@ -671,9 +764,10 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(RunView{
-		Report:      *report,
-		Examples:    examples,
-		PayloadSets: resolved,
+		Report:         *report,
+		Examples:       examples,
+		PayloadSets:    resolved,
+		SessionCookies: intruderSessionCookieView(jarHeader, exemptCookies),
 	})
 }
 

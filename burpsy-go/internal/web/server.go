@@ -85,6 +85,10 @@ type Server struct {
 	// longer in force — findings and the task log are the durable record.
 	auditItems *scanner.AuditItemLedger
 	tasks      *dash.Registry
+	// attacks is the live table of Intruder attacks this process is running, keyed by dashboard task
+	// id, so pause/resume/stop can reach one from another connection while /api/intruder/run holds the
+	// attack's own request open. See api_intruder_control.go.
+	attacks *attackRegistry
 	// pools is the operator's saved resource pools: named limits every tool can reference instead of
 	// re-specifying its own. Never nil — an empty registry is the honest starting state, and every
 	// tool runs under its own documented default until a pool is saved and named.
@@ -196,6 +200,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		intercept:          intercept.NewEngine(),
 		auditItems:         scanner.NewAuditItemLedger(scanner.DefaultAuditItemCap),
 		tasks:              dash.NewRegistry(),
+		attacks:            newAttackRegistry(),
 		pools:              pool.New(),
 		schedules:          schedule.NewRunner(),
 		crawls:             newCrawlRuns(),
@@ -741,6 +746,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/http2/program", s.handleHTTP2Program)
 	s.mux.HandleFunc("/api/intruder/points", s.handleIntruderPoints)
 	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)
+	// Reaching a *running* attack. Two patterns because they are two shapes: the exact path lists what
+	// is running, the prefix carries the per-attack action. Before these an attack could not be paused,
+	// resumed or stopped from anywhere — see api_intruder_control.go.
+	s.mux.HandleFunc("/api/intruder/attacks", s.handleIntruderAttacks)
+	s.mux.HandleFunc("/api/intruder/attacks/", s.handleIntruderAttackAction)
 	s.mux.HandleFunc("/api/scanner/live", s.handleScannerLive)
 	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
 	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)

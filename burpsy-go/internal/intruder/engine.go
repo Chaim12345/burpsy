@@ -153,6 +153,10 @@ type Attack struct {
 	// Grep holds the operator's regexes tested against each response. Empty by default and free
 	// when empty.
 	Grep Grep
+	// Control is the pause/resume/stop handle, consulted by the driver loop before each plan
+	// position. Nil is the uncontrolled attack: it runs to completion, which is what every caller
+	// got before Control existed. See internal/intruder/control.go.
+	Control *Control
 }
 
 // NewAttack builds an attack with defaults sized for a UI: enough rows to render a small attack,
@@ -195,6 +199,13 @@ func (a *Attack) WithGrep(g Grep) *Attack {
 	return a
 }
 
+// WithControl attaches the pause/resume/stop handle. Without one the attack cannot be halted, which
+// is the state every web-launched attack was in.
+func (a *Attack) WithControl(c *Control) *Attack {
+	a.Control = c
+	return a
+}
+
 // ResultBucket is a set of responses that behaved the same, counted once.
 type ResultBucket struct {
 	Status            *int    `json:"status"`
@@ -230,12 +241,26 @@ type Attempt struct {
 
 // AttackReport is the answer to "what happened".
 type AttackReport struct {
-	Kind                AttackKind     `json:"kind"`
-	Combinations        uint64         `json:"combinations"`
-	CombinationsExact   bool           `json:"combinations_exact"`
-	MaxRequests         int            `json:"max_requests"`
-	Truncated           bool           `json:"truncated"`
-	Planned             int            `json:"planned"`
+	Kind              AttackKind `json:"kind"`
+	Combinations      uint64     `json:"combinations"`
+	CombinationsExact bool       `json:"combinations_exact"`
+	MaxRequests       int        `json:"max_requests"`
+	Truncated         bool       `json:"truncated"`
+	Planned           int        `json:"planned"`
+	// Status is how the attack ended: "completed" for the plan exhausted, "stopped" for halted early
+	// (see StopReason), and "paused" only on a report a caller built from a still-live attack.
+	//
+	// It exists because Planned/Sent cannot say it. An attack stopped at request 12 of 200,000 and an
+	// attack whose target refused 199,988 requests both report sent=12 — and the second is a finding
+	// about the target while the first is a fact about the operator's own button. Without this the
+	// report reads as a complete answer over the whole payload set.
+	Status AttackStatus `json:"status"`
+	// StopReason is why the attack ended early, empty when it did not.
+	StopReason string `json:"stop_reason,omitempty"`
+	// Enumerated is how many plan positions the driver actually reached. For a completed attack this
+	// equals Planned; for a stopped one it is the honest denominator — the count the results describe
+	// a prefix of. Sent + Failed can be smaller still, because a stop lets in-flight sends land.
+	Enumerated          int            `json:"enumerated"`
 	Sent                int            `json:"sent"`
 	Failed              int            `json:"failed"`
 	ElapsedMS           int64          `json:"elapsed_ms"`
@@ -376,7 +401,7 @@ func (c *collector) noteError(ordinal int, message string) {
 // finish closes out the summary. Sorted so the smallest, strangest buckets surface first: the
 // count of an attack's success mode is usually a wall, and the interesting rows are the ones
 // with a count of one at the top.
-func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duration) *AttackReport {
+func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duration, enumerated int) *AttackReport {
 	sort.SliceStable(c.buckets, func(i, j int) bool {
 		if c.buckets[i].Count != c.buckets[j].Count {
 			return c.buckets[i].Count < c.buckets[j].Count
@@ -414,6 +439,8 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		Errors: c.errors, Attempts: c.attempts,
 		DetailLimit: c.detailLimit, GrepMatched: c.grepMatched,
 		Pool: pool, AutoThrottleEngaged: limiter.AutoThrottleEngaged(),
+		Status: reportStatus(a.Control), StopReason: a.Control.StopReason(),
+		Enumerated: enumerated,
 	}
 }
 
@@ -427,14 +454,26 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	col := newCollector(a, record)
 
 	results := make(chan outcome, 64)
+	// enumerated is how many plan positions the loop actually reached. A stopped attack's report must
+	// not present its planned count as the denominator of what happened — see AttackReport.Enumerated.
+	enumerated := 0
 	go func() {
 		defer close(results)
 		var wg sync.WaitGroup
 		var asg Assignment
 		for i := 0; i < a.Plan.Len(); i++ {
+			// Before the plan is read and before a permit is taken: a paused attack must hold no
+			// permit (it would throttle nothing and block a resume's first send) and must not have
+			// spliced a request it is not going to send. Stop breaks out here rather than letting the
+			// remaining ordinals become send errors — 199,988 errors for requests the target never
+			// received is a report about a target that was never asked.
+			if !a.Control.gate() {
+				break
+			}
 			if !a.Plan.Fill(i, &asg) {
 				break
 			}
+			enumerated++
 			places := make([]ApplyPlace, 0, len(asg.Slots))
 			payloads := make([][]byte, 0, len(asg.Slots))
 			for _, s := range asg.Slots {
@@ -476,7 +515,12 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	for o := range results {
 		col.absorb(o)
 	}
-	return col.finish(a, limiter, time.Since(started))
+	// After the drain, so an attack whose last in-flight sends were still landing when the plan ran
+	// out is completed only once they are collected. complete() leaves a stopped attack stopped.
+	a.Control.complete()
+	// Read after the range loop: the driver goroutine's writes to enumerated happen-before the
+	// channel close, which happens-before the loop's exit.
+	return col.finish(a, limiter, time.Since(started), enumerated)
 }
 
 // doSend runs one request: send, observe the limiter, ask the reflection and grep questions.

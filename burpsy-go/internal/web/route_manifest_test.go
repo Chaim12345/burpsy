@@ -347,6 +347,15 @@ var manifest = map[string]route{
 		pathValidatedFirst: true,
 		summary:            "the match rules deciding which messages are held, per direction",
 	},
+	"/api/intruder/attacks": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "every intruder attack this process is running, with its status; sends nothing",
+	},
+	"/api/intruder/attacks/": {
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1/stop",
+		summary: "POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, " +
+			"an attack past acting on answers 409",
+	},
 	"/api/intruder/points": {
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "enumerate insertion points in a stored request; sends nothing",
