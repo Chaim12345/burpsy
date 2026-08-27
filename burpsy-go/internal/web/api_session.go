@@ -197,6 +197,21 @@ type sessionCookiesResp struct {
 	Wired   bool                 `json:"wired"`
 	Cookies []sessionHostCookies `json:"cookies,omitempty"`
 	Hint    string               `json:"hint,omitempty"`
+	// AbsorbingFrom names the surfaces registered to feed the jar: "proxy", "macro", "crawler". This
+	// is what makes an empty table readable. Three states render identically without it — the jar is
+	// watched and nothing has flowed, the jar is watched and no origin has set a cookie, and nothing
+	// is watching the jar at all — and only the third means the operator's next action cannot work.
+	//
+	// Never omitempty. An absent field and an empty list are the same JSON to a client, and "nothing
+	// feeds this jar" is precisely the fact that must not be indistinguishable from "the server is
+	// too old to say".
+	AbsorbingFrom []string `json:"absorbing_from"`
+	// ResponsesObserved is how many responses were offered to the jar, and SetCookiesAbsorbed how
+	// many Set-Cookie header lines were found in them. Both are counted per offer, so
+	// `responses_observed > 0` with `set_cookies_absorbed == 0` says "traffic flowed and no origin
+	// set a cookie" — a measurement, not an absence of one.
+	ResponsesObserved  uint64 `json:"responses_observed"`
+	SetCookiesAbsorbed uint64 `json:"set_cookies_absorbed"`
 }
 
 type sessionHostCookies struct {
@@ -972,8 +987,9 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if s.sessionCoordinator == nil {
 		json.NewEncoder(w).Encode(sessionCookiesResp{
-			Wired: false,
-			Hint:  "No session coordinator is attached to this server, so no cookie jar exists to read.",
+			Wired:         false,
+			Hint:          "No session coordinator is attached to this server, so no cookie jar exists to read.",
+			AbsorbingFrom: []string{},
 		})
 		return
 	}
@@ -998,11 +1014,36 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 			Cookies: pairs,
 		})
 	}
-	resp := sessionCookiesResp{Wired: true, Cookies: out}
+	obs := s.sessionCoordinator.Observation()
+	sources := make([]string, 0, len(obs.Sources))
+	for _, src := range obs.Sources {
+		sources = append(sources, string(src))
+	}
+	resp := sessionCookiesResp{
+		Wired:              true,
+		Cookies:            out,
+		AbsorbingFrom:      sources,
+		ResponsesObserved:  obs.ResponsesObserved,
+		SetCookiesAbsorbed: obs.SetCookiesAbsorbed,
+	}
 	if len(out) == 0 {
-		// An empty table and an unreadable one look the same on screen, so the empty case says which
-		// it is. This is now a claim the server can actually stand behind.
-		resp.Hint = "The cookie jar is attached and empty: no Set-Cookie has been absorbed yet."
+		// An empty table, an unread one and an unwatched one look the same on screen, so the empty
+		// case says which it is — and says it from the counters rather than from a belief about how
+		// the process was wired. The three branches are the three distinct facts; collapsing them is
+		// what let "send authenticated traffic through the proxy" ship as advice while no code on the
+		// proxy path absorbed anything.
+		switch {
+		case len(sources) == 0:
+			resp.Hint = "The cookie jar is attached and nothing feeds it: no surface in this process " +
+				"is registered to absorb Set-Cookie, so it will stay empty no matter what traffic flows."
+		case obs.ResponsesObserved == 0:
+			resp.Hint = "The cookie jar is attached and empty, and no response has reached it yet. " +
+				"Absorbing from: " + strings.Join(sources, ", ") + "."
+		default:
+			resp.Hint = fmt.Sprintf(
+				"The cookie jar is attached and empty: %d response(s) reached it and none carried a "+
+					"Set-Cookie. Absorbing from: %s.", obs.ResponsesObserved, strings.Join(sources, ", "))
+		}
 	}
 	json.NewEncoder(w).Encode(resp)
 }

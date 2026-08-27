@@ -271,9 +271,12 @@ func (c *Coordinator) sendWithJar(runner MacroStepRunner, step MacroStep) (*Step
 		return nil, err
 	}
 	host, port, tls := authorityOf(step.URL)
+	c.absorb.attach(SourceMacro)
+	c.absorb.responses.Add(1)
 	for k, v := range resp.Headers {
 		if strings.EqualFold(k, "Set-Cookie") {
 			c.jarMgr.AbsorbSetCookie(host, port, tls, v)
+			c.absorb.cookies.Add(1)
 		}
 	}
 	return resp, nil

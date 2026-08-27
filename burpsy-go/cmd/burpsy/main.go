@@ -436,6 +436,13 @@ func main() {
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
+		// The shared cookie jar, fed by traffic through this listener — Burp's "by default, the
+		// cookie jar is updated based on traffic from the Proxy". The same coordinator the web
+		// server and the scanner hold, so a session an operator establishes in their browser is the
+		// session the other tools send with. Before this the jar was fed only by login macros and
+		// the crawler's session gate, while the Session page told the operator that browsing through
+		// the proxy would fill it.
+		WithCookieJar(sessionCoord).
 		// The listener's own upstream leg. This is the half of Unit 9 that is easy to forget: without
 		// it an operator sets a corporate proxy, watches the scanner's traffic take it, and never
 		// learns that everything their browser drove through the listener went out direct.

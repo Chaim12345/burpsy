@@ -28,6 +28,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/session"
 	upstreamproxy "github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 )
@@ -549,6 +550,11 @@ type ProxyConfig struct {
 	// rules and the Accept-Encoding strip. Never nil after NewProxyConfig, and the
 	// same pointer the web API holds — see WithOptions and internal/proxy/options.go.
 	options *Options
+	// cookieJar receives the Set-Cookie headers of every response this listener captures, so an
+	// operator who browses the target logged-in through the proxy has a jar the other tools can draw
+	// on. Nil absorbs nothing, which is what a proxy built without a session coordinator does. See
+	// CookieAbsorber and WithCookieJar.
+	cookieJar CookieAbsorber
 	// upstream is the per-destination upstream proxy policy this proxy's origin-facing leg follows.
 	// Nil dials origins directly, which is what this package did before the policy existed. Shared by
 	// reference with internal/sender and with the /api/network/proxy handler, so an edit made in the
@@ -662,6 +668,51 @@ func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig
 // passed off as plaintext.
 func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 	c.stripWsExtensions = strip
+	return c
+}
+
+// CookieAbsorber is the shared session cookie jar, as this package needs to see it.
+//
+// An interface rather than the concrete *session.Coordinator so the absorption hook can be exercised
+// without standing up a coordinator, and so nil stays a legal wiring. internal/session is a leaf
+// package with no burpsy dependencies of its own, so naming its source constant here costs nothing.
+// Implemented by *session.Coordinator.
+//
+// The method takes the raw response bytes, not a parsed header map, and that is the point: a login
+// that sets a session cookie and a CSRF cookie sends two Set-Cookie lines, and every existing
+// absorption call site in the tree hands the coordinator a map[string]string that can hold one of
+// them. The proxy has the actual bytes, so it gives them.
+type CookieAbsorber interface {
+	// AbsorbResponseCookies folds every Set-Cookie header in `response` into the jar for this
+	// authority, returning how many it found.
+	AbsorbResponseCookies(host string, port uint16, tls bool, response []byte) int
+	// AttachAbsorptionSource records that this surface feeds the jar, so an empty jar can be told
+	// apart from a jar nothing is watching.
+	AttachAbsorptionSource(src session.AbsorptionSource)
+}
+
+// WithCookieJar attaches the shared session cookie jar. Every response this listener captures has its
+// Set-Cookie headers absorbed into it.
+//
+// This is the wiring behind Burp's "by default, the cookie jar is updated based on traffic from the
+// Proxy". Without it the jar is fed only by login macros and the crawler's session gate, so an
+// operator who logged in through their browser had an empty jar while the Session page told them
+// their browsing should have filled it — a false statement about how the tool works, which is worse
+// than a missing feature because it is invisible.
+//
+// Attach is called here rather than at the first absorption so the jar can report "the proxy is
+// feeding me and no traffic has flowed yet" as a state distinct from "nothing is feeding me". Nil is
+// the no-op: a proxy built without a coordinator absorbs nothing and says so.
+//
+// The same pointer the web server holds, the single-handle rule this package already applies to the
+// TLS policy, the option set and the match & replace rules — a second jar would attach cookies the
+// Session page cannot see.
+func (c *ProxyConfig) WithCookieJar(jar CookieAbsorber) *ProxyConfig {
+	if jar == nil {
+		return c
+	}
+	c.cookieJar = jar
+	jar.AttachAbsorptionSource(session.SourceProxy)
 	return c
 }
 
@@ -1446,7 +1497,20 @@ func (s *Server) applyRequestRules(requestData []byte) []byte {
 // and permanently stalls every cursor that walks the index in order — see
 // scanner.Capture.Record. The proxy's report of that refusal is this log line;
 // the crawler's is a skip record. Neither invents a row.
+// Cookie absorption happens here, before the capture, for two reasons. It is the one funnel every
+// capture site in this package goes through — HTTP/1, the h2 relay's rendered copy, and the WebSocket
+// handshake — so a site added later inherits it the way it inherits the Source attribution. And it
+// runs before Record's own refusals, because a Set-Cookie the origin sent is a fact about the session
+// whether or not the exchange could be indexed: dropping the cookie because the row failed to store
+// would lose the operator's session for a reason that has nothing to do with their session.
+//
+// Not gated on scope. Absorption is keyed by authority and read back by authority, so a cookie for a
+// host no tool will ever address is inert; refusing to absorb it would instead mean an operator who
+// narrowed scope mid-engagement silently stops accumulating the session they are logged in to.
 func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
+	if s.config.cookieJar != nil && len(x.Response) > 0 {
+		s.config.cookieJar.AbsorbResponseCookies(x.Host, x.Port, x.TLS, x.Response)
+	}
 	ex, err := s.capture().Record(x)
 	if err != nil {
 		s.config.logger.Error("failed to capture exchange",

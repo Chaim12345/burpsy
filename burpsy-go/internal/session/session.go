@@ -790,6 +790,10 @@ type Coordinator struct {
 	// a working macro with a broken one.
 	observedMu sync.Mutex
 	observed   map[RuleID][]MacroStep
+
+	// absorb records which surfaces feed the cookie jar and how much traffic they have offered it,
+	// so an empty jar can be told apart from a jar nothing is watching. See internal/session/absorb.go.
+	absorb absorption
 }
 
 func NewCoordinator(logger *zap.Logger) *Coordinator {
@@ -951,10 +955,18 @@ func (c *Coordinator) MatchingRule(host string) *SessionRule {
 	return nil
 }
 
+// HandleResponse absorbs this response's cookies and evaluates the matching rule's validity check.
+//
+// `hdrs` is a map, so it carries at most one Set-Cookie: a response that set two cookies arrives here
+// having already lost one, before this function is entered. Callers that hold the raw response bytes
+// must use AbsorbResponseCookies instead, which reads every line. This signature is kept for the
+// callers that only ever had a parsed map to give.
 func (c *Coordinator) HandleResponse(host string, port uint16, tls bool, status int, hdrs map[string]string, body []byte) {
+	c.absorb.responses.Add(1)
 	for k, v := range hdrs {
 		if strings.EqualFold(k, "Set-Cookie") {
 			c.jarMgr.AbsorbSetCookie(host, port, tls, v)
+			c.absorb.cookies.Add(1)
 		}
 	}
 	rule := c.MatchingRule(host)
@@ -1060,9 +1072,12 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 		}
 		results = append(results, res)
 		// Absorb cookies set by this step.
+		c.absorb.attach(SourceMacro)
+		c.absorb.responses.Add(1)
 		for k, v := range res.Headers {
 			if strings.EqualFold(k, "Set-Cookie") {
 				c.jarMgr.AbsorbSetCookie(host, port, tls, v)
+				c.absorb.cookies.Add(1)
 			}
 		}
 		// Run this step's own extractions against its response.
