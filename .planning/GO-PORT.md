@@ -32,6 +32,14 @@ Rust tree; do not "fix" it to track the Go one.
 - **145 / 183** demonstrated end-to-end against a live target (pinned by
   `wantDemonstrated` in `internal/scanner/runtime_coverage_test.go`). The exact
   38 registered-only rows, grouped by reason, are in HANDOFF-2026-08-18.
+
+> **Superseded 2026-08-27** — the block above is kept as the dated snapshot it is.
+> The live figure moved with the pin: measured run `go test ./internal/scanner/ -run
+> TestTheScannerDetects -count=1 -v -timeout 30m` printed `runtime detection: 160 distinct
+> catalog rows demonstrated across 163 endpoints, 0 missed`, matching `wantDemonstrated = 160`.
+> Current provenance and the why-did-it-drift note live in
+> [burpsy-go/docs/SCANNER-COVERAGE.md](burpsy-go/docs/SCANNER-COVERAGE.md); do not edit dated
+> blocks in place.
 - **264 / 264** BCheck corpus files parse; runtime confirmation pending CS-11.
 - **0 / 1300** UAT cases run (`burpsy-go/docs/ui-map/uat/`).
 - No headline parity percentage is published until Security Research (CS-11)

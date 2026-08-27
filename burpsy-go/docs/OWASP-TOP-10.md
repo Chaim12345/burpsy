@@ -448,26 +448,37 @@ The 183-catalog distribution across check families:
 
 ## Discrepancy with docs/SCANNER-COVERAGE.md
 
-**SCANNER-COVERAGE.md reports:** "145 of 183 catalog rows with an end-to-end runtime demonstration."
+**Resolved 2026-08-27.** The authoritative measurement is the runtime suite itself:
 
-**This analysis found:** 147 runtime-demonstrated rows.
+```
+go test ./internal/scanner/ -run TestTheScannerDetects -count=1 -v -timeout 30m
+# runtime_coverage_test.go:876: runtime detection: 160 distinct catalog rows
+# demonstrated across 163 endpoints, 0 missed   (EXIT=0)
+```
 
-**Reason for discrepancy:** This analysis scanned all vulnapp files for Row field declarations; SCANNER-COVERAGE.md may use `wantDemonstrated` constant in `runtime_coverage_test.go` which pins the count. The difference (2 rows) may be:
-1. Rows added since the last count update in the .md file.
-2. Rows whose manifest entries exist but are not exercised by the test (e.g., endpoints that exist but are not in test cases).
-3. Count discrepancy due to how "distinct rows" vs "endpoints" are tallied (some rows share endpoints).
+That — **160 / 183**, matching the `wantDemonstrated = 160` pin in
+`internal/scanner/runtime_coverage_test.go` — is what `docs/SCANNER-COVERAGE.md` now reports.
 
-**Recommendation:** Cross-check with `internal/scanner/runtime_coverage_test.go:wantDemonstrated` constant.
+This analysis' earlier figure of "147" undercounted, and the two reasons are now understood:
+
+1. It tallied declared `Row:` strings by scanning `vulnapp` sources statically. At audit time the
+   `/sdm/` stored-DOM family's registration was not yet wired into the manifest (the dead-code
+   defect recorded in HANDOFF-2026-08-18), so rows those endpoints prove were invisible to a source
+   scan even though the registry claims them.
+2. Distinct-row vs per-endpoint tallying differs: the runtime test de-duplicates row names across
+   163 endpoint probes rather than counting manifest entries.
+
+The recommendation above — cross-check against `wantDemonstrated` — was carried out; it now equals
+the measured run, and the discrepancy section closes instead of speculating.
 
 ---
 
 ## Summary
 
-The burpsy scanner **detects at least 147 of 183 catalog vulnerabilities under conditions that can be automatically verified** — a 80% runtime-demonstrated rate. Registration without proof (36 rows) breaks down as:
-
-- **10 rows** absent a capability entirely (collaborator, tlsx, Flash/Silverlight runtime) — structural gaps requiring infrastructure.
-- **10 rows** subsumed or overlapped by demonstrated rows — not independent.
-- **16 rows** plausible but not planted in the test corpus — would be demonstrated with deliberate endpoints.
+The burpsy scanner **detects 160 of 183 catalog vulnerabilities under conditions that are
+automatically verified and pinned** (87.4%; measured run cited above). Registration without proof
+is **23 rows**, each named in `docs/SCANNER-COVERAGE.md`; they group into stored-DOM platform walls,
+OOB/collaborator dependence, request smuggling's non-conformant-listener requirement, generated-issue placeholders, and native checks without a planted vulnerable endpoint.
 
 Categories with zero runtime coverage (A04 Insecure Design, A10 SSRF) have either registration as a side effect of Burp's taxonomy (A04) or deliberate opt-out due to infrastructure cost (A10). Both are honest signals rather than defects: an audit tool that sends 20 seconds of SSRF probes to every endpoint makes scans unscalable without a reason.
 
