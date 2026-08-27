@@ -24,6 +24,10 @@ type fakeRow struct {
 	// headers is keyed by LOWERCASED name, because Header's contract is case-insensitive and a stub
 	// that matched case exactly would pass a test the real adapters would fail.
 	headers map[string][]string
+
+	highlight       string
+	comment         string
+	annotationKnown bool
 }
 
 func (f fakeRow) Host() string               { return f.host }
@@ -36,6 +40,13 @@ func (f fakeRow) ResponseLen() (int64, bool) { return f.length, f.hasLength }
 
 // headers is nil by default, so a stub that says nothing about headers reports every header
 // absent — which fails every comparison, the same rule the real adapters carry.
+// annotationKnown defaults to FALSE, so a stub that says nothing about annotations reports that it
+// cannot answer — not that the row is unhighlighted. A default of true would make every existing
+// test row claim "" as a real highlight.
+func (f fakeRow) Annotation() (string, string, bool) {
+	return f.highlight, f.comment, f.annotationKnown
+}
+
 func (f fakeRow) Header(name string) ([]string, bool) {
 	values, ok := f.headers[strings.ToLower(name)]
 	return values, ok
@@ -526,6 +537,9 @@ func (c ruleCandidate) DurationUs() (int64, bool)  { return 0, false }
 // every header absent. Honest for this consumer: it genuinely cannot see headers, and absent fails
 // every comparison rather than answering one wrongly.
 func (c ruleCandidate) Header(string) ([]string, bool) { return nil, false }
+
+// A match-and-replace candidate is not a stored exchange, so nobody has annotated it.
+func (c ruleCandidate) Annotation() (string, string, bool) { return "", "", false }
 
 func TestTheSameParsedQueryDrivesTwoUnrelatedConsumers(t *testing.T) {
 	e, err := Parse(`status in 200..299 and (host = "example.com" or host = "other.test") and body ~ "hi"`)

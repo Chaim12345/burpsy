@@ -1510,6 +1510,11 @@ func (r frontierRow) DurationUs() (int64, bool)  { return 0, false }
 // No response, so no headers. New refuses any query naming this field before the fetch.
 func (r frontierRow) Header(string) ([]string, bool) { return nil, false }
 
+// known=false, not empty strings: the crawler is deciding whether to fetch a URL, so there is no
+// exchange to have been annotated, and reporting "" would tell a query that every frontier URL is
+// unhighlighted and uncommented — a claim rather than an absence.
+func (r frontierRow) Annotation() (string, string, bool) { return "", "", false }
+
 // fetchedRow is what a crawl-retention query is evaluated against: a response that exists, so every
 // field the grammar has is a real answer rather than an absence. This is the difference between the
 // two DSL-03 gates, and the reason the pre-fetch one has to refuse queries this one accepts.
@@ -1550,6 +1555,11 @@ func (r fetchedRow) DurationUs() (int64, bool) { return 0, false }
 // cannot tell them apart from the verdict alone. That is acceptable here and stated rather than
 // hidden: this type only exists after a successful fetch, so resp being nil means the read-back
 // failed, and that path already recorded a SkipResponseUnreadable.
+// known=false for the same reason as frontierRow: the retention gate runs immediately after the
+// fetch, before an operator has seen the row, so an annotation cannot exist yet. A later re-scan
+// through a different consumer can answer it.
+func (r fetchedRow) Annotation() (string, string, bool) { return "", "", false }
+
 func (r fetchedRow) Header(name string) ([]string, bool) {
 	if r.resp == nil {
 		return nil, false

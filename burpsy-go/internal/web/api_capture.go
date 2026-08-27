@@ -729,6 +729,21 @@ func (f filteredExchangeQuery) ResponseLen() (int64, bool) {
 	return int64(f.ex.ResponseLen), true
 }
 
+// Annotation answers from the index row, which is where both live. known is unconditionally true:
+// this consumer is a captured exchange, so "no highlight" and "no comment" are real answers about it
+// rather than an inability to tell.
+//
+// core.Exchange.Notes is a *string because an unset note and an empty note are distinguishable in
+// the store; both read as "" here, which is right for a text search — an operator asking
+// `comment ~ "x"` does not care which kind of nothing they have.
+func (f filteredExchangeQuery) Annotation() (string, string, bool) {
+	comment := ""
+	if f.ex.Notes != nil {
+		comment = *f.ex.Notes
+	}
+	return f.ex.Highlight, comment, true
+}
+
 // Header reads the RESPONSE head, resolved from the store on demand.
 //
 // Note the asymmetry with Body above, which deliberately returns the *request* body for the history

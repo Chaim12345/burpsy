@@ -66,7 +66,7 @@ and-expr   := unary-expr ( "and" unary-expr )*
 unary-expr := "not" unary-expr | primary
 primary    := "(" or-expr ")" | comparison
 comparison := field op value
-field      := "host" | "status" | "method" | "path" | "mime" | "body"\n            | "length" | "duration" | "extension" | "params"\n            | "header" "[" string "]"`;
+field      := "host" | "status" | "method" | "path" | "mime" | "body"\n            | "length" | "duration" | "extension" | "params"\n            | "highlight" | "comment" | "header" "[" string "]"`;
 
 /**
  * Filter examples, one complete query per entry.
@@ -96,6 +96,9 @@ export const QUERY_EXAMPLES: { query: string; means: string }[] = [
   { query: 'not header["strict-transport-security"] ~ "max-age"', means: "Responses missing HSTS. An absent header fails every comparison, so `not` is how you ask for its absence." },
   { query: 'extension = "js"', means: "The path's last-segment extension, lower-cased. A path with none matches no extension comparison." },
   { query: "params > 3", means: "How many QUERY parameters the path carries — the same count the Query column shows, body parameters excluded." },
+  { query: 'highlight = "red"', means: "Your own highlight colour. These two fields describe burpsy's state, not the target's." },
+  { query: 'highlight = ""', means: "Rows you have not highlighted. \"\" is a real answer here, unlike every other field." },
+  { query: 'comment ~ "injectable"', means: "Your own note on the row, searched case-insensitively." },
   { query: "body ~ password", means: "The only operator body accepts, matched against the raw bytes." },
   { query: "host = api.example.com and status >= 400", means: "and binds tighter than or." },
   { query: "method = POST or method = PUT", means: "Keywords are case-insensitive; AND and OR also parse." },
@@ -149,6 +152,11 @@ export const QUERY_PANEL: ReferencePanel = {
       detail:
         "Response size in bytes: = (or ==), !=, <, <=, >, >= and in low..high. Accepts b, kb, mb and gb; a bare number means bytes.",
       note: "length = 0 is a real answer — a 204 is zero-length — so it does not match a request still waiting, which has no length at all. An inverted range (length in 1mb..1kb) is refused at parse time rather than matching nothing.",
+    },
+    {
+      term: "highlight, comment",
+      detail: "Your own annotations on a row: =, != and ~ (contains), all case-insensitive.",
+      note: "The only fields here describing burpsy's state rather than the target's, and the only ones where \"\" is a real answer — highlight = \"\" asks for rows you have not triaged. Everywhere else an empty value means the target gave us nothing and fails every comparison. A consumer that cannot answer at all (the crawler's frontier gate, a match/replace candidate) still fails every comparison including the empty one, so a queued URL is never reported as an untriaged exchange.",
     },
     {
       term: "extension, params",

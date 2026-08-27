@@ -70,6 +70,16 @@ func (q exchangeQueryable) Mime() string {
 }
 func (q exchangeQueryable) Body() []byte { return q.body }
 
+// Annotation answers from the index row, so the CLI's --query supports the same annotation filters
+// the console does.
+func (q exchangeQueryable) Annotation() (string, string, bool) {
+	comment := ""
+	if q.ex.Notes != nil {
+		comment = *q.ex.Notes
+	}
+	return q.ex.Highlight, comment, true
+}
+
 // Header parses the response head out of the raw bytes withBody already loaded.
 //
 // q.body here is msg.Raw() — the whole response including its head, not just the body, despite the

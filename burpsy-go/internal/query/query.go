@@ -125,6 +125,16 @@ type Queryable interface {
 	// nothing after it is a server bug worth seeing — and an absent header must fail every
 	// comparison, negations included, the way an absent status does.
 	Header(name string) ([]string, bool)
+	// Annotation returns the operator's own highlight colour and comment for this row, and whether
+	// this consumer can answer at all.
+	//
+	// These are the only fields in the grammar describing burpsy's own state rather than the
+	// target's, which is why the bool is not optional. "" for highlight means "no highlight" and is a
+	// real answer an operator wants to filter on ("show me what I have not triaged"), so it cannot
+	// double as "this consumer has no idea" — the crawler's frontier and a match/replace candidate
+	// genuinely have no idea, and must fail every comparison rather than report everything
+	// unhighlighted.
+	Annotation() (highlight, comment string, known bool)
 }
 
 // Expr is a parsed, type-checked query expression. Parse is the only way to obtain one, so every
@@ -180,6 +190,8 @@ const (
 	fieldHeader
 	fieldExtension
 	fieldParams
+	fieldHighlight
+	fieldComment
 	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this.
 	//
 	// NOTE: adding a field here is NOT caught by the compiler in fieldOrder — a short
@@ -213,6 +225,10 @@ func (f field) String() string {
 		return "extension"
 	case fieldParams:
 		return "params"
+	case fieldHighlight:
+		return "highlight"
+	case fieldComment:
+		return "comment"
 	}
 	return "?"
 }
@@ -583,6 +599,10 @@ func fieldByName(name string) (field, bool) {
 		return fieldExtension, true
 	case "params":
 		return fieldParams, true
+	case "highlight":
+		return fieldHighlight, true
+	case "comment":
+		return fieldComment, true
 	}
 	return 0, false
 }
@@ -605,7 +625,7 @@ func fieldAllows(f field, o op) bool {
 	case fieldHeader:
 		// String operators only. A header value is text, and no ordering on it means anything.
 		return o == opEq || o == opNe || o == opContains
-	case fieldExtension:
+	case fieldExtension, fieldHighlight, fieldComment:
 		return o == opEq || o == opNe || o == opContains
 	case fieldParams:
 		// A count, so the numeric set — including `in`, for "between two and five parameters".
@@ -627,6 +647,8 @@ func allowedOps(f field) string {
 		return "=, != and ~ (contains), each case-insensitive on the value"
 	case fieldExtension:
 		return "=, != and ~ (contains), case-insensitive"
+	case fieldHighlight, fieldComment:
+		return "=, != and ~ (contains)"
 	case fieldParams:
 		return "=, !=, <, <=, >, >= and `in low..high`"
 	}
@@ -1061,6 +1083,24 @@ func (e *Expr) matchCmp(q Queryable) bool {
 		// and not body parameters — a field named `params` that silently included body parameters
 		// would disagree with the column beside it.
 		return numOp(e, int64(queryParamCount(path)))
+	case fieldHighlight:
+		highlight, _, known := q.Annotation()
+		if !known {
+			return false
+		}
+		// Case-insensitive: the vocabulary is lower-case (core.ValidHighlights) and an operator
+		// typing "Red" means red. "" is a real value here — `highlight = ""` is how you ask for rows
+		// you have not marked — which is exactly why Annotation carries a separate `known` flag
+		// rather than using "" for both.
+		return strOp(e.op, highlight, e.str, true)
+	case fieldComment:
+		_, comment, known := q.Annotation()
+		if !known {
+			return false
+		}
+		// Case-insensitive: a comment is prose the operator wrote, not an identifier, and searching
+		// it case-sensitively would miss their own capitalisation.
+		return strOp(e.op, comment, e.str, true)
 	case fieldHeader:
 		values, present := q.Header(e.key)
 		if !present {

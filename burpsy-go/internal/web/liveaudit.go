@@ -321,6 +321,15 @@ func (q *auditedExchangeQuery) Body() []byte {
 	return msg.Body()
 }
 
+// Annotation answers from the index row. See filteredExchangeQuery.Annotation for why known is true.
+func (q *auditedExchangeQuery) Annotation() (string, string, bool) {
+	comment := ""
+	if q.ex.Notes != nil {
+		comment = *q.ex.Notes
+	}
+	return q.ex.Highlight, comment, true
+}
+
 // Header reads the response head through the same memoised resolution Mime and Body use, so a query
 // naming a header and a body resolves the message once rather than twice.
 func (q *auditedExchangeQuery) Header(name string) ([]string, bool) {
