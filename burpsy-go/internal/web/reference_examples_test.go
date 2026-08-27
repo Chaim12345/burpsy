@@ -128,7 +128,13 @@ func TestTheDocumentedGrammarListsExactlyTheFieldsTheParserKnows(t *testing.T) {
 	// Taken from internal/query's fieldByName. Kept as a literal rather than exported from that
 	// package: the point is to compare the page against the parser's real behaviour, and a shared
 	// constant would let both drift together.
-	known := []string{"host", "method", "path", "mime", "status", "body", "length", "duration"}
+	known := []string{"host", "method", "path", "mime", "status", "body", "length", "duration", "header"}
+
+	// header is the one field whose usable form is not `field op value`: it takes a subscript naming
+	// which header. Spelled out here rather than folded into the loop below, because a loop that
+	// silently accepted "neither form parses" for one field would be the hole this test exists to
+	// close.
+	usableForm := map[string]string{"header": `header["server"] ~ "nginx"`}
 
 	grammarStart := strings.Index(src, "const QUERY_GRAMMAR")
 	if grammarStart < 0 {
@@ -146,6 +152,12 @@ func TestTheDocumentedGrammarListsExactlyTheFieldsTheParserKnows(t *testing.T) {
 				"operator has no way to discover it", field)
 		}
 		// And it must be usable, not merely named.
+		if form, special := usableForm[field]; special {
+			if _, err := query.Parse(form); err != nil {
+				t.Errorf("field %q is documented and its own usable form %q does not parse: %v", field, form, err)
+			}
+			continue
+		}
 		if _, err := query.Parse(field + ` ~ "x"`); err != nil {
 			// Numeric fields legitimately refuse `~`; try a numeric comparison before concluding.
 			if _, numErr := query.Parse(field + " > 1"); numErr != nil {

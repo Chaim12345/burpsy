@@ -70,6 +70,30 @@ func (q exchangeQueryable) Mime() string {
 }
 func (q exchangeQueryable) Body() []byte { return q.body }
 
+// Header parses the response head out of the raw bytes withBody already loaded.
+//
+// q.body here is msg.Raw() — the whole response including its head, not just the body, despite the
+// field name — so the headers are present without a second store read. The name is pre-existing and
+// left alone rather than renamed in a commit about something else.
+//
+// Absent when withBody was never called or found nothing, which fails every comparison. On the CLI
+// that is the `--query` path without the body pass, and it is the honest answer: this process has
+// not read the response, so it has nothing to say about its headers.
+func (q exchangeQueryable) Header(name string) ([]string, bool) {
+	if len(q.body) == 0 {
+		return nil, false
+	}
+	raw, present := core.HeaderValuesFromRaw(q.body, core.DirectionResponse, name)
+	if !present {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		out = append(out, string(value))
+	}
+	return out, true
+}
+
 // ResponseLen and DurationUs come off the index row, so `length` and `duration` work on the CLI's
 // history filter without the -body pass withBody performs. Absence follows the same rule as
 // everywhere else: Response decides whether there is a length, and Measured whether anyone timed

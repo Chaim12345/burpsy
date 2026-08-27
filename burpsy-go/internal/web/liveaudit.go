@@ -321,6 +321,24 @@ func (q *auditedExchangeQuery) Body() []byte {
 	return msg.Body()
 }
 
+// Header reads the response head through the same memoised resolution Mime and Body use, so a query
+// naming a header and a body resolves the message once rather than twice.
+func (q *auditedExchangeQuery) Header(name string) ([]string, bool) {
+	msg := q.response()
+	if msg == nil {
+		return nil, false
+	}
+	raw, present := msg.HeaderValues(name)
+	if !present {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		out = append(out, string(value))
+	}
+	return out, true
+}
+
 // ResponseLen and DurationUs both read the index row rather than the message, so neither forces the
 // lazy response resolution above. Same absence rules as filteredExchangeQuery: presence comes from
 // Response and from Measured, never from the value being non-zero.

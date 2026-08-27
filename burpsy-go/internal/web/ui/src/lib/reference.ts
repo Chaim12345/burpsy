@@ -66,7 +66,7 @@ and-expr   := unary-expr ( "and" unary-expr )*
 unary-expr := "not" unary-expr | primary
 primary    := "(" or-expr ")" | comparison
 comparison := field op value
-field      := "host" | "status" | "method" | "path" | "mime" | "body"\n            | "length" | "duration"`;
+field      := "host" | "status" | "method" | "path" | "mime" | "body"\n            | "length" | "duration" | "header" "[" string "]"`;
 
 /**
  * Filter examples, one complete query per entry.
@@ -91,6 +91,9 @@ export const QUERY_EXAMPLES: { query: string; means: string }[] = [
   { query: "length = 0", means: "A genuinely empty response, such as a 204 — not a request still waiting, which has no length at all." },
   { query: "duration > 500ms", means: "Slow exchanges. us, ms and s are accepted; a bare number means milliseconds, matching the History column." },
   { query: "duration in 100ms..2s", means: "Timing range. Exchanges nobody timed match no duration comparison, including this one." },
+  { query: 'header["server"] ~ "nginx"', means: "A response header. The name is quoted and case-insensitive; the value folds case too." },
+  { query: 'header["set-cookie"] ~ "HttpOnly"', means: "Any-of over a repeated header: Set-Cookie appears many times and this matches if any value does." },
+  { query: 'not header["strict-transport-security"] ~ "max-age"', means: "Responses missing HSTS. An absent header fails every comparison, so `not` is how you ask for its absence." },
   { query: "body ~ password", means: "The only operator body accepts, matched against the raw bytes." },
   { query: "host = api.example.com and status >= 400", means: "and binds tighter than or." },
   { query: "method = POST or method = PUT", means: "Keywords are case-insensitive; AND and OR also parse." },
@@ -144,6 +147,12 @@ export const QUERY_PANEL: ReferencePanel = {
       detail:
         "Response size in bytes: = (or ==), !=, <, <=, >, >= and in low..high. Accepts b, kb, mb and gb; a bare number means bytes.",
       note: "length = 0 is a real answer — a 204 is zero-length — so it does not match a request still waiting, which has no length at all. An inverted range (length in 1mb..1kb) is refused at parse time rather than matching nothing.",
+    },
+    {
+      term: 'header["name"]',
+      detail:
+        "A response header: = (or ==), != and ~ (contains). The name is quoted and matched case-insensitively; so is the value.",
+      note: "Indexed rather than a flat text match over the whole head, which would let a match straddle a header boundary. Any-of over repeated values, because Set-Cookie repeats and \"does any cookie contain HttpOnly\" is the question. An absent header fails EVERY comparison including !=, so ask for absence with not header[\"x\"] ~ \"y\". A header present with an empty value is not absent.",
     },
     {
       term: "duration",

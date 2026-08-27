@@ -1050,14 +1050,16 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 
 	// Gate (b) of DSL-03: crawl *retention*, evaluated after the fetch with the full grammar, because
-	// by now every field the grammar has really does have a value. It gates traversal and nothing
+	// by now every field the grammar has really does have a value — including `header`, which is why
+	// the stored response is handed to fetchedRow rather than only its body. `duration` is the one
+	// exception and reports itself unmeasured: the crawler does not time fetches at this layer. It gates traversal and nothing
 	// else. CRAWL-02 means this response is already captured and already scanned — it cannot be
 	// un-captured, and calling this a scope exclusion would make the crawl's counts disagree with the
 	// store's. So it is a response-category skip, and the request that produced it still counts as a
 	// fetch.
 	if c.retention != nil && !c.retention.Match(fetchedRow{
 		host: item.url.Hostname(), method: item.method, path: item.url.Path, status: fetch.Status,
-		mime: contentType, body: body,
+		mime: contentType, body: body, resp: msg,
 	}) {
 		fetch.RetentionExcluded = true
 		c.skips.record(SkipRecord{
@@ -1505,6 +1507,9 @@ func (r frontierRow) Body() []byte   { return nil }
 func (r frontierRow) ResponseLen() (int64, bool) { return 0, false }
 func (r frontierRow) DurationUs() (int64, bool)  { return 0, false }
 
+// No response, so no headers. New refuses any query naming this field before the fetch.
+func (r frontierRow) Header(string) ([]string, bool) { return nil, false }
+
 // fetchedRow is what a crawl-retention query is evaluated against: a response that exists, so every
 // field the grammar has is a real answer rather than an absence. This is the difference between the
 // two DSL-03 gates, and the reason the pre-fetch one has to refuse queries this one accepts.
@@ -1515,6 +1520,11 @@ type fetchedRow struct {
 	status int
 	mime   string
 	body   []byte
+	// resp is the stored response, carried so Header can answer from the real head rather than
+	// reporting every header absent. Without it the retention gate would evaluate
+	// `header["set-cookie"] ~ "x"` as false for every response, which is a verdict about the target
+	// rather than an admission that this type could not see its headers.
+	resp *core.StoredMessage
 }
 
 func (r fetchedRow) Host() string   { return r.host }
@@ -1534,6 +1544,26 @@ func (r fetchedRow) ResponseLen() (int64, bool) { return int64(len(r.body)), tru
 // If crawl timing is wanted, thread it onto this struct; returning false is what keeps the absence
 // visible until then.
 func (r fetchedRow) DurationUs() (int64, bool) { return 0, false }
+
+// Header reads the stored response head. Absent when there is no stored response to read, which is
+// distinct from a header that is genuinely not there — and both fail every comparison, so a caller
+// cannot tell them apart from the verdict alone. That is acceptable here and stated rather than
+// hidden: this type only exists after a successful fetch, so resp being nil means the read-back
+// failed, and that path already recorded a SkipResponseUnreadable.
+func (r fetchedRow) Header(name string) ([]string, bool) {
+	if r.resp == nil {
+		return nil, false
+	}
+	raw, present := r.resp.HeaderValues(name)
+	if !present {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		out = append(out, string(value))
+	}
+	return out, true
+}
 
 // senderFor returns the AuthorisedSender bound to one origin, building it on first use. The scope
 // handle passed in is the crawl's, so every send this package makes is checked against the same

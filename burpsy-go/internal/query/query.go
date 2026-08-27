@@ -114,6 +114,17 @@ type Queryable interface {
 	// it. Mirrors core.ExchangeDuration, whose Measured flag exists for exactly this reason: an
 	// exchange nobody timed must not report as instantaneous.
 	DurationUs() (int64, bool)
+	// Header returns every value for a response header name, in wire order, and whether the header
+	// was present.
+	//
+	// Every value, not the first: Set-Cookie legally repeats and is the header a predicate is most
+	// often wanted over, so a first-match accessor would pass a response whose SECOND cookie is the
+	// insecure one. See core.StoredMessage.HeaderValues.
+	//
+	// The bool separates absent from present-with-an-empty-value. Both are real — `Set-Cookie:` with
+	// nothing after it is a server bug worth seeing — and an absent header must fail every
+	// comparison, negations included, the way an absent status does.
+	Header(name string) ([]string, bool)
 }
 
 // Expr is a parsed, type-checked query expression. Parse is the only way to obtain one, so every
@@ -140,6 +151,10 @@ type Expr struct {
 	num64 int64
 	lo64  int64
 	hi64  int64
+	// key is the header name for fieldHeader. Held separately from str, which carries the value being
+	// compared: `header["set-cookie"] ~ "HttpOnly"` has both, and collapsing them into one string
+	// would make the comparison unable to say which half it was matching.
+	key string
 }
 
 type exprKind int
@@ -162,6 +177,7 @@ const (
 	fieldBody
 	fieldLength
 	fieldDuration
+	fieldHeader
 	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this.
 	//
 	// NOTE: adding a field here is NOT caught by the compiler in fieldOrder — a short
@@ -189,6 +205,8 @@ func (f field) String() string {
 		return "length"
 	case fieldDuration:
 		return "duration"
+	case fieldHeader:
+		return "header"
 	}
 	return "?"
 }
@@ -439,11 +457,26 @@ func (p *parser) parseCmp() (*Expr, error) {
 	fieldAt := p.pos
 	name := p.consumeIdent()
 	if name == "" {
-		return nil, p.errAt(fieldAt, "expected a field name (host, status, method, path, mime, body) or '('")
+		return nil, p.errAt(fieldAt, "expected a field name (%s) or '('", fieldNames())
 	}
 	f, ok := fieldByName(name)
 	if !ok {
-		return nil, p.errAt(fieldAt, "'%s' is not a field this grammar has — the fields are host, status, method, path, mime and body", name)
+		return nil, p.errAt(fieldAt, "'%s' is not a field this grammar has — the fields are %s", name, fieldNames())
+	}
+
+	// header takes a subscript naming which header: header["set-cookie"] ~ "HttpOnly".
+	//
+	// Indexed rather than a flat text match over the whole head, which would have been one line and
+	// no new syntax. A flat match cannot respect header boundaries: a value ending in "set-cookie"
+	// followed by any header beginning "HttpOnly" would satisfy it, and folded continuation lines
+	// make that likelier than it sounds. An operator asking about a header means that header.
+	var headerName string
+	if f == fieldHeader {
+		name, err := p.parseHeaderSubscript()
+		if err != nil {
+			return nil, err
+		}
+		headerName = name
 	}
 
 	o, opAt, err := p.parseOp(f)
@@ -467,7 +500,57 @@ func (p *parser) parseCmp() (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Expr{kind: kindCmp, field: f, op: o, str: val}, nil
+	return &Expr{kind: kindCmp, field: f, op: o, str: val, key: headerName}, nil
+}
+
+// fieldNames lists every field the grammar has, derived from fieldOrder rather than written out.
+//
+// The two "the fields are host, status, method, path, mime and body" messages this replaces were
+// already wrong: length and duration had been added and neither message mentioned them, so an
+// operator who mistyped a field name was told a list that omitted two of the answers. Derived, it
+// cannot drift again.
+func fieldNames() string {
+	names := make([]string, 0, len(fieldOrder))
+	for _, f := range fieldOrder {
+		names = append(names, f.String())
+	}
+	return strings.Join(names, ", ")
+}
+
+// parseHeaderSubscript reads the ["name"] that follows the header field.
+//
+// The name must be quoted. An unquoted bare word is accepted elsewhere in this grammar for values,
+// but a header name can contain characters the identifier lexer would stop at, and accepting a bare
+// word here would make `header[x-foo]` parse as `header[x]` followed by junk — an error reported
+// somewhere unhelpful rather than at the subscript.
+func (p *parser) parseHeaderSubscript() (string, error) {
+	p.skipWs()
+	at := p.pos
+	if p.pos >= len(p.src) || p.peek() != '[' {
+		return "", p.errAt(at, "header needs a subscript naming which header to test — the form is "+
+			"`header[\"set-cookie\"] ~ \"HttpOnly\"`")
+	}
+	p.pos++
+	p.skipWs()
+	if p.pos >= len(p.src) || p.peek() != '"' {
+		return "", p.errAt(p.pos, "a header name must be quoted: `header[\"set-cookie\"]`, not "+
+			"`header[set-cookie]` — an unquoted name would stop at the first character the identifier "+
+			"lexer does not accept and report the error somewhere else")
+	}
+	name, err := p.consumeQuoted()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", p.errAt(at, "a header name cannot be empty — `header[\"\"]` matches no header, and "+
+			"a comparison that cannot match is refused here rather than reported as no rows found")
+	}
+	p.skipWs()
+	if p.pos >= len(p.src) || p.peek() != ']' {
+		return "", p.errAt(p.pos, "expected ']' to close the header subscript")
+	}
+	p.pos++
+	return name, nil
 }
 
 func fieldByName(name string) (field, bool) {
@@ -488,6 +571,8 @@ func fieldByName(name string) (field, bool) {
 		return fieldLength, true
 	case "duration":
 		return fieldDuration, true
+	case "header":
+		return fieldHeader, true
 	}
 	return 0, false
 }
@@ -507,6 +592,9 @@ func fieldAllows(f field, o op) bool {
 		// The same set status has. A range reads better than two clauses for the case an operator
 		// actually wants — "responses between 1 and 2 megabytes" — and `in` already exists.
 		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
+	case fieldHeader:
+		// String operators only. A header value is text, and no ordering on it means anything.
+		return o == opEq || o == opNe || o == opContains
 	}
 	return false
 }
@@ -520,6 +608,8 @@ func allowedOps(f field) string {
 		return "~ (contains) only, since matching a whole body exactly is rarely what \"filter on body content\" means"
 	case fieldLength, fieldDuration:
 		return "=, !=, <, <=, >, >= and `in low..high`"
+	case fieldHeader:
+		return "=, != and ~ (contains), each case-insensitive on the value"
 	}
 	return "=, != (case-insensitive for host and mime) and ~ (contains)"
 }
@@ -911,6 +1001,29 @@ func (e *Expr) matchCmp(q Queryable) bool {
 			return false
 		}
 		return numOp(e, length)
+	case fieldHeader:
+		values, present := q.Header(e.key)
+		if !present {
+			// An absent header fails every comparison, `!=` included — the same rule as an absent
+			// status. Without it, `header["x-api-key"] != "leaked"` would be true for every response
+			// that has no such header, which is the opposite of what an operator asking about
+			// x-api-key wants to see.
+			return false
+		}
+		// Any-of over the values. Set-Cookie repeats, and "does any cookie contain HttpOnly" is the
+		// question; requiring all of them would answer a different one. For `!=` this means "some
+		// value differs", which is the reading consistent with the other operators — an operator who
+		// wants "no value equals" writes `not header["x"] = "y"`, and the precedence rules make that
+		// expressible.
+		for _, value := range values {
+			// Case-insensitive on the value: header values are compared this way throughout this
+			// package's string fields except method and path, where a spec says otherwise. No spec
+			// makes a general header value case-sensitive.
+			if strOp(e.op, value, e.str, true) {
+				return true
+			}
+		}
+		return false
 	case fieldDuration:
 		us, measured := q.DurationUs()
 		if !measured {

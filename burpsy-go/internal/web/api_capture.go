@@ -729,6 +729,38 @@ func (f filteredExchangeQuery) ResponseLen() (int64, bool) {
 	return int64(f.ex.ResponseLen), true
 }
 
+// Header reads the RESPONSE head, resolved from the store on demand.
+//
+// Note the asymmetry with Body above, which deliberately returns the *request* body for the history
+// filter. Headers are the response's: `header["set-cookie"]` and `header["server"]` are questions
+// about what came back, and no operator writing a history filter means the request's headers by
+// that word. Stated here because the two fields on the same type reading opposite messages would
+// otherwise look like a bug.
+//
+// Resolved lazily and not memoised, unlike auditedExchangeQuery: this type is constructed per row
+// per request and discarded, so there is no second call to save. A query naming no header field
+// never reaches this method and so never opens a response.
+func (f filteredExchangeQuery) Header(name string) ([]string, bool) {
+	if f.ex.Response == nil {
+		return nil, false
+	}
+	msg, err := f.store.Get(*f.ex.Response)
+	if err != nil {
+		// Unreadable is absent, not empty: every comparison fails, and the alternative would be
+		// reporting "no such header" as a fact about the response.
+		return nil, false
+	}
+	raw, present := msg.HeaderValues(name)
+	if !present {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		out = append(out, string(value))
+	}
+	return out, true
+}
+
 // DurationUs carries core.ExchangeDuration's Measured flag straight through rather than reducing it
 // to a number. That flag exists so an exchange nobody timed does not report as instantaneous, and
 // flattening it here would undo it at the one place an operator can ask about timing.

@@ -163,6 +163,58 @@ func (m *StoredMessage) Header(name string) []byte {
 	return nil
 }
 
+// HeaderValuesFromRaw is HeaderValues for bytes that are not in the store.
+//
+// The CLI's history filter holds raw response bytes rather than a StoredMessage, and duplicating the
+// span arithmetic there would be a second implementation of "which bytes are this header's value" —
+// the kind of duplication that drifts and then disagrees with the store about what a message
+// contains. Same absent-versus-empty contract as HeaderValues.
+func HeaderValuesFromRaw(raw []byte, direction Direction, name string) ([][]byte, bool) {
+	shape, err := Parse(raw, direction)
+	if err != nil {
+		return nil, false
+	}
+	want := []byte(name)
+	var out [][]byte
+	for _, h := range shape.Headers {
+		n := raw[h.Name.Offset:h.Name.End()]
+		if len(n) == len(want) && bytes.EqualFold(n, want) {
+			out = append(out, raw[h.Value.Offset:h.Value.End()])
+		}
+	}
+	return out, out != nil
+}
+
+// HeaderValues returns every value for a header name, in wire order, and whether the header was
+// present at all.
+//
+// # Why this exists beside Header
+//
+// Header returns the first match, which is right for the single-valued headers its callers ask
+// about — Content-Type, Content-Length — and wrong for the ones worth querying. Set-Cookie legally
+// appears many times and is the header an operator most often wants a predicate over ("is any
+// cookie missing HttpOnly"); Header can only ever see the first, so a check built on it would pass a
+// response whose second Set-Cookie is the insecure one.
+//
+// The bool separates "header absent" from "header present with an empty value". Both are real and
+// they mean different things: a `Set-Cookie:` with nothing after it is a server bug worth seeing,
+// and folding it into absence would hide it. Callers that treat absence as failing every comparison
+// — the query package does — need the distinction to avoid reporting an empty-valued header as
+// missing.
+//
+// Names are matched case-insensitively per RFC 7230 §3.2.
+func (m *StoredMessage) HeaderValues(name string) ([][]byte, bool) {
+	want := []byte(name)
+	var out [][]byte
+	for _, h := range m.Shape.Headers {
+		n := m.Slice(h.Name)
+		if len(n) == len(want) && bytes.EqualFold(n, want) {
+			out = append(out, m.Slice(h.Value))
+		}
+	}
+	return out, out != nil
+}
+
 // Body returns the message body.
 func (m *StoredMessage) Body() []byte {
 	return m.Slice(m.Shape.Body)

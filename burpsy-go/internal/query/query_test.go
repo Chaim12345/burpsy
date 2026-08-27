@@ -21,6 +21,9 @@ type fakeRow struct {
 	hasLength  bool
 	durationUs int64
 	measured   bool
+	// headers is keyed by LOWERCASED name, because Header's contract is case-insensitive and a stub
+	// that matched case exactly would pass a test the real adapters would fail.
+	headers map[string][]string
 }
 
 func (f fakeRow) Host() string               { return f.host }
@@ -30,7 +33,15 @@ func (f fakeRow) Status() int                { return f.status }
 func (f fakeRow) Mime() string               { return f.mime }
 func (f fakeRow) Body() []byte               { return f.body }
 func (f fakeRow) ResponseLen() (int64, bool) { return f.length, f.hasLength }
-func (f fakeRow) DurationUs() (int64, bool)  { return f.durationUs, f.measured }
+
+// headers is nil by default, so a stub that says nothing about headers reports every header
+// absent — which fails every comparison, the same rule the real adapters carry.
+func (f fakeRow) Header(name string) ([]string, bool) {
+	values, ok := f.headers[strings.ToLower(name)]
+	return values, ok
+}
+
+func (f fakeRow) DurationUs() (int64, bool) { return f.durationUs, f.measured }
 
 func row() fakeRow {
 	return fakeRow{
@@ -510,6 +521,11 @@ func (c ruleCandidate) Body() []byte { return []byte(c.rawBody) }
 // honestly rather than be given zeroes to satisfy the interface.
 func (c ruleCandidate) ResponseLen() (int64, bool) { return int64(len(c.rawBody)), true }
 func (c ruleCandidate) DurationUs() (int64, bool)  { return 0, false }
+
+// A match-and-replace candidate models a request line and a body, not a parsed head, so it reports
+// every header absent. Honest for this consumer: it genuinely cannot see headers, and absent fails
+// every comparison rather than answering one wrongly.
+func (c ruleCandidate) Header(string) ([]string, bool) { return nil, false }
 
 func TestTheSameParsedQueryDrivesTwoUnrelatedConsumers(t *testing.T) {
 	e, err := Parse(`status in 200..299 and (host = "example.com" or host = "other.test") and body ~ "hi"`)
