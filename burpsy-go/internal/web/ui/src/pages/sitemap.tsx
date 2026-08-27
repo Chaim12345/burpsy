@@ -1,10 +1,11 @@
-import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent } from "react";
 import { formatBytes, formatDuration, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import { useSitemapDetailed } from "../lib/data.observe";
 import { useExchangeActions } from "../lib/actions";
 import { useApp } from "../lib/store";
+import { toast } from "sonner";
 import type { SiteNodeDetail as SiteNode } from "../lib/types.observe";
 import type { Exchange } from "../lib/types";
 import { CrawlLauncher } from "../ui/crawl";
@@ -14,7 +15,7 @@ import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Toolbar, Tooltip } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
 import { CrawlPathsView } from "../ui/crawlpaths";
-import { useCrawls } from "../lib/data.observe";
+import { useCrawls, usePassiveScanBranch } from "../lib/data.observe";
 import { cn } from "../lib/cn";
 
 interface FlatRow {
@@ -198,6 +199,7 @@ export function SiteMapPage(): JSX.Element {
    */
   const [view, setView] = useState<"urls" | "paths">("urls");
   const crawls = useCrawls();
+  const passiveScan = usePassiveScanBranch();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [cursorId, setCursorId] = useState<string | null>(null);
@@ -583,6 +585,54 @@ export function SiteMapPage(): JSX.Element {
               <Badge>{(data?.nodes ?? 0).toLocaleString()} nodes</Badge>
               <Badge>{(data?.exchanges ?? 0).toLocaleString()} exchanges</Badge>
               {data?.in_flight ? <Badge tone="info">{data.in_flight} in flight</Badge> : null}
+              {/* Burp's "Passively scan this branch" (burpsy-react-ui-p09). No confirm step: the sweep
+                  sends nothing, it re-reads responses the store already holds. Disabled with a
+                  reason when nothing is selected, rather than acting on an implied whole-store
+                  target — that is what the live audit already does and is not what "this branch"
+                  means. */}
+              <Tooltip
+                content={
+                  selected
+                    ? `Re-run the passive checks over ${selected.host}${selected.depth === 0 ? "" : selected.node.path} — sends nothing, reads what is already captured`
+                    : "Select a host or path in the tree to scan its branch"
+                }
+              >
+                <span>
+                  <Button
+                    variant="outline"
+                    size="small"
+                    disabled={!selected || passiveScan.isPending}
+                    onClick={() => {
+                      if (!selected) return;
+                      passiveScan.mutate(
+                        {
+                          host: selected.host,
+                          // A host node is the whole host; a path node is its own path and below.
+                          path_prefix: selected.depth === 0 ? undefined : selected.node.path,
+                        },
+                        {
+                          onSuccess: (result) => {
+                            // The server's own summary, verbatim: it states the counts WITH their
+                            // caveats, and rewording it here would be a second wording of the one
+                            // thing that must not be optimistic.
+                            if (result.loaded === 0) {
+                              toast.error(result.summary);
+                            } else if (result.findings > 0) {
+                              toast.success(result.summary);
+                            } else {
+                              toast.info(result.summary);
+                            }
+                          },
+                          onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+                        },
+                      );
+                    }}
+                  >
+                    <ShieldCheck size={13} />
+                    {passiveScan.isPending ? "Scanning…" : "Passive scan branch"}
+                  </Button>
+                </span>
+              </Tooltip>
               <CrawlLauncher />
               <RefreshButton onClick={() => void refetch()} loading={isFetching} />
             </>

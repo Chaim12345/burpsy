@@ -496,6 +496,17 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskAttack,
 		summary: "the live sweep over newly-completed proxied traffic; POST opts in",
 	},
+	"/api/scanner/passive-branch": {
+		// riskLocal, and the reasoning belongs here rather than only in the handler: a passive sweep
+		// SENDS NOTHING. It re-reads responses the store already holds, so copying /api/scanner/audit's
+		// riskAttack by analogy would demand confirmation for an operation that touches no target —
+		// which trains operators to click through the confirmations that matter. riskRead understates
+		// it, because the sweep manufactures findings and findings are what an operator reports. It
+		// mutates burpsy's own findings state and nothing else, which is riskLocal exactly.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "Burp's \"Passively scan this branch\": re-run the passive set over one site-map " +
+			"branch's already-captured exchanges, reporting scanned/out-of-scope/no-response as a partition",
+	},
 	// riskAttack, on both, and not because a POST here sends anything: it arms something that will.
 	// A saved schedule starts a crawl or an audit against a live target at a wall-clock time with
 	// nobody watching, which is strictly more than /api/crawl does — a crawl launched now is at least

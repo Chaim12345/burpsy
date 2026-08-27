@@ -37,6 +37,48 @@ export const useCrawls = () => {
   return { ...q, running };
 };
 
+/**
+ * The outcome of a passive re-scan of one site-map branch (burpsy-react-ui-p09).
+ *
+ * The counts are a partition, not a summary: `scanned + skipped_out_of_scope + skipped_no_response`
+ * equals `matched`, always. A caller can therefore answer "what happened to the other ones", which
+ * is what makes this readable as coverage rather than a highlight reel.
+ *
+ * `loaded` is the check count. Zero means the sweep ran and could not have found anything, which is
+ * NOT a clean branch, and a surface must not render the two alike.
+ */
+export interface PassiveBranchResult {
+  host: string;
+  path_prefix?: string;
+  port?: number;
+  matched: number;
+  scanned: number;
+  /** In the branch, refused by the CURRENT scope — they may have been captured under a wider one. */
+  skipped_out_of_scope: number;
+  /** No response to scan. A request in flight is neither a failure nor a clean result. */
+  skipped_no_response: number;
+  findings: number;
+  loaded: number;
+  /** The server's own one-line statement of the counts and their caveats. Shown verbatim. */
+  summary: string;
+}
+
+/**
+ * Passively re-scan one branch's already-captured exchanges.
+ *
+ * Sends nothing to the target — this re-reads what the store holds — which is why it needs no
+ * confirmation step of the kind an audit does.
+ */
+export function usePassiveScanBranch() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: { host: string; path_prefix?: string; port?: number }) =>
+      api<PassiveBranchResult>("/api/scanner/passive-branch", json("POST", body)),
+    // Findings and the dashboard both move; the site map does not, because no traffic was captured.
+    onSuccess: () => invalidate([["issues"], ["dashboard"], ["scanner"]]),
+  });
+}
+
 /** Start a crawl. Resolves as soon as the server has accepted it and registered the task — not when
  * the crawl finishes — so the caller gets a task id to follow rather than a blocked promise. */
 export function useStartCrawl() {

@@ -61,6 +61,9 @@ const (
 	// The first consumer of Handle.WithCancel, because "stop the capture" is a button an operator
 	// reaches for and the route behind it used to answer `{"stopped": true}` without a loop to stop.
 	KindSequencerCapture Kind = "sequencer-capture"
+	// KindPassiveBranch is a passive re-scan of one site-map branch's already-captured exchanges. It
+	// sends nothing: unlike KindAudit it re-reads responses the store already holds.
+	KindPassiveBranch Kind = "passive-branch"
 )
 
 // TaskState is where a task ended up, or that it has not ended.
