@@ -1,5 +1,6 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import * as DropdownPrimitive from "@radix-ui/react-dropdown-menu";
+import { ChevronRight } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 
 export interface MenuAction {
@@ -10,6 +11,13 @@ export interface MenuAction {
   shortcut?: string;
   danger?: boolean;
   disabled?: boolean;
+  /**
+   * Nested groups. When present the row becomes a submenu trigger and `onSelect` is
+   * never called — a row cannot both open a submenu and do something, because a click
+   * on it would then be ambiguous. Burp's own colour and severity pickers are submenus,
+   * which is what this exists for.
+   */
+  submenu?: MenuGroup[];
   onSelect: () => void;
 }
 
@@ -21,11 +29,46 @@ export interface MenuGroup {
   actions: MenuAction[];
 }
 
-function renderItems(
-  groups: MenuGroup[],
-  Item: typeof ContextMenuPrimitive.Item | typeof DropdownPrimitive.Item,
-  Separator: typeof ContextMenuPrimitive.Separator | typeof DropdownPrimitive.Separator,
-): ReactNode {
+/**
+ * The one place a menu's primitives are named. Context menus and dropdowns are two
+ * different Radix packages with the same part names, so the renderer takes the bundle
+ * rather than branching per part — adding a part to one branch and forgetting the other
+ * is how a submenu ends up rendering only inside dropdowns.
+ */
+interface MenuParts {
+  Item: typeof ContextMenuPrimitive.Item | typeof DropdownPrimitive.Item;
+  Separator: typeof ContextMenuPrimitive.Separator | typeof DropdownPrimitive.Separator;
+  Sub: typeof ContextMenuPrimitive.Sub | typeof DropdownPrimitive.Sub;
+  SubTrigger: typeof ContextMenuPrimitive.SubTrigger | typeof DropdownPrimitive.SubTrigger;
+  SubContent: typeof ContextMenuPrimitive.SubContent | typeof DropdownPrimitive.SubContent;
+  Portal: typeof ContextMenuPrimitive.Portal | typeof DropdownPrimitive.Portal;
+}
+
+const CONTEXT_PARTS: MenuParts = {
+  Item: ContextMenuPrimitive.Item,
+  Separator: ContextMenuPrimitive.Separator,
+  Sub: ContextMenuPrimitive.Sub,
+  SubTrigger: ContextMenuPrimitive.SubTrigger,
+  SubContent: ContextMenuPrimitive.SubContent,
+  Portal: ContextMenuPrimitive.Portal,
+};
+
+const DROPDOWN_PARTS: MenuParts = {
+  Item: DropdownPrimitive.Item,
+  Separator: DropdownPrimitive.Separator,
+  Sub: DropdownPrimitive.Sub,
+  SubTrigger: DropdownPrimitive.SubTrigger,
+  SubContent: DropdownPrimitive.SubContent,
+  Portal: DropdownPrimitive.Portal,
+};
+
+/** Whether a set of groups would render anything at all. Used to skip empty menus. */
+export function hasMenuActions(groups: MenuGroup[]): boolean {
+  return groups.some((group) => group.actions.length > 0);
+}
+
+function renderItems(groups: MenuGroup[], parts: MenuParts): ReactNode {
+  const { Item, Separator, Sub, SubTrigger, SubContent, Portal } = parts;
   const visible = groups.filter((group) => group.actions.length > 0);
   return visible.map((group, index) => (
     <div key={group.id}>
@@ -33,6 +76,30 @@ function renderItems(
       {group.title ? <div className="menu-group-title">{group.title}</div> : null}
       {group.actions.map((action) => {
         const Icon = action.icon;
+        const body = (
+          <>
+            <span className="menu-item-icon">{Icon ? <Icon size={14} /> : null}</span>
+            <span className="menu-item-label">{action.label}</span>
+            {action.shortcut ? <span className="menu-item-shortcut">{action.shortcut}</span> : null}
+          </>
+        );
+        if (action.submenu && hasMenuActions(action.submenu)) {
+          return (
+            <Sub key={action.id}>
+              <SubTrigger className="menu-item menu-item-sub" disabled={action.disabled}>
+                {body}
+                <span className="menu-item-chevron" aria-hidden="true">
+                  <ChevronRight size={13} />
+                </span>
+              </SubTrigger>
+              <Portal>
+                <SubContent className="menu-content" collisionPadding={8} sideOffset={2}>
+                  {renderItems(action.submenu, parts)}
+                </SubContent>
+              </Portal>
+            </Sub>
+          );
+        }
         return (
           <Item
             key={action.id}
@@ -40,9 +107,7 @@ function renderItems(
             disabled={action.disabled}
             onSelect={action.onSelect}
           >
-            <span className="menu-item-icon">{Icon ? <Icon size={14} /> : null}</span>
-            <span className="menu-item-label">{action.label}</span>
-            {action.shortcut ? <span className="menu-item-shortcut">{action.shortcut}</span> : null}
+            {body}
           </Item>
         );
       })}
@@ -52,13 +117,13 @@ function renderItems(
 
 /** Right-click menu wrapper. `groups` is rebuilt per open, so it can close over row data. */
 export function ContextMenu({ groups, children }: { groups: MenuGroup[]; children: ReactNode }): JSX.Element {
-  if (groups.every((group) => group.actions.length === 0)) return <>{children}</>;
+  if (!hasMenuActions(groups)) return <>{children}</>;
   return (
     <ContextMenuPrimitive.Root>
       <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>
         <ContextMenuPrimitive.Content className="menu-content" collisionPadding={8}>
-          {renderItems(groups, ContextMenuPrimitive.Item, ContextMenuPrimitive.Separator)}
+          {renderItems(groups, CONTEXT_PARTS)}
         </ContextMenuPrimitive.Content>
       </ContextMenuPrimitive.Portal>
     </ContextMenuPrimitive.Root>
@@ -80,7 +145,7 @@ export function DropdownMenu({
       <DropdownPrimitive.Trigger asChild>{trigger}</DropdownPrimitive.Trigger>
       <DropdownPrimitive.Portal>
         <DropdownPrimitive.Content className="menu-content" align={align} sideOffset={5} collisionPadding={8}>
-          {renderItems(groups, DropdownPrimitive.Item, DropdownPrimitive.Separator)}
+          {renderItems(groups, DROPDOWN_PARTS)}
         </DropdownPrimitive.Content>
       </DropdownPrimitive.Portal>
     </DropdownPrimitive.Root>

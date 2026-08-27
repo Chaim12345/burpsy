@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
-import { ArrowDown, ArrowUp, Columns3, Plus, Send, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Combine, ArrowRightLeft, FileCode2, FileOutput, Globe, Link2, Plus, Repeat2, Send, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { formatBytes, formatDuration } from "../lib/api";
+import { api, copyToClipboard, downloadText, formatBytes, formatDuration, json } from "../lib/api";
+import { exchangeUrl, rawToCurl } from "../lib/actions";
+import { useChord } from "../lib/keymap";
+import { useApp } from "../lib/store";
 import { useInterceptControls } from "../lib/data";
 import {
   useForwardHeld,
@@ -36,6 +39,7 @@ import {
   Tooltip,
 } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
+import type { MenuGroup } from "../ui/menu";
 
 const FIELDS: { value: InterceptRuleSpec["field"]; label: string }[] = [
   { value: "host", label: "Host" },
@@ -362,6 +366,10 @@ export function InterceptPage(): JSX.Element {
   // hard-codes fix_content_length and this page offers it as a toggle.
   const controls = useInterceptControls();
   const forwardHeld = useForwardHeld();
+  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
+  const setRoute = useApp((state) => state.setRoute);
+  const setComparerSlot = useApp((state) => state.setComparerSlot);
+  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   /**
@@ -437,6 +445,167 @@ export function InterceptPage(): JSX.Element {
     });
   };
 
+  /**
+   * The send-to matrix for a held message.
+   *
+   * # Why this cannot just call lib/actions.ts's menu()
+   *
+   * That factory takes an `Exchange`: a row in the traffic store with an id and message ids behind
+   * it. A held message is none of those things yet — it exists only in the proxy's hold, has no
+   * response, and has no stored message the server can be asked for. So the actions that need a
+   * stored message are built here from the bytes the hold already handed us (`row.raw`), and the
+   * one that cannot be built at all is left out rather than faked:
+   *
+   * - Send to Intruder is absent. Intruder splices payloads into a *stored* message id, which a
+   *   held message does not have. Forward it and send from HTTP history, or send it to Repeater
+   *   here and use Repeater's own hand-off, which sends once to create the stored message first.
+   *
+   * Everything else is the same matrix every other HTTP table offers, and the point of it is the
+   * first entry: forking a copy to Repeater WITHOUT resolving the hold. Before this, a held
+   * request had to be forwarded or dropped before it could be worked on, so the operator lost the
+   * hold to get the copy — and forking an intercepted request to Repeater is the single most
+   * common thing done from Burp's Intercept tab.
+   *
+   * `row`, never the selection or the edit buffer: a right-click selects the row, but the buffer
+   * belongs to whatever was selected at the previous render. Sending one message's bytes under
+   * another's id is the bug burpsy-react-ui-3g5 already cost this file once.
+   */
+  const heldMenu = (row: HeldMessageDetail): MenuGroup[] => {
+    const url = exchangeUrl(row);
+    const label = `held #${row.id} ${row.method} ${row.path}`;
+    return [
+      {
+        id: "send",
+        actions: [
+          {
+            id: "repeater",
+            label: "Send to Repeater",
+            icon: Repeat2,
+            onSelect: () => {
+              openRepeaterTab({
+                name: label.slice(0, 42),
+                target: `${row.tls ? "https" : "http"}://${row.host}:${row.port}`,
+                protocol: row.tls ? "https" : "http",
+                request: row.raw,
+              });
+              setRoute("repeater");
+              toast.success(`Held message #${row.id} copied to Repeater — it is still held here`);
+            },
+          },
+          {
+            id: "compare-a",
+            label: "Send to Comparer (A)",
+            icon: Combine,
+            onSelect: () => {
+              setComparerSlot("a", row.raw);
+              setRoute("comparer");
+            },
+          },
+          {
+            id: "compare-b",
+            label: "Send to Comparer (B)",
+            icon: ArrowRightLeft,
+            onSelect: () => {
+              setComparerSlot("b", row.raw);
+              setRoute("comparer");
+            },
+          },
+          {
+            id: "decoder",
+            label: "Send to Decoder",
+            icon: FileOutput,
+            onSelect: () => {
+              setDecoderSeed({ label, input: row.raw });
+              setRoute("decoder");
+            },
+          },
+        ],
+      },
+      {
+        id: "hold",
+        title: "Resolve the hold",
+        actions: [
+          {
+            id: "forward",
+            label: "Forward",
+            icon: Send,
+            shortcut: "Ctrl+F",
+            // row.raw, not the edit buffer: there is no edit buffer for a row that is not
+            // selected, and sending the selection's bytes under another row's id is exactly the
+            // confusion this menu was built to avoid.
+            //
+            // fixContentLength, not a hardcoded true: two forward paths disagreeing about
+            // whether they rewrite a header is invisible from either one.
+            onSelect: () => forwardMessage(row.id, row.raw, fixContentLength),
+          },
+          {
+            id: "drop",
+            label: "Drop",
+            icon: Trash2,
+            danger: true,
+            onSelect: () => dropMessage(row.id),
+          },
+        ],
+      },
+      {
+        id: "copy",
+        actions: [
+          {
+            id: "url",
+            label: "Copy URL",
+            icon: Link2,
+            onSelect: () => {
+              void copyToClipboard(url);
+              toast.success("URL copied");
+            },
+          },
+          {
+            id: "curl",
+            label: "Copy as curl",
+            icon: Terminal,
+            onSelect: () => {
+              void copyToClipboard(rawToCurl(row.raw, url));
+              toast.success("curl command copied");
+            },
+          },
+          {
+            id: "to-file",
+            label: "Copy request to file",
+            icon: FileCode2,
+            onSelect: () =>
+              downloadText(`held-${row.id}-${row.method}.txt`.replace(/[^a-z0-9.\-]+/gi, "_"), row.raw),
+          },
+        ],
+      },
+      {
+        id: "scope",
+        actions: [
+          {
+            id: "add-scope",
+            label: `Add ${row.host} to scope`,
+            icon: ShieldCheck,
+            onSelect: () => {
+              void api<unknown>("/api/scope", json("POST", { action: "include", pattern: row.host }))
+                .then(() => toast.success(`${row.host} added to scope`))
+                .catch((error: unknown) =>
+                  toast.error(`Could not scope ${row.host}: ${error instanceof Error ? error.message : String(error)}`),
+                );
+            },
+          },
+          {
+            id: "browser",
+            label: "Open URL in browser",
+            icon: Globe,
+            onSelect: () => {
+              window.open(url, "_blank", "noopener");
+              toast.info("Opened in your browser — it is captured only if that browser uses burpsy's proxy");
+            },
+          },
+        ],
+      },
+    ];
+  };
+
   // The toolbar's two actions: the selection, its edit buffer, and the operator's toggle.
   const forward = () => {
     if (!selected) return;
@@ -451,24 +620,29 @@ export function InterceptPage(): JSX.Element {
   // Burp's proxy bindings. ctrl+F forwards — in Burp that is Forward, not Find, and
   // the editor's search lives on ctrl+S to match. alt+T stands in for Burp's ctrl+T
   // because Chrome and Firefox reserve ctrl+T for a new tab and a page cannot claim it.
+  // Both chords come from the keymap registry rather than being literals here: `proxy.forward` and
+  // `proxy.toggleIntercept` are rebindable rows in Settings -> Hotkeys, and that table was running
+  // duplicate detection on overrides nothing ever read.
+  const forwardChord = useChord("proxy.forward");
+  const toggleChord = useChord("proxy.toggleIntercept");
   useHotkeys(
-    "mod+f",
+    forwardChord,
     (event) => {
       if (!selected) return;
       event.preventDefault();
       forward();
     },
     { enableOnFormTags: true, enableOnContentEditable: true },
-    [selected],
+    [forwardChord, selected],
   );
   useHotkeys(
-    "alt+t",
+    toggleChord,
     (event) => {
       event.preventDefault();
       toggle();
     },
     { enableOnFormTags: true },
-    [data],
+    [toggleChord, data],
   );
 
   const columns = useMemo<Column<HeldMessageDetail>[]>(
@@ -539,7 +713,13 @@ export function InterceptPage(): JSX.Element {
       </div>
       <div style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", minHeight: 0 }}>
         <div className={inspector ? "held-grid-inspected" : "held-grid"}>
-          <HttpEditor label="Held bytes" value={raw} onChange={setRaw} filename={`held-${selected.id}.txt`} />
+          <HttpEditor
+            label="Held bytes"
+            value={raw}
+            onChange={setRaw}
+            filename={`held-${selected.id}.txt`}
+            menuGroups={heldMenu(selected)}
+          />
           {/* The Inspector edits `raw` — the same buffer the Forward button sends — so an
               edit made here is in the bytes that reach the client or the upstream, not a
               second draft that has to be copied across. This is the surface where that
@@ -725,33 +905,7 @@ export function InterceptPage(): JSX.Element {
                 selectedId={selectedId === null ? null : String(selectedId)}
                 onSelect={(row) => setSelectedId(row.id)}
         onActivate={(row) => setSelectedId(row.id)}
-        menuGroups={(row) => [
-          {
-            id: "intercept",
-            actions: [
-              {
-                id: "forward",
-                label: "Forward",
-                icon: Send,
-                shortcut: "Ctrl+F",
-                // row.raw, not the edit buffer: there is no edit buffer for a row that is not
-                // selected, and sending the selection's bytes under another row's id is exactly the
-                // confusion this menu was built to avoid.
-                //
-                // fixContentLength, not a hardcoded true: two forward paths disagreeing about
-                // whether they rewrite a header is invisible from either one.
-                onSelect: () => forwardMessage(row.id, row.raw, fixContentLength),
-              },
-              {
-                id: "drop",
-                label: "Drop",
-                icon: Trash2,
-                danger: true,
-                onSelect: () => dropMessage(row.id),
-              },
-            ],
-          },
-        ]}
+        menuGroups={heldMenu}
                 loading={isFetching && !data}
                 empty={
                   <Empty

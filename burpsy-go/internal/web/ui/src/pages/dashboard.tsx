@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Activity, CircleAlert, Gauge, Play, Plus, Radar, Square } from "lucide-react";
+import { Activity, CircleAlert, Copy, FolderTree, Gauge, Play, Plus, Radar, Square } from "lucide-react";
 import { toast } from "sonner";
-import { api, formatBytes, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
+import { api, copyToClipboard, formatBytes, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
 import { useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import { useStartCrawl } from "../lib/data.observe";
@@ -10,7 +10,8 @@ import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal } from "../ui/primitives";
-import { SimpleTable } from "../ui/table";
+import { MenuRow, SimpleTable } from "../ui/table";
+import type { MenuGroup } from "../ui/menu";
 
 function taskTone(state: string): "good" | "bad" | "warn" | "info" {
   const value = state.toLowerCase();
@@ -77,6 +78,8 @@ function useCancelTask() {
 
 function TaskTable({ tasks, liveFindings, liveEnabled }: { tasks: TaskRow[]; liveFindings?: number; liveEnabled: boolean }): JSX.Element {
   const cancel = useCancelTask();
+  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
+  const setRoute = useApp((state) => state.setRoute);
   const setLive = useSetScannerLive();
 
   // While live auditing is enabled Burp keeps its live task permanently visible even between
@@ -102,10 +105,67 @@ function TaskTable({ tasks, liveFindings, liveEnabled }: { tasks: TaskRow[]; liv
   if (!rows.length) {
     return <Empty title="No tasks" detail="Crawls, audits and attacks appear here with their progress and bounded results." />;
   }
+  /**
+   * A task's row menu.
+   *
+   * Cancel is the only thing that can be *done* to a task and it is already a row button; the menu
+   * carries it too so the gesture is the same as everywhere else, and adds the copies an operator
+   * needs when a task fails and has to be described in a ticket. `-1` is the synthesised standing
+   * live-audit row, not a real task id, which is why cancelling it goes through setLive instead —
+   * so it is left to its own button rather than given a menu entry that would call the wrong API.
+   */
+  const menuFor = (task: TaskRow): MenuGroup[] => [
+    {
+      id: "task",
+      actions: [
+        ...(task.id !== -1 && task.cancellable && task.state === "running"
+          ? [
+              {
+                id: "cancel",
+                label: `Cancel this ${task.kind} task`,
+                icon: Square,
+                danger: true,
+                disabled: cancel.isPending,
+                onSelect: () => cancel.mutate(task.id),
+              },
+            ]
+          : []),
+        {
+          id: "history",
+          label: `Filter history by ${task.target}`,
+          icon: FolderTree,
+          // The target is a URL or a host depending on the task kind, so this matches on `host ~`
+          // rather than claiming an exact authority it may not have.
+          onSelect: () => {
+            setHistoryQuery(`host ~ "${task.target.replace(/^https?:\/\//, "").split("/")[0] ?? task.target}"`);
+            setRoute("history");
+          },
+        },
+      ],
+    },
+    {
+      id: "copy",
+      actions: [
+        { id: "target", label: "Copy target", icon: Copy, onSelect: () => void copyToClipboard(task.target) },
+        {
+          id: "progress",
+          label: "Copy task status line",
+          icon: Copy,
+          onSelect: () => {
+            void copyToClipboard(
+              `${task.kind} · ${task.target} · ${task.state} · ${task.progress} · ${formatDuration(task.elapsed_ms)}${task.result?.summary ? ` · ${task.result.summary}` : ""}`,
+            );
+            toast.success("Task status copied");
+          },
+        },
+      ],
+    },
+  ];
+
   return (
     <SimpleTable headers={["Kind", "Target", "State", "Progress", "Issues", "Elapsed", ""]}>
       {rows.map((task) => (
-        <tr key={task.id}>
+        <MenuRow key={task.id} groups={menuFor(task)}>
           <td>
             <Badge>{task.kind}</Badge>
           </td>
@@ -168,20 +228,94 @@ function TaskTable({ tasks, liveFindings, liveEnabled }: { tasks: TaskRow[]; liv
               </IconButton>
             ) : null}
           </td>
-        </tr>
+        </MenuRow>
       ))}
     </SimpleTable>
   );
 }
 
 function ActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
+  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
+  const setRoute = useApp((state) => state.setRoute);
+
+  /**
+   * The dashboard's recent-activity menu.
+   *
+   * These rows are the same tool-log entries the Logger page shows, and they carry the same
+   * limitation: the log records that one of burpsy's own tools sent a request, not the request's
+   * bytes. There is no message id on an `ActivityRow`, so there is nothing to send to Repeater or
+   * Intruder from here — offering it would mean fabricating a request. What is offered is the two
+   * things the row can honestly do: jump to the traffic it describes, and copy it. Noted on
+   * burpsy-react-ui-3fr.
+   */
+  const menuFor = (row: ActivityRow): MenuGroup[] => [
+    {
+      id: "history",
+      actions: [
+        ...(row.host
+          ? [
+              {
+                id: "host",
+                label: `Show ${row.host} in HTTP history`,
+                icon: FolderTree,
+                onSelect: () => {
+                  setHistoryQuery(`host = ${row.host}`);
+                  setRoute("history");
+                },
+              },
+            ]
+          : []),
+        {
+          id: "path",
+          label: `Show ${row.path} in HTTP history`,
+          icon: FolderTree,
+          onSelect: () => {
+            setHistoryQuery(`path ~ "${row.path.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
+            setRoute("history");
+          },
+        },
+      ],
+    },
+    {
+      id: "copy",
+      actions: [
+        {
+          id: "request-line",
+          label: "Copy request line",
+          icon: Copy,
+          onSelect: () => {
+            void copyToClipboard(`${row.method} ${row.path}`);
+            toast.success("Request line copied");
+          },
+        },
+        ...(row.host
+          ? [
+              {
+                id: "url",
+                label: "Copy URL (as logged)",
+                icon: Copy,
+                onSelect: () => {
+                  // The log carries no TLS flag, so the scheme is inferred from the port — the same
+                  // honest guess logger.tsx makes, and the same reason this says "as logged".
+                  const scheme = row.port === 443 ? "https" : "http";
+                  const authority = row.port === undefined || row.port === 80 || row.port === 443 ? row.host : `${row.host}:${row.port}`;
+                  void copyToClipboard(`${scheme}://${authority ?? ""}${row.path}`);
+                  toast.success("URL copied");
+                },
+              },
+            ]
+          : []),
+      ],
+    },
+  ];
+
   if (!rows.length) {
     return <Empty title="No tool traffic" detail="Requests that burpsy itself sends — Repeater, Intruder, Scanner — are logged here." />;
   }
   return (
     <SimpleTable headers={["Age", "Tool", "Request", "Status"]}>
       {rows.map((row, index) => (
-        <tr key={`${row.tool}-${row.started_ms}-${index}`}>
+        <MenuRow key={`${row.tool}-${row.started_ms}-${index}`} groups={menuFor(row)}>
           <td>
             <span className="cell-dim">{relativeTime(row.started_ms)}</span>
           </td>
@@ -194,7 +328,7 @@ function ActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
             </code>
           </td>
           <td>{row.status === null ? <Badge>pending</Badge> : <Badge tone={statusTone(row.status)}>{row.status}</Badge>}</td>
-        </tr>
+        </MenuRow>
       ))}
     </SimpleTable>
   );

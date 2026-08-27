@@ -1,7 +1,8 @@
-import { AlertTriangle, ExternalLink, Play, Terminal } from "lucide-react";
+import { AlertTriangle, Copy, ExternalLink, FolderTree, Globe, Link2, Play, Repeat2, Terminal } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { formatBytes, formatCount } from "../lib/api";
+import { copyToClipboard, formatBytes, formatCount, templateRequest } from "../lib/api";
+import { useApp } from "../lib/store";
 import {
   useDiscoveryRuns,
   useStartDiscovery,
@@ -10,7 +11,8 @@ import {
   type DiscoveryToolState,
 } from "../lib/data.discovery";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { SimpleTable } from "../ui/table";
+import { MenuRow, SimpleTable } from "../ui/table";
+import type { MenuGroup } from "../ui/menu";
 import {
   Badge,
   Button,
@@ -237,11 +239,106 @@ function RunCounts({ run }: { run: DiscoveryRun }): JSX.Element {
   );
 }
 
+/**
+ * The discovered-path context menu.
+ *
+ * # Why Send to Repeater builds a request instead of fetching one
+ *
+ * A discovered path is not an exchange. The sweep is an external tool reporting that a URL exists
+ * with a status and a length; nothing captured the request, so there are no bytes to send anywhere.
+ * The Repeater entry therefore synthesises the request the sweep implies — `templateRequest`, the
+ * same builder Repeater's own "new tab" uses — and the toast says so, because handing the operator
+ * a hand-built GET while implying it is the captured one would be the dishonest version.
+ *
+ * "Add to site map" is not offered for the same reason and cannot be faked: the site map is built
+ * from captured traffic, and there is no endpoint that injects a path into it.
+ */
 function DiscoveryRows({ rows }: { rows: Discovery[] }): JSX.Element {
+  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
+  const setRoute = useApp((state) => state.setRoute);
+  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
+
+  const menuFor = (row: Discovery): MenuGroup[] => [
+    {
+      id: "send",
+      actions: [
+        {
+          id: "repeater",
+          label: "Send to Repeater (built from this URL)",
+          icon: Repeat2,
+          onSelect: () => {
+            const scheme = row.url.startsWith("http://") ? "http" : "https";
+            openRepeaterTab({
+              name: `discovered ${row.path || "/"}`.slice(0, 42),
+              target: `${scheme}://${row.host}`,
+              protocol: scheme,
+              request: templateRequest(row.host, row.path || "/"),
+            });
+            setRoute("repeater");
+            toast.success("A GET for this path was built and opened in Repeater — the sweep captured no request bytes");
+          },
+        },
+        {
+          id: "browser",
+          label: "Open URL in browser",
+          icon: Globe,
+          onSelect: () => {
+            window.open(row.url, "_blank", "noopener");
+            toast.info("Opened in your browser — it is captured only if that browser uses burpsy's proxy");
+          },
+        },
+      ],
+    },
+    {
+      id: "copy",
+      actions: [
+        {
+          id: "url",
+          label: "Copy URL",
+          icon: Link2,
+          onSelect: () => {
+            void copyToClipboard(row.url);
+            toast.success("URL copied");
+          },
+        },
+        {
+          id: "path",
+          label: "Copy path",
+          icon: Copy,
+          onSelect: () => void copyToClipboard(row.path || "/"),
+        },
+        ...(row.redirect
+          ? [
+              {
+                id: "redirect",
+                label: "Copy redirect target",
+                icon: ExternalLink,
+                onSelect: () => void copyToClipboard(row.redirect ?? ""),
+              },
+            ]
+          : []),
+      ],
+    },
+    {
+      id: "history",
+      actions: [
+        {
+          id: "filter",
+          label: `Filter history by ${row.path || "/"}`,
+          icon: FolderTree,
+          onSelect: () => {
+            setHistoryQuery(`host = ${row.host} AND path ~ "${(row.path || "/").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
+            setRoute("history");
+          },
+        },
+      ],
+    },
+  ];
+
   return (
     <SimpleTable headers={["Status", "Path", "Length", "Words", "Lines", "Type", "Redirects to"]}>
       {rows.map((row) => (
-        <tr key={row.url}>
+        <MenuRow key={row.url} groups={menuFor(row)}>
           <td>
             <Badge tone={statusTone(row.status)}>{row.status}</Badge>
           </td>
@@ -262,7 +359,7 @@ function DiscoveryRows({ rows }: { rows: Discovery[] }): JSX.Element {
               "—"
             )}
           </td>
-        </tr>
+        </MenuRow>
       ))}
     </SimpleTable>
   );

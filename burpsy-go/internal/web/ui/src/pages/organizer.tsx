@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, Highlighter, Pencil, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { copyToClipboard } from "../lib/api";
 import { useOrganizer, useOrganizerMutations } from "../lib/data";
 import { useApp } from "../lib/store";
 import { HIGHLIGHTS, HIGHLIGHT_TONE, type OrganizerEdit, type OrganizerItem } from "../lib/types";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
-import { SimpleTable } from "../ui/table";
+import { MenuRow, SimpleTable } from "../ui/table";
+import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
+import type { MenuGroup } from "../ui/menu";
 interface Draft {
  title: string;
  note: string;
@@ -236,6 +239,127 @@ export function OrganizerPage(): JSX.Element {
   setRoute("history");
  };
 
+ /**
+  * Write one field of a saved item without going through the detail pane's draft.
+  *
+  * The save endpoint takes the whole `OrganizerEdit`, so a menu that only means to change the
+  * colour still has to send the title and the note. They are read off `item` — the row the pointer
+  * is on — and never off `draft`, which belongs to whatever is selected. Sending the selected
+  * row's note under another row's id would silently overwrite a note the operator wrote.
+  */
+ const patchItem = (item: OrganizerItem, change: Partial<Draft>, message: string) => {
+  const payload: OrganizerEdit = {
+   id: item.id,
+   title: change.title ?? item.title,
+   note: change.note ?? item.note,
+   highlight: change.highlight ?? item.highlight,
+  };
+  mutations.save.mutate(payload, {
+   onSuccess: () => {
+    // Keep the open draft in step when the row being patched is the one on screen; otherwise the
+    // pane would keep showing the old value and report itself "saved".
+    if (selectedId === item.id) select({ ...item, ...payload });
+    toast.success(message);
+   },
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not save that change"),
+  });
+ };
+
+ /**
+  * The saved-item context menu — Burp's Organiser row actions.
+  *
+  * Rename and Highlight are here because they are the two things an operator does to a shortlist
+  * while triaging it, and both previously required selecting the row, editing the detail pane and
+  * pressing Save. The note stays in the pane: it is multi-line prose, and a prompt is the wrong
+  * surface for it.
+  *
+  * Not offered: Burp's "New collection" / "Unlink", which are collection operations. burpsy's
+  * Organizer is one flat list — `/api/tools/organizer` has no collection concept — so there is no
+  * collection to make or unlink from, and inventing the menu entries would advertise a structure
+  * that does not exist. Noted on burpsy-react-ui-3fr.
+  */
+ const menuFor = (item: OrganizerItem): MenuGroup[] => [
+  {
+   id: "edit",
+   actions: [
+    {
+     id: "rename",
+     label: item.title ? "Rename" : "Add a title",
+     icon: Pencil,
+     onSelect: () => {
+      const next = window.prompt(`Title for saved item ${item.id} (exchange #${item.exchange})`, item.title);
+      if (next === null || next.trim() === item.title) return;
+      patchItem(item, { title: next.trim() }, `Item ${item.id} renamed`);
+     },
+    },
+    {
+     id: "highlight",
+     label: "Highlight",
+     icon: Highlighter,
+     submenu: [
+      {
+       id: "colours",
+       actions: HIGHLIGHTS.map((name) => {
+        // "none" is the picker's sentinel and "" is the wire's value for no highlight, the same
+        // translation the detail pane's Select does.
+        const wire = name === "none" ? "" : name;
+        return {
+         id: name,
+         label: name === "none" ? "Clear highlight" : name.charAt(0).toUpperCase() + name.slice(1),
+         icon: HIGHLIGHT_ICONS[name],
+         disabled: (item.highlight || "") === wire,
+         onSelect: () => patchItem(item, { highlight: wire }, wire === "" ? `Highlight cleared on ${item.id}` : `Item ${item.id} highlighted ${wire}`),
+        };
+       }),
+      },
+     ],
+     onSelect: () => {},
+    },
+   ],
+  },
+  {
+   id: "goto",
+   actions: [
+    {
+     id: "open",
+     label: `Show exchange #${item.exchange} in HTTP history`,
+     icon: ExternalLink,
+     onSelect: () => openInHistory(item.exchange),
+    },
+    {
+     id: "copy-exchange",
+     label: `Copy exchange id (#${item.exchange})`,
+     icon: Copy,
+     onSelect: () => void copyToClipboard(String(item.exchange)),
+    },
+    {
+     id: "copy-note",
+     label: "Copy note",
+     icon: Copy,
+     disabled: !item.note,
+     onSelect: () => {
+      void copyToClipboard(item.note);
+      toast.success("Note copied");
+     },
+    },
+   ],
+  },
+  {
+   id: "remove",
+   actions: [
+    {
+     id: "delete",
+     label: `Remove item ${item.id}`,
+     icon: Trash2,
+     danger: true,
+     // Routed through the same confirmation the row button uses: removing a saved item destroys
+     // the note, which is the only thing here that is not recoverable from the traffic store.
+     onSelect: () => setConfirmDelete(item.id),
+    },
+   ],
+  },
+ ];
+
  if (error) {
   return (
    <div className="page">
@@ -357,10 +481,13 @@ export function OrganizerPage(): JSX.Element {
     ) : (
      <SimpleTable headers={["#", "Exchange", "Request", "Status", "Type", "Title", "Highlight", "Note", ""]}>
       {visible.map((item) => (
-       <tr
+       <MenuRow
         key={item.id}
+        groups={menuFor(item)}
         className={item.id === selectedId ? "data-row clickable selected-row" : "data-row clickable"}
         onClick={() => select(item)}
+        // Right-clicking a row should act on that row, matching VirtualTable and every desktop tool.
+        onContextMenu={() => select(item)}
        >
         <td>
          <span className="cell-num">{item.id}</span>
@@ -441,7 +568,7 @@ export function OrganizerPage(): JSX.Element {
           </IconButton>
          </div>
         </td>
-       </tr>
+       </MenuRow>
       ))}
      </SimpleTable>
     )}

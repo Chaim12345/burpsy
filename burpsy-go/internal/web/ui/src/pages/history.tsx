@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { useHotkeys } from "react-hotkeys-hook";
 import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, X } from "lucide-react";
 import { toast } from "sonner";
-import { useExchangeActions, exchangeUrl } from "../lib/actions";
+import { useExchangeActions, useSendShortcuts, exchangeUrl } from "../lib/actions";
 import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useHistory, useMessage, useStats } from "../lib/data";
@@ -609,28 +608,11 @@ export function HistoryPage(): JSX.Element {
   // cannot silently drop the operator's selection.
   const selected = useMemo(() => rows.find((row) => row.id === selectedId) ?? null, [rows, selectedId]);
 
-  // Burp's signature bindings, on the selected row. ctrl+R overrides the browser's
-  // reload: for a Burp user that combination means "send to Repeater" and nothing else.
-  useHotkeys(
-    "mod+r",
-    (event) => {
-      if (!selected) return;
-      event.preventDefault();
-      void actions.sendToRepeater(selected);
-    },
-    { enableOnFormTags: false },
-    [selected, actions],
-  );
-  useHotkeys(
-    "mod+i",
-    (event) => {
-      if (!selected) return;
-      event.preventDefault();
-      actions.sendToIntruder(selected);
-    },
-    { enableOnFormTags: false },
-    [selected, actions],
-  );
+  // Burp's signature bindings, on the selected row. ctrl+R overrides the browser's reload: for a
+  // Burp user that combination means "send to Repeater" and nothing else. They used to be two
+  // hardcoded literals here, which made the Settings hotkey table a lie and left every other row
+  // table without them — see useSendShortcuts in lib/actions.ts.
+  useSendShortcuts(selected);
 
   const request = useMessage(selected?.request);
   const response = useMessage(selected?.response ?? null);
@@ -830,11 +812,15 @@ export function HistoryPage(): JSX.Element {
         />
       </div>
       <div className={inspector ? "editor-grid-inspected" : "editor-grid"}>
+        {/* The row menu, on the message itself. Burp carries the same actions in both places, and
+            reading a response then sending it straight to Repeater is the gesture this pane exists
+            for — reaching back up to the table row to do it is the divergence. */}
         <HttpEditor
           label="Request"
           readOnly
           value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
           filename={`exchange-${selected.id}-request.txt`}
+          menuGroups={actions.menu(selected)}
         />
         <HttpEditor
           label="Response"
@@ -845,6 +831,7 @@ export function HistoryPage(): JSX.Element {
               : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
           }
           filename={`exchange-${selected.id}-response.txt`}
+          menuGroups={actions.menu(selected)}
         />
         {inspector ? (
           <Inspector

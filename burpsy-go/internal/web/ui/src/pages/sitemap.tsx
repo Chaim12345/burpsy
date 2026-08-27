@@ -3,7 +3,7 @@ import { useMemo, useState, type KeyboardEvent } from "react";
 import { formatBytes, formatDuration, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import { useSitemapDetailed } from "../lib/data.observe";
-import { useExchangeActions } from "../lib/actions";
+import { useExchangeActions, useSendShortcuts } from "../lib/actions";
 import { useApp } from "../lib/store";
 import { toast } from "sonner";
 import type { SiteNodeDetail as SiteNode } from "../lib/types.observe";
@@ -294,6 +294,11 @@ export function SiteMapPage(): JSX.Element {
   const request = useMessage(activeExchange?.request);
   const response = useMessage(activeExchange?.response ?? null);
 
+  // Burp's send-to chords are scoped to a table row, not to one tool. Without these, ctrl+R on a
+  // selected Site map row reached the browser and reloaded the console — losing the operator's
+  // tree position and selection to reach the page that has meant "send to Repeater" for years.
+  useSendShortcuts(activeExchange);
+
   const filterHistory = (entry: IndexedNode) => {
     // Quoted so a path carrying an operator character (`?q=a<b`) reaches the parser as one string
     // value rather than terminating the bare word early; the two escapes the grammar defines are
@@ -458,6 +463,7 @@ export function SiteMapPage(): JSX.Element {
           readOnly
           value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
           filename={`exchange-${activeExchange.id}-request.txt`}
+          menuGroups={actions.menu(activeExchange)}
         />
         <HttpEditor
           label="Response"
@@ -468,6 +474,7 @@ export function SiteMapPage(): JSX.Element {
               : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
           }
           filename={`exchange-${activeExchange.id}-response.txt`}
+          menuGroups={actions.menu(activeExchange)}
         />
         {inspector ? (
           <Inspector

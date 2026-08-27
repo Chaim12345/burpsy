@@ -3,6 +3,9 @@ import { ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Crosshair, Plus
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
+import { useExchangeActions } from "../lib/actions";
+import { useExchange } from "../lib/data.observe";
+import { useChord } from "../lib/keymap";
 import { SendCancelled, useRepeaterSend } from "../lib/data.tools";
 import { useApp, type RepeaterTab } from "../lib/store";
 import type { Exchange, RepeaterRedirects, RepeaterResult, RepeaterSendOptions } from "../lib/types";
@@ -144,14 +147,17 @@ export function RepeaterPage(): JSX.Element {
     );
   };
 
+  // From the keymap registry, not a literal: `repeater.send` is a rebindable row in
+  // Settings -> Hotkeys, and that table ran duplicate detection on an override nothing read.
+  const sendChord = useChord("repeater.send");
   useHotkeys(
-    "mod+enter",
+    sendChord,
     (event) => {
       event.preventDefault();
       if (active) submit(active);
     },
     { enableOnFormTags: true, enableOnContentEditable: true },
-    [active],
+    [sendChord, active],
   );
 
   /**
@@ -214,6 +220,20 @@ export function RepeaterPage(): JSX.Element {
   const activeHistory = history[active.id] ?? [];
   const viewIndex = viewing[active.id] ?? activeHistory.length - 1;
   const result = activeHistory[viewIndex];
+
+  /**
+   * The exchange this send produced, so the two message panes carry the same menu every other
+   * HTTP message editor does.
+   *
+   * A Repeater draft is not an exchange until it has been sent — that is why this is keyed on
+   * `result.exchange_id` rather than on the tab. Before a send there is nothing in the traffic
+   * store to act on, and the editor menu is then the selection codecs alone, which is honest:
+   * "Send to Comparer" on a request that has never left the browser would be sending bytes the
+   * store has never seen under an id it does not have.
+   */
+  const sentExchange = useExchange(result?.exchange_id ?? null);
+  const actions = useExchangeActions();
+  const messageMenu = sentExchange.data ? actions.menu(sentExchange.data) : undefined;
   /** How many overrides the active tab carries — shown on the Config trigger so a panel that is
    *  closed cannot silently narrow what Send will do. */
   const overrideCount = Object.keys(active.options ?? {}).length;
@@ -543,6 +563,7 @@ export function RepeaterPage(): JSX.Element {
           onChange={(value) => updateRepeaterTab(active.id, { request: value })}
           filename="repeater-request.txt"
           placeholder="GET / HTTP/1.1"
+          menuGroups={messageMenu}
         />
         <HttpEditor
           label="Response"
@@ -556,6 +577,7 @@ export function RepeaterPage(): JSX.Element {
                     : "Send the request to see the response bytes.")
               }
           filename="repeater-response.txt"
+          menuGroups={messageMenu}
         />
         {inspector ? (
           // Pointed at the response with nothing to show yet, it falls back to the

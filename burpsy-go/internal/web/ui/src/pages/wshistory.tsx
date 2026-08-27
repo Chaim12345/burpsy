@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Copy, ExternalLink, X } from "lucide-react";
-import { copyToClipboard, formatBytes, relativeTime } from "../lib/api";
+import { toast } from "sonner";
+import { ArrowDownLeft, ArrowRightLeft, ArrowUpRight, Combine, Copy, ExternalLink, FileCode2, FileOutput, X } from "lucide-react";
+import { copyToClipboard, downloadText, formatBytes, relativeTime } from "../lib/api";
 import { useWsConnections, useWsHistory } from "../lib/data";
 import { useExchange, useWsMessageDetailed } from "../lib/data.observe";
 import { useMessage } from "../lib/data";
 import { useApp } from "../lib/store";
-import { useExchangeActions } from "../lib/actions";
+import { useExchangeActions, useSendShortcuts } from "../lib/actions";
 import type { WsConnection, WsRow } from "../lib/types";
 import type { WsMessageDetail } from "../lib/types.observe";
 import { HttpEditor } from "../ui/editor";
@@ -104,6 +105,8 @@ function PayloadView({ message, isFetching }: { message: WsMessageDetail | undef
 export function WebSocketPage(): JSX.Element {
   const focusExchange = useApp((state) => state.focusExchange);
   const setRoute = useApp((state) => state.setRoute);
+  const setComparerSlot = useApp((state) => state.setComparerSlot);
+  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
   const actions = useExchangeActions();
 
   const [selectedExchange, setSelectedExchange] = useState<number | null>(null);
@@ -134,6 +137,10 @@ export function WebSocketPage(): JSX.Element {
 
   const rows = history.data?.rows ?? [];
   const selectedFrame = useMemo(() => rows.find((row) => row.id === selectedFrameId) ?? null, [rows, selectedFrameId]);
+
+  // The send-to chords, on the connection's own exchange. Burp scopes them to a table row rather
+  // than to one tool; without them ctrl+R here reached the browser and reloaded the console.
+  useSendShortcuts(exchangeDetail.data ?? null);
 
   const columns = useMemo<Column<WsRow>[]>(
     () => [
@@ -167,6 +174,120 @@ export function WebSocketPage(): JSX.Element {
     ],
     [],
   );
+
+  /**
+   * A frame's own actions.
+   *
+   * # Why some entries appear only on the selected frame
+   *
+   * A frame's payload is not on the row — `WsRow` carries id, direction, opcode, length and time,
+   * and the bytes come from a separate per-frame fetch. Right-clicking selects the row, which
+   * starts that fetch, so the first right-click on a new frame has no payload in hand yet. The
+   * payload actions are therefore offered when the bytes have arrived and withheld when they have
+   * not, exactly as the connection menu beside it already withholds the full exchange matrix —
+   * a "Copy payload" that silently copied nothing would be worse than one that is not there yet.
+   *
+   * # What is deliberately absent
+   *
+   * Comment and highlight. `/api/ws/message/` is GET-only (api_ws.go:184) and a WebSocket frame
+   * has no `notes` or `highlight` field on the wire, so there is nothing to write them to. They
+   * are not stubbed here: a colour that vanished on the next poll is a worse answer than no
+   * colour. Tracked on burpsy-react-ui-nmv as needing the backend fields first.
+   */
+  const menuForFrame = (row: WsRow): MenuGroup[] => {
+    const payload = selectedFrameId === row.id && frame.data && !frame.data.close ? frame.data : null;
+    const isText = payload?.opcode === "text";
+    const bytes = payload === null ? "" : isText ? payload.text : payload.hex;
+    const label = `ws frame #${row.id} ${row.direction === "client_to_server" ? "sent" : "recv"}`;
+    return [
+      {
+        id: "payload",
+        title: payload ? (isText ? "Text payload" : "Hex payload") : "Select this frame to act on its payload",
+        actions:
+          payload === null
+            ? []
+            : [
+                {
+                  id: "copy-payload",
+                  label: isText ? "Copy payload text" : "Copy payload as hex",
+                  icon: Copy,
+                  onSelect: () => {
+                    void copyToClipboard(bytes);
+                    toast.success("Payload copied");
+                  },
+                },
+                {
+                  id: "decoder",
+                  label: "Send payload to Decoder",
+                  icon: FileOutput,
+                  onSelect: () => {
+                    setDecoderSeed({ label, input: bytes });
+                    setRoute("decoder");
+                  },
+                },
+                {
+                  id: "compare-a",
+                  label: "Send payload to Comparer (A)",
+                  icon: Combine,
+                  onSelect: () => {
+                    setComparerSlot("a", bytes);
+                    setRoute("comparer");
+                  },
+                },
+                {
+                  id: "compare-b",
+                  label: "Send payload to Comparer (B)",
+                  icon: ArrowRightLeft,
+                  onSelect: () => {
+                    setComparerSlot("b", bytes);
+                    setRoute("comparer");
+                  },
+                },
+                {
+                  id: "save",
+                  label: "Save payload to file",
+                  icon: FileCode2,
+                  onSelect: () => downloadText(`ws-message-${row.id}.${isText ? "txt" : "hex"}`, bytes),
+                },
+              ],
+      },
+      {
+        id: "frame",
+        actions: [
+          {
+            id: "copy-id",
+            label: `Copy frame id (#${row.id})`,
+            icon: Copy,
+            onSelect: () => void copyToClipboard(String(row.id)),
+          },
+          {
+            id: "copy-summary",
+            label: "Copy frame summary",
+            icon: Copy,
+            onSelect: () => {
+              void copyToClipboard(
+                `#${row.id} ${row.direction} ${row.opcode} ${row.len}B ${new Date(row.at_ms).toISOString()}`,
+              );
+              toast.success("Frame summary copied");
+            },
+          },
+          ...(selectedExchange === null
+            ? []
+            : [
+                {
+                  id: "show-history",
+                  label: `Show connection exchange #${selectedExchange} in HTTP history`,
+                  icon: ExternalLink,
+                  onSelect: () => {
+                    focusExchange(selectedExchange);
+                    setRoute("history");
+                  },
+                },
+              ]),
+        ],
+      },
+    ];
+  };
 
   const menuFor = (conn: WsConnection): MenuGroup[] => {
     // A full Exchange (method, protocol, request/response ids) is only in hand for whichever
@@ -246,6 +367,7 @@ export function WebSocketPage(): JSX.Element {
             getRowId={(row) => String(row.id)}
             selectedId={selectedFrameId === null ? null : String(selectedFrameId)}
             onSelect={(row) => setSelectedFrameId(row.id)}
+            menuGroups={menuForFrame}
             rowClassName={(row) => (row.truncated ? "row-flag-warn" : undefined)}
             loading={history.isFetching && !history.data}
             empty={
@@ -299,6 +421,7 @@ export function WebSocketPage(): JSX.Element {
                       readOnly
                       value={handshakeRequest.data?.text ?? ""}
                       filename={`ws-handshake-${selectedConn.exchange}-request.txt`}
+                      menuGroups={exchangeDetail.data ? actions.menu(exchangeDetail.data) : undefined}
                       placeholder={handshakeRequest.isLoading ? "Loading handshake…" : "No request bytes captured."}
                     />
                     <HttpEditor
@@ -307,6 +430,7 @@ export function WebSocketPage(): JSX.Element {
                       readOnly
                       value={handshakeResponse.data?.text ?? ""}
                       filename={`ws-handshake-${selectedConn.exchange}-response.txt`}
+                      menuGroups={exchangeDetail.data ? actions.menu(exchangeDetail.data) : undefined}
                       placeholder={
                         selectedConn.exchange === null || handshakeResponse.data === undefined
                           ? handshakeResponse.isLoading

@@ -7,7 +7,9 @@ import {
   FileOutput,
   FolderTree,
   Globe,
+  Highlighter,
   Link2,
+  MessageSquarePlus,
   NotebookPen,
   Radar,
   Repeat2,
@@ -17,9 +19,13 @@ import {
   Waypoints,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useHotkeys } from "react-hotkeys-hook";
 import { api, copyToClipboard, json } from "./api";
+import { useAnnotateExchange } from "./data";
+import { useChord } from "./keymap";
 import { useApp } from "./store";
-import type { Exchange, MessageView } from "./types";
+import { HIGHLIGHTS, type Exchange, type MessageView } from "./types";
+import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
 import type { MenuGroup } from "../ui/menu";
 
 /**
@@ -154,6 +160,8 @@ export function useExchangeActions(): {
   changeRequestMethod: (exchange: Exchange) => Promise<void>;
   changeBodyEncoding: (exchange: Exchange) => Promise<void>;
   crawlFrom: (exchange: Exchange, scope: "branch" | "host") => Promise<void>;
+  setHighlight: (exchange: Exchange, colour: string) => void;
+  addComment: (exchange: Exchange) => void;
   menu: (exchange: Exchange, extra?: MenuGroup[]) => MenuGroup[];
 } {
   const openRepeaterTab = useApp((state) => state.openRepeaterTab);
@@ -162,6 +170,7 @@ export function useExchangeActions(): {
   const setComparerSlot = useApp((state) => state.setComparerSlot);
   const setHistoryQuery = useApp((state) => state.setHistoryQuery);
   const setDecoderSeed = useApp((state) => state.setDecoderSeed);
+  const annotate = useAnnotateExchange();
 
   const sendToRepeater = async (exchange: Exchange) => {
     try {
@@ -359,6 +368,49 @@ export function useExchangeActions(): {
     }
   };
 
+  /**
+   * Burp's "Highlight". `""` is the wire's "no highlight", which is why the picker's `none`
+   * sentinel is translated here rather than stored — see the `highlight` field's own comment in
+   * types.ts. Fired straight at the mutation with no confirmation: it is one PATCH, it is visible
+   * in the row the instant it lands, and setting it again to a different colour is the undo.
+   */
+  const setHighlight = (exchange: Exchange, colour: string) => {
+    annotate.mutate(
+      { id: exchange.id, highlight: colour },
+      {
+        onError: (error) =>
+          toast.error(`Could not highlight #${exchange.id}: ${error instanceof Error ? error.message : String(error)}`),
+      },
+    );
+  };
+
+  /**
+   * Burp's "Add comment", seeded with whatever note the row already carries so the menu entry
+   * edits rather than replaces.
+   *
+   * `window.prompt` rather than a modal: the menu factory is a plain function called on every
+   * right-click from six different pages, and a dialog would mean every one of those pages
+   * owning open/target/draft state for a single-line string. The trade is real and is why the
+   * detail pane's textarea stays — that is where a multi-line note belongs. Cancel returns null
+   * and is left alone; clearing the box to empty is a deliberate "remove the note" and is sent
+   * as null, which is what the PATCH endpoint takes for "unset".
+   */
+  const addComment = (exchange: Exchange) => {
+    const existing = exchange.notes ?? "";
+    const next = window.prompt(`Comment on exchange #${exchange.id}`, existing);
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (trimmed === existing) return;
+    annotate.mutate(
+      { id: exchange.id, notes: trimmed === "" ? null : trimmed },
+      {
+        onSuccess: () => toast.success(trimmed === "" ? `Comment cleared on #${exchange.id}` : `Comment saved on #${exchange.id}`),
+        onError: (error) =>
+          toast.error(`Could not save the comment: ${error instanceof Error ? error.message : String(error)}`),
+      },
+    );
+  };
+
   const menu = (exchange: Exchange, extra: MenuGroup[] = []): MenuGroup[] => [
     {
       id: "send",
@@ -386,6 +438,43 @@ export function useExchangeActions(): {
         { id: "curl", label: "Copy as curl", icon: Terminal, onSelect: () => void copyCurl(exchange) },
         { id: "id", label: `Copy exchange id (#${exchange.id})`, icon: Copy, onSelect: () => void copyToClipboard(String(exchange.id)) },
         { id: "to-file", label: "Copy request to file", icon: FileCode2, onSelect: () => void copyRequestToFile(exchange) },
+      ],
+    },
+    {
+      // Burp's universal annotate pair, on the selection rather than in a detail pane: annotate
+      // then filter by annotation is a first-class triage loop, and `highlight` and `notes` are
+      // both queryable DSL fields, so a row that cannot be marked cannot be found again.
+      id: "annotate",
+      actions: [
+        {
+          id: "highlight",
+          label: "Highlight",
+          icon: Highlighter,
+          // A submenu, as Burp's colour picker is. The current colour is disabled rather than
+          // hidden: an operator looking for "which one is set" should find it in the list.
+          submenu: [
+            {
+              id: "colours",
+              actions: HIGHLIGHTS.map((name) => {
+                const wire = name === "none" ? "" : name;
+                return {
+                  id: name,
+                  label: name === "none" ? "Clear highlight" : name.charAt(0).toUpperCase() + name.slice(1),
+                  icon: HIGHLIGHT_ICONS[name],
+                  disabled: (exchange.highlight ?? "") === wire,
+                  onSelect: () => setHighlight(exchange, wire),
+                };
+              }),
+            },
+          ],
+          onSelect: () => {},
+        },
+        {
+          id: "comment",
+          label: exchange.notes ? "Edit comment" : "Add comment",
+          icon: MessageSquarePlus,
+          onSelect: () => addComment(exchange),
+        },
       ],
     },
     {
@@ -429,6 +518,66 @@ export function useExchangeActions(): {
     changeRequestMethod,
     changeBodyEncoding,
     crawlFrom,
+    setHighlight,
+    addComment,
     menu,
   };
+}
+
+/**
+ * The row send-to chords, installed from the keymap registry.
+ *
+ * # Why this is a hook rather than three `useHotkeys` calls per page
+ *
+ * These were hardcoded literals in history.tsx, which made two separate defects. The chords in
+ * Settings -> Hotkeys are real, persisted, duplicate-checked state that nothing read, so
+ * rebinding Send to Repeater reported success and changed nothing; and the bindings existed only
+ * on that one page, so on Site map, Logger and WebSockets history ctrl+R reached the browser and
+ * reloaded the console — losing the operator's filter and selection to reach a page that has
+ * meant "send to Repeater" for a Burp user for twenty years. `send.organizer` was worse still:
+ * advertised in the shortcut modal and the Settings table, installed nowhere.
+ *
+ * One hook fixes all three at once, and — the point — makes it impossible to add a fourth row
+ * table that quietly omits them.
+ *
+ * `preventDefault` fires only when a row is actually in hand, matching what the page can honestly
+ * claim: with nothing selected there is no send to make, so the key is left to the browser rather
+ * than being swallowed into a no-op.
+ */
+export function useSendShortcuts(exchange: Exchange | null | undefined): void {
+  const actions = useExchangeActions();
+  const repeaterChord = useChord("send.repeater");
+  const intruderChord = useChord("send.intruder");
+  const organizerChord = useChord("send.organizer");
+
+  useHotkeys(
+    repeaterChord,
+    (event) => {
+      if (!exchange) return;
+      event.preventDefault();
+      void actions.sendToRepeater(exchange);
+    },
+    { enableOnFormTags: false },
+    [repeaterChord, exchange, actions],
+  );
+  useHotkeys(
+    intruderChord,
+    (event) => {
+      if (!exchange) return;
+      event.preventDefault();
+      actions.sendToIntruder(exchange);
+    },
+    { enableOnFormTags: false },
+    [intruderChord, exchange, actions],
+  );
+  useHotkeys(
+    organizerChord,
+    (event) => {
+      if (!exchange) return;
+      event.preventDefault();
+      void actions.addToOrganizer(exchange);
+    },
+    { enableOnFormTags: false },
+    [organizerChord, exchange, actions],
+  );
 }

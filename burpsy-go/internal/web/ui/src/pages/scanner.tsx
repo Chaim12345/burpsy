@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Download, ExternalLink, Globe, Play, ShieldAlert, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, Play, ShieldAlert, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
-import { formatDuration } from "../lib/api";
+import { copyToClipboard, formatDuration } from "../lib/api";
+import { useExchangeActions } from "../lib/actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import {
   useIssuesDetailed,
@@ -16,6 +17,7 @@ import type { AuditResult, FindingDetail } from "../lib/types.attack";
 import type { Occurrence } from "../lib/types";
 import { AdvisoryReader } from "../ui/advisory";
 import { HttpEditor } from "../ui/editor";
+import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { LoadingPanel, PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import {
   Badge,
@@ -273,6 +275,8 @@ export function ScannerPage(): JSX.Element {
   const runAudit = useRunAudit();
   const focusExchange = useApp((state) => state.focusExchange);
   const setRoute = useApp((state) => state.setRoute);
+  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
+  const actions = useExchangeActions();
 
   const [severity, setSeverity] = useState("all");
   const [confidence, setConfidence] = useState("all");
@@ -348,6 +352,107 @@ export function ScannerPage(): JSX.Element {
     );
   };
 
+  /**
+   * The issue-triage menu, on a tree leaf.
+   *
+   * # What is here and what Burp has that this cannot
+   *
+   * Burp's issue context menu carries Set severity, Set confidence, Report issue, Go to issue and
+   * Delete issue. Three of those five are not offered, and the reason is the same for all three:
+   * `/api/issues` is registered GET-only (internal/web/server.go:727) — there is no PATCH to move a
+   * severity or a confidence onto a finding, and no DELETE to remove one. A menu entry that opened
+   * a picker and then dropped the choice on the floor would be the exact defect this audit is
+   * about, so they are absent rather than decorative. Tracked on burpsy-react-ui-3fr.
+   *
+   * What is here: Burp's "Go to issue" (both directions — the finding's exchange in HTTP history,
+   * and the host filtered in history), its "Report issue" as the three report exports the command
+   * palette already offers, the copies an operator writing a ticket needs, and — when the
+   * finding's exchange is inside the loaded window — the full cross-tool matrix on that exchange,
+   * because retesting a finding means sending its request to Repeater.
+   *
+   * The exchange is resolved per leaf rather than reused from the selection: right-clicking a leaf
+   * that is not selected must act on the leaf under the pointer.
+   */
+  const menuForLeaf = (leaf: IssueLeaf): MenuGroup[] => {
+    const finding = leaf.finding;
+    const exchangeId = leaf.occurrence?.exchange_id;
+    const leafExchange = exchangeId === undefined ? null : ((history ?? []).find((ex) => ex.id === exchangeId) ?? null);
+    const groups: MenuGroup[] = [
+      {
+        id: "goto",
+        actions: [
+          ...(exchangeId === undefined
+            ? []
+            : [
+                {
+                  id: "goto-exchange",
+                  label: `Show exchange #${exchangeId} in HTTP history`,
+                  icon: ExternalLink,
+                  onSelect: () => {
+                    focusExchange(exchangeId);
+                    setRoute("history");
+                  },
+                },
+              ]),
+          {
+            id: "goto-host",
+            label: `Filter history by ${finding.host}`,
+            icon: Globe,
+            onSelect: () => {
+              setHistoryQuery(`host = ${finding.host}`);
+              setRoute("history");
+            },
+          },
+        ],
+      },
+      {
+        id: "copy",
+        actions: [
+          {
+            id: "copy-name",
+            label: "Copy issue name",
+            icon: Copy,
+            onSelect: () => {
+              void copyToClipboard(findingName(finding));
+              toast.success("Issue name copied");
+            },
+          },
+          {
+            id: "copy-location",
+            label: "Copy issue location",
+            icon: Copy,
+            onSelect: () => {
+              void copyToClipboard(`${findingName(finding)} — ${finding.host}${leaf.occurrence?.path ?? ""}`);
+              toast.success("Issue location copied");
+            },
+          },
+          {
+            id: "copy-detail",
+            label: "Copy issue detail",
+            icon: Copy,
+            disabled: !finding.detail,
+            onSelect: () => {
+              void copyToClipboard(finding.detail ?? "");
+              toast.success("Issue detail copied");
+            },
+          },
+        ],
+      },
+      {
+        id: "report",
+        title: "Report",
+        actions: [
+          // The whole-scan exports, not a per-issue one: /api/report/{fmt} reports the scan, and
+          // there is no per-finding report endpoint to point a single-issue entry at.
+          { id: "html", label: "Export scan report (HTML)", icon: FileDown, onSelect: () => window.open("/api/report/html", "_blank") },
+          { id: "json", label: "Export scan report (JSON)", icon: FileDown, onSelect: () => window.open("/api/report/json", "_blank") },
+          { id: "sarif", label: "Export scan report (SARIF)", icon: FileDown, onSelect: () => window.open("/api/report/sarif", "_blank") },
+        ],
+      },
+    ];
+    return leafExchange ? [...groups, ...actions.menu(leafExchange)] : groups;
+  };
+
   const treePane = (
     <div className="pane">
       <Toolbar className="pane-toolbar">
@@ -421,8 +526,8 @@ export function ScannerPage(): JSX.Element {
                           </div>
                           {pathOpen
                             ? path.leaves.map((leaf) => (
+                                <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)}>
                                 <div
-                                  key={leaf.key}
                                   role="treeitem"
                                   aria-level={3}
                                   aria-selected={leaf.key === selectedKey}
@@ -456,6 +561,7 @@ export function ScannerPage(): JSX.Element {
                                     <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
                                   </span>
                                 </div>
+                                </ContextMenu>
                               ))
                             : null}
                         </div>
@@ -587,6 +693,7 @@ export function ScannerPage(): JSX.Element {
               readOnly
               value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
               filename={`finding-${selected.finding.id}-request.txt`}
+              menuGroups={actions.menu(exchange)}
             />
           )}
         </TabsContent>
@@ -608,6 +715,7 @@ export function ScannerPage(): JSX.Element {
                   : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
               }
               filename={`finding-${selected.finding.id}-response.txt`}
+              menuGroups={actions.menu(exchange)}
             />
           )}
         </TabsContent>

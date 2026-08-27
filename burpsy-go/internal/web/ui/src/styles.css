@@ -1377,6 +1377,39 @@ tbody td {
   color: var(--accent-contrast);
 }
 
+/* A submenu trigger carries one more cell than a plain item — the chevron that says it
+ * opens rather than acts. Declared as its own column instead of absolutely positioning the
+ * chevron, so a long label still ellipses against it rather than running underneath it. */
+.menu-item-sub {
+  grid-template-columns: 18px minmax(0, 1fr) auto 14px;
+}
+
+.menu-item-chevron {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.menu-item[data-highlighted] .menu-item-chevron {
+  color: inherit;
+}
+
+/* The colour chip standing in for a MenuAction icon in the Highlight submenu. Sized to the
+ * icon cell so it lines up with the lucide glyphs on every sibling row. "None" is an
+ * outlined transparent circle, matching the detail pane's own picker rather than inventing a
+ * second visual language for the same choice. */
+.menu-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%; /* token-exempt: a swatch is a circle, which is %-radius, not a --radius-* step */
+  background: var(--swatch-color, transparent);
+}
+
+.menu-swatch-none {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+}
+
 .menu-separator {
   height: 1px;
   background: var(--line);

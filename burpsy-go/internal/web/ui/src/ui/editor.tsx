@@ -2,8 +2,8 @@ import { EditorView, Decoration, ViewPlugin, type DecorationSet, type ViewUpdate
 import { openSearchPanel } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
-import { Copy, Download, WrapText } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Copy, Download, MoreHorizontal, Search, WrapText } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
 import { byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
@@ -17,6 +17,7 @@ import {
 } from "../lib/transforms";
 import { cn } from "../lib/cn";
 import { HexEditor } from "./hex-editor";
+import { ContextMenu, DropdownMenu, hasMenuActions, type MenuGroup } from "./menu";
 import { IconButton } from "./primitives";
 import { GraphQLView, JwtView, ParamsView } from "./typed-views";
 
@@ -215,6 +216,7 @@ export function HttpEditor({
   placeholder,
   className,
   views = true,
+  menuGroups,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -227,9 +229,23 @@ export function HttpEditor({
   className?: string;
   /** Set false for non-HTTP payloads (a WebSocket frame, a token blob). */
   views?: boolean;
+  /**
+   * The message's own cross-tool actions — normally `useExchangeActions().menu(exchange)`.
+   *
+   * Burp's message editor carries the same menu as the table row above it, reachable both by
+   * right-clicking the message and from an Actions button, and reading a response then sending
+   * it straight to Repeater is the highest-frequency gesture in the tool. Omit this for an
+   * editor with no exchange behind it (the Decoder's pane, a token blob) — the selection codecs
+   * below are offered either way, because those act on the text and need nothing else.
+   */
+  menuGroups?: MenuGroup[];
 }): JSX.Element {
   const [wrap, setWrap] = useState(true);
   const [view, setView] = useState<MessageView>("raw");
+  // Whether the codec entries can act. Tracked as state rather than read off the view when the
+  // menu is built: `groups` is evaluated at render time, so a selection made after that render
+  // would leave every codec row enabled and doing nothing, or disabled and refusing to.
+  const [hasSelection, setHasSelection] = useState(false);
 
   const editable = !readOnly && Boolean(onChange);
   const extensions = useMemo<Extension[]>(() => {
@@ -240,7 +256,16 @@ export function HttpEditor({
     // used nowhere else for accessibility) actually becomes the textbox's accessible name. Found by
     // the e2e a11y suite's first real run: every route with an HttpEditor failed "aria-label attribute
     // does not exist" on this element, because every route has at least one.
-    const base: Extension[] = [httpHighlight, burpEditorKeys, EditorView.contentAttributes.of({ "aria-label": label })];
+    const base: Extension[] = [
+      httpHighlight,
+      burpEditorKeys,
+      EditorView.contentAttributes.of({ "aria-label": label }),
+      // Keeps the codec menu entries honest about whether they have anything to act on.
+      EditorView.updateListener.of((update) => {
+        if (!update.selectionSet && !update.docChanged) return;
+        setHasSelection(update.state.selection.ranges.some((range) => !range.empty));
+      }),
+    ];
     if (wrap) base.push(EditorView.lineWrapping);
     return base;
   }, [wrap, label]);
@@ -299,6 +324,70 @@ export function HttpEditor({
     setReveal(null);
   }, [reveal, active, cmEpoch]);
 
+  /**
+   * Burp's "Convert selection", as menu entries rather than keystrokes alone.
+   *
+   * The chords in burpEditorKeys above are the same six transforms, and they were the only way
+   * to reach them: a codec an operator has to already know about is a codec most operators never
+   * find. These run the identical `transformSelection` path, so the menu and the keyboard cannot
+   * diverge, and each row shows its own chord so the menu also teaches them.
+   *
+   * Offered only on the Raw view, which is the only view CodeMirror owns and the only one whose
+   * bytes are the message's real bytes — converting a selection of a reformatted body would write
+   * the reformatting back into the request.
+   */
+  const runTransform = useCallback((transform: (input: string) => string) => {
+    const cm = cmViewRef.current;
+    if (cm) transformSelection(cm, transform);
+  }, []);
+
+  const selectionGroups = useMemo<MenuGroup[]>(() => {
+    if (active !== "raw") return [];
+    const codec = (id: string, label: string, shortcut: string, transform: (input: string) => string) => ({
+      id,
+      label,
+      shortcut,
+      disabled: !hasSelection,
+      onSelect: () => runTransform(transform),
+    });
+    return [
+      {
+        id: "convert-selection",
+        title: hasSelection ? "Convert selection" : "Convert selection (select text first)",
+        actions: [
+          codec("url-encode", "URL-encode", "Ctrl+U", urlEncodeKeyChars),
+          codec("url-decode", "URL-decode", "Ctrl+Shift+U", urlDecode),
+          codec("html-encode", "HTML-encode", "Ctrl+H", htmlEncodeKeyChars),
+          codec("html-decode", "HTML-decode", "Ctrl+Shift+H", htmlDecode),
+          codec("b64-encode", "Base64-encode", "Ctrl+B", base64Encode),
+          codec("b64-decode", "Base64-decode", "Ctrl+Shift+B", base64Decode),
+        ],
+      },
+      {
+        id: "editor-find",
+        actions: [
+          {
+            id: "find",
+            label: "Find in this message",
+            icon: Search,
+            shortcut: "Ctrl+S",
+            onSelect: () => {
+              const cm = cmViewRef.current;
+              if (!cm) return;
+              openSearchPanel(cm);
+              cm.focus();
+            },
+          },
+        ],
+      },
+    ];
+  }, [active, hasSelection, runTransform]);
+
+  const allGroups = useMemo<MenuGroup[]>(
+    () => [...(menuGroups ?? []), ...selectionGroups],
+    [menuGroups, selectionGroups],
+  );
+
   return (
     <div className={cn("editor-shell", className)}>
       <div className="editor-bar">
@@ -322,6 +411,30 @@ export function HttpEditor({
         <span className="editor-meta">{formatBytes(bytes)}</span>
         <div className="editor-bar-actions">
           {actions}
+          {/* Burp's Actions button: the same menu the right-click opens, for an operator who has
+              not learned that the message pane has one. Hidden rather than disabled when there is
+              nothing in it — an editor with no exchange behind it and no Raw view (a close frame,
+              a rendered response) genuinely has no actions, and a dead button says otherwise. */}
+          {hasMenuActions(allGroups) ? (
+            <DropdownMenu
+              groups={allGroups}
+              trigger={
+                // A plain button, not IconButton: IconButton wraps its <button> in a Tooltip,
+                // which is a second Radix `asChild` layer, and stacking two of them on one node
+                // means two sets of merged handlers on the same element. app.tsx's menu bar uses
+                // a bare button as its trigger for the same reason. `title` carries the hover
+                // text the Tooltip would have.
+                <button
+                  type="button"
+                  className="icon-button icon-button-sm"
+                  aria-label={`Actions for ${label}`}
+                  title={`Actions for ${label}`}
+                >
+                  <MoreHorizontal size={13} />
+                </button>
+              }
+            />
+          ) : null}
           {/* Wrapping is a CodeMirror setting, so the toggle is offered only on the two
               views CodeMirror renders. It used to be hidden for Render alone, which left
               a dead control on Hex. */}
@@ -343,6 +456,11 @@ export function HttpEditor({
           </IconButton>
         </div>
       </div>
+      {/* The right-click surface is the message body, not the whole shell: the toolbar's own
+          controls keep the browser's menu, and the Render view keeps it too — that iframe is
+          sandboxed attacker-controlled HTML, and putting a Radix trigger over it would replace
+          the browser's own "open image in new tab" affordances on rendered content for no gain. */}
+      <ContextMenu groups={active === "render" ? [] : allGroups}>
       <div className="editor-body" style={{ height }}>
         {active === "render" ? (
           // No scripts, no same-origin, no forms: a captured response is attacker
@@ -412,6 +530,7 @@ export function HttpEditor({
           />
         )}
       </div>
+      </ContextMenu>
       {editable && active !== "raw" && active !== "hex" ? (
         <div className="editor-note">Editing happens on the Raw and Hex views, which are the exact bytes.</div>
       ) : null}

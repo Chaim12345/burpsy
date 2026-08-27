@@ -447,6 +447,34 @@ function TableRow<T>({
   return <ContextMenu groups={menuGroups(row.original)}>{element}</ContextMenu>;
 }
 
+/**
+ * A `SimpleTable` row with a right-click menu.
+ *
+ * # Why this is a component and not a `menuGroups` prop on SimpleTable
+ *
+ * `SimpleTable` takes its rows as `children`, so it never sees a row object to hand to a menu
+ * factory — the page builds the `<tr>`s itself. That leaves two options, and one of them is a
+ * trap: wrapping the page's `<tr>` in a `<ContextMenu>` inside the `.map()` callback moves the
+ * React key onto a child of the mapped element, which leaves the list keyless. That was tried
+ * here and reverted.
+ *
+ * This is the other option. `MenuRow` *is* the mapped element, so the key goes on it, and the
+ * `<tr>` it renders is the Radix trigger via `asChild` — no wrapper element, so the table markup
+ * stays valid. Every prop other than `groups` is forwarded to the `<tr>`, so a page converts a
+ * row by renaming the tag and adding one prop.
+ */
+export function MenuRow({
+  groups,
+  children,
+  ...rowProps
+}: { groups: MenuGroup[]; children: ReactNode } & React.HTMLAttributes<HTMLTableRowElement>): JSX.Element {
+  return (
+    <ContextMenu groups={groups}>
+      <tr {...rowProps}>{children}</tr>
+    </ContextMenu>
+  );
+}
+
 /** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */
 export function SimpleTable({
   headers,
