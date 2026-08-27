@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   assignmentAt,
+  attackProgress,
   customIteratorSize,
   customIteratorSlots,
   dateSetSize,
@@ -8,6 +9,7 @@ import {
   planSetLengths,
   quoteRegex,
   resolvePayloads,
+  type AttackReport,
   type SetSize,
 } from "./types.tools";
 
@@ -218,6 +220,60 @@ describe("estimateRequests", () => {
 // Both grep fields are compiled with regexp.Compile on the server (buildGrep, api_tools.go:736) but
 // were labelled and placeheld as literal strings (burpsy-react-ui-tpy). Simple-string mode quotes
 // the literal here, so the operator's `root:` is sent as a pattern that matches `root:`.
+
+// ---- a stopped attack must not report a complete answer ---------------------------------------
+//
+// An intruder task is cancellable from the Dashboard (api_tools.go:711 registers the cancel), so a
+// stopped report is reachable today with no Intruder UI involved. The report panel used `planned` as
+// its denominator and read "Sent 12 of 400 planned" — asserting the target was asked 400 times and
+// answered 12, when it was asked 12. Filed against burpsy-react-ui-wub.
+
+describe("attackProgress", () => {
+  const report = (over: Partial<AttackReport>): AttackReport =>
+    ({ planned: 400, sent: 12, ...over }) as AttackReport;
+
+  test("a completed attack is described by its plan", () => {
+    expect(attackProgress(report({ status: "completed", enumerated: 400 }))).toEqual({
+      stopped: false,
+      paused: false,
+      reached: 400,
+    });
+  });
+
+  test("a stopped attack is described by what it reached, not what it planned", () => {
+    expect(attackProgress(report({ status: "stopped", enumerated: 12 }))).toEqual({
+      stopped: true,
+      paused: false,
+      reached: 12,
+    });
+  });
+
+  test("a paused attack counts as stopped for reporting, and says which it is", () => {
+    // Its counts describe a prefix exactly as a stopped one's do; the wording differs, the maths
+    // does not.
+    expect(attackProgress(report({ status: "paused", enumerated: 12 }))).toEqual({
+      stopped: true,
+      paused: true,
+      reached: 12,
+    });
+  });
+
+  test("an older server that sends neither field reads as completed over its plan", () => {
+    // Sound only because no server that omits these fields could stop an attack. A future field
+    // that changes that must not reuse the absence.
+    expect(attackProgress(report({}))).toEqual({ stopped: false, paused: false, reached: 400 });
+  });
+
+  test("enumerated is used even when status is absent", () => {
+    expect(attackProgress(report({ enumerated: 12 })).reached).toBe(12);
+  });
+
+  test("enumerated of zero is a real count, not a missing one", () => {
+    // `?? planned` rather than `|| planned` for exactly this: an attack stopped before it reached
+    // any plan position reached none, and 400 would be a fabrication.
+    expect(attackProgress(report({ status: "stopped", enumerated: 0 })).reached).toBe(0);
+  });
+});
 
 describe("quoteRegex", () => {
   test("escapes exactly the bytes regexp.QuoteMeta escapes", () => {

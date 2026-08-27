@@ -105,6 +105,9 @@ export interface Attempt {
   grep_extract: string | null;
 }
 
+/** How an attack ended. "paused" only appears on a report built from a still-live attack. */
+export type AttackStatus = "completed" | "stopped" | "paused";
+
 export interface AttackReport {
   kind: AttackMode;
   combinations: number;
@@ -112,6 +115,22 @@ export interface AttackReport {
   max_requests: number;
   truncated: boolean;
   planned: number;
+  /**
+   * How the attack ended, and why.
+   *
+   * Optional because an older server does not send them, and the difference matters too much to
+   * paper over with a default that reads as "completed": an attack stopped at request 12 of 200,000
+   * and an attack whose target refused 199,988 requests both report sent=12, and the second is a
+   * finding about the target while the first is a fact about the operator's own button.
+   */
+  status?: AttackStatus;
+  stop_reason?: string;
+  /**
+   * Plan positions the driver actually reached — the honest denominator for a stopped attack, where
+   * `planned` is not. Equals `planned` on a completed one. Sent + failed can be smaller still,
+   * because a stop lets in-flight sends land.
+   */
+  enumerated?: number;
   sent: number;
   failed: number;
   elapsed_ms: number;
@@ -147,6 +166,27 @@ export interface PayloadSourceCustomIterator { type: "custom_iterator"; position
 export interface PayloadSourceDates { type: "dates"; from: string; to: string; step: number; format: string }
 export interface PayloadSourceNull { type: "null"; count: number }
 export type PayloadSource = PayloadSourceList | PayloadSourceNumbers | PayloadSourceFile | PayloadSourceBruteForce | PayloadSourceCustomIterator | PayloadSourceDates | PayloadSourceNull;
+
+/**
+ * What a report's counts actually describe.
+ *
+ * A stopped attack describes a *prefix* of its payload sets, so `planned` is the wrong denominator:
+ * "Sent 12 of 400 planned" asserts the target was asked 400 times and answered 12, when it was
+ * asked 12. `reached` is the count the results are a prefix of.
+ *
+ * An older server sends neither `status` nor `enumerated`. Absent is read as completed, and
+ * `reached` falls back to `planned` — sound only because no server that omits these fields could
+ * stop an attack, so completed is what it always was. A future field that changes that must not
+ * reuse the absence.
+ */
+export function attackProgress(report: AttackReport): { stopped: boolean; paused: boolean; reached: number } {
+  const paused = report.status === "paused";
+  return {
+    stopped: report.status === "stopped" || paused,
+    paused,
+    reached: report.enumerated ?? report.planned,
+  };
+}
 
 /**
  * A payload set's size, or `null` when the browser genuinely cannot know it.

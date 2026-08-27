@@ -18,6 +18,7 @@ import {
   PAYLOAD_LAYERS,
   PAYLOAD_RULES,
   assignmentAt,
+  attackProgress,
   customIteratorSize,
   customIteratorSlots,
   dateSetSize,
@@ -303,7 +304,25 @@ function AttackResult({
       return resolvePayloads(slots, known);
     };
   }, [examples, report.kind, report.planned, sets, snapshot]);
+  /**
+   * A stopped attack describes a *prefix* of its payload sets, and the denominator has to say so.
+   *
+   * An intruder task is cancellable from the Dashboard (api_tools.go:711 registers the cancel;
+   * dashboard.tsx offers Cancel on any cancellable running task), so this is reachable today. With
+   * `planned` as the denominator the panel read "Sent 12 of 400 planned" — asserting the target was
+   * asked 400 times and answered 12, when it was asked 12. `enumerated` is how many plan positions
+   * were actually reached, which is the count the results are a prefix of.
+   *
+   * The absent-field fallback lives in attackProgress, where it is pinned by test.
+   */
+  const { stopped, paused, reached } = attackProgress(report);
+
   const caveats = [
+    stopped
+      ? `Attack ${paused ? "paused" : "stopped"} after ${formatCount(reached)} of ${formatCount(
+          report.planned,
+        )} planned requests${report.stop_reason ? ` — ${report.stop_reason}` : ""}. Everything below describes that prefix of the payload sets, not the whole attack.`
+      : null,
     report.truncated ? `Capped at ${formatCount(report.max_requests)} requests` : null,
     !report.combinations_exact ? "Combination count is a floor, not an exact total" : null,
     report.buckets_truncated ? "Result buckets were truncated" : null,
@@ -318,10 +337,14 @@ function AttackResult({
         <Badge tone="neutral" className="sr-only">
           report
         </Badge>
-        <div className="card metric metric-accent">
+        <div className={stopped ? "card metric metric-accent row-flag-bad" : "card metric metric-accent"}>
           <span>Sent</span>
           <strong>{formatCount(report.sent)}</strong>
-          <small>of {formatCount(report.planned)} planned</small>
+          <small>
+            {stopped
+              ? `of ${formatCount(reached)} reached · plan was ${formatCount(report.planned)}`
+              : `of ${formatCount(report.planned)} planned`}
+          </small>
         </div>
         <div className="card metric">
           <span>Combinations</span>
