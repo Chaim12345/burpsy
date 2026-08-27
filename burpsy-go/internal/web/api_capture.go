@@ -743,7 +743,8 @@ func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if len(s.caCertPEM) == 0 {
+	pemBytes := s.currentCACertPEM()
+	if len(pemBytes) == 0 {
 		http.Error(w, "TLS interception is not enabled, so there is no CA to trust; start with -intercept-tls", http.StatusNotFound)
 		return
 	}
@@ -751,12 +752,12 @@ func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 	// for the download the UI link triggers.
 	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
 	w.Header().Set("Content-Disposition", `attachment; filename="burpsy-ca.crt"`)
-	w.Header().Set("Content-Length", strconv.Itoa(len(s.caCertPEM)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(pemBytes)))
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if _, err := w.Write(s.caCertPEM); err != nil {
+	if _, err := w.Write(pemBytes); err != nil {
 		s.logger.Warn("failed to write CA certificate", zap.Error(err))
 	}
 }

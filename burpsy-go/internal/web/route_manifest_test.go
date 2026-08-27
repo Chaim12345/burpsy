@@ -395,6 +395,24 @@ var manifest = map[string]route{
 		summary: "per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded",
 	},
 
+	"/api/proxy/ca": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "which CA is signing intercepted TLS right now: subject and expiry, never the key",
+	},
+	"/api/proxy/ca/import": {
+		// riskCredential. The other classes are all worse fits: nothing is sent (not riskEgress or
+		// riskAttack), and calling it riskLocal would put "replace the trust anchor this proxy signs
+		// every intercepted site with" in the same class as a table-density preference.
+		//
+		// It belongs with the cookie jar and the client certificates because it *takes* a long-lived
+		// private key over HTTP. The consequence is unusual for this manifest: a successful call
+		// invalidates every trust-store install the operator has already done, because the previous CA
+		// stops signing and every cached leaf is discarded. An unattended caller must not be able to
+		// do that without asking, and an operator who is asked will understand why.
+		methods: []string{"POST"}, risk: riskCredential,
+		summary: "import an operator-supplied CA certificate and private key, replacing the signing CA " +
+			"and clearing the leaf cache; refuses the whole pair if it is not a usable CA",
+	},
 	"/api/proxy/options": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters",
@@ -866,9 +884,14 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// Sorted, like the manifest itself, because two branches each appended their own routes to
 	// this list and the merge produced two declarations of it — a set this test compares by
 	// joined string cannot afford an arbitrary order.
+	// /api/proxy/ca/import joins because it accepts a CA private key. It is the only entry here whose
+	// credential is a *signing* one rather than an authenticating one, and the only route in the whole
+	// manifest whose success invalidates work the operator has already done outside burpsy: the
+	// previous CA stops signing, so every trust store they installed it into has to be updated.
 	wantCredential := []string{
 		"/api/blindxss",
 		"/api/network/auth", "/api/network/client-certs",
+		"/api/proxy/ca/import",
 		"/api/session/cookies", "/api/session/login", "/api/session/rules", "/api/session/rules/",
 	}
 	equal := func(name string, got, want []string) {

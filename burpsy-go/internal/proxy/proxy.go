@@ -389,6 +389,103 @@ func loadCA(certData, keyData []byte) (*TlsEngine, error) {
 	}, nil
 }
 
+// ImportCA replaces the signing CA at runtime, so an operator can supply their own
+// pair without restarting — Burp's `configPanelCustomCACertificates`.
+//
+// Before this existed the capability was real and filesystem-only: LoadOrGenerateCA
+// reads ca.crt/ca.key from -ca-dir at startup, so using your own CA meant stopping
+// burpsy, placing two files, and starting again — losing the captured traffic. The
+// UI's certificate section could only *download* the generated CA.
+//
+// # The cache is the whole difficulty
+//
+// certPool holds one leaf per host, each signed by the CA being replaced. Clients
+// are about to be told to trust the *new* CA, so every cached leaf becomes a
+// certificate they will reject — and because the cache is checked before anything
+// else, they would keep being served indefinitely. Handshakes would fail with a
+// trust error that looks like a misconfigured trust store, on hosts that worked a
+// moment ago, and the operator would go looking in their browser.
+//
+// So the pool is emptied under the same lock that swaps the CA. Signing waits on
+// that lock, so no leaf can be minted against a half-swapped pair.
+//
+// One race is deliberately left: GetCertificate's fast path reads the pool without
+// the lock, so a handshake already past that read may still present a leaf signed
+// by the old CA. It cannot be prevented from here — that connection's certificate
+// was chosen before the import — and it resolves itself on the next handshake.
+// Recorded rather than papered over.
+//
+// # Validation happens before anything is touched
+//
+// loadCA parses and runs validateCA against a fresh TlsEngine with no side effects,
+// so a bad pair — not a CA, wrong key, expired — leaves the running CA and the
+// cache exactly as they were. Importing a certificate that cannot sign would
+// otherwise take TLS interception down completely, which is a worse outcome than
+// refusing.
+//
+// Persisting to -ca-dir is the caller's job, not this method's: the engine does not
+// know where it was loaded from, and a write failure must not leave the process
+// signing with a CA that will not survive a restart without somebody being told.
+func (e *TlsEngine) ImportCA(certPEM, keyPEM []byte) error {
+	loaded, err := loadCA(certPEM, keyPEM)
+	if err != nil {
+		return err
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.caCert = loaded.caCert
+	e.caPriv = loaded.caPriv
+	// Every cached leaf was signed by the CA just replaced. See above.
+	e.certPool.Range(func(key, _ any) bool {
+		e.certPool.Delete(key)
+		return true
+	})
+	return nil
+}
+
+// CertPEM returns the current CA certificate as PEM.
+//
+// Read under the lock because ImportCA can replace it mid-flight, and because the
+// one caller that matters is the endpoint serving /ca.crt: an operator who imports
+// a CA and then downloads the certificate to install must receive the CA now in
+// use, not the one this process started with. Serving the stale one would have them
+// trust a CA that signs nothing.
+func (e *TlsEngine) CertPEM() []byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.caCert == nil {
+		return nil
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.caCert.Raw})
+}
+
+// CADescription reports who the current CA is and how long it lasts, for a UI that
+// has to show which CA is in force after an import. Returns the subject common
+// name, the NotAfter, and whether there is a CA at all.
+func (e *TlsEngine) CADescription() (subject string, notAfter time.Time, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.caCert == nil {
+		return "", time.Time{}, false
+	}
+	// A CA with no common name is legal, and a CA with a *wholly* empty subject is
+	// legal too — self-signed CAs built by hand often have one. Both fallbacks are
+	// needed: Subject.String() is itself "" for an empty RDN sequence, so the first
+	// fallback alone still rendered a CA with no identity at all. Caught by
+	// TestCADescriptionFallsBackWhenThereIsNoCommonName, which is why the serial is
+	// the last resort — it is the one field a certificate must have, so the operator
+	// can always tell two CAs apart even when neither is named.
+	name := e.caCert.Subject.CommonName
+	if name == "" {
+		name = e.caCert.Subject.String()
+	}
+	if name == "" {
+		name = fmt.Sprintf("(unnamed CA, serial %s)", e.caCert.SerialNumber)
+	}
+	return name, e.caCert.NotAfter, true
+}
+
 // parseCAKey accepts both PKCS#1 and PKCS#8 encodings, so a CA persisted by any
 // Go version or external tool is loadable.
 func parseCAKey(der []byte) (*rsa.PrivateKey, error) {

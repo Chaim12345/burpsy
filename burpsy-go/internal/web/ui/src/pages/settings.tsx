@@ -24,7 +24,7 @@ import {
   useRemoveNetworkProxyRule,
   useSaveNetworkProxy,
 } from "../lib/data.network";
-import { useCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
+import { useCaCert, useCaStatus, useImportCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useApp, type Density, type Theme } from "../lib/store";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
@@ -1333,6 +1333,103 @@ function AppearanceSection(): JSX.Element {
   );
 }
 
+/**
+ * Burp's `configPanelCustomCACertificates`. Until this existed the capability was real and
+ * filesystem-only — `-ca-dir` at startup — so bringing your own CA cost a restart and every
+ * exchange captured so far.
+ *
+ * Two textareas rather than a file picker: the operator almost always has these as PEM text
+ * already, and a paste target works identically over an SSH-forwarded console where a file picker
+ * would be reaching into the wrong machine's filesystem.
+ */
+function CaImportSection(): JSX.Element {
+  const status = useCaStatus();
+  const importCa = useImportCaCert();
+  const [certPem, setCertPem] = useState("");
+  const [keyPem, setKeyPem] = useState("");
+
+  const s = status.data;
+  const ready = certPem.trim() !== "" && keyPem.trim() !== "" && !importCa.isPending;
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Use your own CA"
+        detail={
+          s?.configured
+            ? `Signing as ${s.subject}${s.not_after ? ` · expires ${new Date(s.not_after).toLocaleDateString()}` : ""}`
+            : (s?.hint ?? "No signing CA.")
+        }
+        actions={
+          <RefreshButton onClick={() => void status.refetch()} loading={status.isFetching} label="Re-check" />
+        }
+      />
+      <div className="form-grid" style={{ marginTop: 8 }}>
+        <label htmlFor="ca-cert-pem">Certificate (PEM)</label>
+        <Textarea
+          id="ca-cert-pem"
+          aria-label="CA certificate in PEM format"
+          rows={5}
+          spellCheck={false}
+          placeholder="-----BEGIN CERTIFICATE-----"
+          value={certPem}
+          onChange={(e) => setCertPem(e.target.value)}
+        />
+        <label htmlFor="ca-key-pem">Private key (PEM)</label>
+        <Textarea
+          id="ca-key-pem"
+          aria-label="CA private key in PEM format"
+          rows={5}
+          spellCheck={false}
+          placeholder="-----BEGIN PRIVATE KEY----- (PKCS#1 or PKCS#8)"
+          value={keyPem}
+          onChange={(e) => setKeyPem(e.target.value)}
+        />
+      </div>
+      <Toolbar>
+        <Button
+          size="small"
+          disabled={!ready}
+          onClick={() =>
+            importCa.mutate(
+              { cert_pem: certPem.trim() + "\n", key_pem: keyPem.trim() + "\n" },
+              {
+                onSuccess: (next) => {
+                  // Clear the key from the form as soon as the server has it. It is still in the
+                  // browser's memory until this component unmounts, which is not something a text
+                  // field can fix, but leaving it on screen after it has served its purpose is
+                  // avoidable and so it is avoided.
+                  setKeyPem("");
+                  setCertPem("");
+                  toast.success(
+                    next.persisted
+                      ? `Now signing as ${next.subject}. Re-download the certificate and trust it.`
+                      : `Now signing as ${next.subject}, for this run only — it was not saved: ${next.persist_error}`,
+                  );
+                },
+                onError: (failure: unknown) =>
+                  toast.error(failure instanceof Error ? failure.message : "CA import refused"),
+              },
+            )
+          }
+        >
+          {importCa.isPending ? "Importing…" : "Import CA"}
+        </Button>
+        {s?.configured && !s.persisted && s.persist_error ? (
+          <Badge tone="warn">not saved to disk</Badge>
+        ) : null}
+      </Toolbar>
+      <p className="field-hint">
+        The pair is validated before anything is replaced, so a certificate that is not a CA, a key
+        that does not match it, or an expired pair is refused and the current CA keeps signing.
+        On success every previously issued per-host certificate is discarded and{" "}
+        <strong>every client trusting the old CA must be given the new one</strong> — the previous
+        certificate signs nothing from that moment.
+      </p>
+    </Card>
+  );
+}
+
 function CertificateSection(): JSX.Element {
   const { data, error, isFetching, refetch } = useCaCert();
 
@@ -1702,6 +1799,7 @@ export function SettingsPage(): JSX.Element {
       <AppearanceSection />
       <HotkeysSection />
       <CertificateSection />
+      <CaImportSection />
       <DiagnosticsSection />
     </div>
   );

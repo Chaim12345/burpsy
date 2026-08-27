@@ -117,6 +117,14 @@ type Server struct {
 	// be told to trust it. Nil when interception is off, and then the route reports that rather than
 	// serving an empty file — see handleCACert.
 	caCertPEM []byte
+	// tlsEngine is the live signing engine, when TLS interception is on. Held so the CA can be
+	// replaced at runtime (POST /api/proxy/ca) and so /ca.crt serves whichever CA is in force
+	// rather than the bytes this process started with — an operator who imports a CA and then
+	// downloads the certificate must receive the one that is actually signing.
+	tlsEngine *proxy.TlsEngine
+	// caDir is where an imported CA is persisted, so it survives a restart. Empty means the
+	// import endpoint installs the CA for this process only and says so.
+	caDir string
 	// captures holds sequencer capture runs, built on first use by captureSet(). Lazy rather than in
 	// NewServer because a session that never runs a capture should not allocate the table, and because
 	// every existing test constructs a Server directly — see api_sequencer_capture.go.
@@ -358,6 +366,29 @@ func (s *Server) WithLiveAudit(la *LiveAuditState) *Server {
 // Passed in rather than read from disk here: the web server has no business knowing where the CA
 // directory is, and the process that generated or loaded the CA already holds the bytes. Nil or empty
 // leaves the route reporting that interception is off, which is what the UI's CA link keys off.
+// WithTLSEngine supplies the live signing engine and the directory an imported CA is written to.
+//
+// Separate from WithCACertPEM because the two answer different questions: that one supplies bytes to
+// serve, this one supplies the thing that can be *changed*. A Server without an engine still serves
+// /ca.crt from the PEM it was given and refuses imports, which is the correct behaviour when TLS
+// interception is off.
+func (s *Server) WithTLSEngine(engine *proxy.TlsEngine, caDir string) *Server {
+	s.tlsEngine = engine
+	s.caDir = caDir
+	return s
+}
+
+// currentCACertPEM is the CA to serve at /ca.crt: the engine's, when there is one, because it may
+// have been replaced since startup. Falls back to the PEM passed at construction.
+func (s *Server) currentCACertPEM() []byte {
+	if s.tlsEngine != nil {
+		if live := s.tlsEngine.CertPEM(); len(live) > 0 {
+			return live
+		}
+	}
+	return s.caCertPEM
+}
+
 func (s *Server) WithCACertPEM(pem []byte) *Server {
 	s.caCertPEM = pem
 	s.tlsInterception = pem != nil
@@ -673,6 +704,10 @@ func (s *Server) setupRoutes() {
 	// Not under /api: a browser is told to fetch this by URL, and the UI links to it as a download.
 	// Matches the Rust route (crates/web/src/lib.rs) so the shipped frontend's CA link works unchanged.
 	s.mux.HandleFunc("/ca.crt", s.handleCACert)
+	// The operator's own CA — W6 #10. GET reports which CA signs; the import replaces it and empties
+	// the leaf cache. See api_ca.go.
+	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
+	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
 	s.mux.HandleFunc("/api/scope", s.handleScope)
 	s.mux.HandleFunc("/api/scanner/config", s.handleScannerConfig)
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)

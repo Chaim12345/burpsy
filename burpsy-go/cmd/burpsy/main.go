@@ -212,26 +212,33 @@ func main() {
 		scope.AddExclude(*scopeExclude)
 	}
 
-	// Create TLS policy
-	tlsPolicy := proxy.NewTlsPolicy()
+	// The CA is loaded once, into one engine, and that engine is shared by the proxy and the web
+	// server. Both properties are load-bearing.
+	//
+	// It used to be loaded twice: once here, and again inside the -passthrough-defaults branch below,
+	// which replaced tlsPolicy wholesale and had to re-attach an engine. That produced two distinct
+	// TlsEngine values from the same files, and the second load swallowed its error where the first
+	// treats one as fatal — so with -passthrough-defaults set, an unreadable CA meant interception
+	// silently disabled instead of a refusal to boot.
+	//
+	// It also has to be a single instance now that the CA can be imported at runtime: an import
+	// replaces the CA and empties the leaf cache on the engine it is called on, so a second engine
+	// would keep signing with the old CA and serving cached leaves nobody trusts any more.
+	var tlsEngine *proxy.TlsEngine
 	if *interceptTLS {
-		// Load or generate CA
-		engine, err := proxy.LoadOrGenerateCA(*caDir)
+		var err error
+		tlsEngine, err = proxy.LoadOrGenerateCA(*caDir)
 		if err != nil {
 			log.Fatalf("Failed to load/generate CA: %v", err)
 		}
-		tlsPolicy.WithEngine(engine)
 	}
 
-	// TLS passthrough defaults
+	tlsPolicy := proxy.NewTlsPolicy()
 	if *passthroughDefaults {
 		tlsPolicy = proxy.NewTlsPolicy().WithCommonDefaults()
-		// Re-apply engine if interceptTLS is also set
-		if *interceptTLS {
-			if engine, err := proxy.LoadOrGenerateCA(*caDir); err == nil {
-				tlsPolicy.WithEngine(engine)
-			}
-		}
+	}
+	if tlsEngine != nil {
+		tlsPolicy.WithEngine(tlsEngine)
 	}
 
 	// Add passthrough patterns
@@ -584,6 +591,10 @@ func main() {
 		// for a client that already trusts the CA, and the operator gets told why the download is
 		// missing instead of the link silently staying hidden.
 		WithCACertPEM(readCACert(*interceptTLS, *caDir, logger)).
+		// The same engine the proxy signs with, so an imported CA takes effect on live traffic and
+		// /ca.crt serves whichever CA is in force. nil when -intercept-tls is off, which is what
+		// makes the import endpoint refuse rather than store a setting nothing reads.
+		WithTLSEngine(tlsEngine, *caDir).
 		WithBindAddrs(*proxyBind, *webBind).
 		WithDOMEngine(*domEngine).
 		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually

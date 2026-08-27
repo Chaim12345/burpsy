@@ -21,6 +21,7 @@ import type {
 export const policyKeys = {
   eventStats: ["events", "stats"] as const,
   caCert: ["ca-cert"] as const,
+  caStatus: ["ca-status"] as const,
   passthrough: ["tls-passthrough"] as const,
 };
 
@@ -74,6 +75,45 @@ export function useCaCert(): UseQueryResult<CaCertState> {
             ? "TLS interception is not enabled, so there is no CA to trust. Start burpsy with -intercept-tls."
             : `The proxy answered ${response.status} for /ca.crt.`,
       };
+    },
+  });
+}
+
+/** Which CA is signing intercepted TLS right now. Subject and expiry only — never the key. */
+export interface CaStatus {
+  configured: boolean;
+  subject?: string;
+  not_after?: string;
+  persisted: boolean;
+  persist_error?: string;
+  hint?: string;
+}
+
+export const useCaStatus = (): UseQueryResult<CaStatus> =>
+  useResource<CaStatus>(policyKeys.caStatus, "/api/proxy/ca");
+
+/**
+ * Import the operator's own CA — Burp's `configPanelCustomCACertificates`.
+ *
+ * Before this the capability was filesystem-only: `LoadOrGenerateCA` reads `ca.crt`/`ca.key` from
+ * `-ca-dir` at startup, so bringing your own CA meant stopping burpsy, placing two files and
+ * starting again — losing every exchange captured so far.
+ *
+ * The server validates the pair before replacing anything, so a refusal leaves the running CA
+ * signing exactly as it was; a certificate that could not sign would otherwise take HTTPS
+ * interception down completely. On success it also empties the per-host leaf cache, because every
+ * cached leaf was signed by the CA just replaced.
+ *
+ * Invalidates the `/ca.crt` probe as well as the status: the download link must now serve the new
+ * certificate, and an operator installing the old one would be trusting a CA that signs nothing.
+ */
+export function useImportCaCert() {
+  const client = useQueryClient();
+  return useMutation<CaStatus, Error, { cert_pem: string; key_pem: string }>({
+    mutationFn: (body) => api<CaStatus>("/api/proxy/ca/import", json("POST", body)),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: policyKeys.caStatus });
+      void client.invalidateQueries({ queryKey: policyKeys.caCert });
     },
   });
 }
