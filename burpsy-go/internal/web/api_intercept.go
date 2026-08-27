@@ -48,6 +48,10 @@ type heldView struct {
 	HeldMs    int64  `json:"held_ms"`
 	Len       int    `json:"len"`
 	Raw       string `json:"raw"`
+	// Opcode is the WebSocket frame type ("text", "binary", …) and is absent for
+	// HTTP. Sent because a held frame's payload alone does not say how to read it:
+	// an operator shown binary bytes with no marking will edit them as text.
+	Opcode string `json:"opcode,omitempty"`
 }
 
 type interceptStatusResp struct {
@@ -90,6 +94,7 @@ func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
 			HeldMs:    now.Sub(h.HeldAt).Milliseconds(),
 			Len:       len(h.Raw),
 			Raw:       string(h.Raw),
+			Opcode:    h.Opcode,
 		})
 	}
 
@@ -144,16 +149,39 @@ func (s *Server) handleInterceptDropAll(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]int{"dropped": dropped})
 }
 
-// directionFor maps the URL suffix (requests|responses) to a Direction.
+// interceptDirectionNames is the wire name for every intercept direction, and it
+// is the only place these strings are written down.
+//
+// It exists as one table because the names had been spelled out twice — here for
+// the URL suffix and again inside handleConfigExport's loop — and the two lists
+// were allowed to disagree. That is not hypothetical: the export loop covered
+// requests and responses only, so the moment a third direction became routable
+// an exported bundle would have carried none of its rules while the importer
+// happily accepted them. A donor's WebSocket rules would vanish in transit and
+// the round trip would still report success, which is the same defect shape as
+// the session_rules omitempty bug in api_config.go.
+//
+// Ordered rather than a map so export writes its keys deterministically; a
+// config file whose key order changes between two identical exports is
+// needlessly hard to diff.
+var interceptDirectionNames = []struct {
+	Name string
+	Dir  intercept.Direction
+}{
+	{"requests", intercept.DirectionRequest},
+	{"responses", intercept.DirectionResponse},
+	{"websocket_to_server", intercept.DirectionWebSocketToServer},
+	{"websocket_to_client", intercept.DirectionWebSocketToClient},
+}
+
+// directionFor maps a wire name to a Direction.
 func directionFor(s string) (intercept.Direction, bool) {
-	switch s {
-	case "requests":
-		return intercept.DirectionRequest, true
-	case "responses":
-		return intercept.DirectionResponse, true
-	default:
-		return intercept.DirectionRequest, false
+	for _, d := range interceptDirectionNames {
+		if d.Name == s {
+			return d.Dir, true
+		}
 	}
+	return intercept.DirectionRequest, false
 }
 
 func specToRules(specs []interceptRuleSpec) ([]intercept.Rule, error) {

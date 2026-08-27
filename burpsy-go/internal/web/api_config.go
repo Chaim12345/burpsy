@@ -158,9 +158,12 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 		pattern := rule.Pattern
 		bundle.Scope.Rules = append(bundle.Scope.Rules, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port})
 	}
-	for name, dir := range map[string]intercept.Direction{"requests": intercept.DirectionRequest, "responses": intercept.DirectionResponse} {
-		list := s.intercept.Rules(dir)
-		bundle.Intercept[name] = configRuleState{Active: list.Active, Rules: rulesToSpecs(list.Rules)}
+	// Every direction the importer accepts, from the one table in api_intercept.go.
+	// Previously a literal map naming two of them, which meant a direction added
+	// later was importable but never exported — see interceptDirectionNames.
+	for _, d := range interceptDirectionNames {
+		list := s.intercept.Rules(d.Dir)
+		bundle.Intercept[d.Name] = configRuleState{Active: list.Active, Rules: rulesToSpecs(list.Rules)}
 	}
 	for _, rule := range s.sessionCoordinator.AllRules() {
 		bundle.SessionRules = append(bundle.SessionRules, ruleToDto(rule))

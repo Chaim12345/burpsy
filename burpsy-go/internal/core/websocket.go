@@ -164,6 +164,66 @@ func WsUnmask(payload []byte, mask [4]byte, offset uint64) {
 	}
 }
 
+// EncodeWsFrame builds a single unfragmented frame carrying payload. It is the
+// inverse of ParseWsFrameHeader, and it exists for exactly one caller: the
+// interception path, which must put an operator-edited payload back on the wire.
+// Capture never encodes anything — it only ever reads — so until frames could be
+// held there was nothing in this package that needed to write one.
+//
+// mask nil sends the frame unmasked; non-nil masks the payload with it. That is
+// not a stylistic choice. RFC 6455 §5.1 requires every client-to-server frame to
+// be masked and forbids masking server-to-client frames, and a peer that
+// receives the wrong one is required to fail the connection. So the caller
+// passes the mask when it is relaying toward the server and nil when it is
+// relaying toward the client, and getting that backwards is a dropped
+// connection rather than a subtle corruption — which is the better failure of
+// the two, but it is still the caller's decision to make and not this
+// function's to guess.
+//
+// The mask is applied to a copy. Masking in place would be faster and would also
+// scribble over the operator's edited bytes, which the caller still holds and
+// which are recorded as evidence of what they sent.
+//
+// FIN is always set. The interception path only ever holds whole unfragmented
+// data frames — see wsHoldable in internal/proxy/ws.go for why fragmented and
+// compressed frames are relayed untouched instead — so a continuation frame is
+// never re-encoded and this function does not need to express one.
+func EncodeWsFrame(opcode WsOpcode, payload []byte, mask *[4]byte) []byte {
+	n := len(payload)
+	// 2 header bytes, up to 8 more for an extended length, 4 more for a mask.
+	out := make([]byte, 0, 2+8+4+n)
+
+	out = append(out, 0x80|byte(opcode&0x0f)) // FIN, no RSV: never compressed.
+
+	maskBit := byte(0)
+	if mask != nil {
+		maskBit = 0x80
+	}
+	switch {
+	case n < 126:
+		out = append(out, maskBit|byte(n))
+	case n <= 0xFFFF:
+		out = append(out, maskBit|126, byte(n>>8), byte(n))
+	default:
+		out = append(out, maskBit|127)
+		// 8-byte big-endian. The reserved high bit is necessarily clear: n came
+		// from len() on an in-memory slice, so it cannot reach 1<<63.
+		for shift := 56; shift >= 0; shift -= 8 {
+			out = append(out, byte(uint64(n)>>uint(shift)))
+		}
+	}
+
+	if mask == nil {
+		return append(out, payload...)
+	}
+	out = append(out, mask[:]...)
+	masked := make([]byte, n)
+	copy(masked, payload)
+	// Offset 0: this is a whole frame, so its mask starts at the key's first byte.
+	WsUnmask(masked, *mask, 0)
+	return append(out, masked...)
+}
+
 // WsEvent is one reassembled application message or control frame, ready to be
 // recorded. The payload is unmasked and truncated to the cap; the shortfall is
 // counted rather than hidden, because a 3 MiB message shown as 1 MiB with no

@@ -221,6 +221,13 @@ type Message struct {
 	Status      *int
 	ContentType string
 	Raw         []byte
+	// Opcode is the WebSocket frame opcode's name ("text", "binary", …) and is
+	// empty for HTTP, which has no equivalent. It is carried because "text" and
+	// "binary" are different editing contexts: an operator handed a binary frame
+	// with no marking will reasonably treat the payload as text, and an edit made
+	// on that assumption goes on the wire as a valid frame with a corrupted body.
+	// Burp labels the frame type for the same reason.
+	Opcode string
 }
 
 // FieldValue returns the message's value for a rule field, or "" when the
@@ -305,6 +312,8 @@ type Held struct {
 	Status    *int
 	Raw       []byte
 	HeldAt    time.Time
+	// Opcode mirrors Message.Opcode: the WebSocket frame type, empty for HTTP.
+	Opcode string
 
 	done     chan struct{}
 	mu       sync.Mutex
@@ -540,6 +549,7 @@ func (e *Engine) Hold(m *Message) *Held {
 		Method:    m.Method,
 		Path:      m.Path,
 		Status:    m.Status,
+		Opcode:    m.Opcode,
 		Raw:       append([]byte{}, m.Raw...),
 		HeldAt:    time.Now(),
 		done:      make(chan struct{}),
