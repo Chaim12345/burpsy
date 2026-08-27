@@ -38,14 +38,32 @@ export const workbenchKeys = {
  * an unknown layer is a visible error rather than a decode that never happened.
  * base64url uses the URL-safe alphabet here and on the encode side.
  */
-export const DECODE_LAYERS = ["url", "html", "base64", "base64url", "hex", "jwt", "ascii"] as const;
+/**
+ * The decode layers the console offers.
+ *
+ * gzip and deflate were absent while `internal/tools/codec.go` had `LayerGzip` and `LayerDeflate`
+ * and the handler already resolved the strings "gzip", "deflate" and "zlib" — so the capability
+ * shipped and no operator could reach it (burpsy-react-ui-37b). Burp's own Operations list names
+ * GZIP, and a compressed response is one of the commonest things to paste into a decoder.
+ *
+ * Keep this in step with AllLayers() in codec.go. `internal/web/toolkit_codec_honesty_test.go`
+ * already asserts against this array, which is why it lives here rather than in the page.
+ */
+export const DECODE_LAYERS = ["url", "html", "base64", "base64url", "hex", "gzip", "deflate", "jwt", "ascii"] as const;
 
 /**
  * Encodings `handleToolsEncode` implements, via the same codec table. Anything
  * else is a 400 naming the accepted set; there is no passthrough branch, so the
  * `encoding` echoed back always describes the bytes in `output`.
  */
-export const ENCODE_ENCODINGS = ["url", "html", "base64", "base64url", "hex", "ascii", "rot13"] as const;
+/**
+ * The encode directions the console offers.
+ *
+ * gzip and deflate are genuinely encodable — codec.go's Encode has `case LayerGzip` and
+ * `case LayerDeflate` — unlike LayerJWT, which is decode-only by construction and is therefore
+ * absent here on purpose.
+ */
+export const ENCODE_ENCODINGS = ["url", "html", "base64", "base64url", "hex", "gzip", "deflate", "ascii", "rot13"] as const;
 
 /** Weakest first. These four are the whole accepted set; anything else is a 400. */
 export const HASH_ALGORITHMS = ["md5", "sha1", "sha256", "sha512"] as const;
