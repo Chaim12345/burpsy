@@ -43,8 +43,9 @@ import (
 // scheduleKind values are the wire names of what can be started on a schedule. Constants rather than
 // bare strings so the registration and the UI's option list cannot disagree by a typo.
 const (
-	scheduleKindCrawl = "crawl"
-	scheduleKindAudit = "audit"
+	scheduleKindCrawl  = "crawl"
+	scheduleKindAudit  = "audit"
+	scheduleKindBackup = "backup"
 )
 
 // missedWindowPolicy is what happens to an occurrence whose window passed while nothing was running.
@@ -239,6 +240,24 @@ func (s *Server) registerScheduleKinds() {
 			return "", err
 		}
 		return fmt.Sprintf("crawl task %d from %s", taskID, strings.Join(seeds, ", ")), nil
+	})
+
+	// The project backup — Burp's configPanelAutomaticProjectBackup (W6 #2). Nothing in this build
+	// ever copied the project file: persistence existed, and an operator who lost the machine lost
+	// the engagement.
+	//
+	// A schedule rather than a write-triggered copy because Store.Backup is VACUUM INTO, which reads
+	// the whole database and writes a whole snapshot — O(size) in time and disk. Firing that per
+	// write would make the proxy slower the longer an engagement ran, which is the wrong shape of
+	// cost for a background safety net.
+	s.schedules.Register(scheduleKindBackup, func(ctx context.Context, sc schedule.Schedule) (string, error) {
+		var params backupParams
+		if len(sc.Params) > 0 {
+			if err := json.Unmarshal(sc.Params, &params); err != nil {
+				return "", fmt.Errorf("this schedule's params are not a backup request: %w", err)
+			}
+		}
+		return s.runProjectBackup(params)
 	})
 
 	s.schedules.Register(scheduleKindAudit, func(ctx context.Context, sc schedule.Schedule) (string, error) {

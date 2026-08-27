@@ -135,6 +135,23 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack, subPath: "0",
 		summary: "run an active audit over one captured exchange, by id (0 is valid — see HONEST-05)",
 	},
+	"/api/backup": {
+		// riskDestructive, not riskLocal, and the reasoning is worth stating because "take a backup"
+		// sounds like the safest call in the manifest.
+		//
+		// It writes a snapshot, and then it *prunes*: snapshots beyond the retention count are
+		// deleted. An unattended caller invoking this in a loop would therefore roll the entire
+		// retention window off the disk — every older snapshot gone, irreversibly — while each
+		// individual call reported success. That is the same shape as DELETE /api/tools/log, which is
+		// what this class was created for, and riskLocal is defined as writing burpsy's own state,
+		// which is exactly the wrong shape for it.
+		//
+		// Pruning only ever removes files matching the name pattern this feature writes, so an
+		// operator's own files in the same directory are never touched.
+		methods: []string{"POST"}, risk: riskDestructive,
+		summary: "snapshot the project database now via VACUUM INTO, then prune snapshots beyond the " +
+			"retention count; refuses with 503 when the instance has no -db",
+	},
 	"/api/blindxss": {
 		// riskCredential, not riskRead, and the classification is the interesting part. A blind-XSS
 		// callback carries `document.cookie` as the victim's browser saw it — a session token belonging
@@ -914,7 +931,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	equal("attack", attack, wantAttack)
 	equal("scope", scope, wantScope)
 	equal("credential", credential, wantCredential)
-	equal("destructive", destructive, []string{"/api/tools/log"})
+	// /api/backup joins the destructive class because it prunes: each call keeps only `retention`
+	// snapshots and deletes the rest, so a caller invoking it in a loop rolls the whole retention
+	// window off the disk irreversibly while every individual response reports success. Same shape as
+	// clearing the tool log, which is what this class was created for.
+	equal("destructive", destructive, []string{"/api/backup", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

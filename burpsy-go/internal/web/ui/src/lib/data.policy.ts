@@ -118,6 +118,37 @@ export function useImportCaCert() {
   });
 }
 
+/** What a project backup reports. Mirrors internal/web/api_backup.go's backupResult. */
+export interface BackupResult {
+  path: string;
+  bytes: number;
+  pruned: number;
+  kept: number;
+  /**
+   * A partial success — most often that the snapshot landed beside the live database, where a disk
+   * failure loses both. Surfaced rather than swallowed: a backup with a caveat is not a clean backup.
+   */
+  warning?: string;
+}
+
+/**
+ * Snapshot the project database now — Burp's `configPanelAutomaticProjectBackup` (W6 #2), which had
+ * no counterpart here: persistence existed and nothing ever copied it, so losing the machine lost
+ * the engagement.
+ *
+ * The snapshot is taken with SQLite's `VACUUM INTO`, not a file copy. This store runs in WAL mode, so
+ * the main database file alone is not a database anyone can open — a `cp`-style backup produces a
+ * file of plausible size that opens to a corrupt schema.
+ *
+ * Beware the retention parameter: snapshots beyond the count are deleted, oldest first. Pass -1 to
+ * keep everything.
+ */
+export function useBackupNow() {
+  return useMutation<BackupResult, Error, { dir?: string; retention?: number }>({
+    mutationFn: (body) => api<BackupResult>("/api/backup", json("POST", body)),
+  });
+}
+
 /* --- writes -------------------------------------------------------------- */
 
 function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {

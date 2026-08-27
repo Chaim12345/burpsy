@@ -24,7 +24,7 @@ import {
   useRemoveNetworkProxyRule,
   useSaveNetworkProxy,
 } from "../lib/data.network";
-import { useCaCert, useCaStatus, useImportCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
+import { useBackupNow, useCaCert, useCaStatus, useImportCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useUninterestingHeaders, useSetUninterestingHeaders } from "../lib/data.workbench";
 import { useApp, type Density, type Theme } from "../lib/store";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
@@ -1355,6 +1355,83 @@ function AppearanceSection(): JSX.Element {
  * counted*, never removed. A setting that quietly dropped differences from a security tool's
  * comparison would be a bad idea however convenient.
  */
+/**
+ * Burp's `configPanelAutomaticProjectBackup` (W6 #2). Nothing in this build ever copied the project
+ * file: persistence existed, so losing the machine lost the engagement.
+ *
+ * Two halves, and the scheduled one is the point. This card takes a snapshot now; the recurring
+ * backup is a schedule of kind "backup" in the Scheduled tasks section below, which reaches the same
+ * code — a scheduled backup and a clicked one are one path, so the scheduled one cannot be the
+ * version nobody watches.
+ */
+function ProjectBackupSection(): JSX.Element {
+  const backup = useBackupNow();
+  const [dir, setDir] = useState("");
+  const [retention, setRetention] = useState("7");
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Project backup"
+        detail="A consistent snapshot of the project database, taken with SQLite's own VACUUM INTO rather than a file copy."
+      />
+      <div className="form-grid">
+        <label htmlFor="backup-dir">Directory</label>
+        <Input
+          id="backup-dir"
+          aria-label="Backup directory"
+          placeholder="blank writes beside the live database — worst place if the disk is what fails"
+          value={dir}
+          onChange={(event) => setDir(event.target.value)}
+        />
+        <label htmlFor="backup-retention">Keep</label>
+        <Input
+          id="backup-retention"
+          aria-label="How many snapshots to keep"
+          type="number"
+          min={-1}
+          value={retention}
+          onChange={(event) => setRetention(event.target.value)}
+        />
+      </div>
+      <Toolbar>
+        <Button
+          size="small"
+          disabled={backup.isPending}
+          onClick={() =>
+            backup.mutate(
+              { dir: dir.trim() || undefined, retention: Number(retention) || undefined },
+              {
+                onSuccess: (result) =>
+                  // The warning is surfaced rather than swallowed: "backed up, but beside the live
+                  // database" and "backed up" are different outcomes.
+                  result.warning
+                    ? toast.warning(`Snapshot written to ${result.path} — ${result.warning}`)
+                    : toast.success(
+                        `Snapshot written to ${result.path}; kept ${result.kept}, pruned ${result.pruned}`,
+                      ),
+                onError: (failure: unknown) =>
+                  toast.error(failure instanceof Error ? failure.message : "Backup failed"),
+              },
+            )
+          }
+        >
+          {backup.isPending ? "Backing up…" : "Back up now"}
+        </Button>
+        <span style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
+          Keep <code>-1</code> to never prune. Snapshots beyond the count are deleted oldest-first,
+          and only files this feature wrote are ever touched.
+        </span>
+      </Toolbar>
+      <p className="field-hint">
+        For a recurring backup, add a scheduled task of kind <code>backup</code> below. A snapshot is a
+        whole copy of the project database, so it costs time and disk proportional to the project —
+        which is why it runs on a schedule rather than on every write.
+      </p>
+    </Card>
+  );
+}
+
 function UninterestingHeadersSection(): JSX.Element {
   const lists = useUninterestingHeaders();
   const save = useSetUninterestingHeaders();
@@ -1912,6 +1989,7 @@ export function SettingsPage(): JSX.Element {
       <CertificateSection />
       <CaImportSection />
       <UninterestingHeadersSection />
+      <ProjectBackupSection />
       <DiagnosticsSection />
     </div>
   );
@@ -2349,7 +2427,9 @@ function ScheduleDialog({
         hint={
           kind === "crawl"
             ? 'A crawl request, e.g. {"seeds":["https://target.test/"],"max_requests":500}'
-            : 'An audit request, e.g. {"exchange_id":12,"config":"thorough"}'
+            : kind === "backup"
+              ? 'A backup request, e.g. {"dir":"/mnt/backups","retention":7}. Blank writes beside the live database and keeps 7.'
+              : 'An audit request, e.g. {"exchange_id":12,"config":"thorough"}'
         }
       >
         {(id) => (

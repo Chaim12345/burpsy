@@ -38,6 +38,17 @@ import (
 type Store struct {
 	db     *sql.DB
 	logger *zap.Logger
+	// path is where this database lives, kept so a backup can name itself after it and so the
+	// backup endpoint can report which file it snapshotted. Open is the only writer.
+	path string
+}
+
+// Path is the database file this store was opened on.
+func (s *Store) Path() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
 }
 
 // Open opens (creating if necessary) the database at path and ensures the
@@ -60,12 +71,51 @@ func Open(path string, logger *zap.Logger) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("set busy_timeout: %w", err)
 	}
-	s := &Store{db: db, logger: logger}
+	s := &Store{db: db, logger: logger, path: path}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// Backup writes a consistent snapshot of the database to dest.
+//
+// # Why VACUUM INTO and not a file copy
+//
+// This store runs in WAL mode (see Open). A live WAL database is *two or three* files — the main
+// database, the -wal, and the -shm — and the main file alone is not a database anyone can open:
+// committed pages may exist only in the WAL. Copying it while the proxy is recording produces a
+// backup that is either stale, internally inconsistent, or torn mid-page, and the operator would not
+// discover which until they tried to restore it. Under a `cp`-style backup the failure mode is a
+// file that looks the right size and opens to a corrupt schema.
+//
+// VACUUM INTO takes SQLite's own read snapshot and writes a complete, defragmented, single-file
+// database — no WAL to carry alongside it, and consistent by construction. It is also the only
+// option here that needs no second connection and no driver-specific backup API, which matters
+// because modernc.org/sqlite is a translation of the C source rather than a binding and does not
+// expose the online-backup handle.
+//
+// The cost is real and worth stating: VACUUM INTO reads the whole database and writes the whole
+// snapshot, so it is O(size) in both time and disk. That is why the scheduled backup exists as a
+// schedule rather than as something that fires on every write.
+//
+// dest must not exist — SQLite refuses to overwrite, and that refusal is kept rather than worked
+// around, because silently replacing a previous backup is how an operator ends up with one copy
+// when they believed they had a series.
+func (s *Store) Backup(dest string) error {
+	if s == nil || s.db == nil {
+		return errors.New("no database is open, so there is nothing to back up")
+	}
+	if dest == "" {
+		return errors.New("backup destination is empty")
+	}
+	// The parameter is bound rather than interpolated. VACUUM INTO takes an expression, so a bound
+	// value works, and a path is operator input — it arrives from a schedule's params.
+	if _, err := s.db.Exec(`VACUUM INTO ?`, dest); err != nil {
+		return fmt.Errorf("backup to %s: %w", dest, err)
+	}
+	return nil
 }
 
 func (s *Store) migrate() error {

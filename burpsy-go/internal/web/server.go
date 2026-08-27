@@ -711,6 +711,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/ca.crt", s.handleCACert)
 	// The operator's own CA — W6 #10. GET reports which CA signs; the import replaces it and empties
 	// the leaf cache. See api_ca.go.
+	s.mux.HandleFunc("/api/backup", s.handleBackup)
 	s.mux.HandleFunc("/api/headers/uninteresting", s.handleUninterestingHeaders)
 	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
 	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
