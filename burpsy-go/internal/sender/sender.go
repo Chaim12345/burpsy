@@ -853,6 +853,9 @@ func (s *Sender) SendRawOutcome(
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
 	}
 	defer conn.Close()
+	// See cancel.go: without this, cancelling the context leaves the read blocked until the
+	// configured timeout, whatever the caller asked for.
+	defer watchCancel(ctx, conn)()
 	if plan.wantH2 {
 		// Learnt only when h2 was actually offered. A handshake that offered http/1.1 alone and got
 		// http/1.1 back is no evidence at all about whether the target speaks h2, and recording it as
@@ -988,6 +991,8 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 		return nil, fmt.Errorf("connection failed: %w", err)
 	}
 	defer conn.Close()
+	// Cancelling the context must unblock the read, not merely be noticed after it. See cancel.go.
+	defer watchCancel(ctx, conn)()
 	return s.writeHTTP1(ctx, conn, host, raw)
 }
 
@@ -1000,7 +1005,7 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 	settings := s.Network()
 	s.setDeadline(ctx, conn, host)
 	if _, err := conn.Write(raw); err != nil {
-		return nil, fmt.Errorf("write failed: %w", err)
+		return nil, fmt.Errorf("write failed: %w", explainCancellation(ctx, err))
 	}
 	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
 	// the response — see read.go.
@@ -1010,7 +1015,10 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 		settings.Streaming.isStreaming(host),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("read failed: %w", err)
+		// explainCancellation, because an unblocked read reports a deadline error: reporting a
+		// cancelled send as "read failed: i/o timeout" would blame the target for a decision the
+		// operator made. See cancel.go.
+		return nil, fmt.Errorf("read failed: %w", explainCancellation(ctx, err))
 	}
 	return response, nil
 }

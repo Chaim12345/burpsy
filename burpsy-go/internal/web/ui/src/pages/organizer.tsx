@@ -7,7 +7,6 @@ import { HIGHLIGHTS, HIGHLIGHT_TONE, type OrganizerEdit, type OrganizerItem } fr
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
-import { ContextMenu } from "../ui/menu";
 interface Draft {
  title: string;
  note: string;

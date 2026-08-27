@@ -3,7 +3,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Crosshair, Plus
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
-import { useRepeaterSend } from "../lib/data.tools";
+import { SendCancelled, useRepeaterSend } from "../lib/data.tools";
 import { useApp, type RepeaterTab } from "../lib/store";
 import type { Exchange, RepeaterRedirects, RepeaterResult, RepeaterSendOptions } from "../lib/types";
 import { HttpEditor } from "../ui/editor";
@@ -129,7 +129,17 @@ export function RepeaterPage(): JSX.Element {
           setViewing((current) => ({ ...current, [tab.id]: null }));
           toast.success(`${result.status} in ${formatDuration(result.duration_ms)}`);
         },
-        onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+        onError: (error) => {
+          // A cancellation is the operator getting what they asked for, so it is reported as
+          // information rather than as a failure. It still says the request may have reached the
+          // target: burpsy stopped waiting and told the sender to stop, but bytes already on the
+          // wire are gone, and pretending otherwise is the one thing this button must not do.
+          if (error instanceof SendCancelled) {
+            toast.info("Send cancelled — anything already written to the target was still sent");
+            return;
+          }
+          toast.error(error instanceof Error ? error.message : String(error));
+        },
       },
     );
   };
@@ -400,6 +410,18 @@ export function RepeaterPage(): JSX.Element {
                   Config{overrideCount ? ` (${overrideCount})` : ""}
                 </Button>
               </Tooltip>
+              {/* Burp pairs Send with Cancel because a request to a wedged host otherwise leaves the
+                  tab stuck with no way back except closing it. Shown only while a send is in flight:
+                  a Cancel that is always present but usually inert invites a click that does nothing
+                  and teaches the operator the control is unreliable. */}
+              {send.isPending ? (
+                <Tooltip content="Stop waiting and tell the sender to abandon this request">
+                  <button type="button" className="button button-outline" onClick={send.cancel}>
+                    <X size={14} />
+                    Cancel
+                  </button>
+                </Tooltip>
+              ) : null}
               <Tooltip content="Send the current request (mod+Enter)">
                 <button type="button" className="button button-primary" onClick={() => submit(active)} disabled={send.isPending}>
                   <Send size={14} />
@@ -505,7 +527,11 @@ export function RepeaterPage(): JSX.Element {
           </Button>
         </div>
 
-        {send.error ? <ErrorNotice error={send.error} onRetry={() => submit(active)} /> : null}
+        {/* A cancellation is excluded: it is not a failed request, and an error notice inviting a
+            retry would frame the operator's own decision as something that went wrong. */}
+        {send.error && !(send.error instanceof SendCancelled) ? (
+          <ErrorNotice error={send.error} onRetry={() => submit(active)} />
+        ) : null}
         {configOpen ? <SendOptionsPanel options={active.options} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} /> : null}
         {result?.redirects ? <RedirectChain chain={result.redirects} /> : null}
       </div>
@@ -521,7 +547,14 @@ export function RepeaterPage(): JSX.Element {
         <HttpEditor
           label="Response"
           readOnly
-          value={result?.response ?? (send.isPending ? "Waiting for the response…" : "Send the request to see the response bytes.")}
+          value={
+                result?.response ??
+                (send.isPending
+                  ? "Waiting for the response…"
+                  : send.error instanceof SendCancelled
+                    ? "Cancelled. No response arrived, and no exchange was recorded — but anything already written to the target was sent."
+                    : "Send the request to see the response bytes.")
+              }
           filename="repeater-response.txt"
         />
         {inspector ? (

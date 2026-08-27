@@ -193,6 +193,8 @@ func (a *AuthorisedSender) sendFrameProgram(
 		return res, err
 	}
 	defer conn.Close()
+	// See cancel.go.
+	defer watchCancel(ctx, conn)()
 	res.Negotiated = negotiated
 
 	res.Sent = program.Encode()

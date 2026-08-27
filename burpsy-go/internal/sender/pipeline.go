@@ -196,6 +196,9 @@ func (s *Sender) SendPipelined(ctx context.Context, host string, port uint16, us
 		return nil, err
 	}
 	defer conn.Close()
+	// See cancel.go. Installed per connection, not per request: the loops below re-arm the
+	// deadline each iteration, and one watcher per iteration would leave stale ones behind.
+	defer watchCancel(ctx, conn)()
 	// One deadline for the whole batch, set once, exactly like writeHTTP1 sets one for its single
 	// exchange: SendPipelined is one connection carrying one unit of work, and re-arming the deadline
 	// per read would let a large batch's total duration grow without the bound the caller asked for.
@@ -255,6 +258,9 @@ func (s *Sender) SendKeepAlive(ctx context.Context, host string, port uint16, us
 		return nil, err
 	}
 	defer conn.Close()
+	// See cancel.go. Installed per connection, not per request: the loops below re-arm the
+	// deadline each iteration, and one watcher per iteration would leave stale ones behind.
+	defer watchCancel(ctx, conn)()
 
 	br := bufio.NewReader(conn)
 	exchanges := make([]PipelinedExchange, len(raws))
@@ -293,6 +299,9 @@ func (s *Sender) TimedRead(ctx context.Context, host string, port uint16, useTLS
 		return nil, false, err
 	}
 	defer conn.Close()
+	// See cancel.go. Installed per connection, not per request: the loops below re-arm the
+	// deadline each iteration, and one watcher per iteration would leave stale ones behind.
+	defer watchCancel(ctx, conn)()
 
 	s.setDeadline(ctx, conn, host)
 	if _, err = conn.Write(raw); err != nil {
