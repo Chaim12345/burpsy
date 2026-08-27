@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,6 +41,11 @@ var controlBytesAllowed = map[byte]bool{'\t': true, '\n': true, '\r': true}
 func TestNoUISourceFileIsInvisibleToGrep(t *testing.T) {
 	// Walk the checked-in frontend source. dist/ is excluded: it is a build artifact, nobody greps
 	// it for intent, and esbuild may legitimately emit whatever it likes.
+	//
+	// Frontend only, and that is a real limit rather than an oversight — see
+	// TestNoTrackedTextFileIsInvisibleToGrep below, which covers the whole repository and is the one
+	// that would now catch a NUL in a document or a script. This test survives because it is cheap,
+	// runs without git, and names the directory the original defect lived in.
 	root := filepath.Join("ui", "src")
 	if _, err := os.Stat(root); err != nil {
 		t.Skipf("frontend source not present at %s: %v", root, err)
@@ -132,5 +138,74 @@ func TestTheInspectorRowFingerprintUsesEscapedDelimiters(t *testing.T) {
 		if !strings.Contains(fingerprint, want) {
 			t.Errorf("rowFingerprint no longer contains %s: %s", want, strings.TrimSpace(fingerprint))
 		}
+	}
+}
+
+// The same invariant over every tracked text file, not just the frontend.
+//
+// The narrower test above covers internal/web/ui/src, which is where the original NUL byte lived.
+// That is not the whole exposure: Go's toolchain rejects NUL in .go input outright, but nothing
+// stops one reaching a Markdown document, a JSON config or a shell script — and during the session
+// that fixed the original bug I re-introduced it into a parity document by pasting the raw bytes
+// into the retraction, which made that document invisible to grep in exactly the same way.
+//
+// Driven from `git ls-files` so it follows what is actually committed rather than a hard-coded list,
+// and skips cleanly when git is unavailable.
+func TestNoTrackedTextFileIsInvisibleToGrep(t *testing.T) {
+	// The repository root, from this package's directory.
+	root := filepath.Join("..", "..", "..")
+	cmd := exec.Command("git", "-C", root, "ls-files", "-z")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Skipf("git ls-files unavailable: %v", err)
+	}
+
+	textExt := map[string]bool{
+		".go": true, ".ts": true, ".tsx": true, ".js": true, ".jsx": true, ".css": true,
+		".md": true, ".json": true, ".yml": true, ".yaml": true, ".sh": true, ".html": true,
+		".toml": true, ".txt": true, ".sql": true,
+	}
+
+	var offenders []string
+	scanned := 0
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name == "" {
+			continue
+		}
+		if !textExt[strings.ToLower(filepath.Ext(name))] {
+			continue
+		}
+		// dist/ is generated; see the note in the test above.
+		if strings.Contains(name, "/dist/") {
+			continue
+		}
+		raw, readErr := os.ReadFile(filepath.Join(root, name))
+		if readErr != nil {
+			// A tracked file that is not on disk is a different problem and not this test's.
+			continue
+		}
+		scanned++
+		for i := 0; i < len(raw); i++ {
+			b := raw[i]
+			if (b < 0x20 && !controlBytesAllowed[b]) || b == 0x7f {
+				line := 1 + bytes.Count(raw[:i], []byte{'\n'})
+				offenders = append(offenders, fmt.Sprintf(
+					"%s:%d holds a raw control byte 0x%02x — grep reports zero matches in this whole "+
+						"file while exiting 0, so any search of it silently lies. Write it as an escape.",
+					name, line, b))
+				break
+			}
+		}
+	}
+
+	if scanned < 100 {
+		t.Fatalf("scanned only %d tracked text files, so this test proves little — the ls-files "+
+			"parse or the extension filter is wrong", scanned)
+	}
+	t.Logf("scanned %d tracked text files", scanned)
+
+	if len(offenders) > 0 {
+		t.Errorf("%d tracked file(s) are invisible to grep:\n  %s",
+			len(offenders), strings.Join(offenders, "\n  "))
 	}
 }

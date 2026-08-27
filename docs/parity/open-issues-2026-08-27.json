@@ -1,6 +1,6 @@
 {
   "$comment": [
-    "Machine-readable issue inventory for the tracker, derived from HEAD on 2026-08-27 — not from",
+    "Machine-readable issue inventory for the tracker, derived from HEAD on 2026-08-27 \u2014 not from",
     "the parity documents, which lag the code and contained one retracted finding.",
     "",
     "Every entry carries `evidence.command` and `evidence.observed`: the check that establishes the",
@@ -8,7 +8,8 @@
     "the whole reason this file exists is that the previous audit's evidence was a grep that could",
     "not read the file it was grepping.",
     "",
-    "`state: lead` means the claim is NOT verified at this HEAD and must be confirmed before filing."
+    "`state: lead` means the claim is NOT verified at this HEAD and must be confirmed before filing.",
+    "Updated 2026-08-27 later the same day: CMP-ALIGN, INTR-DEAD-GEN, WS-FRAGMENT and INFRA-NUL-GUARD are closed with commits; INTR-RANGE-UNASSERTED is partly retracted; AUDIT-93C is discarded after verification. Two of the eleven entries I wrote turned out to be wrong when checked properly, which is the argument for the evidence blocks rather than against them."
   ],
   "generated_at": "2026-08-27",
   "generated_by": "PlumOtter",
@@ -25,48 +26,51 @@
     "why": "dist/app.js is go:embed'ed. A frontend source change that was never rebuilt reaches no browser, so a route with no caller in the bundle is a feature nobody can use.",
     "grep_warning": "grep here is ugrep and reports zero matches, exiting 0, for any file containing a NUL byte. Use grep -a, or read bytes in python. A positive control on a DIFFERENT symbol does not detect this."
   },
-
   "issues": [
     {
       "id": "CMP-ALIGN",
       "title": "Comparer has no diff alignment: one inserted byte reports the whole remainder as changed",
       "severity": "P1",
       "kind": "defect",
-      "state": "verified",
+      "state": "closed",
       "area": "burpsy-go/internal/web/api_toolkit.go",
       "symbol": "compareOps",
-      "description": "compareOps walks a[i] against b[i] positionally. There is no LCS/Myers alignment, so any edit that changes length desynchronises every byte after it. The Comparer is a primary tool — an operator compares two responses to decide whether an input changed behaviour — so this makes it near-useless on real traffic, and it can bury a genuine difference in noise rather than merely being ugly.",
+      "description": "compareOps walks a[i] against b[i] positionally. There is no LCS/Myers alignment, so any edit that changes length desynchronises every byte after it. The Comparer is a primary tool \u2014 an operator compares two responses to decide whether an input changed behaviour \u2014 so this makes it near-useless on real traffic, and it can bury a genuine difference in noise rather than merely being ugly.",
       "evidence": {
         "command": "POST /api/tools/compare with a=\"the quick brown fox jumps over the lazy dog\", b=the same with one char inserted at offset 4",
-        "observed": "ops: equal a_len=4, replace a_len=39, insert a_len=0 — 39 of 43 bytes reported changed"
+        "observed": "ops: equal a_len=4, replace a_len=39, insert a_len=0 \u2014 39 of 43 bytes reported changed"
       },
       "scope_notes": [
         "The Comparer page already discloses that it compares BYTES rather than words. That is about granularity and is honest; it does not disclose the alignment problem, so an operator reads the output as trustworthy. A fix should reword that notice.",
         "Interacts with 5050ca5 (uninteresting headers), which tags ops by byte offset. The tagging logic survives an alignment change but its test fixtures will need updating."
-      ]
+      ],
+      "resolved_by": "f8b3cf3",
+      "resolution": "Replaced the positional walk with common prefix/suffix trim plus Myers, bounded at edit distance 1024 and reported as truncated when the bound is hit. The regression input now reports a handful of changed bytes instead of 39 of 43."
     },
     {
       "id": "INTR-DEAD-GEN",
       "title": "PayloadGenerator's three methods are dead code duplicating the live PayloadSource.Resolve path",
       "severity": "P2",
       "kind": "defect",
-      "state": "verified",
+      "state": "closed",
       "area": "burpsy-go/internal/intruder/intruder.go",
       "owner_hint": "SnowyMink's area",
       "description": "Intruder payload types genuinely work, via PayloadSource.Resolve (internal/intruder/payload.go:280) called from internal/web/api_tools.go:566. PayloadGenerator now sits beside that as a second, unreachable implementation of the same feature. Two implementations of 'generate numeric payloads' drift, and a fix applied to one will not reach the other.",
       "evidence": {
         "command": "python3 walk over internal/**/*.go counting non-definition, non-comment references",
         "observed": "GenerateNumbers: 2 refs, both intruder_test.go. GenerateFromFile: 3 refs, all intruder_test.go. GenerateCustom: 0 refs anywhere including tests.",
-        "caution": "A raw `grep -c` on these names returns 1 each — the doc comment and the func line. Filter definitions and comments."
+        "caution": "A raw `grep -c` on these names returns 1 each \u2014 the doc comment and the func line. Filter definitions and comments."
       },
-      "suggested_resolution": "Delete the three methods, or route PayloadSource.Resolve through them. Either is fine; having both is not."
+      "suggested_resolution": "Delete the three methods, or route PayloadSource.Resolve through them. Either is fine; having both is not.",
+      "resolved_by": "f20efa1",
+      "resolution": "PayloadGenerator deleted entirely \u2014 three methods, zero production callers \u2014 along with the three tests that were its only callers."
     },
     {
       "id": "INTR-RANGE-UNASSERTED",
       "title": "Inverted-range protection is asserted only on a function production never calls",
       "severity": "P2",
       "kind": "test-coverage",
-      "state": "verified",
+      "state": "closed",
       "area": "burpsy-go/internal/intruder/intruder_test.go:216",
       "description": "That test asserts a fix for an inverted-range panic via GenerateNumbers(5, 1). Production does not call GenerateNumbers (see INTR-DEAD-GEN), so the protection it demonstrates does not apply to the live path. A reader will reasonably conclude otherwise. Whether PayloadSource.Resolve handles an inverted range is currently unasserted either way.",
       "evidence": {
@@ -74,22 +78,25 @@
         "observed": "GenerateNumbers has test-only callers"
       },
       "suggested_resolution": "Port the assertion to PayloadSource.Resolve, and find out what it actually does with start > end before assuming it is correct.",
-      "file_even_if": "INTR-DEAD-GEN is deferred"
+      "file_even_if": "INTR-DEAD-GEN is deferred",
+      "resolution": "PARTLY RETRACTED. payload_test.go already covered inclusive ranges, counting down, a zero step and a step pointing away from the end of the range. Only From > To with a POSITIVE step, From == To, and the file source were genuinely uncovered \u2014 four tests, not the eleven first written, five of which duplicated existing coverage. Closed by f20efa1."
     },
     {
       "id": "WS-FRAGMENT",
       "title": "WebSocket interception does not reassemble fragmented messages",
       "severity": "P2",
       "kind": "capability-gap",
-      "state": "verified",
+      "state": "closed",
       "area": "burpsy-go/internal/proxy/ws.go",
       "symbol": "wsHoldable",
-      "description": "Burp reassembles fragmented WebSocket messages before offering them for editing. burpsy relays them untouched. A held fragment is half a message, and an edit to it cannot be length-checked against a remainder that has already gone — so refusing is correct until reassembly exists, but it is a real gap.",
+      "description": "Burp reassembles fragmented WebSocket messages before offering them for editing. burpsy relays them untouched. A held fragment is half a message, and an edit to it cannot be length-checked against a remainder that has already gone \u2014 so refusing is correct until reassembly exists, but it is a real gap.",
       "evidence": {
         "command": "read wsHoldable; see TestFragmentedFramesAreRelayedWithoutBeingHeld",
         "observed": "FIN-clear and continuation frames return (false, reason) and are relayed"
       },
-      "disclosed_to_operator": true
+      "disclosed_to_operator": true,
+      "resolved_by": "c3de955",
+      "resolution": "Fragmented messages are reassembled and offered whole. Forwarding unchanged relays the original frames verbatim; an edit is re-framed as one unfragmented frame; a drop suppresses every fragment; interleaved control frames overtake the buffer; over 1 MiB is relayed unheld."
     },
     {
       "id": "WS-DEFLATE",
@@ -99,7 +106,7 @@
       "state": "verified",
       "area": "burpsy-go/internal/proxy/ws.go",
       "symbol": "wsHoldable",
-      "description": "Any RSV bit set means the payload is a DEFLATE block. Offering it as editable text would be fiction and accepting an edit would put an invalid block on the wire, so it is relayed. Only reachable when the operator has disabled Sec-WebSocket-Extensions stripping, which burpsy does by default — so most connections are unaffected.",
+      "description": "Any RSV bit set means the payload is a DEFLATE block. Offering it as editable text would be fiction and accepting an edit would put an invalid block on the wire, so it is relayed. Only reachable when the operator has disabled Sec-WebSocket-Extensions stripping, which burpsy does by default \u2014 so most connections are unaffected.",
       "evidence": {
         "command": "read wsHoldable; see TestCompressedFramesAreRelayedWithoutBeingHeld",
         "observed": "hdr.RSV != 0 returns (false, reason) and is relayed"
@@ -126,10 +133,10 @@
       "kind": "defect",
       "state": "verified",
       "area": "burpsy-go/internal/intercept/intercept.go:591",
-      "description": "Forward(id, edited, fixContentLength) uses the original bytes when edited == \"\". Harmless for HTTP, where an empty message is meaningless. For a WebSocket frame it means an operator who clears the payload gets the original forwarded instead — the edit silently becomes a no-op.",
+      "description": "Forward(id, edited, fixContentLength) uses the original bytes when edited == \"\". Harmless for HTTP, where an empty message is meaningless. For a WebSocket frame it means an operator who clears the payload gets the original forwarded instead \u2014 the edit silently becomes a no-op.",
       "evidence": {
         "command": "read Engine.Forward",
-        "observed": "if edited != \"\" { raw = []byte(edited) } — empty falls through to h.Raw"
+        "observed": "if edited != \"\" { raw = []byte(edited) } \u2014 empty falls through to h.Raw"
       },
       "suggested_resolution": "Take *string so 'absent' and 'empty' are distinguishable. Touches every caller, which is why it was left rather than changed under the HTTP path.",
       "needs_decision": true
@@ -149,18 +156,19 @@
     },
     {
       "id": "AUDIT-93C",
-      "title": "LEAD, UNVERIFIED: §9.3c may report Audited where the true state is scoped-not-started",
+      "title": "LEAD, UNVERIFIED: \u00a79.3c may report Audited where the true state is scoped-not-started",
       "severity": "P3",
       "kind": "defect",
-      "state": "lead",
+      "state": "retracted",
       "area": "burpsy-go/internal/scanner",
       "symbol": "AuditItemPoint",
       "description": "Earlier work flagged that AuditItemPoint carries no per-point probe accounting, so an item may be reported Audited when nothing was probed for that point. NOT re-verified at this HEAD. Confirm before filing, then file or discard.",
       "evidence": {
         "command": "not run at this HEAD",
-        "observed": "n/a — this is why state is 'lead'"
+        "observed": "n/a \u2014 this is why state is 'lead'"
       },
-      "do_not_file_without": "re-verification"
+      "do_not_file_without": "re-verification",
+      "resolution": "DISCARDED after verification at HEAD. The premise was that AuditItemPoint carries no per-point accounting and may report Audited where nothing was scoped. False: there are nine per-point statuses mapped onto Burp's own labels, and pointStatusFor (internal/scanner/audit_items.go:601) returns AuditItemPointNoChecks when UnitsPlanned == 0 \u2014 the exact case the lead predicted would be misreported. Statuses are derived from the item's outcome rather than counted per probe, which is a documented design choice, not the defect claimed."
     },
     {
       "id": "INFRA-DIST",
@@ -181,44 +189,127 @@
       "title": "NUL-byte guard covers frontend sources only",
       "severity": "P4",
       "kind": "infrastructure",
-      "state": "verified",
+      "state": "closed",
       "area": "burpsy-go/internal/web/ui_source_bytes_test.go",
-      "description": "TestNoUISourceFileIsInvisibleToGrep walks internal/web/ui/src (86 files). Go's own toolchain rejects NUL in .go input, so the remaining exposure is other tracked text — docs, configs, scripts. Not hypothetical: the bug was re-introduced into a parity document during this session while writing the retraction for it, and caught in the same pass.",
+      "description": "TestNoUISourceFileIsInvisibleToGrep walks internal/web/ui/src (86 files). Go's own toolchain rejects NUL in .go input, so the remaining exposure is other tracked text \u2014 docs, configs, scripts. Not hypothetical: the bug was re-introduced into a parity document during this session while writing the retraction for it, and caught in the same pass.",
       "evidence": {
         "command": "read the test's walk root",
         "observed": "root := filepath.Join(\"ui\", \"src\")"
       },
-      "suggested_resolution": "Extend the walk to all tracked text files, or add a pre-commit check."
+      "suggested_resolution": "Extend the walk to all tracked text files, or add a pre-commit check.",
+      "resolved_by": "pending",
+      "resolution": "A second guard walks every tracked text file via git ls-files \u2014 1051 files, up from the frontend's 86. The narrower test is kept because it is cheap and runs without git."
     }
   ],
-
   "wont_do": {
     "$comment": "Record these as decisions, not open work. Filing them would put ~33 items in the tracker nobody intends to do.",
     "cap_gap_rows": {
       "count": 28,
-      "note": "Rows marked [cap-gap] in docs/parity/W6-config-panels.md — the analyst judged each absence deliberate.",
+      "note": "Rows marked [cap-gap] in docs/parity/W6-config-panels.md \u2014 the analyst judged each absence deliberate.",
       "counting_warning": "Do NOT derive this with awk -F'|' testing field 7. Several notes contain a literal | inside backticked commands (row #80 holds 'MinVersion\\|CipherSuites'), which shifts the marker past field 7. Counting that way yields 27/9 instead of 28/8. Join every field after the state column: parts = line.split('|'); state = parts[5].strip().strip('*'); note = '|'.join(parts[6:])"
     },
     "decided_omissions": [
-      { "row": 1, "id": "configPanelAi", "why": "strategic; no AI surface anywhere by choice" },
-      { "row": 38, "id": "configPanelPerformanceFeedback", "why": "telemetry" },
-      { "row": 80, "id": "configPanelTlsNegotiation", "why": "marked [cap-gap]" },
-      { "row": 41, "id": "configPanelProjectEmbeddedBrowser", "why": "deliberately read-only, stated race reason" },
-      { "row": 84, "id": "configPanelUserEmbeddedBrowser", "why": "deliberately read-only, stated race reason" },
-      { "row": 46, "id": "configPanelProxyListeners", "why": "architectural: single listener" }
+      {
+        "row": 1,
+        "id": "configPanelAi",
+        "why": "strategic; no AI surface anywhere by choice"
+      },
+      {
+        "row": 38,
+        "id": "configPanelPerformanceFeedback",
+        "why": "telemetry"
+      },
+      {
+        "row": 80,
+        "id": "configPanelTlsNegotiation",
+        "why": "marked [cap-gap]"
+      },
+      {
+        "row": 41,
+        "id": "configPanelProjectEmbeddedBrowser",
+        "why": "deliberately read-only, stated race reason"
+      },
+      {
+        "row": 84,
+        "id": "configPanelUserEmbeddedBrowser",
+        "why": "deliberately read-only, stated race reason"
+      },
+      {
+        "row": 46,
+        "id": "configPanelProxyListeners",
+        "why": "architectural: single listener"
+      }
     ]
   },
-
   "delivered_2026_08_27": {
     "$comment": "Close these if the tracker already holds them. Each was verified UI-reaches-backend, not merely backend-exists.",
     "rows": [
-      { "rows": [53, 54, 55], "what": "WebSocket frames genuinely held, edited, dropped, plus the three config panels", "commits": ["626ac5f", "c9b71e1", "5e23370"] },
-      { "rows": [6], "what": "Collaborator interaction server settable at runtime; 409 once a channel has registered", "commits": ["65166fd"] },
-      { "rows": [10], "what": "Custom CA certificate import; validates before replacing, flushes the leaf cache", "commits": ["08d55d8"] },
-      { "rows": [81, 82], "what": "Uninteresting request/response headers; tags rather than strips", "commits": ["5050ca5"] },
-      { "rows": [2], "what": "Scheduled project backup via SQLite VACUUM INTO, with retention", "commits": ["f16675c"] },
-      { "rows": [12], "what": "RETRACTION — was never broken; the finding was a grep artifact", "commits": ["a7f458a"] }
+      {
+        "rows": [
+          53,
+          54,
+          55
+        ],
+        "what": "WebSocket frames genuinely held, edited, dropped, plus the three config panels",
+        "commits": [
+          "626ac5f",
+          "c9b71e1",
+          "5e23370"
+        ]
+      },
+      {
+        "rows": [
+          6
+        ],
+        "what": "Collaborator interaction server settable at runtime; 409 once a channel has registered",
+        "commits": [
+          "65166fd"
+        ]
+      },
+      {
+        "rows": [
+          10
+        ],
+        "what": "Custom CA certificate import; validates before replacing, flushes the leaf cache",
+        "commits": [
+          "08d55d8"
+        ]
+      },
+      {
+        "rows": [
+          81,
+          82
+        ],
+        "what": "Uninteresting request/response headers; tags rather than strips",
+        "commits": [
+          "5050ca5"
+        ]
+      },
+      {
+        "rows": [
+          2
+        ],
+        "what": "Scheduled project backup via SQLite VACUUM INTO, with retention",
+        "commits": [
+          "f16675c"
+        ]
+      },
+      {
+        "rows": [
+          12
+        ],
+        "what": "RETRACTION \u2014 was never broken; the finding was a grep artifact",
+        "commits": [
+          "a7f458a"
+        ]
+      }
     ],
     "candidate_arithmetic": "8 real candidate rows: 6 delivered, 2 are recorded decisions (#1, #38)."
+  },
+  "tracker_ids": {
+    "$comment": "BlueBison's Beads IDs are canonical. Mapping so neither list drifts.",
+    "burpsy-react-ui-a50": "WS-FRAGMENT \u2014 closed by c3de955",
+    "burpsy-react-ui-3ay": "WS-DEFLATE \u2014 open",
+    "burpsy-react-ui-4lh": "WS-MATCHREPLACE \u2014 open"
   }
 }
