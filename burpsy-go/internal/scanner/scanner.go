@@ -504,7 +504,24 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 // rather than a fabricated one. headers overrides/adds request headers for probes that inject
 // through User-Agent/Referer rather than the query string (Zsn3/Zexx's real insertion points per
 // out/strings/map_root.tsv); nil sends the request with only its normal headers.
-func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.Exchange, testURL string, headers map[string]string) *sender.Response {
+//
+// # method is a parameter, and that is the whole point
+//
+// This used to set `Method: exchange.Method`, silently inheriting the captured request's method.
+// Seven of its eleven call sites probe a *different* path from the exchange — `/robots.txt`,
+// `/trace.axd`, `/Default.aspx`, backup-file candidates, a `.burpsy-control-404` control, and
+// the HTTP-PUT check's own read-back — and for those the captured method is simply irrelevant.
+// An API exercised through the proxy with POST therefore produced `POST /robots.txt`, got a 405,
+// and the check recorded "clean". A default-ON family reporting a clean result for a probe that
+// was never meaningfully sent.
+//
+// Making the method a parameter rather than fixing the seven call sites in place is deliberate:
+// a caller that genuinely wants the exchange's own method — the four same-path header-injection
+// probes, which are re-sending *this* request with one header changed — now says
+// `exchange.Method` out loud. The intent is visible at the call site instead of being a property
+// of the helper, so the next probe added here cannot inherit a method by accident. That is the
+// same "make it unrepresentable" move as `builtInConfigKeys`, applied to a signature.
+func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.Exchange, method, testURL string, headers map[string]string) *sender.Response {
 	if s.sender == nil {
 		return nil
 	}
@@ -512,7 +529,7 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 	meter.attempt()
 	gate := s.probeGate(exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
-		Method:  exchange.Method,
+		Method:  method,
 		Host:    exchange.Host,
 		Path:    testURL,
 		Headers: headers,

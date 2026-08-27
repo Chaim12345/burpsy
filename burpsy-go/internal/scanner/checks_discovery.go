@@ -59,7 +59,7 @@ var openAPIDefinitionPaths = [...]string{
 func checkOpenAPIDefinitionFound(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	exchange := cc.Exchange
 	for _, path := range openAPIDefinitionPaths {
-		resp := cc.Scanner.sendTestRequestFull(ctx, exchange, path, nil)
+		resp := cc.Scanner.sendTestRequestFull(ctx, exchange, "GET", path, nil)
 		if resp == nil || resp.StatusCode != 200 {
 			continue
 		}
@@ -85,7 +85,7 @@ const robotsTxtIssue = "Robots.txt file"
 // than merely a 200 status, since some hosts serve a 200 catch-all page for any path.
 func checkRobotsTxtFile(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	exchange := cc.Exchange
-	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, "/robots.txt", nil)
+	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, "GET", "/robots.txt", nil)
 	if resp == nil || resp.StatusCode != 200 {
 		return nil, nil
 	}
@@ -182,7 +182,7 @@ func checkHTTPPutEnabled(ctx context.Context, cc *CheckContext) ([]*Finding, err
 	if putResp == nil || putResp.StatusCode < 200 || putResp.StatusCode >= 300 {
 		return nil, nil
 	}
-	getResp := cc.Scanner.sendTestRequestFull(ctx, exchange, path, nil)
+	getResp := cc.Scanner.sendTestRequestFull(ctx, exchange, "GET", path, nil)
 	if getResp == nil || getResp.StatusCode != 200 || !strings.Contains(string(getResp.Body), canary) {
 		return nil, nil
 	}

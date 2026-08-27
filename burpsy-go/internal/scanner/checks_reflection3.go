@@ -58,7 +58,7 @@ func checkBackupFile(ctx context.Context, cc *CheckContext) ([]*Finding, error) 
 		return nil, nil
 	}
 
-	controlResp := cc.Scanner.sendTestRequestFull(ctx, exchange, dir+base+".burpsy-control-404"+ext, nil)
+	controlResp := cc.Scanner.sendTestRequestFull(ctx, exchange, "GET", dir+base+".burpsy-control-404"+ext, nil)
 	control := ""
 	if controlResp != nil {
 		control = string(controlResp.Body)
@@ -81,7 +81,7 @@ func checkBackupFile(ctx context.Context, cc *CheckContext) ([]*Finding, error) 
 	}
 
 	for _, candidate := range candidates {
-		resp := cc.Scanner.sendTestRequestFull(ctx, exchange, candidate, nil)
+		resp := cc.Scanner.sendTestRequestFull(ctx, exchange, "GET", candidate, nil)
 		if resp == nil || resp.StatusCode != 200 || len(resp.Body) == 0 {
 			continue
 		}
@@ -137,7 +137,7 @@ func checkUserAgentDependentResponse(ctx context.Context, cc *CheckContext) ([]*
 	if baseline == "" {
 		return nil, nil
 	}
-	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, exchange.Path, map[string]string{"User-Agent": mobileUserAgent})
+	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, exchange.Method, exchange.Path, map[string]string{"User-Agent": mobileUserAgent})
 	if resp == nil {
 		return nil, nil
 	}
@@ -166,7 +166,7 @@ func checkRefererDependentResponse(ctx context.Context, cc *CheckContext) ([]*Fi
 		return nil, nil
 	}
 	referer := "http://" + newProbeCanary("brpr") + ".com/"
-	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, exchange.Path, map[string]string{"Referer": referer})
+	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, exchange.Method, exchange.Path, map[string]string{"Referer": referer})
 	if resp == nil {
 		return nil, nil
 	}
@@ -197,7 +197,7 @@ var aspDebuggingResponseMarkers = [...]string{
 // "Command: start-debug" header (the ASP.NET remote-debugging wire protocol's start command).
 func checkASPDebuggingEnabled(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	exchange := cc.Exchange
-	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, "/Default.aspx", map[string]string{"Command": "start-debug"})
+	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, "GET", "/Default.aspx", map[string]string{"Command": "start-debug"})
 	if resp == nil {
 		return nil, nil
 	}
@@ -224,7 +224,7 @@ const aspTracingIssue = "ASP.NET tracing enabled"
 // consistent with the "class"/"span"/"aspx"/"tracecontent" token evidence recovered for Zsqx.
 func checkASPTracingEnabled(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	exchange := cc.Exchange
-	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, "/trace.axd", nil)
+	resp := cc.Scanner.sendTestRequestFull(ctx, exchange, "GET", "/trace.axd", nil)
 	if resp == nil || resp.StatusCode != 200 {
 		return nil, nil
 	}

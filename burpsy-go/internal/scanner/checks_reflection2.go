@@ -456,7 +456,7 @@ func checkCodeInjection(ctx context.Context, cc *CheckContext) ([]*Finding, erro
 			}
 		}
 		for _, header := range codeInjectionHeaders {
-			resp := cc.Scanner.sendTestRequestFull(ctx, cc.Exchange, cc.Exchange.Path, map[string]string{header: payload})
+			resp := cc.Scanner.sendTestRequestFull(ctx, cc.Exchange, cc.Exchange.Method, cc.Exchange.Path, map[string]string{header: payload})
 			if resp == nil {
 				continue
 			}
@@ -529,7 +529,7 @@ func checkSSIInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error
 	falseToken := newProbeCanary("brpf")
 	payload := `<!--#if expr="1 = 1" -->` + trueToken + `<!--#else-->` + falseToken + `<!--#endif-->`
 	for _, header := range codeInjectionHeaders {
-		resp := cc.Scanner.sendTestRequestFull(ctx, cc.Exchange, cc.Exchange.Path, map[string]string{header: payload})
+		resp := cc.Scanner.sendTestRequestFull(ctx, cc.Exchange, cc.Exchange.Method, cc.Exchange.Path, map[string]string{header: payload})
 		if resp == nil {
 			continue
 		}
