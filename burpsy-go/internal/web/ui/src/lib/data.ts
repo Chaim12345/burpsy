@@ -381,6 +381,17 @@ export function useInterceptControls() {
       mutationFn: (enabled: boolean) => api<unknown>("/api/intercept/enable", json("POST", { enabled })),
       onSuccess: done,
     }),
+    /** Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1). Its own route, not a second
+     * field on /enable: two independent switches, and an endpoint named "enable" carrying a filter
+     * would make a caller setting one have to restate the other. */
+    setInScopeOnly: useMutation({
+      mutationFn: (inScopeOnly: boolean) =>
+        api<{ in_scope_only: boolean; scope_attached: boolean }>(
+          "/api/intercept/in-scope-only",
+          json("POST", { in_scope_only: inScopeOnly }),
+        ),
+      onSuccess: done,
+    }),
     forward: useMutation({
       mutationFn: ({ id, raw }: { id: number; raw: string }) =>
         api<unknown>(`/api/intercept/${id}/forward`, json("POST", { raw, fix_content_length: true })),
@@ -389,6 +400,20 @@ export function useInterceptControls() {
     drop: useMutation({
       mutationFn: (id: number) =>
         api<unknown>(`/api/intercept/${id}/drop`, json("POST", { reason: "dropped by operator" })),
+      onSuccess: done,
+    }),
+    /**
+     * Drop every held message in one round trip (burpsy-react-ui-t6f).
+     *
+     * The route answers the count it ACTUALLY dropped, which is the useful part and the reason this
+     * is not just a loop over the visible rows: a message resolved elsewhere between the page's last
+     * poll and this request is not counted, so the number cannot overstate. The caller shows it, and
+     * says so when it differs from what was on screen — that difference is how an operator learns
+     * the queue moved under them rather than assuming the button half-worked.
+     */
+    dropAll: useMutation({
+      mutationFn: () =>
+        api<{ dropped: number }>("/api/intercept/drop-all", json("POST", { reason: "dropped by operator" })),
       onSuccess: done,
     }),
   };

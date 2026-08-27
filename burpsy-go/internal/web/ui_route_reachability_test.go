@@ -64,24 +64,25 @@ var uiRouteExempt = map[string]string{
 	"/api/findings": "legacy alias for /api/issues, same reasoning as /api/exchanges/",
 }
 
-// uiRouteMissingSurface is a route that *should* be operator-facing and is not — a real gap, named
-// with the issue tracking it.
+// uiRouteMissingSurface holds routes that *should* be operator-facing and are not — real gaps, each
+// named with the issue tracking it.
 //
-// This is deliberately not part of uiRouteExempt, because it is not an exemption: nothing about
-// these routes justifies their absence, and the reason field of an exemption would be a lie. It is
-// a bounded, visible list that the two tests below force to shrink rather than drift:
+// It is deliberately separate from uiRouteExempt, because such a route is not exempt: nothing about
+// it justifies the absence, and an exemption's reason field would be a lie. It is a bounded, visible
+// list that the tests below force to shrink rather than drift:
 //
 //   - It cannot grow without someone editing this file and supplying an issue id.
 //   - It cannot go stale: once a route here gains a console caller, TestNoKnownGapWasQuietlyFixed
 //     fails until the entry is deleted, so a fixed gap cannot sit here pretending to be open.
 //
 // The alternative was leaving the suite red, which within a day means the suite is ignored and this
-// test protects nothing. An empty map is the goal.
-var uiRouteMissingSurface = map[string]string{
-	"/api/intercept/drop-all": "burpsy-react-ui-t6f — drops every held message in one round trip " +
-		"and answers the count actually dropped. Burp has this on the intercept toolbar. Found by " +
-		"this test on its first run, which is the point of it",
-}
+// test protects nothing.
+//
+// It is currently EMPTY, which is the goal state. The one entry it ever held —
+// /api/intercept/drop-all, found by this test on its very first run — has been fixed, and
+// TestNoKnownGapWasQuietlyFixed is what refused to let the entry stay behind afterwards. Both
+// directions of the list have now done their job on a real case.
+var uiRouteMissingSurface = map[string]string{}
 
 // uiSourceDirForRoutes is the console source tree.
 const uiSourceDirForRoutes = "ui/src"

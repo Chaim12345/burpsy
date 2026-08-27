@@ -331,6 +331,14 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "turn interception on or off",
 	},
+	"/api/intercept/in-scope-only": {
+		// riskLocal: it narrows what burpsy HOLDS and sends nothing. Worth stating why it is not
+		// stronger, because turning it on means more traffic reaches the target without operator
+		// review — but that traffic was going there anyway; interception is a hold, not a gate, and
+		// the engagement scope already decides what may be touched.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "Burp's \"Only intercept in-scope messages\": filter the hold queue to the engagement scope",
+	},
 	"/api/intercept/rules/": {
 		// "requests" and "responses", plural — see directionFor. The singular was a guess when this
 		// entry was first written, and it answered 404 "Unknown direction" for every verb, which the

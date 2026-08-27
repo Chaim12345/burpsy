@@ -416,6 +416,11 @@ func main() {
 	// live-traffic no-op. WithMatchReplace on the web server (below) must run before WithPersist, so a
 	// restored ruleset lands in this shared object.
 	interceptEngine := intercept.NewEngine()
+	// Same scope object the relay and the web API use, so "Only intercept in-scope messages" filters
+	// against the rules the operator can actually see on the Scope page. The web server attaches this
+	// too; doing it here as well means the standalone-proxy path (no web server) is not left with an
+	// engine whose toggle silently does nothing.
+	interceptEngine.SetScope(scope)
 	matchReplaceRules := matchreplace.NewRuleSet()
 	// The proxy's live option set — Burp's response-modification switches. One set handed to both
 	// the relay and the web API, the same single-pointer rule as the TLS policy and the Match &

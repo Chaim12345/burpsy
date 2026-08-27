@@ -220,6 +220,11 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 	// known. The runner refuses a kind it cannot start, and a restore that ran first would have
 	// nothing to check against.
 	s.registerScheduleKinds()
+	// The intercept engine needs the scope for Burp's "Only intercept in-scope messages". Attached
+	// here rather than passed to NewEngine so the engine keeps no constructor dependency on it, and
+	// so the pointer is provably the same *core.Scope the server and the relay hold — a second scope
+	// object would let the toggle filter against rules the operator cannot see.
+	s.intercept.SetScope(scope)
 	s.followLive()
 	s.setupRoutes()
 	return s
@@ -800,6 +805,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/schedules", s.handleSchedules)
 	s.mux.HandleFunc("/api/schedules/", s.handleScheduleDetail)
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
+	s.mux.HandleFunc("/api/intercept/in-scope-only", s.handleInterceptInScopeOnly)
 	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)

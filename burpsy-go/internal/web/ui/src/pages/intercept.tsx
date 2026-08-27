@@ -24,6 +24,7 @@ import {
   ErrorNotice,
   IconButton,
   Input,
+  Modal,
   Metric,
   Select,
   Switch,
@@ -32,6 +33,7 @@ import {
   TabsList,
   TabsTrigger,
   Toolbar,
+  Tooltip,
 } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
 
@@ -362,6 +364,11 @@ export function InterceptPage(): JSX.Element {
   const forwardHeld = useForwardHeld();
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  /**
+   * Drop-all needs a confirm step: it discards traffic that cannot be recovered, and unlike a single
+   * Drop it does so for messages the operator has not looked at.
+   */
+  const [confirmDropAll, setConfirmDropAll] = useState(false);
   const [raw, setRaw] = useState("");
   const [fixContentLength, setFixContentLength] = useState(true);
   const [directionFilter, setDirectionFilter] = useState<HeldDirectionFilter>("all");
@@ -397,29 +404,48 @@ export function InterceptPage(): JSX.Element {
     controls.setEnabled.mutate(!data.enabled, { onError: (err) => toast.error(err instanceof Error ? err.message : String(err)) });
   };
 
-  const forward = () => {
-    if (!selected) return;
+  /**
+   * Forward one held message by id, with its body and the Content-Length decision passed in.
+   *
+   * Taking all three explicitly is the point. The previous shape closed over `selected` and `raw`,
+   * which was fine for the toolbar — it only ever acts on the selection — and wrong for anything
+   * that acts on a row the operator pointed at instead. A caller that set the selection and then
+   * invoked a closure captured at the previous render would forward the PREVIOUS message, with the
+   * previous message's edit buffer as its body, and the success toast would name the one that
+   * actually went. See burpsy-react-ui-3g5.
+   */
+  const forwardMessage = (id: number, body: string, fixCL: boolean) => {
     forwardHeld.mutate(
-      { id: selected.id, raw, fixContentLength },
+      { id, raw: body, fixContentLength: fixCL },
       {
         onSuccess: () => {
           setSelectedId(null);
-          toast.success(`Held message #${selected.id} forwarded`);
+          toast.success(`Held message #${id} forwarded`);
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
       },
     );
   };
 
-  const drop = () => {
-    if (!selected) return;
-    controls.drop.mutate(selected.id, {
+  const dropMessage = (id: number) => {
+    controls.drop.mutate(id, {
       onSuccess: () => {
         setSelectedId(null);
-        toast.success(`Held message #${selected.id} dropped`);
+        toast.success(`Held message #${id} dropped`);
       },
       onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
     });
+  };
+
+  // The toolbar's two actions: the selection, its edit buffer, and the operator's toggle.
+  const forward = () => {
+    if (!selected) return;
+    forwardMessage(selected.id, raw, fixContentLength);
+  };
+
+  const drop = () => {
+    if (!selected) return;
+    dropMessage(selected.id);
   };
 
   // Burp's proxy bindings. ctrl+F forwards — in Burp that is Forward, not Find, and
@@ -532,6 +558,31 @@ export function InterceptPage(): JSX.Element {
             onCheckedChange={setFixContentLength}
             label="Fix Content-Length when forwarding"
           />
+          {/* Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1). Disabled with the
+              reason shown when no scope is attached, rather than offered as a control that silently
+              does nothing — the engine deliberately refuses to filter in that case, because an empty
+              queue an operator cannot connect to a switch they flipped is worse than an unfiltered
+              one. */}
+          <Tooltip
+            content={
+              data?.scope_attached
+                ? "Hold only traffic the engagement scope allows. Messages already held are untouched."
+                : "No scope is attached to the intercept engine, so this would not filter anything."
+            }
+          >
+            <span>
+              <Checkbox
+                checked={data?.in_scope_only ?? false}
+                disabled={!data?.scope_attached}
+                onCheckedChange={(next) =>
+                  controls.setInScopeOnly.mutate(next === true, {
+                    onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+                  })
+                }
+                label="Only intercept in-scope messages"
+              />
+            </span>
+          </Tooltip>
           <span style={{ flex: 1 }} />
           <Button onClick={forward} disabled={forwardHeld.isPending}>
             <Send size={14} />
@@ -541,7 +592,66 @@ export function InterceptPage(): JSX.Element {
             <Trash2 size={14} />
             Drop
           </Button>
+          {/* Burp's queue toolbar has this, and burpsy's route has answered the count actually
+              dropped since it was written — nothing called it (burpsy-react-ui-t6f).
+
+              Disabled, not hidden, when the queue is empty: a control that vanishes reads as a
+              missing feature, and an operator who used it once will look for it again. */}
+          <Button
+            variant="outline"
+            onClick={() => setConfirmDropAll(true)}
+            disabled={held.length === 0 || controls.dropAll.isPending}
+            title={held.length === 0 ? "Nothing is held" : `Drop all ${held.length} held messages`}
+          >
+            <Trash2 size={14} />
+            Drop all{held.length > 0 ? ` (${held.length})` : ""}
+          </Button>
         </Toolbar>
+
+        <Modal
+          open={confirmDropAll}
+          onOpenChange={(open) => {
+            if (!open) setConfirmDropAll(false);
+          }}
+          title={`Drop all ${held.length} held messages?`}
+          description="Each client sees its request fail. Dropped traffic is not recoverable, and this discards messages you have not looked at."
+        >
+          <div className="page-actions">
+            <Button variant="outline" onClick={() => setConfirmDropAll(false)}>
+              Keep them held
+            </Button>
+            <Button
+              variant="danger"
+              disabled={controls.dropAll.isPending}
+              onClick={() => {
+                // `expected` is read before the call so the two numbers can be compared. The route
+                // answers what it actually dropped, and a message resolved elsewhere between the
+                // last poll and this request is not counted — so a smaller number is not an error,
+                // it is the queue having moved. Saying so is how the operator learns that rather
+                // than concluding the button half-worked.
+                const expected = held.length;
+                controls.dropAll.mutate(undefined, {
+                  onSuccess: (result) => {
+                    setConfirmDropAll(false);
+                    setSelectedId(null);
+                    const dropped = result.dropped;
+                    if (dropped === expected) {
+                      toast.success(`Dropped ${dropped} held message${dropped === 1 ? "" : "s"}`);
+                    } else {
+                      toast.success(
+                        `Dropped ${dropped} of the ${expected} shown — the rest resolved elsewhere before this request arrived`,
+                      );
+                    }
+                  },
+                  onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+                });
+              }}
+            >
+              <Trash2 size={13} />
+              {controls.dropAll.isPending ? "Dropping…" : `Drop all ${held.length}`}
+            </Button>
+          </div>
+        </Modal>
       </div>
     </div>
   ) : (
@@ -614,6 +724,34 @@ export function InterceptPage(): JSX.Element {
                 getRowId={(row) => String(row.id)}
                 selectedId={selectedId === null ? null : String(selectedId)}
                 onSelect={(row) => setSelectedId(row.id)}
+        onActivate={(row) => setSelectedId(row.id)}
+        menuGroups={(row) => [
+          {
+            id: "intercept",
+            actions: [
+              {
+                id: "forward",
+                label: "Forward",
+                icon: Send,
+                shortcut: "Ctrl+F",
+                // row.raw, not the edit buffer: there is no edit buffer for a row that is not
+                // selected, and sending the selection's bytes under another row's id is exactly the
+                // confusion this menu was built to avoid.
+                //
+                // fixContentLength, not a hardcoded true: two forward paths disagreeing about
+                // whether they rewrite a header is invisible from either one.
+                onSelect: () => forwardMessage(row.id, row.raw, fixContentLength),
+              },
+              {
+                id: "drop",
+                label: "Drop",
+                icon: Trash2,
+                danger: true,
+                onSelect: () => dropMessage(row.id),
+              },
+            ],
+          },
+        ]}
                 loading={isFetching && !data}
                 empty={
                   <Empty

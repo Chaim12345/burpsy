@@ -320,15 +320,32 @@ export function Checkbox({
   onCheckedChange,
   label,
   className,
+  disabled,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   label: ReactNode;
   className?: string;
+  /**
+   * Disabled, and visibly so. Added for the intercept page's in-scope-only toggle, which must be
+   * shown-but-inert when no scope is attached: hiding it would read as a missing feature, and leaving
+   * it live would let an operator flip a switch the engine deliberately ignores.
+   *
+   * No extra class is needed — styles.css already has `.check-row input:disabled + span`, which greys
+   * the label text as well as the box. A greyed box beside black text does not read as disabled, and
+   * the stylesheet had already solved that; a new class here would have been a second answer to a
+   * question already answered.
+   */
+  disabled?: boolean;
 }): JSX.Element {
   return (
     <label className={cn("check-row", className)}>
-      <input type="checkbox" checked={checked} onChange={(event) => onCheckedChange(event.target.checked)} />
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onCheckedChange(event.target.checked)}
+      />
       <span>{label}</span>
     </label>
   );

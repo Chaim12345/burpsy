@@ -366,6 +366,24 @@ type Engine struct {
 	held   map[uint64]*Held
 	// onChange is an optional signal that the queue or the switch changed (see OnChange).
 	onChange func()
+
+	// inScopeOnly is Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1). Off by default,
+	// matching Burp and matching the safer reading: a queue that silently skipped traffic would make
+	// an operator think interception was broken rather than filtered.
+	inScopeOnly bool
+	// scope answers whether a message's authority is in the engagement scope. Nil means no scope was
+	// attached, and see shouldHold for why that makes inScopeOnly refuse to filter rather than
+	// filter everything out.
+	scope ScopeChecker
+}
+
+// ScopeChecker is the engagement scope, narrowed to the one question this package asks.
+//
+// An interface rather than a *core.Scope so internal/intercept keeps no dependency on the store's
+// package, and — more usefully — so a test can pin the in-scope-only behaviour without building a
+// scope. It matches core.Scope.Contains exactly.
+type ScopeChecker interface {
+	Contains(host string, port uint16, path string, isTLS bool) bool
 }
 
 // NewEngine creates an intercept engine with both lists off.
@@ -406,6 +424,44 @@ func (e *Engine) signalChange() {
 	if fn != nil {
 		fn()
 	}
+}
+
+// SetScope attaches the engagement scope, which the in-scope-only filter consults.
+//
+// Separate from SetInScopeOnly because they come from different places: the scope is wired once at
+// construction and the filter is an operator toggle. Wiring them together would have made the
+// toggle able to arrive before the scope did.
+func (e *Engine) SetScope(s ScopeChecker) {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	e.scope = s
+}
+
+// InScopeOnly reports whether the queue is filtered to in-scope traffic.
+func (e *Engine) InScopeOnly() bool {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	return e.inScopeOnly
+}
+
+// SetInScopeOnly turns Burp's "Only intercept in-scope messages" on or off.
+//
+// Held messages are untouched, exactly as SetEnabled leaves them: a message already held was held
+// under the rules in force at the time, and dropping it now because the filter changed would discard
+// traffic an operator is mid-decision on.
+func (e *Engine) SetInScopeOnly(v bool) {
+	e.mu <- struct{}{}
+	e.inScopeOnly = v
+	<-e.mu
+	e.signalChange()
+}
+
+// ScopeAttached reports whether a scope is wired, so a surface can say why the in-scope-only toggle
+// would not do anything rather than offering a control that silently does nothing.
+func (e *Engine) ScopeAttached() bool {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	return e.scope != nil
 }
 
 // Enabled reports the master switch.
@@ -508,6 +564,17 @@ func (e *Engine) shouldHold(d Direction, m *Message) bool {
 		return false
 	}
 	if !d.valid() {
+		return false
+	}
+	// The in-scope-only filter, checked before the rules: it is a narrowing of what the queue may
+	// contain at all, not another rule to match against.
+	//
+	// With no scope attached this does NOT filter. A nil scope means nothing has told this engine
+	// what is in scope, and treating that as "nothing is in scope" would empty the queue while the
+	// toggle claimed only to be narrowing it — an operator would see interception stop working and
+	// have no way to connect it to a switch they flipped. ScopeAttached exists so a surface can say
+	// so out loud instead.
+	if e.inScopeOnly && e.scope != nil && !e.scope.Contains(m.Host, m.Port, m.Path, m.TLS) {
 		return false
 	}
 	l := e.lists[d]

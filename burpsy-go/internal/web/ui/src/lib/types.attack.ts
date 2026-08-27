@@ -48,6 +48,14 @@ export interface InterceptStateDetail {
   held: HeldMessageDetail[];
   holds_every_request?: boolean;
   holds_every_response?: boolean;
+  /** Burp's "Only intercept in-scope messages". */
+  in_scope_only: boolean;
+  /**
+   * Whether the engine has a scope to consult. False makes `in_scope_only` inert, and the page says
+   * so rather than offering a toggle that changes nothing — the same reason `wired` sits beside
+   * `enabled`.
+   */
+  scope_attached: boolean;
 }
 
 /** One condition in an interception rule list. Mirrors intercept.ts's RuleSpec / `interceptRuleSpec`. */

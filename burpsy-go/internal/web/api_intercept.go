@@ -62,6 +62,12 @@ type interceptStatusResp struct {
 	Held               []heldView `json:"held"`
 	HoldsEveryRequest  *bool      `json:"holds_every_request,omitempty"`
 	HoldsEveryResponse *bool      `json:"holds_every_response,omitempty"`
+	// InScopeOnly is Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1).
+	InScopeOnly bool `json:"in_scope_only"`
+	// ScopeAttached reports whether the engine has a scope to consult. False makes InScopeOnly inert,
+	// and the console says so rather than offering a toggle that silently changes nothing — the same
+	// reason `wired` exists beside `enabled`.
+	ScopeAttached bool `json:"scope_attached"`
 }
 
 func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +113,8 @@ func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
 		Held:               views,
 		HoldsEveryRequest:  &holdsEveryReq,
 		HoldsEveryResponse: &holdsEveryResp,
+		InScopeOnly:        s.intercept.InScopeOnly(),
+		ScopeAttached:      s.intercept.ScopeAttached(),
 	})
 }
 
@@ -125,6 +133,35 @@ func (s *Server) handleInterceptEnable(w http.ResponseWriter, r *http.Request) {
 	s.intercept.SetEnabled(req.Enabled)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"enabled": req.Enabled})
+}
+
+// handleInterceptInScopeOnly serves POST /api/intercept/in-scope-only — Burp's "Only intercept
+// in-scope messages".
+//
+// Its own route rather than a second field on /api/intercept/enable: they are two independent
+// switches, and an endpoint named "enable" that also carried a filter would make a caller setting one
+// have to restate the other, which is how a UI ends up turning interception off by accident.
+//
+// The answer echoes both the new value and whether a scope is attached, so a caller cannot conclude
+// the filter is in force when there is nothing for it to filter against.
+func (s *Server) handleInterceptInScopeOnly(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		InScopeOnly bool `json:"in_scope_only"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	s.intercept.SetInScopeOnly(req.InScopeOnly)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{
+		"in_scope_only":  req.InScopeOnly,
+		"scope_attached": s.intercept.ScopeAttached(),
+	})
 }
 
 // handleInterceptDropAll serves POST /api/intercept/drop-all and resolves every
