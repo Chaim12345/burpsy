@@ -1455,11 +1455,12 @@ func (c *Crawler) recordFingerprintBudget(item frontierItem, foundAt string, lim
 // frontierRow is what a crawl-scope query is evaluated against (DSL-03).
 //
 // Host, Method and Path are the request the crawler is about to build, and are real answers. Status,
-// Mime and Body report absent, because before the fetch there is no response — and New has already
-// refused any query that names them, so no comparison ever reaches those three. They are implemented
-// as absent rather than left to panic because query.Queryable requires all six, and because a
-// caller constructing this type directly should get the documented "absent fields are absent"
-// behaviour rather than a crash.
+// Mime, Body, ResponseLen and DurationUs report absent, because before the fetch there is no
+// response — and New has already refused any query that names them, so no comparison ever reaches
+// them (unavailablePreFetch derives its answer from the field list, so a field added to the grammar
+// defaults to unavailable). They are implemented as absent rather than left to panic because
+// query.Queryable requires all of them, and because a caller constructing this type directly should
+// get the documented "absent fields are absent" behaviour rather than a crash.
 type frontierRow struct {
 	host   string
 	method string
@@ -1472,6 +1473,10 @@ func (r frontierRow) Path() string   { return r.path }
 func (r frontierRow) Status() int    { return 0 }
 func (r frontierRow) Mime() string   { return "" }
 func (r frontierRow) Body() []byte   { return nil }
+
+// Both absent, not zero: there is no response to have a size, and nothing has been timed.
+func (r frontierRow) ResponseLen() (int64, bool) { return 0, false }
+func (r frontierRow) DurationUs() (int64, bool)  { return 0, false }
 
 // fetchedRow is what a crawl-retention query is evaluated against: a response that exists, so every
 // field the grammar has is a real answer rather than an absence. This is the difference between the
@@ -1491,6 +1496,17 @@ func (r fetchedRow) Path() string   { return r.path }
 func (r fetchedRow) Status() int    { return r.status }
 func (r fetchedRow) Mime() string   { return r.mime }
 func (r fetchedRow) Body() []byte   { return r.body }
+
+// ResponseLen is present because the response is: this type exists only after a fetch. len(body) is
+// the honest answer even when the body is empty — a 204 is a zero-length response, not an absent one,
+// which is the distinction the bool carries.
+func (r fetchedRow) ResponseLen() (int64, bool) { return int64(len(r.body)), true }
+
+// DurationUs is UNMEASURED. The crawler does not time its fetches at this layer, and reporting 0
+// would tell an operator every crawled response arrived instantaneously — a measurement nobody made.
+// If crawl timing is wanted, thread it onto this struct; returning false is what keeps the absence
+// visible until then.
+func (r fetchedRow) DurationUs() (int64, bool) { return 0, false }
 
 // senderFor returns the AuthorisedSender bound to one origin, building it on first use. The scope
 // handle passed in is the crawl's, so every send this package makes is checked against the same

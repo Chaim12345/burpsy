@@ -70,6 +70,25 @@ func (q exchangeQueryable) Mime() string {
 }
 func (q exchangeQueryable) Body() []byte { return q.body }
 
+// ResponseLen and DurationUs come off the index row, so `length` and `duration` work on the CLI's
+// history filter without the -body pass withBody performs. Absence follows the same rule as
+// everywhere else: Response decides whether there is a length, and Measured whether anyone timed
+// it — never the value being zero, because an empty response and an unmeasured exchange are real
+// states that a zero would misreport as "0 bytes" and "instantaneous".
+func (q exchangeQueryable) ResponseLen() (int64, bool) {
+	if q.ex.Response == nil {
+		return 0, false
+	}
+	return int64(q.ex.ResponseLen), true
+}
+
+func (q exchangeQueryable) DurationUs() (int64, bool) {
+	if !q.ex.Duration.Measured {
+		return 0, false
+	}
+	return int64(q.ex.Duration.Us), true
+}
+
 func (q *exchangeQueryable) withBody(store *core.TrafficStore) *exchangeQueryable {
 	if q.ex.Response != nil {
 		if msg, err := store.Get(*q.ex.Response); err == nil {

@@ -321,6 +321,23 @@ func (q *auditedExchangeQuery) Body() []byte {
 	return msg.Body()
 }
 
+// ResponseLen and DurationUs both read the index row rather than the message, so neither forces the
+// lazy response resolution above. Same absence rules as filteredExchangeQuery: presence comes from
+// Response and from Measured, never from the value being non-zero.
+func (q *auditedExchangeQuery) ResponseLen() (int64, bool) {
+	if q.ex.Response == nil {
+		return 0, false
+	}
+	return int64(q.ex.ResponseLen), true
+}
+
+func (q *auditedExchangeQuery) DurationUs() (int64, bool) {
+	if !q.ex.Duration.Measured {
+		return 0, false
+	}
+	return int64(q.ex.Duration.Us), true
+}
+
 // liveAuditAdmits is the sweep's whole admission decision for one exchange: the engagement scope, then
 // the operator's query.
 //

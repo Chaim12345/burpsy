@@ -88,6 +88,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -102,6 +103,17 @@ type Queryable interface {
 	Status() int  // 0 = absent (no response yet)
 	Mime() string
 	Body() []byte
+	// ResponseLen reports the response's size in bytes, and whether there is a response at all.
+	//
+	// The bool is not optional politeness: 0 is a legitimate length — a 204 has an empty body — so a
+	// bare int64 could not tell "an empty response" from "no response", and `length = 0` would match
+	// every request still in flight. Same reasoning as Status()'s documented 0-means-absent, made
+	// explicit here because for length the absent value collides with a real one.
+	ResponseLen() (int64, bool)
+	// DurationUs reports how long the exchange took, in microseconds, and whether anyone measured
+	// it. Mirrors core.ExchangeDuration, whose Measured flag exists for exactly this reason: an
+	// exchange nobody timed must not report as instantaneous.
+	DurationUs() (int64, bool)
 }
 
 // Expr is a parsed, type-checked query expression. Parse is the only way to obtain one, so every
@@ -121,6 +133,13 @@ type Expr struct {
 	num   uint16 // status value for =, !=, <, <=, >, >=
 	lo    uint16 // status range lower bound, inclusive (op == opIn)
 	hi    uint16 // status range upper bound, inclusive (op == opIn)
+	// The wide numerics, for length and duration. Separate from num/lo/hi rather than widening
+	// those: status is a 16-bit value and the parser rejects anything larger with a message that
+	// says so, which is a real check worth keeping. A response length does not fit in 16 bits at
+	// all — 65535 bytes is a small page — so sharing the field would have silently truncated.
+	num64 int64
+	lo64  int64
+	hi64  int64
 }
 
 type exprKind int
@@ -141,9 +160,14 @@ const (
 	fieldMime
 	fieldStatus
 	fieldBody
-	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this, so
-	// adding a field above without extending that array is a compile error rather than a silent
-	// out-of-range panic on the first query that names the new field.
+	fieldLength
+	fieldDuration
+	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this.
+	//
+	// NOTE: adding a field here is NOT caught by the compiler in fieldOrder — a short
+	// [fieldCount]field literal is legal Go and pads with the zero value, which is fieldHost, so the
+	// omission shows up as Fields() reporting "host" for a query that never named it. That happened
+	// when length and duration were added. TestFieldOrderCoversEveryField is what catches it now.
 	fieldCount = iota
 )
 
@@ -161,6 +185,10 @@ func (f field) String() string {
 		return "status"
 	case fieldBody:
 		return "body"
+	case fieldLength:
+		return "length"
+	case fieldDuration:
+		return "duration"
 	}
 	return "?"
 }
@@ -432,6 +460,9 @@ func (p *parser) parseCmp() (*Expr, error) {
 	if f == fieldStatus {
 		return p.parseStatusValue(o)
 	}
+	if f == fieldLength || f == fieldDuration {
+		return p.parseNumericValue(f, o)
+	}
 	val, err := p.parseStringValue(f)
 	if err != nil {
 		return nil, err
@@ -453,6 +484,10 @@ func fieldByName(name string) (field, bool) {
 		return fieldStatus, true
 	case "body":
 		return fieldBody, true
+	case "length":
+		return fieldLength, true
+	case "duration":
+		return fieldDuration, true
 	}
 	return 0, false
 }
@@ -468,6 +503,10 @@ func fieldAllows(f field, o op) bool {
 		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
 	case fieldBody:
 		return o == opContains
+	case fieldLength, fieldDuration:
+		// The same set status has. A range reads better than two clauses for the case an operator
+		// actually wants — "responses between 1 and 2 megabytes" — and `in` already exists.
+		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
 	}
 	return false
 }
@@ -479,6 +518,8 @@ func allowedOps(f field) string {
 		return "=, !=, <, <=, >, >= and `in low..high`"
 	case fieldBody:
 		return "~ (contains) only, since matching a whole body exactly is rarely what \"filter on body content\" means"
+	case fieldLength, fieldDuration:
+		return "=, !=, <, <=, >, >= and `in low..high`"
 	}
 	return "=, != (case-insensitive for host and mime) and ~ (contains)"
 }
@@ -568,6 +609,137 @@ func (p *parser) parseStatusValue(o op) (*Expr, error) {
 		return nil, err
 	}
 	return &Expr{kind: kindCmp, field: fieldStatus, op: opIn, lo: lo, hi: hi}, nil
+}
+
+// parseNumericValue reads a length or duration comparison, including the `in low..high` form.
+func (p *parser) parseNumericValue(f field, o op) (*Expr, error) {
+	lo, err := p.parseScaledNumber(f)
+	if err != nil {
+		return nil, err
+	}
+	if o != opIn {
+		return &Expr{kind: kindCmp, field: f, op: o, num64: lo}, nil
+	}
+	p.skipWs()
+	if !strings.HasPrefix(p.src[p.pos:], "..") {
+		return nil, p.errAt(p.pos, "expected '..' between the bounds of a %s range — the form is `%s in %s`, inclusive of both ends",
+			f, f, numericRangeExample(f))
+	}
+	p.pos += 2
+	hi, err := p.parseScaledNumber(f)
+	if err != nil {
+		return nil, err
+	}
+	// Bounds the wrong way round match nothing, which on this grammar is a verdict indistinguishable
+	// from "no rows are that size". Rejected at parse time, as the type mismatches above are.
+	if lo > hi {
+		return nil, p.errAt(p.pos, "the range for %s is empty: its lower bound (%d) is above its upper bound (%d), so nothing could match it", f, lo, hi)
+	}
+	return &Expr{kind: kindCmp, field: f, op: opIn, lo64: lo, hi64: hi}, nil
+}
+
+func numericRangeExample(f field) string {
+	if f == fieldDuration {
+		return "100ms..2s"
+	}
+	return "1kb..1mb"
+}
+
+// numericUnits is the suffix vocabulary per field, with each suffix's multiplier in the field's own
+// base unit — bytes for length, microseconds for duration.
+//
+// # Why suffixes exist at all
+//
+// The question an operator actually has is "which responses are over a megabyte", and the
+// unsuffixed form of that is `length > 1048576`. Requiring it would be hostile, and worse, easy to
+// get wrong by an order of magnitude in a way the result set would not reveal.
+//
+// # Why a bare number still has one documented meaning
+//
+// Bytes for length, milliseconds for duration — milliseconds because that is what the History
+// column shows, so `duration > 500` means what an operator reading the screen expects. The base
+// unit internally is microseconds, because that is what core.ExchangeDuration stores; the
+// difference is confined to this table.
+var numericUnits = map[field][]struct {
+	suffix string
+	scale  int64
+}{
+	fieldLength: {
+		{"kb", 1024},
+		{"mb", 1024 * 1024},
+		{"gb", 1024 * 1024 * 1024},
+		{"b", 1},
+		{"", 1}, // bare: bytes
+	},
+	fieldDuration: {
+		{"us", 1},
+		{"ms", 1000},
+		{"s", 1000 * 1000},
+		{"", 1000}, // bare: milliseconds, matching the History column
+	},
+}
+
+// parseScaledNumber reads a number with an optional unit suffix and returns it in the field's base
+// unit.
+func (p *parser) parseScaledNumber(f field) (int64, error) {
+	p.skipWs()
+	at := p.pos
+	if p.pos >= len(p.src) {
+		return 0, p.errAt(at, "the query ended while a number for %s was still expected", f)
+	}
+	if p.peek() == '"' {
+		// Same rule as status: a comparison whose types do not fit is refused here rather than
+		// reaching Match and returning false, which reads as "nothing matched".
+		return 0, p.errAt(at, "%s expects a number but found a quoted string — a comparison whose types do not fit is rejected here rather than silently matching nothing", f)
+	}
+	start := p.pos
+	for p.pos < len(p.src) && isDigit(p.src[p.pos]) {
+		p.pos++
+	}
+	if p.pos == start {
+		return 0, p.errAt(at, "%s expects a number but found %q — a comparison whose types do not fit is rejected here rather than silently matching nothing", f, p.restOfToken())
+	}
+	digits := p.src[start:p.pos]
+
+	// The suffix, if any. Read as letters so `1kbx` is an error rather than `1kb` with trailing
+	// junk the parser would then fail on somewhere less helpful.
+	unitStart := p.pos
+	for p.pos < len(p.src) && isAlpha(p.src[p.pos]) {
+		p.pos++
+	}
+	unit := strings.ToLower(p.src[unitStart:p.pos])
+
+	var scale int64
+	found := false
+	for _, candidate := range numericUnits[f] {
+		if candidate.suffix == unit {
+			scale = candidate.scale
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0, p.errAt(unitStart, "%q is not a unit %s accepts — %s", unit, f, unitsFor(f))
+	}
+
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return 0, p.errAt(at, "%s is too large a number for %s", digits, f)
+	}
+	// Overflow is checked rather than allowed to wrap: a wrapped bound becomes a negative number
+	// that matches nothing, or everything, with no error to say why.
+	if scale != 0 && n > math.MaxInt64/scale {
+		return 0, p.errAt(at, "%s%s overflows the range %s can express", digits, unit, f)
+	}
+	return n * scale, nil
+}
+
+// unitsFor names the accepted suffixes, and what a bare number means, so the error is actionable.
+func unitsFor(f field) string {
+	if f == fieldDuration {
+		return "duration accepts us, ms and s, and a bare number means milliseconds"
+	}
+	return "length accepts b, kb, mb and gb, and a bare number means bytes"
 }
 
 func (p *parser) parseStatusNumber() (uint16, error) {
@@ -731,6 +903,22 @@ func (e *Expr) matchCmp(q Queryable) bool {
 	case fieldBody:
 		// Case-sensitive and byte-exact: a body needle is content, not an identifier.
 		return bytes.Contains(q.Body(), []byte(e.str))
+	case fieldLength:
+		length, present := q.ResponseLen()
+		if !present {
+			// No response: not a zero-length one. `length != 0` must not sweep up every request
+			// still in flight, which is precisely what a bare int64 here would have done.
+			return false
+		}
+		return numOp(e, length)
+	case fieldDuration:
+		us, measured := q.DurationUs()
+		if !measured {
+			// Nobody timed this exchange. An unmeasured duration is not a fast one, and
+			// `duration < 100ms` reporting it would be the tool inventing a measurement.
+			return false
+		}
+		return numOp(e, us)
 	}
 	// Unreachable: field is set only by parseCmp, from fieldByName.
 	return false
@@ -755,6 +943,31 @@ func strOp(o op, actual, expected string, caseInsensitive bool) bool {
 		return strings.Contains(actual, expected)
 	}
 	// Unreachable: fieldAllows admits no other operator for a string field.
+	return false
+}
+
+// numOp is statusOp for the wide numeric fields. Kept separate rather than made generic: status
+// carries its bounds in uint16 and these in int64, and a shared helper would have to widen or
+// narrow one of them at the comparison, which is where an off-by-a-factor hides.
+func numOp(e *Expr, actual int64) bool {
+	switch e.op {
+	case opEq:
+		return actual == e.num64
+	case opNe:
+		return actual != e.num64
+	case opLt:
+		return actual < e.num64
+	case opLe:
+		return actual <= e.num64
+	case opGt:
+		return actual > e.num64
+	case opGe:
+		return actual >= e.num64
+	case opIn:
+		// Inclusive of both ends, as status ranges are.
+		return actual >= e.lo64 && actual <= e.hi64
+	}
+	// Unreachable: fieldAllows admits no other operator for these fields.
 	return false
 }
 

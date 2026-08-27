@@ -27,14 +27,30 @@ package query
 
 // Fields reports the fields this query compares on, in the grammar's own field order (host,
 // method, path, mime, status, body) and without duplicates. A nil *Expr — "no filter" — names none.
+// fieldOrder is the declared field order, so Fields() is stable across two queries that name the
+// same fields in different places.
+//
+// # Why this is a package-level var with a test behind it
+//
+// It used to be an array literal inside Fields, and the enum's comment claimed that adding a field
+// without extending it would be "a compile error rather than a silent out-of-range panic". That was
+// wrong: `[fieldCount]field{...}` with too few values is perfectly legal Go, and the missing slots
+// are filled with the zero value — which is fieldHost. So adding `length` and `duration` to the
+// grammar did not fail to compile; it made Fields() report `host,status,host,host`, emitting a field
+// the query never named, twice. Exactly the silent-wrong-answer this package exists to eliminate,
+// produced by the guard meant to prevent it.
+//
+// TestFieldOrderCoversEveryField is the guard that actually holds, because a length check and a
+// duplicate check are things Go will not do for you here.
+var fieldOrder = [fieldCount]field{
+	fieldHost, fieldMethod, fieldPath, fieldMime, fieldStatus, fieldBody, fieldLength, fieldDuration,
+}
+
 func (e *Expr) Fields() []string {
 	var seen [fieldCount]bool
 	e.collectFields(&seen)
-	// Built from the declared field order rather than discovery order, so the result is stable
-	// across two queries that name the same fields in different places.
-	order := [fieldCount]field{fieldHost, fieldMethod, fieldPath, fieldMime, fieldStatus, fieldBody}
-	out := make([]string, 0, len(order))
-	for _, f := range order {
+	out := make([]string, 0, len(fieldOrder))
+	for _, f := range fieldOrder {
 		if seen[int(f)] {
 			out = append(out, f.String())
 		}

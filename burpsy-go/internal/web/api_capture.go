@@ -716,6 +716,29 @@ func (f filteredExchangeQuery) Body() []byte {
 	return msg.Body()
 }
 
+// ResponseLen answers from the index row, which is the whole point of ResponseLen existing on
+// core.Exchange: /api/history serves index rows and must not open a response to size one.
+//
+// Presence is decided by Response, not by the length being non-zero. A 204 is a zero-length
+// response and a request still in flight is no response at all; collapsing those would make
+// `length = 0` match every pending request, and `length != 0` hide every empty one.
+func (f filteredExchangeQuery) ResponseLen() (int64, bool) {
+	if f.ex.Response == nil {
+		return 0, false
+	}
+	return int64(f.ex.ResponseLen), true
+}
+
+// DurationUs carries core.ExchangeDuration's Measured flag straight through rather than reducing it
+// to a number. That flag exists so an exchange nobody timed does not report as instantaneous, and
+// flattening it here would undo it at the one place an operator can ask about timing.
+func (f filteredExchangeQuery) DurationUs() (int64, bool) {
+	if !f.ex.Duration.Measured {
+		return 0, false
+	}
+	return int64(f.ex.Duration.Us), true
+}
+
 // sortable status helpers for the sitemap
 func sortedUints(vs []uint16) []uint16 {
 	out := make([]uint16, len(vs))

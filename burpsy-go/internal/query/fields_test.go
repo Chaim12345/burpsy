@@ -80,11 +80,19 @@ type stubRow struct {
 	status int
 	mime   string
 	body   []byte
+	// Both absences are explicit, so a stub that says nothing about length or timing reports them
+	// as absent rather than as zero — the same distinction the real adapters carry.
+	length     int64
+	hasLength  bool
+	durationUs int64
+	measured   bool
 }
 
-func (r stubRow) Host() string   { return r.host }
-func (r stubRow) Method() string { return r.method }
-func (r stubRow) Path() string   { return r.path }
-func (r stubRow) Status() int    { return r.status }
-func (r stubRow) Mime() string   { return r.mime }
-func (r stubRow) Body() []byte   { return r.body }
+func (r stubRow) Host() string               { return r.host }
+func (r stubRow) Method() string             { return r.method }
+func (r stubRow) Path() string               { return r.path }
+func (r stubRow) Status() int                { return r.status }
+func (r stubRow) Mime() string               { return r.mime }
+func (r stubRow) Body() []byte               { return r.body }
+func (r stubRow) ResponseLen() (int64, bool) { return r.length, r.hasLength }
+func (r stubRow) DurationUs() (int64, bool)  { return r.durationUs, r.measured }

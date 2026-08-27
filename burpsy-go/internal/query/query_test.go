@@ -15,14 +15,22 @@ type fakeRow struct {
 	status int    // 0 = absent, as Queryable documents
 	mime   string
 	body   []byte
+	// Absence is explicit for both, matching Queryable: a length of 0 is a real length (a 204) and
+	// an unmeasured duration is not a fast one, so neither can be inferred from the value.
+	length     int64
+	hasLength  bool
+	durationUs int64
+	measured   bool
 }
 
-func (f fakeRow) Host() string   { return f.host }
-func (f fakeRow) Method() string { return f.method }
-func (f fakeRow) Path() string   { return f.path }
-func (f fakeRow) Status() int    { return f.status }
-func (f fakeRow) Mime() string   { return f.mime }
-func (f fakeRow) Body() []byte   { return f.body }
+func (f fakeRow) Host() string               { return f.host }
+func (f fakeRow) Method() string             { return f.method }
+func (f fakeRow) Path() string               { return f.path }
+func (f fakeRow) Status() int                { return f.status }
+func (f fakeRow) Mime() string               { return f.mime }
+func (f fakeRow) Body() []byte               { return f.body }
+func (f fakeRow) ResponseLen() (int64, bool) { return f.length, f.hasLength }
+func (f fakeRow) DurationUs() (int64, bool)  { return f.durationUs, f.measured }
 
 func row() fakeRow {
 	return fakeRow{
@@ -495,6 +503,13 @@ func (c ruleCandidate) Path() string { return "" }
 func (c ruleCandidate) Status() int  { return c.responseCode }
 func (c ruleCandidate) Mime() string { return c.contentType }
 func (c ruleCandidate) Body() []byte { return []byte(c.rawBody) }
+
+// A match-and-replace candidate has bytes in hand, so its length is a real answer; nothing timed it,
+// so its duration is absent. Exactly the mix Queryable's two bools exist to express — and the reason
+// this consumer is in the test suite: it is structurally unlike a history row and must still answer
+// honestly rather than be given zeroes to satisfy the interface.
+func (c ruleCandidate) ResponseLen() (int64, bool) { return int64(len(c.rawBody)), true }
+func (c ruleCandidate) DurationUs() (int64, bool)  { return 0, false }
 
 func TestTheSameParsedQueryDrivesTwoUnrelatedConsumers(t *testing.T) {
 	e, err := Parse(`status in 200..299 and (host = "example.com" or host = "other.test") and body ~ "hi"`)
