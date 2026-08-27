@@ -50,11 +50,52 @@ const CATEGORIES: { value: InterceptRuleSpec["category"]; label: string }[] = [
   { value: "literal", label: "Literal" },
 ];
 
-/** A new row's field defaults to what that direction is usually written against: a host for a
- * request, a status code for a response — matching the vanilla intercept.ts default. */
+/**
+ * Everything that differs between the four directions, in one table.
+ *
+ * It is a table because the page previously carried `direction === "requests" ? … : …` in four
+ * separate places, and every one of those ternaries silently treats a WebSocket direction as a
+ * response — so adding the WebSocket panels by widening the union alone would have labelled them
+ * "Response interception rules" and defaulted their rules to matching a status code, which a frame
+ * does not have.
+ *
+ * `defaultField` is the field a new row is usually written against. A WebSocket frame has no method
+ * and no status code, so host is the only sensible default of the seven.
+ */
+/**
+ * What the queue filter can be set to. These are `Direction.String()` values from Go — singular,
+ * and underscored for WebSocket — because they are compared against `held[].direction`. They are
+ * deliberately NOT the same strings as `InterceptDirection`, which is the plural rule-endpoint
+ * suffix; conflating the two yields a filter that always matches nothing.
+ */
+type HeldDirectionFilter =
+  | "all"
+  | "request"
+  | "response"
+  | "websocket_to_server"
+  | "websocket_to_client";
+
+const DIRECTIONS: Record<
+  InterceptDirection,
+  { title: string; noun: string; defaultField: InterceptRuleSpec["field"] }
+> = {
+  requests: { title: "Request", noun: "request", defaultField: "host" },
+  responses: { title: "Response", noun: "response", defaultField: "status_code" },
+  websocket_to_server: {
+    title: "WebSocket → server",
+    noun: "client frame",
+    defaultField: "host",
+  },
+  websocket_to_client: {
+    title: "WebSocket → client",
+    noun: "server frame",
+    defaultField: "host",
+  },
+};
+
 function defaultRule(dir: InterceptDirection): InterceptRuleSpec {
   return {
-    field: dir === "requests" ? "host" : "status_code",
+    field: DIRECTIONS[dir].defaultField,
     enabled: true,
     string_match: "",
     category: "regex",
@@ -74,7 +115,7 @@ function describeRules(active: boolean, rules: InterceptRuleSpec[], noun: string
 function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Element {
   const { data, error, isFetching, refetch } = useInterceptRules(direction);
   const save = useSaveInterceptRules(direction);
-  const noun = direction === "requests" ? "request" : "response";
+  const { title, noun } = DIRECTIONS[direction];
 
   const [active, setActive] = useState(false);
   const [rules, setRules] = useState<InterceptRuleSpec[]>([]);
@@ -135,7 +176,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
           setActive(resp.active);
           setRules(resp.rules);
           setDirty(false);
-          toast.success(`${direction === "requests" ? "Request" : "Response"} rules saved`);
+          toast.success(`${title} rules saved`);
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
       },
@@ -147,7 +188,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
   if (data && !data.wired) {
     return (
       <div className="notice notice-warn">
-        {direction === "requests" ? "Request" : "Response"} interception rules are not wired up.
+        {title} interception rules are not wired up.
       </div>
     );
   }
@@ -323,7 +364,7 @@ export function InterceptPage(): JSX.Element {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [raw, setRaw] = useState("");
   const [fixContentLength, setFixContentLength] = useState(true);
-  const [directionFilter, setDirectionFilter] = useState<"all" | "request" | "response">("all");
+  const [directionFilter, setDirectionFilter] = useState<HeldDirectionFilter>("all");
   const [inspector, setInspector] = useState(true);
 
   const heldAll = data?.held ?? [];
@@ -449,6 +490,13 @@ export function InterceptPage(): JSX.Element {
           </strong>
         </div>
         <div className="detail-actions">
+          {/* The frame type, when there is one. A WebSocket payload alone does not say how to read
+              it, and an operator handed unlabelled binary bytes will edit them as text and forward a
+              structurally valid frame with a corrupted body. Warn tone on binary because that is
+              the case where the editor below is the wrong tool. */}
+          {selected.opcode ? (
+            <Badge tone={selected.opcode === "text" ? "info" : "warn"}>{selected.opcode}</Badge>
+          ) : null}
           <Badge tone={selected.direction === "request" ? "info" : "good"}>{selected.direction}</Badge>
           <IconButton
             label={inspector ? "Hide Inspector" : "Show Inspector"}
@@ -532,12 +580,17 @@ export function InterceptPage(): JSX.Element {
               id="direction-filter"
               aria-label="Filter by direction"
               value={directionFilter}
-              onChange={(e) => setDirectionFilter(e.target.value as "all" | "request" | "response")}
+              onChange={(e) => setDirectionFilter(e.target.value as HeldDirectionFilter)}
               style={{ width: "auto" }}
             >
               <option value="all">All messages</option>
               <option value="request">Requests only</option>
               <option value="response">Responses only</option>
+              {/* These values are Go's Direction.String(), which is what the API puts on each held
+                  row — not the plural rule-endpoint suffixes. Using the wrong one filters to nothing
+                  and looks exactly like an empty queue. */}
+              <option value="websocket_to_server">WebSocket → server only</option>
+              <option value="websocket_to_client">WebSocket → client only</option>
             </Select>
           </div>
         </div>
@@ -577,6 +630,20 @@ export function InterceptPage(): JSX.Element {
           <div className="two-col">
             <RuleEditor direction="requests" />
             <RuleEditor direction="responses" />
+            <RuleEditor direction="websocket_to_server" />
+            <RuleEditor direction="websocket_to_client" />
+          </div>
+          {/* Stated on the surface where the operator switches these on, because the limits are not
+              guessable from the controls and each one changes what the queue will contain. See
+              wsHoldable in internal/proxy/ws.go. */}
+          <div className="notice" style={{ marginTop: 10 }}>
+            <strong>What WebSocket interception does not hold.</strong> Control frames (ping, pong,
+            close) are always relayed: holding a ping stalls the peer's keepalive and holding a close
+            leaves a socket that cannot be ended. Fragmented messages and compressed frames are also
+            relayed untouched — a fragment is half a message, and a compressed payload is a DEFLATE
+            block rather than editable text. Compressed frames only occur if you have turned off
+            <code>Sec-WebSocket-Extensions</code> stripping in proxy options. Burp reassembles
+            fragments and inflates compressed frames; burpsy does not yet.
           </div>
         </TabsContent>
       </Tabs>

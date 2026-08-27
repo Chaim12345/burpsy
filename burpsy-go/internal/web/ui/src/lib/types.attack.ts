@@ -27,6 +27,12 @@ export interface HeldMessageDetail {
   held_ms: number;
   len: number;
   raw: string;
+  /**
+   * WebSocket frame type — "text", "binary", or a control opcode. Absent for HTTP, which has no
+   * equivalent, so this is optional rather than an empty string: "not applicable" and "unknown" are
+   * different, and only one of them should render a badge.
+   */
+  opcode?: string;
 }
 
 /**
