@@ -21,6 +21,7 @@ import { IssueDefinitionsPage } from "./pages/advisories";
 import { AuditQueuePage } from "./pages/auditqueue";
 import { ComparerPage } from "./pages/comparer";
 import { CollaboratorPage } from "./pages/collaborator";
+import { ContentDiscoveryPage } from "./pages/contentdiscovery";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
 import { DiscoverPage } from "./pages/discover";
@@ -95,6 +96,15 @@ export const TOOLS: NavTool[] = [
         // what can be described. Burp keeps the same pair under Target for the same reason.
         description: "Every issue class the catalogue describes, found or not",
         page: IssueDefinitionsPage,
+      },
+      {
+        id: "contentdiscovery",
+        // Burp reaches "Discover content" from a site-map right-click, so it belongs beside the
+        // site map rather than on the DISCOVER tab, which is a different feature that happens to
+        // share the word — see pages/contentdiscovery.tsx and pages/discover.tsx.
+        label: "Content discovery",
+        description: "Sweep a path space with ffuf, and what the scope check dropped",
+        page: ContentDiscoveryPage,
       },
       { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
     ],

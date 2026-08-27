@@ -47,6 +47,7 @@ export const keys = {
   intercept: ["intercept"] as const,
   sitemap: ["sitemap"] as const,
   crawls: ["crawls"] as const,
+  discovery: ["discovery"] as const,
   wsConnections: ["ws", "connections"] as const,
   wsHistory: (exchange: number) => ["ws", "history", exchange] as const,
   wsMessage: (id: number) => ["ws", "message", id] as const,
@@ -88,7 +89,10 @@ const INVALIDATION: Record<string, string[][]> = {
   issues: [["issues"], ["dashboard"], ["scanner"]],
   scanner: [["issues"], ["dashboard"], ["scanner"]],
   toollog: [["toollog"], ["dashboard"]],
-  dashboard: [["dashboard"]],
+  // A finished content-discovery run notifies changeDashboard and nothing else — it fetched
+  // nothing through burpsy, so no history row, site-map node or finding moved. That makes this
+  // entry the only event that can tell the console a sweep has results.
+  dashboard: [["dashboard"], ["discovery"]],
   task: [["dashboard"]],
   tasks: [["dashboard"]],
   ws: [["ws"], ["stats"], ["dashboard"]],
