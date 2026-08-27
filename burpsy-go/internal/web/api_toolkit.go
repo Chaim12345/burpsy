@@ -833,10 +833,19 @@ func bytesEqual(a, b []byte) bool {
 
 // toolLogEntry mirrors toollog.ts's LogEntry.
 type toolLogEntry struct {
-	ID     uint64 `json:"id"`
-	Tool   string `json:"tool"`
-	Host   string `json:"host"`
-	Port   uint16 `json:"port"`
+	ID   uint64 `json:"id"`
+	Tool string `json:"tool"`
+	Host string `json:"host"`
+	Port uint16 `json:"port"`
+	// TLS is whether the exchange this row records was carried over TLS.
+	//
+	// toollog.Entry has carried the flag since the log existed; this projection dropped it, so the
+	// Logger pane had to infer the scheme from the port — honestly, and it said so in a comment — and
+	// therefore emitted `http://` for every HTTPS service not on 443. Copy URL and Copy as curl both
+	// read that, so an operator pasted a wrong-scheme URL into a terminal or a report and debugged
+	// their copy rather than their target. Most internal and staging targets are HTTPS on a port
+	// other than 443.
+	TLS    bool   `json:"tls"`
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Status *int   `json:"status"`
