@@ -93,6 +93,73 @@ function scopeToQueryFragment(scope: ScopeView | undefined): string | null {
   return parts.length > 0 ? parts.join(" AND ") : null;
 }
 
+/* --- per-column filters (burpsy-react-ui-8sa) ------------------------------
+ *
+ * Burp puts a filter input under each column header. burpsy did not have one, and the naive fix —
+ * a row of inputs each holding its own state and filtering client-side — would have made this the
+ * page's *third* filtering mechanism, after the toolbar selects and the DSL box, with no single
+ * place showing what is actually being filtered.
+ *
+ * So these compose into the DSL instead, the same way the "In scope only" toggle already does
+ * (see scopeToQueryFragment and combineQuery). Typing in a column filter appends a clause to the
+ * query box, where the operator can see it, edit it, and learn the language. One mechanism, one
+ * visible statement of the current filter, and the server still does the filtering.
+ *
+ * # Why only some columns get one
+ *
+ * The DSL knows six fields: host, method, path, mime, status, body (internal/query/query.go:444).
+ * Columns outside that set — extension, query-parameter count, length, time, comment — cannot be
+ * expressed as a clause, and an input that silently did nothing, or that filtered client-side while
+ * the box said otherwise, is worse than no input. Those columns get no filter and the panel says
+ * why rather than leaving the operator to wonder which ones work.
+ *
+ * status, mime and method already have toolbar selects, so offering a second control for the same
+ * field would put two widgets on one clause. The text fields are the gap, and they are what this
+ * adds.
+ */
+
+/** The DSL-expressible text columns, with the operator each one should use. */
+export const COLUMN_FILTERS = [
+  {
+    field: "host",
+    label: "Host",
+    // `~` rather than `=`: a column filter is a substring search in every tool that has one, and
+    // `host = api.example.com` would match nothing until the operator typed the authority in full.
+    operator: "~",
+    placeholder: "api.example",
+  },
+  { field: "path", label: "Path", operator: "~", placeholder: "/admin" },
+  {
+    field: "body",
+    label: "Response body",
+    operator: "~",
+    // Worth stating: this is the one clause the server cannot answer from the index — it reads
+    // response bodies — so it is slower than the others by a lot on a large capture.
+    placeholder: "searches response bytes",
+  },
+] as const;
+
+type ColumnFilterField = (typeof COLUMN_FILTERS)[number]["field"];
+
+/** The clause a column filter contributes, or "" when the input is empty. */
+export function columnClause(field: string, operator: string, value: string): string {
+  const trimmed = value.trim();
+  return trimmed === "" ? "" : `${field} ${operator} "${escapeQueryString(trimmed)}"`;
+}
+
+/**
+ * Replace one column filter's clause in the query text.
+ *
+ * Pure, and exported, because the property that matters is a sequence property and cannot be seen
+ * from one call: typing "api" one character at a time must leave ONE clause in the box, not
+ * `host ~ "a" AND host ~ "ap" AND host ~ "api"`. That is what stripping the previous clause before
+ * appending the next one buys, and it is worth a test rather than a comment.
+ */
+export function rewriteClause(term: string, previous: string, next: string): string {
+  const without = previous ? stripFragment(term, previous) : term;
+  return next ? combineQuery(without, next) : without;
+}
+
 /** Append a fragment as a new AND'd clause, or start the query with it if the box is empty. */
 function combineQuery(base: string, fragment: string): string {
   const trimmed = base.trim();
@@ -314,6 +381,36 @@ export function HistoryPage(): JSX.Element {
   const [searchRegex, setSearchRegex] = useState(false);
   const [searchNegate, setSearchNegate] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  /**
+   * Per-column filter inputs (8sa). Their own state, but not their own filtering: each edit rewrites
+   * the DSL box, so `term` stays the single statement of what is filtered and the server still does
+   * the work. Kept keyed by field so a column can be cleared without disturbing the others.
+   */
+  const [columnFilters, setColumnFilters] = useState<Record<ColumnFilterField, string>>({
+    host: "",
+    path: "",
+    body: "",
+  });
+  const [columnFiltersOpen, setColumnFiltersOpen] = useState(false);
+
+  /**
+   * Change one column filter and rewrite its clause in the query box.
+   *
+   * The old clause is stripped before the new one is appended, so editing an input does not stack
+   * `host ~ "a" AND host ~ "ap" AND host ~ "api"` as the operator types. stripFragment is
+   * best-effort by design — if they have hand-edited the box, their text is left alone and the new
+   * clause is simply appended, which is visible in the box rather than silently discarded.
+   */
+  const setColumnFilter = (field: ColumnFilterField, value: string) => {
+    const spec = COLUMN_FILTERS.find((entry) => entry.field === field);
+    if (!spec) return;
+    const previous = columnClause(field, spec.operator, columnFilters[field]);
+    const next = columnClause(field, spec.operator, value);
+    setColumnFilters((current) => ({ ...current, [field]: value }));
+    setTerm((current) => rewriteClause(current, previous, next));
+  };
+
+  const columnFiltersActive = Object.values(columnFilters).filter((value) => value.trim() !== "").length;
   const [note, setNote] = useState("");
 
   const debouncedTerm = useDebounced(term, 260);
@@ -811,6 +908,11 @@ export function HistoryPage(): JSX.Element {
           <FilterToggle pressed={hideNoResponse} onPressedChange={setHideNoResponse}>
             Hide items without responses
           </FilterToggle>
+          {/* FilterToggle takes a single string child, so the count is composed rather than
+              interpolated as a second child. */}
+          <FilterToggle pressed={columnFiltersOpen} onPressedChange={setColumnFiltersOpen}>
+            {columnFiltersActive > 0 ? `Column filters (${columnFiltersActive})` : "Column filters"}
+          </FilterToggle>
           <Button
             variant={filtersActive > 0 ? "outline" : "quiet"}
             size="small"
@@ -855,6 +957,42 @@ export function HistoryPage(): JSX.Element {
             ))}
           </Select>
         </Toolbar>
+
+        {columnFiltersOpen ? (
+          <Toolbar style={{ marginTop: 6 }} aria-label="Per-column filters">
+            {COLUMN_FILTERS.map((spec) => (
+              <Field key={spec.field} label={spec.label} className="field-inline">
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={columnFilters[spec.field]}
+                    placeholder={spec.placeholder}
+                    onChange={(event) => setColumnFilter(spec.field, event.target.value)}
+                  />
+                )}
+              </Field>
+            ))}
+            {columnFiltersActive > 0 ? (
+              <Button
+                variant="outline"
+                size="small"
+                onClick={() => {
+                  for (const spec of COLUMN_FILTERS) setColumnFilter(spec.field, "");
+                }}
+              >
+                <X size={13} />
+                Clear column filters
+              </Button>
+            ) : null}
+            {/* Said once, here, rather than left to be discovered: these write clauses into the
+                filter box above, and the columns the query grammar cannot express get no input. */}
+            <span className="cell-dim">
+              These append clauses to the filter box, so it always shows what is filtered. Status,
+              type and method have their own controls above; extension, params, length, time and
+              comment cannot be expressed in the query grammar and so have no filter here.
+            </span>
+          </Toolbar>
+        ) : null}
         {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
       </div>
 
