@@ -343,6 +343,9 @@ export function IntruderPage(): JSX.Element {
   const [points, setPoints] = useState<PointView[]>([]);
   const [selected, setSelected] = useState<number[]>([]);
   const [payloadTexts, setPayloadTexts] = useState<string[]>([DEFAULT_PAYLOADS]);
+  const [payloadTypes, setPayloadTypes] = useState<("list" | "numbers" | "file")[]>(["list"]);
+  const [payloadNumbers, setPayloadNumbers] = useState<{ from: string; to: string; step: string }[]>([{ from: "1", to: "100", step: "1" }]);
+  const [payloadFiles, setPayloadFiles] = useState<string[]>([""]);
   const [rules, setRules] = useState<PayloadRuleSpec[]>([]);
   const [grepMatch, setGrepMatch] = useState("");
   const [grepExtract, setGrepExtract] = useState("");
@@ -378,9 +381,36 @@ export function IntruderPage(): JSX.Element {
       if (current.length > setsNeeded) return current.slice(0, setsNeeded);
       return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "")];
     });
+    setPayloadTypes((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "list" as const)];
+    });
+    setPayloadNumbers((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => ({ from: "1", to: "100", step: "1" }))];
+    });
+    setPayloadFiles((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "")];
+    });
   }, [setsNeeded]);
 
-  const setSizes = useMemo(() => payloadTexts.map(countPayloads), [payloadTexts]);
+  const setSizes = useMemo(() => {
+    return payloadTypes.map((t, i) => {
+      if (t === "numbers") {
+        const n = payloadNumbers[i];
+        if (!n) return 0;
+        const from = Number(n.from), to = Number(n.to), step = Number(n.step) || 1;
+        if (!Number.isFinite(from) || !Number.isFinite(to) || step === 0) return 0;
+        return Math.floor(Math.abs(to - from) / Math.abs(step)) + 1;
+      }
+      if (t === "file") return 1; // unknown until resolved server-side; 1 keeps canRun true
+      return countPayloads(payloadTexts[i] ?? "");
+    });
+  }, [payloadTypes, payloadTexts, payloadNumbers, payloadFiles]);
   const estimate = useMemo(() => estimateRequests(mode, selected.length, setSizes), [mode, selected.length, setSizes]);
   const examples = useMemo(
     () => new Map((result?.examples ?? []).map((example) => [example.first_ordinal, example.payloads])),
@@ -412,13 +442,13 @@ export function IntruderPage(): JSX.Element {
   const onRun = () => {
     setResult(null);
     setLegacyResult(null);
-    const body = {
+    const useSources = payloadTypes.some((t) => t !== "list");
+    const body: Record<string, unknown> = {
       msg_id: Number(msgId),
       target: target.trim(),
       all: allPoints,
       mode,
       points: selected,
-      payload_sets: payloadTexts.map(payloadList),
       max_requests: maxRequests,
       max_in_flight: maxInFlight,
       ...(rules.length ? { payload_rules: rules } : {}),
@@ -426,7 +456,21 @@ export function IntruderPage(): JSX.Element {
       ...(grepExtract.trim() ? { grep_extract: grepExtract.trim() } : {}),
       ...(rps.trim() ? { rps: Number(rps) } : {}),
     };
-    run.mutate(body, {
+    if (useSources) {
+      body.payload_sources = payloadTypes.map((t, i) => {
+        if (t === "numbers") {
+          const n = payloadNumbers[i] ?? { from: "1", to: "100", step: "1" };
+          return { type: "numbers", from: Number(n.from), to: Number(n.to), step: Number(n.step) || 1 };
+        }
+        if (t === "file") {
+          return { type: "file", filename: (payloadFiles[i] ?? "").trim() };
+        }
+        return { type: "list", items: payloadList(payloadTexts[i] ?? "") };
+      });
+    } else {
+      body.payload_sets = payloadTexts.map(payloadList);
+    }
+    run.mutate(body as unknown as Parameters<typeof run.mutate>[0], {
       onSuccess: (payload) => {
         // Naming a mode always selects the full report shape, but stay defensive:
         // an older server could still answer with the flat legacy array.
@@ -630,29 +674,99 @@ export function IntruderPage(): JSX.Element {
               />
             </div>
             <div className="card-pad stack">
-              {payloadTexts.map((text, index) => (
-                <Field
-                  key={index}
-                  label={
-                    setsNeeded === 1
-                      ? `Payloads (${setSizes[index] ?? 0})`
-                      : `Set ${index + 1} (${setSizes[index] ?? 0})`
-                  }
-                >
-                  {(id) => (
-                    <Textarea
-                      id={id}
-                      value={text}
-                      onChange={(event) =>
-                        setPayloadTexts((current) =>
-                          current.map((value, position) => (position === index ? event.target.value : value)),
-                        )
-                      }
-                      placeholder={index === 0 ? DEFAULT_PAYLOADS : "one payload per line"}
-                    />
-                  )}
-                </Field>
-              ))}
+              {Array.from({ length: setsNeeded }, (_, index) => {
+                const t = payloadTypes[index] ?? "list";
+                return (
+                  <Card key={index} className="card-pad" style={{ border: "1px solid var(--line)" }}>
+                    <div className="toolbar" style={{ marginBottom: 8 }}>
+                      <Field label={setsNeeded === 1 ? `Set (${setSizes[index] ?? 0})` : `Set ${index + 1} (${setSizes[index] ?? 0})`}>
+                        {(id) => (
+                          <Select
+                            id={id}
+                            value={t}
+                            onChange={(e) =>
+                              setPayloadTypes((cur) => cur.map((v, i) => (i === index ? (e.target.value as typeof t) : v)))
+                            }
+                          >
+                            <option value="list">Simple list</option>
+                            <option value="numbers">Numbers</option>
+                            <option value="file">File (server path)</option>
+                          </Select>
+                        )}
+                      </Field>
+                      <Badge tone={t === "list" ? "neutral" : "accent"}>{t}</Badge>
+                    </div>
+                    {t === "list" ? (
+                      <Field label="One payload per line">
+                        {(id) => (
+                          <Textarea
+                            id={id}
+                            value={payloadTexts[index] ?? ""}
+                            onChange={(event) =>
+                              setPayloadTexts((current) =>
+                                current.map((value, position) => (position === index ? event.target.value : value)),
+                              )
+                            }
+                            placeholder={index === 0 ? DEFAULT_PAYLOADS : "one payload per line"}
+                          />
+                        )}
+                      </Field>
+                    ) : t === "numbers" ? (
+                      <div className="form-grid">
+                        <Field label="From">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadNumbers[index]?.from ?? "1"}
+                              onChange={(e) =>
+                                setPayloadNumbers((cur) => cur.map((v, i) => (i === index ? { ...v, from: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="To">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadNumbers[index]?.to ?? "100"}
+                              onChange={(e) =>
+                                setPayloadNumbers((cur) => cur.map((v, i) => (i === index ? { ...v, to: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="Step">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadNumbers[index]?.step ?? "1"}
+                              onChange={(e) =>
+                                setPayloadNumbers((cur) => cur.map((v, i) => (i === index ? { ...v, step: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    ) : (
+                      <Field label="Server file path" hint="File must exist on server; blank lines skipped">
+                        {(id) => (
+                          <Input
+                            id={id}
+                            value={payloadFiles[index] ?? ""}
+                            onChange={(e) =>
+                              setPayloadFiles((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
+                            }
+                            placeholder="/tmp/payloads.txt or ./wordlists/sqli.txt"
+                          />
+                        )}
+                      </Field>
+                    )}
+                  </Card>
+                );
+              })}
             </div>
           </Card>
 

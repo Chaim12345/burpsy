@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -191,6 +192,7 @@ type PayloadSource struct {
 	BruteForce     *BruteForce
 	CustomIterator *CustomIterator
 	Null           *NullSource
+	File           *FileSource
 }
 
 // ListSource is the items for {"type":"list"}.
@@ -201,6 +203,11 @@ type ListSource struct {
 // NullSource is the count for {"type":"null"}: N copies of the empty payload.
 type NullSource struct {
 	Count int `json:"count"`
+}
+
+// FileSource is the filename for {"type":"file"} — payloads from server file, one per line.
+type FileSource struct {
+	Filename string `json:"filename"`
 }
 
 // UnmarshalJSON decodes the tagged shape, dispatching on "type".
@@ -249,6 +256,12 @@ func (s *PayloadSource) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		s.Null = &n
+	case "file":
+		var f FileSource
+		if err := json.Unmarshal(b, &f); err != nil {
+			return err
+		}
+		s.File = &f
 	default:
 		return fmt.Errorf("unknown payload source type %q", probe.Type)
 	}
@@ -347,6 +360,31 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "file":
+		if s.File == nil || strings.TrimSpace(s.File.Filename) == "" {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "file"}
+		}
+		data, err := os.ReadFile(s.File.Filename)
+		if err != nil {
+			return nil, err
+		}
+		var payloads []string
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				if err := checkLen(len(line)); err != nil {
+					return nil, err
+				}
+				payloads = append(payloads, line)
+			}
+		}
+		total = uint64(len(payloads))
+		exact = true
+		if uint64(len(payloads)) > uint64(cap) {
+			payloads = payloads[:cap]
+			trunc = true
+		}
+		items = payloads
 	default:
 		return nil, fmt.Errorf("unknown payload source type %q", s.Type)
 	}

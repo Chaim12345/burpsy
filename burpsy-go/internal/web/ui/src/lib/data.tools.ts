@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { api, json } from "./api";
 import type { RepeaterResult, RepeaterSendOptions } from "./types";
-import type { PointView } from "./types.tools";
+import type { PayloadSource, PointView } from "./types.tools";
 
 export interface IntruderRunRequest {
   msg_id: number;
@@ -9,7 +9,8 @@ export interface IntruderRunRequest {
   all: boolean;
   mode: string;
   points: number[];
-  payload_sets: string[][];
+  payload_sets?: string[][];
+  payload_sources?: PayloadSource[];
   max_requests: number;
   max_in_flight: number;
 }

@@ -142,6 +142,17 @@ export interface RunView {
  * but showing the estimate first is what stops an operator launching a
  * cluster-bomb attack that would have run for hours.
  */
+export type PayloadSourceType = "list" | "numbers" | "file" | "brute_force" | "custom_iterator" | "dates" | "null";
+
+export interface PayloadSourceList { type: "list"; items: string[] }
+export interface PayloadSourceNumbers { type: "numbers"; from: number; to: number; step: number; order?: "sequential" | "random"; count?: number; base?: "decimal" | "hex"; pad_to?: number }
+export interface PayloadSourceFile { type: "file"; filename: string }
+export interface PayloadSourceBruteForce { type: "brute_force"; charset: string; min_len: number; max_len: number }
+export interface PayloadSourceCustomIterator { type: "custom_iterator"; positions: string[][]; separator: string }
+export interface PayloadSourceDates { type: "dates"; from: string; to: string; step: number; format: string }
+export interface PayloadSourceNull { type: "null"; count: number }
+export type PayloadSource = PayloadSourceList | PayloadSourceNumbers | PayloadSourceFile | PayloadSourceBruteForce | PayloadSourceCustomIterator | PayloadSourceDates | PayloadSourceNull;
+
 export function estimateRequests(mode: AttackMode, pointCount: number, setSizes: number[]): { count: number; exact: boolean } {
   const sizes = setSizes.map((size) => Math.max(0, size));
   const first = sizes[0] ?? 0;
