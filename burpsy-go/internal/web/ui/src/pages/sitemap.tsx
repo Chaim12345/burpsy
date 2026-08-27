@@ -13,6 +13,8 @@ import { Inspector } from "../ui/inspector";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Toolbar, Tooltip } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
+import { CrawlPathsView } from "../ui/crawlpaths";
+import { useCrawls } from "../lib/data.observe";
 import { cn } from "../lib/cn";
 
 interface FlatRow {
@@ -187,6 +189,15 @@ export function SiteMapPage(): JSX.Element {
   const setRoute = useApp((state) => state.setRoute);
 
   const [filter, setFilter] = useState("");
+  /**
+   * Which of Burp's two site-map views is showing.
+   *
+   * Kept as page state rather than persisted: the URL view is the one an operator wants on arrival,
+   * and a remembered "crawl paths" would greet them with an empty panel on a session where nothing
+   * has crawled yet — which reads as a broken site map rather than as a remembered preference.
+   */
+  const [view, setView] = useState<"urls" | "paths">("urls");
+  const crawls = useCrawls();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [cursorId, setCursorId] = useState<string | null>(null);
@@ -548,6 +559,27 @@ export function SiteMapPage(): JSX.Element {
           title="Site map"
           actions={
             <>
+              {/* Burp's two views (burpsy-react-ui-tix). The URL tree answers "what is on this
+                  host"; crawl paths answers "what should have linked to the page I expected and
+                  cannot find". Different questions, so a toggle rather than a merged tree. */}
+              <div className="chip-row" role="group" aria-label="Site map view">
+                <Button
+                  variant={view === "urls" ? "outline" : "quiet"}
+                  size="small"
+                  aria-pressed={view === "urls"}
+                  onClick={() => setView("urls")}
+                >
+                  URL view
+                </Button>
+                <Button
+                  variant={view === "paths" ? "outline" : "quiet"}
+                  size="small"
+                  aria-pressed={view === "paths"}
+                  onClick={() => setView("paths")}
+                >
+                  Crawl paths
+                </Button>
+              </div>
               <Badge>{(data?.nodes ?? 0).toLocaleString()} nodes</Badge>
               <Badge>{(data?.exchanges ?? 0).toLocaleString()} exchanges</Badge>
               {data?.in_flight ? <Badge tone="info">{data.in_flight} in flight</Badge> : null}
@@ -558,7 +590,11 @@ export function SiteMapPage(): JSX.Element {
         />
         {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
       </div>
-      <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
+      {view === "paths" ? (
+        <CrawlPathsView runs={crawls.data?.crawls ?? []} />
+      ) : (
+        <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
+      )}
     </div>
   );
 }

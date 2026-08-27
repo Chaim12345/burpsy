@@ -299,6 +299,28 @@ type Fetch struct {
 	// RetentionExcluded records that the crawl-retention query did not match this response, so it was
 	// captured and scanned but not traversed.
 	RetentionExcluded bool `json:"retention_excluded,omitempty"`
+
+	// FoundAt is the URL of the page this one was discovered on, empty for a seed.
+	//
+	// # Why a successful fetch needs it, when refusals already had it
+	//
+	// frontierItem.foundAt existed and was documented "reporting only": every SkipRecord carried it,
+	// so the crawler could say why a URL it declined had been considered. Nothing carried it for a
+	// URL the crawl actually fetched, so the graph the crawler walks was reconstructible only for
+	// the parts it refused.
+	//
+	// That is the data behind Burp's "Crawl paths view", and the reason burpsy had no such view was
+	// not a missing UI — it was that the edge was thrown away on success. Depth already said HOW FAR
+	// a page was from a seed; this says WHICH WAY, which is the question an operator has when a page
+	// they expected is absent: not "how deep is it" but "what should have linked to it".
+	//
+	// Empty means seed, and a reader must not treat empty as "unknown provenance": a seed genuinely
+	// has no referring page. LinkText below is what distinguishes the two in a rendering.
+	FoundAt string `json:"found_at,omitempty"`
+	// LinkText is the link text or form label this URL was reached through, empty for a seed and for
+	// a link with no text. Carried because "which of the four links to /logout was followed" is not
+	// answerable from the URL alone, and because a rendering needs something to label an edge with.
+	LinkText string `json:"link_text,omitempty"`
 }
 
 // Report is one crawl's whole outcome.
@@ -923,7 +945,12 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	if item.depth > lim.DeepestDepth {
 		lim.DeepestDepth = item.depth
 	}
-	fetch := Fetch{URL: item.url.String(), Method: item.method, ExchangeID: ex.ID, Depth: item.depth}
+	// FoundAt and LinkText come straight off the frontier item, which has carried them all along for
+	// the refusal reports. Populating them here is the whole of what a crawl-paths view needed.
+	fetch := Fetch{
+		URL: item.url.String(), Method: item.method, ExchangeID: ex.ID, Depth: item.depth,
+		FoundAt: item.foundAt, LinkText: item.text,
+	}
 	if ex.Status != nil {
 		fetch.Status = int(*ex.Status)
 	}
