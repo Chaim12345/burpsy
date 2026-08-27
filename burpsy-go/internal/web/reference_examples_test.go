@@ -128,7 +128,7 @@ func TestTheDocumentedGrammarListsExactlyTheFieldsTheParserKnows(t *testing.T) {
 	// Taken from internal/query's fieldByName. Kept as a literal rather than exported from that
 	// package: the point is to compare the page against the parser's real behaviour, and a shared
 	// constant would let both drift together.
-	known := []string{"host", "method", "path", "mime", "status", "body", "length", "duration", "header"}
+	known := []string{"host", "method", "path", "mime", "status", "body", "length", "duration", "header", "extension", "params"}
 
 	// header is the one field whose usable form is not `field op value`: it takes a subscript naming
 	// which header. Spelled out here rather than folded into the loop below, because a loop that

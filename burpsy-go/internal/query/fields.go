@@ -44,7 +44,7 @@ package query
 // duplicate check are things Go will not do for you here.
 var fieldOrder = [fieldCount]field{
 	fieldHost, fieldMethod, fieldPath, fieldMime, fieldStatus, fieldBody, fieldLength, fieldDuration,
-	fieldHeader,
+	fieldHeader, fieldExtension, fieldParams,
 }
 
 func (e *Expr) Fields() []string {

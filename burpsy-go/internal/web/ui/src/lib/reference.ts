@@ -66,7 +66,7 @@ and-expr   := unary-expr ( "and" unary-expr )*
 unary-expr := "not" unary-expr | primary
 primary    := "(" or-expr ")" | comparison
 comparison := field op value
-field      := "host" | "status" | "method" | "path" | "mime" | "body"\n            | "length" | "duration" | "header" "[" string "]"`;
+field      := "host" | "status" | "method" | "path" | "mime" | "body"\n            | "length" | "duration" | "extension" | "params"\n            | "header" "[" string "]"`;
 
 /**
  * Filter examples, one complete query per entry.
@@ -94,6 +94,8 @@ export const QUERY_EXAMPLES: { query: string; means: string }[] = [
   { query: 'header["server"] ~ "nginx"', means: "A response header. The name is quoted and case-insensitive; the value folds case too." },
   { query: 'header["set-cookie"] ~ "HttpOnly"', means: "Any-of over a repeated header: Set-Cookie appears many times and this matches if any value does." },
   { query: 'not header["strict-transport-security"] ~ "max-age"', means: "Responses missing HSTS. An absent header fails every comparison, so `not` is how you ask for its absence." },
+  { query: 'extension = "js"', means: "The path's last-segment extension, lower-cased. A path with none matches no extension comparison." },
+  { query: "params > 3", means: "How many QUERY parameters the path carries — the same count the Query column shows, body parameters excluded." },
   { query: "body ~ password", means: "The only operator body accepts, matched against the raw bytes." },
   { query: "host = api.example.com and status >= 400", means: "and binds tighter than or." },
   { query: "method = POST or method = PUT", means: "Keywords are case-insensitive; AND and OR also parse." },
@@ -147,6 +149,12 @@ export const QUERY_PANEL: ReferencePanel = {
       detail:
         "Response size in bytes: = (or ==), !=, <, <=, >, >= and in low..high. Accepts b, kb, mb and gb; a bare number means bytes.",
       note: "length = 0 is a real answer — a 204 is zero-length — so it does not match a request still waiting, which has no length at all. An inverted range (length in 1mb..1kb) is refused at parse time rather than matching nothing.",
+    },
+    {
+      term: "extension, params",
+      detail:
+        "Derived from the path: extension takes =, != and ~ case-insensitively; params is a count and takes the numeric operators.",
+      note: "Both are computed from the path rather than sent, so they cannot disagree between rows — and they use the same rules as the History table's Extension and Query columns (pathParts), so the filter and the column beside it always agree. params counts QUERY parameters only; Burp's Params column also counts body parameters, which are not on an index row. A path with no extension matches NO extension comparison, negations included.",
     },
     {
       term: 'header["name"]',

@@ -178,6 +178,8 @@ const (
 	fieldLength
 	fieldDuration
 	fieldHeader
+	fieldExtension
+	fieldParams
 	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this.
 	//
 	// NOTE: adding a field here is NOT caught by the compiler in fieldOrder — a short
@@ -207,6 +209,10 @@ func (f field) String() string {
 		return "duration"
 	case fieldHeader:
 		return "header"
+	case fieldExtension:
+		return "extension"
+	case fieldParams:
+		return "params"
 	}
 	return "?"
 }
@@ -493,7 +499,7 @@ func (p *parser) parseCmp() (*Expr, error) {
 	if f == fieldStatus {
 		return p.parseStatusValue(o)
 	}
-	if f == fieldLength || f == fieldDuration {
+	if f == fieldLength || f == fieldDuration || f == fieldParams {
 		return p.parseNumericValue(f, o)
 	}
 	val, err := p.parseStringValue(f)
@@ -573,6 +579,10 @@ func fieldByName(name string) (field, bool) {
 		return fieldDuration, true
 	case "header":
 		return fieldHeader, true
+	case "extension":
+		return fieldExtension, true
+	case "params":
+		return fieldParams, true
 	}
 	return 0, false
 }
@@ -595,6 +605,11 @@ func fieldAllows(f field, o op) bool {
 	case fieldHeader:
 		// String operators only. A header value is text, and no ordering on it means anything.
 		return o == opEq || o == opNe || o == opContains
+	case fieldExtension:
+		return o == opEq || o == opNe || o == opContains
+	case fieldParams:
+		// A count, so the numeric set — including `in`, for "between two and five parameters".
+		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
 	}
 	return false
 }
@@ -610,6 +625,10 @@ func allowedOps(f field) string {
 		return "=, !=, <, <=, >, >= and `in low..high`"
 	case fieldHeader:
 		return "=, != and ~ (contains), each case-insensitive on the value"
+	case fieldExtension:
+		return "=, != and ~ (contains), case-insensitive"
+	case fieldParams:
+		return "=, !=, <, <=, >, >= and `in low..high`"
 	}
 	return "=, != (case-insensitive for host and mime) and ~ (contains)"
 }
@@ -767,6 +786,13 @@ var numericUnits = map[field][]struct {
 		{"s", 1000 * 1000},
 		{"", 1000}, // bare: milliseconds, matching the History column
 	},
+	// params is a plain count, so the only accepted form is a bare number. It still needs an entry:
+	// parseScaledNumber looks its field up here, and a missing entry made every `params = 3` fail
+	// with "\"\" is not a unit params accepts — length accepts b, kb, mb and gb", which is both a
+	// refusal of valid input and an offer of megabytes for a count.
+	fieldParams: {
+		{"", 1},
+	},
 }
 
 // parseScaledNumber reads a number with an optional unit suffix and returns it in the field's base
@@ -826,10 +852,18 @@ func (p *parser) parseScaledNumber(f field) (int64, error) {
 
 // unitsFor names the accepted suffixes, and what a bare number means, so the error is actionable.
 func unitsFor(f field) string {
-	if f == fieldDuration {
+	switch f {
+	case fieldDuration:
 		return "duration accepts us, ms and s, and a bare number means milliseconds"
+	case fieldParams:
+		return "params is a count and takes a plain number with no unit"
+	default:
+		// Spelled as a switch with an explicit default rather than an if: the previous form returned
+		// length's units for every field that was not duration, so params was told it accepts
+		// megabytes. A new numeric field now gets length's text only by falling through here
+		// deliberately.
+		return "length accepts b, kb, mb and gb, and a bare number means bytes"
 	}
-	return "length accepts b, kb, mb and gb, and a bare number means bytes"
 }
 
 func (p *parser) parseStatusNumber() (uint16, error) {
@@ -1001,6 +1035,32 @@ func (e *Expr) matchCmp(q Queryable) bool {
 			return false
 		}
 		return numOp(e, length)
+	case fieldExtension:
+		path := q.Path()
+		if path == "" {
+			return false // no path: nothing to take an extension from
+		}
+		ext, has := pathExtension(path)
+		if !has {
+			// No extension is not an empty extension. `extension != "js"` must not sweep up every
+			// extensionless path, the same rule an absent header follows.
+			return false
+		}
+		// Case-insensitive: a URL naming LOGO.PNG and one naming logo.png name the same file type,
+		// and Burp's own filter folds it.
+		return strOp(e.op, ext, e.str, true)
+	case fieldParams:
+		path := q.Path()
+		if path == "" {
+			return false
+		}
+		// Derived rather than carried, because it is derivable exactly: the count is a property of
+		// the path this row already has, so no adapter has to answer a new question and none can
+		// answer it differently. The UI's Query column computes the same thing client-side from the
+		// same string (see pathParts in history.tsx), which is why this counts QUERY parameters only
+		// and not body parameters — a field named `params` that silently included body parameters
+		// would disagree with the column beside it.
+		return numOp(e, int64(queryParamCount(path)))
 	case fieldHeader:
 		values, present := q.Header(e.key)
 		if !present {
@@ -1057,6 +1117,51 @@ func strOp(o op, actual, expected string, caseInsensitive bool) bool {
 	}
 	// Unreachable: fieldAllows admits no other operator for a string field.
 	return false
+}
+
+// pathExtension returns the lowercased extension of a path's last segment, and whether it has one.
+//
+// The query string is cut first: `/report.pdf?v=2` has extension "pdf", and a naive last-dot search
+// would find the one in `?v=2.1` on a path with no extension at all. A leading dot on the segment
+// itself (`/.env`) is not an extension either — the whole name is ".env" — because treating it as
+// one would make `extension = "env"` match a dotfile whose type is not env.
+func pathExtension(path string) (string, bool) {
+	if cut := strings.IndexAny(path, "?#"); cut >= 0 {
+		path = path[:cut]
+	}
+	segment := path
+	if slash := strings.LastIndexByte(path, '/'); slash >= 0 {
+		segment = path[slash+1:]
+	}
+	dot := strings.LastIndexByte(segment, '.')
+	if dot <= 0 || dot == len(segment)-1 {
+		// dot <= 0 covers both "no dot" and a leading dot; dot at the end is a trailing dot with no
+		// extension after it.
+		return "", false
+	}
+	return strings.ToLower(segment[dot+1:]), true
+}
+
+// queryParamCount counts the query parameters in a path.
+//
+// Empty pairs are not counted: `?a=1&&b=2` has two parameters, not three, and `?` alone has none. A
+// count that included them would report a number an operator cannot see anywhere on screen.
+func queryParamCount(path string) int {
+	cut := strings.IndexByte(path, '?')
+	if cut < 0 {
+		return 0
+	}
+	query := path[cut+1:]
+	if fragment := strings.IndexByte(query, '#'); fragment >= 0 {
+		query = query[:fragment]
+	}
+	count := 0
+	for _, pair := range strings.Split(query, "&") {
+		if pair != "" {
+			count++
+		}
+	}
+	return count
 }
 
 // numOp is statusOp for the wide numeric fields. Kept separate rather than made generic: status
