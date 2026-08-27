@@ -156,6 +156,30 @@ export interface RunView {
   payload_sets: PayloadSetReport[];
 }
 
+/**
+ * A running attack as the control routes see it (GET /api/intruder/attacks).
+ *
+ * Distinct from AttackStatus: this is the *live* state of an attack the process is still executing,
+ * and "running" is a state the finished report never carries. `task_id` is the dashboard task id,
+ * which is also the id POST /api/intruder/attacks/{id}/{pause|resume|stop} takes — one id space, so
+ * the Dashboard's stop button and Intruder's address the same attack by the same name.
+ */
+export type IntruderAttackStatus = "running" | "paused" | "stopped";
+
+export interface IntruderAttack {
+  task_id: number;
+  kind: AttackMode;
+  target: string;
+  planned: number;
+  status: IntruderAttackStatus;
+  stop_reason?: string;
+}
+
+/** The list shape; `attacks` is never null, so absent cannot be misread as "none running". */
+export interface IntruderAttacksResp {
+  attacks: IntruderAttack[];
+}
+
 export type PayloadSourceType = "list" | "numbers" | "file" | "brute_force" | "custom_iterator" | "dates" | "null";
 
 export interface PayloadSourceList { type: "list"; items: string[] }

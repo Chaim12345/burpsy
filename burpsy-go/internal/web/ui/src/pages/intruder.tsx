@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Crosshair, FileSearch, Plus, RotateCcw, Search, Trash2, Zap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Crosshair, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
-import { useIntruderPoints, useIntruderRun, type IntruderRunRequest } from "../lib/data.tools";
+import { api, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import {
+  AttackActionStale,
+  useIntruderAttackAction,
+  useIntruderAttacks,
+  useIntruderPoints,
+  useIntruderRun,
+  type IntruderRunRequest,
+} from "../lib/data.tools";
 import { usePools } from "../lib/data.pools";
 import { useMessage } from "../lib/data";
 import {
@@ -28,6 +35,7 @@ import {
   quoteRegex,
   resolvePayloads,
   type AttackMode,
+  type IntruderAttacksResp,
   type PayloadRuleName,
   type PayloadRuleSpec,
   type ResolvedPayload,
@@ -617,6 +625,78 @@ export function IntruderPage(): JSX.Element {
   const pools = usePools();
   const baseMessage = useMessage(msgId ? Number(msgId) : null);
 
+  // Live attack control (pause/resume/stop). /run is synchronous, so this page cannot read its own
+  // attack's task_id from the run response — that arrives only when the attack is already over. It
+  // finds the id by watching GET /api/intruder/attacks while its run is in flight, and identifying
+  // the attack that appeared *after* it launched (target- and kind-matched). priorIds is the set of
+  // attacks already running at launch, captured so a second identical attack started elsewhere is
+  // not mistaken for this one.
+  const priorIds = useRef<Set<number>>(new Set());
+  const [myTaskId, setMyTaskId] = useState<number | null>(null);
+  const attacks = useIntruderAttacks(run.isPending);
+  const attackAction = useIntruderAttackAction();
+
+  // The attacks list reports `target` as bare host:port (the server's targetParts collapses the URL
+  // to that; api_types.go), so the page's URL-shaped target has to be reduced the same way before it
+  // can match. Mirrors targetParts' scheme-default ports so "https://h" and "h:443" compare equal.
+  const targetAuthority = (raw: string): string => {
+    let t = raw.trim();
+    let tls = false;
+    const scheme = t.indexOf("://");
+    if (scheme >= 0) {
+      tls = t.slice(0, scheme).toLowerCase() === "https";
+      t = t.slice(scheme + 3);
+    }
+    const cut = t.search(/[/?]/);
+    if (cut >= 0) t = t.slice(0, cut);
+    if (!/:\d+$/.test(t)) t = `${t}:${tls ? 443 : 80}`;
+    return t;
+  };
+
+  // Lock onto our task id once it appears, and never re-pick within one run: once identified, the id
+  // is stable until the run ends, so a later poll that races the attack's own status change cannot
+  // move the controls to a different attack.
+  useEffect(() => {
+    if (!run.isPending || myTaskId !== null) return;
+    const authority = targetAuthority(target);
+    const candidates = (attacks.data?.attacks ?? []).filter(
+      (a) =>
+        !priorIds.current.has(a.task_id) &&
+        a.target === authority &&
+        a.kind === mode &&
+        (a.status === "running" || a.status === "paused"),
+    );
+    if (candidates.length) {
+      // The newest matching attack is this page's: it just launched, and older identical attacks (if
+      // any) were captured in priorIds already.
+      setMyTaskId(candidates.reduce((best, a) => (a.task_id > best.task_id ? a : best)).task_id);
+    }
+  }, [attacks.data, run.isPending, myTaskId, target, mode]);
+
+  // When the run ends (completed or stopped), drop the id so the controls disappear with it.
+  useEffect(() => {
+    if (!run.isPending) setMyTaskId(null);
+  }, [run.isPending]);
+
+  const myAttack = myTaskId === null ? null : (attacks.data?.attacks ?? []).find((a) => a.task_id === myTaskId) ?? null;
+
+  const controlAttack = (action: "pause" | "resume" | "stop") => {
+    if (myTaskId === null) return;
+    attackAction.mutate(
+      { task_id: myTaskId, action },
+      {
+        onSuccess: () => {
+          if (action === "stop") toast.info("Stopping — the report will show everything that was sent");
+          else toast.success(action === "pause" ? "Attack paused" : "Attack resumed");
+        },
+        onError: (error) =>
+          error instanceof AttackActionStale
+            ? toast.info("The attack already finished — its report is on the way")
+            : toast.error(error instanceof Error ? error.message : String(error)),
+      },
+    );
+  };
+
   // A send-to handoff from History or Repeater arrives through the store. It replaces only what is
   // tied to the specific request — the base message, the target, the discovered positions — and the
   // report, which belongs to the request that produced it. Payload sets, processing rules, grep and
@@ -774,8 +854,18 @@ export function IntruderPage(): JSX.Element {
     }),
   });
 
-  const onRun = () => {
+  const onRun = async () => {
     setStoredRun(null);
+    setMyTaskId(null);
+    // Snapshot the attacks already running, so the one that appears next is unambiguously ours even
+    // if an identical attack is running elsewhere. Best-effort: if the list cannot be read, fall
+    // back to an empty prior set and the target/kind/newest match still finds it.
+    try {
+      const prior = await api<IntruderAttacksResp>("/api/intruder/attacks");
+      priorIds.current = new Set(prior.attacks.map((a) => a.task_id));
+    } catch {
+      priorIds.current = new Set();
+    }
     const snapshotAtLaunch = payloadSnapshot();
     const useSources = payloadTypes.some((t) => t !== "list");
     const usePool = poolName.trim() !== "";
@@ -879,8 +969,43 @@ export function IntruderPage(): JSX.Element {
                   New attack
                 </Button>
               ) : null}
+              {/* Live controls for the attack in flight. They appear only once this page's task id
+                  has been located in the attacks list — a control that cannot yet name its target is
+                  worse than no control, so until then the badge says it is still locating. */}
+              {run.isPending ? (
+                myAttack ? (
+                  <>
+                    <Badge tone={myAttack.status === "paused" ? "warn" : "accent"}>
+                      {myAttack.status === "paused" ? "paused" : "running"}
+                    </Badge>
+                    {myAttack.status === "paused" ? (
+                      <Tooltip content="Resume the paused attack">
+                        <Button variant="outline" onClick={() => controlAttack("resume")} disabled={attackAction.isPending}>
+                          <Play size={14} />
+                          Resume
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip content="Pause the attack; it holds its place and can be resumed">
+                        <Button variant="outline" onClick={() => controlAttack("pause")} disabled={attackAction.isPending}>
+                          <Pause size={14} />
+                          Pause
+                        </Button>
+                      </Tooltip>
+                    )}
+                    <Tooltip content="Stop the attack; the report will show everything sent so far">
+                      <Button variant="outline" onClick={() => controlAttack("stop")} disabled={attackAction.isPending}>
+                        <Square size={14} />
+                        Stop
+                      </Button>
+                    </Tooltip>
+                  </>
+                ) : (
+                  <Badge tone="info">locating attack…</Badge>
+                )
+              ) : null}
               <Tooltip content={canRun ? "Run the attack" : "Choose a message, target, positions and payloads first"}>
-                <button type="button" className="button button-primary" onClick={onRun} disabled={!canRun}>
+                <button type="button" className="button button-primary" onClick={() => void onRun()} disabled={!canRun}>
                   <Zap size={14} />
                   {run.isPending ? "Attacking…" : "Launch attack"}
                 </button>

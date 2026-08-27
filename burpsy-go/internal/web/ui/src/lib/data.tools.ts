@@ -1,8 +1,8 @@
 import { useRef } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
 import type { RepeaterResult, RepeaterSendOptions } from "./types";
-import type { PayloadRuleSpec, PayloadSource, PointView } from "./types.tools";
+import type { IntruderAttack, IntruderAttacksResp, PayloadRuleSpec, PayloadSource, PointView } from "./types.tools";
 
 export interface IntruderRunRequest {
   msg_id: number;
@@ -116,5 +116,74 @@ export function useIntruderPoints() {
 export function useIntruderRun() {
   return useMutation({
     mutationFn: (body: IntruderRunRequest) => api<unknown>("/api/intruder/run", json("POST", body)),
+  });
+}
+
+/**
+ * The attacks this process is running and can control (GET /api/intruder/attacks).
+ *
+ * Polled only while `enabled` — i.e. while this page has an attack in flight. /run is synchronous,
+ * so a page cannot learn its own attack's task_id from the run response (which arrives only when the
+ * attack is over, by which point control is moot). It learns it here instead, by watching this list
+ * while it waits. The 1s cadence is chosen to feel live for pause/resume/stop without hammering a
+ * process that is already busy driving the attack.
+ */
+export function useIntruderAttacks(enabled: boolean) {
+  return useQuery({
+    queryKey: ["intruder", "attacks"],
+    queryFn: ({ signal }) => api<IntruderAttacksResp>("/api/intruder/attacks", { signal }),
+    enabled,
+    refetchInterval: enabled ? 1_000 : false,
+  });
+}
+
+/**
+ * Thrown when pause/resume/stop hit an attack that is no longer in a state the action can change
+ * (HTTP 409): it already stopped, or its plan is exhausted and the report is assembling. Its own
+ * type so the page can say "the attack already finished" rather than render a 409 as a failure —
+ * the same reason SendCancelled is not an Error notice.
+ */
+export class AttackActionStale extends Error {
+  constructor(readonly action: string) {
+    super(`Attack is no longer in a state that ${action} can change`);
+    this.name = "AttackActionStale";
+  }
+}
+
+export interface IntruderAttackActionBody {
+  task_id: number;
+  action: "pause" | "resume" | "stop";
+}
+
+/** The 200 body of a successful action: the id, what was done, and the state it left the attack in. */
+export interface IntruderAttackActionResult {
+  task_id: number;
+  action: string;
+  applied: boolean;
+  status: IntruderAttack["status"];
+}
+
+/**
+ * Pause, resume or stop a running attack by task id.
+ *
+ * Stop is deliberately NOT paired with aborting the run fetch. The server, on stop, lets in-flight
+ * sends land and returns the assembled report (a prefix of the payload sets) as the /run response —
+ * so the launching page's run mutation resolves with a real stopped report the operator can read.
+ * Aborting the fetch would throw that report away, which is the worse of the two honest options.
+ */
+export function useIntruderAttackAction() {
+  return useMutation<IntruderAttackActionResult, Error, IntruderAttackActionBody>({
+    mutationFn: async ({ task_id, action }) => {
+      try {
+        return await api<IntruderAttackActionResult>(`/api/intruder/attacks/${task_id}/${action}`, json("POST", {}));
+      } catch (failure) {
+        // 409 is "the action cannot apply", not a failure: the attack ended between the button
+        // appearing and the click landing. Translated so the page reports it as information.
+        if (failure && typeof failure === "object" && "status" in failure && (failure as { status: number }).status === 409) {
+          throw new AttackActionStale(action);
+        }
+        throw failure;
+      }
+    },
   });
 }

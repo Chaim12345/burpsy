@@ -1,0 +1,10 @@
+# Beads runtime/machine-local files. The portable, mergeable database lives in issues.jsonl
+# (beads' own git-sync form); the SQLite binary is rebuilt from it and must not be committed —
+# it is large, machine-specific, and torn if copied mid-write.
+beads.db
+beads.db-shm
+beads.db-wal
+*.lock
+.write.lock
+last-touched
+.local_version
