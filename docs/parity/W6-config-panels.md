@@ -139,7 +139,7 @@ All paths are relative to repo root; the React tree is
 | 9 | configPanelCookieJar | Which tools update the jar; view/edit cookies | `ui/pages/session.tsx:1005` | 4-c | View only. The jar is read (`/api/session/cookies`) and honestly reports "not attached"/"attached and empty". No per-tool monitor selection, no add/edit/delete. |
 | 10 | configPanelCustomCACertificates | Import your own CA cert+key | `internal/proxy/proxy.go:271` `LoadOrGenerateCA` reads `ca.crt`/`ca.key` from `-ca-dir` (`cmd/burpsy/main.go:46`) | 3 | Real capability, filesystem+flag only. `CertificateSection` (`ui/pages/settings.tsx:1336`) is **download-only** — no import control. |
 | 11 | configPanelDNSLookupPolicy | System vs custom resolver, DNS timeout | `ui/pages/settings.tsx:919`; wire `internal/web/api_network.go:92-105`; consumed `internal/sender/network.go:515-517` | 4 | Proof: `go test ./internal/sender/...` → `ok …/internal/sender 4.619s`. |
-| 12 | configPanelDefaultInspectorPanelState | Whether Inspector sections start open | `ui/lib/store.ts:18,66,124,141,288` | **2** | **UNWIRED — flagship finding.** `inspectorPanelState` is declared, defaulted, persisted, and has a setter. `grep -rn 'inspectorPanelState\|setInspectorPanelState'` over the whole repo returns **only store.ts**. Zero readers, zero writers, zero tests. The store comment names Burp's identifier verbatim: *"The state sections open in, Burp's `configPanelDefaultInspectorPanelState`"*. Positive control: the same grep for `density` returns readers in `settings.tsx:1302`, `ui/table.tsx:38`. |
+| 12 | configPanelDefaultInspectorPanelState | Whether Inspector sections start open | `ui/lib/store.ts:18,103,161,178,328`; read `ui/ui/inspector.tsx:475,550`, written `:477`, applied `:769` | 4 | **RETRACTED 2026-08-27 — this row was a false positive, and so was the "flagship finding" framing built on it.** The panel is fully wired: `SettingsPanel` (`inspector.tsx:466-520`) offers "Sections open by default / Start collapsed" radios, and `isOpen` at `:769` reads the value — `section.id in toggled ? toggled[section.id] : panelState === "auto" && section.rows.length > 0`. `inspectorDock` is wired too: radios at `:505,509`, and it drives a className at `:784`. <br><br>**Root cause of the error.** `ui/ui/inspector.tsx` contained a single literal NUL byte, at line 190, used as a field delimiter in `rowFingerprint`. `grep` (ugrep on this machine) therefore classified the whole 826-line file as binary and **silently reported zero matches in it, exiting 0** — no warning, no "binary file matches" line. Every grep in this row, including the one quoted as evidence, was blind to the one file that contained the answer. The `density` positive control did not catch it because `density`'s readers live in files grep *could* read, so the control confirmed the method worked in general while the specific target stayed invisible. Fixed by writing the delimiters as `\u0000`/`\u0001` escapes; the file is now greppable and the behaviour is unchanged. Verified: exactly 1 of 1102 tracked source files was affected. |
 | 13 | configPanelExtensionsSettings | Extension load list, folders, options | `ui/pages/extensions.tsx:296` + `/api/extensions/{load,unload}`; allowlist gate `-plugins` at `cmd/burpsy/main.go:70` | 4-c | Load/unload from the UI works, but only within a CLI allowlist. No extension-folder or per-extension option panel. Protocol gap is self-documented at `internal/extension/protocol.go:19-33` (3-of-13). `[cap-gap]` |
 | 14 | configPanelHostnameResolution | Static host→address overrides | `ui/pages/settings.tsx:836`; `internal/sender/network.go:418-439` | 4 | Editable table with add/enable/remove; draft-then-Save with a dirty badge. |
 | 15 | configPanelHotkeys | Rebind keyboard shortcuts | `ui/pages/settings.tsx:1239` (`HotkeysSection`) | 4 | Search, per-row rebind, "Reset all", and an honest reassignable/fixed/changed count. Browser-local (`useKeymap`), disclosed in the section detail. |
@@ -275,6 +275,8 @@ renders nothing, rather than a screen that looks live. That is the single health
 here and it is why the ABSENT count is high: absence is being taken honestly instead of being
 laundered into a stub.
 
+> **RETRACTION 2026-08-27 — the "3 unwired rows" are 2.** Row #12 (`inspectorPanelState`/`inspectorDock`) is fully wired: read at `ui/ui/inspector.tsx:475,550,551`, written at `:476,477`, applied at `:769,784`. The greps that reported zero readers were blind to that single file, which held a literal NUL byte — ugrep classified the 826-line source as binary and reported no matches while exiting 0, with no warning. #27/#28 were real and are now wired. The paragraph below is left as written; treat every #12 claim in it as withdrawn.
+
 **The 3 UNWIRED rows are the real defect class.** They are the exact failure mode TAXONOMY was
 written for — code that reads as finished, is commented as finished, is even named after the
 Burp panel it implements, and has no caller. `inspectorPanelState`/`inspectorDock` (#12) are
@@ -294,7 +296,7 @@ it renders, invites a click, and lies. The known example (the Decoder guess-alph
 denominator; but I checked the two nearest candidates inside it and both came back clean:
 match/replace deliberately omits its two dead targets from the `<select>`
 (`ui/pages/matchreplace.tsx:17-18`), and the Repeater options panel deliberately omits its two
-unimplementable switches. The unwired rows in #12/#27/#28 are *invisible* rather than
+unimplementable switches. The unwired rows in ~~#12~~/#27/#28 (see the retraction above: #12 was never unwired) are *invisible* rather than
 decorative — no control renders at all — which is less harmful to an operator and more harmful
 to a reader of the codebase.
 
@@ -333,7 +335,7 @@ highest-value single fix in this table.
    divergence. For 5 of them (#57, #59, #34, #36, #67) the code states the reasoning explicitly
    and the tag is evidenced. For the rest it is inference from architecture (browser console,
    non-JVM extensions) and a reader who disagrees should downgrade them to plain gaps.
-6. **Row #12's blast radius.** I proved `inspectorPanelState`/`inspectorDock` have no readers.
+6. **Row #12's blast radius. — RETRACTED 2026-08-27.** I did not prove this; I proved only that grep could not read `inspector.tsx`, which held a literal NUL byte. The prefs are fully wired — read `:475,550,551`, written `:476,477`, applied `:769,784`.
    I did **not** establish whether the Inspector's actual open/closed behaviour is hardcoded to
    "auto" or to something else, so I cannot say what an operator loses beyond "the preference
    cannot be set".
@@ -382,7 +384,7 @@ CI, so these three package results are gated. Nothing in this report rests on `b
 | No project backup (#2) | `grep -rEil 'project.?backup\|autosave\|auto.?save' internal/ cmd/` | `grep -rEil 'schedule'` → `internal/schedule/`, `internal/web/api_schedules.go` |
 | No perf feedback (#38) | `grep -rEil 'performance.?feedback\|submit.*anonym'` | as above |
 | `PayloadGenerator` unwired (#27, #28) | `grep -rn 'GenerateNumbers\|NewPayloadGenerator\|GenerateFromFile\|GenerateCustom' --include=*.go .` → only `intruder_test.go` | `grep -rn 'matchreplace.NewRuleSet(' --include=*.go .` → `internal/web/server.go:179`, `cmd/burpsy/main.go:412`, `cmd/burpsy/cli.go:191` |
-| Inspector prefs unwired (#12) | `grep -rn 'inspectorDock\|inspectorPanelState' ui/src/` excluding `lib/store.ts` → 0 | same grep for `density` → `ui/pages/settings.tsx:1302-1322`, `ui/ui/table.tsx:38-58`, `ui/styles.css:1157` |
+| ~~Inspector prefs unwired (#12)~~ **RETRACTED** | The cited grep returned 0 because `ui/ui/inspector.tsx` held a literal NUL byte and ugrep skipped it silently, exiting 0. The correct method is `grep -a` (or an AST tool); a binary-classified file is an *unreadable* file, not an absence of matches. |
 | No TLS version/cipher config (#80) | `grep -n 'MinVersion\|CipherSuites' internal/sender/*.go` → 0 | `grep -n 'tls.Config{' internal/sender/*.go` → `sender.go:242` (the config object exists; it just sets neither) |
 
 *(End of W6b pass. Baseline `638c480`, clean tree, read-only.)*

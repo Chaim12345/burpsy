@@ -141,6 +141,8 @@ rows). Those are not parity debt in any meaningful sense.
   cannot be constrained away from one. That is a real testing limitation and **nothing in
   the UI says so.**
 
+> **RETRACTION 2026-08-27 — the "3 unwired rows" are 2.** Row #12 (`inspectorPanelState`/`inspectorDock`) is fully wired: read at `ui/ui/inspector.tsx:475,550,551`, written at `:476,477`, applied at `:769,784`. The greps that reported zero readers were blind to that single file, which held a literal NUL byte — ugrep classified the 826-line source as binary and reported no matches while exiting 0, with no warning. #27/#28 were real and are now wired. The paragraph below is left as written; treat every #12 claim in it as withdrawn.
+
 **The 3 unwired rows are the TAXONOMY failure mode in its purest form** — code that reads as
 finished, is commented as finished, is *named after the Burp panel it implements*, and has no
 caller. `inspectorPanelState`/`inspectorDock` are declared, defaulted, given setters, and
@@ -952,7 +954,7 @@ we said it says. **13 claims checked:**
 | §4 Myers diff engine has zero non-test callers | `tools/comparer.go:99,109` | **Holds.** Only its own declarations. Positive control: `tools.NewDecoder()` *is* found live at `api_toolkit.go:1026`, so the method can see live use of that package. |
 | §2.1 Intruder `PayloadGenerator` has zero non-test callers | `intruder/intruder.go:346-387` | **Holds.** Only its own declarations and methods. |
 | §6.1a `advisory.Catalogue.ByName` has zero non-test callers | `advisory/advisory.go:216` | **Holds, including the trap it warns about** — the competing hits really are `scanner.BuiltInConfigByName` (`api_scanner_configs.go:124`), a different symbol in a different package. |
-| §2.1 `inspectorPanelState`/`inspectorDock` are written and never read | `ui/src/lib/store.ts` | **Holds.** Declared `:65-66`, defaulted `:123-124`, setters `:140-141`, persisted `:287-288` — and referenced by no other file. |
+| ~~§2.1 `inspectorPanelState`/`inspectorDock` are written and never read~~ **RETRACTED 2026-08-27** |
 | §2.2 `Export configuration` ships only scope + intercept + session | `web/api_config.go:48-67` | **Holds exactly.** The `configBundle` is populated with `Scope`, `Intercept` and `SessionRules` and nothing else, then encoded. |
 | §2.1 row 80 — the sender's `tls.Config` pins neither version nor ciphers | `sender/sender.go:242-244` | **Holds, and understates itself.** Only `InsecureSkipVerify` is set. The report cited one path; there are **two**, and `alpn.Dialer` (`alpn/alpn.go:182-188`) sets only `ServerName`, `InsecureSkipVerify` and `NextProtos`. **Neither** path constrains TLS version or cipher suite. |
 | §3.0.3c `AuditItemPointNoChecks` "is never used" | `scanner/audit_items.go:188-190` | **FALSE — corrected in place.** Produced live via `Resolve`→`resolvePoints`→`pointStatusFor:602`. |
@@ -1128,7 +1130,7 @@ Named explicitly per TAXONOMY rule 6, rather than guessed:
    would have looked identical from the outside. Per-tab back/forward history is real
    (`repeater.tsx:63-65`, with an `N/M` counter at `:358-382`), and `repeaterTabs` /
    `repeaterGroups` genuinely rehydrate and drive chrome (`:420-470`) — so the write-only
-   pathology really is confined to `inspectorDock` / `inspectorPanelState`. **But see §6.7b:
+   pathology really is confined to `inspectorDock` / `inspectorPanelState` — **RETRACTED 2026-08-27: those two are read; there is no write-only pathology here at all.** **But see §6.7b:
    the same code path silently evicts the 13th tab.**
 9. **Burp-side depth for the Discover/Learn tool.** Not enumerated in any available Burp-side
    document, so no ratio is offered for that row.
