@@ -279,6 +279,15 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "legacy alias for /api/issues",
 	},
+	"/api/headers/uninteresting": {
+		// riskLocal, and this one genuinely is: it changes how burpsy *presents* a comparison and
+		// nothing else. No traffic, no credentials, and it cannot widen what the engagement may
+		// touch. The lists only ever cause differences to be labelled — never dropped — so even a
+		// maliciously broad list cannot hide a difference from an operator, it can only dim it.
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "the header names the Comparer discounts, per direction, with the response-side " +
+			"defaults and the list of surfaces that consult them",
+	},
 	"/api/history": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "proxy history, filtered by the typed query DSL",

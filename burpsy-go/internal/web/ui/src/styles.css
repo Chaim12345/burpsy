@@ -2743,6 +2743,15 @@ tbody td {
   border-bottom-color: var(--warn);
 }
 
+/* A difference inside a header the operator discounted (W6 #81/#82). Dimmed, never hidden: the
+   bytes really do differ, and a diff that silently dropped runs would misrepresent the messages.
+   The dashed underline carries the same information without relying on opacity alone, so the
+   distinction survives both colour-blindness and a high-contrast setting that flattens opacity. */
+.diff-uninteresting {
+  opacity: 0.45;
+  border-bottom-style: dashed;
+}
+
 .diff-mark {
   font-weight: var(--weight-bold);
   opacity: 0.7;

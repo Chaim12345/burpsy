@@ -117,6 +117,10 @@ type Server struct {
 	// be told to trust it. Nil when interception is off, and then the route reports that rather than
 	// serving an empty file — see handleCACert.
 	caCertPEM []byte
+	// uninteresting holds the header names the Comparer discounts — W6 #81/#82. Always non-nil:
+	// built in NewServer so every code path can consult it without a nil check, and so the
+	// response-side defaults are in force from the first request rather than after a first PUT.
+	uninteresting *uninterestingHeaders
 	// tlsEngine is the live signing engine, when TLS interception is on. Held so the CA can be
 	// replaced at runtime (POST /api/proxy/ca) and so /ca.crt serves whichever CA is in force
 	// rather than the bytes this process started with — an operator who imports a CA and then
@@ -185,6 +189,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		sitemap:            sitemap.New(),
 		sessionCoordinator: session.NewCoordinator(zap.NewNop()),
 		matchReplace:       matchreplace.NewRuleSet(),
+		uninteresting:      newUninterestingHeaders(),
 		toolLog:            toollog.New(),
 		organizer:          organizer.New(),
 		loginRuns:          newSessionLoginRuns(),
@@ -706,6 +711,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/ca.crt", s.handleCACert)
 	// The operator's own CA — W6 #10. GET reports which CA signs; the import replaces it and empties
 	// the leaf cache. See api_ca.go.
+	s.mux.HandleFunc("/api/headers/uninteresting", s.handleUninterestingHeaders)
 	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
 	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
 	s.mux.HandleFunc("/api/scope", s.handleScope)

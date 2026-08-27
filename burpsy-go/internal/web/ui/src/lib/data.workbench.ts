@@ -3,6 +3,7 @@ import { api, json, query } from "./api";
 import { useResource } from "./data";
 import type {
   CompareResponse,
+  UninterestingHeaders,
   DecodeResponse,
   EncodeResponse,
   HashResponse,
@@ -180,12 +181,40 @@ export function useTransformPipeline() {
 /* --- comparer ------------------------------------------------------------- */
 
 /**
+ * The header names the Comparer discounts — Burp's `configPanelUninterestingRequestHeaders` and
+ * `configPanelUninterestingResponseHeaders` (W6 #81/#82), which had no counterpart here at all.
+ *
+ * Comparing two responses is how an operator decides whether an input changed behaviour, and the
+ * comparison is drowned by headers that differ on every request and mean nothing: `Date` always
+ * differs, `ETag` and `Age` usually do, a request-id differs by construction.
+ *
+ * Nothing is ever hidden. The backend labels differences that fall inside a discounted header and
+ * reports both verdicts — see `CompareResponse.identical_ignoring_uninteresting`.
+ */
+export const useUninterestingHeaders = () =>
+  useResource<UninterestingHeaders>(["uninteresting-headers"], "/api/headers/uninteresting");
+
+/** Replace the discount lists. Omit a direction to leave it untouched. */
+export function useSetUninterestingHeaders() {
+  const client = useQueryClient();
+  return useMutation<UninterestingHeaders, Error, { request?: string[]; response?: string[] }>({
+    mutationFn: (body) =>
+      api<UninterestingHeaders>("/api/headers/uninteresting", json("PUT", body)),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["uninteresting-headers"] }),
+  });
+}
+
+/**
  * The handler reads flat `a` / `b` strings and has no granularity parameter, so
  * every comparison is byte-level.
  */
 export function useCompare() {
-  return useMutation<CompareResponse, Error, { a: string; b: string }>({
-    mutationFn: ({ a, b }) => api<CompareResponse>("/api/tools/compare", json("POST", { a, b })),
+  return useMutation<CompareResponse, Error, { a: string; b: string; response?: boolean }>({
+    // `response` selects which uninteresting-header list applies (W6 #81/#82). Omitted means the
+    // request list, which is empty unless the operator populated it — so leaving it out reproduces
+    // the behaviour this endpoint had before the field existed.
+    mutationFn: ({ a, b, response }) =>
+      api<CompareResponse>("/api/tools/compare", json("POST", { a, b, response })),
   });
 }
 

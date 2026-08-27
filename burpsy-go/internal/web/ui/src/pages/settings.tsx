@@ -25,6 +25,7 @@ import {
   useSaveNetworkProxy,
 } from "../lib/data.network";
 import { useCaCert, useCaStatus, useImportCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
+import { useUninterestingHeaders, useSetUninterestingHeaders } from "../lib/data.workbench";
 import { useApp, type Density, type Theme } from "../lib/store";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
@@ -1342,6 +1343,116 @@ function AppearanceSection(): JSX.Element {
  * already, and a paste target works identically over an SSH-forwarded console where a file picker
  * would be reaching into the wrong machine's filesystem.
  */
+/**
+ * Burp's `configPanelUninterestingRequestHeaders` / `configPanelUninterestingResponseHeaders`
+ * (W6 #81/#82), which had no counterpart here at all.
+ *
+ * One panel for both directions because they are one decision with two lists, and because splitting
+ * them would put the request list — empty by default, and rarely wanted — on equal footing with the
+ * response list, which is the one that does the work.
+ *
+ * The wording is careful about what this does: differences inside these headers are *dimmed and
+ * counted*, never removed. A setting that quietly dropped differences from a security tool's
+ * comparison would be a bad idea however convenient.
+ */
+function UninterestingHeadersSection(): JSX.Element {
+  const lists = useUninterestingHeaders();
+  const save = useSetUninterestingHeaders();
+  const [requestDraft, setRequestDraft] = useState<string | null>(null);
+  const [responseDraft, setResponseDraft] = useState<string | null>(null);
+
+  const data = lists.data;
+  // The drafts start as null so a background refetch cannot overwrite an in-progress edit, and the
+  // textarea falls back to the server's list until the operator types.
+  const requestText = requestDraft ?? (data?.request ?? []).join("\n");
+  const responseText = responseDraft ?? (data?.response ?? []).join("\n");
+  const dirty = requestDraft !== null || responseDraft !== null;
+
+  const commit = (next: { request?: string[]; response?: string[] }) =>
+    save.mutate(next, {
+      onSuccess: () => {
+        setRequestDraft(null);
+        setResponseDraft(null);
+        toast.success("Uninteresting headers saved");
+      },
+      onError: (failure: unknown) =>
+        toast.error(failure instanceof Error ? failure.message : "Saving the header lists failed"),
+    });
+
+  const toList = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Uninteresting headers"
+        detail={
+          data?.applies_to?.length
+            ? `Differences in these headers are dimmed in: ${data.applies_to.join(", ")}.`
+            : "Headers whose differences are dimmed when comparing messages."
+        }
+        actions={
+          <RefreshButton onClick={() => void lists.refetch()} loading={lists.isFetching} label="Reload" />
+        }
+      />
+      {lists.error ? <ErrorNotice error={lists.error} onRetry={() => void lists.refetch()} /> : null}
+      <div className="two-col">
+        <Field label="Response headers" hint="One name per line. Applied when comparing responses.">
+          <Textarea
+            aria-label="Uninteresting response headers, one per line"
+            rows={8}
+            spellCheck={false}
+            value={responseText}
+            onChange={(event) => setResponseDraft(event.target.value)}
+          />
+        </Field>
+        <Field label="Request headers" hint="Empty by default: nothing you sent is noise unless you say so.">
+          <Textarea
+            aria-label="Uninteresting request headers, one per line"
+            rows={8}
+            spellCheck={false}
+            value={requestText}
+            onChange={(event) => setRequestDraft(event.target.value)}
+          />
+        </Field>
+      </div>
+      <Toolbar>
+        <Button
+          size="small"
+          disabled={!dirty || save.isPending}
+          onClick={() => commit({ request: toList(requestText), response: toList(responseText) })}
+        >
+          {save.isPending ? "Saving…" : "Save"}
+        </Button>
+        <Button
+          size="small"
+          variant="ghost"
+          disabled={save.isPending || !data}
+          onClick={() => {
+            // Restore the server's own defaults rather than a copy of them held here — two
+            // declarations of a default list drift, and the API already reports one.
+            setResponseDraft((data?.default_response ?? []).join("\n"));
+            toast.message("Response defaults restored in the editor — Save to apply.");
+          }}
+        >
+          Restore response defaults
+        </Button>
+        {dirty ? <Badge tone="warn">unsaved</Badge> : null}
+      </Toolbar>
+      <p className="field-hint">
+        Nothing is hidden. A difference inside one of these headers is still reported and still
+        rendered — dimmed, and counted separately — so &ldquo;the only differences were in headers you
+        discounted&rdquo; stays distinguishable from &ldquo;these messages are identical&rdquo;.
+        <strong> Set-Cookie is deliberately not a default</strong>: a rotated or fixated session token
+        can be the finding.
+      </p>
+    </Card>
+  );
+}
+
 function CaImportSection(): JSX.Element {
   const status = useCaStatus();
   const importCa = useImportCaCert();
@@ -1800,6 +1911,7 @@ export function SettingsPage(): JSX.Element {
       <HotkeysSection />
       <CertificateSection />
       <CaImportSection />
+      <UninterestingHeadersSection />
       <DiagnosticsSection />
     </div>
   );

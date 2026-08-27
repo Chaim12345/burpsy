@@ -61,6 +61,7 @@ var (
 		"scope",
 		"intercept",
 		"session_rules",
+		"uninteresting_headers",
 	}
 	configOmittedSections = []string{
 		"client_certificates",
@@ -132,6 +133,20 @@ type configBundle struct {
 	// different facts and were being conflated. A pre-manifest bundle with no key at all still
 	// decodes to nil and is still left untouched.
 	SessionRules []sessionRuleDto `json:"session_rules"`
+	// UninterestingHeaders is the Comparer's discount lists — W6 #81/#82. Added to the bundle in the
+	// same commit that created the setting, deliberately: a new configuration surface that the
+	// importer accepts and the exporter never writes is the exact defect fixed in 58d4611 for
+	// session_rules and again for the WebSocket intercept directions. A pointer so an older bundle
+	// with no such key leaves the recipient's lists alone, rather than silently clearing them.
+	UninterestingHeaders *configUninterestingHeaders `json:"uninteresting_headers,omitempty"`
+}
+
+// configUninterestingHeaders carries both directions. Not omitempty on the inner slices: exported
+// and empty must stay distinguishable from not exported, which is what decides whether an import
+// clears the recipient's list or leaves it.
+type configUninterestingHeaders struct {
+	Request  []string `json:"request"`
+	Response []string `json:"response"`
 }
 
 func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +182,10 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, rule := range s.sessionCoordinator.AllRules() {
 		bundle.SessionRules = append(bundle.SessionRules, ruleToDto(rule))
+	}
+	bundle.UninterestingHeaders = &configUninterestingHeaders{
+		Request:  s.uninteresting.headers(false),
+		Response: s.uninteresting.headers(true),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(bundle)
@@ -265,6 +284,13 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if bundle.UninterestingHeaders != nil {
+		// Nothing to validate: any string is an acceptable header name once normalised, and set()
+		// drops the empties. So this belongs in phase two with the other writes rather than needing
+		// a phase-one conversion.
+		s.uninteresting.set(false, bundle.UninterestingHeaders.Request)
+		s.uninteresting.set(true, bundle.UninterestingHeaders.Response)
+	}
 	if bundle.SessionRules != nil {
 		for _, existing := range s.sessionCoordinator.AllRules() {
 			s.sessionCoordinator.RemoveRule(existing.ID)
@@ -280,10 +306,11 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":         "ok",
-		"scope_rules":    len(scopeRules),
-		"intercept_dirs": len(interceptSets),
-		"session_rules":  len(sessionRules),
+		"status":                "ok",
+		"scope_rules":           len(scopeRules),
+		"intercept_dirs":        len(interceptSets),
+		"session_rules":         len(sessionRules),
+		"uninteresting_headers": bundle.UninterestingHeaders != nil,
 	})
 }
 

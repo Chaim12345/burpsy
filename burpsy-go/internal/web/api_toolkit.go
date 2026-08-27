@@ -1340,6 +1340,12 @@ type compareOp struct {
 	BOffset int    `json:"b_offset"`
 	BLen    int    `json:"b_len"`
 	Text    string `json:"text,omitempty"`
+	// Uninteresting marks a difference lying entirely inside a header line the operator has told
+	// burpsy to discount — W6 #81/#82. The op is still reported with its real offsets and text:
+	// the console dims it and counts it separately rather than dropping it, because "the only
+	// differences were in headers you chose to ignore" and "these messages are identical" are
+	// different facts and only one of them is true.
+	Uninteresting bool `json:"uninteresting,omitempty"`
 }
 
 // handleToolsCompare mirrors comparer.ts's CompareResp. The engine produces a byte-level
@@ -1353,6 +1359,10 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		A string `json:"a"`
 		B string `json:"b"`
+		// Response selects which uninteresting-header list applies. Defaults to false, i.e. the
+		// request list, which is empty unless the operator populated it — so an old client that
+		// does not send this field gets exactly the behaviour it had before the field existed.
+		Response bool `json:"response"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1360,23 +1370,66 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 	}
 	a, b := []byte(req.A), []byte(req.B)
 	ops := compareOps(a, b)
-	deleted, inserted := 0, 0
-	for _, op := range ops {
+
+	// Tag differences that fall inside a discounted header. Spans are computed per side because the
+	// same header sits at different offsets in two messages of different lengths, and an op's A and B
+	// ranges must each be inside one for the difference to be attributable to that header alone.
+	spansA := uninterestingSpansIn(a, s.uninteresting, req.Response)
+	spansB := uninterestingSpansIn(b, s.uninteresting, req.Response)
+
+	deleted, inserted, discounted := 0, 0, 0
+	for i := range ops {
+		op := &ops[i]
+		if op.Kind == "equal" {
+			continue
+		}
+		switch op.Kind {
+		case "delete":
+			// Present only in A, so only A's spans can account for it.
+			op.Uninteresting = coveredBy(spansA, op.AOffset, op.ALen)
+		case "insert":
+			op.Uninteresting = coveredBy(spansB, op.BOffset, op.BLen)
+		default:
+			// A replace must be discounted on both sides. Covered in A alone would mean the bytes it
+			// was replaced *with* are somewhere the operator did not discount.
+			op.Uninteresting = coveredBy(spansA, op.AOffset, op.ALen) &&
+				coveredBy(spansB, op.BOffset, op.BLen)
+		}
+		if op.Uninteresting {
+			discounted++
+		}
 		if op.Kind == "delete" {
 			deleted += op.ALen
 		} else if op.Kind == "insert" {
 			inserted += op.BLen
 		}
 	}
+
 	identical := len(ops) == 1 && ops[0].Kind == "equal"
+	// True when every difference was discounted. Deliberately distinct from `identical`: these
+	// messages are not identical, and a UI that conflated the two would tell the operator the bytes
+	// matched when they did not.
+	identicalIgnoring := identical
+	if !identical {
+		identicalIgnoring = true
+		for _, op := range ops {
+			if op.Kind != "equal" && !op.Uninteresting {
+				identicalIgnoring = false
+				break
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"identical":       identical,
-		"deleted_tokens":  deleted,
-		"inserted_tokens": inserted,
-		"truncated":       false,
-		"ops_omitted":     0,
-		"ops":             ops,
+		"identical":                        identical,
+		"identical_ignoring_uninteresting": identicalIgnoring,
+		"uninteresting_ops":                discounted,
+		"uninteresting_headers_applied":    s.uninteresting.headers(req.Response),
+		"deleted_tokens":                   deleted,
+		"inserted_tokens":                  inserted,
+		"truncated":                        false,
+		"ops_omitted":                      0,
+		"ops":                              ops,
 	})
 }
 
