@@ -129,22 +129,34 @@ func TestAMissingRuleTypeIsRefusedAsMissing(t *testing.T) {
 // PUT's old coercion, the round trip was actively destructive: GET a param rule, PUT it back
 // unchanged, and it became a body rule against live traffic.
 //
-// This test walks every declared Target rather than an enumerated list of names, so adding a
-// Target to the engine without teaching both directions about it fails here by name.
+// This test walks the enum itself, from 0 to matchreplace.TargetCount, so adding a Target to
+// the engine without teaching both directions about it fails here by name.
 //
-// Every Target must still have a NAME — that is what keeps a stored rule readable. But only
-// the appliable ones round-trip back into a Target, because `applyOne` implements five of the
+// It did not always. It used to iterate a hand-written slice of seven while this comment
+// claimed it "walks every declared Target" — which meant an eighth Target would have left both
+// the wire-name mapping and the accepted-vocabulary parser silently incomplete with the test
+// still green. BURP_PARITY_GAP_ANALYSIS.md §9.4 caught it and put it precisely: a hand-typed
+// exhaustive test is "not a weaker version of a reflective one; it is the same silent-drift bug
+// wearing the pattern's clothes." It was mine, and the comment above the slice was the tell.
+//
+// Every Target must have a NAME — that is what keeps a stored rule readable. But only the
+// appliable ones round-trip back into a Target, because `applyOne` implements five of the
 // seven. The two param targets are named and refused, which is the honest pairing: the console
 // can display a param rule truthfully while the API declines to install one.
 func TestEveryEngineTargetHasANameAndOnlyAppliableOnesRoundTrip(t *testing.T) {
-	all := []matchreplace.Target{
-		matchreplace.TargetRequestHeader,
-		matchreplace.TargetRequestBody,
-		matchreplace.TargetRequestFirstLine,
-		matchreplace.TargetRequestParamName,
-		matchreplace.TargetRequestParamValue,
-		matchreplace.TargetResponseHeader,
-		matchreplace.TargetResponseBody,
+	if matchreplace.TargetCount == 0 {
+		t.Fatal("TargetCount is 0; the sentinel is not last in the const block")
+	}
+	// The sentinel is only exhaustive if it sits after the last real Target. Asserting that
+	// here rather than trusting it is the whole point of the exercise: a sentinel in the wrong
+	// position gives a loop that looks exhaustive and is not, which is the bug being fixed.
+	if got, want := int(matchreplace.TargetResponseBody), matchreplace.TargetCount-1; got != want {
+		t.Fatalf("TargetResponseBody = %d but TargetCount-1 = %d; the sentinel must be the last "+
+			"constant in the block or this loop silently stops short", got, want)
+	}
+	all := make([]matchreplace.Target, 0, matchreplace.TargetCount)
+	for i := 0; i < matchreplace.TargetCount; i++ {
+		all = append(all, matchreplace.Target(i))
 	}
 	for _, target := range all {
 		name := matchReplaceTargetName(target)

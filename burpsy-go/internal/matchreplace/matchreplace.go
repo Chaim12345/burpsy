@@ -22,6 +22,15 @@ const (
 	TargetRequestParamValue
 	TargetResponseHeader
 	TargetResponseBody
+	// TargetCount is how many Targets the taxonomy has, and it must stay last.
+	//
+	// It exists so tests can walk the enum instead of a hand-written list. The round-trip test
+	// in internal/web used to iterate a literal slice of seven while its own comment claimed it
+	// "walks every declared Target" — so an eighth Target added here would have left both the
+	// wire-name mapping and the accepted-vocabulary parser silently incomplete, with the test
+	// still green. Same shape as fieldCount in internal/query and changeKindCount in
+	// internal/web/events.go.
+	TargetCount = iota
 )
 
 // Category is how string_match is interpreted.
