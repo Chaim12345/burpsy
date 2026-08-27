@@ -712,15 +712,11 @@ func (s *PassiveScanner) checkSecurityHeaders(exchange *core.Exchange, findings 
 	respHeaders := s.getResponseHeaders(exchange)
 	lines := strings.Split(respHeaders, "\r\n")
 
-	hasXFrameOptions := false
 	hasXContentTypeOptions := false
 	hasCSP := false
 
 	for _, line := range lines {
 		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "x-frame-options:") {
-			hasXFrameOptions = true
-		}
 		if strings.HasPrefix(lower, "x-content-type-options:") {
 			hasXContentTypeOptions = true
 		}
@@ -729,18 +725,26 @@ func (s *PassiveScanner) checkSecurityHeaders(exchange *core.Exchange, findings 
 		}
 	}
 
-	if !hasXFrameOptions {
-		*findings = append(*findings, &Finding{
-			Name:        "Missing X-Frame-Options Header",
-			Severity:    "low",
-			Confidence:  "certain",
-			Description: "The X-Frame-Options header is missing, making the site vulnerable to clickjacking",
-			URL:         fmt.Sprintf("%s://%s:%d%s", map[bool]string{true: "https", false: "http"}[exchange.TLS], exchange.Host, exchange.Port, exchange.Path),
-			Method:      exchange.Method,
-			Solution:    "Add X-Frame-Options: DENY or SAMEORIGIN header",
-			Timestamp:   time.Now(),
-		})
-	}
+	// No "Missing X-Frame-Options Header" finding here, deliberately.
+	//
+	// It used to emit one whenever the header was absent, at severity low. `checkFrameableResponse`
+	// (checks_passive_analysis.go) reports the same condition as "Frameable response (potential
+	// Clickjacking)" at info, and `advisory/aliases.go` maps this check's name onto *that*
+	// catalogue entry — so both landed on type_index 0x005009a0. `/api/issues` showed one
+	// condition twice, at two severities, inflating counts and splitting a single problem across
+	// two severity buckets for anything that sorts or totals by severity. See
+	// BURP_PARITY_GAP_ANALYSIS.md §3.0.3b.
+	//
+	// The duplicate is why it was looked at; being *wrong* is why this one went rather than the
+	// other. `IsFrameable` consults X-Frame-Options **and** CSP `frame-ancestors`, because
+	// frame-ancestors supersedes the older header. This check only asked whether the header
+	// string was present, so a site correctly defended by `frame-ancestors 'none'` and nothing
+	// else was reported as clickjackable. That is a false positive on a correct defence, and no
+	// amount of deduplication downstream would have fixed it.
+	//
+	// Nothing here tracks X-Frame-Options any more, and the loop above no longer looks for it:
+	// the only reader was the finding this comment replaces. `checkFrameableResponse` reads the
+	// header itself, from the raw response, so there is nothing to hand it.
 
 	if !hasXContentTypeOptions {
 		*findings = append(*findings, &Finding{

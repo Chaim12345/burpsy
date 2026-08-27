@@ -100,8 +100,16 @@ func TestPlainHTTPInterceptionAndPassiveScan(t *testing.T) {
 	for _, f := range findings.All() {
 		names[f.Name] = true
 	}
-	if !names["Missing X-Frame-Options Header"] {
-		t.Errorf("expected X-Frame-Options finding, got %v", names)
+	// X-Content-Type-Options rather than X-Frame-Options, and the swap is deliberate.
+	//
+	// This assertion is about the proxy: it proves the captured response reached the passive
+	// scanner and came back with findings. Any missing-header finding serves that purpose, and
+	// the X-Frame-Options one was removed from the passive path as a duplicate — it aliased onto
+	// the same catalogue entry as checkFrameableResponse and, unlike that check, ignored CSP
+	// frame-ancestors, so it reported clickjacking on sites correctly defended against it. See
+	// scanner.go's comment in checkSecurityHeaders and BURP_PARITY_GAP_ANALYSIS.md §3.0.3b.
+	if !names["Missing X-Content-Type-Options Header"] {
+		t.Errorf("expected a missing-security-header finding, got %v", names)
 	}
 }
 
