@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // The proxy's live option set: Burp's Proxy → Response modification rules and the
@@ -60,6 +62,31 @@ const (
 	// decompressor on the proxy path, so asking the origin for plaintext is the
 	// only way the response rules above get a body they can rewrite.
 	OptStripAcceptEncoding OptionKey = "strip_accept_encoding"
+	// OptUnpackCompressedRequests decompresses a gzip or deflate request body before
+	// the request is forwarded, dropping its Content-Encoding and fixing
+	// Content-Length. Burp's proxyOptionsUnpackCompressedRequests.
+	//
+	// Its own switch rather than one shared with the response direction, because
+	// they are not the same decision: unpacking a request changes the bytes the
+	// *origin* receives, which an application may reject, while unpacking a
+	// response changes only what the browser receives.
+	OptUnpackCompressedRequests OptionKey = "unpack_compressed_requests"
+	// OptUnpackCompressedResponses decompresses a gzip or deflate response body so
+	// the response modification rules above can reach it, dropping its
+	// Content-Encoding and fixing Content-Length. Burp's
+	// proxyOptionsUnpackCompressedResponses; its search keywords are literally
+	// "unpack gzip" and "unpack deflate".
+	//
+	// This is the answer to strip_accept_encoding being the only previous option.
+	// Stripping Accept-Encoding changes what the client asks the origin for and is
+	// detectable server-side, so it forced a choice between reading the traffic and
+	// observing the traffic the client would really have received. Unpacking asks
+	// the origin for nothing different.
+	//
+	// br and zstd are not decoded — there is no standard-library decoder for either
+	// — and a response carrying one is counted as SkippedUnsupportedEncoding rather
+	// than reported as unpacked. See internal/httputil.Unpackable.
+	OptUnpackCompressedResponses OptionKey = "unpack_compressed_responses"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -72,6 +99,8 @@ var OptionKeys = []OptionKey{
 	OptRemoveAllJavaScript,
 	OptConvertHTTPSLinks,
 	OptStripAcceptEncoding,
+	OptUnpackCompressedRequests,
+	OptUnpackCompressedResponses,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The
@@ -115,9 +144,23 @@ type Counters struct {
 	// to rewrite in. Distinct from every Skipped* below, which are responses the
 	// rules never got to look at.
 	Unchanged uint64 `json:"responses_unchanged"`
-	// SkippedCompressed is a response carrying a Content-Encoding this proxy does
-	// not decode. Turn on strip_accept_encoding to stop the origin sending them.
+	// SkippedCompressed is a response carrying a Content-Encoding that was left
+	// alone: unpack_compressed_responses is off, or it is on and the encoding is one
+	// this build cannot decode (see SkippedUnsupportedEncoding, which is the subset
+	// naming that second reason). Turn on unpack_compressed_responses, or
+	// strip_accept_encoding to stop the origin sending them at all.
 	SkippedCompressed uint64 `json:"skipped_compressed"`
+	// SkippedUnsupportedEncoding is the subset of SkippedCompressed where unpacking
+	// was ON and the encoding could not be decoded anyway — br or zstd, or a body
+	// that failed to decompress. It is separate because the two say different things
+	// to an operator who has just ticked the box: "the switch is off" is something
+	// they can fix, and "this build cannot decode brotli" is not.
+	SkippedUnsupportedEncoding uint64 `json:"skipped_unsupported_encoding"`
+	// UnpackedResponses and UnpackedRequests count messages actually decompressed,
+	// not messages seen while the switch was on: a switch that saw no compressed
+	// traffic must not read as a switch that is working.
+	UnpackedResponses uint64 `json:"unpacked_responses"`
+	UnpackedRequests  uint64 `json:"unpacked_requests"`
 	SkippedNotHTML    uint64 `json:"skipped_not_html"`
 	// SkippedUnframed is a response with no header/body separator, or with chunk
 	// framing that would not parse. Neither can be rewritten without guessing
@@ -164,6 +207,9 @@ type Options struct {
 	modified               atomic.Uint64
 	unchanged              atomic.Uint64
 	skippedCompressed      atomic.Uint64
+	skippedUnsupportedEnc  atomic.Uint64
+	unpackedResponses      atomic.Uint64
+	unpackedRequests       atomic.Uint64
 	skippedNotHTML         atomic.Uint64
 	skippedUnframed        atomic.Uint64
 	relayedHTTP2           atomic.Uint64
@@ -235,16 +281,19 @@ func (o *Options) Counters() Counters {
 		return Counters{}
 	}
 	return Counters{
-		Considered:             o.considered.Load(),
-		Modified:               o.modified.Load(),
-		Unchanged:              o.unchanged.Load(),
-		SkippedCompressed:      o.skippedCompressed.Load(),
-		SkippedNotHTML:         o.skippedNotHTML.Load(),
-		SkippedUnframed:        o.skippedUnframed.Load(),
-		RelayedHTTP2:           o.relayedHTTP2.Load(),
-		AcceptEncodingStripped: o.acceptEncodingStripped.Load(),
-		Dechunked:              o.dechunked.Load(),
-		ModifiedUnrecorded:     o.modifiedUnrecorded.Load(),
+		Considered:                 o.considered.Load(),
+		Modified:                   o.modified.Load(),
+		Unchanged:                  o.unchanged.Load(),
+		SkippedCompressed:          o.skippedCompressed.Load(),
+		SkippedUnsupportedEncoding: o.skippedUnsupportedEnc.Load(),
+		UnpackedResponses:          o.unpackedResponses.Load(),
+		UnpackedRequests:           o.unpackedRequests.Load(),
+		SkippedNotHTML:             o.skippedNotHTML.Load(),
+		SkippedUnframed:            o.skippedUnframed.Load(),
+		RelayedHTTP2:               o.relayedHTTP2.Load(),
+		AcceptEncodingStripped:     o.acceptEncodingStripped.Load(),
+		Dechunked:                  o.dechunked.Load(),
+		ModifiedUnrecorded:         o.modifiedUnrecorded.Load(),
 	}
 }
 
@@ -285,15 +334,87 @@ func (o *Options) NoteRelayedHTTP2() {
 // ApplyRequest rewrites a request on its way upstream. Returns raw unchanged when
 // nothing applies, so the ordinary path allocates nothing.
 func (o *Options) ApplyRequest(raw []byte) []byte {
-	if o == nil || !o.Get(OptStripAcceptEncoding) {
+	if o == nil {
 		return raw
 	}
-	out, removed := removeHeader(raw, "Accept-Encoding")
-	if !removed {
-		return raw
+	out := raw
+	// Unpacking first, then the header strip. Order matters only in that the strip must not be able to
+	// remove a header the unpack step needed to read; Accept-Encoding is a request for the *response*
+	// and Content-Encoding describes this body, so they do not interact — the ordering is fixed and
+	// documented rather than left to chance.
+	if o.Get(OptUnpackCompressedRequests) {
+		if unpacked, ok := o.unpack(out, &o.unpackedRequests); ok {
+			out = unpacked
+		}
 	}
-	o.acceptEncodingStripped.Add(1)
+	if o.Get(OptStripAcceptEncoding) {
+		if stripped, removed := removeHeader(out, "Accept-Encoding"); removed {
+			o.acceptEncodingStripped.Add(1)
+			out = stripped
+		}
+	}
 	return out
+}
+
+// unpack decompresses one message's body in place in the message, dropping Content-Encoding and
+// fixing Content-Length. It reports false, and changes nothing, whenever it cannot.
+//
+// Every refusal is counted, on the same principle the response rules already follow: an operator who
+// ticks "unpack compressed" and sees no change must be able to tell "there was nothing compressed"
+// from "the encoding could not be decoded" from "the framing did not parse".
+//
+// A body that fails to decompress is left byte-for-byte alone rather than partially replaced. Handing
+// a rule half a document — or handing the client one — is worse than not unpacking: the rule would
+// rewrite what it could see and the browser would receive a document cut in the middle.
+func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
+	head, body, sep, ok := splitMessage(raw)
+	if !ok {
+		o.skippedUnframed.Add(1)
+		return raw, false
+	}
+	encoding := headerValue(head, "Content-Encoding")
+	if encoding == "" || strings.EqualFold(encoding, "identity") {
+		// Nothing to unpack. Not counted at all: an uncompressed message is not a skip, it is a
+		// message the switch has no business touching, and counting it would make the skip ratios
+		// meaningless the way Considered already documents for the response rules.
+		return raw, false
+	}
+	if !httputil.Unpackable(encoding) {
+		// br, zstd, or a chain of encodings. Counted twice on purpose: SkippedCompressed keeps its
+		// meaning as "a compressed message no rule reached", and the narrower counter says the switch
+		// was on and could not help.
+		o.skippedCompressed.Add(1)
+		o.skippedUnsupportedEnc.Add(1)
+		return raw, false
+	}
+
+	chunked := strings.EqualFold(headerValue(head, "Transfer-Encoding"), "chunked")
+	compressed := body
+	if chunked {
+		// Dechunk before decompressing: the chunk sizes frame the compressed bytes, and feeding
+		// `size CRLF data CRLF` to gzip decodes the size prefix as payload.
+		decoded, dok := dechunk(body)
+		if !dok {
+			o.skippedUnframed.Add(1)
+			return raw, false
+		}
+		compressed = decoded
+	}
+
+	plain, err := httputil.DecodeBody(encoding, compressed)
+	if err != nil {
+		o.skippedCompressed.Add(1)
+		o.skippedUnsupportedEnc.Add(1)
+		return raw, false
+	}
+	if chunked {
+		o.dechunked.Add(1)
+	}
+	counter.Add(1)
+	// Content-Encoding goes, because the body is no longer encoded and leaving the header would tell
+	// the recipient to decompress plaintext. rebuild drops Content-Length and Transfer-Encoding and
+	// writes the new length.
+	return rebuild(head, sep, plain, chunked, true), true
 }
 
 // ---- response direction --------------------------------------------------------
@@ -303,10 +424,16 @@ func (o *Options) ApplyRequest(raw []byte) []byte {
 //
 // # What it refuses to do, and why each refusal is counted
 //
-//   - A body with a Content-Encoding is left alone. This proxy has no decompressor on
-//     its path, so "remove all JavaScript" applied to gzip bytes would find no script
-//     tags, report success, and hand the browser a corrupted stream. strip_accept_encoding
-//     is the offered fix, and the counter is what tells an operator to reach for it.
+//   - A body with a Content-Encoding is left alone *unless* unpack_compressed_responses
+//     is on. Applying "remove all JavaScript" to gzip bytes would find no script tags,
+//     report success, and hand the browser a corrupted stream, so with the switch off the
+//     response is skipped and counted. With it on the body is decompressed first and the
+//     rules run on plaintext — which is why the switch exists: before it, a compressed
+//     response was permanently in the "the rule was never allowed to look" state, and
+//     strip_accept_encoding was the only escape.
+//   - An encoding this build cannot decode (br, zstd, a chain) is still left alone with the
+//     switch on, counted as SkippedUnsupportedEncoding as well, because "the switch is off"
+//     and "this build has no brotli decoder" are different things to tell an operator.
 //   - A body that is not HTML is left alone. These are HTML rewrites; running them over
 //     JSON, CSS or an image is at best a no-op and at worst silent corruption.
 //   - A body with no header/body separator is left alone: there is nothing to locate.
@@ -333,8 +460,13 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 			any = true
 		}
 	}
+	unpacking := o.flags[OptUnpackCompressedResponses]
 	o.mu.RUnlock()
-	if !any {
+	// Unpacking counts as something to do on its own. It is not a rewriting rule — it makes the
+	// response *readable*, in history and in every consumer downstream — so a response that is
+	// decompressed and matched by no rule is still a response this changed, and returning early on
+	// `!any` would have made the switch a no-op unless another box was also ticked.
+	if !any && !unpacking {
 		return raw
 	}
 	o.considered.Add(1)
@@ -345,8 +477,36 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		return raw
 	}
 	if encoding := headerValue(head, "Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
-		o.skippedCompressed.Add(1)
-		return raw
+		// Unpack when the operator asked for it, then carry on with the decompressed message — this is
+		// the whole point of the switch: "the rule found nothing to rewrite" and "the rule was never
+		// allowed to look" were the two states this package was built to distinguish, and a
+		// compressed body was permanently in the second.
+		if !unpacking {
+			o.skippedCompressed.Add(1)
+			return raw
+		}
+		unpacked, uok := o.unpack(raw, &o.unpackedResponses)
+		if !uok {
+			// unpack counted the reason. SkippedCompressed is added there too, so the panel's
+			// "Skipped: compressed" total still covers every compressed response no rule reached.
+			return raw
+		}
+		// Re-split, because the head and the framing have both changed. Recursion is deliberately not
+		// used: the message now carries no Content-Encoding, so a second pass could not reach this
+		// branch again, and an explicit re-split says that rather than relying on it.
+		raw = unpacked
+		head, body, sep, ok = splitMessage(raw)
+		if !ok {
+			o.skippedUnframed.Add(1)
+			return raw
+		}
+		if !any {
+			// Decompressed, and no rewriting rule to run. The decompressed message is the result: the
+			// switch's job is to make the body readable, and Modified counts it because the bytes
+			// really did change.
+			o.modified.Add(1)
+			return raw
+		}
 	}
 	if !isHTMLResponse(head) {
 		o.skippedNotHTML.Add(1)
@@ -396,7 +556,9 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		o.dechunked.Add(1)
 	}
 	o.modified.Add(1)
-	return rebuild(head, sep, out, chunked)
+	// wasEncoded false: any Content-Encoding was already removed by the unpack step above, so there is
+	// none left to drop and claiming otherwise here would hide where it happened.
+	return rebuild(head, sep, out, chunked, false)
 }
 
 // ---- the rules -----------------------------------------------------------------
@@ -573,7 +735,7 @@ func removeHeader(raw []byte, name string) ([]byte, bool) {
 // rebuild reassembles a message around a new body, fixing Content-Length and — when
 // the original was chunked — dropping the Transfer-Encoding header the new body no
 // longer uses. Every other header line is copied through byte for byte.
-func rebuild(head, sep, body []byte, wasChunked bool) []byte {
+func rebuild(head, sep, body []byte, wasChunked, wasEncoded bool) []byte {
 	crlf := bytes.Contains(head, []byte("\r\n"))
 	normalised := bytes.ReplaceAll(head, []byte("\r\n"), []byte("\n"))
 	lines := bytes.Split(normalised, []byte("\n"))
@@ -589,6 +751,12 @@ func rebuild(head, sep, body []byte, wasChunked bool) []byte {
 			continue
 		}
 		if wasChunked && strings.HasPrefix(lower, "transfer-encoding:") {
+			continue
+		}
+		// The body is plaintext now, so the header describing it as encoded must go. Leaving it would
+		// tell the recipient to decompress bytes that are not compressed, which is a broken page
+		// rather than an unrewritten one.
+		if wasEncoded && strings.HasPrefix(lower, "content-encoding:") {
 			continue
 		}
 		kept = append(kept, line)

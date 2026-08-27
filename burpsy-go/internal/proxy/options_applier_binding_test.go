@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/gzip"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -40,12 +43,52 @@ const everyRuleMarkup = `<html><body>` +
 	`</body></html>`
 
 // requestWithEncoding is the request-direction equivalent: a request carrying the one header
-// the request-direction option exists to strip.
+// strip_accept_encoding exists to strip.
 func requestWithEncoding() []byte {
 	return []byte("GET /page HTTP/1.1\r\n" +
 		"Host: example.test\r\n" +
 		"Accept-Encoding: gzip, deflate, br\r\n" +
 		"\r\n")
+}
+
+// gzipBytes compresses one string, for the two unpack fixtures below.
+func gzipBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(s)); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// gzippedHTMLResponse and gzippedRequest are the fixtures the two unpack options act on.
+//
+// They are separate inputs rather than replacements for the plain ones, because no single message can
+// exercise every option: the five rewriting rules need a plaintext HTML body, and the unpack switches
+// need a compressed one. Compressing the shared fixture would have made the rewriting rules skip
+// unless unpacking were also on, which is exactly the "enabled alone" condition this test asserts.
+func gzippedHTMLResponse(t *testing.T, body string) []byte {
+	t.Helper()
+	packed := gzipBytes(t, body)
+	head := "HTTP/1.1 200 OK\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"Content-Encoding: gzip\r\n" +
+		"Content-Length: " + strconv.Itoa(len(packed)) + "\r\n\r\n"
+	return append([]byte(head), packed...)
+}
+
+func gzippedRequest(t *testing.T, body string) []byte {
+	t.Helper()
+	packed := gzipBytes(t, body)
+	head := "POST /page HTTP/1.1\r\n" +
+		"Host: example.test\r\n" +
+		"Content-Encoding: gzip\r\n" +
+		"Content-Length: " + strconv.Itoa(len(packed)) + "\r\n\r\n"
+	return append([]byte(head), packed...)
 }
 
 // The binding itself: enabling any single listed option, alone, must change *something* in
@@ -72,6 +115,18 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			req := requestWithEncoding()
 			reqOut := o.ApplyRequest(req)
 			reqChanged := string(reqOut) != string(req)
+
+			// The compressed pair, for the two unpack switches. Every option is offered every
+			// fixture: an option that acts on the plain message and not the compressed one is still
+			// bound, and asking "did anything change anywhere" keeps this test free of a per-key
+			// table — which is the property the file header argues for at length.
+			gzResp := gzippedHTMLResponse(t, everyRuleMarkup)
+			gzRespOut := o.ApplyResponse(gzResp)
+			respChanged = respChanged || string(gzRespOut) != string(gzResp)
+
+			gzReq := gzippedRequest(t, everyRuleMarkup)
+			gzReqOut := o.ApplyRequest(gzReq)
+			reqChanged = reqChanged || string(gzReqOut) != string(gzReq)
 
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+

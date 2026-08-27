@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // ExchangeView is the wire shape every exchange-facing endpoint serves. It mirrors the
@@ -72,6 +74,24 @@ type MessageView struct {
 	ID   uint64 `json:"id"`
 	Len  int    `json:"len"`
 	Text string `json:"text"`
+	// ContentEncoding is the message's own Content-Encoding, empty when it has none. Carried so the
+	// viewer knows why `text` is unreadable without having to re-parse the head it was just handed.
+	ContentEncoding string `json:"content_encoding,omitempty"`
+	// Decoded is the body with its Content-Encoding undone, and the head as it was, for a message
+	// this build can decompress. Nil when there was nothing to decode or when the decode failed —
+	// DecodeError says which.
+	//
+	// A separate field rather than a substitution in Text, and that is the whole design: burpsy's
+	// stated invariant is that captured bytes are the bytes on the wire, so `text` stays the exact
+	// capture. A viewer that replaced it would make history disagree with a packet capture for a
+	// reason the operator could not see. This is the readable rendering beside the record, not
+	// instead of it.
+	Decoded *string `json:"decoded,omitempty"`
+	// DecodeError names why a compressed message could not be decoded: an encoding this build has no
+	// decoder for (br, zstd), a corrupt stream, or a body over the cap. Present rather than silent,
+	// because "burpsy cannot read this" and "there was nothing to read" are the two states an
+	// unreadable pane must never merge.
+	DecodeError string `json:"decode_error,omitempty"`
 }
 
 // StatsView mirrors the UI's Stats interface.
@@ -140,11 +160,107 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 	}
 }
 
+// messageView projects one stored message, with a decoded rendering beside the raw bytes when the
+// message is compressed.
+//
+// This is the "unreadable in history" half of the gzip/deflate gap. A gzipped response rendered as
+// `text` is a screenful of binary, and burpsy had no decompressor on any HTTP path at all — the only
+// inflate in the tree was WebSocket-only. The raw bytes stay exactly as captured; see
+// MessageView.Decoded for why the decode is added alongside rather than swapped in.
 func messageView(msg *core.StoredMessage) *MessageView {
-	return &MessageView{
+	raw := msg.Raw()
+	view := &MessageView{
 		ID:   uint64(msg.ID),
 		Len:  msg.Len(),
-		Text: string(msg.Raw()),
+		Text: string(raw),
+	}
+	head, body := splitHeadBody(raw)
+	if len(body) == 0 {
+		// No terminator, or a head with nothing after it. There is no body to decode, and a truncated
+		// head's Content-Encoding describes bytes that are not here.
+		return view
+	}
+	encoding := firstHeaderValue(head, "Content-Encoding")
+	if encoding == "" || strings.EqualFold(encoding, "identity") {
+		return view
+	}
+	view.ContentEncoding = encoding
+	if !httputil.Unpackable(encoding) {
+		view.DecodeError = "no decoder for Content-Encoding " + strconv.Quote(encoding) +
+			" in this build; gzip and deflate are supported"
+		return view
+	}
+	// Chunk framing wraps the compressed bytes, so it has to come off first — feeding `size CRLF data`
+	// to gzip decodes the size prefix as payload.
+	if strings.EqualFold(firstHeaderValue(head, "Transfer-Encoding"), "chunked") {
+		unchunked, dok := dechunkForView(body)
+		if !dok {
+			view.DecodeError = "the chunk framing did not parse, so the compressed body could not be located"
+			return view
+		}
+		body = unchunked
+	}
+	plain, err := httputil.DecodeBody(encoding, body)
+	if err != nil {
+		view.DecodeError = err.Error()
+		return view
+	}
+	decoded := string(head) + "\r\n\r\n" + string(plain)
+	view.Decoded = &decoded
+	return view
+}
+
+// firstHeaderValue reads one header out of a head block, first occurrence winning, skipping the
+// status or request line.
+func firstHeaderValue(head []byte, name string) string {
+	normalised := bytes.ReplaceAll(head, []byte("\r\n"), []byte("\n"))
+	lines := bytes.Split(normalised, []byte("\n"))
+	prefix := strings.ToLower(name) + ":"
+	for i, line := range lines {
+		if i == 0 {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(string(line)), prefix) {
+			return strings.TrimSpace(string(line[len(prefix):]))
+		}
+	}
+	return ""
+}
+
+// dechunkForView collapses chunk framing to the data it frames, reporting false for framing it cannot
+// parse rather than guessing where the body is.
+//
+// A second implementation of proxy.dechunk, because that one is unexported in a package this one must
+// not depend on — internal/proxy imports the capture pipeline, and a view helper reaching into it
+// would invert the dependency. Kept minimal and refusing on anything unexpected: a view that showed a
+// mis-dechunked body would be a rendering nobody can check against the wire.
+func dechunkForView(body []byte) ([]byte, bool) {
+	var out bytes.Buffer
+	rest := body
+	for {
+		eol := bytes.Index(rest, []byte("\r\n"))
+		if eol < 0 {
+			return nil, false
+		}
+		sizeField := string(rest[:eol])
+		// A chunk extension follows a semicolon and is not part of the size.
+		if i := strings.IndexByte(sizeField, ';'); i >= 0 {
+			sizeField = sizeField[:i]
+		}
+		size, err := strconv.ParseInt(strings.TrimSpace(sizeField), 16, 64)
+		if err != nil || size < 0 {
+			return nil, false
+		}
+		rest = rest[eol+2:]
+		if size == 0 {
+			// Last chunk. Trailers and the final CRLF are not part of the body.
+			return out.Bytes(), true
+		}
+		if int64(len(rest)) < size+2 {
+			return nil, false
+		}
+		out.Write(rest[:size])
+		rest = rest[size+2:]
 	}
 }
 
