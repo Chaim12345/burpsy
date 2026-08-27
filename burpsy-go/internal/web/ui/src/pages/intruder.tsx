@@ -343,9 +343,13 @@ export function IntruderPage(): JSX.Element {
   const [points, setPoints] = useState<PointView[]>([]);
   const [selected, setSelected] = useState<number[]>([]);
   const [payloadTexts, setPayloadTexts] = useState<string[]>([DEFAULT_PAYLOADS]);
-  const [payloadTypes, setPayloadTypes] = useState<("list" | "numbers" | "file")[]>(["list"]);
+  const [payloadTypes, setPayloadTypes] = useState<("list" | "numbers" | "file" | "brute_force" | "dates" | "custom_iterator" | "null")[]>(["list"]);
   const [payloadNumbers, setPayloadNumbers] = useState<{ from: string; to: string; step: string }[]>([{ from: "1", to: "100", step: "1" }]);
   const [payloadFiles, setPayloadFiles] = useState<string[]>([""]);
+  const [payloadBrute, setPayloadBrute] = useState<{ charset: string; min_len: string; max_len: string }[]>([{ charset: "abc", min_len: "1", max_len: "3" }]);
+  const [payloadDates, setPayloadDates] = useState<{ from: string; to: string; step: string; format: string }[]>([{ from: "2024-01-01", to: "2024-12-31", step: "1", format: "yyyy-MM-dd" }]);
+  const [payloadCustom, setPayloadCustom] = useState<{ positions: string; separator: string }[]>([{ positions: "a,b\nc,d", separator: "" }]);
+  const [payloadNulls, setPayloadNulls] = useState<string[]>(["10"]);
   const [rules, setRules] = useState<PayloadRuleSpec[]>([]);
   const [grepMatch, setGrepMatch] = useState("");
   const [grepExtract, setGrepExtract] = useState("");
@@ -396,6 +400,26 @@ export function IntruderPage(): JSX.Element {
       if (current.length > setsNeeded) return current.slice(0, setsNeeded);
       return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "")];
     });
+    setPayloadBrute((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => ({ charset: "abc", min_len: "1", max_len: "3" }))];
+    });
+    setPayloadDates((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => ({ from: "2024-01-01", to: "2024-12-31", step: "1", format: "yyyy-MM-dd" }))];
+    });
+    setPayloadCustom((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => ({ positions: "a,b\nc,d", separator: "" }))];
+    });
+    setPayloadNulls((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "10")];
+    });
   }, [setsNeeded]);
 
   const setSizes = useMemo(() => {
@@ -407,10 +431,29 @@ export function IntruderPage(): JSX.Element {
         if (!Number.isFinite(from) || !Number.isFinite(to) || step === 0) return 0;
         return Math.floor(Math.abs(to - from) / Math.abs(step)) + 1;
       }
-      if (t === "file") return 1; // unknown until resolved server-side; 1 keeps canRun true
+      if (t === "file") return 1;
+      if (t === "brute_force") {
+        const b = payloadBrute[i];
+        if (!b) return 0;
+        const charset = b.charset.length || 1;
+        const min = Number(b.min_len) || 0, max = Number(b.max_len) || 0;
+        if (max < min || min < 1) return 0;
+        let total = 0;
+        for (let l = min; l <= max; l++) total += Math.pow(charset, l);
+        return Math.min(total, 200000);
+      }
+      if (t === "dates") {
+        const d = payloadDates[i];
+        if (!d) return 0;
+        const step = Number(d.step) || 1;
+        if (step === 0) return 0;
+        return 10; // approximate; server computes exact
+      }
+      if (t === "custom_iterator") return 4; // approximate
+      if (t === "null") return Number(payloadNulls[i] ?? "0") || 0;
       return countPayloads(payloadTexts[i] ?? "");
     });
-  }, [payloadTypes, payloadTexts, payloadNumbers, payloadFiles]);
+  }, [payloadTypes, payloadTexts, payloadNumbers, payloadFiles, payloadBrute, payloadDates, payloadCustom, payloadNulls]);
   const estimate = useMemo(() => estimateRequests(mode, selected.length, setSizes), [mode, selected.length, setSizes]);
   const examples = useMemo(
     () => new Map((result?.examples ?? []).map((example) => [example.first_ordinal, example.payloads])),
@@ -464,6 +507,22 @@ export function IntruderPage(): JSX.Element {
         }
         if (t === "file") {
           return { type: "file", filename: (payloadFiles[i] ?? "").trim() };
+        }
+        if (t === "brute_force") {
+          const b = payloadBrute[i] ?? { charset: "abc", min_len: "1", max_len: "3" };
+          return { type: "brute_force", charset: b.charset, min_len: Number(b.min_len) || 1, max_len: Number(b.max_len) || 1 };
+        }
+        if (t === "dates") {
+          const d = payloadDates[i] ?? { from: "2024-01-01", to: "2024-12-31", step: "1", format: "yyyy-MM-dd" };
+          return { type: "dates", from: d.from, to: d.to, step: Number(d.step) || 1, format: d.format };
+        }
+        if (t === "custom_iterator") {
+          const c = payloadCustom[i] ?? { positions: "a,b\nc,d", separator: "" };
+          const positions = c.positions.split("\n").map((line) => line.split(",").map((s) => s.trim()).filter(Boolean));
+          return { type: "custom_iterator", positions, separator: c.separator };
+        }
+        if (t === "null") {
+          return { type: "null", count: Number(payloadNulls[i] ?? "0") || 0 };
         }
         return { type: "list", items: payloadList(payloadTexts[i] ?? "") };
       });
@@ -691,6 +750,10 @@ export function IntruderPage(): JSX.Element {
                             <option value="list">Simple list</option>
                             <option value="numbers">Numbers</option>
                             <option value="file">File (server path)</option>
+                            <option value="brute_force">Brute force</option>
+                            <option value="dates">Dates</option>
+                            <option value="custom_iterator">Custom iterator</option>
+                            <option value="null">Null payloads</option>
                           </Select>
                         )}
                       </Field>
@@ -750,7 +813,7 @@ export function IntruderPage(): JSX.Element {
                           )}
                         </Field>
                       </div>
-                    ) : (
+                    ) : t === "file" ? (
                       <Field label="Server file path" hint="File must exist on server; blank lines skipped">
                         {(id) => (
                           <Input
@@ -763,7 +826,135 @@ export function IntruderPage(): JSX.Element {
                           />
                         )}
                       </Field>
-                    )}
+                    ) : t === "brute_force" ? (
+                      <div className="form-grid">
+                        <Field label="Charset">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadBrute[index]?.charset ?? "abc"}
+                              onChange={(e) =>
+                                setPayloadBrute((cur) => cur.map((v, i) => (i === index ? { ...v, charset: e.target.value } : v)))
+                              }
+                              placeholder="abc"
+                            />
+                          )}
+                        </Field>
+                        <Field label="Min length">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadBrute[index]?.min_len ?? "1"}
+                              onChange={(e) =>
+                                setPayloadBrute((cur) => cur.map((v, i) => (i === index ? { ...v, min_len: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="Max length">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadBrute[index]?.max_len ?? "3"}
+                              onChange={(e) =>
+                                setPayloadBrute((cur) => cur.map((v, i) => (i === index ? { ...v, max_len: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    ) : t === "dates" ? (
+                      <div className="form-grid">
+                        <Field label="From (YYYY-MM-DD)">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadDates[index]?.from ?? "2024-01-01"}
+                              onChange={(e) =>
+                                setPayloadDates((cur) => cur.map((v, i) => (i === index ? { ...v, from: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="To">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadDates[index]?.to ?? "2024-12-31"}
+                              onChange={(e) =>
+                                setPayloadDates((cur) => cur.map((v, i) => (i === index ? { ...v, to: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="Step (days)">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadDates[index]?.step ?? "1"}
+                              onChange={(e) =>
+                                setPayloadDates((cur) => cur.map((v, i) => (i === index ? { ...v, step: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="Format">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadDates[index]?.format ?? "yyyy-MM-dd"}
+                              onChange={(e) =>
+                                setPayloadDates((cur) => cur.map((v, i) => (i === index ? { ...v, format: e.target.value } : v)))
+                              }
+                              placeholder="yyyy-MM-dd"
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    ) : t === "custom_iterator" ? (
+                      <div className="stack">
+                        <Field label="Positions (one set per line, comma-separated)" hint="Two or more lines, each line is a slot: a,b,c">
+                          {(id) => (
+                            <Textarea
+                              id={id}
+                              value={payloadCustom[index]?.positions ?? "a,b\nc,d"}
+                              onChange={(e) =>
+                                setPayloadCustom((cur) => cur.map((v, i) => (i === index ? { ...v, positions: e.target.value } : v)))
+                              }
+                              placeholder="a,b,c&#10;1,2,3"
+                            />
+                          )}
+                        </Field>
+                        <Field label="Separator">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadCustom[index]?.separator ?? ""}
+                              onChange={(e) =>
+                                setPayloadCustom((cur) => cur.map((v, i) => (i === index ? { ...v, separator: e.target.value } : v)))
+                              }
+                              placeholder="e.g. / or empty"
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    ) : t === "null" ? (
+                      <Field label="Count (number of empty payloads)">
+                        {(id) => (
+                          <Input
+                            id={id}
+                            type="number"
+                            value={payloadNulls[index] ?? "10"}
+                            onChange={(e) =>
+                              setPayloadNulls((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
+                            }
+                          />
+                        )}
+                      </Field>
+                    ) : null}
                   </Card>
                 );
               })}
