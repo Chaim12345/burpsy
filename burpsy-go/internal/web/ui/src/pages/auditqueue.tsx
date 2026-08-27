@@ -83,6 +83,30 @@ export function AuditQueuePage(): JSX.Element {
                     <td className="cell-num">{item.attempts}</td>
                     <td className="cell-dim">{item.note ?? "—"}</td>
                     <td>
+                      {/* Per row, because the control used to be one page-level button that only ever
+                          expanded d.items[0] — on every other row it appeared to do nothing, and an
+                          operator read "no insertion points" where the truth was "this control cannot
+                          show you them" (burpsy-react-ui-d0n).
+
+                          Disabled with its count when a row recorded none, rather than hidden: an
+                          absent button is indistinguishable from a row that has points and a broken
+                          toggle, which is the confusion this issue was about. */}
+                      <Button
+                        variant="quiet"
+                        size="small"
+                        disabled={!item.insertion_points?.length}
+                        aria-expanded={expanded === item.seq}
+                        title={
+                          item.insertion_points?.length
+                            ? `${expanded === item.seq ? "Hide" : "Show"} the ${item.insertion_points.length} insertion point(s) recorded for this item`
+                            : "No insertion points were recorded for this item"
+                        }
+                        onClick={() => setExpanded(expanded === item.seq ? null : item.seq)}
+                      >
+                        {item.insertion_points?.length
+                          ? `${expanded === item.seq ? "Hide" : "Points"} (${item.insertion_points.length})`
+                          : "Points (0)"}
+                      </Button>
                       <Button
                         variant="outline"
                         size="small"
@@ -102,6 +126,9 @@ export function AuditQueuePage(): JSX.Element {
                     <tr key={`${item.seq}-points`}>
                       <td colSpan={6}>
                         <div className="stack">
+                          <span className="cell-dim">
+                            {item.insertion_points.length} insertion point(s) recorded for seq {item.seq}
+                          </span>
                           {item.insertion_points.map((point, index) => (
                             <div key={index} className="cell-dim mono">
                               {point.kind}/{point.name}: {point.status}
@@ -115,15 +142,6 @@ export function AuditQueuePage(): JSX.Element {
                 </Fragment>
               ))}
             </SimpleTable>
-            <div className="toolbar-end" style={{ marginTop: "var(--gap)" }}>
-              <Button
-                variant="outline"
-                size="small"
-                onClick={() => setExpanded(expanded === null ? (d.items[0]?.seq ?? null) : null)}
-              >
-                {expanded === null ? "Show insertion points" : "Hide insertion points"}
-              </Button>
-            </div>
           </Card>
         </>
       )}
