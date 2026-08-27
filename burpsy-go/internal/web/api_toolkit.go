@@ -568,6 +568,8 @@ var matchReplaceTargetNames = []string{
 	"request_first_line",
 	"response_header",
 	"response_body",
+	"websocket_to_server",
+	"websocket_to_client",
 }
 
 // matchReplaceUnappliedTargets are rule_types the engine declares but cannot apply.
@@ -624,6 +626,10 @@ func targetToCategory(ruleType string) (matchreplace.Target, error) {
 		return matchreplace.TargetResponseHeader, nil
 	case "response_body":
 		return matchreplace.TargetResponseBody, nil
+	case "websocket_to_server":
+		return matchreplace.TargetWebSocketToServer, nil
+	case "websocket_to_client":
+		return matchreplace.TargetWebSocketToClient, nil
 	case "":
 		return 0, fmt.Errorf("rule_type is required; accepted values are %s", strings.Join(matchReplaceTargetNames, ", "))
 	default:
@@ -738,6 +744,10 @@ func matchReplaceTargetName(t matchreplace.Target) string {
 		return "response_header"
 	case matchreplace.TargetResponseBody:
 		return "response_body"
+	case matchreplace.TargetWebSocketToServer:
+		return "websocket_to_server"
+	case matchreplace.TargetWebSocketToClient:
+		return "websocket_to_client"
 	default:
 		return fmt.Sprintf("unrecognised_target_%d", int(t))
 	}

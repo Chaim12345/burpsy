@@ -79,6 +79,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
 	"github.com/burpsy-go/burpsy/internal/intercept"
+	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
 )
@@ -332,12 +333,16 @@ func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst 
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
 
-			dir, holding := s.wsInterceptDirection(fromClient)
+			dir, _ := s.wsInterceptDirection(fromClient)
 			// Bytes already buffered must go out through the same path that
 			// buffered them, even if interception was switched off in between.
 			// Relaying a newer chunk ahead of an older partial frame would
 			// reorder the stream, which is worse than either path alone.
-			if !degraded && (holding || len(pending) > 0) {
+			//
+			// A buffered fragment counts too: mid-message, the accumulator holds bytes that have not
+			// been relayed, so switching to the chunk path would emit the rest of the message ahead
+			// of its own beginning.
+			if !degraded && (s.wsNeedsFrames(fromClient) || len(pending) > 0 || frag.active) {
 				fault, gone := s.wsIntercept(dir, &pending, chunk, dst, rs, exchangeID, fromClient, peer, stats, &frag)
 				if gone {
 					return ""
@@ -411,6 +416,35 @@ func (s *Server) wsInterceptDirection(fromClient bool) (intercept.Direction, boo
 		return dir, false
 	}
 	return dir, s.config.intercept.Rules(dir).Active
+}
+
+// wsMatchReplaceDirection is the match/replace direction for this side of the relay, and whether any
+// enabled rule targets it.
+func (s *Server) wsMatchReplaceDirection(fromClient bool) (matchreplace.Direction, bool) {
+	dir := matchreplace.DirWebSocketToClient
+	if fromClient {
+		dir = matchreplace.DirWebSocketToServer
+	}
+	if s.config.matchReplace == nil {
+		return dir, false
+	}
+	return dir, s.config.matchReplace.Affects(dir)
+}
+
+// wsNeedsFrames reports whether this direction must be parsed into frames rather than relayed as
+// opaque chunks.
+//
+// Two independent reasons, and either alone is enough: interception has to hold whole messages, and
+// match & replace has to rewrite whole payloads. Tying the frame path to interception alone was a
+// real bug for a moment during this work — WebSocket match/replace rules would have installed,
+// reported success, and rewritten nothing whenever interception happened to be off, which is the
+// decorative-control failure this project keeps finding.
+func (s *Server) wsNeedsFrames(fromClient bool) bool {
+	if _, holding := s.wsInterceptDirection(fromClient); holding {
+		return true
+	}
+	_, rewriting := s.wsMatchReplaceDirection(fromClient)
+	return rewriting
 }
 
 // wsIntercept consumes chunk on the frame-boundary path: it appends to pending,
@@ -633,17 +667,45 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 // message that went through interception untouched is byte-identical to one that never entered it.
 // An edit is re-encoded as a single unfragmented frame, which is legal and is what Burp sends.
 func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, payload []byte, originals [][]byte, fromClient bool, peer wsPeer) ([][]byte, bool) {
-	held := s.config.intercept.Hold(&intercept.Message{
-		Direction: dir,
-		Host:      peer.host,
-		Port:      peer.port,
-		TLS:       peer.tls,
-		Path:      peer.path,
-		Opcode:    opcode.Name(),
-		Raw:       payload,
-	})
+	// Match & replace runs before interception, exactly as it does on the HTTP path in proxy.go: the
+	// operator's standing rewrite rules are part of what the peer is deemed to have sent, so the
+	// message offered for interception is the rewritten one. The other order would show the operator
+	// a message, then silently alter it after they approved it.
+	rewritten := payload
+	if s.config.matchReplace != nil {
+		mrDir := matchreplace.DirWebSocketToClient
+		if fromClient {
+			mrDir = matchreplace.DirWebSocketToServer
+		}
+		if s.config.matchReplace.Affects(mrDir) {
+			rewritten = s.config.matchReplace.Apply(mrDir, payload)
+		}
+	}
+	// A rewrite means the original frames are no longer what should go out, so the untouched-relay
+	// shortcut below must not fire on them.
+	rewrote := !bytes.Equal(rewritten, payload)
+	payload = rewritten
+
+	// Interception may be off while match & replace is on — the frame path runs for either reason —
+	// so this must not assume there is an engine to offer the message to.
+	var held *intercept.Held
+	if _, holding := s.wsInterceptDirection(fromClient); holding {
+		held = s.config.intercept.Hold(&intercept.Message{
+			Direction: dir,
+			Host:      peer.host,
+			Port:      peer.port,
+			TLS:       peer.tls,
+			Path:      peer.path,
+			Opcode:    opcode.Name(),
+			Raw:       payload,
+		})
+	}
 	if held == nil {
-		// No rule matched, so this was never offered. Relay exactly as it arrived.
+		// No interception rule matched, so this was never offered. Relay exactly as it arrived —
+		// unless match & replace changed it, in which case the rewritten message is what goes out.
+		if rewrote {
+			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false
+		}
 		return originals, false
 	}
 
@@ -652,22 +714,43 @@ func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, p
 		return nil, true
 	}
 	if bytes.Equal(edited, payload) {
+		// Forwarded without further editing. If match & replace had rewritten it, that rewrite still
+		// has to reach the wire; only an entirely unmodified message relays its original frames.
+		if rewrote {
+			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false
+		}
 		return originals, false
 	}
 
 	// A client-to-server frame must be masked and a server-to-client frame must not be
 	// (RFC 6455 §5.1). The direction decides, not what happened to arrive.
+	return [][]byte{s.wsEncode(opcode, edited, fromClient, originals)}, false
+}
+
+// wsEncode frames a payload for the wire.
+//
+// A client-to-server frame must be masked and a server-to-client frame must not be (RFC 6455 §5.1),
+// and a peer receiving the wrong one is required to fail the connection — so the mask is decided by
+// direction, never by what happened to arrive.
+//
+// fallback is what to relay if a mask cannot be generated. Without one the only choices are an
+// unmasked client frame, which the server must reject, or silently not sending the change; so the
+// original goes out and the failure is logged loudly rather than swallowed.
+func (s *Server) wsEncode(opcode core.WsOpcode, payload []byte, fromClient bool, fallback [][]byte) []byte {
 	var mask *[4]byte
 	if fromClient {
 		var m [4]byte
 		if _, err := rand.Read(m[:]); err != nil {
-			s.config.logger.Error("could not generate a WebSocket mask; the operator's edit was NOT sent and the original message was relayed instead",
+			s.config.logger.Error("could not generate a WebSocket mask; the modified message was NOT sent and the original was relayed instead",
 				zap.Error(err), zap.String("direction", wsWhich(fromClient)))
-			return originals, false
+			if len(fallback) > 0 {
+				return fallback[0]
+			}
+			return nil
 		}
 		mask = &m
 	}
-	return [][]byte{core.EncodeWsFrame(opcode, edited, mask)}, false
+	return core.EncodeWsFrame(opcode, payload, mask)
 }
 
 // total is the whole frame length for a parsed header.

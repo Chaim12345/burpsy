@@ -22,6 +22,12 @@ const (
 	TargetRequestParamValue
 	TargetResponseHeader
 	TargetResponseBody
+	// The two WebSocket targets rewrite a whole message payload rather than part of an HTTP
+	// message. A frame has no headers, no first line and no parameters, so there is nothing to
+	// address inside it — the payload IS the addressable unit, which is why these two need no
+	// header/body split of their own.
+	TargetWebSocketToServer
+	TargetWebSocketToClient
 	// TargetCount is how many Targets the taxonomy has, and it must stay last.
 	//
 	// It exists so tests can walk the enum instead of a hand-written list. The round-trip test
@@ -78,7 +84,20 @@ type Direction int
 const (
 	DirRequest Direction = iota
 	DirResponse
+	DirWebSocketToServer
+	DirWebSocketToClient
+	// DirCount must stay last, for the same reason TargetCount does: it lets targetDirections be
+	// an array the compiler sizes, so a direction added without a mapping is a build failure
+	// rather than a silent fallthrough.
+	DirCount = iota
 )
+
+// IsWebSocket reports whether this direction carries WebSocket message payloads rather than HTTP
+// messages. Callers use it to skip anything HTTP-shaped — recomputing Content-Length on a frame,
+// for instance, which has none.
+func (d Direction) IsWebSocket() bool {
+	return d == DirWebSocketToServer || d == DirWebSocketToClient
+}
 
 // RuleSet is an ordered set of compiled rules.
 type RuleSet struct {
@@ -128,6 +147,10 @@ func (rs *RuleSet) Rules() []*Rule {
 }
 
 // Affects returns true if any enabled rule targets this direction.
+//
+// Reads the same targetDirections table Apply does, so "this direction has rules" and "this rule
+// runs in this direction" cannot disagree. They previously had separate if-chains listing the
+// targets by hand, which is two places to forget a new one.
 func (rs *RuleSet) Affects(dir Direction) bool {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
@@ -135,10 +158,7 @@ func (rs *RuleSet) Affects(dir Direction) bool {
 		if !r.Enabled {
 			continue
 		}
-		if dir == DirRequest && (r.Target == TargetRequestHeader || r.Target == TargetRequestBody || r.Target == TargetRequestFirstLine || r.Target == TargetRequestParamName || r.Target == TargetRequestParamValue) {
-			return true
-		}
-		if dir == DirResponse && (r.Target == TargetResponseHeader || r.Target == TargetResponseBody) {
+		if targetsDir(r.Target, dir) {
 			return true
 		}
 	}
@@ -175,10 +195,30 @@ func (rs *RuleSet) Apply(dir Direction, raw []byte) []byte {
 	if !changed {
 		return raw
 	}
-	if updateCL {
+	// Not for WebSocket. A frame has no Content-Length, and fixContentLength looks for a
+	// header/body separator — which a payload that happens to contain a blank line would appear to
+	// have, at which point it would inject a Content-Length header into the middle of application
+	// data. Skipped by direction rather than by inspecting the bytes, because the direction is a
+	// fact and the bytes are a guess.
+	if updateCL && !dir.IsWebSocket() {
 		out = fixContentLength(out)
 	}
 	return out
+}
+
+// applyWholePayload rewrites the entire input, for targets whose addressable unit is the whole
+// thing. Returns nil when the rule did not fire, which is applyOne's contract.
+func applyWholePayload(r *Rule, raw []byte) []byte {
+	if r.Category == CategoryRegex {
+		if r.re == nil || !r.re.Match(raw) {
+			return nil
+		}
+		return r.re.ReplaceAll(raw, []byte(r.StringReplace))
+	}
+	if r.StringMatch == "" || !bytes.Contains(raw, []byte(r.StringMatch)) {
+		return nil
+	}
+	return bytes.ReplaceAll(raw, []byte(r.StringMatch), []byte(r.StringReplace))
 }
 
 // fixContentLength recomputes the Content-Length header to match the actual body length.
@@ -241,11 +281,33 @@ func fixContentLength(raw []byte) []byte {
 	return out.Bytes()
 }
 
+// targetDirections says which direction each target belongs to.
+//
+// An array rather than the if-chain this used to be. That chain read `if dir == DirRequest { ...five
+// targets... } return ...two targets...`, so every direction that was not DirRequest was treated as
+// a response — which meant adding the WebSocket directions would have silently matched WebSocket
+// payloads against the *response* target list. Same failure the intercept package's Direction had,
+// and fixed the same way: the compiler sizes this array, so a target added without a row here does
+// not build.
+var targetDirections = [TargetCount]Direction{
+	TargetRequestHeader:     DirRequest,
+	TargetRequestBody:       DirRequest,
+	TargetRequestFirstLine:  DirRequest,
+	TargetRequestParamName:  DirRequest,
+	TargetRequestParamValue: DirRequest,
+	TargetResponseHeader:    DirResponse,
+	TargetResponseBody:      DirResponse,
+	TargetWebSocketToServer: DirWebSocketToServer,
+	TargetWebSocketToClient: DirWebSocketToClient,
+}
+
 func targetsDir(t Target, dir Direction) bool {
-	if dir == DirRequest {
-		return t == TargetRequestHeader || t == TargetRequestBody || t == TargetRequestFirstLine || t == TargetRequestParamName || t == TargetRequestParamValue
+	if t < 0 || int(t) >= TargetCount {
+		// An out-of-range target matches nothing. Refusing here rather than indexing keeps a
+		// corrupt rule inert instead of routing it to whichever direction sits at that offset.
+		return false
 	}
-	return t == TargetResponseHeader || t == TargetResponseBody
+	return targetDirections[t] == dir
 }
 
 func applyOne(r *Rule, raw []byte) []byte {
@@ -256,6 +318,8 @@ func applyOne(r *Rule, raw []byte) []byte {
 		return applyHeaders(r, raw)
 	case TargetRequestFirstLine:
 		return applyFirstLine(r, raw)
+	case TargetWebSocketToServer, TargetWebSocketToClient:
+		return applyWholePayload(r, raw)
 	default:
 		// An unimplemented target did not fire. `nil` is this function's contract for that —
 		// see Apply, which only sets `changed` when applyOne returns non-nil.

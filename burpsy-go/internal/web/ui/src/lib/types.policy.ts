@@ -6,18 +6,26 @@
 
 /* --- match & replace ------------------------------------------------------- */
 
-/** The five targets targetToCategory() in api_toolkit.go accepts. Anything else compiles to a no-op. */
+/**
+ * The targets targetToCategory() in api_toolkit.go accepts. Anything else is refused with a 400
+ * naming the accepted vocabulary — it does not compile to a no-op rule, which it used to.
+ *
+ * The two WebSocket targets rewrite a whole message payload. A frame has no headers, no first line
+ * and no parameters, so the payload is the only addressable unit.
+ */
 export type MatchReplaceTarget =
   | "request_first_line"
   | "request_header"
   | "request_body"
   | "response_header"
-  | "response_body";
+  | "response_body"
+  | "websocket_to_server"
+  | "websocket_to_client";
 
 /** matchReplaceCategoryName(): the server knows exactly these two. */
 export type MatchReplaceCategory = "literal" | "regex";
 
-export type MatchReplaceDirection = "request" | "response";
+export type MatchReplaceDirection = "request" | "response" | "websocket";
 
 /** What /api/tools/rules/test answers with; `output` is the server's bytesView shape. */
 export interface BytesView {

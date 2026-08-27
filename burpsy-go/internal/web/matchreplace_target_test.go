@@ -150,8 +150,10 @@ func TestEveryEngineTargetHasANameAndOnlyAppliableOnesRoundTrip(t *testing.T) {
 	// The sentinel is only exhaustive if it sits after the last real Target. Asserting that
 	// here rather than trusting it is the whole point of the exercise: a sentinel in the wrong
 	// position gives a loop that looks exhaustive and is not, which is the bug being fixed.
-	if got, want := int(matchreplace.TargetResponseBody), matchreplace.TargetCount-1; got != want {
-		t.Fatalf("TargetResponseBody = %d but TargetCount-1 = %d; the sentinel must be the last "+
+	// TargetWebSocketToClient is the last real Target as of the WebSocket match/replace work; this
+	// assertion is what caught that change rather than letting the loop quietly stop two short.
+	if got, want := int(matchreplace.TargetWebSocketToClient), matchreplace.TargetCount-1; got != want {
+		t.Fatalf("TargetWebSocketToClient = %d but TargetCount-1 = %d; the sentinel must be the last "+
 			"constant in the block or this loop silently stops short", got, want)
 	}
 	all := make([]matchreplace.Target, 0, matchreplace.TargetCount)
