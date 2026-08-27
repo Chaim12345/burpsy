@@ -1369,7 +1369,8 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, b := []byte(req.A), []byte(req.B)
-	ops := compareOps(a, b)
+	diff := diffBytes(a, b)
+	ops := diff.Ops
 
 	// Tag differences that fall inside a discounted header. Spans are computed per side because the
 	// same header sits at different offsets in two messages of different lengths, and an op's A and B
@@ -1427,48 +1428,10 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		"uninteresting_headers_applied":    s.uninteresting.headers(req.Response),
 		"deleted_tokens":                   deleted,
 		"inserted_tokens":                  inserted,
-		"truncated":                        false,
+		"truncated":                        diff.Truncated,
 		"ops_omitted":                      0,
 		"ops":                              ops,
 	})
-}
-
-// compareOps converts two byte slices into a run of equal/replace/insert/delete ops.
-func compareOps(a, b []byte) []compareOp {
-	var ops []compareOp
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	i := 0
-	for i < minLen {
-		if a[i] == b[i] {
-			start := i
-			for i < minLen && a[i] == b[i] {
-				i++
-			}
-			ops = append(ops, compareOp{Kind: "equal", AOffset: start, ALen: i - start, BOffset: start, BLen: i - start})
-			continue
-		}
-		startA, startB := i, i
-		for i < minLen && a[i] != b[i] {
-			i++
-		}
-		ops = append(ops, compareOp{
-			Kind:    "replace",
-			AOffset: startA,
-			ALen:    i - startA,
-			BOffset: startB,
-			BLen:    i - startB,
-			Text:    string(a[startA:i]),
-		})
-	}
-	if len(a) > minLen {
-		ops = append(ops, compareOp{Kind: "delete", AOffset: minLen, ALen: len(a) - minLen, BOffset: len(b), BLen: 0, Text: string(a[minLen:])})
-	} else if len(b) > minLen {
-		ops = append(ops, compareOp{Kind: "insert", AOffset: len(a), ALen: 0, BOffset: minLen, BLen: len(b) - minLen, Text: string(b[minLen:])})
-	}
-	return ops
 }
 
 // ---- Organizer ---------------------------------------------------------------------------------

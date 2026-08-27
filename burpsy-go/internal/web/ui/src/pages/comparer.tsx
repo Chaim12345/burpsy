@@ -267,9 +267,23 @@ export function ComparerPage(): JSX.Element {
 
       {/* The handler reads two flat strings and has no granularity parameter, so a
           word-level option here would be a control that changes nothing. */}
+      {/* The old wording said only that this build compares BYTES rather than words. That was true
+          about granularity and silent about something worse: the diff had no alignment at all, so one
+          inserted byte reported the whole remainder as changed. Now it aligns, and the notice says
+          what the actual remaining limit is. */}
       <div className="notice">
-        This build compares bytes. The server exposes no word-level mode, so no granularity control is offered rather
-        than one that silently does the same thing.
+        Byte-level, aligned. Differences are matched up across insertions and deletions, so a
+        one-character change reads as a one-character change. There is no word-level mode, and none is
+        offered rather than a control that silently did the same thing.
+        {result?.truncated ? (
+          <>
+            {" "}
+            <strong>
+              These two inputs differ too extensively to align, so the differing region is shown as one
+              block rather than matched up.
+            </strong>
+          </>
+        ) : null}
       </div>
 
       {/* Which discount list applies. A control rather than a guess: burpsy cannot reliably tell a
