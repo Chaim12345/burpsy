@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
@@ -148,16 +149,87 @@ func Test_tools_hash_still_serves_its_implemented_algorithms(t *testing.T) {
 	}
 }
 
-// The encodings the UI offers all still work, so the refusal above cannot have narrowed the set the
-// workbench's dropdown depends on (ENCODE_ENCODINGS in ui/src/lib/data.workbench.ts).
+// codecListFromUI extracts one `as const` string array out of ui/src/lib/data.workbench.ts.
+//
+// # Why this reads the TypeScript instead of restating it
+//
+// The two tests below used to carry a hard-coded list while their comments claimed they covered
+// ENCODE_ENCODINGS and the decode layers "in ui/src/lib/data.workbench.ts". They did not read that
+// file at all, so the guarantee was fictional: adding an encoding to the dropdown that the backend
+// cannot perform left the suite green. Proven by mutation — offering "brainfuck" passed.
+//
+// That is the same failure that had been written into reference.ts's header (a test that did not
+// exist), which suggests the pattern rather than the instance is the problem: a comment naming a file
+// it does not open. These now open it.
+func codecListFromUI(t *testing.T, name string) []string {
+	t.Helper()
+	const path = "ui/src/lib/data.workbench.ts"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	src := string(data)
+	// The declaration, matched up to and including the "=", so a RENAMED array cannot satisfy it by
+	// prefix. Searching for "export const DECODE_LAYERS" alone also matched DECODE_LAYERS_RENAMED,
+	// which made the rename mutation pass — my own bug, caught by mutating the name.
+	at := strings.Index(src, "export const "+name+" =")
+	if at < 0 {
+		t.Fatalf("%s does not declare %s — this test cannot check what it cannot find", path, name)
+	}
+	open, close := strings.Index(src[at:], "["), strings.Index(src[at:], "]")
+	if open < 0 || close < open {
+		t.Fatalf("could not find %s's array literal in %s", name, path)
+	}
+	var out []string
+	for _, part := range strings.Split(src[at+open+1:at+close], ",") {
+		if v := strings.Trim(strings.TrimSpace(part), `"'`); v != "" {
+			out = append(out, v)
+		}
+	}
+	// The floor: an extractor that silently matched nothing would make this pass by checking nothing,
+	// which is exactly how the guarantee was lost the first time.
+	if len(out) < 5 {
+		t.Fatalf("extracted only %d entries from %s in %s; the extractor is not reading the array",
+			len(out), name, path)
+	}
+	return out
+}
+
+// Every encoding the dropdown offers must actually encode. Read from the UI's own array, so adding
+// one the backend cannot perform fails here rather than 500-ing in front of an operator.
 func Test_tools_encode_serves_every_encoding_the_ui_offers(t *testing.T) {
 	s := newTestServer()
-	for _, encoding := range []string{"url", "html", "base64", "base64url", "hex", "ascii", "rot13"} {
+	for _, encoding := range codecListFromUI(t, "ENCODE_ENCODINGS") {
 		rec := postJSON(t, s, "/api/tools/encode",
 			map[string]string{"input": "abc", "encoding": encoding})
 		if rec.Code != http.StatusOK {
-			t.Errorf("encoding %q: status = %d, want 200; body %s",
+			t.Errorf("the Decoder offers encoding %q and the backend refuses it: status = %d, body %s",
 				encoding, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// And the decode direction, which had no such test at all. gzip and deflate were in the engine and
+// missing from the dropdown (burpsy-react-ui-37b); with them added, this is what stops the reverse —
+// a layer offered that cannot decode.
+func Test_tools_decode_serves_every_layer_the_ui_offers(t *testing.T) {
+	s := newTestServer()
+	for _, layer := range codecListFromUI(t, "DECODE_LAYERS") {
+		// What is asserted is that the layer is RECOGNISED, not that the input decodes: "YWJj" is not
+		// valid gzip, deflate or a JWT, and a known layer handed undecodable input reporting that
+		// failure is correct behaviour. The signal is decodeLayer's vocabulary error, "unknown
+		// encoding %q: expected one of ...".
+		//
+		// The body shape is FLAT — {input, encoding} — which is what lib/data.workbench.ts's runStep
+		// posts. Sending {input, steps:[...]} instead, as I first did, is silently ignored by the
+		// handler: nothing is decoded, no error is produced, and the test passes for every layer
+		// including nonsense ones. Two mutations were needed to find that (a bogus layer, and a
+		// renamed array), and both passed against the earlier version.
+		rec := postJSON(t, s, "/api/tools/decode",
+			map[string]any{"input": "YWJj", "encoding": layer})
+		if strings.Contains(rec.Body.String(), "unknown encoding") {
+			t.Errorf("the Decoder offers layer %q and the backend does not recognise it: %s",
+				layer, rec.Body.String())
 		}
 	}
 }
