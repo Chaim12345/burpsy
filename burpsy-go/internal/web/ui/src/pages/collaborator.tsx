@@ -12,7 +12,7 @@
  */
 import { useState } from "react";
 import { Copy, Plus, RefreshCw } from "lucide-react";
-import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Metric } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Metric } from "../ui/primitives";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
 import {
@@ -23,6 +23,7 @@ import {
   useMintBlindXSSPayload,
   useMintPayload,
   usePollNow,
+  useSetCollaboratorServer,
   type CollaboratorInteractionRow,
 } from "../lib/data.collab";
 import { copyToClipboard } from "../lib/api";
@@ -39,7 +40,10 @@ export function CollaboratorPage(): JSX.Element {
   const mint = useMintPayload();
   const poll = usePollNow();
   const mintBX = useMintBlindXSSPayload();
+  const setServer = useSetCollaboratorServer();
   const [selected, setSelected] = useState<number | null>(null);
+  const [serverInput, setServerInput] = useState("");
+  const [clientPath, setClientPath] = useState("");
 
   if (status.isLoading) return <LoadingPanel label="Loading collaborator state" />;
   if (status.error || !status.data)
@@ -59,6 +63,78 @@ export function CollaboratorPage(): JSX.Element {
           </>
         }
       />
+      {/* Burp's configPanelCollaboratorServer. Until this existed the capability was reachable only
+          via -collaborator-server at startup, so forgetting the flag gated 26 corpus checks off for
+          the whole session and the only remedy was a restart — which costs the operator their
+          captured traffic. */}
+      <Card>
+        <SectionHeading
+          title="Interaction server"
+          detail={
+            s.configured
+              ? "Change where out-of-band callbacks are collected. Refused once a channel has registered, because payloads already handed out belong to the current domain."
+              : "No interaction server is set, so every out-of-band check refuses and no address can be handed out. Set one here instead of restarting."
+          }
+        />
+        <div className="form-grid" style={{ marginTop: 8 }}>
+          <label htmlFor="collab-server">Server</label>
+          <Input
+            id="collab-server"
+            aria-label="Interaction server URL"
+            placeholder="https://oast.example — or the word: public"
+            value={serverInput}
+            onChange={(e) => setServerInput(e.target.value)}
+          />
+          <label htmlFor="collab-client">Client binary</label>
+          <Input
+            id="collab-client"
+            aria-label="Path to the interactsh-client binary"
+            placeholder="optional — path to interactsh-client, else found on PATH"
+            value={clientPath}
+            onChange={(e) => setClientPath(e.target.value)}
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+          <Button
+            size="small"
+            disabled={serverInput.trim() === "" || setServer.isPending}
+            onClick={() =>
+              setServer.mutate(
+                { server: serverInput.trim(), client_path: clientPath.trim() || undefined },
+                {
+                  onSuccess: (next) =>
+                    // "Configured" and "reachable" are deliberately different claims. The provider is
+                    // lazy: nothing has contacted the server yet, and whether it answers — or whether
+                    // interactsh-client can even be found — is discovered when a payload is first
+                    // minted. Saying "connected" here would be a guess presented as a fact.
+                    toast.success(
+                      next.default_pool
+                        ? "Configured: interactsh public pool. Generate a payload to register a channel."
+                        : `Configured: ${next.server}. Generate a payload to register a channel.`,
+                    ),
+                  onError: (failure: unknown) =>
+                    toast.error(failure instanceof Error ? failure.message : "Setting the interaction server failed"),
+                },
+              )
+            }
+          >
+            {setServer.isPending ? "Setting…" : "Set server"}
+          </Button>
+          <span style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
+            <code>public</code> uses interactsh's own pool — third-party, and your callback data lands
+            there. Hosting a private server is out of scope for burpsy; driving its client is not.
+          </span>
+        </div>
+        {s.domain ? (
+          <div className="notice" style={{ marginTop: 8 }}>
+            A channel is registered on <code>{s.domain}</code>, so the server can no longer be changed
+            from here: the payload addresses already handed out — and the findings that reference them
+            — belong to that domain, and repointing would leave them at a server nobody is polling.
+            Restart with <code>-collaborator-server</code> to change it.
+          </div>
+        ) : null}
+      </Card>
+
       <Card>
         <SectionHeading
           title="Interaction channel"

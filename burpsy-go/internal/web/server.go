@@ -722,6 +722,9 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
 	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
 	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)
+	// The one collaborator route that changes state: it installs a provider. Refuses once a channel
+	// has registered a domain — see handleCollaboratorServer.
+	s.mux.HandleFunc("/api/collaborator/server", s.handleCollaboratorServer)
 	s.mux.HandleFunc("/api/collaborator/status", s.handleCollaboratorStatus)
 
 	// Session

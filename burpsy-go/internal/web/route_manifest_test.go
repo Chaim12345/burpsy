@@ -178,6 +178,25 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "re-read the interaction log now instead of waiting for the page's next tick",
 	},
+	"/api/collaborator/server": {
+		// riskScope, not riskLocal, and the reasoning is worth stating because riskLocal is the
+		// tempting reading: this route sends nothing. The provider it installs is lazy, so no
+		// registration, no subprocess and no packet happens here.
+		//
+		// What it does is decide *which third party* subsequently learns that an engagement is
+		// running, and where the callback data for it lands. /api/collaborator/payload is already
+		// riskEgress on the grounds that registering a domain discloses the engagement to a third
+		// party; the route that chooses that party is at least as confirmation-worthy as the one that
+		// contacts it. Classified riskLocal, an unattended caller could silently repoint every future
+		// out-of-band callback at a host of its choosing — including by passing the literal "public"
+		// to send it to interactsh's shared pool — and no confirmation would be asked.
+		//
+		// Refuses with 409 once a channel has registered, so it cannot orphan payloads already handed
+		// out; that is a correctness guard, not a reason to soften the class.
+		methods: []string{"POST"}, risk: riskScope,
+		summary: "point this installation at an interaction server without restarting: a URL, or " +
+			"\"public\" for interactsh's shared pool; refuses with 409 once a channel is registered",
+	},
 	"/api/collaborator/status": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "the out-of-band channel's state: configured or not, the registered domain, minted " +
@@ -825,9 +844,15 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// the scope authorised by name to an address the operator chose. Neither escapes the gate — the
 	// scope still says yes or no about the name — but both change where the authorised bytes land,
 	// which is an engagement-shaped decision an unattended caller must confirm.
+	// /api/collaborator/server joins for the same reason as /api/network/settings, one step further
+	// out: it does not change where the *target's* bytes land, it chooses which third party is told
+	// the engagement exists and receives its out-of-band callbacks. Minting is already riskEgress on
+	// the grounds that a registration discloses the engagement; picking the recipient is the decision
+	// behind that disclosure, and an unattended caller repointing it — or passing "public" to use
+	// interactsh's shared pool — is exactly what a confirmation gate is for.
 	wantScope := []string{
-		"/api/config/import", "/api/network/settings", "/api/pools", "/api/pools/", "/api/scanner/config",
-		"/api/scope",
+		"/api/collaborator/server", "/api/config/import", "/api/network/settings", "/api/pools",
+		"/api/pools/", "/api/scanner/config", "/api/scope",
 	}
 	// /api/blindxss is in the credential class because a callback carries the victim browser's
 	// `document.cookie`. It is the first entry there whose secret is not a credential burpsy holds

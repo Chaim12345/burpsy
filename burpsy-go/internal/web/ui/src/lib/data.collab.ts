@@ -86,6 +86,36 @@ export function useMintPayload() {
   });
 }
 
+/**
+ * Point this installation at an interaction server without restarting it — Burp's
+ * `configPanelCollaboratorServer`.
+ *
+ * The capability was real and reachable only from the command line, so an operator who started
+ * burpsy without `-collaborator-server` had every out-of-band check refuse for the rest of the
+ * session, with a restart — and the loss of their captured traffic — as the only remedy.
+ *
+ * `server` takes an interaction-server URL or the literal `"public"` for interactsh's own pool,
+ * matching the flag. An empty string is refused by the server rather than silently meaning
+ * "public": a blank box is much more likely to be an accident than a decision to send out-of-band
+ * traffic to a public third party.
+ *
+ * Returns the fresh status rather than a bare ok, and the distinction is the point: 200 means
+ * *configured*, never *reachable*. The provider is lazy, so whether the server answers and whether
+ * the interactsh-client binary can be found are only discovered when a payload is first minted.
+ *
+ * Expect a 409 when a channel has already registered a domain — see the comment on the button.
+ */
+export function useSetCollaboratorServer() {
+  const client = useQueryClient();
+  return useMutation<CollaboratorStatus, Error, { server: string; client_path?: string }>({
+    mutationFn: (body) => api<CollaboratorStatus>("/api/collaborator/server", json("POST", body)),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.collaborator });
+      void client.invalidateQueries({ queryKey: keys.collaboratorInteractions });
+    },
+  });
+}
+
 export function usePollNow() {
   const client = useQueryClient();
   return useMutation<{ interactions: number }, Error>({

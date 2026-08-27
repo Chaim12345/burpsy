@@ -42,6 +42,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -50,6 +51,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/oob"
+	"github.com/burpsy-go/burpsy/internal/scanner"
 )
 
 // The five states this surface distinguishes.
@@ -474,6 +476,111 @@ func (s *Server) handleCollaboratorStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
+}
+
+// collaboratorServerRequest is the body of POST /api/collaborator/server.
+type collaboratorServerRequest struct {
+	// Server is an interaction-server URL, or the literal "public" for interactsh's own pool. Named
+	// the same as the -collaborator-server flag and accepting the same two forms, so the flag and
+	// this endpoint cannot drift into meaning different things.
+	Server string `json:"server"`
+	// ClientPath optionally locates the interactsh-client binary, mirroring -collaborator-client.
+	// Empty means "find it on PATH", which is what the flag's own default means.
+	ClientPath string `json:"client_path"`
+}
+
+// handleCollaboratorServer serves POST /api/collaborator/server: point this installation at an
+// interaction server without restarting it.
+//
+// # Why this exists
+//
+// The capability was real and completely unreachable from the console. `-collaborator-server` is
+// read once in main.go, and an operator who started burpsy without it had every out-of-band check
+// refuse for the rest of the session — 26 corpus checks gated off — with the only remedy being a
+// restart, which costs them their captured traffic. W6 #6 recorded the panel as absent for that
+// reason: the UI could report the channel's state in three honest ways and offered no way to set it.
+//
+// # Why it refuses once a channel is open
+//
+// Installing a new provider is safe in itself — WithOOBProvider takes the scanner's mutex, and
+// NewLazyOOBProvider does not touch the network until something asks for a channel. What is not safe
+// is doing it after a channel has registered a domain.
+//
+// Minted payload addresses belong to that domain, and findings already reference them. Swapping the
+// server underneath would leave those addresses pointing at a server nobody is polling, and the
+// Collaborator page would report "no interactions" for payloads that may well have been hit — the
+// exact confusion between "nothing called back" and "nobody was listening" that this whole surface
+// is built to prevent. So an open channel is a 409 that names the domain, and the operator restarts
+// deliberately rather than being quietly detached from their own evidence.
+//
+// A channel that was *attempted and failed* is a different case and is allowed through: there is no
+// domain and no correlated payload, so nothing can be orphaned. That is also the most likely reason
+// anyone reaches for this endpoint — a mistyped server, or a machine without the client binary.
+func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req collaboratorServerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	req.Server = strings.TrimSpace(req.Server)
+	req.ClientPath = strings.TrimSpace(req.ClientPath)
+	if req.Server == "" {
+		// Refused rather than silently selecting the public pool. Empty is how the *internal*
+		// Options field spells "default pool", but as an operator's input an empty box is far more
+		// likely to be an accident, and quietly pointing their out-of-band traffic at a public
+		// third-party server is not a thing to do by accident. "public" says it on purpose.
+		http.Error(w, "server is required: give an interaction server URL, or \"public\" for "+
+			"interactsh's own public pool", http.StatusBadRequest)
+		return
+	}
+
+	if s.scanner == nil {
+		// No scanner means nothing would ever consult the provider, so accepting the setting would
+		// be storing a value that changes nothing — a decorative control by another route.
+		http.Error(w, "no scanner is attached to this server, so an interaction channel cannot be "+
+			"configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// The open-channel refusal. Read before installing, and note that this is not a
+	// check-then-act race worth locking against: two operators racing here both get a coherent
+	// outcome, and the losing one sees the new server in the status they poll a moment later.
+	if reg, configured := s.scanner.OOBRegistration(); configured && reg.Open {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  "a collaborator channel is already registered",
+			"domain": reg.Domain,
+			"server": reg.Server,
+			"detail": "changing the interaction server now would leave the payload addresses already " +
+				"handed out — and the findings that reference them — pointing at a server nobody is " +
+				"polling, so this surface could no longer tell 'nothing called back' from 'nobody was " +
+				"listening'. Restart burpsy with -collaborator-server to change it.",
+		})
+		return
+	}
+
+	serverURL := req.Server
+	if serverURL == "public" {
+		// Empty ServerURL is what selects the client's own default pool. Same translation as
+		// main.go:352-356; the two must agree or "public" would mean different things depending on
+		// which of the two set it.
+		serverURL = ""
+	}
+	s.scanner.WithOOBProvider(scanner.NewLazyOOBProvider(oob.Options{
+		ServerURL:  serverURL,
+		BinaryPath: req.ClientPath,
+	}))
+
+	// The fresh status, not a bare ok. The provider is lazy, so what the operator most needs to know
+	// is that nothing has been registered yet and generating a payload is what will try the server —
+	// including whether the binary can be found, which this endpoint deliberately does not
+	// pre-validate. A 200 here means "configured", never "reachable", and collaboratorStatusNow is
+	// the one thing that reports the difference.
+	writeJSON(w, http.StatusOK, s.collaboratorStatusNow(false))
 }
 
 // handleCollaboratorPoll serves POST /api/collaborator/poll: re-read the interaction log now.
