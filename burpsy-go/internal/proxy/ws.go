@@ -69,6 +69,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -96,6 +97,9 @@ type wsCapture struct {
 	port  uint16
 	tls   bool
 	path  string
+	// deflate is what the 101 response agreed. Carried so drainWs can inflate a compressed message
+	// for the operator's view where that is provably safe — see core.WsDeflateParams.InflatableFor.
+	deflate core.WsDeflateParams
 }
 
 // wsCaptureStats counts what the relay wrote to the index. Both directions
@@ -242,7 +246,11 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 	exchangeID := core.ExchangeID(0)
 	if handshake != nil {
 		exchangeID = handshake.ID
-		capture = &wsCapture{scope: s.config.scope, host: host, port: port, path: path}
+		capture = &wsCapture{
+			scope: s.config.scope, host: host, port: port, path: path,
+			// The response is authoritative: the client offers extensions, the server chooses.
+			deflate: core.ParseWsDeflateParams(head),
+		}
 	} else {
 		s.config.logger.Warn("relaying a websocket that could not be captured",
 			zap.String("host", host), zap.Uint16("port", port), zap.String("path", path))
@@ -774,18 +782,62 @@ func (s *Server) drainWs(rs *core.WsReassembler, exchangeID core.ExchangeID, fro
 		if capture == nil {
 			continue
 		}
+		payload, note := s.wsInflateForView(ev, capture.deflate, fromClient)
 		m := &core.WsMessage{
 			Exchange:   exchangeID,
 			FromClient: fromClient,
 			Opcode:     ev.Opcode,
-			Len:        len(ev.Payload),
+			Len:        len(payload),
 			Dropped:    ev.Dropped,
 			Fragments:  ev.Fragments,
 			AtMs:       uint64(time.Now().UnixMilli()),
-			Note:       ev.Note,
+			Note:       note,
 		}
-		s.config.store.AddWsMessage(m, ev.Payload)
+		s.config.store.AddWsMessage(m, payload)
 		stats.messages.Add(1)
+	}
+}
+
+// wsInflateForView returns the payload to record and the note to record with it.
+//
+// For an uncompressed message this is the event unchanged. For a compressed one it inflates when
+// that is provably correct, and otherwise keeps the DEFLATE bytes and says why — because a message
+// inflated against a window we do not have would be plausible-looking wrong plaintext, and on a tool
+// whose output is read as evidence that is worse than showing nothing.
+//
+// Read-only by construction: this runs on the capture path, so whatever it returns affects the
+// operator's view and never the bytes between the peers. That is the property that makes inflating
+// here safe at all, and it is why editing a compressed message is still refused in wsDecideFrames.
+func (s *Server) wsInflateForView(ev *core.WsEvent, params core.WsDeflateParams, fromClient bool) ([]byte, string) {
+	if !ev.Compressed {
+		return ev.Payload, ev.Note
+	}
+	if !params.InflatableFor(fromClient) {
+		which := "client_no_context_takeover"
+		if !fromClient {
+			which = "server_no_context_takeover"
+		}
+		return ev.Payload, ev.Note + " This connection did not negotiate " + which +
+			", so the sender's compression window carries across messages and this one cannot be " +
+			"decoded on its own; burpsy does not keep that state, and decoding it against a fresh " +
+			"window would show you convincing but wrong plaintext."
+	}
+
+	out, err := core.InflateWsMessage(ev.Payload, core.DefaultMaxWsMessageBytes)
+	switch {
+	case errors.Is(err, core.ErrWsDeflateTooLarge):
+		// The data is fine, there is simply too much of it. What was inflated is true, so it is kept
+		// and the shortfall is stated rather than the whole message being discarded.
+		return out, "[burpsy] permessage-deflate message inflated up to the " +
+			"1 MiB cap and truncated there; the bytes above are the message, the remainder was not decoded."
+	case err != nil:
+		s.config.logger.Debug("websocket message could not be inflated; recording it compressed",
+			zap.String("direction", wsWhich(fromClient)), zap.Error(err))
+		return ev.Payload, ev.Note + " Inflating it failed (" + err.Error() +
+			"), so the compressed bytes are recorded as they arrived."
+	default:
+		return out, "[burpsy] decoded from permessage-deflate (RFC 7692); the bytes above are the " +
+			"message, not the DEFLATE stream that carried it."
 	}
 }
 

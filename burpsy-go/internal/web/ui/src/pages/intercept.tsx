@@ -639,10 +639,12 @@ export function InterceptPage(): JSX.Element {
           <div className="notice" style={{ marginTop: 10 }}>
             <strong>What WebSocket interception does not hold.</strong> Control frames (ping, pong,
             close) are always relayed: holding a ping stalls the peer&apos;s keepalive and holding a
-            close leaves a socket that cannot be ended. Compressed frames are relayed untouched too —
-            the payload is a DEFLATE block rather than editable text — and they only occur if you have
-            turned off <code>Sec-WebSocket-Extensions</code> stripping in proxy options. Burp inflates
-            them; burpsy does not yet.
+            close leaves a socket that cannot be ended. Compressed frames are relayed untouched too, and
+            they only occur if you have turned off <code>Sec-WebSocket-Extensions</code> stripping in
+            proxy options. They are now <em>decoded for WebSocket history</em> where the handshake
+            agreed <code>no_context_takeover</code>, so you can read them — but they are still not
+            offered for editing, because re-compressing one message of a shared compression stream
+            would corrupt every later message on that connection, not just the edited one.
             <br />
             Fragmented messages <em>are</em> reassembled and offered whole, so nothing is relayed until
             the final fragment arrives. Forwarding without editing relays the original frames exactly

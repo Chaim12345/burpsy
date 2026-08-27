@@ -236,6 +236,13 @@ type WsEvent struct {
 	Fragments uint32
 	Dropped   uint64
 	Note      string
+	// Compressed reports that the message's first frame had RSV1 set, i.e. this payload is a
+	// permessage-deflate stream rather than the message.
+	//
+	// A field rather than something a caller infers from Note. The note is prose for an operator and
+	// gets reworded; a consumer deciding whether to inflate needs a fact, and string-matching a
+	// human-readable sentence for it is the kind of coupling that breaks silently on a copy edit.
+	Compressed bool
 }
 
 // wsDest says where a frame's payload is going. A control frame interleaves
@@ -272,13 +279,17 @@ type WsReassembler struct {
 	partial       []byte
 	partialOpcode WsOpcode
 	partialOpen   bool
-	fragments     uint32
-	dropped       uint64
-	noteMsg       string
-	ctrl          []byte
-	ctrlDropped   uint64
-	ctrlNote      string
-	ready         []*WsEvent
+	// partialCompressed is RSV1 from the message's FIRST frame. Per RFC 7692 §6.1 only that frame
+	// carries the flag; continuations of a compressed message do not repeat it, so reading it from
+	// any later frame would report false.
+	partialCompressed bool
+	fragments         uint32
+	dropped           uint64
+	noteMsg           string
+	ctrl              []byte
+	ctrlDropped       uint64
+	ctrlNote          string
+	ready             []*WsEvent
 }
 
 // NewWsReassembler creates a reassembler that keeps at most maxMessageBytes of
@@ -394,6 +405,11 @@ func (r *WsReassembler) beginFrame(hdr *WsFrameHeader) {
 		if hdr.RSV != 0 {
 			r.note(wsRsvNote(hdr.RSV))
 		}
+		// Only the first frame of a message carries RSV1 (RFC 7692 §6.1), which is why this is
+		// guarded on fragments == 0 rather than set from whichever frame happens to be in hand.
+		if r.fragments == 0 && hdr.RSV&WsRsv1 != 0 {
+			r.partialCompressed = true
+		}
 		r.fragments++
 	}
 	r.inFlight = &wsInFlight{hdr: *hdr, dest: dest}
@@ -476,13 +492,15 @@ func (r *WsReassembler) flushPartial(fragments uint32) {
 		opcode = WsOpcodeContinuation
 	}
 	r.ready = append(r.ready, &WsEvent{
-		Opcode:    opcode,
-		Payload:   r.partial,
-		Fragments: fragments,
-		Dropped:   r.dropped,
-		Note:      r.noteMsg,
+		Opcode:     opcode,
+		Payload:    r.partial,
+		Fragments:  fragments,
+		Dropped:    r.dropped,
+		Note:       r.noteMsg,
+		Compressed: r.partialCompressed,
 	})
 	r.partial = nil
+	r.partialCompressed = false
 	r.partialOpcode = WsOpcodeContinuation
 	r.partialOpen = false
 	r.fragments = 0
