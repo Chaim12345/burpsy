@@ -20,19 +20,57 @@ import (
 	"time"
 )
 
-// Direction names the two rule lists / hold queues.
+// Direction names one rule list / hold queue.
+//
+// # Why WebSocket is two directions and not one
+//
+// Burp intercepts WebSocket frames per direction, because the operator's reason for holding
+// one is asymmetric: a client→server frame is the thing they want to tamper with, and a
+// server→client frame is the thing they want to read before the page sees it. Collapsing them
+// into a single "websocket" list would mean an operator who wants to edit outgoing frames also
+// has every incoming frame stop in front of them, which on a chatty socket is unusable.
 type Direction int
 
 const (
 	DirectionRequest Direction = iota
 	DirectionResponse
+	// DirectionWebSocketToServer is a frame the client sent, held before it is relayed upstream.
+	DirectionWebSocketToServer
+	// DirectionWebSocketToClient is a frame the origin sent, held before it reaches the browser.
+	DirectionWebSocketToClient
+	// DirectionCount is how many directions exist and must stay last. The Engine sizes its list
+	// array from it, so adding a direction above without extending anything is a compile error
+	// rather than a silent misroute.
+	DirectionCount = iota
 )
 
+// directionNames is indexed by Direction, so a new direction that is not named here fails the
+// exhaustiveness test rather than borrowing a neighbour's label.
+var directionNames = [DirectionCount]string{
+	DirectionRequest:           "request",
+	DirectionResponse:          "response",
+	DirectionWebSocketToServer: "websocket_to_server",
+	DirectionWebSocketToClient: "websocket_to_client",
+}
+
+// String names the direction.
+//
+// It used to be `if d == DirectionRequest { "request" }; return "response"` — a two-value
+// assumption that would have reported every WebSocket direction as "response" the moment one
+// existed, in the API, in the held queue and in the logs. Indexed now, and out-of-range says so
+// rather than guessing.
 func (d Direction) String() string {
-	if d == DirectionRequest {
-		return "request"
+	if d < 0 || int(d) >= DirectionCount {
+		return "unknown_direction"
 	}
-	return "response"
+	return directionNames[d]
+}
+
+// IsWebSocket reports whether this direction carries WebSocket frames rather than HTTP
+// messages. Callers that can only handle one or the other ask this instead of comparing against
+// a list of constants they would have to keep in step.
+func (d Direction) IsWebSocket() bool {
+	return d == DirectionWebSocketToServer || d == DirectionWebSocketToClient
 }
 
 // Field is what a rule matches against.
@@ -305,12 +343,18 @@ func (h *Held) resolve(a Action, raw []byte, reason string) bool {
 
 // Engine is the intercept controller shared by the proxy and the web API.
 type Engine struct {
-	mu        chan struct{}
-	enabled   bool
-	requests  List
-	responses List
-	nextID    uint64
-	held      map[uint64]*Held
+	mu      chan struct{}
+	enabled bool
+	// lists is indexed by Direction rather than being one named field per direction.
+	//
+	// It was `requests` and `responses`, selected with `if d == DirectionRequest { … } else { … }`
+	// in three places. That else is a silent misroute waiting for a third direction: a WebSocket
+	// frame would have been matched against the response rules and held or released on the wrong
+	// operator's intent. Indexing makes the direction the address instead of a branch, so adding
+	// one cannot land in the wrong list.
+	lists  [DirectionCount]List
+	nextID uint64
+	held   map[uint64]*Held
 	// onChange is an optional signal that the queue or the switch changed (see OnChange).
 	onChange func()
 }
@@ -376,6 +420,13 @@ func (e *Engine) SetEnabled(v bool) {
 // SetRules replaces one direction's list. A malformed regex is refused and the
 // list is left unchanged, matching Burp's save-time compilation.
 func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
+	// Refused before any work, because the direction is now an array index. It arrives from a
+	// decoded API request, so an out-of-range value must be an error rather than a panic on the
+	// proxy's own goroutine — and an error naming the value rather than a silent write to
+	// whichever list happened to be adjacent.
+	if !d.valid() {
+		return fmt.Errorf("unknown intercept direction %d", int(d))
+	}
 	compiled := make([]*Rule, 0, len(rules))
 	for i := range rules {
 		r := &rules[i]
@@ -406,22 +457,26 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 	e.mu <- struct{}{}
 	defer e.signalChange()
 	defer func() { <-e.mu }()
-	if d == DirectionRequest {
-		e.requests = List{Active: active, Rules: compiled}
-	} else {
-		e.responses = List{Active: active, Rules: compiled}
-	}
+	e.lists[d] = List{Active: active, Rules: compiled}
 	return nil
 }
 
-// Rules returns one direction's list.
+// Rules returns one direction's list. An unknown direction returns the zero list — inactive,
+// no rules — rather than another direction's, because answering with a neighbour's rules is how
+// the old two-field version would have misreported a WebSocket direction as the response list.
 func (e *Engine) Rules(d Direction) List {
 	e.mu <- struct{}{}
 	defer func() { <-e.mu }()
-	if d == DirectionRequest {
-		return copyList(e.requests)
+	if !d.valid() {
+		return List{}
 	}
-	return copyList(e.responses)
+	return copyList(e.lists[d])
+}
+
+// valid reports whether the direction addresses a real list. Every indexing site asks this, so
+// an out-of-range Direction from a decoded API request cannot panic the proxy.
+func (d Direction) valid() bool {
+	return d >= 0 && int(d) < DirectionCount
 }
 
 func copyList(l List) List {
@@ -443,12 +498,10 @@ func (e *Engine) shouldHold(d Direction, m *Message) bool {
 	if !e.enabled {
 		return false
 	}
-	var l List
-	if d == DirectionRequest {
-		l = e.requests
-	} else {
-		l = e.responses
+	if !d.valid() {
+		return false
 	}
+	l := e.lists[d]
 	if !l.Active {
 		return false
 	}
