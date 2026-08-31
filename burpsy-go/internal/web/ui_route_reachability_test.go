@@ -82,13 +82,11 @@ var uiRouteExempt = map[string]string{
 // has been fixed, and TestNoKnownGapWasQuietlyFixed is what refused to let the entry stay behind
 // afterwards. Both directions of the list have now done their job on a real case.
 var uiRouteMissingSurface = map[string]string{
-	// The Go half of burpsy-react-ui-wub: an attack can now be paused, resumed and stopped, and its
-	// dashboard task is cancellable (which is a working stop button today, through /api/tasks/{id}/cancel).
-	// The Intruder page's own controls are the remaining half — intruder.tsx needs an AbortController on
-	// its run mutation, the way useRepeaterSend in the same module already has one, and buttons wired to
-	// these two routes. Listed here rather than exempted because nothing justifies the absence.
-	"/api/intruder/attacks":  "burpsy-react-ui-wub",
-	"/api/intruder/attacks/": "burpsy-react-ui-wub",
+	// Empty since the intruder control half of burpsy-react-ui-wub landed (44f4111): intruder.tsx
+	// carries an AbortController on its run mutation and pause/resume/stop buttons wired to
+	// /api/intruder/attacks/{task_id}/{pause|resume|stop}, so those two entries came off this list —
+	// which is this test working, not the list dying. A route that *should* be operator-facing but is
+	// not belongs back here, with the issue id that will force it shut.
 }
 
 // uiSourceDirForRoutes is the console source tree.
