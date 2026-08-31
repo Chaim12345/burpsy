@@ -299,6 +299,12 @@ export interface RepeaterRedirectHop {
   to?: string;
   followed: boolean;
   reason?: string;
+  /**
+   * The hop's request and response bytes, present only when the hop was followed —
+   * a hop that was never sent has no bytes, and absence says exactly that.
+   */
+  request?: string;
+  response?: string;
 }
 
 export interface RepeaterRedirects {

@@ -70,14 +70,30 @@ type repeaterRedirects struct {
 	// Sent counts every request this exchange put on the wire, the operator's own included.
 	Sent int `json:"sent"`
 	// Complete is false when the chain was still redirecting when it stopped.
-	Complete bool                 `json:"complete"`
-	Hops     []sender.RedirectHop `json:"hops"`
+	Complete bool          `json:"complete"`
+	Hops     []repeaterHop `json:"hops"`
 	// FinalStatus is the status of the last response received, which differs from `status` above
 	// whenever a hop was actually followed.
 	FinalStatus int `json:"final_status"`
 	// Error is set when the chain could not be evaluated at all — the response was unreadable, say.
 	// Reported rather than dropped: "we did not look" must not render as "there was nothing to follow".
 	Error string `json:"error,omitempty"`
+}
+
+// repeaterHop is one hop as the panel reads it: the sender's hop decision plus, on a followed hop, the
+// bytes its request put on the wire and the bytes that came back.
+//
+// The bytes are the point of this shape — Burp stores the full requests and responses of a redirection
+// chain with each result item, and the previous wire shape answered every question about a hop except
+// the one an operator follows a chain to ask. They ride here rather than on sender.RedirectHop's own
+// JSON because the byte images are engine state there; what a browser sees is this layer's decision.
+type repeaterHop struct {
+	sender.RedirectHop
+	// Request and Response carry the hop's wire bytes as text, empty when the hop was not followed —
+	// a hop that was never sent has no bytes, and an empty string means exactly that rather than
+	// "an empty request or response happened".
+	Request  string `json:"request,omitempty"`
+	Response string `json:"response,omitempty"`
 }
 
 func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +250,7 @@ func (s *Server) followRepeaterRedirects(
 	if err != nil {
 		// The send succeeded and this did not, so the exchange still stands. Naming the failure is the
 		// honest option: a nil here would say "not a redirect", which is a claim we cannot make.
-		return &repeaterRedirects{Mode: mode, Sent: 1, Hops: []sender.RedirectHop{}, Error: err.Error()}
+		return &repeaterRedirects{Mode: mode, Sent: 1, Hops: []repeaterHop{}, Error: err.Error()}
 	}
 	if len(result.Hops) == 0 {
 		return nil
@@ -243,11 +259,26 @@ func (s *Server) followRepeaterRedirects(
 	if result.Final != nil {
 		final = result.Final.StatusCode
 	}
+	// The hop bytes are carried as text, not a message id to fetch: the chain arrives alongside the
+	// send's own response and is rendered by the same panel in the same breath, so a second round trip
+	// per hop would buy nothing the bytes on this response do not already carry. Each one is bounded by
+	// the same response cap the first response is, so a fat landing page is no wider here than
+	// `response` above.
+	hops := make([]repeaterHop, len(result.Hops))
+	for i, hop := range result.Hops {
+		hops[i] = repeaterHop{RedirectHop: hop}
+		if len(hop.RequestRaw) > 0 {
+			hops[i].Request = string(hop.RequestRaw)
+		}
+		if len(hop.ResponseRaw) > 0 {
+			hops[i].Response = string(hop.ResponseRaw)
+		}
+	}
 	return &repeaterRedirects{
 		Mode:        mode,
 		Sent:        result.Sent,
 		Complete:    result.Complete,
-		Hops:        result.Hops,
+		Hops:        hops,
 		FinalStatus: final,
 	}
 }

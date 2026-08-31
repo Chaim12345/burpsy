@@ -79,6 +79,16 @@ export function RepeaterPage(): JSX.Element {
    */
   const [inspecting, setInspecting] = useState<"request" | "response">("request");
   const send = useRepeaterSend();
+  /**
+   * Which response the pane shows when the last send followed a redirect chain:
+   * "first" is the response to the request the operator wrote — the default,
+   * because the 302 with its Set-Cookie is usually what the send was for — and a
+   * number is the index of the chain hop whose response the operator asked to see,
+   * the last followed hop being the chain's final response. A reset effect below
+   * clears it whenever the result under the pane changes, so a stale hop index can
+   * never show one send's bytes inside another's pane.
+   */
+  const [chainSide, setChainSide] = useState<"first" | number>("first");
 
   // Bulk closes (close others / left / right) remove many tabs at once, so per-close cleanup in
   // the click handlers no longer covers it. One pruning effect owns the invariant instead: the
@@ -220,6 +230,23 @@ export function RepeaterPage(): JSX.Element {
   const activeHistory = history[active.id] ?? [];
   const viewIndex = viewing[active.id] ?? activeHistory.length - 1;
   const result = activeHistory[viewIndex];
+
+  // The chain's hop selection, resolved to bytes. `lastFollowedHop` is the response the chain
+  // landed on — the "final response" the toggle offers — and is null for a chain that followed
+  // nothing, where the first response IS the final response and the toggle has nothing to offer.
+  const lastFollowedHop =
+    result?.redirects?.hops.reduce<number | null>(
+      (acc, hop, index) => (hop.followed && hop.response != null ? index : acc),
+      null,
+    ) ?? null;
+  const finalResponse = lastFollowedHop != null ? (result?.redirects?.hops[lastFollowedHop]?.response ?? null) : null;
+  const chainResponse =
+    typeof chainSide === "number" && result?.redirects ? (result.redirects.hops[chainSide]?.response ?? null) : null;
+
+  // A stale hop index must never show one send's bytes inside another's pane: whenever the result
+  // under the pane changes — a new send, or paging back through the tab's history — the selection
+  // returns to the first response, which is what the pane shows by default.
+  useEffect(() => setChainSide("first"), [result?.exchange_id, active.id]);
 
   /**
    * The exchange this send produced, so the two message panes carry the same menu every other
@@ -553,7 +580,9 @@ export function RepeaterPage(): JSX.Element {
           <ErrorNotice error={send.error} onRetry={() => submit(active)} />
         ) : null}
         {configOpen ? <SendOptionsPanel options={active.options} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} /> : null}
-        {result?.redirects ? <RedirectChain chain={result.redirects} /> : null}
+        {result?.redirects ? (
+          <RedirectChain chain={result.redirects} chainSide={chainSide} onViewHop={setChainSide} />
+        ) : null}
       </div>
 
       <div className={inspector ? "editor-grid-inspected" : "editor-grid"}>
@@ -565,20 +594,43 @@ export function RepeaterPage(): JSX.Element {
           placeholder="GET / HTTP/1.1"
           menuGroups={messageMenu}
         />
-        <HttpEditor
-          label="Response"
-          readOnly
-          value={
-                result?.response ??
-                (send.isPending
-                  ? "Waiting for the response…"
-                  : send.error instanceof SendCancelled
-                    ? "Cancelled. No response arrived, and no exchange was recorded — but anything already written to the target was sent."
-                    : "Send the request to see the response bytes.")
-              }
-          filename="repeater-response.txt"
-          menuGroups={messageMenu}
-        />
+        <div className="stack">
+          {finalResponse != null ? (
+            <div className="toolbar" role="group" aria-label="Which chain response to show">
+              <Button
+                variant={chainSide === "first" ? "outline" : "quiet"}
+                size="small"
+                aria-pressed={chainSide === "first"}
+                onClick={() => setChainSide("first")}
+              >
+                First response ({result?.status})
+              </Button>
+              <Button
+                variant={chainSide === lastFollowedHop ? "outline" : "quiet"}
+                size="small"
+                aria-pressed={chainSide === lastFollowedHop}
+                onClick={() => setChainSide(lastFollowedHop as number)}
+              >
+                Final response ({result?.redirects?.final_status})
+              </Button>
+            </div>
+          ) : null}
+          <HttpEditor
+            label="Response"
+            readOnly
+            value={
+                  chainResponse ??
+                  result?.response ??
+                  (send.isPending
+                    ? "Waiting for the response…"
+                    : send.error instanceof SendCancelled
+                      ? "Cancelled. No response arrived, and no exchange was recorded — but anything already written to the target was sent."
+                      : "Send the request to see the response bytes.")
+                }
+            filename="repeater-response.txt"
+            menuGroups={messageMenu}
+          />
+        </div>
         {inspector ? (
           // Pointed at the response with nothing to show yet, it falls back to the
           // request rather than rendering a pane of empty sections that looks like
@@ -593,7 +645,7 @@ export function RepeaterPage(): JSX.Element {
             />
           ) : (
             <Inspector
-              raw={result.response}
+              raw={chainResponse ?? result.response}
               label="Inspector · response"
               readOnlyNote="A response that has already arrived cannot be edited — change the request and send it again."
               onSwitch={() => setInspecting("request")}
@@ -689,7 +741,15 @@ function SendOptionsPanel({
  * "1 redirect" would lose the only fact the operator needs — whether the hop was refused by scope, held
  * back by the policy, or followed to a real response.
  */
-function RedirectChain({ chain }: { chain: RepeaterRedirects }): JSX.Element {
+function RedirectChain({
+  chain,
+  chainSide,
+  onViewHop,
+}: {
+  chain: RepeaterRedirects;
+  chainSide: "first" | number;
+  onViewHop: (index: number) => void;
+}): JSX.Element {
   const followed = chain.hops.filter((hop) => hop.followed).length;
   return (
     <div className="stack" style={{ marginTop: 10 }}>
@@ -712,7 +772,7 @@ function RedirectChain({ chain }: { chain: RepeaterRedirects }): JSX.Element {
           {chain.error}
         </p>
       ) : null}
-      <SimpleTable headers={["From", "Status", "Location", "Followed", "Why not"]}>
+      <SimpleTable headers={["From", "Status", "Location", "Followed", "Why not", "Bytes"]}>
         {chain.hops.map((hop, index) => (
           <tr key={`${hop.from}-${index}`}>
             <td>
@@ -728,6 +788,20 @@ function RedirectChain({ chain }: { chain: RepeaterRedirects }): JSX.Element {
               <Badge tone={hop.followed ? "good" : "warn"}>{hop.followed ? "sent" : "not sent"}</Badge>
             </td>
             <td>{hop.reason ? hop.reason : <span className="cell-dim">—</span>}</td>
+            <td>
+              {hop.followed ? (
+                <Button
+                  variant={chainSide === index ? "outline" : "quiet"}
+                  size="small"
+                  aria-pressed={chainSide === index}
+                  onClick={() => onViewHop(index)}
+                >
+                  View response
+                </Button>
+              ) : (
+                <span className="cell-dim">—</span>
+              )}
+            </td>
           </tr>
         ))}
       </SimpleTable>

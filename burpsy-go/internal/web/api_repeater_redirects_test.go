@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/sender"
@@ -194,6 +195,61 @@ func TestRepeaterRefusesAnOutOfScopeRedirectHop(t *testing.T) {
 	}
 	if arrived := seen(); len(arrived) != 1 {
 		t.Errorf("the in-scope target saw %v, want only /go", arrived)
+	}
+	// A hop the scope refused was never sent, so it carries no bytes: an empty string here means "no
+	// bytes" and must not be spent describing an exchange that did not happen.
+	hop, _ = hops[0].(map[string]any)
+	if reqBytes, _ := hop["request"].(string); reqBytes != "" {
+		t.Errorf("the refused hop carries request bytes %q; a hop that was never sent has none", reqBytes)
+	}
+	if respBytes, _ := hop["response"].(string); respBytes != "" {
+		t.Errorf("the refused hop carries response bytes %q; a hop that was never sent has none", respBytes)
+	}
+}
+
+// The chain's bytes ride the same response as the send, which is the whole point of "Follow
+// redirections": reading the page the chain landed on. Burp stores the full requests and responses of
+// a redirection chain with each result item — its documentation's own contract — and before this the
+// wire answered every question about a hop except what it sent and what came back. The first response
+// stays the operator's own (asserted above), so these bytes are additive, never a substitution.
+func TestRepeaterServesTheChainHopsBytesAlongsideTheSend(t *testing.T) {
+	srv, seen := redirectTarget(t, func() string { return "/landed" })
+	host, port := targetHostPort(t, srv.URL)
+
+	s := newTestServer()
+	includeInScope(t, s, host)
+	setRedirectMode(t, s, "on_site")
+
+	got := repeaterSend(t, s, host, port, "/go")
+	block, ok := got["redirects"].(map[string]any)
+	if !ok {
+		t.Fatalf("no redirects block: %v", got)
+	}
+	hops, _ := block["hops"].([]any)
+	if len(hops) != 1 {
+		t.Fatalf("hops = %v, want one", block["hops"])
+	}
+	hop, _ := hops[0].(map[string]any)
+	if followed, _ := hop["followed"].(bool); !followed {
+		t.Fatalf("the hop is recorded as not followed: %v", hop)
+	}
+	// The hop's request is the one the Location chose, and it names the authority it was sent to —
+	// host:port for a non-default port, per Burp's own authority rendering (Zxrb.Zv) and HTTP/1.1.
+	reqBytes, _ := hop["request"].(string)
+	if !strings.Contains(reqBytes, "GET /landed HTTP/1.1") {
+		t.Errorf("the hop's request bytes = %q, want the request the Location chose", reqBytes)
+	}
+	if !strings.Contains(reqBytes, fmt.Sprintf("Host: %s:%d", host, port)) {
+		t.Errorf("the hop's request bytes = %q, want a Host header naming %s:%d", reqBytes, host, port)
+	}
+	// The hop's response is the body the chain landed on — the bytes a status integer had swallowed.
+	respBytes, _ := hop["response"].(string)
+	if !strings.Contains(respBytes, "landed") {
+		t.Errorf("the hop's response bytes = %q, want the body the chain landed on", respBytes)
+	}
+	// And the bytes describe real traffic: the origin actually received the hop the bytes claim.
+	if arrived := seen(); len(arrived) != 2 || arrived[1] != "/landed" {
+		t.Errorf("the target saw %v, want /go then /landed", arrived)
 	}
 }
 

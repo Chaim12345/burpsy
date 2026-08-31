@@ -31,12 +31,27 @@ type RedirectHop struct {
 	// Reason names why an unfollowed hop was not followed: the policy that filtered it, the scope that
 	// refused it, the budget that ran out, or the Location that could not be read. Empty when Followed.
 	Reason string `json:"reason,omitempty"`
+
+	// RequestRaw and ResponseRaw capture what this hop put on the wire and what came back, set when the
+	// hop was followed and nil when it was not — a hop that was never sent has no bytes, and inventing
+	// either half would misdescribe what happened. Tagged out of this type's JSON because byte images
+	// are engine state, not wire shape: the web layer maps them onto its own view and decides what a
+	// browser sees, the same division that keeps FollowResult.Final out of the JSON.
+	RequestRaw  []byte `json:"-"`
+	ResponseRaw []byte `json:"-"`
 }
 
 // FollowResult is a redirect-following send: the last response actually received, and every hop.
 type FollowResult struct {
 	// Final is the last response received. Never nil when the error is nil, and it is the 30x itself
-	// when the chain was stopped at one — the operator sees the redirect rather than nothing.
+	// when the chain was stopped at one — the operator sees the redirect rather than nothing. Final.Raw
+	// carries the exact response bytes whenever they are known: the caller's own bytes on the
+	// AfterPolicy entry points, the hop's wire bytes on every followed hop. Only the typed entry
+	// point's first response has no bytes to attach — SendRequest returns a transport view — and a
+	// caller of that entry holds the bytes it sent, not bytes it can show for the response.
+	//
+	// This is the fix for a real gap: Final was tagged out of the JSON and nothing else carried the
+	// body, so the operator who set "follow redirections" got a status number and no bytes.
 	Final *Response `json:"-"`
 	// Hops is every 30x reached, in order.
 	Hops []RedirectHop `json:"hops"`
@@ -242,31 +257,47 @@ func (a *AuthorisedSender) followChain(
 		}
 
 		// The authoritative gate for this hop. A fresh AuthorisedSender bound to the new authority,
-		// sharing this one's scope handle: its SendRequest renders the request and runs AuthoriseRaw on
-		// those bytes before any dial, so the hop is authorised on the same terms as a first request.
-		// Reusing `current` would not work and must not be made to — bind() refuses a request naming
-		// another authority, which is precisely the check that makes a cross-authority hop deliberate.
+		// sharing this one's scope handle: its SendAs authorises the rendered bytes before any dial, so
+		// the hop is authorised on the same terms as a first request. Reusing `current` would not work
+		// and must not be made to — a request naming another authority is exactly what makes a
+		// cross-authority hop deliberate, and the render below is where that naming becomes bytes.
 		hopSender := NewAuthorisedSender(a.scope, a.net, nextHost, nextPort, nextTLS)
 
+		// The hop's request is rendered exactly once: these bytes are what the scope gate reads and
+		// what the transport writes, so the gate's decision and the wire cannot disagree. They are also
+		// kept on the hop — a request a Location chose is worth reading as readily as the one the
+		// operator wrote, which is Burp's own contract for a followed chain.
+		rendered, rerr := a.net.Render(candidate)
+		if rerr != nil {
+			hop.Reason = "the next hop's request cannot be rendered to wire bytes: " + rerr.Error()
+			result.Hops = append(result.Hops, hop)
+			return
+		}
+
 		// Pre-flighting the same gate lets a refusal be reported as this hop's Reason rather than as an
-		// error that loses the chain. It is not the check that protects anything — hopSender.SendRequest
-		// runs it again on its own bytes and is what actually stops the dial — so a disagreement between
-		// the two costs a confusing message, never an ungated send.
-		if raw, rerr := a.net.Render(candidate); rerr == nil {
-			if serr := a.scope.AuthoriseRaw(nextHost, nextPort, nextTLS, raw); serr != nil {
-				hop.Reason = serr.Error()
-				result.Hops = append(result.Hops, hop)
-				// Counted on the sender the caller holds, so the chain's refusals show up in the same
-				// counters every other refused request does. Not also on hopSender: that sender is
-				// discarded on this path, so incrementing it would record the refusal nowhere.
-				a.refused.Add(1)
-				return
-			}
+		// error that loses the chain. It is not the check that protects anything — hopSender.SendAs
+		// runs it again on these same bytes and is what actually stops the dial — so a disagreement
+		// between the two costs a confusing message, never an ungated send.
+		if serr := a.scope.AuthoriseRaw(nextHost, nextPort, nextTLS, rendered); serr != nil {
+			hop.Reason = serr.Error()
+			result.Hops = append(result.Hops, hop)
+			// Counted on the sender the caller holds, so the chain's refusals show up in the same
+			// counters every other refused request does. Not also on hopSender: that sender is
+			// discarded on this path, so incrementing it would record the refusal nowhere.
+			a.refused.Add(1)
+			return
 		}
 
 		// The hop is sent here rather than at the top of the loop so the loop is entered with a response
 		// already in hand — which is what lets a raw first send share this machinery.
-		hopResp, err := hopSender.SendRequest(ctx, candidate)
+		//
+		// SendAs rather than SendRequest: the raw path is what the caller's own send used (Repeater
+		// sends the operator's bytes), so a hop travels under the same rules as the request that started
+		// the chain instead of the stdlib transport's — no injected User-Agent or Accept-Encoding, no
+		// transparent gzip — and the bytes that come back are the bytes that arrived, which is the whole
+		// point of following. The gate is unchanged: SendAs runs AuthoriseRaw on exactly these rendered
+		// bytes for the authority it is bound to.
+		hopRes, err := hopSender.SendAs(ctx, rendered, ProtocolPreferenceAuto)
 		if err != nil {
 			// The hop cleared every gate and then failed at the transport. That is not a refusal and not
 			// a completed chain: Final stays the 30x that named it, and the reason says what happened.
@@ -275,9 +306,22 @@ func (a *AuthorisedSender) followChain(
 			return
 		}
 		hop.Followed = true
+		hop.RequestRaw = rendered
+		hop.ResponseRaw = hopRes.Raw
+		parsed, perr := responseFromRaw(hopRes.Raw)
+		if perr != nil {
+			// The hop's bytes arrived but cannot be read as a response, so the chain cannot be decided
+			// further from them. The hop stays followed and keeps its bytes; the chain stops here rather
+			// than guessing what the bytes meant, and the reason names the stop.
+			hop.Reason = "the hop was sent and answered, but its response cannot be read well enough to " +
+				"continue the chain: " + perr.Error()
+			result.Hops = append(result.Hops, hop)
+			result.Sent++
+			return
+		}
 		result.Hops = append(result.Hops, hop)
 		result.Sent++
-		result.Final = hopResp
+		result.Final = parsed
 
 		nextTarget, terr := effectiveTarget(candidate)
 		if terr != nil {
@@ -287,11 +331,14 @@ func (a *AuthorisedSender) followChain(
 			return
 		}
 		visited[visitKey(nextHost, nextPort, nextTLS, nextTarget.RequestURI())] = struct{}{}
-		current, next, target, resp = hopSender, candidate, nextTarget, hopResp
+		current, next, target, resp = hopSender, candidate, nextTarget, parsed
 	}
 }
 
-// responseFromRaw parses raw response bytes into the view the redirect decision needs.
+// responseFromRaw parses raw response bytes into the view the redirect decision needs, keeping the
+// bytes themselves on Response.Raw — the parsed view flattens headers and never reads the body, so
+// the raw image is the only complete copy and a caller that wants to show the response reads it
+// there rather than reconstructing one.
 //
 // http.ReadResponse rather than a hand-rolled split: the status line and header folding rules are
 // exactly where a hand-rolled parser gets a hostile response wrong, and this decides whether another
@@ -314,6 +361,7 @@ func responseFromRaw(raw []byte) (*Response, error) {
 		Status:     parsed.Status,
 		Headers:    headers,
 		Version:    parsed.Proto,
+		Raw:        raw,
 	}, nil
 }
 
@@ -444,10 +492,16 @@ func redirectRequest(prev *Request, prevURL *url.URL, status int, location strin
 	out := &Request{
 		Method: prev.Method,
 		URL:    resolved.String(),
-		Host:   host,
-		Path:   resolved.RequestURI(),
-		TLS:    isTLS,
-		Port:   port,
+		// The Host header names the hop's authority, port included when the scheme's default does not
+		// apply. Burp's own rendering is the specification here: Zxrb.Zv(Zp42) writes host only for
+		// https/443 and http/80 and host:port otherwise, and Zx9i.ZH writes that exact string into
+		// :authority when a cross-domain hop is rebuilt — so a followed hop to :8080 advertises
+		// host:8080, the way the target's virtual-host routing expects to be addressed. The hostname
+		// alone that used to be set here addressed the right socket but the wrong service.
+		Host: hostPortFor(host, port, isTLS),
+		Path: resolved.RequestURI(),
+		TLS:  isTLS,
+		Port: port,
 	}
 	if !keepMethodAndBody {
 		out.Method = http.MethodGet
@@ -493,8 +547,12 @@ func absoluteURL(a *AuthorisedSender, target *url.URL) string {
 }
 
 // hostPortFor renders an authority, eliding the port when it is the scheme's default so two spellings
-// of one authority produce one string.
+// of one authority produce one string. A bare IPv6 literal is bracketed first, mirroring Burp's
+// Zxrb.Zv (its Zhq_.ZK check): "::1:8080" is unparseable as an authority, "[::1]:8080" is the address.
 func hostPortFor(host string, port uint16, isTLS bool) string {
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
 	if (isTLS && port == 443) || (!isTLS && port == 80) {
 		return host
 	}

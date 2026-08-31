@@ -258,6 +258,99 @@ func TestAnInScopeRedirectHopIsFollowedThroughItsOwnAuthority(t *testing.T) {
 	}
 }
 
+// A followed chain answers the question the option exists to ask — what did the chain land on? — and
+// the answer is bytes, not a status integer: Final.Raw is the exact response the last hop received and
+// every followed hop keeps the request its Location chose plus the bytes that came back, which is
+// Burp's own contract for a followed chain ("the full requests and responses in the redirection chain
+// are stored with each result item"). Before this, Final was tagged out of the wire and no hop carried
+// a body, so the operator who set "follow redirections" got a badge reading `final 200` and no bytes.
+func TestAFollowedHopKeepsTheBytesItSentAndReceived(t *testing.T) {
+	landed := "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\nlanded"
+	srv := newRedirectServer(t, func(path string) string {
+		if path == "/start" {
+			return redirectTo("/landed")
+		}
+		return landed
+	})
+
+	a := followerFor(t, core.NewScopeAllowEverything(), "127.0.0.1", srv.port, RedirectInScope, 5)
+	res, err := a.FollowRedirects(context.Background(), requestTo("127.0.0.1", srv.port, "/start"))
+	if err != nil {
+		t.Fatalf("FollowRedirects: %v", err)
+	}
+	if len(res.Hops) != 1 || !res.Hops[0].Followed {
+		t.Fatalf("hops = %+v, want one followed hop", res.Hops)
+	}
+	hop := res.Hops[0]
+	// The hop's request is the one the Location chose, and these are the bytes the gate authorised and
+	// the wire carried — the same bytes for both, not a reconstruction of either.
+	if !strings.Contains(string(hop.RequestRaw), "GET /landed HTTP/1.1") {
+		t.Errorf("the followed hop's request bytes %q do not name the hop the Location chose", hop.RequestRaw)
+	}
+	if !strings.Contains(string(hop.RequestRaw), fmt.Sprintf("Host: 127.0.0.1:%d", srv.port)) {
+		t.Errorf("the followed hop's request bytes %q do not name the authority it was sent to", hop.RequestRaw)
+	}
+	if string(hop.ResponseRaw) != landed {
+		t.Errorf("the followed hop's response bytes = %q, want the exact bytes the origin sent", hop.ResponseRaw)
+	}
+	if res.Final == nil || res.Final.StatusCode != 200 {
+		t.Fatalf("final = %v, want the 200 the chain landed on", res.Final)
+	}
+	if string(res.Final.Raw) != landed {
+		t.Errorf("Final.Raw = %q, want the landing response's exact bytes — the landing page is the "+
+			"thing an operator follows a chain to read", res.Final.Raw)
+	}
+}
+
+// A hop that was never sent has no bytes, and nil must say exactly that: an unfollowed hop carrying
+// request or response bytes would describe an exchange that did not happen.
+func TestAnUnfollowedHopCarriesNoBytes(t *testing.T) {
+	elsewhere := newRedirectServer(t, func(string) string { return okResponse })
+	start := newRedirectServer(t, func(path string) string {
+		if path == "/start" {
+			return redirectTo(fmt.Sprintf("http://127.0.0.1:%d/offsite", elsewhere.port))
+		}
+		return okResponse
+	})
+
+	a := followerFor(t, core.NewScopeAllowEverything(), "127.0.0.1", start.port, RedirectOnSite, 5)
+	res, err := a.FollowRedirects(context.Background(), requestTo("127.0.0.1", start.port, "/start"))
+	if err != nil {
+		t.Fatalf("FollowRedirects: %v", err)
+	}
+	if len(res.Hops) != 1 || res.Hops[0].Followed {
+		t.Fatalf("hops = %+v, want one unfollowed hop", res.Hops)
+	}
+	if res.Hops[0].RequestRaw != nil || res.Hops[0].ResponseRaw != nil {
+		t.Errorf("the refused hop carries request %q / response %q; a hop that was never sent has no bytes",
+			res.Hops[0].RequestRaw, res.Hops[0].ResponseRaw)
+	}
+}
+
+// The raw entry keeps the caller's own first response bytes on Final, so a chain that follows nothing
+// still hands back what arrived as it arrived. Only the typed entry point's first response has no bytes
+// to attach — SendRequest returns a transport view — and its doc says so rather than papering over it.
+func TestTheRawEntryKeepsTheFirstResponseBytesOnFinal(t *testing.T) {
+	first := "HTTP/1.1 302 Found\r\nLocation: /landed\r\nContent-Length: 0\r\n\r\n"
+	srv := newRedirectServer(t, func(path string) string { return okResponse })
+
+	a := followerFor(t, core.NewScopeAllowEverything(), "127.0.0.1", srv.port, RedirectNever, 5)
+	raw := "GET /start HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+	res, err := a.FollowRedirectsAfter(context.Background(), []byte(raw), []byte(first))
+	if err != nil {
+		t.Fatalf("FollowRedirectsAfter: %v", err)
+	}
+	if res.Final == nil || res.Final.StatusCode != 302 {
+		t.Fatalf("final = %v, want the 302 itself", res.Final)
+	}
+	if string(res.Final.Raw) != first {
+		t.Errorf("Final.Raw = %q, want the caller's own response bytes", res.Final.Raw)
+	}
+	if len(res.Hops) != 1 || res.Hops[0].Followed {
+		t.Errorf("hops = %+v, want one unfollowed hop under the never policy", res.Hops)
+	}
+}
+
 // On-site is the mode that filters by authority rather than by scope, so it must stop a cross-authority
 // hop the scope would have allowed — otherwise it is indistinguishable from in_scope.
 func TestOnSiteRefusesAHopToAnotherAuthorityTheScopeWouldAllow(t *testing.T) {

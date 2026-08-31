@@ -500,6 +500,12 @@ type Response struct {
 	Body       []byte
 	Version    string
 	Duration   time.Duration
+	// Raw is the exact bytes this response arrived as, when they are known. The typed transport path
+	// builds a Response straight off http.Response and has no byte image to attach — nil here means
+	// "ask whoever sent it", never "the response was empty". Parsers that start from bytes
+	// (responseFromRaw) set it, which is what lets a redirect chain hand its caller the final
+	// response's real bytes instead of a reconstruction.
+	Raw []byte
 	// Outcome is which protocol carried the request, and why it was not HTTP/2 when it was not.
 	//
 	// Version already carries the stdlib's protocol string ("HTTP/2.0"), which is the same fact in a form
