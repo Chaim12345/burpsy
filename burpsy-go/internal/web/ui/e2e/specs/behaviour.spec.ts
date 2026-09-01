@@ -450,7 +450,7 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
       // "Reflect it in the query text" (DESIGN.md / the task brief): the toggle's effect is visible
       // as real DSL, not a second hidden filter — the operator can read it, and could have typed it.
       await expect(queryBox).toHaveValue('NOT host = "127.0.0.1"');
-      await expect(page.getByText("No exchange matches this filter")).toBeVisible();
+      await expect(page.getByText("No exchange matches these filters")).toBeVisible();
       await expect(rows).toHaveCount(0);
 
       // Turning it back off restores the capture and removes exactly the clause it added.
@@ -467,35 +467,39 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
   });
 });
 
-test.describe("the editable Inspector — Unit 14", () => {
-  /**
-   * A GET through the proxy that RESOLVES WITH THE BODY, unlike the harness's own
-   * viaProxy which only waits for the end of the stream. The body is the assertion:
-   * the throwaway origin echoes `ORIGIN-OK <method> <url>`, so reading it back is
-   * how a test learns what bytes the proxy actually forwarded — as opposed to what
-   * the console displayed, which is the thing under test and cannot vouch for itself.
-   *
-   * `agent: false` for the same reason the harness does it; see viaProxy's comment.
-   */
-  function proxyGet(proxyPort: number, url: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const target = new URL(url);
-      const request = httpRequest(
-        { host: "127.0.0.1", port: proxyPort, method: "GET", path: url, headers: { Host: target.host }, agent: false },
-        (response) => {
-          let body = "";
-          response.setEncoding("utf8");
-          response.on("data", (chunk: string) => {
-            body += chunk;
-          });
-          response.once("end", () => resolve(body));
-        },
-      );
-      request.once("error", reject);
-      request.end();
-    });
-  }
+/**
+ * A GET through the proxy that RESOLVES WITH THE BODY, unlike the harness's own
+ * viaProxy which only waits for the end of the stream. The body is the assertion:
+ * the throwaway origin echoes `ORIGIN-OK <method> <url>`, so reading it back is
+ * how a test learns what bytes the proxy actually forwarded — as opposed to what
+ * the console displayed, which is the thing under test and cannot vouch for itself.
+ *
+ * `agent: false` for the same reason the harness does it; see viaProxy's comment.
+ *
+ * Module scope rather than inside the "Unit 14" describe: the Intercept spec below
+ * also resolves held traffic through it, and a describe-scoped function is not in
+ * that test's scope at all — a ReferenceError, not a failure of the thing under test.
+ */
+function proxyGet(proxyPort: number, url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const request = httpRequest(
+      { host: "127.0.0.1", port: proxyPort, method: "GET", path: url, headers: { Host: target.host }, agent: false },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        response.once("end", () => resolve(body));
+      },
+    );
+    request.once("error", reject);
+    request.end();
+  });
+}
 
+test.describe("the editable Inspector — Unit 14", () => {
   test("an Inspector edit changes the request Repeater actually sends", async ({ page, consoleErrors }) => {
     const { targetPort } = readHarness();
     const origin = `http://127.0.0.1:${targetPort}`;
@@ -631,6 +635,10 @@ test.describe("extender", () => {
     const inspector = page.locator(".inspector");
     // Put a percent-encoded query parameter on the request to have something to decode.
     const query = inspector.locator(".inspector-section").filter({ hasText: "Query parameters" });
+    // A fresh template has no query parameters, so under the panel's "auto" state the empty
+    // section is collapsed — the same first impression an operator gets. Expanding it is
+    // part of the flow under test, not a detour around one.
+    await query.getByRole("button", { name: /Query parameters/ }).click();
     await query.getByRole("button", { name: "Add" }).click();
     await query.getByLabel("New Query parameters name").fill("next");
     await query.getByLabel("New Query parameters value").fill("%2Fhome%3Fa%3D1");
@@ -671,7 +679,7 @@ test.describe("extender", () => {
     // left edge must end up left of the request editor's.
     await expect(inspector).toHaveClass(/inspector-dock-left/);
     const inspectorBox = await inspector.boundingBox();
-    const editorBox = await page.locator(".editor-grid-inspected > .editor").first().boundingBox();
+    const editorBox = await page.locator(".editor-grid-inspected > .editor-shell").first().boundingBox();
     expect(inspectorBox!.x).toBeLessThan(editorBox!.x);
 
     await page.reload();
