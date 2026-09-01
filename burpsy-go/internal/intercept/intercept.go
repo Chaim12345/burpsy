@@ -714,6 +714,51 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	return nil
 }
 
+// ForwardAll resolves every held message as forwarded, unmodified, in one pass
+// and returns how many this call forwarded. It is the safe half of the pair
+// DropAll is the destructive half of — Burp ships both from one dropdown
+// (proxyForwardOptionsButton: "Forward" / "Forward all", mirrored by "Drop" /
+// "Drop all") — and it exists because a queue that can only be emptied by
+// dropping teaches the operator to stop queueing traffic at all.
+//
+// "Unmodified" is the point and the difference from per-id Forward: no edited
+// bytes and no content-length rewrite, because a bulk action never had a human
+// read what it is forwarding. Each message resolves through the same once-only
+// gate Drop applies per id, so a message resolved elsewhere (another operator,
+// a client that gave up waiting) is left to whoever resolved it and is not
+// counted. One change signal fires at the end no matter how many were
+// forwarded: N forwards are one queue event, not N, so the live-update fan-out
+// sees a single change for one operator action instead of one per message.
+func (e *Engine) ForwardAll() int {
+	e.mu <- struct{}{}
+	all := make([]*Held, 0, len(e.held))
+	for _, h := range e.held {
+		all = append(all, h)
+	}
+	<-e.mu
+	forwarded := make([]*Held, 0, len(all))
+	for _, h := range all {
+		// h.Raw, not nil: the resolve payload IS the proxy side's answer, and nil
+		// reads as an empty message there — a forward of nothing. The client's own
+		// held bytes are the unmodified content this method promises.
+		if h.resolve(ActionForward, h.Raw, "") {
+			forwarded = append(forwarded, h)
+		}
+	}
+	if len(forwarded) == 0 {
+		return 0
+	}
+	// Remove what this call resolved, then signal with the lock released —
+	// the same two-step shape as Forward, batched over the queue.
+	e.mu <- struct{}{}
+	for _, h := range forwarded {
+		delete(e.held, h.ID)
+	}
+	<-e.mu
+	e.signalChange()
+	return len(forwarded)
+}
+
 // DropAll resolves every held message as dropped in one pass and returns how
 // many this call dropped. A message already resolved elsewhere (another
 // operator, a client that gave up waiting) is left to whoever resolved it and

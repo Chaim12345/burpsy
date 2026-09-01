@@ -164,6 +164,24 @@ func (s *Server) handleInterceptInScopeOnly(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+// handleInterceptForwardAll serves POST /api/intercept/forward-all and resolves every
+// held message as forwarded, unmodified, in one round trip — the queue toolbar's
+// "Forward all", the safe half of the pair whose destructive half is above. The
+// count in the answer is what the engine actually forwarded on this call: a
+// message resolved elsewhere between the page's last poll and this request is
+// not double-counted, so the toast the UI shows cannot overstate. There is no
+// body to read on purpose: the engine applies no edits and no content-length
+// rewrite, because nobody has looked at what a bulk forward sends.
+func (s *Server) handleInterceptForwardAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	forwarded := s.intercept.ForwardAll()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"forwarded": forwarded})
+}
+
 // handleInterceptDropAll serves POST /api/intercept/drop-all and resolves every
 // held message as dropped in one round trip — the queue toolbar's "Drop all".
 // The count in the answer is what the engine actually dropped on this call: a

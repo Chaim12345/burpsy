@@ -772,6 +772,40 @@ export function InterceptPage(): JSX.Element {
             <Trash2 size={14} />
             Drop
           </Button>
+          {/* Burp's queue toolbar pairs Forward with "Forward all" and Drop with "Drop all"
+              (proxyForwardOptionsButton), and the destructive half shipped without the safe one
+              (burpsy-react-ui-4v3): a queue that can only be emptied by dropping teaches the
+              operator to stop queueing traffic at all. No confirmation, unlike Drop all — this
+              forwards exactly what the clients sent, and the destructive direction is the one
+              that needs the guard.
+
+              Disabled, not hidden, when the queue is empty: a control that vanishes reads as a
+              missing feature, and an operator who used it once will look for it again. */}
+          <Button
+            variant="outline"
+            onClick={() => {
+              const expected = held.length;
+              controls.forwardAll.mutate(undefined, {
+                onSuccess: (result) => {
+                  setSelectedId(null);
+                  const forwarded = result.forwarded;
+                  if (forwarded === expected) {
+                    toast.success(`Forwarded ${forwarded} held message${forwarded === 1 ? "" : "s"}`);
+                  } else {
+                    toast.success(
+                      `Forwarded ${forwarded} of the ${expected} shown — the rest resolved elsewhere before this request arrived`,
+                    );
+                  }
+                },
+                onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+              });
+            }}
+            disabled={held.length === 0 || controls.forwardAll.isPending}
+            title={held.length === 0 ? "Nothing is held" : `Forward all ${held.length} held messages unmodified`}
+          >
+            <Send size={14} />
+            Forward all{held.length > 0 ? ` (${held.length})` : ""}
+          </Button>
           {/* Burp's queue toolbar has this, and burpsy's route has answered the count actually
               dropped since it was written — nothing called it (burpsy-react-ui-t6f).
 

@@ -331,6 +331,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "turn interception on or off",
 	},
+	"/api/intercept/forward-all": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "forward every held message unmodified in one round trip; answers the count actually forwarded",
+	},
 	"/api/intercept/in-scope-only": {
 		// riskLocal: it narrows what burpsy HOLDS and sends nothing. Worth stating why it is not
 		// stronger, because turning it on means more traffic reaches the target without operator

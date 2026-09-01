@@ -411,6 +411,18 @@ export function useInterceptControls() {
      * says so when it differs from what was on screen — that difference is how an operator learns
      * the queue moved under them rather than assuming the button half-worked.
      */
+    /**
+     * Forward every held message in one round trip (burpsy-react-ui-4v3) — the safe half of the
+     * pair dropAll is the destructive half of, and Burp ships both from one dropdown. The route
+     * takes no body on purpose: a bulk forward applies no edits and no content-length rewrite,
+     * because nobody has looked at what it sends. The count it answers is what the engine
+     * actually forwarded — a message resolved elsewhere between the page's last poll and this
+     * request is not counted, so the number cannot overstate.
+     */
+    forwardAll: useMutation({
+      mutationFn: () => api<{ forwarded: number }>("/api/intercept/forward-all", json("POST", {})),
+      onSuccess: done,
+    }),
     dropAll: useMutation({
       mutationFn: () =>
         api<{ dropped: number }>("/api/intercept/drop-all", json("POST", { reason: "dropped by operator" })),

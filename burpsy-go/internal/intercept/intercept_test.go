@@ -345,6 +345,48 @@ func TestEngine_DropAllDropsEveryHeldMessageAndCountsOnlyItsOwn(t *testing.T) {
 	}
 }
 
+// ForwardAll is the safe half of the DropAll pair, and it must be exactly that:
+// every held message released with the bytes the client sent and nothing added
+// — no edit, no content-length rewrite, because a bulk action never had a human
+// read what it forwards. A queue that can only be emptied by dropping teaches
+// the operator to stop queueing traffic at all, which is why Burp ships both
+// halves from one dropdown (proxyForwardOptionsButton).
+func TestEngine_ForwardAllForwardsEveryHeldMessageUnmodifiedAndCountsOnlyItsOwn(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	e.SetRules(DirectionRequest, true, nil)
+	first := e.Hold(reqMessage("a.test", "GET", "/one"))
+	second := e.Hold(reqMessage("a.test", "POST", "/two"))
+	if first == nil || second == nil {
+		t.Fatalf("expected both messages held")
+	}
+	// Resolve one out from under ForwardAll: it must not be counted or
+	// re-resolved, because the proxy side of that message already has its answer.
+	if err := e.Drop(first.ID, "resolved first"); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+	if got := e.ForwardAll(); got != 1 {
+		t.Fatalf("ForwardAll = %d, want 1 (the dropped message was already resolved)", got)
+	}
+	if left := len(e.Held()); left != 0 {
+		t.Fatalf("queue not empty after ForwardAll: %d left", left)
+	}
+	// The forwarded message's proxy side wakes with a forward and the exact
+	// bytes the client put on the wire — the rewriteContentLength pass that a
+	// per-id Forward applies on request has no place here.
+	action, raw := second.Wait()
+	if action != ActionForward {
+		t.Fatalf("Wait action = %v, want forward", action)
+	}
+	if string(raw) != string(second.Raw) {
+		t.Fatalf("Wait raw = %q, want the client's own bytes %q", raw, second.Raw)
+	}
+	// An empty queue forwards nothing and says so.
+	if got := e.ForwardAll(); got != 0 {
+		t.Fatalf("ForwardAll on an empty queue = %d, want 0", got)
+	}
+}
+
 // ptr is for the *string argument Forward now takes: nil means "forward unchanged", and a pointer
 // to the empty string means "clear the payload". Those were the same value before, which is the
 // defect this signature fixes.
