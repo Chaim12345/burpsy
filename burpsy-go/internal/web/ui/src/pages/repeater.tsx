@@ -208,6 +208,47 @@ export function RepeaterPage(): JSX.Element {
     }
   };
 
+  // The entry on screen: whichever the operator paged to, else the newest. These values — and the
+  // hooks that read them below — live above the empty-state return because hooks run
+  // unconditionally: a first render with no tabs used to run fewer of them than the first render
+  // with a tab, and React answers that with "Rendered more hooks than during the previous render",
+  // which the error boundary turned into a Repeater page where "New request" could never produce a
+  // working tab.
+  const activeHistory = active ? (history[active.id] ?? []) : [];
+  const viewIndex = active ? (viewing[active.id] ?? activeHistory.length - 1) : 0;
+  const result = activeHistory[viewIndex];
+
+  // The chain's hop selection, resolved to bytes. `lastFollowedHop` is the response the chain
+  // landed on — the "final response" the toggle offers — and is null for a chain that followed
+  // nothing, where the first response IS the final response and the toggle has nothing to offer.
+  const lastFollowedHop =
+    result?.redirects?.hops.reduce<number | null>(
+      (acc, hop, index) => (hop.followed && hop.response != null ? index : acc),
+      null,
+    ) ?? null;
+  const finalResponse = lastFollowedHop != null ? (result?.redirects?.hops[lastFollowedHop]?.response ?? null) : null;
+  const chainResponse =
+    typeof chainSide === "number" && result?.redirects ? (result.redirects.hops[chainSide]?.response ?? null) : null;
+
+  // A stale hop index must never show one send's bytes inside another's pane: whenever the result
+  // under the pane changes — a new send, or paging back through the tab's history — the selection
+  // returns to the first response, which is what the pane shows by default.
+  useEffect(() => setChainSide("first"), [result?.exchange_id, active?.id]);
+
+  /**
+   * The exchange this send produced, so the two message panes carry the same menu every other
+   * HTTP message editor does.
+   *
+   * A Repeater draft is not an exchange until it has been sent — that is why this is keyed on
+   * `result.exchange_id` rather than on the tab. Before a send there is nothing in the traffic
+   * store to act on, and the editor menu is then the selection codecs alone, which is honest:
+   * "Send to Comparer" on a request that has never left the browser would be sending bytes the
+   * store has never seen under an id it does not have.
+   */
+  const sentExchange = useExchange(result?.exchange_id ?? null);
+  const actions = useExchangeActions();
+  const messageMenu = sentExchange.data ? actions.menu(sentExchange.data) : undefined;
+
   if (!active) {
     return (
       <div className="page">
@@ -226,41 +267,6 @@ export function RepeaterPage(): JSX.Element {
     );
   }
 
-  // The entry on screen: whichever the operator paged to, else the newest.
-  const activeHistory = history[active.id] ?? [];
-  const viewIndex = viewing[active.id] ?? activeHistory.length - 1;
-  const result = activeHistory[viewIndex];
-
-  // The chain's hop selection, resolved to bytes. `lastFollowedHop` is the response the chain
-  // landed on — the "final response" the toggle offers — and is null for a chain that followed
-  // nothing, where the first response IS the final response and the toggle has nothing to offer.
-  const lastFollowedHop =
-    result?.redirects?.hops.reduce<number | null>(
-      (acc, hop, index) => (hop.followed && hop.response != null ? index : acc),
-      null,
-    ) ?? null;
-  const finalResponse = lastFollowedHop != null ? (result?.redirects?.hops[lastFollowedHop]?.response ?? null) : null;
-  const chainResponse =
-    typeof chainSide === "number" && result?.redirects ? (result.redirects.hops[chainSide]?.response ?? null) : null;
-
-  // A stale hop index must never show one send's bytes inside another's pane: whenever the result
-  // under the pane changes — a new send, or paging back through the tab's history — the selection
-  // returns to the first response, which is what the pane shows by default.
-  useEffect(() => setChainSide("first"), [result?.exchange_id, active.id]);
-
-  /**
-   * The exchange this send produced, so the two message panes carry the same menu every other
-   * HTTP message editor does.
-   *
-   * A Repeater draft is not an exchange until it has been sent — that is why this is keyed on
-   * `result.exchange_id` rather than on the tab. Before a send there is nothing in the traffic
-   * store to act on, and the editor menu is then the selection codecs alone, which is honest:
-   * "Send to Comparer" on a request that has never left the browser would be sending bytes the
-   * store has never seen under an id it does not have.
-   */
-  const sentExchange = useExchange(result?.exchange_id ?? null);
-  const actions = useExchangeActions();
-  const messageMenu = sentExchange.data ? actions.menu(sentExchange.data) : undefined;
   /** How many overrides the active tab carries — shown on the Config trigger so a panel that is
    *  closed cannot silently narrow what Send will do. */
   const overrideCount = Object.keys(active.options ?? {}).length;
@@ -340,7 +346,10 @@ export function RepeaterPage(): JSX.Element {
   };
 
   const renderTabTrigger = (tab: RepeaterTab): JSX.Element => (
-    <ContextMenu groups={tabMenuGroups(tab)}>
+    // Keyed here rather than at the .map call sites because the key must sit on the element the
+    // function returns: a wrapper added without one makes every multi-tab strip render unkeyed
+    // children, which React answers with a console error the e2e suite refuses to ship with.
+    <ContextMenu key={tab.id} groups={tabMenuGroups(tab)}>
       <div
         role="tab"
         aria-selected={tab.id === active.id}

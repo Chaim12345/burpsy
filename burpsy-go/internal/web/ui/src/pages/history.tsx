@@ -520,6 +520,12 @@ export function HistoryPage(): JSX.Element {
    */
   const activeFilterNames = useMemo(() => {
     const names: string[] = [];
+    // The typed query is a filter whether or not a checkbox produced it: it runs server-side
+    // (useHistory sends debouncedTerm) and narrows `data` exactly like the controls do. Leaving
+    // it out of this list meant a hand-typed query that matched nothing answered with "No traffic
+    // captured yet" — a false claim about the proxy, verified live against a seeded capture —
+    // instead of naming the filter that emptied the view.
+    if (debouncedTerm.trim() !== "") names.push(`query ${debouncedTerm.trim()}`);
     if (method !== "all") names.push(`method ${method}`);
     if (mime !== "all") names.push(`type ${MIME_TYPES.find((mt) => mt.value === mime)?.label ?? mime}`);
     if (status !== "all") names.push(`status ${STATUS_BUCKETS.find((sb) => sb.value === status)?.label ?? status}`);
@@ -533,7 +539,7 @@ export function HistoryPage(): JSX.Element {
     if (hideList.length > 0) names.push(`hiding ${hideList.join(", ")}`);
     return names;
   }, [
-    method, mime, status, hideNoResponse, scopeOnly, searchMatcher, searchNegate,
+    debouncedTerm, method, mime, status, hideNoResponse, scopeOnly, searchMatcher, searchNegate,
     onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
   ]);
 
