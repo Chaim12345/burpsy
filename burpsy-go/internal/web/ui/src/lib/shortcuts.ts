@@ -79,7 +79,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: "repeater.send", group: "Message editor", label: "Send the request in Repeater", defaultChord: "mod+enter", rebindable: true, note: "Burp also binds Ctrl+Space" },
 
   // ---- Navigation ------------------------------------------------------------------
-  { id: "nav.palette", group: "Navigation", label: "Command palette", defaultChord: "mod+k", rebindable: true, note: "Burp ships its palette with no default binding at all" },
+  { id: "nav.palette", group: "Navigation", label: "Command palette", defaultChord: "mod+k", rebindable: true, note: "Burp's documented default is also Ctrl+K, so this matches Burp exactly" },
   { id: "nav.nextTool", group: "Navigation", label: "Next tool tab", defaultChord: "mod+alt+right", rebindable: true },
   { id: "nav.prevTool", group: "Navigation", label: "Previous tool tab", defaultChord: "mod+alt+left", rebindable: true },
   {
