@@ -385,7 +385,7 @@ export const LIMITS_PANEL: ReferencePanel = {
     {
       term: "A desktop shell",
       detail:
-        "No native window and no system tray. The console is a browser page on the -web address by design, so burpsy stays usable headless and over SSH.",
+        "A native window ships: cmd/desktop is a Wails v2 shell with a native File/View/Tools/Help menu bar, native dialogs and the same console UI served over a reverse proxy. There is no system tray, and the browser page on the -web address remains the headless path — burpsy stays usable over SSH without the shell.",
     },
     {
       term: "Porting Burp's Java scan checks",
