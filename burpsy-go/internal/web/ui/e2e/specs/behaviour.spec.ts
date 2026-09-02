@@ -727,7 +727,9 @@ test.describe("extender", () => {
       // The held-bytes editor is the buffer Forward sends, so the edit has to show there.
       await expect(page.locator(".held-grid-inspected > *").first()).toContainText("GET /forwarded-by-inspector");
 
-      await page.getByRole("button", { name: "Forward" }).click();
+      // exact: the toolbar now also carries "Forward all (n)" (b2e3a8f), and role-name
+      // matching is substring-by-default, so the unqualified name resolves to two buttons.
+      await page.getByRole("button", { name: "Forward", exact: true }).click();
 
       // The origin is the witness. It echoes the path it was asked for, so this fails if
       // the console showed the edit and forwarded the original bytes.
