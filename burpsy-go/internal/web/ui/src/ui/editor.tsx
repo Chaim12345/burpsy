@@ -5,7 +5,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { Copy, Download, MoreHorizontal, Search, WrapText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
 import { byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
 import {
   base64Decode,
@@ -193,17 +193,24 @@ const VIEW_LABELS: Record<MessageView, string> = {
 /**
  * Raw HTTP message editor with Burp's message-editor views.
  *
- * Raw and Hex are the editable views, and they are editable for opposite reasons:
- * Raw is the exact bytes as text, Hex is the exact bytes as bytes. Pretty reformats
- * the body only, Render shows the response in a sandboxed iframe, and GraphQL, JWT
- * and Params read a structure out of the message without offering to write one back.
- * Editing never happens on a derived view: a reformatted body is not the bytes that
- * were sent, and silently sending the reformatted version would be a lie.
+ * Raw, Hex and Pretty are the editable views, for reasons that pair with what each
+ * view shows: Raw is the exact bytes as text, Hex is the exact bytes as bytes, and
+ * Pretty is the operator's readable window onto the body — an edit there is written
+ * back through compactMessage, which inverts the prettifier so the wire bytes stay
+ * what every view (and the send path) shows. Render shows the response in a
+ * sandboxed iframe, and GraphQL, JWT and Params read a structure out of the message
+ * without offering to write one back; those stay read-only, and the note under the
+ * editor says which.
  *
- * Every tab past Raw and Hex is conditional. Pretty appears only when reformatting
- * would change something; Render only for an HTML response; GraphQL, JWT and Params
- * only when the message actually carries one. A tab that is present on every message
- * and empty on all but a few teaches an operator to ignore the tab strip.
+ * Pretty is also the default view when the body has a formattable format — Burp
+ * opens Pretty whenever it detects a supported format (tools/message-editor/
+ * text-editor.html), and a migrating operator who has to click Pretty on every
+ * JSON body has been told their preference does not matter (burpsy-react-ui-vet).
+ *
+ * Every tab past Raw is conditional. Pretty appears only when reformatting would
+ * change something; Render only for an HTML response; GraphQL, JWT and Params only
+ * when the message actually carries one. A tab that is present on every message and
+ * empty on all but a few teaches an operator to ignore the tab strip.
  */
 export function HttpEditor({
   value,
@@ -241,6 +248,9 @@ export function HttpEditor({
   menuGroups?: MenuGroup[];
 }): JSX.Element {
   const [wrap, setWrap] = useState(true);
+  // Pretty first when it is available: the initial state cannot read canPretty (it
+  // does not exist yet on first render), so the choice is deferred to the active
+  // resolution below instead of a second source of truth in useState.
   const [view, setView] = useState<MessageView>("raw");
   // Whether the codec entries can act. Tracked as state rather than read off the view when the
   // menu is built: `groups` is evaluated at render time, so a selection made after that render
@@ -298,8 +308,24 @@ export function HttpEditor({
       ] as MessageView[])
     : [];
 
-  // Fall back to Raw if the current view stops being available for a new message.
-  const active: MessageView = available.length === 0 || available.includes(view) ? view : "raw";
+  // Resolve the active view. The "raw" initial state means "the operator has not
+  // chosen yet", and for an unchosen editor a formattable body opens on Pretty —
+  // Burp's default (burpsy-react-ui-vet): a migrating operator who has to click
+  // Pretty on every JSON body has been told their preference does not matter. An
+  // explicit click, including a click back to Raw, wins for the life of this
+  // editor pane, which is also how Burp treats a pane once the operator has
+  // expressed a preference. A message whose Pretty view disappears falls back to
+  // Raw, the only view every message has.
+  const pickedRef = useRef(false);
+  const pick = useCallback((candidate: MessageView) => {
+    pickedRef.current = true;
+    setView(candidate);
+  }, []);
+  const active: MessageView = available.includes(view)
+    ? view
+    : !pickedRef.current && canPretty
+      ? "pretty"
+      : "raw";
   const shown = active === "pretty" ? prettied : value;
   // What the toolbar's Copy hands over. Hex still copies a dump — that is what an
   // operator pasting into a ticket wants, and it is why message.ts's read-only
@@ -401,7 +427,7 @@ export function HttpEditor({
                 role="tab"
                 aria-selected={candidate === active}
                 className={candidate === active ? "editor-view editor-view-active" : "editor-view"}
-                onClick={() => setView(candidate)}
+                onClick={() => pick(candidate)}
               >
                 {VIEW_LABELS[candidate]}
               </button>
@@ -488,7 +514,7 @@ export function HttpEditor({
                       from: byteOffsetToCharIndex(value, selection.from),
                       to: byteOffsetToCharIndex(value, selection.to),
                     });
-                    setView("raw");
+                    pick("raw");
                   }
                 : undefined
             }
@@ -502,9 +528,23 @@ export function HttpEditor({
         ) : (
           <CodeMirror
             value={shown}
-            onChange={active === "raw" ? onChange : undefined}
-            editable={editable && active === "raw"}
-            readOnly={!(editable && active === "raw")}
+            onChange={
+              // Raw edits are the bytes; a Pretty edit is the operator editing the
+              // readable form, written back through compactMessage so the wire keeps
+              // the body compacted exactly as it was (burpsy-react-ui-dmf) — the same
+              // deal Burp offers ("In this tab, you can access all the same
+              // functionality as in the Raw tab"), and the reason the sent request
+              // never silently grows to the pretty layout. A mid-edit JSON parse
+              // failure passes the operator's text through untouched, and Raw then
+              // shows precisely what they typed.
+              active === "pretty" && editable
+                ? (next) => onChange?.(compactMessage(next))
+                : active === "raw"
+                  ? onChange
+                  : undefined
+            }
+            editable={editable && (active === "raw" || active === "pretty")}
+            readOnly={!(editable && (active === "raw" || active === "pretty"))}
             height="100%"
             theme={editorTheme}
             extensions={extensions}
@@ -522,8 +562,8 @@ export function HttpEditor({
               autocompletion: false,
               bracketMatching: false,
               closeBrackets: false,
-              highlightActiveLine: editable && active === "raw",
-              highlightActiveLineGutter: editable && active === "raw",
+              highlightActiveLine: editable && (active === "raw" || active === "pretty"),
+              highlightActiveLineGutter: editable && (active === "raw" || active === "pretty"),
               searchKeymap: true,
               indentOnInput: false,
             }}
@@ -531,8 +571,10 @@ export function HttpEditor({
         )}
       </div>
       </ContextMenu>
-      {editable && active !== "raw" && active !== "hex" ? (
-        <div className="editor-note">Editing happens on the Raw and Hex views, which are the exact bytes.</div>
+      {editable && active !== "raw" && active !== "hex" && active !== "pretty" ? (
+        <div className="editor-note">
+          Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back.
+        </div>
       ) : null}
     </div>
   );

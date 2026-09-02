@@ -301,6 +301,37 @@ function looksLikeJson(body: string): boolean {
   return (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
 }
 
+/**
+ * The write-back half of prettyMessage: turns a possibly-edited Pretty view back
+ * into the bytes that go on the wire (burpsy-react-ui-dmf).
+ *
+ * The head is kept exactly as the operator left it — Pretty never rewrites the
+ * head, so any edit to it is a real edit to real bytes. Only the body is
+ * compacted, and only by inverting what the formatter did: JSON is re-stringified
+ * minified (a JSON parse failing means the operator is mid-edit, and their text
+ * passes through unchanged — Raw then shows precisely what they typed, so nothing
+ * is hidden), and markup collapses the exact `>` newline `<` breaks prettyMarkup
+ * inserted, leaving text nodes that sit on their own lines untouched. Whatever
+ * this returns becomes the message's value, so Raw, Hex and the send path all
+ * agree with what the Pretty view showed.
+ */
+export function compactMessage(pretty: string): string {
+  const { body, bodyOffset } = parseMessage(pretty);
+  if (!body.trim()) return pretty;
+  const trimmed = body.trim();
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    try {
+      return pretty.slice(0, bodyOffset) + JSON.stringify(JSON.parse(body));
+    } catch {
+      return pretty;
+    }
+  }
+  return pretty.slice(0, bodyOffset) + body.replace(/>\n\s*</g, "><");
+}
+
 function prettyMarkup(input: string): string {
   const withBreaks = input.replace(/></g, ">\n<");
   let depth = 0;
