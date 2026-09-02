@@ -1,5 +1,5 @@
 import { EditorView, Decoration, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
-import { openSearchPanel } from "@codemirror/search";
+import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
 import { Copy, Download, MoreHorizontal, Search, WrapText } from "lucide-react";
@@ -258,6 +258,9 @@ export function HttpEditor({
   const [hasSelection, setHasSelection] = useState(false);
 
   const editable = !readOnly && Boolean(onChange);
+  // The search spec this editor last auto-scrolled for. Outside the useMemo because the
+  // listener closes over it; per-editor, so two editors do not fight over one marker.
+  const lastSearchSpecRef = useRef("");
   const extensions = useMemo<Extension[]>(() => {
     // CodeMirror's content element renders with role="textbox" but nothing in @uiw/react-codemirror's
     // own props reaches it — the wrapper spreads unknown props onto its outer container, not the
@@ -274,6 +277,40 @@ export function HttpEditor({
       EditorView.updateListener.of((update) => {
         if (!update.selectionSet && !update.docChanged) return;
         setHasSelection(update.state.selection.ranges.some((range) => !range.empty));
+      }),
+      // burpsy-react-ui-czw9: when the search panel is open and the query text changes, scroll
+      // to the first match immediately — Burp's message search steps through matches as the
+      // text changes, while CodeMirror's own panel only moves the viewport on Enter (its
+      // commit() dispatches setSearchQuery; scrolling lives in findNext/replaceNext alone).
+      // The re-find runs from position 0 rather than from the caret, so what the operator sees
+      // tracks the text they type: first match of the new term, not of the old selection.
+      EditorView.updateListener.of((update) => {
+        if (!searchPanelOpen(update.state)) return;
+        const query = getSearchQuery(update.state);
+        // React only when the query text changed (the panel's commit), not on every keystroke
+        // in the document: a doc edit while a search is open must not yank the viewport.
+        // lastSearchSpecRef lives outside the useMemo, so the closure survives re-renders.
+        if (query.search === lastSearchSpecRef.current) return;
+        lastSearchSpecRef.current = query.search;
+        if (!query.search || !query.valid) return;
+        // StringCursor only: a plain string with the query's own case sensitivity covers the
+        // message search that matters (find "token", "password", a header name). Regexp and
+        // whole-word queries keep CodeMirror's Enter-to-step behaviour rather than having this
+        // extension reimplement their matching.
+        if (query.regexp || query.wholeWord) return;
+        const cursor = new SearchCursor(
+          update.state.doc,
+          query.search,
+          0,
+          update.state.doc.length,
+          query.caseSensitive ? undefined : (s) => s.toLowerCase(),
+        );
+        cursor.next();
+        if (cursor.done) return;
+        update.view.dispatch({
+          selection: { anchor: cursor.value.from, head: cursor.value.to },
+          effects: EditorView.scrollIntoView(cursor.value.from, { y: "center" }),
+        });
       }),
     ];
     if (wrap) base.push(EditorView.lineWrapping);
