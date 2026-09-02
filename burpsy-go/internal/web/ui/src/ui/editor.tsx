@@ -2,7 +2,7 @@ import { EditorView, Decoration, ViewPlugin, type DecorationSet, type ViewUpdate
 import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
-import { Copy, Download, MoreHorizontal, Search, WrapText } from "lucide-react";
+import { ClipboardPaste, Copy, Download, MoreHorizontal, Search, WrapText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
@@ -261,6 +261,27 @@ export function HttpEditor({
   // The search spec this editor last auto-scrolled for. Outside the useMemo because the
   // listener closes over it; per-editor, so two editors do not fight over one marker.
   const lastSearchSpecRef = useRef("");
+  // Paste-from-file (burpsy-react-ui-cto2): a hidden input is the only way a web page reads a
+  // file the operator picked, and it must live in the DOM to be clickable. Cleared after every
+  // change so choosing the same file twice still fires (the app's config import does the same).
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pasteFromFile = useCallback(
+    (file: File) => {
+      const reader = new FileReader();
+      // Text decode: the editor's value IS text — a binary file pasted as text arrives with
+      // replacement characters rather than as raw bytes, and Raw shows exactly that, which is
+      // the honest outcome. Burp's own paste-from-file treats the file as text in the text tabs.
+      reader.readAsText(file);
+      reader.onload = () => {
+        const text = String(reader.result ?? "");
+        // Replace, not insert: the point is loading a request/response from disk, and a
+        // replace is what "paste the file into this message" means when the message is a draft.
+        onChange?.(text);
+      };
+      reader.onerror = () => {};
+    },
+    [onChange],
+  );
   const extensions = useMemo<Extension[]>(() => {
     // CodeMirror's content element renders with role="textbox" but nothing in @uiw/react-codemirror's
     // own props reaches it — the wrapper spreads unknown props onto its outer container, not the
@@ -511,6 +532,16 @@ export function HttpEditor({
               <WrapText size={13} />
             </IconButton>
           ) : null}
+          {editable ? (
+            <IconButton
+              label="Paste from file"
+              size="small"
+              title="Load a message body from a file on your machine"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <ClipboardPaste size={13} />
+            </IconButton>
+          ) : null}
           <IconButton label="Copy message" size="small" onClick={() => void copyToClipboard(clipboard)}>
             <Copy size={13} />
           </IconButton>
@@ -608,6 +639,18 @@ export function HttpEditor({
         )}
       </div>
       </ContextMenu>
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) pasteFromFile(file);
+          event.target.value = "";
+        }}
+      />
       {editable && active !== "raw" && active !== "hex" && active !== "pretty" ? (
         <div className="editor-note">
           Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back.
