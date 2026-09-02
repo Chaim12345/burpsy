@@ -674,6 +674,10 @@ function App(): JSX.Element {
             <Database size={11} />
             {stats.data ? formatBytes(stats.data.stored_bytes) : "—"} stored
           </span>
+          <span title="The proxy listener every client points at (the -proxy address)">
+            <Network size={11} />
+            {stats.data?.proxy_bind ?? "proxy: —"}
+          </span>
           <span>
             <Network size={11} />
             {formatCount(stats.data?.exchanges)} exchanges

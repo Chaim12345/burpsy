@@ -33,15 +33,25 @@ function ConnectionRow({
   conn,
   selected,
   onSelect,
+  onClear,
   menuGroups,
 }: {
   conn: WsConnection;
   selected: boolean;
   onSelect: () => void;
+  /** Called instead of onSelect when an already-selected row is clicked: the second click is the
+   * deselect, so the promise the empty state makes ("clear the selection to see every frame") has
+   * an affordance in the same place the selection was made. */
+  onClear: () => void;
   menuGroups: MenuGroup[];
 }): JSX.Element {
   const row = (
-    <button type="button" className={selected ? "list-row active" : "list-row"} onClick={onSelect}>
+    <button
+      type="button"
+      className={selected ? "list-row active" : "list-row"}
+      onClick={selected ? onClear : onSelect}
+      aria-pressed={selected}
+    >
       <div className="list-row-text">
         <strong title={`${conn.host}:${conn.port}${conn.path}`}>
           {conn.host}:{conn.port}
@@ -331,6 +341,10 @@ export function WebSocketPage(): JSX.Element {
               setSelectedExchange(conn.exchange);
               setSelectedFrameId(null);
             }}
+            onClear={() => {
+              setSelectedExchange(null);
+              setSelectedFrameId(null);
+            }}
             menuGroups={menuFor(conn)}
           />
         ))}
@@ -402,6 +416,18 @@ export function WebSocketPage(): JSX.Element {
                         <X size={13} />
                       </IconButton>
                     </>
+                  ) : selectedExchange !== null ? (
+                    <IconButton
+                      label="Clear connection selection"
+                      size="small"
+                      title="Clear the selection to see every frame"
+                      onClick={() => {
+                        setSelectedExchange(null);
+                        setSelectedFrameId(null);
+                      }}
+                    >
+                      <X size={13} />
+                    </IconButton>
                   ) : null}
                 </div>
               </div>
