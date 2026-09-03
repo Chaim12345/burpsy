@@ -9,8 +9,10 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3 } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import { copyToClipboard } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useApp } from "../lib/store";
 import { ColumnVisibilityMenu } from "./column-visibility-menu";
@@ -366,16 +368,44 @@ export function VirtualTable<T>({
                 {group.headers.map((header) => {
                   const sorted = header.column.getIsSorted();
                   const canSort = header.column.getCanSort();
+                  // Burp's "Copy column" (burpsy-react-ui-3gr3): the underlying values of every
+                  // loaded row, not just the rendered window - copying only the virtualised
+                  // viewport would silently drop rows. Raw values, not badge text ("pending",
+                  // "HTML", "—" are presentation); the data is what a wordlist wants.
+                  const rawHeader = header.column.columnDef.header;
+                  const columnLabel = typeof rawHeader === "string" ? rawHeader : header.column.id;
+                  const copyColumn = () => {
+                    if (!rows.length) {
+                      toast.error("No rows to copy");
+                      return;
+                    }
+                    const lines = rows.map((row) => {
+                      const value: unknown = row.getValue(header.column.id);
+                      return value === null || value === undefined ? "" : String(value);
+                    });
+                    void copyToClipboard(lines.join("\n"));
+                    toast.success(`Copied ${lines.length} ${columnLabel} values`);
+                  };
+                  const label = canSort ? (
+                    <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {sorted === "asc" ? <ArrowUp size={11} /> : sorted === "desc" ? <ArrowDown size={11} /> : null}
+                    </button>
+                  ) : (
+                    <span className="th-label">{flexRender(header.column.columnDef.header, header.getContext())}</span>
+                  );
                   return (
                     <th key={header.id} style={{ width: header.getSize() }} aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}>
-                      {canSort ? (
-                        <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                          {sorted === "asc" ? <ArrowUp size={11} /> : sorted === "desc" ? <ArrowDown size={11} /> : null}
-                        </button>
-                      ) : (
-                        flexRender(header.column.columnDef.header, header.getContext())
-                      )}
+                      <ContextMenu
+                        groups={[
+                          {
+                            id: "column",
+                            actions: [{ id: "copy-column", label: `Copy ${columnLabel} column`, icon: Copy, onSelect: copyColumn }],
+                          },
+                        ]}
+                      >
+                        {label}
+                      </ContextMenu>
                       {header.column.getCanResize() ? (
                         <span
                           role="presentation"
