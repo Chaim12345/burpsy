@@ -318,6 +318,10 @@ func applyOne(r *Rule, raw []byte) []byte {
 		return applyHeaders(r, raw)
 	case TargetRequestFirstLine:
 		return applyFirstLine(r, raw)
+	case TargetRequestParamName:
+		return applyParamName(r, raw)
+	case TargetRequestParamValue:
+		return applyParamValue(r, raw)
 	case TargetWebSocketToServer, TargetWebSocketToClient:
 		return applyWholePayload(r, raw)
 	default:
@@ -411,6 +415,115 @@ func applyHeaders(r *Rule, raw []byte) []byte {
 		out.Write(body)
 	}
 	return out.Bytes()
+}
+
+// The two param appliers exist because a whole-body rewrite cannot see a field boundary:
+// that is the documented defect (see applyOne's default case) that refused these targets for
+// months. What they rewrite is the request's query string — the parameters the request line
+// actually carries. The body is deliberately out of scope: a form body's parameter encoding
+// is content-type-dependent and a query-string applier that silently also rewrote form fields
+// would repeat the original mistake one level down. Burp's rule_type applies these to query
+// parameters, which is what the name says.
+//
+// Both split the query string on `&` and rewrite only the addressed half of each pair,
+// rejoining with the same separators — so a rule can no longer rename `nonsecret` while
+// aiming at `secret`, and a value rule cannot spill into the next pair.
+func applyParamInQuery(r *Rule, raw []byte, matchName bool) []byte {
+	idx := bytes.Index(raw, []byte("\r\n"))
+	if idx < 0 {
+		return nil
+	}
+	line := raw[:idx]
+	// The query string starts at the first `?` in the request line and runs to the first
+	// space (HTTP/1.x request lines are METHOD SP TARGET SP VERSION) — or the line end.
+	q := bytes.Index(line, []byte("?"))
+	if q < 0 {
+		return nil
+	}
+	end := bytes.IndexByte(line[q:], ' ')
+	if end < 0 {
+		end = len(line[q:])
+	}
+	query := line[q+1 : q+end]
+	prefix, suffix := line[:q+1], line[q+end:]
+
+	rewritten, hit := rewriteParams(query, r, matchName)
+	if !hit {
+		return nil
+	}
+	out := make([]byte, 0, len(prefix)+len(rewritten)+len(suffix))
+	out = append(out, prefix...)
+	out = append(out, rewritten...)
+	out = append(out, suffix...)
+	out = append(out, raw[idx:]...)
+	return out
+}
+
+func applyParamName(r *Rule, raw []byte) []byte {
+	return applyParamInQuery(r, raw, true)
+}
+
+func applyParamValue(r *Rule, raw []byte) []byte {
+	return applyParamInQuery(r, raw, false)
+}
+
+// rewriteParams walks one query string pair by pair. A pair with no `=` is a bare name —
+// a name rule may rewrite it, a value rule has nothing to address. The `hit` return is
+// separate from the bytes so "matched but replaced with the same text" still reads as a
+// change the caller can count.
+func rewriteParams(query []byte, r *Rule, matchName bool) ([]byte, bool) {
+	hit := false
+	var out []byte
+	pairs := bytes.Split(query, []byte("&"))
+	for i, pair := range pairs {
+		var name, value []byte
+		var hasValue bool
+		if eq := bytes.IndexByte(pair, '='); eq >= 0 {
+			name, value, hasValue = pair[:eq], pair[eq+1:], true
+		} else {
+			name = pair
+		}
+		field := value
+		if matchName {
+			field = name
+		}
+		var repl []byte
+		matched := false
+		if r.Category == CategoryLiteral {
+			// A parameter name is matched whole, never as a substring: the boundary is
+			// the pair separator, and a literal rule against `secret` must not fire inside
+			// `nonsecret`. The old whole-body rewrite renamed `nonsecret` because it saw
+			// `secret` in the middle; a field-aware rewrite that still used Contains would
+			// repeat the same defect one level down. Values keep substring matching — a
+			// value has no finer boundary, and Burp's value rules are substring rules.
+			matched = matchName && bytes.Equal(field, []byte(r.StringMatch)) || !matchName && bytes.Contains(field, []byte(r.StringMatch))
+			if matched {
+				repl = bytes.ReplaceAll(field, []byte(r.StringMatch), []byte(r.StringReplace))
+			}
+		} else if r.re != nil && r.re.Match(field) {
+			matched = true
+			repl = r.re.ReplaceAll(field, []byte(r.StringReplace))
+		}
+		if matched {
+			hit = true
+			if matchName {
+				name = repl
+			} else if hasValue {
+				value = repl
+			}
+		}
+		var rebuilt []byte
+		if hasValue {
+			rebuilt = append(append(append(make([]byte, 0, len(name)+1+len(value)), name...), '='), value...)
+		} else {
+			rebuilt = append(make([]byte, 0, len(name)), name...)
+		}
+		if i > 0 {
+			out = append(out, '&')
+		}
+		out = append(out, rebuilt...)
+	}
+	return out, hit
 }
 
 func applyFirstLine(r *Rule, raw []byte) []byte {

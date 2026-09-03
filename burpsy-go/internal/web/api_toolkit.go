@@ -571,16 +571,8 @@ var matchReplaceTargetNames = []string{
 	"response_body",
 	"websocket_to_server",
 	"websocket_to_client",
-}
-
-// matchReplaceUnappliedTargets are rule_types the engine declares but cannot apply.
-//
-// They are refused with their own message rather than being reported as unknown, because
-// "unknown rule_type" would be a lie: the Target exists, `targetsDir` routes it, and
-// `matchReplaceTargetName` can name it. What is missing is the applier.
-var matchReplaceUnappliedTargets = map[string]string{
-	"request_param_name":  "TargetRequestParamName",
-	"request_param_value": "TargetRequestParamValue",
+	"request_param_name",
+	"request_param_value",
 }
 
 // targetToCategory maps the UI's rule_type to the engine's Target.
@@ -598,23 +590,12 @@ var matchReplaceUnappliedTargets = map[string]string{
 // was applied to real requests, not merely displayed. A rule the engine cannot express is
 // now a 400 that names what is accepted.
 //
-// # And why request_param_name / request_param_value are refused
-//
-// I added those two here in 4469cf1 and it was wrong. My justification was that "the engine
-// already matches on them (matchreplace.go:129)" — but that line is `targetsDir`, which says
-// which *direction* a target belongs to. The applier is `applyOne`, and it has no case for
-// either: both fell through to `default: return applyBody(...)`.
-//
-// So accepting them turned a parameter rule into a whole-body substring rewrite. A
-// param-name rule replacing "secret" with "harmless" against
-// `user=admin&secret=hunter2&nonsecret=keep` yielded `user=admin&harmless=hunter2&nonharmless=keep`
-// — it rewrote `nonsecret`, an unrelated parameter, and answered 200 with a compiled count.
-// I reintroduced the very defect the rest of this comment describes, by verifying against
-// one function and asserting about another.
-//
-// They are refused until the appliers exist, and refused *by name* rather than as unknown,
-// because the Target is real — what is missing is the code that applies it. A declined path
-// beats a plausible-looking wrong one.
+// request_param_name / request_param_value were refused here for months (see 4469cf1 and
+// the incident in applyOne's history): the engine declared the Targets but nothing applied
+// them, so accepting them silently rewrote whole bodies. The appliers now exist
+// (applyParamName / applyParamValue in internal/matchreplace) and are field-boundary-honest:
+// a literal name rule matches the whole name, so `secret` cannot rename `nonsecret`. They
+// are accepted again, with the boundary semantics pinned by tests in unapplied_target_test.go.
 func targetToCategory(ruleType string) (matchreplace.Target, error) {
 	switch ruleType {
 	case "request_first_line":
@@ -633,14 +614,11 @@ func targetToCategory(ruleType string) (matchreplace.Target, error) {
 		return matchreplace.TargetWebSocketToClient, nil
 	case "":
 		return 0, fmt.Errorf("rule_type is required; accepted values are %s", strings.Join(matchReplaceTargetNames, ", "))
+	case "request_param_name":
+		return matchreplace.TargetRequestParamName, nil
+	case "request_param_value":
+		return matchreplace.TargetRequestParamValue, nil
 	default:
-		if engineName, unapplied := matchReplaceUnappliedTargets[ruleType]; unapplied {
-			return 0, fmt.Errorf(
-				"rule_type %q is declared by the engine as %s but has no applier yet, so a rule "+
-					"using it would be applied as a whole-body rewrite and could change unrelated "+
-					"parameters; refused until it is implemented. Accepted values are %s",
-				ruleType, engineName, strings.Join(matchReplaceTargetNames, ", "))
-		}
 		return 0, fmt.Errorf("unknown rule_type %q; accepted values are %s", ruleType, strings.Join(matchReplaceTargetNames, ", "))
 	}
 }

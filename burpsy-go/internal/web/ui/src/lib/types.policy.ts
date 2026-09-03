@@ -17,6 +17,8 @@ export type MatchReplaceTarget =
   | "request_first_line"
   | "request_header"
   | "request_body"
+  | "request_param_name"
+  | "request_param_value"
   | "response_header"
   | "response_body"
   | "websocket_to_server"
