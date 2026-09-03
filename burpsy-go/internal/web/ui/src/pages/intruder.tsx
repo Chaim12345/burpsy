@@ -285,11 +285,16 @@ function AttackResult({
   /**
    * Decode an attempt's ordinal into its payload combination.
    *
-   * The server sends `examples` only for each bucket's *first* ordinal, so those rows are answered
-   * from the server directly and the rest are recomputed here from the plan — pure arithmetic on
-   * the index, which is what internal/intruder/plan.go's Fill is (burpsy-react-ui-fvx). The set
-   * lengths come from the report's own per-set counts, so the arithmetic runs against the sets the
-   * engine actually used, not the sets the form currently holds.
+   * The server sends an `examples` entry for every ordinal it kept a row for — every bucket's
+   * first ordinal, and every attempt in the (detail-limited) attempts table — resolved server-side
+   * from the post-processing-rule payload sets (api_tools.go's payloadsAt), so a rule that
+   * transforms bytes without dropping any (add_prefix, hash, …) still names the payload that was
+   * actually sent. That covers every row this page renders today; the fallback below recomputes
+   * the ordinal from the plan — pure arithmetic on the index, which is what
+   * internal/intruder/plan.go's Fill is (burpsy-react-ui-fvx) — for an older server that predates
+   * that coverage, or an ordinal outside what Examples carries. The set lengths come from the
+   * report's own per-set counts, so the fallback arithmetic runs against the sets the engine
+   * actually used, not the sets the form currently holds.
    */
   const payloadsAt = useMemo(() => {
     const setCounts = sets.map((set) => set.count);

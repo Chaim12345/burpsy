@@ -484,15 +484,19 @@ type AttemptView struct {
 	GrepExtract *string `json:"grep_extract"`
 }
 
-// BucketExample resolves one bucket's first ordinal back to the exact payload combination, so
-// the operator never has to reconstruct it by hand.
+// BucketExample resolves one ordinal — a bucket's first ordinal, or any other attempt ordinal the
+// report kept — back to the exact payload combination the engine actually sent, so the operator
+// never has to reconstruct it by hand. FirstOrdinal is the field name for historical reasons (the
+// bucket table was the first consumer); despite the name, RunView.Examples carries one entry per
+// distinct ordinal across both the bucket table and the attempts table.
 type BucketExample struct {
 	FirstOrdinal int      `json:"first_ordinal"`
 	Payloads     []string `json:"payloads"`
 }
 
-// RunView is the full report shape: the bucketed summary, payloads behind each bucket, and the
-// honest per-set counting (what was capped, truncated, skipped or dropped).
+// RunView is the full report shape: the bucketed summary, payloads behind every bucket and every
+// kept attempt (keyed by ordinal in Examples — see BucketExample), and the honest per-set
+// counting (what was capped, truncated, skipped or dropped).
 type RunView struct {
 	Report      intruder.AttackReport `json:"report"`
 	Examples    []BucketExample       `json:"examples"`
@@ -786,12 +790,30 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	examples := make([]BucketExample, 0, len(report.Buckets))
+	// Every bucket's first ordinal, plus every attempt ordinal the report actually kept — not just
+	// buckets. The bundled UI can reconstruct an ordinal's payloads itself (pure arithmetic on the
+	// plan), but only from what the *browser* typed; a payload-processing rule runs server-side at
+	// resolve time (see internal/intruder/process.go), so a count-preserving rule like add_prefix
+	// changes every byte the client cannot see. Only the resolved set — what this handler already
+	// has in `resolved`, post-chain — names what was actually sent. Bounded by report.DetailLimit
+	// (internal/intruder/engine.go), so this does not unbound the response (burpsy-react-ui-fvx).
+	seenOrdinal := make(map[int]bool, len(report.Buckets)+len(report.Attempts))
+	examples := make([]BucketExample, 0, len(report.Buckets)+len(report.Attempts))
 	for _, b := range report.Buckets {
 		examples = append(examples, BucketExample{
 			FirstOrdinal: b.FirstOrdinal,
 			Payloads:     payloadsAt(plan, resolved, b.FirstOrdinal),
 		})
+		seenOrdinal[b.FirstOrdinal] = true
+	}
+	for _, a := range report.Attempts {
+		if seenOrdinal[a.Ordinal] {
+			continue
+		}
+		seenOrdinal[a.Ordinal] = true
+		if pl := payloadsAt(plan, resolved, a.Ordinal); len(pl) > 0 {
+			examples = append(examples, BucketExample{FirstOrdinal: a.Ordinal, Payloads: pl})
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(RunView{
