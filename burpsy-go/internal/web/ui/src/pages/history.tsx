@@ -15,7 +15,7 @@ import { Inspector } from "../ui/inspector";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Toolbar, Tooltip } from "../ui/primitives";
 import { ReferencePanelView } from "../ui/reference";
-import { VirtualTable, type Column } from "../ui/table";
+import { VirtualTable, type Column, type VisibilityState } from "../ui/table";
 
 const STATUS_BUCKETS = [
   { value: "all", label: "All statuses" },
@@ -38,6 +38,23 @@ const MIME_TYPES = [
 ];
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+/**
+ * Whether one MIME bucket matches a row (burpsy-react-ui-9my). The single-select memo below
+ * used to inline this per the selected value; the multi-select calls it per checked bucket and
+ * passes on the first hit. Untyped rows match nothing - see isTyped.
+ */
+function mimeMatches(row: Exchange, value: string): boolean {
+  if (!isTyped(row)) return false;
+  const exMime = row.mime.toLowerCase();
+  if (value === "binary") {
+    return !(
+      exMime.includes("text") || exMime.includes("json") || exMime.includes("xml") ||
+      exMime.includes("javascript") || exMime.includes("css") || exMime.includes("html")
+    );
+  }
+  return exMime.includes(value);
+}
 
 /**
  * Whether a row can be classified by content type at all.
@@ -220,6 +237,108 @@ function isHostInScope(host: string, scope: ScopeView | undefined): boolean {
 
 /** design/jsx/filter-toggle-{off,on}.jsx. A real toggle button, not a checkbox styled as a pill —
  *  `aria-pressed` is the correct role for "this button's own state flips", per the task brief. */
+/**
+ * Reads and writes one table's hidden-column set under `burpsy.<key>` (burpsy-react-ui-3daa).
+ * Copied from logger.tsx's local of the same name: storage is a page decision, not table API
+ * (see the note there), so each page carries its own fifteen lines rather than sharing one
+ * keyed wrong.
+ */
+function useStoredColumnVisibility(key: string): [VisibilityState, (next: VisibilityState) => void] {
+  const [visibility, setVisibility] = useState<VisibilityState>(() => {
+    try {
+      const raw = localStorage.getItem(`burpsy.${key}`);
+      return raw ? (JSON.parse(raw) as VisibilityState) : {};
+    } catch {
+      return {};
+    }
+  });
+  const store = (next: VisibilityState) => {
+    setVisibility(next);
+    try {
+      localStorage.setItem(`burpsy.${key}`, JSON.stringify(next));
+    } catch {
+      // A private window or cleared site data: the table still filters this session.
+    }
+  };
+  return [visibility, store];
+}
+
+/**
+ * One multi-bucket filter control (burpsy-react-ui-9my): a button naming its count plus a
+ * checkbox popover in the same anchored-panel shape as the column-visibility menu, so
+ * checkboxes stay in normal tab order with Escape/outside-click to dismiss.
+ */
+function BucketMenu({
+  label,
+  buckets,
+  selected,
+  onToggle,
+  onReset,
+}: {
+  label: string;
+  buckets: { value: string; label: string }[];
+  selected: string[];
+  onToggle: (value: string) => void;
+  onReset: () => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (panelRef.current?.contains(event.target as Node) || triggerRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open ]);
+  return (
+    <div className="column-menu-anchor">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="column-menu-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`${label} filter${selected.length ? `, ${selected.length} selected` : ""}`}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {label}
+        {selected.length > 0 ? ` (${selected.length})` : ""}
+      </button>
+      {open ? (
+        <div ref={panelRef} className="column-menu-panel" role="menu" aria-label={`${label} buckets`}>
+          {buckets.map((bucket) => (
+            <Checkbox
+              key={bucket.value}
+              checked={selected.includes(bucket.value)}
+              onCheckedChange={() => onToggle(bucket.value)}
+              label={bucket.label}
+              className="column-menu-row"
+            />
+          ))}
+          <div className="column-menu-divider" role="separator" />
+          <button type="button" className="column-menu-reset" onClick={() => { onReset(); setOpen(false); }}>
+            Reset {label.toLowerCase()}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function FilterToggle({
   pressed,
   onPressedChange,
@@ -360,8 +479,15 @@ export function HistoryPage(): JSX.Element {
   const focusExchange = useApp((state) => state.focusExchange);
 
   const [term, setTerm] = useState(historyQuery);
-  const [status, setStatus] = useState("all");
-  const [mime, setMime] = useState("all");
+  // burpsy-react-ui-9my: independent bucket sets, not single values - Burp's status/MIME
+  // filters are checkboxes, so "2xx and 5xx" is expressible. Empty means all.
+  const [statusSet, setStatusSet] = useState<string[]>([]);
+  const [mimeSet, setMimeSet] = useState<string[]>([]);
+  // burpsy-react-ui-ovow: Burp's master Filter on/off - suspends every control below while
+  // preserving its value, so the operator can compare filtered against unfiltered without
+  // clearing anything. On by default: off would show the whole capture behind a filter bar
+  // that claims to filter.
+  const [filterOn, setFilterOn] = useState(true);
   const [method, setMethod] = useState("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -396,6 +522,9 @@ export function HistoryPage(): JSX.Element {
     body: "",
   });
   const [columnFiltersOpen, setColumnFiltersOpen] = useState(false);
+  // burpsy-react-ui-3daa: Logger's capability, same fifteen lines (see the note on
+  // useStoredColumnVisibility): the operator's hidden-column set persists per table.
+  const [columnVisibility, setColumnVisibility] = useStoredColumnVisibility("history-columns");
 
   /**
    * Change one column filter and rewrite its clause in the query box.
@@ -532,8 +661,14 @@ export function HistoryPage(): JSX.Element {
     // instead of naming the filter that emptied the view.
     if (debouncedTerm.trim() !== "") names.push(`query ${debouncedTerm.trim()}`);
     if (method !== "all") names.push(`method ${method}`);
-    if (mime !== "all") names.push(`type ${MIME_TYPES.find((mt) => mt.value === mime)?.label ?? mime}`);
-    if (status !== "all") names.push(`status ${STATUS_BUCKETS.find((sb) => sb.value === status)?.label ?? status}`);
+    if (mimeSet.length > 0) {
+      const labelFor = (value: string) => MIME_TYPES.find((mt) => mt.value === value)?.label ?? value;
+      names.push(`type ${mimeSet.map(labelFor).join(" + ")}`);
+    }
+    if (statusSet.length > 0) {
+      const labelFor = (value: string) => STATUS_BUCKETS.find((sb) => sb.value === value)?.label ?? value;
+      names.push(`status ${statusSet.map(labelFor).join(" + ")}`);
+    }
     if (hideNoResponse) names.push("hiding rows with no response");
     if (scopeOnly) names.push("in-scope only");
     if (searchMatcher) names.push(searchNegate ? "search (inverted)" : "search");
@@ -544,35 +679,25 @@ export function HistoryPage(): JSX.Element {
     if (hideList.length > 0) names.push(`hiding ${hideList.join(", ")}`);
     return names;
   }, [
-    debouncedTerm, method, mime, status, hideNoResponse, scopeOnly, searchMatcher, searchNegate,
+    debouncedTerm, method, mimeSet, statusSet, hideNoResponse, scopeOnly, searchMatcher, searchNegate,
     onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
   ]);
+  // ovow: names describe the *applied* filters; suspended, there are none to name no matter
+  // what the controls hold. Computed above, filtered here, so the empty states and the status
+  // bar read unfiltered while the values wait underneath.
+  const appliedFilterNames = filterOn ? activeFilterNames : [];
 
   const rows = useMemo(() => {
     const all = data ?? [];
     return all.filter((row) => {
+      // burpsy-react-ui-ovow: suspended means the whole capture, values preserved.
+      if (!filterOn) return true;
       if (method !== "all" && row.method !== method) return false;
-      if (mime !== "all") {
-        // A row with no type answers no question about its type, so it matches no specific value —
-        // including "binary". See isTyped: the binary branch is a negation, and letting an untyped or
-        // response-less row through it would report "this body is binary" about a response whose type
-        // nobody knows.
-        if (!isTyped(row)) return false;
-        const exMime = row.mime.toLowerCase();
-        if (mime === "binary") {
-          // Binary = everything that is not a text-ish content type.
-          if (
-            exMime.includes("text") || exMime.includes("json") || exMime.includes("xml") ||
-            exMime.includes("javascript") || exMime.includes("css") || exMime.includes("html")
-          ) {
-            return false;
-          }
-        } else if (!exMime.includes(mime)) {
-          return false;
-        }
+      if (mimeSet.length > 0 && !mimeSet.some((value) => mimeMatches(row, value))) return false;
+      if (statusSet.length > 0) {
+        const bucket = row.status === null ? "none" : String(row.status).slice(0, 1);
+        if (!statusSet.includes(bucket)) return false;
       }
-      if (status === "none" && row.status !== null) return false;
-      if (status !== "all" && status !== "none" && (row.status === null || !String(row.status).startsWith(status))) return false;
       if (hideNoResponse && row.response === null) return false;
       // Only needed when the scope could not be written into the query above (a wildcard pattern) —
       // when it could, the server already returned only in-scope rows and this is a no-op re-check.
@@ -597,7 +722,7 @@ export function HistoryPage(): JSX.Element {
       return true;
     });
   }, [
-    data, method, status, mime, hideNoResponse, scopeOnly, scopeFragment, scope.data,
+    data, method, statusSet, mimeSet, filterOn, hideNoResponse, scopeOnly, scopeFragment, scope.data,
     onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList, searchMatcher, searchNegate,
   ]);
 
@@ -910,6 +1035,9 @@ export function HistoryPage(): JSX.Element {
         />
         <Toolbar style={{ marginTop: 10 }}>
 
+          <FilterToggle pressed={filterOn} onPressedChange={setFilterOn} title="Suspend every filter below without clearing it">
+            Filter
+          </FilterToggle>
           <FilterToggle pressed={scopeOnly} onPressedChange={handleScopeToggle}>
             In scope only
           </FilterToggle>
@@ -936,20 +1064,24 @@ export function HistoryPage(): JSX.Element {
           >
             More filters{filtersActive > 0 ? ` (${filtersActive})` : ""}
           </Button>
-          <Select aria-label="Status filter" title="Status filter" value={status} onChange={(event) => setStatus(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
-            {STATUS_BUCKETS.map((bucket) => (
-              <option key={bucket.value} value={bucket.value}>
-                {bucket.label}
-              </option>
-            ))}
-          </Select>
-          <Select aria-label="MIME type filter" title="MIME type filter" value={mime} onChange={(event) => setMime(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
-            {MIME_TYPES.map((mt) => (
-              <option key={mt.value} value={mt.value}>
-                {mt.label}
-              </option>
-            ))}
-          </Select>
+          <BucketMenu
+            label="Status"
+            buckets={STATUS_BUCKETS.filter((bucket) => bucket.value !== "all")}
+            selected={statusSet}
+            onToggle={(value) =>
+              setStatusSet((current) => (current.includes(value) ? current.filter((v) => v !== value) : [...current, value]))
+            }
+            onReset={() => setStatusSet([])}
+          />
+          <BucketMenu
+            label="Type"
+            buckets={MIME_TYPES.filter((mt) => mt.value !== "all")}
+            selected={mimeSet}
+            onToggle={(value) =>
+              setMimeSet((current) => (current.includes(value) ? current.filter((v) => v !== value) : [...current, value]))
+            }
+            onReset={() => setMimeSet([])}
+          />
           <Select aria-label="Method filter" title="Method filter" value={method} onChange={(event) => setMethod(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
             <option value="all">All methods</option>
             {METHODS.map((name) => (
@@ -1042,6 +1174,9 @@ export function HistoryPage(): JSX.Element {
             columns={columns}
             getRowId={(row) => String(row.id)}
             followNewRows={followNew}
+            enableColumnVisibility
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChange={setColumnVisibility}
             selectedId={selectedId === null ? null : String(selectedId)}
             onSelect={(row) => setSelectedId(row.id)}
             onActivate={(row) => void actions.sendToRepeater(row)}
@@ -1083,10 +1218,10 @@ export function HistoryPage(): JSX.Element {
               // and was answered with "No traffic captured yet. Point a client at the proxy", which is
               // a claim about the proxy, was false whenever a filter was responsible, and sent the
               // operator to check their client setup over a dropdown they had set themselves.
-              activeFilterNames.length > 0 ? (
+              appliedFilterNames.length > 0 ? (
                 <Empty
                   title="No exchange matches these filters"
-                  detail={`Nothing in the ${formatCount(data?.length ?? 0)} loaded rows matches ${activeFilterNames.join(" + ")}. Relax or clear a filter to see more of the capture.`}
+                  detail={`Nothing in the ${formatCount(data?.length ?? 0)} loaded rows matches ${appliedFilterNames.join(" + ")}. Relax or clear a filter to see more of the capture.`}
                 />
               ) : (
                 <Empty
@@ -1136,9 +1271,9 @@ export function HistoryPage(): JSX.Element {
 
             --fg, not --warn: this is a neutral statement of cause, and the yellow token is a
             14px-on-paper contrast risk in a status bar the axe suite currently passes clean. */}
-        {rows.length === 0 && (data?.length ?? 0) > 0 && activeFilterNames.length > 0 ? (
+        {rows.length === 0 && (data?.length ?? 0) > 0 && appliedFilterNames.length > 0 ? (
           <div style={{ color: "var(--fg)" }} title="Which filters are responsible for the empty table">
-            no match for {activeFilterNames.join(" + ")}
+            no match for {appliedFilterNames.join(" + ")}
           </div>
         ) : null}
         <div title="Sum of response bytes for the visible rows">
