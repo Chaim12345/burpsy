@@ -87,6 +87,7 @@ export const TOOLS: NavTool[] = [
     hotkey: "2",
     leaves: [
       { id: "sitemap", label: "Site map", description: "Hosts, paths, and observed behaviour", page: SiteMapPage },
+      { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
       { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
       { id: "auditqueue", label: "Audit queue", description: "What the active audit did with each exchange, and why any were skipped", page: AuditQueuePage },
       {
@@ -106,7 +107,6 @@ export const TOOLS: NavTool[] = [
         description: "Sweep a path space with ffuf, and what the scope check dropped",
         page: ContentDiscoveryPage,
       },
-      { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
     ],
   },
   {
@@ -154,6 +154,19 @@ export const TOOLS: NavTool[] = [
     leaves: [{ id: "repeater", label: "Repeater", description: "Craft and resend requests", page: RepeaterPage }],
   },
   {
+    id: "collaborator",
+    label: "Collaborator",
+    icon: RadioTower,
+    leaves: [
+      {
+        id: "collaborator",
+        label: "Collaborator",
+        description: "Out-of-band interactions and blind-XSS callbacks",
+        page: CollaboratorPage,
+      },
+    ],
+  },
+  {
     id: "sequencer",
     label: "Sequencer",
     icon: ChartNoAxesCombined,
@@ -175,19 +188,6 @@ export const TOOLS: NavTool[] = [
     icon: Combine,
     hotkey: "8",
     leaves: [{ id: "comparer", label: "Comparer", description: "Byte-level differences", page: ComparerPage }],
-  },
-  {
-    id: "collaborator",
-    label: "Collaborator",
-    icon: RadioTower,
-    leaves: [
-      {
-        id: "collaborator",
-        label: "Collaborator",
-        description: "Out-of-band interactions and blind-XSS callbacks",
-        page: CollaboratorPage,
-      },
-    ],
   },
   {
     id: "logger",
@@ -214,16 +214,17 @@ export const TOOLS: NavTool[] = [
     ],
   },
   {
-    // The Extender's three sub-tabs. Burp has four; the fourth is the BApp Store, which is a hosted
-    // catalogue this tool has no counterpart for - see pages/extensions.tsx for why a tab listing
-    // nothing would be worse than no tab at all.
+    // Burp 2026.7.3 calls this tab Extensions (verified against the live AX tree: Installed,
+    // BApp Store, APIs, Custom scan checks, Bambda library). The BApp Store is a hosted catalogue
+    // this tool has no counterpart for - see pages/extensions.tsx for why a tab listing nothing
+    // would be worse than no tab at all. The tool id stays "extender": it is the URL hash.
     id: "extender",
-    label: "Extender",
+    label: "Extensions",
     icon: Plug,
     leaves: [
       {
         id: "extensions",
-        label: "Extensions",
+        label: "Installed",
         description: "Local JSON-RPC plugins, their consoles and what they registered",
         page: ExtensionsPage,
       },

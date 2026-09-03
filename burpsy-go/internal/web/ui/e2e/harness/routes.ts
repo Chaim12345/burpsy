@@ -47,7 +47,7 @@ export const ROUTES: Route[] = [
   { id: "collaborator", label: "Collaborator", h1: "Collaborator", tool: "collaborator" },
   { id: "session", label: "Session", h1: "Session", tool: "session" },
   { id: "discover", label: "Discover", h1: "Discover", tool: "discover" },
-  { id: "extensions", label: "Extensions", h1: "Extensions", tool: "extender" },
+  { id: "extensions", label: "Installed", h1: "Extensions", tool: "extender" },
   { id: "extenderoptions", label: "Options", h1: "Extender options", tool: "extender" },
   { id: "extenderapis", label: "APIs", h1: "Extender APIs", tool: "extender" },
   { id: "settings", label: "Settings", h1: "Settings", tool: "settings" },

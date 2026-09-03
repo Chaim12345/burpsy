@@ -629,6 +629,9 @@ function App(): JSX.Element {
             <IconButton label="Keyboard shortcuts (?)" onClick={() => setShortcutsOpen(true)}>
               <Keyboard size={15} />
             </IconButton>
+            <IconButton label="Settings" onClick={() => navigate("settings")}>
+              <Settings size={15} />
+            </IconButton>
             <IconButton
               label={resolveTheme(theme) === "dark" ? "Use light theme" : "Use dark theme"}
               onClick={toggleTheme}
