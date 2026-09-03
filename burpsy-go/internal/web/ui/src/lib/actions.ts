@@ -3,6 +3,7 @@ import {
   Combine,
   Copy,
   Crosshair,
+  Download,
   FileCode2,
   FileOutput,
   FolderTree,
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useHotkeys } from "react-hotkeys-hook";
-import { api, copyToClipboard, json } from "./api";
+import { api, copyToClipboard, downloadText, json } from "./api";
 import { useAnnotateExchange } from "./data";
 import { useChord } from "./keymap";
 import { useApp } from "./store";
@@ -191,6 +192,7 @@ export function useExchangeActions(): {
   auditExchange: (exchange: Exchange) => Promise<void>;
   sendToDecoder: (exchange: Exchange) => Promise<void>;
   copyRequestToFile: (exchange: Exchange) => Promise<void>;
+  saveItems: (exchange: Exchange) => Promise<void>;
   copyLinks: (exchange: Exchange) => Promise<void>;
   requestInBrowser: (exchange: Exchange) => void;
   changeRequestMethod: (exchange: Exchange) => Promise<void>;
@@ -338,6 +340,28 @@ export function useExchangeActions(): {
       toast.success(`Copied ${links.length} link${links.length === 1 ? "" : "s"} from #${exchange.id}`);
     } catch (error) {
       toast.error(`Could not load response bytes: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  /**
+   * Burp's "Save items" for one exchange (burpsy-react-ui-57t): request and response together
+   * in a single labelled file, which is what gets attached to a report. "Copy request to
+   * file" stays request-only beside it - the two are different actions, as in Burp. A
+   * missing response still saves (labelled as missing) rather than refusing: the request
+   * half is the evidence being kept.
+   */
+  const saveItems = async (exchange: Exchange) => {
+    try {
+      const request = await fetchRaw(exchange.request);
+      const response = exchange.response === null ? null : await fetchRaw(exchange.response);
+      const name = `${exchange.method}-${exchange.host}${exchange.path}`.replace(/[^a-z0-9.\-/]+/gi, "_").slice(0, 80);
+      downloadText(
+        `${name}-exchange.txt`,
+        ["=============== REQUEST ===============", request, "=============== RESPONSE ===============", response ?? "(no response was captured for this exchange)"].join("\n"),
+      );
+      toast.success(`Exchange #${exchange.id} saved with its response`);
+    } catch (error) {
+      toast.error(`Could not load exchange bytes: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -494,6 +518,7 @@ export function useExchangeActions(): {
         { id: "id", label: `Copy exchange id (#${exchange.id})`, icon: Copy, onSelect: () => void copyToClipboard(String(exchange.id)) },
         { id: "to-file", label: "Copy request to file", icon: FileCode2, onSelect: () => void copyRequestToFile(exchange) },
         { id: "links", label: "Copy links", icon: Globe, onSelect: () => void copyLinks(exchange) },
+        { id: "save-items", label: "Save request and response", icon: Download, onSelect: () => void saveItems(exchange) },
       ],
     },
     {
@@ -571,6 +596,7 @@ export function useExchangeActions(): {
     sendToDecoder,
     copyRequestToFile,
     copyLinks,
+    saveItems,
     requestInBrowser,
     changeRequestMethod,
     changeBodyEncoding,
