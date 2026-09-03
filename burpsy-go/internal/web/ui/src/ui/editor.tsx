@@ -2,7 +2,8 @@ import { EditorView, Decoration, ViewPlugin, WidgetType, highlightSpecialChars, 
 import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
-import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Search, WrapText } from "lucide-react";
+import { toast } from "sonner";
+import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
@@ -16,6 +17,7 @@ import {
   urlEncodeKeyChars,
 } from "../lib/transforms";
 import { cn } from "../lib/cn";
+import { useMintPayload } from "../lib/data.collab";
 import { HexEditor } from "./hex-editor";
 import { ContextMenu, DropdownMenu, hasMenuActions, type MenuGroup } from "./menu";
 import { IconButton } from "./primitives";
@@ -528,8 +530,56 @@ export function HttpEditor({
     if (cm) transformSelection(cm, transform);
   }, []);
 
+  /**
+   * Burp's "Insert Collaborator payload" (burpsy-react-ui-0ax): mint one server-side and drop
+   * its address at the caret, replacing any selection. Offered on Raw and Pretty alike - both
+   * are the same CodeMirror document, and a Pretty insert writes back through compactMessage
+   * exactly like a typed one. The mint is server-side because the address has to be a payload
+   * the polling loop already knows; inventing a subdomain client-side would insert an address
+   * no interaction could ever come back on.
+   */
+  const mint = useMintPayload();
+  const insertCollaboratorPayload = useCallback(() => {
+    const cm = cmViewRef.current;
+    if (!cm) {
+      toast.error("Open the Raw or Pretty view to insert a payload");
+      return;
+    }
+    mint.mutate(undefined, {
+      onSuccess: (payload) => {
+        const view = cmViewRef.current;
+        if (!view) return;
+        const sel = view.state.selection.main;
+        view.dispatch({
+          changes: { from: sel.from, to: sel.to, insert: payload.address },
+          selection: { anchor: sel.from + payload.address.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+        toast.success(`Inserted Collaborator payload ${payload.address}`);
+      },
+      onError: (failure: unknown) =>
+        toast.error(failure instanceof Error ? failure.message : "Minting a Collaborator payload failed"),
+    });
+  }, [mint]);
+
   const selectionGroups = useMemo<MenuGroup[]>(() => {
-    if (active !== "raw") return [];
+    const groups: MenuGroup[] = [];
+    if (editable && (active === "raw" || active === "pretty")) {
+      groups.push({
+        id: "collaborator",
+        actions: [
+          {
+            id: "insert-payload",
+            label: "Insert Collaborator payload",
+            icon: RadioTower,
+            disabled: mint.isPending,
+            onSelect: insertCollaboratorPayload,
+          },
+        ],
+      });
+    }
+    if (active !== "raw") return groups;
     const codec = (id: string, label: string, shortcut: string, transform: (input: string) => string) => ({
       id,
       label,
@@ -537,7 +587,7 @@ export function HttpEditor({
       disabled: !hasSelection,
       onSelect: () => runTransform(transform),
     });
-    return [
+    groups.push(
       {
         id: "convert-selection",
         title: hasSelection ? "Convert selection" : "Convert selection (select text first)",
@@ -567,8 +617,9 @@ export function HttpEditor({
           },
         ],
       },
-    ];
-  }, [active, hasSelection, runTransform]);
+    );
+    return groups;
+  }, [active, editable, hasSelection, runTransform, insertCollaboratorPayload, mint.isPending]);
 
   const allGroups = useMemo<MenuGroup[]>(
     () => [...(menuGroups ?? []), ...selectionGroups],
