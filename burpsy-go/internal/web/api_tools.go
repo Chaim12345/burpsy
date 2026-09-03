@@ -96,81 +96,90 @@ type repeaterHop struct {
 	Response string `json:"response,omitempty"`
 }
 
-func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req repeaterSendReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	host, port, tls, err := targetParts(req.Target)
+// repeaterSendSpec is one Repeater send resolved to everything the wire half needs: the authority to
+// dial, the exact bytes to write, and the bookkeeping the exchange row records.
+//
+// It exists so /api/repeater/send and /api/repeater/send-group cannot drift. A group send is N sends,
+// and the moment "N sends" meant a second copy of the target parsing, the options validation, the
+// transform order and the scope gate, one of the two copies would be the one that stops matching —
+// and the one that stops matching is always the one whose scope decision nobody re-read.
+type repeaterSendSpec struct {
+	Host string
+	Port uint16
+	TLS  bool
+	// Raw is what goes on the wire: the operator's request with this send's transforms applied.
+	Raw []byte
+	// AsWritten is the request text *before* the transforms, which is what the exchange row's Method
+	// and Path are read from — the same source the single send has always used, so a transform cannot
+	// silently re-label a history row.
+	AsWritten string
+	Options   repeaterSendOptions
+	From      *core.ExchangeID
+}
+
+// prepareRepeaterSend resolves one send's target, validates its options, applies its transforms and
+// runs the host-level scope gate, in that order. It returns the HTTP status a refusal should carry,
+// so the two handlers report an identical refusal for identical input; code is 0 on success.
+//
+// The order is load-bearing and is the single send's original order: options are validated before
+// anything they could affect, because a send that half-applied an options object would put bytes on
+// the wire shaped by an option the caller believes was something else.
+func (s *Server) prepareRepeaterSend(
+	target, protocol, request string, options *repeaterSendOptions, from *core.ExchangeID,
+) (spec repeaterSendSpec, code int, err error) {
+	host, port, tls, err := targetParts(target)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return repeaterSendSpec{}, http.StatusBadRequest, err
 	}
-	if strings.EqualFold(req.Protocol, "https") {
+	if strings.EqualFold(protocol, "https") {
 		tls = true
-	} else if strings.EqualFold(req.Protocol, "http") {
+	} else if strings.EqualFold(protocol, "http") {
 		tls = false
 	}
-	if strings.TrimSpace(req.Request) == "" {
-		http.Error(w, "Empty request", http.StatusBadRequest)
-		return
+	if strings.TrimSpace(request) == "" {
+		return repeaterSendSpec{}, http.StatusBadRequest, errors.New("Empty request")
 	}
-	// Options are validated before anything else they could affect: a send that half-applied an
-	// options object would put bytes on the wire shaped by an option the caller believes was
-	// something else. The error names the refused key, per the proxy-options contract.
 	var opts repeaterSendOptions
-	if req.Options != nil {
-		opts = *req.Options
-		if err := opts.validate(); err != nil {
-			http.Error(w, "refused: "+err.Error(), http.StatusBadRequest)
-			return
+	if options != nil {
+		opts = *options
+		if verr := opts.validate(); verr != nil {
+			return repeaterSendSpec{}, http.StatusBadRequest, fmt.Errorf("refused: %w", verr)
 		}
 	}
 	// The transforms run before the scope gate on the transformed bytes — though the gate is
 	// host-level and no transform changes the authority, so this ordering is about the stored
 	// exchange recording what actually went out, not about which bytes the gate saw.
-	rawRequest := opts.applyToRequest([]byte(req.Request), s.cookieHeaderFor(host, port, tls))
+	raw := opts.applyToRequest([]byte(request), s.cookieHeaderFor(host, port, tls))
 	// The repeater sends to whatever target the operator types, so it is gated
 	// by scope for the same reason the intruder is: a scope the operator set to
 	// constrain outbound traffic must not be bypassable by sending raw bytes
 	// here. The request line is not parsed (the operator owns it), so this is a
 	// host-level check, the same first layer the intruder applies.
 	if !s.scope.MayContainHost(host, port, tls) {
-		http.Error(w, "refused: "+s.scope.Explain(host, port, "/", tls), http.StatusForbidden)
-		return
+		return repeaterSendSpec{}, http.StatusForbidden, errors.New("refused: " + s.scope.Explain(host, port, "/", tls))
 	}
+	return repeaterSendSpec{
+		Host: host, Port: port, TLS: tls, Raw: raw, AsWritten: request, Options: opts, From: from,
+	}, 0, nil
+}
 
-	// SendRaw handles a raw HTTP request (possibly HTTP/1.0-style with Host line) over the wire.
-	// Timed here because SendRaw does not report a duration and the exchange row used to be written with a
-	// hardcoded zero — which, before core.ExchangeDuration existed, was indistinguishable from a
-	// sub-millisecond send, so the repeater's own "duration_ms: 0" reply looked like a measurement.
-	//
-	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
-	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
-	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
-	ctx := r.Context()
-	sendStarted := time.Now()
-	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, host, port, tls, rawRequest, opts.protocolPreference())
-	elapsed := time.Since(sendStarted)
-	if err != nil {
-		// Surface the dial/parse error to the UI so Repeater is not silently empty.
-		// nil, not zero: the send never reached a response, which is a different fact from a response
-		// that arrived with no bytes in it.
-		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "SEND", "", 0, nil, 0, err.Error())
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
+// recordRepeaterExchange persists both halves of one completed send, writes its exchange row and its
+// tool-log line, and returns the response the panel reads. The redirect chain is not evaluated here —
+// see sendOneRepeaterRequest, which adds it, and the group send's single-connection mode, which
+// deliberately does not.
+//
+// duration is passed in rather than measured here because not every caller can measure one: a send
+// that rode a shared socket inside sender.SendKeepAlive has no per-exchange timing to report, and
+// core.UnmeasuredDuration is how that is said out loud instead of being written as a zero that reads
+// as an instantaneous send.
+func (s *Server) recordRepeaterExchange(
+	spec repeaterSendSpec, rawResp []byte, protocol core.Protocol, duration core.ExchangeDuration, started time.Time,
+) (resp repeaterSendResp, ex *core.Exchange) {
 	// Persist both halves so history/decoder can reference them. A failed Put
 	// must not be silently swallowed: an exchange referencing a non-existent
 	// message ID would 404 in history lookups. Log and degrade rather than
 	// advertise a bad id.
-	reqMsgID, err := s.store.Put(rawRequest, core.DirectionRequest)
+	reqMsgID, err := s.store.Put(spec.Raw, core.DirectionRequest)
 	if err != nil {
 		s.logger.Error("repeater: failed to store request", zap.Error(err))
 	}
@@ -181,28 +190,28 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 
 	status := parseResponseStatus(rawResp)
 
-	ex := &core.Exchange{
-		Host:        host,
-		Port:        port,
-		TLS:         tls,
-		Method:      firstLineMethod(req.Request),
-		Path:        firstLinePath(req.Request),
+	ex = &core.Exchange{
+		Host:        spec.Host,
+		Port:        spec.Port,
+		TLS:         spec.TLS,
+		Method:      firstLineMethod(spec.AsWritten),
+		Path:        firstLinePath(spec.AsWritten),
 		Status:      status,
 		ResponseLen: len(rawResp),
 		// From the bytes that just came back, for the same reason ResponseLen is taken here: history
 		// serves index rows and must not reopen a response to type it. See core.Exchange.Mime.
 		Mime:      core.MimeEssence(rawResp),
-		StartedMs: uint64(sendStarted.UnixMilli()),
-		Duration:  core.MeasuredDuration(elapsed),
+		StartedMs: uint64(started.UnixMilli()),
+		Duration:  duration,
 		Request:   reqMsgID,
 		Response:  &respMsgID,
 		// What actually carried the send, not what the request bytes asked for. outcome.Downgrade says why
 		// it was HTTP/1.1 when it was, and Sender.Protocols counts it across every surface.
-		Protocol: outcome.Protocol,
+		Protocol: protocol,
 		// Lineage, when the caller named one. Validated rather than trusted: a parent id pointing at
 		// nothing would be a link that resolves to the wrong row or to no row, which is the failure
 		// mode the whole exchange-id typing exercise exists to stop.
-		ParentID: s.validParent(req.FromExchange),
+		ParentID: s.validParent(spec.From),
 		// SourceRepeater, not the unattributed zero value: this was not traffic the operator's
 		// client proxied, and HTTP history must not claim it was. It is recorded in the tool log
 		// below, which is the view whose subject is requests burpsy itself made — the same way
@@ -213,19 +222,69 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 
 	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
 	// cannot disagree about the size of one send.
-	s.toolLog.Record(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status),
+	s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, ex.Method, ex.Path, intOrZero(status),
 		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "")
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(repeaterSendResp{
+	return repeaterSendResp{
 		Status:        intOrZero(status),
 		DurationMs:    ex.Duration.Millis(),
 		Response:      string(rawResp),
 		RequestMsgID:  uint64(reqMsgID),
 		ResponseMsgID: uint64(respMsgID),
 		ExchangeID:    ex.ID,
-		Redirects:     s.followRepeaterRedirects(ctx, host, port, tls, rawRequest, rawResp, opts),
-	})
+	}, ex
+}
+
+// sendOneRepeaterRequest is one send on its own fresh connection, end to end: the wire, the stored
+// exchange, the tool log and the redirect chain. It is the whole of /api/repeater/send's wire half,
+// and it is what the group send's two separate-connection modes fan out over — sequentially or
+// concurrently — so those modes reinvent no scope-checking and no result-shaping.
+func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSpec) (repeaterSendResp, error) {
+	// SendRaw handles a raw HTTP request (possibly HTTP/1.0-style with Host line) over the wire.
+	// Timed here because SendRaw does not report a duration and the exchange row used to be written with a
+	// hardcoded zero — which, before core.ExchangeDuration existed, was indistinguishable from a
+	// sub-millisecond send, so the repeater's own "duration_ms: 0" reply looked like a measurement.
+	//
+	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
+	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
+	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
+	sendStarted := time.Now()
+	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, spec.Options.protocolPreference())
+	elapsed := time.Since(sendStarted)
+	if err != nil {
+		// Surface the dial/parse error to the UI so Repeater is not silently empty.
+		// nil, not zero: the send never reached a response, which is a different fact from a response
+		// that arrived with no bytes in it.
+		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error())
+		return repeaterSendResp{}, err
+	}
+	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
+	resp.Redirects = s.followRepeaterRedirects(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, rawResp, spec.Options)
+	return resp, nil
+}
+
+func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req repeaterSendReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	spec, code, err := s.prepareRepeaterSend(req.Target, req.Protocol, req.Request, req.Options, req.FromExchange)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	resp, err := s.sendOneRepeaterRequest(r.Context(), spec)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // followRepeaterRedirects applies this send's redirect policy to a send that already happened — the

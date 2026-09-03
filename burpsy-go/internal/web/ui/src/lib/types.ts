@@ -314,6 +314,80 @@ export interface RepeaterResult {
  */
 export interface RepeaterHistoryEntry extends RepeaterResult {
   request: string;
+  /**
+   * How this entry was sent, when it was not an ordinary single Send. Absent means the Send button.
+   *
+   * Carried because a history entry that rode a shared socket is not comparable to one that dialled
+   * fresh — that difference is the whole subject of a smuggling or desync test — and an operator
+   * paging back through five entries has no other way to tell which was which.
+   */
+  group_mode?: RepeaterGroupSendMode;
+  /**
+   * False when `duration_ms` is not a measurement. Only a single-connection group send sets it:
+   * sender.SendKeepAlive owns the write/read loop and reports no per-exchange timing, so the panel
+   * renders the batch time instead of a zero that looks measured. Absent means measured.
+   */
+  duration_measured?: boolean;
+  /** The HTTP/1.1 rule that delimited this response's body, for a single-connection group send only. */
+  framing?: string;
+  /** False when the response was not read to a boundary the server is confident of. */
+  response_complete?: boolean;
+}
+
+/**
+ * How a Repeater tab group is sent — Burp's dropdown beside Send, which appears only when the active
+ * tab belongs to a group.
+ *
+ * `sequence_single_conn` is HTTP/1.1 keep-alive: every request in tab order down one socket, which is
+ * the only way a request-smuggling or client-side-desync test can be performed from Repeater at all.
+ * It is NOT HTTP/2 multiplexing (burpsy-react-ui-745), and it does not follow redirects — a hop is a
+ * new request on a new connection, which is the one thing that mode cannot do.
+ */
+export type RepeaterGroupSendMode = "sequence_single_conn" | "sequence_separate_conn" | "parallel";
+
+/** One tab's request within a group send. `tab_id` is echoed back on the result that answers it. */
+export interface RepeaterGroupSendItem {
+  tab_id: string;
+  target: string;
+  protocol: string;
+  request: string;
+  from_exchange?: number;
+  options?: RepeaterSendOptions;
+}
+
+/**
+ * One tab's outcome. `result` is the same shape a single send returns, so results render with the
+ * code that already exists.
+ *
+ * `result` and `error` are not exclusive: a response whose head arrived and whose body then failed to
+ * delimit is the evidence a smuggling test is reading, so the bytes are reported *and* the failure is
+ * named. `result` is null only when nothing came back at all.
+ */
+export interface RepeaterGroupItemResult {
+  tab_id: string;
+  result?: RepeaterResult;
+  error?: string;
+  /** "content-length", "chunked", "eof" or "none" — single-connection mode only. */
+  framing?: string;
+  /** Absent for the separate-connection modes, where there is no second take to compare against. */
+  response_complete?: boolean;
+  /** False when `result.duration_ms` is not a measurement. See RepeaterHistoryEntry.duration_measured. */
+  duration_measured: boolean;
+}
+
+export interface RepeaterGroupSendResult {
+  mode: RepeaterGroupSendMode;
+  /** One result per request, in the order they were sent — tab order, never completion order. */
+  items: RepeaterGroupItemResult[];
+  /** The authority the one socket addressed. Present only for `sequence_single_conn`. */
+  shared_connection?: string;
+  /** Wall time of the whole group send. The only honest timing a single-connection send has. */
+  batch_duration_ms: number;
+  /**
+   * Whether each send's redirect policy was applied at all. False for `sequence_single_conn`, so
+   * "no chain" never renders as "we looked and found none".
+   */
+  followed_redirects: boolean;
 }
 
 export interface RepeaterRedirectHop {

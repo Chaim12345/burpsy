@@ -6,15 +6,61 @@ import { api, formatDuration, json, statusTone, templateRequest } from "../lib/a
 import { useExchangeActions } from "../lib/actions";
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
-import { SendCancelled, useRepeaterSend } from "../lib/data.tools";
+import { SendCancelled, useRepeaterSend, useSendRepeaterGroup } from "../lib/data.tools";
+import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
 import { useApp, type RepeaterTab } from "../lib/store";
-import type { Exchange, RepeaterHistoryEntry, RepeaterRedirects, RepeaterResult, RepeaterSendOptions } from "../lib/types";
+import type {
+  Exchange,
+  RepeaterGroupSendMode,
+  RepeaterGroupSendResult,
+  RepeaterHistoryEntry,
+  RepeaterRedirects,
+  RepeaterResult,
+  RepeaterSendOptions,
+} from "../lib/types";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Select, Tooltip } from "../ui/primitives";
-import { ContextMenu, type MenuGroup } from "../ui/menu";
+import { ContextMenu, DropdownMenu, type MenuGroup } from "../ui/menu";
 import { SimpleTable } from "../ui/table";
+
+/**
+ * The three ways a tab group can be sent, in the order Burp's dropdown lists them.
+ *
+ * Held as data rather than three copies of a menu row because each one needs the same three strings —
+ * a label, the confirmation the toast repeats, and the sentence that says what the mode actually does
+ * to the wire. "Single connection" in particular has to say what it is not: HTTP/1.1 keep-alive, not
+ * HTTP/2 multiplexing.
+ */
+const GROUP_SEND_MODES: { mode: RepeaterGroupSendMode; label: string; detail: string }[] = [
+  {
+    mode: "sequence_single_conn",
+    label: "Send group in sequence (single connection)",
+    detail:
+      "Every request in tab order down one shared HTTP/1.1 socket, keep-alive: write one, read its " +
+      "response, write the next. This is what a request-smuggling or client-side-desync test needs. " +
+      "Redirects are not followed — a hop is a new connection — and every request is scope-authorised " +
+      "on its own bytes.",
+  },
+  {
+    mode: "sequence_separate_conn",
+    label: "Send group in sequence (separate connections)",
+    detail: "Every request in tab order, each on its own fresh connection. The ordinary Send, once per tab.",
+  },
+  {
+    mode: "parallel",
+    label: "Send group in parallel",
+    detail:
+      "Every request fired at once, each on its own connection, so they overlap at the target. This is " +
+      "the race-condition workflow.",
+  },
+];
+
+/** The label a group-send mode carries in a badge or a toast. */
+function groupModeLabel(mode: RepeaterGroupSendMode): string {
+  return GROUP_SEND_MODES.find((entry) => entry.mode === mode)?.label ?? mode;
+}
 
 const DEFAULT_TARGET = "https://example.com:443";
 
@@ -84,6 +130,18 @@ export function RepeaterPage(): JSX.Element {
    */
   const [inspecting, setInspecting] = useState<"request" | "response">("request");
   const send = useRepeaterSend();
+  const groupSend = useSendRepeaterGroup();
+  /**
+   * The last group send's outcome, or null when this session has not made one.
+   *
+   * Kept on screen until dismissed rather than living only in a toast, for two reasons. A group send
+   * is N results and only one of them lands in the tab the operator is looking at — the other N-1
+   * would otherwise be invisible until they click each tab. And the facts that make the
+   * single-connection mode worth having (which framing rule delimited each response, whether each
+   * read completed) are per-request comparisons, which means they have to be readable side by side or
+   * they are not a comparison at all.
+   */
+  const [groupOutcome, setGroupOutcome] = useState<RepeaterGroupSendResult | null>(null);
   /**
    * Which response the pane shows when the last send followed a redirect chain:
    * "first" is the response to the request the operator wrote — the default,
@@ -168,6 +226,86 @@ export function RepeaterPage(): JSX.Element {
           // wire are gone, and pretending otherwise is the one thing this button must not do.
           if (error instanceof SendCancelled) {
             toast.info("Send cancelled — anything already written to the target was still sent");
+            return;
+          }
+          toast.error(error instanceof Error ? error.message : String(error));
+        },
+      },
+    );
+  };
+
+  /**
+   * The active tab's group and its members, in tab order.
+   *
+   * Resolved through `groups` rather than trusted from `tab.groupId` alone, matching how `ungrouped`
+   * below decides the same question: deleting a group deliberately keeps its tabs, so a tab can still
+   * carry a dead group id, and treating that as membership would offer to send a group that no longer
+   * exists.
+   */
+  const activeGroup = active ? (groups.find((group) => group.id === active.groupId) ?? null) : null;
+  const groupMembers = activeGroup ? tabs.filter((tab) => tab.groupId === activeGroup.id) : [];
+
+  /**
+   * Send every tab in the active tab's group, in tab order, in one of the three modes.
+   *
+   * Ordering is the tab strip's order, which is what the group header renders, because in a smuggling
+   * or desync test which request goes first *is* the test. It is never sorted or de-duplicated here;
+   * the server refuses a repeated tab id rather than guessing.
+   *
+   * The paged-back refusal is the same one `submit` makes and for the same reason: the active tab's
+   * request pane is then a snapshot, and sending would fire bytes the operator cannot see. Members
+   * that are not the active tab may well be paged back too — their panes are not on screen, so there
+   * is no pane contradicting the button, and their drafts are what goes out. A landed result snaps
+   * each of those tabs forward to it, exactly as a single send does.
+   */
+  const submitGroup = (mode: RepeaterGroupSendMode) => {
+    if (!active || !activeGroup) return;
+    if (viewing[active.id] != null) {
+      toast.info("Viewing a past send — step to the newest entry to edit and send the draft");
+      return;
+    }
+    const members = groupMembers;
+    if (members.length < 2) {
+      toast.info("This group has one tab, so a group send is just Send");
+      return;
+    }
+    // The exact drafts that go on the wire, captured before the request leaves, so each history entry
+    // records what was sent rather than what that tab's draft says by the time the answer arrives.
+    const sentRequests = new Map(members.map((tab) => [tab.id, tab.request]));
+    groupSend.mutate(
+      {
+        mode,
+        items: members.map((tab) => ({
+          tab_id: tab.id,
+          target: tab.target,
+          request: tab.request,
+          protocol: schemeOf(tab.target),
+          ...(tab.fromExchange != null ? { from_exchange: tab.fromExchange } : {}),
+          ...(tab.options ? { options: tab.options } : {}),
+        })),
+      },
+      {
+        onSuccess: (result) => {
+          setGroupOutcome(result);
+          // The fold lives in lib/repeater-group.ts and is unit tested there: each result lands in
+          // its own tab's history, paired with the draft that produced it, and an item with no
+          // response appends nothing rather than a fabricated entry.
+          setHistory((current) => appendGroupResultsToHistory(current, result, sentRequests));
+          setViewing((current) => followNewestAfterGroupSend(current, result));
+          const answered = result.items.filter((item) => item.result).length;
+          const failed = result.items.filter((item) => item.error).length;
+          const summary = `${answered}/${result.items.length} answered in ${formatDuration(result.batch_duration_ms)}`;
+          if (failed > 0) {
+            // Not toast.error: some requests did answer, and calling a partly-successful group send a
+            // failure would misreport what happened to the ones that landed.
+            toast.warning(`${groupModeLabel(result.mode)} — ${summary}, ${failed} reported a problem`);
+            return;
+          }
+          toast.success(`${groupModeLabel(result.mode)} — ${summary}`);
+        },
+        onError: (error) => {
+          if (error instanceof SendCancelled) {
+            toast.info("Group send cancelled — anything already written to the target was still sent");
             return;
           }
           toast.error(error instanceof Error ? error.message : String(error));
@@ -453,8 +591,38 @@ export function RepeaterPage(): JSX.Element {
               {result ? (
                 <>
                   <Badge tone={statusTone(result.status)}>{result.status}</Badge>
-                  <Badge>{formatDuration(result.duration_ms)}</Badge>
+                  {/* A single-connection group send has no per-request timing to report —
+                      sender.SendKeepAlive owns the write/read loop — so this says "untimed" rather
+                      than rendering the 0 it would otherwise have as though it were a measurement.
+                      The group outcome panel carries the batch time, which is the real number. */}
+                  {result.duration_measured === false ? (
+                    <Tooltip content="This request shared a socket with the rest of its group, and the shared-socket send reports no per-request timing. The group's total is in the group send panel.">
+                      <Badge tone="warn">untimed</Badge>
+                    </Tooltip>
+                  ) : (
+                    <Badge>{formatDuration(result.duration_ms)}</Badge>
+                  )}
                   {result.exchange_id ? <Badge>#{result.exchange_id}</Badge> : null}
+                  {/* Which send produced the entry on screen. An entry that rode a shared socket is
+                      not comparable with one that dialled fresh, and that difference is the whole
+                      subject of the test the mode exists for. */}
+                  {result.group_mode ? (
+                    <Tooltip content={groupModeLabel(result.group_mode)}>
+                      <Badge tone="info">
+                        {result.group_mode === "sequence_single_conn"
+                          ? "one socket"
+                          : result.group_mode === "parallel"
+                            ? "group, parallel"
+                            : "group, sequence"}
+                      </Badge>
+                    </Tooltip>
+                  ) : null}
+                  {result.framing ? <Badge>framing: {result.framing}</Badge> : null}
+                  {result.response_complete === false ? (
+                    <Tooltip content="The response was not read to a boundary burpsy is confident of — see the group send panel. On a shared socket that ambiguity is evidence, not a glitch.">
+                      <Badge tone="warn">incomplete read</Badge>
+                    </Tooltip>
+                  ) : null}
                 </>
               ) : null}
               {/* Labelled "send" rather than "response" because stepping moves both panes: the
@@ -517,6 +685,16 @@ export function RepeaterPage(): JSX.Element {
                   </button>
                 </Tooltip>
               ) : null}
+              {/* A group send is N requests and, in single-connection mode, N requests on one socket:
+                  the operator needs a way out of that at least as much as out of a single send. */}
+              {groupSend.isPending ? (
+                <Tooltip content="Stop waiting and tell the sender to abandon this group send. Requests already written to the target were still sent.">
+                  <button type="button" className="button button-outline" onClick={groupSend.cancel}>
+                    <X size={14} />
+                    Cancel group
+                  </button>
+                </Tooltip>
+              ) : null}
               {/* Disabled while a past send is on screen: the request pane is then a snapshot, and
                   Send would fire the draft the operator can no longer see. The tooltip says which
                   control gets them back rather than leaving a dead button unexplained. */}
@@ -531,12 +709,44 @@ export function RepeaterPage(): JSX.Element {
                   type="button"
                   className="button button-primary"
                   onClick={() => submit(active)}
-                  disabled={send.isPending || viewedRequest != null}
+                  disabled={send.isPending || groupSend.isPending || viewedRequest != null}
                 >
                   <Send size={14} />
                   {send.isPending ? "Sending…" : "Send"}
                 </button>
               </Tooltip>
+              {/* Burp grows a dropdown arrow beside Send exactly when the active tab belongs to a
+                  group, and not otherwise: a permanently visible arrow whose menu is usually empty
+                  teaches the operator to ignore it. One member is not a group send — it is Send —
+                  so the threshold is two, which is also what makes any of the three modes mean
+                  something different from each other. */}
+              {activeGroup && groupMembers.length > 1 ? (
+                <DropdownMenu
+                  groups={[
+                    {
+                      id: "group-send",
+                      title: `${activeGroup.name} — ${groupMembers.length} tabs, in tab order`,
+                      actions: GROUP_SEND_MODES.map((entry) => ({
+                        id: entry.mode,
+                        label: entry.label,
+                        disabled: send.isPending || groupSend.isPending || viewedRequest != null,
+                        onSelect: () => submitGroup(entry.mode),
+                      })),
+                    },
+                  ]}
+                  trigger={
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      aria-label={`Send group ${activeGroup.name} (${groupMembers.length} tabs)`}
+                      disabled={send.isPending || groupSend.isPending || viewedRequest != null}
+                      style={{ paddingInline: "var(--s2)" }}
+                    >
+                      {groupSend.isPending ? "Sending group…" : <ChevronDown size={14} />}
+                    </button>
+                  }
+                />
+              ) : null}
             </>
           }
         />
@@ -640,6 +850,18 @@ export function RepeaterPage(): JSX.Element {
             retry would frame the operator's own decision as something that went wrong. */}
         {send.error && !(send.error instanceof SendCancelled) ? (
           <ErrorNotice error={send.error} onRetry={() => submit(active)} />
+        ) : null}
+        {/* No retry button: retrying a group send is a choice of mode, and the last mode is not
+            necessarily the one the operator wants after a failure. The dropdown is right there. */}
+        {groupSend.error && !(groupSend.error instanceof SendCancelled) ? (
+          <ErrorNotice error={groupSend.error} title="The group send was refused" />
+        ) : null}
+        {groupOutcome ? (
+          <GroupSendOutcome
+            outcome={groupOutcome}
+            tabName={(id) => tabs.find((tab) => tab.id === id)?.name ?? id}
+            onDismiss={() => setGroupOutcome(null)}
+          />
         ) : null}
         {configOpen ? <SendOptionsPanel options={active.options} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} /> : null}
         {result?.redirects ? (
@@ -800,6 +1022,95 @@ function SendOptionsPanel({
       <p className="field-hint">
         Overrides ride on this one send; anything left unset uses the standing Network settings.
       </p>
+    </Card>
+  );
+}
+
+/**
+ * The last group send, one row per tab (burpsy-react-ui-03z).
+ *
+ * It exists because a group send answers N questions and only one of the answers lands in the tab on
+ * screen. The three things it reports that a per-tab response pane cannot:
+ *
+ *   - which tabs answered and which did not, in one place, so a mode that half-worked cannot read as
+ *     a mode that worked;
+ *   - the framing rule that delimited each response and whether each read completed — a *comparison*
+ *     across the group, which is the entire evidence a smuggling or desync test produces;
+ *   - whether the redirect policy was applied at all, which is false for the shared socket and must
+ *     not be mistaken for "there was nothing to follow".
+ *
+ * A row can carry both a response and an error: a head that arrived followed by a body that could not
+ * be delimited is exactly the ambiguity being looked for, so both halves are shown.
+ */
+function GroupSendOutcome({
+  outcome,
+  tabName,
+  onDismiss,
+}: {
+  outcome: RepeaterGroupSendResult;
+  tabName: (tabId: string) => string;
+  onDismiss: () => void;
+}): JSX.Element {
+  const answered = outcome.items.filter((item) => item.result).length;
+  const failed = outcome.items.filter((item) => item.error).length;
+  const detail = GROUP_SEND_MODES.find((entry) => entry.mode === outcome.mode)?.detail ?? "";
+  return (
+    <Card style={{ marginTop: 10, padding: 12, display: "grid", gap: 8 }}>
+      <div className="toolbar">
+        <Badge tone="info">{groupModeLabel(outcome.mode)}</Badge>
+        <Badge tone={failed === 0 ? "good" : "warn"}>
+          {answered} of {outcome.items.length} answered
+        </Badge>
+        {failed > 0 ? (
+          <Badge tone="warn">
+            {failed} problem{failed === 1 ? "" : "s"}
+          </Badge>
+        ) : null}
+        {/* The batch total, which for the shared socket is the only measured duration there is. */}
+        <Badge>group took {formatDuration(outcome.batch_duration_ms)}</Badge>
+        {outcome.shared_connection ? <Badge tone="accent">one socket to {outcome.shared_connection}</Badge> : null}
+        <Badge tone={outcome.followed_redirects ? "neutral" : "warn"}>
+          {outcome.followed_redirects ? "redirect policy applied" : "redirects not followed"}
+        </Badge>
+        <IconButton label="Dismiss the group send summary" size="small" onClick={onDismiss}>
+          <X size={11} />
+        </IconButton>
+      </div>
+      <SimpleTable headers={["Tab", "Status", "Response", "Framing", "Read", "Problem"]}>
+        {outcome.items.map((item) => (
+          <tr key={item.tab_id}>
+            <td>{tabName(item.tab_id)}</td>
+            <td>
+              {item.result ? (
+                <Badge tone={statusTone(item.result.status)}>{item.result.status}</Badge>
+              ) : (
+                <span className="cell-dim">none</span>
+              )}
+            </td>
+            <td>
+              {/* Bytes, not a duration: on the shared socket there is no per-request duration to
+                  show, and the response size is the fact that is actually known per request. */}
+              {item.result ? (
+                <span className="cell-num">{item.result.response.length} B</span>
+              ) : (
+                <span className="cell-dim">—</span>
+              )}
+            </td>
+            <td>{item.framing ? <code>{item.framing}</code> : <span className="cell-dim">n/a</span>}</td>
+            <td>
+              {item.response_complete == null ? (
+                <span className="cell-dim">n/a</span>
+              ) : (
+                <Badge tone={item.response_complete ? "good" : "warn"}>
+                  {item.response_complete ? "complete" : "incomplete"}
+                </Badge>
+              )}
+            </td>
+            <td>{item.error ? item.error : <span className="cell-dim">—</span>}</td>
+          </tr>
+        ))}
+      </SimpleTable>
+      <p className="field-hint">{detail}</p>
     </Card>
   );
 }

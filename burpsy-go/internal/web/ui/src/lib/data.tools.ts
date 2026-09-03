@@ -1,7 +1,13 @@
 import { useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
-import type { RepeaterResult, RepeaterSendOptions } from "./types";
+import type {
+  RepeaterGroupSendItem,
+  RepeaterGroupSendMode,
+  RepeaterGroupSendResult,
+  RepeaterResult,
+  RepeaterSendOptions,
+} from "./types";
 import type { IntruderAttack, IntruderAttacksResp, PayloadRuleSpec, PayloadSource, PointView } from "./types.tools";
 
 export interface IntruderRunRequest {
@@ -102,6 +108,54 @@ export function useRepeaterSend() {
     isPending: mutation.isPending,
     error: mutation.error,
     /** Abort the send in flight. A no-op when nothing is in flight, so it is safe to bind blindly. */
+    cancel: () => inFlight.current?.abort(),
+  };
+}
+
+export interface RepeaterGroupSendBody {
+  mode: RepeaterGroupSendMode;
+  /** The group's tabs in tab order. Order is the test in a smuggling or desync send, so it is not sorted. */
+  items: RepeaterGroupSendItem[];
+}
+
+/**
+ * Send a whole Repeater tab group (burpsy-react-ui-03z), in one of the three modes Burp's dropdown
+ * beside Send offers.
+ *
+ * Cancellation works the same way useRepeaterSend's does and for the same reason — see that hook's
+ * comment on why aborting the fetch is not the whole story. It matters more here, not less: a group
+ * send is N requests, and in `sequence_single_conn` they share a socket, so an operator who wants to
+ * stop needs the server to stop too. POST /api/repeater/send-group threads r.Context() into the
+ * sender exactly as the single send does, and internal/sender/cancel.go unblocks the in-flight read.
+ *
+ * What Cancel here cannot promise, and does not claim: the requests already written. A group send is
+ * partly-sent traffic by construction, and the toast says so.
+ */
+export function useSendRepeaterGroup() {
+  const inFlight = useRef<AbortController | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async (body: RepeaterGroupSendBody) => {
+      const controller = new AbortController();
+      inFlight.current = controller;
+      try {
+        return await api<RepeaterGroupSendResult>("/api/repeater/send-group", {
+          ...json("POST", body),
+          signal: controller.signal,
+        });
+      } catch (failure) {
+        if (controller.signal.aborted) throw new SendCancelled();
+        throw failure;
+      } finally {
+        if (inFlight.current === controller) inFlight.current = null;
+      }
+    },
+  });
+
+  return {
+    mutate: mutation.mutate,
+    isPending: mutation.isPending,
+    error: mutation.error,
     cancel: () => inFlight.current?.abort(),
   };
 }

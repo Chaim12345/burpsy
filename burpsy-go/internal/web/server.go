@@ -739,6 +739,11 @@ func (s *Server) setupRoutes() {
 
 	// Tools
 	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)
+	// Send a whole tab group: in tab order on one shared socket, in tab order on separate
+	// connections, or all at once. See api_repeater_group.go — the shared-socket mode is the first
+	// caller sender's keep-alive primitive has ever had outside its own tests, and it is what makes a
+	// smuggling or desync test performable from Repeater at all.
+	s.mux.HandleFunc("/api/repeater/send-group", s.handleRepeaterSendGroup)
 	// Which protocol this tool's own traffic actually used, and a send path for a deliberately malformed
 	// frame program. See api_protocol.go: both are capabilities that existed and had no route to an
 	// operator.
