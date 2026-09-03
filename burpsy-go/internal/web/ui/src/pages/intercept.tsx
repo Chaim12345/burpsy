@@ -99,6 +99,16 @@ const DIRECTIONS: Record<
   },
 };
 
+/**
+ * Final path segment's extension without the dot (burpsy-react-ui-35i4): mirrors the
+ * proxy's extensionOf, which is what the engine will match the rule against.
+ */
+function extensionOf(path: string): string {
+  const segment = path.split("?")[0]?.split("/").pop() ?? "";
+  const dot = segment.lastIndexOf(".");
+  return dot < 0 ? "" : segment.slice(dot + 1);
+}
+
 function defaultRule(dir: InterceptDirection): InterceptRuleSpec {
   return {
     field: DIRECTIONS[dir].defaultField,
@@ -106,6 +116,7 @@ function defaultRule(dir: InterceptDirection): InterceptRuleSpec {
     string_match: "",
     category: "regex",
     comment: "",
+    action: "hold",
   };
 }
 
@@ -242,6 +253,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
                 <th style={{ width: "18%" }}>Field</th>
                 <th>Match</th>
                 <th style={{ width: "12%" }}>Kind</th>
+                <th style={{ width: "14%" }}>Action</th>
                 <th style={{ width: "18%" }}>Comment</th>
                 <th style={{ width: "10%" }}>Order</th>
                 <th style={{ width: "6%" }} />
@@ -250,7 +262,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
             <tbody>
               {rules.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="cell-dim">
+                  <td colSpan={8} className="cell-dim">
                     no rules — every {noun} is held while this list is on
                   </td>
                 </tr>
@@ -311,6 +323,21 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
                       </Select>
                     </td>
                     <td>
+                      <Select
+                        aria-label={`Action for rule ${index + 1}`}
+                        title="Do intercept holds a match; Don't intercept lets it through"
+                        value={rule.action ?? "hold"}
+                        onChange={(event) =>
+                          update((list) =>
+                            list.map((r, i) => (i === index ? { ...r, action: event.target.value as InterceptRuleSpec["action"] } : r)),
+                          )
+                        }
+                      >
+                        <option value="hold">Do intercept</option>
+                        <option value="pass">Don&apos;t intercept</option>
+                      </Select>
+                    </td>
+                    <td>
                       <Input
                         aria-label={`Comment for rule ${index + 1}`}
                         value={rule.comment}
@@ -366,12 +393,21 @@ export function InterceptPage(): JSX.Element {
   // hard-codes fix_content_length and this page offers it as a toggle.
   const controls = useInterceptControls();
   const forwardHeld = useForwardHeld();
+  const reqRules = useInterceptRules("requests");
+  const resRules = useInterceptRules("responses");
+  const saveReqRules = useSaveInterceptRules("requests");
+  const saveResRules = useSaveInterceptRules("responses");
   const openRepeaterTab = useApp((state) => state.openRepeaterTab);
   const setRoute = useApp((state) => state.setRoute);
   const setComparerSlot = useApp((state) => state.setComparerSlot);
   const setDecoderSeed = useApp((state) => state.setDecoderSeed);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // burpsy-react-ui-s5g7: the checkbox subset for bulk forward/drop. Separate from the
+  // single selection that drives the detail pane: checking boxes must not yank the editor
+  // to another message, and the bulk actions send unedited row bytes (like Forward all),
+  // never one row's edit buffer under N ids.
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   /**
    * Drop-all needs a confirm step: it discards traffic that cannot be recovered, and unlike a single
    * Drop it does so for messages the operator has not looked at.
@@ -401,6 +437,10 @@ export function InterceptPage(): JSX.Element {
   // selection that no longer exists in the queue rather than let the editor go stale.
   useEffect(() => {
     if (selectedId !== null && data && !held.some((h) => h.id === selectedId)) setSelectedId(null);
+    if (data) {
+      const live = new Set(held.map((h) => h.id));
+      setSelectedIds((current) => (current.every((id) => live.has(id)) ? current : current.filter((id) => live.has(id))));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
@@ -422,14 +462,52 @@ export function InterceptPage(): JSX.Element {
    * previous message's edit buffer as its body, and the success toast would name the one that
    * actually went. See burpsy-react-ui-3g5.
    */
-  const forwardMessage = (id: number, body: string, fixCL: boolean) => {
+  const forwardMessage = (id: number, body: string, fixCL: boolean, holdResponse = false) => {
     forwardHeld.mutate(
-      { id, raw: body, fixContentLength: fixCL },
+      { id, raw: body, fixContentLength: fixCL, holdResponse },
       {
         onSuccess: () => {
           setSelectedId(null);
           toast.success(`Held message #${id} forwarded`);
         },
+        onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+      },
+    );
+  };
+
+  /**
+   * Burp's "Don't intercept ..." quick actions (burpsy-react-ui-35i4): append a pass rule
+   * built from the message in front of the operator, then save the whole list. The list is
+   * read from the last poll rather than refetched first: a rule added elsewhere between the
+   * poll and this click would be dropped by the PUT, and that lossy read-modify-write is the
+   * documented shape of this page's rule editing (the RuleEditor tab saves whole lists too).
+   * First-match-wins evaluation means the new rule belongs at the TOP: appended at the end it
+   * would sit behind broader hold rules and never fire, silently doing nothing.
+   */
+  const addPassRule = (
+    dir: "requests" | "responses",
+    field: InterceptRuleSpec["field"],
+    match: string,
+    comment: string,
+  ) => {
+    const current = dir === "requests" ? reqRules.data : resRules.data;
+    if (!current) {
+      toast.error("Rule list has not loaded yet");
+      return;
+    }
+    const save = dir === "requests" ? saveReqRules : saveResRules;
+    const rule: InterceptRuleSpec = {
+      field,
+      category: "literal",
+      string_match: match,
+      enabled: true,
+      comment,
+      action: "pass",
+    };
+    save.mutate(
+      { active: current.active, rules: [rule, ...current.rules] },
+      {
+        onSuccess: () => toast.success(`Pass rule added — ${match} will no longer be held`),
         onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
       },
     );
@@ -443,6 +521,50 @@ export function InterceptPage(): JSX.Element {
       },
       onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
     });
+  };
+
+  /**
+   * burpsy-react-ui-s5g7: forward/drop the checkbox subset, one resolved message at a time.
+   * Sequential, not parallel: the queue shifts under each resolution and the toasts name what
+   * actually happened, so a message resolved elsewhere mid-run is reported as skipped rather
+   * than double-counted. Bulk sends carry unedited row bytes (like Forward all) — the edit
+   * buffer belongs to the detail selection alone.
+   */
+  const forwardSelected = async () => {
+    const targets = held.filter((h) => selectedIds.includes(h.id));
+    let ok = 0;
+    const failed: number[] = [];
+    for (const target of targets) {
+      try {
+        await forwardHeld.mutateAsync({ id: target.id, raw: target.raw, fixContentLength: fixContentLength, holdResponse: false });
+        ok += 1;
+      } catch {
+        failed.push(target.id);
+      }
+    }
+    setSelectedIds((current) => current.filter((id) => failed.includes(id)));
+    if (selectedId !== null && !failed.includes(selectedId) && targets.some((t) => t.id === selectedId)) setSelectedId(null);
+    toast.success(
+      failed.length ? `Forwarded ${ok}, ${failed.length} failed (${failed.join(", ")})` : `Forwarded ${ok} message${ok === 1 ? "" : "s"}`,
+    );
+  };
+
+  const dropSelected = async () => {
+    const ids = selectedIds.filter((id) => held.some((h) => h.id === id));
+    let ok = 0;
+    const failed: number[] = [];
+    for (const id of ids) {
+      try {
+        await controls.drop.mutateAsync(id);
+        ok += 1;
+      } catch {
+        failed.push(id);
+      }
+    }
+    setSelectedIds((current) => current.filter((id) => failed.includes(id)));
+    if (selectedId !== null && !failed.includes(selectedId) && ids.includes(selectedId)) setSelectedId(null);
+    if (failed.length) toast.error(`Dropped ${ok}, ${failed.length} failed (${failed.join(", ")})`);
+    else toast.success(`Dropped ${ok} message${ok === 1 ? "" : "s"}`);
   };
 
   /**
@@ -548,6 +670,44 @@ export function InterceptPage(): JSX.Element {
         ],
       },
       {
+        id: "rules",
+        title: "Interception rules from this message",
+        actions: [
+          ...(row.direction === "request"
+            ? [
+                {
+                  id: "dont-intercept-host",
+                  label: `Don't intercept requests to ${row.host}`,
+                  onSelect: () => addPassRule("requests", "host", row.host, `from held #${row.id}`),
+                },
+                ...(extensionOf(row.path)
+                  ? [
+                      {
+                        id: "dont-intercept-ext",
+                        label: `Don't intercept requests for .${extensionOf(row.path)} files`,
+                        onSelect: () =>
+                          addPassRule("requests", "extension", extensionOf(row.path), `from held #${row.id}`),
+                      },
+                    ]
+                  : []),
+                {
+                  id: "intercept-response",
+                  label: "Do intercept the response to this request",
+                  onSelect: () => forwardMessage(row.id, row.raw, fixContentLength, true),
+                },
+              ]
+            : row.direction === "response"
+              ? [
+                  {
+                    id: "dont-intercept-host",
+                    label: `Don't intercept responses from ${row.host}`,
+                    onSelect: () => addPassRule("responses", "host", row.host, `from held #${row.id}`),
+                  },
+                ]
+              : []),
+        ],
+      },
+      {
         id: "copy",
         actions: [
           {
@@ -647,6 +807,26 @@ export function InterceptPage(): JSX.Element {
 
   const columns = useMemo<Column<HeldMessageDetail>[]>(
     () => [
+      {
+        id: "select",
+        header: "✓",
+        size: 40,
+        enableSorting: false,
+        cell: (info) => {
+          const id = info.row.original.id;
+          return (
+            <Checkbox
+              checked={selectedIds.includes(id)}
+              onCheckedChange={(checked) => {
+                setSelectedIds((current) =>
+                  checked ? (current.includes(id) ? current : [...current, id]) : current.filter((v) => v !== id),
+                );
+              }}
+              label={`Select held #${id} for bulk forward or drop`}
+            />
+          );
+        },
+      },
       { accessorKey: "id", header: "#", size: 56, cell: (info) => <span className="cell-num">{info.getValue<number>()}</span> },
       {
         accessorKey: "direction",
@@ -675,7 +855,7 @@ export function InterceptPage(): JSX.Element {
       { accessorKey: "held_ms", header: "Held", size: 80, cell: (info) => <span className="cell-num">{formatDuration(info.getValue<number>())}</span> },
       { accessorKey: "len", header: "Len", size: 76, cell: (info) => <span className="cell-num">{formatBytes(info.getValue<number>())}</span> },
     ],
-    [],
+    [selectedIds],
   );
 
   const detail = selected ? (
@@ -926,6 +1106,24 @@ export function InterceptPage(): JSX.Element {
           <TabsTrigger value="rules">Interception rules</TabsTrigger>
         </TabsList>
         <TabsContent value="queue" style={{ display: "grid", minHeight: 0 }}>
+          {selectedIds.length > 0 ? (
+            <Toolbar aria-label="Bulk actions for the checked messages">
+              <span className="cell-dim">
+                {selectedIds.length} checked
+              </span>
+              <Button size="small" onClick={() => void forwardSelected()} disabled={forwardHeld.isPending}>
+                <Send size={13} />
+                Forward checked
+              </Button>
+              <Button size="small" variant="danger" onClick={() => void dropSelected()} disabled={controls.drop.isPending}>
+                <Trash2 size={13} />
+                Drop checked
+              </Button>
+              <Button size="small" variant="outline" onClick={() => setSelectedIds([])}>
+                Clear
+              </Button>
+            </Toolbar>
+          ) : null}
           <SplitPane
             storageId="intercept"
             orientation="vertical"

@@ -91,9 +91,12 @@ export function useSaveInterceptRules(dir: InterceptDirection) {
  */
 export function useForwardHeld() {
   const client = useQueryClient();
-  return useMutation<unknown, Error, { id: number; raw: string; fixContentLength: boolean }>({
-    mutationFn: ({ id, raw, fixContentLength }) =>
-      api<unknown>(`/api/intercept/${id}/forward`, json("POST", { raw, fix_content_length: fixContentLength })),
+  return useMutation<unknown, Error, { id: number; raw: string; fixContentLength: boolean; holdResponse?: boolean }>({
+    mutationFn: ({ id, raw, fixContentLength, holdResponse }) =>
+      api<unknown>(
+        `/api/intercept/${id}/forward`,
+        json("POST", { raw, fix_content_length: fixContentLength, hold_response: holdResponse ?? false }),
+      ),
     onSuccess: () => void client.invalidateQueries({ queryKey: keys.intercept }),
   });
 }

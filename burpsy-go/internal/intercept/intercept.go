@@ -135,6 +135,39 @@ const (
 	CategoryLiteral
 )
 
+// Action is what a matching rule does: Burp's per-rule "Do intercept" versus
+// "Don't intercept". The zero value holds, so every rule written before this
+// field existed keeps doing what it always did.
+type RuleAction int
+
+const (
+	// RuleActionHold stalls a matching message in the queue.
+	RuleActionHold RuleAction = iota
+	// RuleActionPass lets a matching message through without holding it.
+	RuleActionPass RuleAction = iota
+)
+
+// ParseRuleAction maps the wire/UI name to an Action. Anything else is refused at
+// save time, like a malformed regex: a rule that silently held when the operator
+// asked it to pass (or the reverse) would be a coin flip on the wire.
+func ParseRuleAction(s string) (RuleAction, error) {
+	switch s {
+	case "hold", "intercept", "":
+		return RuleActionHold, nil
+	case "pass", "dont_intercept", "don't intercept":
+		return RuleActionPass, nil
+	default:
+		return RuleActionHold, fmt.Errorf("unknown rule action %q: want \"hold\" or \"pass\"", s)
+	}
+}
+
+func (a RuleAction) String() string {
+	if a == RuleActionPass {
+		return "pass"
+	}
+	return "hold"
+}
+
 // Rule is one hold condition. Enabled rules are ANDed with the list switch;
 // a list with any enabled rule holds only matching messages, a list with no
 // enabled rules holds everything (unconditional).
@@ -144,19 +177,21 @@ type Rule struct {
 	StringMatch string
 	Enabled     bool
 	Comment     string
+	Action      RuleAction
 
 	re *regexp.Regexp
 }
 
 // NewRule compiles a rule, refusing a malformed regex (matching Burp, which
 // reports a bad pattern when the list is saved rather than when it fires).
-func NewRule(field Field, cat Category, match string, enabled bool, comment string) (*Rule, error) {
+func NewRule(field Field, cat Category, match string, enabled bool, comment string, action RuleAction) (*Rule, error) {
 	r := &Rule{
 		Field:       field,
 		Category:    cat,
 		StringMatch: match,
 		Enabled:     enabled,
 		Comment:     comment,
+		Action:      action,
 	}
 	if cat == CategoryRegex && match != "" {
 		re, err := regexp.Compile(match)
@@ -364,6 +399,11 @@ type Engine struct {
 	lists  [DirectionCount]List
 	nextID uint64
 	held   map[uint64]*Held
+	// pending one-shot response holds (burpsy-react-ui-v6jw): Burp's "Do intercept >
+	// Response to this request". Each names the request it was armed from; the first
+	// response with identical attributes is held and the entry consumed, so arming
+	// never leaks onto later unrelated traffic.
+	pending []pendingResponse
 	// onChange is an optional signal that the queue or the switch changed (see OnChange).
 	onChange func()
 
@@ -386,12 +426,63 @@ type ScopeChecker interface {
 	Contains(host string, port uint16, path string, isTLS bool) bool
 }
 
+// pendingResponse is one armed "hold the response to this request".
+type pendingResponse struct {
+	// holdID is the held request this was armed from. Drop(id) retracts the arming,
+	// because a dropped request has no response coming and a stale entry would fire
+	// on a later unrelated request with identical attributes.
+	holdID uint64
+	host   string
+	port   uint16
+	method string
+	path   string
+}
+
+// maxPendingResponses bounds armed-but-unforwarded response holds. Arming without
+// forwarding would otherwise grow this list without bound, one entry per click.
+const maxPendingResponses = 256
+
 // NewEngine creates an intercept engine with both lists off.
 func NewEngine() *Engine {
 	return &Engine{
 		mu:   make(chan struct{}, 1),
 		held: make(map[uint64]*Held),
 	}
+}
+
+// ArmResponseHold arms a one-shot hold for the response to one held request
+// (burpsy-react-ui-v6jw). Only a held request qualifies: arming from anything else
+// names a response that cannot be paired with anything.
+func (e *Engine) ArmResponseHold(id uint64) error {
+	e.mu <- struct{}{}
+	defer e.signalChange()
+	defer func() { <-e.mu }()
+	h := e.held[id]
+	if h == nil {
+		return fmt.Errorf("no held message %d", id)
+	}
+	if h.Direction != DirectionRequest {
+		return fmt.Errorf("message %d is not a held request", id)
+	}
+	if len(e.pending) >= maxPendingResponses {
+		return fmt.Errorf("too many armed response holds (%d)", len(e.pending))
+	}
+	e.pending = append(e.pending, pendingResponse{
+		holdID: h.ID,
+		host:   h.Host,
+		port:   h.Port,
+		method: h.Method,
+		path:   h.Path,
+	})
+	return nil
+}
+
+// PendingResponses counts armed one-shot response holds. Read by tests and by any
+// surface that wants to say an arming is outstanding rather than silently holding one.
+func (e *Engine) PendingResponses() int {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	return len(e.pending)
 }
 
 // OnChange installs the signal called after the held queue or the intercept switch changes, or nil to
@@ -506,6 +597,7 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 				StringMatch: r.StringMatch,
 				Enabled:     r.Enabled,
 				Comment:     r.Comment,
+				Action:      r.Action,
 				re:          re,
 			})
 			continue
@@ -516,6 +608,7 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 			StringMatch: r.StringMatch,
 			Enabled:     r.Enabled,
 			Comment:     r.Comment,
+			Action:      r.Action,
 		})
 	}
 
@@ -577,6 +670,16 @@ func (e *Engine) shouldHold(d Direction, m *Message) bool {
 	if e.inScopeOnly && e.scope != nil && !e.scope.Contains(m.Host, m.Port, m.Path, m.TLS) {
 		return false
 	}
+	// One-shot response holds fire before the rule lists and consume themselves, so an
+	// arming applies to exactly one response: the next one with identical attributes.
+	if d == DirectionResponse {
+		for i, p := range e.pending {
+			if p.host == m.Host && p.port == m.Port && p.method == m.Method && p.path == m.Path {
+				e.pending = append(e.pending[:i], e.pending[i+1:]...)
+				return true
+			}
+		}
+	}
 	l := e.lists[d]
 	if !l.Active {
 		return false
@@ -588,9 +691,15 @@ func (e *Engine) shouldHold(d Direction, m *Message) bool {
 	if len(enabled) == 0 {
 		return false
 	}
+	// First matching rule wins (burpsy-react-ui-35i4): Burp's per-rule Do/Don't
+	// intercept. A list of hold-only rules behaves exactly as before — the first
+	// match holds, and reaching the end means no rule matched — so every list
+	// written before actions existed evaluates identically. The default below is
+	// deliberately not "hold": with enabled rules present and nothing matching,
+	// the list passes, which is the same default the loop above implemented.
 	for _, r := range enabled {
 		if r.Match(m) {
-			return true
+			return r.Action == RuleActionHold
 		}
 	}
 	return false
@@ -706,6 +815,15 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	if !h.resolve(ActionDrop, nil, reason) {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
+	e.mu <- struct{}{}
+	kept := e.pending[:0]
+	for _, p := range e.pending {
+		if p.holdID != id {
+			kept = append(kept, p)
+		}
+	}
+	e.pending = kept
+	<-e.mu
 	// Remove from the hold map; see Forward for why.
 	e.mu <- struct{}{}
 	delete(e.held, id)

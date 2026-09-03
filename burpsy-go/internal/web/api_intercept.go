@@ -24,6 +24,10 @@ type interceptRuleSpec struct {
 	Match    string `json:"string_match"`
 	Enabled  bool   `json:"enabled"`
 	Comment  string `json:"comment"`
+	// Action is "hold" (Do intercept) or "pass" (Don't intercept), Burp's per-rule
+	// action. Absent means hold, so every list written before actions existed reads back
+	// unchanged.
+	Action string `json:"action,omitempty"`
 }
 
 // interceptListState mirrors intercept.ts's ListState (the PUT body and the GET rules body).
@@ -250,12 +254,17 @@ func specToRules(specs []interceptRuleSpec) ([]intercept.Rule, error) {
 		if sp.Category == "literal" {
 			cat = intercept.CategoryLiteral
 		}
+		action, err := intercept.ParseRuleAction(sp.Action)
+		if err != nil {
+			return nil, err
+		}
 		rules = append(rules, intercept.Rule{
 			Field:       field,
 			Category:    cat,
 			StringMatch: sp.Match,
 			Enabled:     sp.Enabled,
 			Comment:     sp.Comment,
+			Action:      action,
 		})
 	}
 	return rules, nil
@@ -274,6 +283,7 @@ func rulesToSpecs(rules []*intercept.Rule) []interceptRuleSpec {
 			Match:    r.StringMatch,
 			Enabled:  r.Enabled,
 			Comment:  r.Comment,
+			Action:   r.Action.String(),
 		})
 	}
 	return specs
@@ -349,10 +359,20 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 			// got the original forwarded, answered 200, with no sign the edit was discarded.
 			Raw              *string `json:"raw"`
 			FixContentLength bool    `json:"fix_content_length"`
+			// HoldResponse arms a one-shot hold for this request's response (burpsy-react-ui-v6jw):
+			// Burp's "Do intercept > Response to this request". Refused for anything but a held
+			// request, by the engine.
+			HoldResponse bool `json:"hold_response"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
+		}
+		if req.HoldResponse {
+			if err := s.intercept.ArmResponseHold(id); err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
 		}
 		if err := s.intercept.Forward(id, req.Raw, req.FixContentLength); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)

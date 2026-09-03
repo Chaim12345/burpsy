@@ -65,6 +65,12 @@ export interface InterceptRuleSpec {
   string_match: string;
   enabled: boolean;
   comment: string;
+  /**
+   * What a match does: Burp's per-rule Do/Don't intercept (burpsy-react-ui-35i4).
+   * Absent means hold — the wire omits it and the server defaults it — so every list
+   * written before actions existed reads back unchanged.
+   */
+  action?: "hold" | "pass";
 }
 
 /** GET/PUT body for /api/intercept/rules/{requests|responses} — Go's `interceptListState`. */

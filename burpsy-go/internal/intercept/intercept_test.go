@@ -61,7 +61,7 @@ func TestEngine_UnconditionalListHoldsEverything(t *testing.T) {
 func TestEngine_SelectiveRuleHoldsOnlyMatches(t *testing.T) {
 	e := NewEngine()
 	e.SetEnabled(true)
-	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", true, "")
+	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", true, "", RuleActionHold)
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestEngine_SelectiveRuleHoldsOnlyMatches(t *testing.T) {
 func TestEngine_DisabledRuleHoldsNothing(t *testing.T) {
 	e := NewEngine()
 	e.SetEnabled(true)
-	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", false, "")
+	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", false, "", RuleActionHold)
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestEngine_DisabledRuleHoldsNothing(t *testing.T) {
 func TestEngine_RegexRuleMatchesPath(t *testing.T) {
 	e := NewEngine()
 	e.SetEnabled(true)
-	rule, err := NewRule(FieldPath, CategoryRegex, `^/admin/.*`, true, "")
+	rule, err := NewRule(FieldPath, CategoryRegex, `^/admin/.*`, true, "", RuleActionHold)
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestEngine_ResponseFields(t *testing.T) {
 	if m.ContentType != "application/json" {
 		t.Fatalf("content type = %q", m.ContentType)
 	}
-	rule, err := NewRule(FieldStatusCode, CategoryLiteral, "404", true, "")
+	rule, err := NewRule(FieldStatusCode, CategoryLiteral, "404", true, "", RuleActionHold)
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
 	}
