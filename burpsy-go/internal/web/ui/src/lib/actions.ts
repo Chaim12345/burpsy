@@ -54,6 +54,41 @@ async function fetchRaw(messageId: number): Promise<string> {
   return message.text ?? "";
 }
 
+/**
+ * Every link a response carries, in first-seen order without repeats (burpsy-react-ui-4d4).
+ * Both quoted attributes (href/src/action/data-*) and bare absolute URLs, because harvests
+ * feed crawl seeds and wordlists where a JS-built URL counts as much as an anchor. Fragments,
+ * javascript: and mailto: are not links out, and trailing sentence punctuation is stripped so
+ * "see http://x/y," does not seed a 404 for "http://x/y,". As-found, never resolved: the
+ * response may be off-scope or rewritten, and resolving against a base would invent URLs.
+ */
+export function extractLinks(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (link: string) => {
+    const cleaned = link.trim().replace(/[.,;:!?]+$/, "");
+    if (!cleaned || cleaned.startsWith("#")) return;
+    const scheme = cleaned.split(":")[0]?.toLowerCase() ?? "";
+    if (scheme === "javascript" || scheme === "mailto" || scheme === "data") return;
+    if (!seen.has(cleaned)) {
+      seen.add(cleaned);
+      out.push(cleaned);
+    }
+  };
+  for (const match of text.matchAll(/(?:href|src|action|data-[a-z-]+)\s*=\s*["']([^"']+)["']/gi)) {
+    const value = match[1];
+    if (value) push(value);
+  }
+  for (const match of text.matchAll(/https?:\/\/[^\s"'<>\\)]+/gi)) push(match[0]);
+  // Unquoted CSS url() references: the one bare-relative form with unambiguous delimiters.
+  // Anything looser (a bare /path token) also matches regex literals and division.
+  for (const match of text.matchAll(/url\(\s*["']?([^"'()\s]+)["']?\s*\)/gi)) {
+    const value = match[1];
+    if (value) push(value);
+  }
+  return out;
+}
+
 /** Translate a captured request into a runnable curl command. */
 export function rawToCurl(raw: string, url: string): string {
   const [head = ""] = raw.split(/\r?\n\r?\n/, 1);
@@ -156,6 +191,7 @@ export function useExchangeActions(): {
   auditExchange: (exchange: Exchange) => Promise<void>;
   sendToDecoder: (exchange: Exchange) => Promise<void>;
   copyRequestToFile: (exchange: Exchange) => Promise<void>;
+  copyLinks: (exchange: Exchange) => Promise<void>;
   requestInBrowser: (exchange: Exchange) => void;
   changeRequestMethod: (exchange: Exchange) => Promise<void>;
   changeBodyEncoding: (exchange: Exchange) => Promise<void>;
@@ -283,6 +319,25 @@ export function useExchangeActions(): {
       toast.success("Request downloaded");
     } catch (error) {
       toast.error(`Could not load request bytes: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const copyLinks = async (exchange: Exchange) => {
+    if (exchange.response === null) {
+      toast.error(`Exchange #${exchange.id} has no response to harvest links from`);
+      return;
+    }
+    try {
+      const raw = await fetchRaw(exchange.response);
+      const links = extractLinks(raw);
+      if (!links.length) {
+        toast.error(`No links found in the response of #${exchange.id}`);
+        return;
+      }
+      await copyToClipboard(links.join("\n"));
+      toast.success(`Copied ${links.length} link${links.length === 1 ? "" : "s"} from #${exchange.id}`);
+    } catch (error) {
+      toast.error(`Could not load response bytes: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -438,6 +493,7 @@ export function useExchangeActions(): {
         { id: "curl", label: "Copy as curl", icon: Terminal, onSelect: () => void copyCurl(exchange) },
         { id: "id", label: `Copy exchange id (#${exchange.id})`, icon: Copy, onSelect: () => void copyToClipboard(String(exchange.id)) },
         { id: "to-file", label: "Copy request to file", icon: FileCode2, onSelect: () => void copyRequestToFile(exchange) },
+        { id: "links", label: "Copy links", icon: Globe, onSelect: () => void copyLinks(exchange) },
       ],
     },
     {
@@ -514,6 +570,7 @@ export function useExchangeActions(): {
     auditExchange,
     sendToDecoder,
     copyRequestToFile,
+    copyLinks,
     requestInBrowser,
     changeRequestMethod,
     changeBodyEncoding,
