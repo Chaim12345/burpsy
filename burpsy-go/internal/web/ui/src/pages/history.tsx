@@ -875,26 +875,7 @@ export function HistoryPage(): JSX.Element {
           }
         />
         <Toolbar style={{ marginTop: 10 }}>
-          <div className="search-field">
-            <Search size={15} />
-            <Input
-              aria-label="Filter history"
-              title="Filter history"
-              value={term}
-              onChange={(event) => setTerm(event.target.value)}
-              placeholder="host = api.example AND status >= 400"
-            />
-            {term ? (
-              <IconButton label="Clear filter" size="small" onClick={() => setTerm("")}>
-                <X size={13} />
-              </IconButton>
-            ) : null}
-            <Tooltip content="Filter syntax">
-              <button type="button" className="icon-button icon-button-sm" aria-label="Filter syntax" onClick={() => setHelpOpen(true)}>
-                <HelpCircle size={13} />
-              </button>
-            </Tooltip>
-          </div>
+
           <FilterToggle pressed={scopeOnly} onPressedChange={handleScopeToggle}>
             In scope only
           </FilterToggle>
@@ -949,6 +930,26 @@ export function HistoryPage(): JSX.Element {
               </option>
             ))}
           </Select>
+          <div className="search-field">
+            <Search size={15} />
+            <Input
+              aria-label="Filter history"
+              title="Filter history"
+              value={term}
+              onChange={(event) => setTerm(event.target.value)}
+              placeholder="host = api.example AND status >= 400"
+            />
+            {term ? (
+              <IconButton label="Clear filter" size="small" onClick={() => setTerm("")}>
+                <X size={13} />
+              </IconButton>
+            ) : null}
+            <Tooltip content="Filter syntax">
+              <button type="button" className="icon-button icon-button-sm" aria-label="Filter syntax" onClick={() => setHelpOpen(true)}>
+                <HelpCircle size={13} />
+              </button>
+            </Tooltip>
+          </div>
         </Toolbar>
 
         {columnFiltersOpen ? (
