@@ -212,8 +212,11 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// them again to answer "what type was it". See core.Exchange.Mime. This is the seam nearly all
 		// proxy traffic comes through, so it is the site that decides whether the History MIME column
 		// and filter have anything to work with at all.
-		Mime:  core.MimeEssence(x.Response),
-		Notes: x.Notes,
+		Mime: core.MimeEssence(x.Response),
+		// Same seam as Mime: the bytes are here, so the derived columns are decided here.
+		Cookies: core.CookieNames(x.Response),
+		Title:   core.ResponseTitle(x.Response),
+		Notes:   x.Notes,
 		// The per-exchange source wins when it is set, so a surface with a default can still record one
 		// exchange as something else; otherwise the handle's default applies. Neither is substituted for
 		// the other when both are unset — unattributed is a real answer, see above.

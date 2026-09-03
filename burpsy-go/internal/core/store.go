@@ -408,6 +408,14 @@ type Exchange struct {
 	// A pointer rather than a zero sentinel, because exchange 0 is a real exchange and is very often
 	// the first thing an operator sends to Repeater.
 	ParentID *ExchangeID
+	// Cookies names the cookies the response set, in first-seen order. Computed once at
+	// capture by CookieNames, for the same reason Mime is: listing history must never read
+	// response bytes. Nil means none were set — like Mime, only Response separates "none
+	// set" from "no response yet".
+	Cookies []string
+	// Title is the response's HTML <title> text, or "" when it has none. Computed once at
+	// capture by ResponseTitle: a list-time parse would read bodies to render a column.
+	Title string
 }
 
 // Source names the surface an exchange came from.

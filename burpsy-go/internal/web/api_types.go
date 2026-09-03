@@ -65,6 +65,11 @@ type ExchangeView struct {
 	// ParentID is the exchange this one was derived from — a Repeater resend's original, an Intruder
 	// payload's base request. Omitted when there is no antecedent.
 	ParentID *core.ExchangeID `json:"parent_id,omitempty"`
+	// Cookies names the cookies the response set, in first-seen order. Empty when none were
+	// set; `response: null` is what separates that from "no response yet". See core.Exchange.
+	Cookies []string `json:"cookies"`
+	// Title is the response's HTML <title> text, "" when it has none. See core.Exchange.
+	Title string `json:"title"`
 }
 
 // MessageView is the wire shape for a stored message: id, byte length, and a lossy UTF-8 text
@@ -157,6 +162,8 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		Protocol:   protocolToken(ex.Protocol),
 		TaskID:     ex.TaskID,
 		ParentID:   ex.ParentID,
+		Cookies:    ex.Cookies,
+		Title:      ex.Title,
 	}
 }
 

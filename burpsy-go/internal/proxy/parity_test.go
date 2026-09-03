@@ -123,11 +123,19 @@ var exchangeFieldRules = map[string]fieldRule{
 	// Lineage. A proxied request and a crawled fetch both have no antecedent exchange; only a Repeater
 	// resend, an Intruder payload or a followed redirect does.
 	"ParentID": ruleAbsent,
+	// Identical: both legs record through scanner.Capture.Record, which derives these from
+	// the response bytes in hand. The origin above serves a title and a cookie so the
+	// comparison is over real values, not two empty cells agreeing vacuously.
+	"Cookies": ruleIdentical,
+	"Title":   ruleIdentical,
 }
 
 func TestTheProxyAndTheCrawlerRecordTheSameShapeOfExchange(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// A cookie, so the Cookies rule below compares something real on both legs rather
+		// than two empty lists. The title already comes from parityBody itself.
+		w.Header().Set("Set-Cookie", "parity_probe=1; Path=/")
 		io.WriteString(w, parityBody)
 	}))
 	defer origin.Close()

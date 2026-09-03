@@ -118,6 +118,11 @@ export interface Exchange {
    * populates it unconditionally), not optional.
    */
   highlight: string;
+  /** Cookie names the response set, in first-seen order. Empty when none were set; `response`
+      being null is what separates that from "no response yet". Always on the wire. */
+  cookies: string[] | null;
+  /** The response's HTML title text, "" when it has none. Always on the wire. */
+  title: string;
 }
 
 export interface MessageView {
@@ -423,6 +428,34 @@ export interface ToolLog {
 }
 
 /**
+ * The user-applied workflow status of one saved exchange — Burp's organizer "Statuses"
+ * (New / In progress / Postponed / Done / Ignored): "which saved requests still need attention and
+ * which ones you have already tested". This is the operator's decision and must not be confused
+ * with `OrganizerItem.status`, the HTTP response code the server recorded — the page shows both as
+ * separate columns, which is exactly how they get mistaken for one field.
+ */
+export const WORKFLOW_STATUSES = ["new", "in_progress", "postponed", "done", "ignored"] as const;
+export type WorkflowStatus = (typeof WORKFLOW_STATUSES)[number];
+
+/** Tone to render each workflow status as; "new" is deliberately unmapped (falls back to neutral). */
+export const WORKFLOW_STATUS_TONE: Record<WorkflowStatus, "neutral" | "bad" | "warn" | "good" | "info" | "accent"> = {
+  new: "neutral",
+  in_progress: "info",
+  postponed: "warn",
+  done: "good",
+  ignored: "neutral",
+};
+
+/** The human label for a workflow status; the wire values are underscore-separated. */
+export const WORKFLOW_STATUS_LABEL: Record<WorkflowStatus, string> = {
+  new: "New",
+  in_progress: "In progress",
+  postponed: "Postponed",
+  done: "Done",
+  ignored: "Ignored",
+};
+
+/**
  * The editable half of an organizer item: what a save sends back.
  *
  * Split from OrganizerItem because the read shape now carries resolved fields — status, MIME, scope
@@ -434,6 +467,13 @@ export interface OrganizerEdit {
   title: string;
   note: string;
   highlight: string;
+}
+
+/** One named group of saved exchanges; an item not in any group is in the inbox (collection 0). */
+export interface OrganizerCollection {
+  id: number;
+  name: string;
+  note: string;
 }
 
 /**
@@ -454,6 +494,15 @@ export interface OrganizerEdit {
  */
 export interface OrganizerItem extends OrganizerEdit {
   exchange: number;
+
+  /**
+   * The workflow status the operator applied — a different axis from `status` below, which is the
+   * HTTP response code. Absent means the item predates the field and reads as "new".
+   */
+  workflow_status?: WorkflowStatus;
+
+  /** The collection this item sits in; 0 (or absent) means the inbox. */
+  collection?: number;
 
   /** False when the exchange is no longer in the traffic store; every field below is then absent. */
   resolved: boolean;

@@ -140,7 +140,9 @@ CREATE TABLE IF NOT EXISTS exchanges (
 	duration_ms   INTEGER NOT NULL,
 	notes         TEXT,
 	protocol      INTEGER NOT NULL,
-	related       TEXT
+	related       TEXT,
+	cookies       TEXT,
+	title         TEXT
 );
 CREATE TABLE IF NOT EXISTS findings (
 	id          INTEGER PRIMARY KEY,
@@ -328,6 +330,16 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("exchanges", "mime", "TEXT"); err != nil {
 		return err
 	}
+	// exchanges gained cookies and title for the History Cookies and Title columns, denormalised
+	// at capture like mime and for the same reason: a list-time derivation would read response
+	// bytes per row. NULL reads back as unattributed (no cookies / no title), and backfilling
+	// is not attempted for the same cost reason mime documents above.
+	if err := s.addColumn("exchanges", "cookies", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.addColumn("exchanges", "title", "TEXT"); err != nil {
+		return err
+	}
 	// findings gained a target and a param set, both for deduplication (core.FindingStore.Add). The
 	// target is the second half of the dedup key, so without it a restored finding cannot attract new
 	// occurrences after a restart — it would start a second finding beside itself. params is the set
@@ -464,6 +476,10 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	if err != nil {
 		related = nil
 	}
+	cookies, err := json.Marshal(ex.Cookies)
+	if err != nil {
+		cookies = nil
+	}
 	var status any
 	if ex.Status != nil {
 		status = int(*ex.Status)
@@ -475,12 +491,12 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
-		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
-		ex.Highlight, string(ex.Source), ex.Mime)
+		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title)
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -578,7 +594,7 @@ func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
 func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
-		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime
+		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -600,9 +616,11 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		var highlight sql.NullString
 		var source sql.NullString
 		var mime sql.NullString
+		var cookies []byte
+		var title sql.NullString
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
-			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime); err != nil {
+			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title); err != nil {
 			return nil, err
 		}
 		ex.Highlight = highlight.String
@@ -611,6 +629,14 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		// whole restore of a legacy database rather than losing one cell of it. "" is the right reading
 		// — this build cannot know what type that response declared, and will not guess.
 		ex.Mime = mime.String
+		// Same NULL-tolerant shape as Related: a legacy row scans NULL bytes, which unmarshal
+		// to nothing, and the row keeps its zero values rather than failing the restore.
+		if len(cookies) > 0 {
+			if err := json.Unmarshal(cookies, &ex.Cookies); err != nil {
+				return nil, err
+			}
+		}
+		ex.Title = title.String
 		// NULL reads back as the unattributed zero value, not a guess: see the migrate note on this
 		// column. History keeps such rows — losing the attribution must not masquerade as tool traffic
 		// being dropped.

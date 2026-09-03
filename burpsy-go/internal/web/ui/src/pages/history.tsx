@@ -740,6 +740,35 @@ export function HistoryPage(): JSX.Element {
         },
       },
       {
+        // Burp's Cookies column (burpsy-react-ui-f4hc): names, not values - values are
+        // secrets more often than not, and a column is the wrong place for them.
+        id: "cookies",
+        header: "Cookies",
+        size: 110,
+        accessorFn: (row: Exchange) => row.cookies ?? [],
+        cell: (info) => {
+          const names = info.getValue<string[]>();
+          return names.length ? (
+            <span className="cell-num" title={names.join(", ")}>
+              {names.length}
+            </span>
+          ) : (
+            <span className="cell-dim">—</span>
+          );
+        },
+      },
+      {
+        // Burp's Title column (burpsy-react-ui-tk6z): the page title for HTML responses.
+        id: "title",
+        header: "Title",
+        size: 200,
+        accessorFn: (row: Exchange) => row.title ?? "",
+        cell: (info) => {
+          const text = info.getValue<string>();
+          return text === "" ? <span className="cell-dim">—</span> : <span title={text}>{text}</span>;
+        },
+      },
+      {
         accessorKey: "response_len",
         header: "Length",
         size: 84,
