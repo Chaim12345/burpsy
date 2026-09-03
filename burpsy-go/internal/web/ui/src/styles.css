@@ -1281,6 +1281,12 @@ tbody td {
    the message editors — the surface an operator spends the most time in — with no keyboard focus
    indicator at all (WCAG 2.4.7). Inset by 2px so the ring sits inside the editor's own border
    instead of overlapping the pane divider. */
+/* Non-printing glyphs (Burp's \n toggle): control pictures and high bytes render in the
+   accent colour so they read as markup about the bytes, not as message content. */
+.cm-nonprinting {
+  color: var(--accent-strong);
+}
+
 .editor-body .cm-editor.cm-focused {
   outline: var(--border-strong) solid var(--accent);
   outline-offset: -2px;

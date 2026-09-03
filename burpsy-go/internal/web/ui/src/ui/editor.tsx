@@ -1,8 +1,8 @@
-import { EditorView, Decoration, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { EditorView, Decoration, ViewPlugin, WidgetType, highlightSpecialChars, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
-import { ClipboardPaste, Copy, Download, MoreHorizontal, Search, WrapText } from "lucide-react";
+import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Search, WrapText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
@@ -78,6 +78,98 @@ const httpHighlight = ViewPlugin.fromClass(
   },
   { decorations: (plugin) => plugin.decorations },
 );
+
+/**
+ * Burp's \\n toggle as a CodeMirror decoration (burpsy-react-ui-1e4). Bytes below 0x20 render
+ * as their Unicode Control Picture (U+2400 block: NUL -> ␀, TAB -> ␉, LF -> ␊, CR -> ␍),
+ * DEL as ␡, and 0x80-0xFF keep their own glyph inside a marked span with the code point as
+ * its tooltip - those bytes are only invisible in fonts that lack them, so replacing them
+ * with an escape would hide what the operator came to see. The default special-char set
+ * already covers the C0 controls; addSpecialChars pulls in TAB (which CodeMirror leaves
+ * alone) and the high range. A decoration only: the document - and therefore anything sent
+ * or saved - is untouched.
+ */
+const nonPrintingGlyphs = highlightSpecialChars({
+  render: (code) => {
+    const span = document.createElement("span");
+    span.className = "cm-nonprinting";
+    if (code <= 0x1f) span.textContent = String.fromCodePoint(0x2400 + code);
+    else if (code === 0x7f) span.textContent = "\u2421";
+    else span.textContent = String.fromCodePoint(code);
+    span.title = `U+${code.toString(16).toUpperCase().padStart(4, "0")}`;
+    return span;
+  },
+  addSpecialChars: /[\t\x7f-\xff]/,
+});
+
+/**
+ * Line-ending markers, the other half of the toggle. CodeMirror treats CR and LF as
+ * structural line separators rather than document content, so highlightSpecialChars can
+ * never see them - a message whose every line ends CRLF would show no glyph at all.
+ * These zero-width end-of-line widgets name the actual break bytes instead (␍␊ for CRLF,
+ * the smuggling-relevant case). Widgets are not document text: copying, saving and
+ * sending are byte-identical with the toggle on or off.
+ */
+class EOLMarker extends WidgetType {
+  constructor(readonly glyph: string) {
+    super();
+  }
+  override eq(other: EOLMarker): boolean {
+    return other.glyph === this.glyph;
+  }
+  override toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-nonprinting cm-eol";
+    span.textContent = this.glyph;
+    return span;
+  }
+}
+
+/**
+ * The break bytes behind each rendered line, read off the raw message rather than the
+ * CodeMirror document: CM6 normalises CRLF to LF when it parses the doc, so the document
+ * itself can no longer tell a CRLF message from an LF one - and certifying "LF only" on a
+ * CRLF message is the one wrong answer this toggle must never give. The raw text and the
+ * document agree line-for-line (every break spelling still breaks exactly one line), so the
+ * nth break in the raw text is the break after the nth rendered line.
+ */
+function breakGlyphs(text: string): string[] {
+  const glyphs: string[] = [];
+  for (const match of text.matchAll(/\r\n|\r|\n/g)) {
+    glyphs.push(match[0] === "\r\n" ? "␍␊" : match[0] === "\n" ? "␊" : "␍");
+  }
+  return glyphs;
+}
+
+function buildEOLMarkers(view: EditorView, raw: string): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  const doc = view.state.doc;
+  const glyphs = breakGlyphs(raw);
+  for (let lineNo = 1; lineNo <= doc.lines; lineNo += 1) {
+    const line = doc.line(lineNo);
+    // The final line has no break after it (a document ending in a break grows an empty
+    // final line instead), so there is nothing to name there.
+    if (line.to >= doc.length) break;
+    const glyph = glyphs[lineNo - 1];
+    if (glyph) builder.add(line.to, line.to, Decoration.widget({ widget: new EOLMarker(glyph), side: 1 }));
+  }
+  return builder.finish();
+}
+
+function nonPrintingEOLPlugin(rawRef: { current: string }) {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      constructor(view: EditorView) {
+        this.decorations = buildEOLMarkers(view, rawRef.current);
+      }
+      update(update: ViewUpdate) {
+        if (update.docChanged || update.viewportChanged) this.decorations = buildEOLMarkers(update.view, rawRef.current);
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+}
 
 /**
  * Colours come from CSS custom properties so a single stylesheet drives both
@@ -248,6 +340,9 @@ export function HttpEditor({
   menuGroups?: MenuGroup[];
 }): JSX.Element {
   const [wrap, setWrap] = useState(true);
+  // Burp's \n toggle (burpsy-react-ui-1e4): off by default, and a pure decoration - the
+  // document never changes, so toggling cannot alter the bytes that get sent.
+  const [showNonPrinting, setShowNonPrinting] = useState(false);
   // Pretty first when it is available: the initial state cannot read canPretty (it
   // does not exist yet on first render), so the choice is deferred to the active
   // resolution below instead of a second source of truth in useState.
@@ -261,6 +356,7 @@ export function HttpEditor({
   // The search spec this editor last auto-scrolled for. Outside the useMemo because the
   // listener closes over it; per-editor, so two editors do not fight over one marker.
   const lastSearchSpecRef = useRef("");
+  const rawTextRef = useRef("");
   // Paste-from-file (burpsy-react-ui-cto2): a hidden input is the only way a web page reads a
   // file the operator picked, and it must live in the DOM to be clickable. Cleared after every
   // change so choosing the same file twice still fires (the app's config import does the same).
@@ -335,8 +431,9 @@ export function HttpEditor({
       }),
     ];
     if (wrap) base.push(EditorView.lineWrapping);
+    if (showNonPrinting) base.push(nonPrintingGlyphs, nonPrintingEOLPlugin(rawTextRef));
     return base;
-  }, [wrap, label]);
+  }, [wrap, showNonPrinting, label]);
 
   const bytes = useMemo(() => new TextEncoder().encode(value).length, [value]);
   const response = useMemo(() => isResponse(value), [value]);
@@ -385,6 +482,12 @@ export function HttpEditor({
       ? "pretty"
       : "raw";
   const shown = active === "pretty" ? prettied : value;
+  // Refreshed every render, before any plugin constructor or update can run: the EOL plugin
+  // names breaks off the raw text (CM6 normalises CRLF away in the document), and reading it
+  // here keeps `value` out of the extensions useMemo deps - which would otherwise rebuild the
+  // whole extension set on every keystroke. This must stay outside that useMemo: its factory
+  // runs on mount, before this line exists, which is a first-render TDZ crash.
+  rawTextRef.current = shown;
   // What the toolbar's Copy hands over. Hex still copies a dump — that is what an
   // operator pasting into a ticket wants, and it is why message.ts's read-only
   // hexDump did not go away when the view became editable.
@@ -530,6 +633,17 @@ export function HttpEditor({
               onClick={() => setWrap((current) => !current)}
             >
               <WrapText size={13} />
+            </IconButton>
+          ) : null}
+          {active === "pretty" || active === "raw" ? (
+            <IconButton
+              label={showNonPrinting ? "Hide non-printing characters" : "Show non-printing characters"}
+              title="Render bytes below 0x20 and 0x7F-0xFF as visible glyphs (Burp's \n)"
+              size="small"
+              aria-pressed={showNonPrinting}
+              onClick={() => setShowNonPrinting((current) => !current)}
+            >
+              <Pilcrow size={13} />
             </IconButton>
           ) : null}
           {editable ? (
