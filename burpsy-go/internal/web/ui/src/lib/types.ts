@@ -292,6 +292,25 @@ export interface RepeaterResult {
   redirects?: RepeaterRedirects;
 }
 
+/**
+ * One position in a Repeater tab's response history: a send's result *paired with the request
+ * that produced it*.
+ *
+ * The pair is the point. Repeater's whole method is "change one thing and compare", and a history
+ * entry that carried only the response left the operator reading entry 2 of 5 beside whatever the
+ * request pane happened to hold — the current draft, which is not what entry 2 was sent with.
+ *
+ * `request` is the draft text as the operator wrote it, captured client-side at send time. It is
+ * NOT declared on `RepeaterResult` because the server does not return it: /api/repeater/send
+ * answers with the response side plus ids, and claiming otherwise on the wire type would be a
+ * contract this UI invented. Nor is it the exact bytes that went out — per-send overrides such as
+ * `normalize_line_endings` and `update_content_length` are applied server-side — so this is "as
+ * written", which is what an operator comparing two variations is actually looking for.
+ */
+export interface RepeaterHistoryEntry extends RepeaterResult {
+  request: string;
+}
+
 export interface RepeaterRedirectHop {
   from: string;
   status: number;

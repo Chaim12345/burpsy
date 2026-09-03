@@ -8,7 +8,7 @@ import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
 import { SendCancelled, useRepeaterSend } from "../lib/data.tools";
 import { useApp, type RepeaterTab } from "../lib/store";
-import type { Exchange, RepeaterRedirects, RepeaterResult, RepeaterSendOptions } from "../lib/types";
+import type { Exchange, RepeaterHistoryEntry, RepeaterRedirects, RepeaterResult, RepeaterSendOptions } from "../lib/types";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader } from "../ui/layout";
@@ -56,14 +56,19 @@ export function RepeaterPage(): JSX.Element {
   const setRepeaterTabOptions = useApp((state) => state.setRepeaterTabOptions);
 
   /**
-   * Every response a tab has received, oldest first — not just the latest. Held in memory only;
-   * the store persists the request draft across reloads, deliberately not the responses.
+   * Every send a tab has made, oldest first — not just the latest. Held in memory only; the store
+   * persists the request draft across reloads, deliberately not the responses.
    *
    * Burp keeps a per-tab history because the whole method of the tool is "change one thing and
    * compare": overwriting the previous response destroys the half of the comparison you were about
    * to make. This kept exactly one response per tab and dropped the rest on every send.
+   *
+   * Each entry is a request/response *pair* (RepeaterHistoryEntry). Storing the response alone made
+   * paging back a half-answer: the response pane moved to entry 2 while the request pane went on
+   * showing the live draft, so the operator could see that entry 2 behaved differently and not
+   * which variation entry 2 was — the comparison the tool exists for.
    */
-  const [history, setHistory] = useState<Record<string, RepeaterResult[]>>({});
+  const [history, setHistory] = useState<Record<string, RepeaterHistoryEntry[]>>({});
   /** Which entry of the active tab's history is on screen. Null follows the newest. */
   const [viewing, setViewing] = useState<Record<string, number | null>>({});
   const [handingOff, setHandingOff] = useState(false);
@@ -123,10 +128,21 @@ export function RepeaterPage(): JSX.Element {
   };
 
   const submit = (tab: RepeaterTab) => {
+    // Paged back into history, the request pane shows a past entry's snapshot, not the draft this
+    // would send. Sending anyway would fire bytes the operator cannot see — the pane says one
+    // thing and the button does another. The Send button is disabled in that state, but the
+    // hotkey and Enter-in-Target reach here directly, so the refusal lives with the send itself.
+    if (viewing[tab.id] != null) {
+      toast.info("Viewing a past send — step to the newest entry to edit and send the draft");
+      return;
+    }
+    // The exact draft text that goes on the wire, captured here so the history entry below records
+    // what was sent rather than what the draft says later.
+    const sentRequest = tab.request;
     send.mutate(
       {
         target: tab.target,
-        request: tab.request,
+        request: sentRequest,
         protocol: schemeOf(tab.target),
         from_exchange: tab.fromExchange,
         // Absent options means "standing behaviour" — the backend validates and applies whatever
@@ -135,7 +151,10 @@ export function RepeaterPage(): JSX.Element {
       },
       {
         onSuccess: (result) => {
-          setHistory((current) => ({ ...current, [tab.id]: [...(current[tab.id] ?? []), result] }));
+          setHistory((current) => ({
+            ...current,
+            [tab.id]: [...(current[tab.id] ?? []), { ...result, request: sentRequest }],
+          }));
           // A new send always snaps the view forward: an operator who had paged back to compare is
           // still asking "what did this one do", and leaving them on an older entry would answer a
           // question they stopped asking.
@@ -190,7 +209,15 @@ export function RepeaterPage(): JSX.Element {
             ...(tab.options ? { options: tab.options } : {}),
           }),
         );
-        setHistory((current) => ({ ...current, [tab.id]: [...(current[tab.id] ?? []), sent] }));
+        // Same pairing rule as a normal send: the entry this hand-off adds carries the draft it
+        // sent, so history stays navigable rather than gaining one response with no request.
+        setHistory((current) => ({
+          ...current,
+          [tab.id]: [...(current[tab.id] ?? []), { ...sent, request: tab.request }],
+        }));
+        // Same rule as the Send button: a send that lands snaps the view to it, so the counter and
+        // both panes describe the request that just went out instead of an entry further back.
+        setViewing((current) => ({ ...current, [tab.id]: null }));
         exchangeId = sent.exchange_id;
       }
       if (!exchangeId) {
@@ -217,6 +244,16 @@ export function RepeaterPage(): JSX.Element {
   const activeHistory = active ? (history[active.id] ?? []) : [];
   const viewIndex = active ? (viewing[active.id] ?? activeHistory.length - 1) : 0;
   const result = activeHistory[viewIndex];
+
+  /**
+   * The request that produced the entry on screen, or null while the tab is following its newest
+   * send — where the request pane is the live, editable draft and must stay that way.
+   *
+   * Null is the "not pinned" state rather than "index equals the last entry": paging forward onto
+   * the newest entry clears the pin back to null (see the Next handler), and a send clears it too,
+   * so a non-null pin always means the operator is deliberately looking at a past send.
+   */
+  const viewedRequest = active && viewing[active.id] != null ? (result?.request ?? null) : null;
 
   // The chain's hop selection, resolved to bytes. `lastFollowedHop` is the response the chain
   // landed on — the "final response" the toggle offers — and is null for a chain that followed
@@ -420,10 +457,12 @@ export function RepeaterPage(): JSX.Element {
                   {result.exchange_id ? <Badge>#{result.exchange_id}</Badge> : null}
                 </>
               ) : null}
+              {/* Labelled "send" rather than "response" because stepping moves both panes: the
+                  request that was sent and the response it got, together. */}
               {activeHistory.length > 1 ? (
-                <span className="repeater-history" role="group" aria-label="Response history">
+                <span className="repeater-history" role="group" aria-label="Send history">
                   <IconButton
-                    label="Previous response"
+                    label="Previous send"
                     size="small"
                     disabled={viewIndex <= 0}
                     onClick={() => setViewing((c) => ({ ...c, [active.id]: Math.max(0, viewIndex - 1) }))}
@@ -435,7 +474,7 @@ export function RepeaterPage(): JSX.Element {
                     {viewIndex + 1}/{activeHistory.length}
                   </span>
                   <IconButton
-                    label="Next response"
+                    label="Next send"
                     size="small"
                     disabled={viewIndex >= activeHistory.length - 1}
                     onClick={() =>
@@ -478,8 +517,22 @@ export function RepeaterPage(): JSX.Element {
                   </button>
                 </Tooltip>
               ) : null}
-              <Tooltip content="Send the current request (mod+Enter)">
-                <button type="button" className="button button-primary" onClick={() => submit(active)} disabled={send.isPending}>
+              {/* Disabled while a past send is on screen: the request pane is then a snapshot, and
+                  Send would fire the draft the operator can no longer see. The tooltip says which
+                  control gets them back rather than leaving a dead button unexplained. */}
+              <Tooltip
+                content={
+                  viewedRequest != null
+                    ? "Viewing a past send — step to the newest entry to send the draft"
+                    : "Send the current request (mod+Enter)"
+                }
+              >
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => submit(active)}
+                  disabled={send.isPending || viewedRequest != null}
+                >
                   <Send size={14} />
                   {send.isPending ? "Sending…" : "Send"}
                 </button>
@@ -595,9 +648,14 @@ export function RepeaterPage(): JSX.Element {
       </div>
 
       <div className={inspector ? "editor-grid-inspected" : "editor-grid"}>
+        {/* Paged back, this pane shows the request that produced the entry on screen — read-only,
+            because it has already been sent and there is nothing left to change about it. The label
+            carries the state: an editor that silently stopped accepting keystrokes would read as a
+            broken editor. Following the newest send, it is the live draft, editable as always. */}
         <HttpEditor
-          label="Request"
-          value={active.request}
+          label={viewedRequest != null ? `Request · sent ${viewIndex + 1}/${activeHistory.length}, as written` : "Request"}
+          value={viewedRequest ?? active.request}
+          readOnly={viewedRequest != null}
           onChange={(value) => updateRepeaterTab(active.id, { request: value })}
           filename="repeater-request.txt"
           placeholder="GET / HTTP/1.1"
@@ -645,10 +703,14 @@ export function RepeaterPage(): JSX.Element {
           // request rather than rendering a pane of empty sections that looks like
           // a parse failure.
           inspecting === "request" || !result ? (
+            // On a past send the Inspector follows the pane: it parses that entry's request and
+            // drops its editing affordances, the same way the response half already does, rather
+            // than offering fields whose edits would land on a draft that is not on screen.
             <Inspector
-              raw={active.request}
-              label="Inspector · request"
-              onChange={(next) => updateRepeaterTab(active.id, { request: next })}
+              raw={viewedRequest ?? active.request}
+              label={viewedRequest != null ? "Inspector · request as sent" : "Inspector · request"}
+              onChange={viewedRequest != null ? undefined : (next) => updateRepeaterTab(active.id, { request: next })}
+              readOnlyNote="This request has already been sent, so it is read-only here — step to the newest entry to edit the draft."
               onSwitch={result ? () => setInspecting("response") : undefined}
               switchLabel="Inspect the response"
             />
