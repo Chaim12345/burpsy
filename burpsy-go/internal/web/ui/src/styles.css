@@ -2059,10 +2059,24 @@ tbody td {
     padding: var(--s2);
     border: 1px solid var(--line);
     background: var(--surface);
-    cursor: pointer;
     color: inherit;
     font: inherit;
     border-left: var(--border-strong) solid transparent;
+  }
+
+  /* Only the title selects the tile (the tile also owns a cancel button and a switch), so
+     only the title carries the pointer cursor. */
+  .task-tile-select {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    min-width: 0;
+    flex: 1;
+    display: flex;
   }
 
   .task-tile:hover {

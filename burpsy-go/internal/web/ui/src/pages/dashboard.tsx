@@ -134,26 +134,23 @@ function TaskTile({
 }): JSX.Element {
   const cancel = useCancelTask();
   const setLive = useSetScannerLive();
+  // The tile is a div, not a button: it owns an IconButton and a Switch, and a button wrapping
+  // either is invalid HTML, fails the axe nested-interactive rule, and selects the tile when the
+  // operator only meant to flip the switch. Only the title selects.
   return (
-    <button
-      type="button"
-      className={selected ? "task-tile task-tile-selected" : "task-tile"}
-      aria-pressed={selected}
-      onClick={onSelect}
-    >
+    <div className={selected ? "task-tile task-tile-selected" : "task-tile"}>
       <div className="task-tile-head">
-        <strong>
-          {ordinal}. {task.kind === "live audit" ? "Live audit from Proxy (all traffic)" : `${task.kind} (${task.target})`}
-        </strong>
+        <button type="button" className="task-tile-select" aria-pressed={selected} onClick={onSelect}>
+          <strong>
+            {ordinal}. {task.kind === "live audit" ? "Live audit from Proxy (all traffic)" : `${task.kind} (${task.target})`}
+          </strong>
+        </button>
         {task.id !== -1 && task.cancellable && task.state === "running" ? (
           <IconButton
             label={`Cancel ${task.kind} task on ${task.target}`}
             size="small"
             disabled={cancel.isPending}
-            onClick={(event) => {
-              event.stopPropagation();
-              cancel.mutate(task.id);
-            }}
+            onClick={() => cancel.mutate(task.id)}
           >
             <Square size={12} />
           </IconButton>
@@ -197,7 +194,7 @@ function TaskTile({
           </>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -254,11 +251,11 @@ function TaskSidebar({
       </div>
       {shown.length ? (
         <div className="task-tile-list">
-          {shown.map((task, index) => (
+          {shown.map((task) => (
             <TaskTile
               key={task.id}
               task={task}
-              ordinal={shown.length - index}
+              ordinal={rows.length - rows.indexOf(task)}
               selected={selectedId === task.id}
               onSelect={() => onSelect(task.id)}
               liveFindings={liveFindings}
