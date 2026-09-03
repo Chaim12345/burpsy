@@ -4,6 +4,9 @@
 package toollog
 
 import (
+	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,6 +103,16 @@ type Entry struct {
 	StartedMs   uint64
 	DurationMs  uint64
 	Note        string
+	// Comment is the operator's annotation (burpsy-react-ui-5da): Burp's log comment,
+	// distinct from Note, which producers write (errors and run summaries) and the wire
+	// surfaces as the row's error text. Merging the two would let an annotation overwrite
+	// the reason a send failed, or a failure overwrite an annotation.
+	Comment string
+	// Highlight is the operator's colour tag for this row (burpsy-react-ui-5da), empty when
+	// unset. It reuses core.ValidHighlights' vocabulary — the same colour means the same thing
+	// in Logger, Organizer and HTTP history — rather than a second vocabulary, and validation
+	// lives at the API boundary (toolLogSetComment) for the same reason the organizer's does.
+	Highlight string
 }
 
 // Bytes wraps a measured response length for Record's respLen argument. Callers that received no
@@ -134,6 +147,20 @@ type ToolLog struct {
 	// of this field would mean nothing records, so New seeds it explicitly.
 	capturing atomic.Uint32
 
+	// filter narrows which records Record keeps, beyond the per-tool capture axis
+	// (burpsy-react-ui-72k9): status buckets, a search term over method/host/path, and an
+	// in-scope-only switch. Destructive like the tool axis — a refused record is sent and
+	// deliberately not kept — so it reads and writes under the same lock as the entries
+	// rather than through a lock-free snapshot that could disagree mid-record.
+	filter CaptureFilter
+	// filtered counts what the filter refused. Beside Uncaptured, never merged into it:
+	// "not this tool" and "not this traffic" are different reasons to lose a row.
+	// Atomic because Record's refusal path must not take the entries lock to count.
+	filtered atomic.Uint64
+	// scope answers the in-scope question for ScopeOnly. Nil means no scope was attached,
+	// and a nil scope filters nothing — the intercept engine's fail-safe, for the same
+	// reason: an attached-but-unreadable scope must not silently empty the log.
+	scope ScopeChecker
 	// uncaptured counts, per tool ordinal, the Record calls capture refused.
 	// This is the honest-counting counterpart of the axis: switching a tool's
 	// capture off must not look like an empty log — it looks like a log plus a
@@ -167,11 +194,214 @@ func New() *ToolLog {
 	return l
 }
 
+// ScopeChecker is the engagement scope, narrowed to the one question the capture filter
+// asks. Mirrors intercept.ScopeChecker so neither package imports the other for one method.
+type ScopeChecker interface {
+	Contains(host string, port uint16, path string, isTLS bool) bool
+}
+
+// SearchSpec is a capture-time search over method, host and path.
+type SearchSpec struct {
+	Term          string
+	Regex         bool
+	CaseSensitive bool
+	Negate        bool
+
+	re *regexp.Regexp
+}
+
+// CaptureFilter narrows Record beyond the per-tool axis. The zero value filters nothing,
+// so a log that never had a filter set behaves exactly as before.
+type CaptureFilter struct {
+	// Status holds accepted status classes (2-5, first digit); empty accepts all.
+	Status []int
+	Search SearchSpec
+	// ScopeOnly keeps in-scope traffic. Needs a scope via SetScope; without one it is
+	// inert rather than emptying the log.
+	ScopeOnly bool
+}
+
+// compile validates the search term the way rules are validated: a bad regex is refused
+// when the filter is saved, not per record. Called with the term this filter carries.
+func (f *CaptureFilter) compile() error {
+	if f.Search.Term == "" || !f.Search.Regex {
+		f.Search.re = nil
+		return nil
+	}
+	re, err := regexp.Compile(f.Search.Term)
+	if err != nil {
+		return err
+	}
+	f.Search.re = re
+	return nil
+}
+
+// matches reports whether one record survives the filter. Scope is passed in because it
+// lives on the log, not in the filter value.
+func (f *CaptureFilter) matches(host string, port uint16, tls bool, method, path string, status int, scope ScopeChecker) bool {
+	if len(f.Status) > 0 {
+		hit := false
+		for _, class := range f.Status {
+			if status/100 == class {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	}
+	if f.ScopeOnly {
+		if scope == nil {
+			return true
+		}
+		if !scope.Contains(host, port, path, tls) {
+			return false
+		}
+	}
+	if f.Search.Term != "" {
+		haystack := method + " " + host + " " + path
+		term := f.Search.Term
+		if !f.Search.CaseSensitive {
+			haystack = strings.ToLower(haystack)
+			term = strings.ToLower(term)
+		}
+		var hit bool
+		if f.Search.re != nil {
+			target := haystack
+			if f.Search.CaseSensitive {
+				target = method + " " + host + " " + path
+			}
+			hit = f.Search.re.MatchString(target)
+		} else {
+			hit = strings.Contains(haystack, term)
+		}
+		if hit == f.Search.Negate {
+			return false
+		}
+	}
+	return true
+}
+
 func (l *ToolLog) WithCapacity(c int) *ToolLog {
 	l.mu.Lock()
 	l.capacity = c
 	l.mu.Unlock()
 	return l
+}
+
+// SetCapacity changes the bound at runtime (burpsy-react-ui-72k9): Burp's capture limit.
+// Non-positive values are refused rather than clamped — a limit of zero would read as
+// "keep nothing" while meaning "unlimited" nowhere.
+func (l *ToolLog) SetCapacity(c int) error {
+	if c <= 0 {
+		return fmt.Errorf("capacity must be positive, got %d", c)
+	}
+	l.mu.Lock()
+	l.capacity = c
+	for len(l.entries) > l.capacity {
+		l.entries = l.entries[1:]
+		l.dropped++
+	}
+	l.mu.Unlock()
+	if l.onChange != nil {
+		l.onChange()
+	}
+	return nil
+}
+
+// Capacity reports the current bound.
+func (l *ToolLog) Capacity() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.capacity
+}
+
+// ScopeAttached reports whether ScopeOnly can filter. Read by the API so the page can
+// disable the switch with its reason instead of offering a control that does nothing.
+func (l *ToolLog) ScopeAttached() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.scope != nil
+}
+
+// SetScope attaches the engagement scope for ScopeOnly filtering.
+func (l *ToolLog) SetScope(s ScopeChecker) {
+	l.mu.Lock()
+	l.scope = s
+	l.mu.Unlock()
+}
+
+// SetFilter replaces the capture filter, compiling its regex first so a bad pattern is
+// refused at save time with the previous filter still in force — never a half-applied one.
+func (l *ToolLog) SetFilter(f CaptureFilter) error {
+	if err := f.compile(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	l.filter = f
+	l.mu.Unlock()
+	if l.onChange != nil {
+		l.onChange()
+	}
+	return nil
+}
+
+// Filter returns the capture filter in force.
+func (l *ToolLog) Filter() CaptureFilter {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.filter
+}
+
+// Filtered counts records the filter refused. Beside Dropped and Uncaptured: three different
+// reasons to lose a row, three counters, none summed into another.
+func (l *ToolLog) Filtered() uint64 {
+	return l.filtered.Load()
+}
+
+// SetComment annotates one entry (burpsy-react-ui-5da): Burp's log comment. It re-fires the
+// persistence sink so a restart keeps the comment — the sink is an upsert — and reports whether
+// the id existed rather than silently keeping a comment addressed nowhere.
+func (l *ToolLog) SetComment(id uint64, comment string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, e := range l.entries {
+		if e.ID == id {
+			e.Comment = comment
+			l.fire(e)
+			return true
+		}
+	}
+	return false
+}
+
+// SetHighlight paints one entry (burpsy-react-ui-5da): Burp's row highlight, from the same
+// vocabulary as the Organizer's and HTTP history's (core.ValidHighlights). Empty clears. The
+// set is re-fired even when the colour is unchanged so a client re-saving reads as saved.
+func (l *ToolLog) SetHighlight(id uint64, highlight string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, e := range l.entries {
+		if e.ID == id {
+			e.Highlight = highlight
+			l.fire(e)
+			return true
+		}
+	}
+	return false
+}
+
+// fire runs the persistence and live-update hooks after an in-place annotation. Both are
+// called under the log's write lock, which is what Record already does for new rows; the
+// sink is an upsert, so re-writing the row is how an annotation survives a restart.
+func (l *ToolLog) fire(e *Entry) {
+	if l.onRecord != nil {
+		l.onRecord(e)
+	}
+	if l.onChange != nil {
+		l.onChange()
+	}
 }
 
 // Record adds one entry and returns its ID, or 0 when the tool's capture is
@@ -187,6 +417,13 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		if tool >= 0 && int(tool) < len(l.uncaptured) {
 			l.uncaptured[tool].Add(1)
 		}
+		return 0
+	}
+	l.mu.RLock()
+	keep := l.filter.matches(host, port, tls, method, path, status, l.scope)
+	l.mu.RUnlock()
+	if !keep {
+		l.filtered.Add(1)
 		return 0
 	}
 	id := atomic.AddUint64(&l.nextID, 1)

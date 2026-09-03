@@ -472,6 +472,15 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send one operator-authored request and record the exchange",
 	},
+	"/api/repeater/send-group": {
+		// riskEgress, not riskAttack: the group is tabs an operator authored by hand and the endpoint
+		// caps one call at 64 of them, so this is "a handful", the same class as the single send. The
+		// parallel mode fires them concurrently, which is a timing choice rather than an unbounded
+		// volume one.
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "send a Repeater tab group in tab order on one shared socket, in tab order on separate " +
+			"connections, or all at once in parallel; every raw request is authorised individually",
+	},
 	"/api/report/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",
 		summary: "export findings as json, sarif or html",
@@ -611,16 +620,41 @@ var manifest = map[string]route{
 			"the capture axis (which tools are recorded at all, and how many requests went unrecorded). " +
 			"POST: turn one tool's capture on or off. DELETE: clears it, discarding the record of what was sent to the target",
 	},
+	"/api/tools/log/": {
+		// PATCH annotates one entry with a comment (burpsy-react-ui-5da) — a local write to the
+		// running process's log, the same class as the organizer's POST edit. Not GET: the list
+		// endpoint at /api/tools/log already returns the entries, so a bare GET here answers 405.
+		methods: []string{"PATCH"}, risk: riskLocal, subPath: "1",
+		summary: "one log entry by id: PATCH sets (or clears) its comment",
+	},
 	"/api/tools/organizer": {
 		methods: []string{"GET", "POST"}, risk: riskLocal,
 		summary: "the organizer's saved items",
 	},
 	"/api/tools/organizer/": {
-		// POST updates and DELETE removes. Not GET, and not PUT — both of which this entry originally
-		// guessed at. Worth recording because POST-to-update is unusual enough that a reader would
-		// expect PUT, and the 405 test is what settled it.
-		methods: []string{"POST", "DELETE"}, risk: riskLocal, subPath: "1",
-		summary: "one organizer item by id: POST updates title/note/highlight, DELETE removes it",
+		// POST updates title/note/highlight, PUT .../status sets the workflow status, DELETE removes.
+		// Not GET. The status PUT exists because a status change is one deliberate operator decision
+		// (Burp applies it from the item's status submenu), kept off the POST edit form the same way
+		// the store keeps SetStatus apart from Update; an unrepresentable status is a 400 naming the
+		// valid set, which is why PUT needs a real handler rather than a bare 405.
+		methods: []string{"POST", "PUT", "DELETE"}, risk: riskLocal, subPath: "1",
+		summary: "one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it",
+	},
+	"/api/tools/organizer/collections": {
+		// POST creates a named group; GET is the organizer list's partner but the list endpoint
+		// already carries collections, so a bare GET here answers 405 rather than a second copy
+		// of the same shape that could drift from it.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "create a collection: POST {name}; a duplicate name is a 400",
+	},
+	"/api/tools/organizer/collections/": {
+		// The collections surface: PUT {id} renames / sets the About note, POST {id}/duplicate
+		// copies the group with its items under fresh ids, PUT {id}/items moves or copies items
+		// in (and PUT /inbox moves them back), DELETE {id} deletes with ?items=inbox (default,
+		// unlink) or ?items=delete. One entry because one handler owns the whole subtree and the
+		// id space is shared with the inbox literal.
+		methods: []string{"PUT", "POST", "DELETE"}, risk: riskLocal, subPath: "1",
+		summary: "organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete",
 	},
 	"/api/tools/rules": {
 		// PUT, not POST: the whole rule set is replaced as a document rather than appended to, which is

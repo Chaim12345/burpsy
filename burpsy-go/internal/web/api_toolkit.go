@@ -13,6 +13,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/tools"
@@ -860,6 +861,11 @@ type toolLogEntry struct {
 	StartedMs  uint64  `json:"started_ms"`
 	DurationMs uint64  `json:"duration_ms"`
 	Error      *string `json:"error"`
+	// Comment is the operator's annotation, distinct from Error (the producer's note).
+	Comment string `json:"comment"`
+	// Highlight is the operator's colour tag, "" when unset. Same vocabulary as the
+	// organizer's (core.ValidHighlights) so the three surfaces agree on what red means.
+	Highlight string `json:"highlight"`
 }
 
 // toolLogResp mirrors toollog.ts's LogResp.
@@ -882,6 +888,25 @@ type toolLogResp struct {
 	// UncapturedTotal is the sum of Uncaptured, so a caller showing 20 of 4000
 	// can also say how many request-gone-forever the log is silent about.
 	UncapturedTotal uint64 `json:"uncaptured_total"`
+	// FilteredTotal counts what the capture filter refused, beside Dropped (evicted).
+	FilteredTotal uint64 `json:"filtered_total"`
+	// Capacity is the memory bound in rows.
+	Capacity int `json:"capacity"`
+	// ScopeAttached says whether ScopeOnly can filter: without a scope it is inert.
+	ScopeAttached bool `json:"scope_attached"`
+	// Filter echoes the capture filter in force, so the page renders what the server
+	// enforces rather than a second copy of it.
+	Filter toolLogFilterView `json:"filter"`
+}
+
+// toolLogFilterView mirrors toollog.CaptureFilter for the capture-filter surface.
+type toolLogFilterView struct {
+	Status    []int  `json:"status"`
+	Term      string `json:"term"`
+	Regex     bool   `json:"regex"`
+	Case      bool   `json:"case_sensitive"`
+	Negate    bool   `json:"negate"`
+	ScopeOnly bool   `json:"scope_only"`
 }
 
 func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
@@ -897,12 +922,14 @@ func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// toolLogSetCaptureReq toggles the capture axis for one tool. The tool is a
-// name (from Tool.String()), never an ordinal: ordinals are the durable
-// mirror's stability contract, and the wire has always used names.
+// toolLogSetCaptureReq drives the capture surface. The historical {tool, on} toggle keeps
+// working; filter and capacity ride the same endpoint so the whole capture filter is one
+// round trip, and absent keys leave their axes untouched rather than resetting them.
 type toolLogSetCaptureReq struct {
-	Tool string `json:"tool"`
-	On   bool   `json:"on"`
+	Tool     string             `json:"tool"`
+	On       bool               `json:"on"`
+	Filter   *toolLogFilterView `json:"filter"`
+	Capacity *int               `json:"capacity"`
 }
 
 // toolLogSetCapture serves POST /api/tools/log — the destructive arm of the
@@ -914,14 +941,41 @@ func (s *Server) toolLogSetCapture(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body must be JSON with tool and on", http.StatusBadRequest)
 		return
 	}
-	tool, ok := toollog.ToolFromName(req.Tool)
-	if !ok {
-		http.Error(w, "unknown tool", http.StatusBadRequest)
+	if req.Filter != nil {
+		f := toollog.CaptureFilter{
+			Status:    req.Filter.Status,
+			ScopeOnly: req.Filter.ScopeOnly,
+		}
+		f.Search.Term = req.Filter.Term
+		f.Search.Regex = req.Filter.Regex
+		f.Search.CaseSensitive = req.Filter.Case
+		f.Search.Negate = req.Filter.Negate
+		if err := s.toolLog.SetFilter(f); err != nil {
+			http.Error(w, "Invalid filter: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Capacity != nil {
+		if err := s.toolLog.SetCapacity(*req.Capacity); err != nil {
+			http.Error(w, "Invalid capacity: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	// The legacy toggle: present only when the caller names a tool. A filter-only POST
+	// carries no tool and must not touch the axis.
+	if req.Tool != "" {
+		tool, ok := toollog.ToolFromName(req.Tool)
+		if !ok {
+			http.Error(w, "unknown tool", http.StatusBadRequest)
+			return
+		}
+		s.toolLog.SetCapturing(tool, req.On)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{req.Tool + ".capturing": s.toolLog.Capturing(tool)})
 		return
 	}
-	s.toolLog.SetCapturing(tool, req.On)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{req.Tool + ".capturing": s.toolLog.Capturing(tool)})
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // toolLogGet serves GET /api/tools/log?filter=&search=&limit=.
@@ -982,6 +1036,15 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 		uncapturedTotal += n
 	}
 
+	f := s.toolLog.Filter()
+	// The filter echoes as wire shape, so its arrays must be arrays: a nil Status would
+	// marshal as null and every client reading filter.status.length crashes on a fresh
+	// server that has never had a capture filter set. "No classes accepted yet" is an
+	// empty list, not an absent one.
+	status := f.Status
+	if status == nil {
+		status = []int{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(toolLogResp{
 		Total:           len(matched),
@@ -992,7 +1055,57 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 		Capturing:       capturing,
 		Uncaptured:      uncaptured,
 		UncapturedTotal: uncapturedTotal,
+		FilteredTotal:   s.toolLog.Filtered(),
+		Capacity:        s.toolLog.Capacity(),
+		ScopeAttached:   s.toolLog.ScopeAttached(),
+		Filter: toolLogFilterView{
+			Status:    status,
+			Term:      f.Search.Term,
+			Regex:     f.Search.Regex,
+			Case:      f.Search.CaseSensitive,
+			Negate:    f.Search.Negate,
+			ScopeOnly: f.ScopeOnly,
+		},
 	})
+}
+
+// toolLogSetComment serves PATCH /api/tools/log/{id} — Burp's log comment
+// (burpsy-react-ui-5da). The body carries the whole comment; empty clears it. Unknown ids
+// 404 rather than succeeding quietly, so a note addressed at a trimmed row cannot read as saved.
+func (s *Server) toolLogSetComment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/api/tools/log/")
+	if !ok {
+		http.Error(w, "Usage: PATCH /api/tools/log/{id} with {comment}", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.ParseUint(strings.TrimSuffix(rest, "/"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid log entry id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Comment   string `json:"comment"`
+		Highlight string `json:"highlight"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Highlight != "" && !core.ValidHighlights[req.Highlight] {
+		http.Error(w, "Invalid highlight; use one of red orange yellow green cyan blue pink magenta gray or empty", http.StatusBadRequest)
+		return
+	}
+	if !s.toolLog.SetComment(id, req.Comment) {
+		http.Error(w, "No such log entry", http.StatusNotFound)
+		return
+	}
+	s.toolLog.SetHighlight(id, req.Highlight)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) toolLogClear(w http.ResponseWriter, r *http.Request) {
@@ -1463,7 +1576,11 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 		// an organizer.Item does not have, and the resolution happens here because that is where the
 		// traffic store and the scope are. See api_organizer_view.go, particularly for what happens
 		// to an item whose exchange has been evicted.
-		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizerView()})
+		//
+		// Collections ride the same response: the page renders groups and items from one fetch, and
+		// a separate endpoint would let the two drift apart mid-triage (a group shown after its last
+		// member was moved out).
+		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizerView(), "collections": s.organizer.Collections()})
 	case http.MethodPost:
 		var req struct {
 			Exchange int `json:"exchange"`
@@ -1497,7 +1614,15 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/")
-	id, err := strconv.Atoi(strings.TrimSuffix(idStr, "/"))
+	idStr = strings.TrimSuffix(idStr, "/")
+	// The status write is a subpath, not the item id: /{id}/status must be split before the id is
+	// parsed, or Atoi("1/status") fails and every status PUT would be answered "Invalid item id".
+	// Same shape as the session-rule detail handler's /update-macro and /run suffix routes.
+	if statusStr, ok := strings.CutSuffix(idStr, "/status"); ok {
+		s.organizerItemStatus(w, r, statusStr)
+		return
+	}
+	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "Invalid item id", http.StatusBadRequest)
 		return
@@ -1519,6 +1644,11 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 		}
 		s.organizerChanged()
 		w.WriteHeader(http.StatusOK)
+	case http.MethodPut:
+		// PUT .../status is handled by organizerItemStatus below (a /{id}/status subpath, split off
+		// before the id parse). A PUT of the item resource itself is not implemented: title/note/
+		// highlight go through POST, and a bare PUT would otherwise reach the 405 with no handler.
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	case http.MethodDelete:
 		if !s.organizer.Remove(id) {
 			http.Error(w, "Item not found", http.StatusNotFound)
@@ -1529,4 +1659,306 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// organizerItemStatus serves PUT /api/tools/organizer/{id}/status — the workflow-status write
+// path, separate from the POST edit form for the same reason the store keeps SetStatus apart
+// from Update: setting a status is one deliberate operator decision (Burp applies it from the
+// item's status submenu), not a field on the annotate dialog. An unrepresentable value is
+// refused with the valid set named, rather than stored and later rendered as a state the UI
+// cannot set or filter on. 404 is an unknown item, so "the item is gone" and "the status does
+// not exist" stay distinguishable.
+func (s *Server) organizerItemStatus(w http.ResponseWriter, r *http.Request, idStr string) {
+	if r.Method != http.MethodPut {
+		w.Header().Set("Allow", http.MethodPut)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid item id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	status := organizer.Status(req.Status)
+	if !organizer.ValidStatus(status) {
+		http.Error(w, fmt.Sprintf("Unknown status %q; the valid statuses are new, in_progress, postponed, done, ignored", req.Status), http.StatusBadRequest)
+		return
+	}
+	if !s.organizer.SetStatus(id, status) {
+		http.Error(w, "Item not found", http.StatusNotFound)
+		return
+	}
+	s.organizerChanged()
+	w.WriteHeader(http.StatusOK)
+}
+
+// ---- Organizer collections ----------------------------------------------------------------------
+
+// handleOrganizerCollections serves the /api/tools/organizer/collections surface — Burp's
+// organizer collections (tools/organizer/collections.html): New / Rename / Duplicate / Delete,
+// the About note, and Move to… for the items inside. One handler, because the routes share one
+// subtree and one id space:
+//
+//	POST   /api/tools/organizer/collections                 {name} -> create
+//	PUT    /api/tools/organizer/collections/{id}            {name?, note?} -> rename / note
+//	POST   /api/tools/organizer/collections/{id}/duplicate  -> duplicate with its items
+//	DELETE /api/tools/organizer/collections/{id}?items=inbox|delete
+//	                                                        -> delete, items unlinked or deleted
+//	PUT    /api/tools/organizer/collections/inbox           {item_ids} -> move back to the inbox
+//	PUT    /api/tools/organizer/collections/{id}/items      {item_ids, copy} -> move / copy into it
+//
+// "inbox" as the literal id in the move path is deliberate: collection 0 is not a collection, and
+// making the UI mint a fake numeric id for it would be a second lie about the id space.
+func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/collections")
+	rest = strings.Trim(rest, "/")
+
+	if rest == "" {
+		switch r.Method {
+		case http.MethodPost:
+			var req struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+			name := strings.TrimSpace(req.Name)
+			if name == "" {
+				http.Error(w, "A collection needs a name", http.StatusBadRequest)
+				return
+			}
+			c, ok := s.organizer.NewCollection(name)
+			if !ok {
+				http.Error(w, fmt.Sprintf("A collection named %q already exists", name), http.StatusBadRequest)
+				return
+			}
+			s.organizerChanged()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(c)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	// Move-to-inbox: the literal "inbox" stands for collection 0.
+	if rest == "inbox" {
+		if r.Method != http.MethodPut {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ItemIDs []int `json:"item_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		moved := s.organizer.MoveToCollection(req.ItemIDs, 0)
+		s.organizerChanged()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]int{"moved": moved})
+		return
+	}
+
+	// {id}/duplicate and {id}/items have a subpath; plain {id} is rename/note/delete.
+	if dup, ok := strings.CutSuffix(rest, "/duplicate"); ok {
+		id, err := strconv.Atoi(dup)
+		if err != nil {
+			http.Error(w, "Invalid collection id", http.StatusBadRequest)
+			return
+		}
+		s.organizerCollectionDuplicate(w, r, id)
+		return
+	}
+	if items, ok := strings.CutSuffix(rest, "/items"); ok {
+		id, err := strconv.Atoi(items)
+		if err != nil {
+			http.Error(w, "Invalid collection id", http.StatusBadRequest)
+			return
+		}
+		s.organizerCollectionItems(w, r, id)
+		return
+	}
+
+	id, err := strconv.Atoi(rest)
+	if err != nil {
+		http.Error(w, "Invalid collection id", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var req struct {
+			Name string  `json:"name"`
+			Note *string `json:"note"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Name != "" {
+			if !s.organizer.RenameCollection(id, strings.TrimSpace(req.Name)) {
+				// Renaming an unknown collection and renaming onto a taken name are different
+				// faults; the store's own duplicate check would have refused either, so the
+				// distinction is made here before asking.
+				if s.collectionExists(id) {
+					http.Error(w, fmt.Sprintf("A collection named %q already exists", req.Name), http.StatusBadRequest)
+					return
+				}
+				http.Error(w, "Collection not found", http.StatusNotFound)
+				return
+			}
+		}
+		if req.Note != nil {
+			if !s.organizer.SetCollectionNote(id, *req.Note) {
+				http.Error(w, "Collection not found", http.StatusNotFound)
+				return
+			}
+		}
+		s.organizerChanged()
+		w.WriteHeader(http.StatusOK)
+	case http.MethodDelete:
+		// The delete dialog's choice, verbatim from the acceptance criteria: unlink the items back
+		// to the inbox (the default, losing nothing) or delete them with the collection. Anything
+		// else is refused rather than guessed at.
+		disposition := r.URL.Query().Get("items")
+		if disposition == "" {
+			disposition = "inbox"
+		}
+		if disposition != "inbox" && disposition != "delete" {
+			http.Error(w, fmt.Sprintf("Unknown items disposition %q; use inbox or delete", disposition), http.StatusBadRequest)
+			return
+		}
+		unlinked, ok := s.organizer.DeleteCollection(id, disposition == "delete")
+		if !ok {
+			http.Error(w, "Collection not found", http.StatusNotFound)
+			return
+		}
+		s.organizerChanged()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]int{"unlinked": unlinked})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) collectionExists(id int) bool {
+	for _, c := range s.organizer.Collections() {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// organizerCollectionDuplicate copies a collection with every item in it — Burp's "duplicate" —
+// giving the items fresh ids (a duplicate is a new copy of the work, not a second pointer to it)
+// and the copy a name that does not collide.
+func (s *Server) organizerCollectionDuplicate(w http.ResponseWriter, r *http.Request, id int) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var source *organizer.Collection
+	for _, c := range s.organizer.Collections() {
+		if c.ID == id {
+			copied := c
+			source = &copied
+			break
+		}
+	}
+	if source == nil {
+		http.Error(w, "Collection not found", http.StatusNotFound)
+		return
+	}
+	// Find a name: "name (copy)", then "(copy 2)", … — bounded by the count of collections plus
+	// one, so the loop cannot run away.
+	name := source.Name + " (copy)"
+	for attempt := 2; s.nameTaken(name); attempt++ {
+		name = fmt.Sprintf("%s (copy %d)", source.Name, attempt)
+	}
+	created, ok := s.organizer.NewCollection(name)
+	if !ok {
+		http.Error(w, "Could not create the copy", http.StatusBadRequest)
+		return
+	}
+	s.organizer.SetCollectionNote(created.ID, source.Note)
+	// Copy the membership: each item is duplicated into the new collection with a fresh id.
+	copied := 0
+	for _, it := range s.organizer.List() {
+		if it.Collection != id {
+			continue
+		}
+		item := s.organizer.Add(it.Exchange)
+		s.organizer.Update(item.ID, it.Title, it.Note, it.Highlight)
+		s.organizer.SetStatus(item.ID, it.Status)
+		s.organizer.MoveToCollection([]int{item.ID}, created.ID)
+		copied++
+	}
+	s.organizerChanged()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"collection": created, "items_copied": copied})
+}
+
+func (s *Server) nameTaken(name string) bool {
+	for _, c := range s.organizer.Collections() {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// organizerCollectionItems moves (or copies) a set of items into one collection. copy=true
+// duplicates each item first — the Copy Link analogue — so the source keeps its own entry.
+func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request, id int) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ItemIDs []int `json:"item_ids"`
+		Copy    bool  `json:"copy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !s.collectionExists(id) {
+		http.Error(w, "Collection not found", http.StatusNotFound)
+		return
+	}
+	moved := 0
+	if req.Copy {
+		for _, itemID := range req.ItemIDs {
+			for _, it := range s.organizer.List() {
+				if it.ID != itemID {
+					continue
+				}
+				fresh := s.organizer.Add(it.Exchange)
+				s.organizer.Update(fresh.ID, it.Title, it.Note, it.Highlight)
+				s.organizer.SetStatus(fresh.ID, it.Status)
+				s.organizer.MoveToCollection([]int{fresh.ID}, id)
+				moved++
+				break
+			}
+		}
+	} else {
+		moved = s.organizer.MoveToCollection(req.ItemIDs, id)
+		if moved < 0 {
+			http.Error(w, "Collection not found", http.StatusNotFound)
+			return
+		}
+	}
+	s.organizerChanged()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"moved": moved})
 }

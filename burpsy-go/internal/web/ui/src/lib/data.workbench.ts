@@ -2,20 +2,20 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 import { api, json, query } from "./api";
 import { useResource } from "./data";
 import type {
-  CompareResponse,
-  UninterestingHeaders,
-  DecodeResponse,
-  EncodeResponse,
-  HashResponse,
-  SequencerAnalysis,
-  SequencerCapture,
-  StopCaptureResult,
-  TokenLocation,
-  ToolLogView,
-  TransformKind,
-  TransformResult,
-  TransformRun,
-  TransformStep,
+ CompareResponse,
+ UninterestingHeaders,
+ DecodeResponse,
+ EncodeResponse,
+ HashResponse,
+ SequencerAnalysis,
+ SequencerCapture,
+ StopCaptureResult,
+ TokenLocation,
+ ToolLogView,
+ TransformKind,
+ TransformResult,
+ TransformRun,
+ TransformStep,
 } from "./types.workbench";
 
 /**
@@ -24,10 +24,10 @@ import type {
  * server event still refreshes these views.
  */
 export const workbenchKeys = {
-  /** Distinct from data.ts's keys.toolLog: that key omits `limit`, so sharing it
-   *  would let the Dashboard's 20-row window and this page's full read collide. */
-  toolLog: (filter: string, search: string, limit: number) => ["toollog", "logger", filter, search, limit] as const,
-  sequencerCapture: (id: string) => ["sequencer", "capture", id] as const,
+ /** Distinct from data.ts's keys.toolLog: that key omits `limit`, so sharing it
+  *  would let the Dashboard's 20-row window and this page's full read collide. */
+ toolLog: (filter: string, search: string, limit: number) => ["toollog", "logger", filter, search, limit] as const,
+ sequencerCapture: (id: string) => ["sequencer", "capture", id] as const,
 };
 
 /* --- supported values, read off the Go handlers --------------------------- */
@@ -74,19 +74,19 @@ export const SEQUENCER_ENCODINGS = ["hex", "base64", "raw"] as const;
 /* --- sequencer ------------------------------------------------------------ */
 
 export function useSequencerAnalyse() {
-  return useMutation<SequencerAnalysis, Error, { text: string; encoding: string }>({
-    // An omitted encoding is what makes the server detect one; sending "" is an error there.
-    mutationFn: ({ text, encoding }) =>
-      api<SequencerAnalysis>("/api/sequencer/analyse", json("POST", encoding ? { text, encoding } : { text })),
-  });
+ return useMutation<SequencerAnalysis, Error, { text: string; encoding: string }>({
+  // An omitted encoding is what makes the server detect one; sending "" is an error there.
+  mutationFn: ({ text, encoding }) =>
+   api<SequencerAnalysis>("/api/sequencer/analyse", json("POST", encoding ? { text, encoding } : { text })),
+ });
 }
 
 /** Analyse an already-collected token list rather than a pasted blob. */
 export function useSequencerAnalyseTokens() {
-  return useMutation<SequencerAnalysis, Error, { tokens: string[]; encoding: string }>({
-    mutationFn: ({ tokens, encoding }) =>
-      api<SequencerAnalysis>("/api/sequencer/analyse", json("POST", encoding ? { tokens, encoding } : { tokens })),
-  });
+ return useMutation<SequencerAnalysis, Error, { tokens: string[]; encoding: string }>({
+  mutationFn: ({ tokens, encoding }) =>
+   api<SequencerAnalysis>("/api/sequencer/analyse", json("POST", encoding ? { tokens, encoding } : { tokens })),
+ });
 }
 
 /**
@@ -94,42 +94,42 @@ export function useSequencerAnalyseTokens() {
  * the one Workbench read that polls, matching Intercept's cadence.
  */
 export function useSequencerCapture(id: string, pollMs = 1_000): UseQueryResult<SequencerCapture> {
-  return useQuery({
-    queryKey: workbenchKeys.sequencerCapture(id),
-    queryFn: ({ signal }) => api<SequencerCapture>(`/api/sequencer/capture/${encodeURIComponent(id)}`, { signal }),
-    enabled: id !== "",
-    refetchInterval: pollMs,
-    staleTime: 0,
-  });
+ return useQuery({
+  queryKey: workbenchKeys.sequencerCapture(id),
+  queryFn: ({ signal }) => api<SequencerCapture>(`/api/sequencer/capture/${encodeURIComponent(id)}`, { signal }),
+  enabled: id !== "",
+  refetchInterval: pollMs,
+  staleTime: 0,
+ });
 }
 
 /** The body POST /api/sequencer/capture takes. `count` defaults to 100 server-side. */
 export interface SequencerCaptureRequest {
-  target: string;
-  protocol?: "http" | "https";
-  request: string;
-  count?: number;
-  /** Milliseconds between sends. A capture is the one tool that deliberately hammers one endpoint,
-   *  so this is how an operator stays under a rate limit. */
-  delay_ms?: number;
-  location: TokenLocation;
+ target: string;
+ protocol?: "http" | "https";
+ request: string;
+ count?: number;
+ /** Milliseconds between sends. A capture is the one tool that deliberately hammers one endpoint,
+  *  so this is how an operator stays under a rate limit. */
+ delay_ms?: number;
+ location: TokenLocation;
 }
 
 /** Start a real capture: N sends of one request, one token extracted per response. */
 export function useStartSequencerCapture() {
-  const client = useQueryClient();
-  return useMutation<SequencerCapture, Error, SequencerCaptureRequest>({
-    mutationFn: (body) => api<SequencerCapture>("/api/sequencer/capture", json("POST", body)),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ["sequencer", "capture"] }),
-  });
+ const client = useQueryClient();
+ return useMutation<SequencerCapture, Error, SequencerCaptureRequest>({
+  mutationFn: (body) => api<SequencerCapture>("/api/sequencer/capture", json("POST", body)),
+  onSuccess: () => void client.invalidateQueries({ queryKey: ["sequencer", "capture"] }),
+ });
 }
 
 export function useStopSequencerCapture() {
-  const client = useQueryClient();
-  return useMutation<StopCaptureResult, Error, void>({
-    mutationFn: () => api<StopCaptureResult>("/api/sequencer/capture/stop", json("POST", {})),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ["sequencer", "capture"] }),
-  });
+ const client = useQueryClient();
+ return useMutation<StopCaptureResult, Error, void>({
+  mutationFn: () => api<StopCaptureResult>("/api/sequencer/capture/stop", json("POST", {})),
+  onSuccess: () => void client.invalidateQueries({ queryKey: ["sequencer", "capture"] }),
+ });
 }
 
 /* --- decoder pipeline ----------------------------------------------------- */
@@ -137,32 +137,32 @@ export function useStopSequencerCapture() {
 let stepSequence = 0;
 
 export function newTransformStep(kind: TransformKind, value: string): TransformStep {
-  stepSequence += 1;
-  return { id: `s${stepSequence}`, kind, value, guess: kind === "decode" };
+ stepSequence += 1;
+ return { id: `s${stepSequence}`, kind, value, guess: kind === "decode" };
 }
 
 /** Run one step against the server and normalise the three response shapes. */
 async function runStep(input: string, step: TransformStep): Promise<TransformResult> {
-  const base = { stepId: step.id, kind: step.kind, value: step.value };
-  if (step.kind === "decode") {
-    // "auto" is the smart path: the handler treats "" and "auto" alike and
-    // reports what it unwrapped in `layers`.
-    const response = await api<DecodeResponse>(
-      "/api/tools/decode",
-      json("POST", { input, encoding: step.value === "auto" ? "auto" : step.value, guess_alphabets: step.guess }),
-    );
-    return { ...base, ...viewFields(response.output), layers: response.layers ?? [], partial: response.partial ?? false };
-  }
-  if (step.kind === "encode") {
-    const response = await api<EncodeResponse>("/api/tools/encode", json("POST", { input, encoding: step.value }));
-    return { ...base, ...viewFields(response.output), layers: null };
-  }
-  const response = await api<HashResponse>("/api/tools/hash", json("POST", { input, algorithm: step.value }));
+ const base = { stepId: step.id, kind: step.kind, value: step.value };
+ if (step.kind === "decode") {
+  // "auto" is the smart path: the handler treats "" and "auto" alike and
+  // reports what it unwrapped in `layers`.
+  const response = await api<DecodeResponse>(
+   "/api/tools/decode",
+   json("POST", { input, encoding: step.value === "auto" ? "auto" : step.value, guess_alphabets: step.guess }),
+  );
+  return { ...base, ...viewFields(response.output), layers: response.layers ?? [], partial: response.partial ?? false };
+ }
+ if (step.kind === "encode") {
+  const response = await api<EncodeResponse>("/api/tools/encode", json("POST", { input, encoding: step.value }));
   return { ...base, ...viewFields(response.output), layers: null };
+ }
+ const response = await api<HashResponse>("/api/tools/hash", json("POST", { input, algorithm: step.value }));
+ return { ...base, ...viewFields(response.output), layers: null };
 }
 
 function viewFields(view: { text: string; len: number; utf8: boolean; truncated: boolean }) {
-  return { output: view.text, len: view.len, utf8: view.utf8, truncated: view.truncated };
+ return { output: view.text, len: view.len, utf8: view.utf8, truncated: view.truncated };
 }
 
 /**
@@ -174,26 +174,26 @@ function viewFields(view: { text: string; len: number; utf8: boolean; truncated:
  * server state and are not recorded in the tool log.
  */
 export function useTransformPipeline() {
-  return useMutation<TransformRun, Error, { input: string; steps: TransformStep[] }>({
-    mutationFn: async ({ input, steps }) => {
-      const results: TransformResult[] = [];
-      let current = input;
-      for (const [index, step] of steps.entries()) {
-        try {
-          const result = await runStep(current, step);
-          results.push(result);
-          current = result.output;
-        } catch (error) {
-          return {
-            results,
-            failedAt: index,
-            message: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }
-      return { results, failedAt: null, message: null };
-    },
-  });
+ return useMutation<TransformRun, Error, { input: string; steps: TransformStep[] }>({
+  mutationFn: async ({ input, steps }) => {
+   const results: TransformResult[] = [];
+   let current = input;
+   for (const [index, step] of steps.entries()) {
+    try {
+     const result = await runStep(current, step);
+     results.push(result);
+     current = result.output;
+    } catch (error) {
+     return {
+      results,
+      failedAt: index,
+      message: error instanceof Error ? error.message : String(error),
+     };
+    }
+   }
+   return { results, failedAt: null, message: null };
+  },
+ });
 }
 
 /* --- comparer ------------------------------------------------------------- */
@@ -210,16 +210,16 @@ export function useTransformPipeline() {
  * reports both verdicts — see `CompareResponse.identical_ignoring_uninteresting`.
  */
 export const useUninterestingHeaders = () =>
-  useResource<UninterestingHeaders>(["uninteresting-headers"], "/api/headers/uninteresting");
+ useResource<UninterestingHeaders>(["uninteresting-headers"], "/api/headers/uninteresting");
 
 /** Replace the discount lists. Omit a direction to leave it untouched. */
 export function useSetUninterestingHeaders() {
-  const client = useQueryClient();
-  return useMutation<UninterestingHeaders, Error, { request?: string[]; response?: string[] }>({
-    mutationFn: (body) =>
-      api<UninterestingHeaders>("/api/headers/uninteresting", json("PUT", body)),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ["uninteresting-headers"] }),
-  });
+ const client = useQueryClient();
+ return useMutation<UninterestingHeaders, Error, { request?: string[]; response?: string[] }>({
+  mutationFn: (body) =>
+   api<UninterestingHeaders>("/api/headers/uninteresting", json("PUT", body)),
+  onSuccess: () => void client.invalidateQueries({ queryKey: ["uninteresting-headers"] }),
+ });
 }
 
 /**
@@ -227,26 +227,26 @@ export function useSetUninterestingHeaders() {
  * every comparison is byte-level.
  */
 export function useCompare() {
-  return useMutation<CompareResponse, Error, { a: string; b: string; response?: boolean }>({
-    // `response` selects which uninteresting-header list applies (W6 #81/#82). Omitted means the
-    // request list, which is empty unless the operator populated it — so leaving it out reproduces
-    // the behaviour this endpoint had before the field existed.
-    mutationFn: ({ a, b, response }) =>
-      api<CompareResponse>("/api/tools/compare", json("POST", { a, b, response })),
-  });
+ return useMutation<CompareResponse, Error, { a: string; b: string; response?: boolean }>({
+  // `response` selects which uninteresting-header list applies (W6 #81/#82). Omitted means the
+  // request list, which is empty unless the operator populated it — so leaving it out reproduces
+  // the behaviour this endpoint had before the field existed.
+  mutationFn: ({ a, b, response }) =>
+   api<CompareResponse>("/api/tools/compare", json("POST", { a, b, response })),
+ });
 }
 
 /** Fetch stored message bytes on demand, for loading a Comparer slot by id. */
 export function useLoadMessage() {
-  return useMutation<{ text: string }, Error, number>({
-    mutationFn: (id) => api<{ text: string }>(`/api/message/${id}`),
-  });
+ return useMutation<{ text: string }, Error, number>({
+  mutationFn: (id) => api<{ text: string }>(`/api/message/${id}`),
+ });
 }
 
 /* --- tool log ------------------------------------------------------------- */
 
 export const useToolLogView = (filter: string, search: string, limit = 1_000) =>
-  useResource<ToolLogView>(workbenchKeys.toolLog(filter, search, limit), `/api/tools/log${query({ limit, filter, search })}`);
+ useResource<ToolLogView>(workbenchKeys.toolLog(filter, search, limit), `/api/tools/log${query({ limit, filter, search })}`);
 
 /**
  * Toggle one tool's capture axis. This is the destructive arm, so the UI must
@@ -256,15 +256,37 @@ export const useToolLogView = (filter: string, search: string, limit = 1_000) =>
  * the dashboard's, under the same "toollog" prefix) so the new axis is shown.
  */
 export const useSetToolLogCapture = () => {
-  const queryClient = useQueryClient();
-  return useMutation<Record<string, boolean>, Error, { tool: string; on: boolean }>({
-    mutationFn: ({ tool, on }) =>
-      api<Record<string, boolean>>("/api/tools/log", json("POST", { tool, on })),
-    onSuccess: () => {
-      // Invalidate every filter/search combination under the "toollog" prefix,
-      // matching workbenchKeys.toolLog's shape, so the refreshed read reflects
-      // the new capture axis regardless of the currently-selected filters.
-      void queryClient.invalidateQueries({ queryKey: ["toollog"] });
-    },
-  });
+ const queryClient = useQueryClient();
+ return useMutation<
+  Record<string, boolean>,
+  Error,
+  {
+   tool?: string;
+   on?: boolean;
+   filter?: { status: number[]; term: string; regex: boolean; case_sensitive: boolean; negate: boolean; scope_only: boolean };
+   capacity?: number;
+  }
+ >({
+  mutationFn: (body) => api<Record<string, boolean>>("/api/tools/log", json("POST", body)),
+  onSuccess: () => {
+   // Invalidate every filter/search combination under the "toollog" prefix,
+   // matching workbenchKeys.toolLog's shape, so the refreshed read reflects
+   // the new capture axis regardless of the currently-selected filters.
+   void queryClient.invalidateQueries({ queryKey: ["toollog"] });
+  },
+ });
+};
+
+/**
+ * Annotate one log entry (burpsy-react-ui-5da). Empty clears. Unknown ids 404 rather
+ * than succeeding quietly, so a comment addressed at a trimmed row cannot read as saved.
+ */
+export const useSetToolLogComment = () => {
+ const queryClient = useQueryClient();
+ return useMutation<unknown, Error, { id: number; comment: string; highlight?: string }>({
+  mutationFn: ({ id, comment, highlight = "" }) => api<unknown>(`/api/tools/log/${id}`, json("PATCH", { comment, highlight })),
+  onSuccess: () => {
+   void queryClient.invalidateQueries({ queryKey: ["toollog"] });
+  },
+ });
 };

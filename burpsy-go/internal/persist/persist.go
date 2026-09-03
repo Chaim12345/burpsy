@@ -206,6 +206,11 @@ CREATE TABLE IF NOT EXISTS organizer_items (
 	note      TEXT NOT NULL,
 	highlight TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS organizer_collections (
+	id   INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	note TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS platform_auth (
 	ord      INTEGER PRIMARY KEY,
 	host     TEXT NOT NULL,
@@ -231,7 +236,9 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	status      INTEGER NOT NULL,
 	started_ms  INTEGER NOT NULL,
 	duration_ms INTEGER NOT NULL,
-	note        TEXT NOT NULL
+	note        TEXT NOT NULL,
+	comment     TEXT NOT NULL DEFAULT '',
+	highlight   TEXT NOT NULL DEFAULT ''
 );
 `
 	if _, err := s.db.Exec(schema); err != nil {
@@ -299,11 +306,34 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("tool_log", "response_len", "INTEGER"); err != nil {
 		return err
 	}
+	// tool_log gained comment for operator annotations on tool rows. NULL reads back as "".
+	if err := s.addColumn("tool_log", "comment", "TEXT"); err != nil {
+		return err
+	}
+	// tool_log gained highlight for the same reason: the colour tag, sharing the
+	// organizer's vocabulary. NULL reads back as "" (no highlight).
+	if err := s.addColumn("tool_log", "highlight", "TEXT"); err != nil {
+		return err
+	}
 	// exchanges gained highlight for the same reason notes did: an operator annotation, not traffic,
 	// so it lives beside notes rather than in its own table. NULL and "" both read back as "" (no
 	// highlight) — a legacy row written before this column existed never has an opinion either way, so
 	// there is nothing to distinguish it from an exchange explicitly cleared.
 	if err := s.addColumn("exchanges", "highlight", "TEXT"); err != nil {
+		return err
+	}
+	// organizer_items gained status for the user-applied workflow status (Burp's New / In progress /
+	// Postponed / Done / Ignored). NULL reads back as "new": a legacy row was saved before the field
+	// existed, and "the operator never triaged this item" is exactly what "new" means — so a restored
+	// pre-status item shows up in the same untriaged state it was in, rather than as some invented
+	// default that looks like a decision.
+	if err := s.addColumn("organizer_items", "status", "TEXT"); err != nil {
+		return err
+	}
+	// organizer_items gained collection so an item can say which collection it sits in. 0 means
+	// the inbox — which is what every legacy row is, because collections did not exist when it was
+	// written and the inbox is where Burp's docs say messages appear before anyone organises them.
+	if err := s.addColumn("organizer_items", "collection", "INTEGER"); err != nil {
 		return err
 	}
 	// exchanges gained source so HTTP history can keep tool-originated sends (Repeater, Intruder,
@@ -1295,19 +1325,56 @@ func (s *Store) SaveOrganizer(items []organizer.Item) {
 		return
 	}
 	for _, it := range items {
+		// An empty Status stores NULL and reads back as "new" (LoadOrganizer) — the honest
+		// fallback, because a caller that never set a status never triaged the item.
 		if _, err := s.db.Exec(
-			`INSERT OR REPLACE INTO organizer_items (id, exchange, title, note, highlight)
-			 VALUES (?, ?, ?, ?, ?)`,
-			it.ID, it.Exchange, it.Title, it.Note, it.Highlight); err != nil {
+			`INSERT OR REPLACE INTO organizer_items (id, exchange, title, note, highlight, status, collection)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			it.ID, it.Exchange, it.Title, it.Note, it.Highlight, string(it.Status), it.Collection); err != nil {
 			s.log("organizer item", err)
 			return
 		}
 	}
 }
 
+// SaveOrganizerCollections replaces the collection registry. Items carry their collection id
+// separately (organizer_items.collection), so this table holds only the group's own identity.
+func (s *Store) SaveOrganizerCollections(collections []organizer.Collection) {
+	if _, err := s.db.Exec(`DELETE FROM organizer_collections`); err != nil {
+		s.log("organizer collections clear", err)
+		return
+	}
+	for _, c := range collections {
+		if _, err := s.db.Exec(
+			`INSERT OR REPLACE INTO organizer_collections (id, name, note) VALUES (?, ?, ?)`,
+			c.ID, c.Name, c.Note); err != nil {
+			s.log("organizer collection", err)
+			return
+		}
+	}
+}
+
+// LoadOrganizerCollections restores the collection registry, ordered by id.
+func (s *Store) LoadOrganizerCollections() ([]organizer.Collection, error) {
+	rows, err := s.db.Query(`SELECT id, name, note FROM organizer_collections ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []organizer.Collection
+	for rows.Next() {
+		c := organizer.Collection{}
+		if err := rows.Scan(&c.ID, &c.Name, &c.Note); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // LoadOrganizer restores organizer items.
 func (s *Store) LoadOrganizer() ([]organizer.Item, error) {
-	rows, err := s.db.Query(`SELECT id, exchange, title, note, highlight FROM organizer_items ORDER BY id`)
+	rows, err := s.db.Query(`SELECT id, exchange, title, note, highlight, status, collection FROM organizer_items ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1315,8 +1382,20 @@ func (s *Store) LoadOrganizer() ([]organizer.Item, error) {
 	var out []organizer.Item
 	for rows.Next() {
 		it := organizer.Item{}
-		if err := rows.Scan(&it.ID, &it.Exchange, &it.Title, &it.Note, &it.Highlight); err != nil {
+		// status is nullable: NULL and "" both mean "never triaged", which is what StatusNew
+		// is for. A value that is not one of the five valid statuses is also read as "new"
+		// rather than passed through — a status nobody defined is a wire/storage fault, and
+		// rendering it would present an operator a state they cannot set or filter on.
+		var status *string
+		var collection int
+		if err := rows.Scan(&it.ID, &it.Exchange, &it.Title, &it.Note, &it.Highlight, &status, &collection); err != nil {
 			return nil, err
+		}
+		it.Collection = collection
+		if status != nil && organizer.ValidStatus(organizer.Status(*status)) {
+			it.Status = organizer.Status(*status)
+		} else {
+			it.Status = organizer.StatusNew
 		}
 		out = append(out, it)
 	}
@@ -1333,13 +1412,12 @@ func (s *Store) SaveToolLog(e *toollog.Entry) {
 	if e.ResponseLen != nil {
 		responseLen = int64(*e.ResponseLen)
 	}
-	_, err := s.db.Exec(
+	if _, err := s.db.Exec(
 		`INSERT OR REPLACE INTO tool_log
-		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, comment, highlight)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, int(e.Tool), e.Host, int(e.Port), boolInt(e.TLS), e.Method, e.Path,
-		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen)
-	if err != nil {
+		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen, e.Comment, e.Highlight); err != nil {
 		s.log("tool_log", err)
 	}
 }
@@ -1351,7 +1429,7 @@ func (s *Store) SaveToolLog(e *toollog.Entry) {
 // the exact claim this field was added to stop making: that the response was empty.
 func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len
+		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, comment, highlight
 		 FROM tool_log ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -1362,7 +1440,9 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 		e := &toollog.Entry{}
 		var tool, port, tls, status int
 		var responseLen sql.NullInt64
-		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen); err != nil {
+		var comment sql.NullString
+		var highlight sql.NullString
+		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen, &comment, &highlight); err != nil {
 			return nil, err
 		}
 		e.Tool = toollog.Tool(tool)
@@ -1373,6 +1453,8 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 			n := int(responseLen.Int64)
 			e.ResponseLen = &n
 		}
+		e.Comment = comment.String
+		e.Highlight = highlight.String
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -1713,7 +1795,11 @@ func (s *Store) Restore(
 		if err != nil {
 			return fmt.Errorf("load organizer: %w", err)
 		}
-		org.Restore(items)
+		collections, err := s.LoadOrganizerCollections()
+		if err != nil {
+			return fmt.Errorf("load organizer collections: %w", err)
+		}
+		org.Restore(items, collections)
 	}
 
 	if toolLog != nil {

@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, ExternalLink, Highlighter, Pencil, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, FolderInput, FolderPlus, Highlighter, ListTodo, Pencil, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { copyToClipboard } from "../lib/api";
+import { copyToClipboard, downloadText, organizerToCSV } from "../lib/api";
 import { useOrganizer, useOrganizerMutations } from "../lib/data";
 import { useApp } from "../lib/store";
-import { HIGHLIGHTS, HIGHLIGHT_TONE, type OrganizerEdit, type OrganizerItem } from "../lib/types";
+import {
+ HIGHLIGHTS,
+ HIGHLIGHT_TONE,
+ WORKFLOW_STATUSES,
+ WORKFLOW_STATUS_LABEL,
+ WORKFLOW_STATUS_TONE,
+ type OrganizerCollection,
+ type OrganizerEdit,
+ type OrganizerItem,
+ type WorkflowStatus,
+} from "../lib/types";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
 import { MenuRow, SimpleTable } from "../ui/table";
@@ -15,6 +25,9 @@ interface Draft {
  note: string;
  highlight: string;
 }
+
+/** The inbox is collection 0; the UI names it rather than minting a numeric id for what is not a collection. */
+const INBOX = "inbox" as const;
 
 function draftOf(item: OrganizerItem): Draft {
  return { title: item.title, note: item.note, highlight: item.highlight || "none" };
@@ -116,11 +129,26 @@ export function OrganizerPage(): JSX.Element {
  const [inScopeOnly, setInScopeOnly] = useState(false);
  const [statusClass, setStatusClass] = useState<StatusClass>("all");
  const [mimeFilter, setMimeFilter] = useState("all");
+ /** The user-applied workflow status to filter on — Burp's "Filter by status", a different axis from the HTTP status class above. */
+ const [workflowFilter, setWorkflowFilter] = useState<WorkflowStatus | "all">("all");
 
  const items = useMemo(() => data?.items ?? [], [data]);
+ const collections = useMemo(() => data?.collections ?? [], [data]);
  const mimes = useMemo(() => mimeOptions(items), [items]);
 
- const filtering = inScopeOnly || statusClass !== "all" || mimeFilter !== "all";
+ /**
+  * The collection being viewed: "all" is the whole organizer, 0 the inbox, an id one group. This
+  * is Burp's organizer frame — the inbox first, collections as where work goes — implemented as a
+  * view over one flat store rather than as the store's shape, so a collection cannot strand an
+  * item from the operator's single list.
+  */
+ const [collectionView, setCollectionView] = useState<"all" | number>("all");
+
+ /** The collection delete dialog: its choice is the items' fate, so it is asked, never defaulted silently. */
+ const [confirmDeleteCollection, setConfirmDeleteCollection] = useState<OrganizerCollection | null>(null);
+ const [newCollectionName, setNewCollectionName] = useState("");
+
+ const filtering = inScopeOnly || statusClass !== "all" || mimeFilter !== "all" || workflowFilter !== "all";
 
  /**
   * The filtered rows, plus how many were kept only because they could not be judged.
@@ -130,10 +158,13 @@ export function OrganizerPage(): JSX.Element {
   * read as evidence those are not the same statement.
   */
  const { visible, unjudged } = useMemo(() => {
-  if (!filtering) return { visible: items, unjudged: 0 };
+  if (!filtering && collectionView === "all") return { visible: items, unjudged: 0 };
   const kept: OrganizerItem[] = [];
   let exempt = 0;
   for (const item of items) {
+   // The collection view is not a judgement about the row, so an unresolved row is still grouped:
+   // its collection id is stored state, not derived, and a filter must not scatter it.
+   if (collectionView !== "all" && (item.collection ?? 0) !== collectionView) continue;
    if (!item.resolved) {
     // Cannot be judged, so it is not judged. See the filter note above.
     kept.push(item);
@@ -143,10 +174,13 @@ export function OrganizerPage(): JSX.Element {
    if (inScopeOnly && item.in_scope !== true) continue;
    if (!matchesStatusClass(item, statusClass)) continue;
    if (!matchesMime(item, mimeFilter)) continue;
+   // An item with no status on the wire predates the field; it reads as "new" (the same fallback
+   // the Go load path applies), so the filter matches it against "new" rather than hiding it.
+   if (workflowFilter !== "all" && (item.workflow_status ?? "new") !== workflowFilter) continue;
    kept.push(item);
   }
   return { visible: kept, unjudged: exempt };
- }, [items, filtering, inScopeOnly, statusClass, mimeFilter]);
+ }, [items, filtering, inScopeOnly, statusClass, mimeFilter, workflowFilter, collectionView]);
 
  // A MIME option can disappear when the rows behind it are removed, which would leave the filter
  // pinned to a value nothing can match — an empty table with no visible reason. Fall back to "all".
@@ -265,6 +299,34 @@ export function OrganizerPage(): JSX.Element {
   });
  };
 
+ /** Create a collection from the toolbar input; the server refuses a duplicate name with 400. */
+ const createCollection = () => {
+  const name = newCollectionName.trim();
+  if (!name) return;
+  mutations.createCollection.mutate(name, {
+   onSuccess: (collection) => {
+    setNewCollectionName("");
+    toast.success(`Collection ${collection.name} created`);
+   },
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not create the collection"),
+  });
+ };
+
+ /**
+  * Move (or copy) one item into a collection, or back to the inbox. The wire route is the same
+  * one the multi-select uses; a copy arrives under a fresh id, so the table grows rather than
+  * the original relocating.
+  */
+ const moveItems = (item: OrganizerItem, collection: number | typeof INBOX, copy = false) => {
+  mutations.moveItems.mutate(
+   { collection, itemIds: [item.id], copy },
+   {
+    onSuccess: () => toast.success(copy ? `Copied item ${item.id}` : `Moved item ${item.id}`),
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not move that item"),
+   },
+  );
+ };
+
  /**
   * The saved-item context menu — Burp's Organiser row actions.
   *
@@ -273,10 +335,10 @@ export function OrganizerPage(): JSX.Element {
   * pressing Save. The note stays in the pane: it is multi-line prose, and a prompt is the wrong
   * surface for it.
   *
-  * Not offered: Burp's "New collection" / "Unlink", which are collection operations. burpsy's
-  * Organizer is one flat list — `/api/tools/organizer` has no collection concept — so there is no
-  * collection to make or unlink from, and inventing the menu entries would advertise a structure
-  * that does not exist. Noted on burpsy-react-ui-3fr.
+  * Status and the collection Move/Copy submenus are Burp's remaining row actions
+  * (tools/organizer/annotate.html "Statuses", collections.html "Move to…"). A status change goes
+  * through setStatus — one deliberate decision about the item itself — and never through the
+  * title/note save, the same separation the Go store draws between SetStatus and Update.
   */
  const menuFor = (item: OrganizerItem): MenuGroup[] => [
   {
@@ -291,6 +353,31 @@ export function OrganizerPage(): JSX.Element {
       if (next === null || next.trim() === item.title) return;
       patchItem(item, { title: next.trim() }, `Item ${item.id} renamed`);
      },
+    },
+    {
+     id: "status",
+     label: "Status",
+     icon: ListTodo,
+     submenu: [
+      {
+       id: "statuses",
+       actions: WORKFLOW_STATUSES.map((status) => ({
+        id: status,
+        label: WORKFLOW_STATUS_LABEL[status],
+        disabled: (item.workflow_status ?? "new") === status,
+        onSelect: () => {
+         mutations.setStatus.mutate(
+          { id: item.id, status },
+          {
+           onSuccess: () => toast.success(`Item ${item.id} marked ${WORKFLOW_STATUS_LABEL[status]}`),
+           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not set the status"),
+          },
+         );
+        },
+       })),
+      },
+     ],
+     onSelect: () => { },
     },
     {
      id: "highlight",
@@ -313,7 +400,7 @@ export function OrganizerPage(): JSX.Element {
        }),
       },
      ],
-     onSelect: () => {},
+     onSelect: () => { },
     },
    ],
   },
@@ -341,6 +428,52 @@ export function OrganizerPage(): JSX.Element {
       void copyToClipboard(item.note);
       toast.success("Note copied");
      },
+    },
+   ],
+  },
+  {
+   /**
+    * Move to… / Copy to… — Burp's collections.html: "In Organizer, select one or more messages.
+    * Right-click and select Move to…". The inbox is offered as a destination, which is Unlink.
+    * Copy duplicates the item under a fresh id (the Copy Link analogue) rather than aliasing it.
+    */
+   id: "collect",
+   actions: [
+    {
+     id: "move-to",
+     label: "Move to…",
+     icon: FolderInput,
+     submenu: [
+      {
+       id: "destinations",
+       actions: [
+        { id: "inbox", label: "Inbox", disabled: (item.collection ?? 0) === 0, onSelect: () => moveItems(item, INBOX) },
+        ...collections.map((collection) => ({
+         id: `collection-${collection.id}`,
+         label: collection.name,
+         disabled: (item.collection ?? 0) === collection.id,
+         onSelect: () => moveItems(item, collection.id),
+        })),
+       ],
+      },
+     ],
+     onSelect: () => { },
+    },
+    {
+     id: "copy-to",
+     label: "Copy to…",
+     icon: FolderPlus,
+     submenu: [
+      {
+       id: "copy-destinations",
+       actions: collections.map((collection) => ({
+        id: `copy-${collection.id}`,
+        label: collection.name,
+        onSelect: () => moveItems(item, collection.id, true),
+       })),
+      },
+     ],
+     onSelect: () => { },
     },
    ],
   },
@@ -377,6 +510,36 @@ export function OrganizerPage(): JSX.Element {
     actions={
      <>
       <Badge>{items.length} saved</Badge>
+      <Button
+       variant="outline"
+       size="small"
+       onClick={() => {
+        // Burp exports the selection, or the whole table when nothing is selected. The page
+        // has no multi-select, so the whole filtered view is exported — the same "what you
+        // see is what exports" rule History's button follows.
+        if (visible.length === 0) {
+         toast.error("No organizer items to export");
+         return;
+        }
+        downloadText(
+         "organizer.csv",
+         organizerToCSV(
+          visible.map((item) => ({
+           id: item.id,
+           title: item.title,
+           note: item.note,
+           highlight: item.highlight,
+           workflow_status: item.workflow_status ?? "new",
+           exchange: item.exchange,
+          })),
+         ),
+         "text/csv",
+        );
+        toast.success(`Exported ${visible.length} organizer items to CSV`);
+       }}
+      >
+       Export CSV
+      </Button>
       <RefreshButton onClick={() => void refetch()} loading={isFetching} />
      </>
     }
@@ -437,6 +600,20 @@ export function OrganizerPage(): JSX.Element {
        </Select>
       )}
      </Field>
+     {/* Burp's "Filter by status" (filter.html) — the user-applied status, distinct from the
+         Status-class filter above. An item with no status on the wire reads as "new". */}
+     <Field label="Workflow" className="field-inline">
+      {(id) => (
+       <Select id={id} value={workflowFilter} onChange={(event) => setWorkflowFilter(event.target.value as WorkflowStatus | "all")}>
+        <option value="all">Any workflow status</option>
+        {WORKFLOW_STATUSES.map((status) => (
+         <option key={status} value={status}>
+          {WORKFLOW_STATUS_LABEL[status]}
+         </option>
+        ))}
+       </Select>
+      )}
+     </Field>
      {filtering ? (
       <>
        <Button
@@ -446,6 +623,7 @@ export function OrganizerPage(): JSX.Element {
          setInScopeOnly(false);
          setStatusClass("all");
          setMimeFilter("all");
+         setWorkflowFilter("all");
         }}
        >
         <RotateCcw size={13} />
@@ -464,6 +642,141 @@ export function OrganizerPage(): JSX.Element {
       </>
      ) : null}
     </Toolbar>
+
+    {/* --- Collections (dcr) ---------------------------------------------------------------
+     * Burp's organizer collections: the inbox is where messages appear, collections are where
+     * work goes (tools/organizer/collections.html). The panel manages the groups; membership is
+     * the row menu's Move to…/Copy to…. Creating, renaming, duplicating and deleting a group are
+     * server refusals when they are wrong (duplicate name, delete of an unknown id), so the UI
+     * surfaces the server's message rather than pre-validating a second opinion.
+     */}
+    <Card>
+     <SectionHeading
+      title="Collections"
+      detail="Groups of saved exchanges. New items land in the inbox; move them from a row's menu."
+     />
+     <Toolbar>
+      <div className="inline-add">
+       <Input
+        aria-label="New collection name"
+        title="New collection name"
+        value={newCollectionName}
+        placeholder="new collection name"
+        onChange={(event) => setNewCollectionName(event.target.value)}
+        onKeyDown={(event) => {
+         if (event.key === "Enter") createCollection();
+        }}
+        style={{ maxWidth: "var(--w-sm)" }}
+       />
+       <Button
+        variant="outline"
+        size="small"
+        onClick={createCollection}
+        disabled={!newCollectionName.trim() || mutations.createCollection.isPending}
+       >
+        <FolderPlus size={13} />
+        New collection
+       </Button>
+      </div>
+      {/* The view switcher: the whole list, the inbox, or one group. Counted so an empty view
+          reads as "this group is empty", not as "data is missing". */}
+      <Field label="View" className="field-inline">
+       {(id) => (
+        <Select id={id} value={String(collectionView)} onChange={(event) => setCollectionView(event.target.value === "all" ? "all" : Number(event.target.value))}>
+         <option value="all">All saved exchanges</option>
+         <option value="0">{`Inbox (${items.filter((item) => (item.collection ?? 0) === 0).length})`}</option>
+         {collections.map((collection) => (
+          <option key={collection.id} value={String(collection.id)}>
+           {`${collection.name} (${items.filter((item) => (item.collection ?? 0) === collection.id).length})`}
+          </option>
+         ))}
+        </Select>
+       )}
+      </Field>
+     </Toolbar>
+     {collections.length > 0 ? (
+      <SimpleTable headers={["Collection", "Items", "Note", ""]}>
+       {collections.map((collection) => (
+        <tr key={collection.id} className={collectionView === collection.id ? "data-row selected-row" : "data-row"}>
+         <td>
+          <button type="button" className="text-button" onClick={() => setCollectionView(collectionView === collection.id ? "all" : collection.id)}>
+           {collection.name}
+          </button>
+         </td>
+         <td>
+          <span className="cell-num">{items.filter((item) => (item.collection ?? 0) === collection.id).length}</span>
+         </td>
+         <td>
+          <span className="cell-dim">{collection.note || "no note"}</span>
+         </td>
+         <td>
+          <div className="chip-row">
+           <IconButton
+            label={`Rename ${collection.name}`}
+            size="small"
+            onClick={() => {
+             const next = window.prompt(`Rename collection ${collection.name}`, collection.name);
+             if (next === null || next.trim() === collection.name) return;
+             mutations.updateCollection.mutate(
+              { id: collection.id, name: next.trim() },
+              {
+               onSuccess: () => toast.success(`Collection renamed to ${next.trim()}`),
+               onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Rename failed"),
+              },
+             );
+            }}
+           >
+            <Pencil size={13} />
+           </IconButton>
+           <IconButton
+            label={`Edit note on ${collection.name}`}
+            size="small"
+            onClick={() => {
+             const next = window.prompt(`Note for collection ${collection.name} (About tab)`, collection.note);
+             if (next === null) return;
+             mutations.updateCollection.mutate(
+              { id: collection.id, note: next },
+              {
+               onSuccess: () => toast.success("Collection note saved"),
+               onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not save the note"),
+              },
+             );
+            }}
+           >
+            <ListTodo size={13} />
+           </IconButton>
+           <IconButton
+            label={`Duplicate ${collection.name}`}
+            size="small"
+            onClick={() =>
+             mutations.duplicateCollection.mutate(collection.id, {
+              onSuccess: (out) => toast.success(`Duplicated into ${out.collection.name} with ${out.items_copied} item(s)`),
+              onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Duplicate failed"),
+             })
+            }
+           >
+            <Copy size={13} />
+           </IconButton>
+           <IconButton
+            label={`Delete ${collection.name}`}
+            size="small"
+            onClick={() => setConfirmDeleteCollection(collection)}
+           >
+            <Trash2 size={13} />
+           </IconButton>
+          </div>
+         </td>
+        </tr>
+       ))}
+      </SimpleTable>
+     ) : (
+      <Empty
+       title="No collections yet"
+       detail="Create one above, then move saved exchanges into it from a row's Move to… menu."
+      />
+     )}
+    </Card>
+
     {isLoading ? (
      <LoadingPanel label="Loading saved exchanges" />
     ) : items.length === 0 ? (
@@ -479,7 +792,7 @@ export function OrganizerPage(): JSX.Element {
       detail={`All ${items.length} are still here. Widen or clear the filters to see them.`}
      />
     ) : (
-     <SimpleTable headers={["#", "Exchange", "Request", "Status", "Type", "Title", "Highlight", "Note", ""]}>
+     <SimpleTable headers={["#", "Exchange", "Request", "Status", "Workflow", "Type", "Title", "Highlight", "Note", ""]}>
       {visible.map((item) => (
        <MenuRow
         key={item.id}
@@ -527,12 +840,21 @@ export function OrganizerPage(): JSX.Element {
           </td>
          </>
         ) : (
-         <td colSpan={3}>
+         <td colSpan={4}>
           <Badge tone="warn" title="The exchange is no longer in the traffic store; the note survives it">
            exchange no longer retained
           </Badge>
          </td>
         )}
+        {/* The operator's decision, not the server's — the Status column above is the HTTP code.
+            Both are shown because both are answered per row, and merging them is exactly the
+            collision the wire avoids by naming this field workflow_status. */}
+        <td>
+         {(() => {
+          const status = item.workflow_status ?? "new";
+          return <Badge tone={WORKFLOW_STATUS_TONE[status]}>{WORKFLOW_STATUS_LABEL[status]}</Badge>;
+         })()}
+        </td>
         <td>{item.title || <span className="cell-dim">untitled</span>}</td>
         <td>
          {item.highlight ? (
@@ -678,6 +1000,67 @@ export function OrganizerPage(): JSX.Element {
      >
       <Trash2 size={13} />
       Remove item
+     </Button>
+    </div>
+   </Modal>
+
+   {/* The collection delete dialog, with the acceptance criteria's two options spelled out:
+       unlink (the default, losing nothing) or delete the items with the group. Refusing to
+       hide this choice is the point — a silent "delete" of a group would take saved notes
+       with it, and a note is the only thing here that is not recoverable. */}
+   <Modal
+    open={confirmDeleteCollection !== null}
+    onOpenChange={(open) => {
+     if (!open) setConfirmDeleteCollection(null);
+    }}
+    title={confirmDeleteCollection ? `Delete collection ${confirmDeleteCollection.name}?` : "Delete collection?"}
+    description="Its items can be moved back to the inbox, or deleted with the collection."
+   >
+    <div className="page-actions">
+     <Button variant="outline" onClick={() => setConfirmDeleteCollection(null)}>
+      Cancel
+     </Button>
+     <Button
+      variant="outline"
+      disabled={mutations.deleteCollection.isPending}
+      onClick={() => {
+       if (!confirmDeleteCollection) return;
+       mutations.deleteCollection.mutate(
+        { id: confirmDeleteCollection.id },
+        {
+         onSuccess: (out) => {
+          if (collectionView === confirmDeleteCollection.id) setCollectionView("all");
+          setConfirmDeleteCollection(null);
+          toast.success(`Collection deleted${out.unlinked ? `, ${out.unlinked} item(s) back in the inbox` : ""}`);
+         },
+         onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Delete failed"),
+        },
+       );
+      }}
+     >
+      <FolderInput size={13} />
+      Delete, keep items (inbox)
+     </Button>
+     <Button
+      variant="danger"
+      disabled={mutations.deleteCollection.isPending}
+      onClick={() => {
+       if (!confirmDeleteCollection) return;
+       mutations.deleteCollection.mutate(
+        { id: confirmDeleteCollection.id, items: "delete" },
+        {
+         onSuccess: () => {
+          if (collectionView === confirmDeleteCollection.id) setCollectionView("all");
+          setConfirmDeleteCollection(null);
+          toast.success("Collection and its items deleted");
+         },
+         onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Delete failed"),
+        },
+       );
+      }}
+     >
+      <Trash2 size={13} />
+      Delete with items
      </Button>
     </div>
    </Modal>

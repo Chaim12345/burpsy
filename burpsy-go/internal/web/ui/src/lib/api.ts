@@ -1,101 +1,101 @@
 export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly body: string,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
+ constructor(
+  message: string,
+  readonly status: number,
+  readonly body: string,
+ ) {
+  super(message);
+  this.name = "ApiError";
+ }
 }
 
 /** Go handlers answer with either a bare string or {"error": "..."}; show whichever we get. */
 function readFailure(text: string, fallback: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) return fallback;
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed) as { error?: unknown; message?: unknown };
-      const detail = parsed.error ?? parsed.message;
-      if (typeof detail === "string" && detail) return detail;
-    } catch {
-      return trimmed;
-    }
+ const trimmed = text.trim();
+ if (!trimmed) return fallback;
+ if (trimmed.startsWith("{")) {
+  try {
+   const parsed = JSON.parse(trimmed) as { error?: unknown; message?: unknown };
+   const detail = parsed.error ?? parsed.message;
+   if (typeof detail === "string" && detail) return detail;
+  } catch {
+   return trimmed;
   }
-  return trimmed;
+ }
+ return trimmed;
 }
 
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (init?.body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const response = await fetch(url, { ...init, headers });
-  const text = await response.text();
-  if (!response.ok) throw new ApiError(readFailure(text, response.statusText), response.status, text);
-  if (!text) return null as T;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new ApiError("response was not JSON", response.status, text);
-  }
+ const headers = new Headers(init?.headers);
+ if (init?.body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json");
+ const response = await fetch(url, { ...init, headers });
+ const text = await response.text();
+ if (!response.ok) throw new ApiError(readFailure(text, response.statusText), response.status, text);
+ if (!text) return null as T;
+ try {
+  return JSON.parse(text) as T;
+ } catch {
+  throw new ApiError("response was not JSON", response.status, text);
+ }
 }
 
 export function json(method: string, body?: unknown): RequestInit {
-  return { method, body: body === undefined ? undefined : JSON.stringify(body) };
+ return { method, body: body === undefined ? undefined : JSON.stringify(body) };
 }
 
 export function query(params: Record<string, string | number | boolean | undefined | null>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null || value === "") continue;
-    search.set(key, String(value));
-  }
-  const encoded = search.toString();
-  return encoded ? `?${encoded}` : "";
+ const search = new URLSearchParams();
+ for (const [key, value] of Object.entries(params)) {
+  if (value === undefined || value === null || value === "") continue;
+  search.set(key, String(value));
+ }
+ const encoded = search.toString();
+ return encoded ? `?${encoded}` : "";
 }
 
 export function formatBytes(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  if (value < 1024) return `${value} B`;
-  if (value < 1048576) return `${(value / 1024).toFixed(1)} KB`;
-  if (value < 1073741824) return `${(value / 1048576).toFixed(2)} MB`;
-  return `${(value / 1073741824).toFixed(2)} GB`;
+ if (!Number.isFinite(value)) return "—";
+ if (value < 1024) return `${value} B`;
+ if (value < 1048576) return `${(value / 1024).toFixed(1)} KB`;
+ if (value < 1073741824) return `${(value / 1048576).toFixed(2)} MB`;
+ return `${(value / 1073741824).toFixed(2)} GB`;
 }
 
 export function formatCount(value: number | undefined | null): string {
-  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "—";
+ return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString() : "—";
 }
 
 export function formatDuration(ms: number | undefined | null): string {
-  if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
-  const minutes = Math.floor(ms / 60000);
-  return `${minutes}m ${Math.round((ms % 60000) / 1000)}s`;
+ if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
+ if (ms < 1000) return `${Math.round(ms)} ms`;
+ if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
+ const minutes = Math.floor(ms / 60000);
+ return `${minutes}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
 export function relativeTime(atMs: number, now = Date.now()): string {
-  if (!Number.isFinite(atMs) || atMs <= 0) return "—";
-  const seconds = Math.max(0, Math.round((now - atMs) / 1000));
-  if (seconds < 1) return "now";
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86400)}d ago`;
+ if (!Number.isFinite(atMs) || atMs <= 0) return "—";
+ const seconds = Math.max(0, Math.round((now - atMs) / 1000));
+ if (seconds < 1) return "now";
+ if (seconds < 60) return `${seconds}s ago`;
+ if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+ if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+ return `${Math.round(seconds / 86400)}d ago`;
 }
 
 export function absoluteTime(atMs: number): string {
-  if (!Number.isFinite(atMs) || atMs <= 0) return "unknown";
-  return new Date(atMs).toLocaleString();
+ if (!Number.isFinite(atMs) || atMs <= 0) return "unknown";
+ return new Date(atMs).toLocaleString();
 }
 
 /** Coarse family of an HTTP status, used for colour and filter buckets. */
 export function statusTone(status: number | null | undefined): "neutral" | "good" | "info" | "warn" | "bad" {
-  if (status === null || status === undefined) return "neutral";
-  if (status >= 500) return "bad";
-  if (status >= 400) return "warn";
-  if (status >= 300) return "info";
-  if (status >= 200) return "good";
-  return "neutral";
+ if (status === null || status === undefined) return "neutral";
+ if (status >= 500) return "bad";
+ if (status >= 400) return "warn";
+ if (status >= 300) return "info";
+ if (status >= 200) return "good";
+ return "neutral";
 }
 
 /**
@@ -123,34 +123,34 @@ export function statusTone(status: number | null | undefined): "neutral" | "good
  * is how a CSV says "no value".
  */
 export function mimeLabel(row: { mime?: string; response: number | null }): string {
-  if (row.mime) return row.mime;
-  return row.response === null ? "—" : "untyped";
+ if (row.mime) return row.mime;
+ return row.response === null ? "—" : "untyped";
 }
 
 export async function copyToClipboard(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Clipboard API needs a secure context; fall back to a detached textarea.
-    const scratch = document.createElement("textarea");
-    scratch.value = text;
-    scratch.setAttribute("readonly", "");
-    scratch.style.position = "fixed";
-    scratch.style.opacity = "0";
-    document.body.appendChild(scratch);
-    scratch.select();
-    document.execCommand("copy");
-    document.body.removeChild(scratch);
-  }
+ try {
+  await navigator.clipboard.writeText(text);
+ } catch {
+  // Clipboard API needs a secure context; fall back to a detached textarea.
+  const scratch = document.createElement("textarea");
+  scratch.value = text;
+  scratch.setAttribute("readonly", "");
+  scratch.style.position = "fixed";
+  scratch.style.opacity = "0";
+  document.body.appendChild(scratch);
+  scratch.select();
+  document.execCommand("copy");
+  document.body.removeChild(scratch);
+ }
 }
 
 export function downloadText(filename: string, text: string, type = "text/plain"): void {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
+ const url = URL.createObjectURL(new Blob([text], { type }));
+ const anchor = document.createElement("a");
+ anchor.href = url;
+ anchor.download = filename;
+ anchor.click();
+ URL.revokeObjectURL(url);
 }
 
 /**
@@ -162,71 +162,136 @@ export function downloadText(filename: string, text: string, type = "text/plain"
  */
 /** Extension of a path's last segment, lower-cased, or "" when it has none. */
 function csvExtension(path: string): string {
-  const cut = path.indexOf("?");
-  const route = cut === -1 ? path : path.slice(0, cut);
-  const segment = route.slice(route.lastIndexOf("/") + 1);
-  const dot = segment.lastIndexOf(".");
-  return dot > 0 && dot < segment.length - 1 ? segment.slice(dot + 1).toLowerCase() : "";
+ const cut = path.indexOf("?");
+ const route = cut === -1 ? path : path.slice(0, cut);
+ const segment = route.slice(route.lastIndexOf("/") + 1);
+ const dot = segment.lastIndexOf(".");
+ return dot > 0 && dot < segment.length - 1 ? segment.slice(dot + 1).toLowerCase() : "";
 }
 
 /** Query-parameter count. A bare `?` is zero, not one empty parameter. */
 function csvQueryCount(path: string): number {
-  const cut = path.indexOf("?");
-  if (cut === -1) return 0;
-  const query = path.slice(cut + 1);
-  return query === "" ? 0 : query.split("&").filter((pair) => pair !== "").length;
+ const cut = path.indexOf("?");
+ if (cut === -1) return 0;
+ const query = path.slice(cut + 1);
+ return query === "" ? 0 : query.split("&").filter((pair) => pair !== "").length;
+}
+
+/**
+ * Burp's CSV export specifies an Excel formula guard (burpsy-react-ui-656): a value starting
+ * with -, +, = or @ would otherwise execute as a formula when the file is opened in Excel,
+ * which is a real injection vector for a security tool's output — a host or path captured
+ * from the target could carry "=cmd|...'!A0". The guard quotes the leading character so the
+ * cell reads as text. History's export gains this retroactively through the shared cell writer.
+ */
+function csvCell(value: string | number | null | undefined): string {
+ const text = value === null || value === undefined ? "" : String(value);
+ const guarded = /^[+\-=@]/.test(text) ? `'${text}` : text;
+ return `"${guarded.replace(/"/g, '""')}"`;
 }
 
 export function historyToCSV(exchanges: {
-  id: number;
-  started_ms: number;
-  method: string;
-  host: string;
-  port: number;
-  path: string;
-  status: number | null;
-  response_len: number;
-  mime?: string;
-  duration_ms: number;
-  tls?: boolean;
-  notes?: string | null;
+ id: number;
+ started_ms: number;
+ method: string;
+ host: string;
+ port: number;
+ path: string;
+ status: number | null;
+ response_len: number;
+ mime?: string;
+ duration_ms: number;
+ tls?: boolean;
+ notes?: string | null;
 }[]): string {
-  // Extension and Query are derived here rather than read off the row, for the same reason the
-  // history table derives them: they are a property of the path, which the export already has.
-  // Both doors -- this button and the desktop shell's File > Export History -- render through this
-  // one helper precisely so the CSV and the table cannot disagree about what a column means.
-  const headers = [
-    "ID", "Timestamp", "Method", "Host", "Port", "Path", "Extension", "Query", "TLS",
-    "Status", "Length", "MIME", "Duration", "Comment",
-  ];
-  const rows = exchanges.map((ex) => [
-    ex.id,
-    new Date(ex.started_ms).toISOString(),
-    ex.method,
-    ex.host,
-    ex.port,
-    ex.path,
-    csvExtension(ex.path),
-    csvQueryCount(ex.path),
-    ex.tls === undefined ? "" : ex.tls ? "yes" : "no",
-    ex.status ?? "",
-    ex.response_len,
-    ex.mime ?? "",
-    ex.duration_ms,
-    (ex.notes ?? "").replace(/"/g, '""'),
-  ]);
-  return [headers, ...rows].map((row) => row.map((cell) => `"${cell}"`).join(",")).join("\n");
+ // Extension and Query are derived here rather than read off the row, for the same reason the
+ // history table derives them: they are a property of the path, which the export already has.
+ // Both doors -- this button and the desktop shell's File > Export History -- render through this
+ // one helper precisely so the CSV and the table cannot disagree about what a column means.
+ const headers = [
+  "ID", "Timestamp", "Method", "Host", "Port", "Path", "Extension", "Query", "TLS",
+  "Status", "Length", "MIME", "Duration", "Comment",
+ ];
+ const rows = exchanges.map((ex) => [
+  ex.id,
+  new Date(ex.started_ms).toISOString(),
+  ex.method,
+  ex.host,
+  ex.port,
+  ex.path,
+  csvExtension(ex.path),
+  csvQueryCount(ex.path),
+  ex.tls === undefined ? "" : ex.tls ? "yes" : "no",
+  ex.status ?? "",
+  ex.response_len,
+  ex.mime ?? "",
+  ex.duration_ms,
+  ex.notes ?? "",
+ ]);
+ return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
+}
+
+/**
+ * Serialise tool-log rows to CSV (burpsy-react-ui-656). Same guard, same quoting, one shape:
+ * the columns the Logger table shows, index data only — the log stores no request bodies.
+ */
+export function toolLogToCSV(entries: {
+ id: number;
+ started_ms: number;
+ tool: string;
+ host: string;
+ port: number;
+ method: string;
+ path: string;
+ status: number | null;
+ response_len: number | null;
+ duration_ms: number;
+ comment: string;
+}[]): string {
+ const headers = ["ID", "Timestamp", "Tool", "Host", "Port", "Method", "Path", "Status", "Length", "Duration", "Comment"];
+ const rows = entries.map((e) => [
+  e.id,
+  new Date(e.started_ms).toISOString(),
+  e.tool,
+  e.host,
+  e.port,
+  e.method,
+  e.path,
+  e.status ?? "",
+  e.response_len ?? "",
+  e.duration_ms,
+  e.comment,
+ ]);
+ return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
+}
+
+/**
+ * Serialise Organizer items to CSV (burpsy-react-ui-656): the item's own fields, with the
+ * exchange id rather than the exchange body — the Organizer's export shares History's
+ * index-rows-only rule.
+ */
+export function organizerToCSV(items: {
+ id: number;
+ title: string;
+ note: string;
+ highlight: string;
+ workflow_status: string;
+ exchange: number;
+}[]): string {
+ const headers = ["ID", "Title", "Note", "Highlight", "Status", "Exchange"];
+ const rows = items.map((item) => [item.id, item.title, item.note, item.highlight, item.workflow_status, item.exchange]);
+ return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
 }
 
 /** Build a minimal raw HTTP/1.1 request for a target, used when seeding Repeater by hand. */
 export function templateRequest(host: string, path = "/"): string {
-  return [`GET ${path} HTTP/1.1`, `Host: ${host}`, "Accept: */*", "", ""].join("\r\n");
+ return [`GET ${path} HTTP/1.1`, `Host: ${host}`, "Accept: */*", "", ""].join("\r\n");
 }
 
 /** Pull the authority out of a raw request's Host header so Repeater can prefill a target. */
 export function authorityFromRaw(raw: string, fallbackProtocol = "https"): string {
-  const match = /^host:[ \t]*(.+)$/im.exec(raw);
-  const host = match?.[1]?.trim();
-  if (!host) return "";
-  return host.includes("://") ? host : `${fallbackProtocol}://${host}`;
+ const match = /^host:[ \t]*(.+)$/im.exec(raw);
+ const host = match?.[1]?.trim();
+ if (!host) return "";
+ return host.includes("://") ? host : `${fallbackProtocol}://${host}`;
 }
