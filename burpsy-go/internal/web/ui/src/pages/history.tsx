@@ -224,15 +224,18 @@ function FilterToggle({
   pressed,
   onPressedChange,
   children,
+  title,
 }: {
   pressed: boolean;
   onPressedChange: (next: boolean) => void;
   children: string;
+  title?: string;
 }): JSX.Element {
   return (
     <button
       type="button"
       aria-pressed={pressed}
+      title={title}
       className={cn("filter-toggle", pressed && "filter-toggle-on")}
       onClick={() => onPressedChange(!pressed)}
     >
@@ -371,6 +374,8 @@ export function HistoryPage(): JSX.Element {
   const [onlyParameterized, setOnlyParameterized] = useState(false);
   const [onlyCommented, setOnlyCommented] = useState(false);
   const [onlyHighlighted, setOnlyHighlighted] = useState(false);
+  // burpsy-react-ui-c13: Burp pins history to the newest rows as traffic arrives.
+  const [followNew, setFollowNew] = useState(false);
   // Extension include/exclude, comma-separated, matched against the derived extension.
   const [showExtensions, setShowExtensions] = useState("");
   const [hideExtensions, setHideExtensions] = useState("");
@@ -882,6 +887,13 @@ export function HistoryPage(): JSX.Element {
           <FilterToggle pressed={hideNoResponse} onPressedChange={setHideNoResponse}>
             Hide items without responses
           </FilterToggle>
+          <FilterToggle
+            pressed={followNew}
+            onPressedChange={setFollowNew}
+            title="Keep the bottom of the table in view as new rows arrive"
+          >
+            Auto-scroll
+          </FilterToggle>
           {/* FilterToggle takes a single string child, so the count is composed rather than
               interpolated as a second child. */}
           <FilterToggle pressed={columnFiltersOpen} onPressedChange={setColumnFiltersOpen}>
@@ -1000,6 +1012,7 @@ export function HistoryPage(): JSX.Element {
             data={rows}
             columns={columns}
             getRowId={(row) => String(row.id)}
+            followNewRows={followNew}
             selectedId={selectedId === null ? null : String(selectedId)}
             onSelect={(row) => setSelectedId(row.id)}
             onActivate={(row) => void actions.sendToRepeater(row)}

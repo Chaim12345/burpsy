@@ -105,6 +105,12 @@ export interface VirtualTableProps<T> {
    */
   columnVisibility?: VisibilityState;
   onColumnVisibilityChange?: (next: VisibilityState) => void;
+  /**
+   * Pin the viewport to the last row whenever rows are appended. Off by default: a table
+   * that yanks the viewport out from under an operator reading older rows is the failure
+   * this flag exists to avoid, so following is always opt-in per table (burpsy-react-ui-c13).
+   */
+  followNewRows?: boolean;
 }
 
 export function VirtualTable<T>({
@@ -125,6 +131,7 @@ export function VirtualTable<T>({
   enableColumnVisibility = false,
   columnVisibility: controlledVisibility,
   onColumnVisibilityChange,
+  followNewRows = false,
 }: VirtualTableProps<T>): JSX.Element {
   // The operator's density preference is the default when a page does not name
   // one — the store is the single source of truth for it, so a table that never
@@ -234,6 +241,21 @@ export function VirtualTable<T>({
     // virtualizer identity is stable per scroll element; re-running on it would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIndex]);
+
+  // burpsy-react-ui-c13: follow appended rows while enabled. Growth-only (a filter narrowing
+  // the list must never fling the viewport), and bottom-of-current-order rather than
+  // newest-by-id: under a descending sort the last row is the oldest, and claiming otherwise
+  // would be the same dishonesty as a fabricated count. Selection scroll above still wins on
+  // its own trigger; the two do not fight because this one only fires when the row count grew.
+  const rowCountRef = useRef(rows.length);
+  useEffect(() => {
+    const grew = rows.length > rowCountRef.current;
+    rowCountRef.current = rows.length;
+    if (followNewRows && grew && rows.length > 0) {
+      virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.length, followNewRows]);
 
   const move = useCallback(
     (delta: number | "start" | "end") => {
