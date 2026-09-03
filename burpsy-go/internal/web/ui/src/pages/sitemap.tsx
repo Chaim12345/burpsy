@@ -1,9 +1,11 @@
 import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent } from "react";
-import { formatBytes, formatDuration, mimeLabel, relativeTime, statusTone } from "../lib/api";
+import { copyToClipboard, formatBytes, formatDuration, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import { useSitemapDetailed } from "../lib/data.observe";
-import { useExchangeActions, useSendShortcuts } from "../lib/actions";
+import { useIssuesDetailed } from "../lib/data.attack";
+import type { FindingDetail } from "../lib/types.attack";
+import { exchangeUrl, useExchangeActions, useSendShortcuts } from "../lib/actions";
 import { useApp } from "../lib/store";
 import { toast } from "sonner";
 import type { SiteNodeDetail as SiteNode } from "../lib/types.observe";
@@ -11,9 +13,10 @@ import type { Exchange } from "../lib/types";
 import { CrawlLauncher } from "../ui/crawl";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
-import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
-import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Toolbar, Tooltip } from "../ui/primitives";
-import { VirtualTable, type Column } from "../ui/table";
+import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
+import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Toolbar, Tooltip } from "../ui/primitives";
+import { ContextMenu, type MenuGroup } from "../ui/menu";
+import { MenuRow, SimpleTable, VirtualTable, type Column } from "../ui/table";
 import { CrawlPathsView } from "../ui/crawlpaths";
 import { useCrawls, usePassiveScanBranch } from "../lib/data.observe";
 import { cn } from "../lib/cn";
@@ -106,12 +109,15 @@ function TreeRow({
   cursor,
   onToggle,
   onSelect,
+  getMenuGroups,
 }: {
   row: FlatRow;
   selected: boolean;
   cursor: boolean;
   onToggle: () => void;
   onSelect: () => void;
+  /** Right-click menu per row; Burp's tree menu carries host/branch actions (burpsy-react-ui-gfx). */
+  getMenuGroups?: (row: FlatRow) => MenuGroup[];
 }): JSX.Element {
   const { node, depth, hasChildren, expanded } = row;
   const isHost = depth === 0;
@@ -122,6 +128,7 @@ function TreeRow({
   // too, and hosts — where the decision actually gets made — say it in visible text.
   const outOfScope = !node.in_scope;
   return (
+    <ContextMenu groups={getMenuGroups?.(row) ?? []}>
     <div
       role="treeitem"
       aria-level={depth + 1}
@@ -182,7 +189,39 @@ function TreeRow({
         </span>
       </span>
     </div>
+    </ContextMenu>
   );
+}
+
+/** Burp's severity colours for the inline node-findings list (burpsy-react-ui-zzz). */
+function findingTone(severity: string): "bad" | "warn" | "info" | "neutral" {
+  switch (severity) {
+    case "Critical":
+    case "High":
+      return "bad";
+    case "Medium":
+      return "warn";
+    case "Low":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
+
+/** Deduplicated absolute URLs for every captured exchange under a tree row (burpsy-react-ui-gfx). */
+function urlsUnder(row: FlatRow, exchanges: Exchange[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const ex of exchanges) {
+    if (ex.host !== row.host) continue;
+    if (row.depth > 0 && !underNode(ex.path, row.node.path)) continue;
+    const url = exchangeUrl(ex);
+    if (!seen.has(url)) {
+      seen.add(url);
+      out.push(url);
+    }
+  }
+  return out;
 }
 
 export function SiteMapPage(): JSX.Element {
@@ -205,6 +244,8 @@ export function SiteMapPage(): JSX.Element {
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [selectedExchange, setSelectedExchange] = useState<number | null>(null);
   const [inspector, setInspector] = useState(false);
+  const [showIssues, setShowIssues] = useState(false);
+  const issues = useIssuesDetailed();
 
   const debouncedFilter = useDebounced(filter, 250);
   const term = debouncedFilter.trim().toLowerCase();
@@ -242,6 +283,7 @@ export function SiteMapPage(): JSX.Element {
     setCursorId(key);
     // The previous node's exchange is meaningless against a different node's table.
     setSelectedExchange(null);
+    setShowIssues(false);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -286,6 +328,17 @@ export function SiteMapPage(): JSX.Element {
     if (selected.depth === 0) return all.filter((ex) => ex.host === selected.host);
     return all.filter((ex) => ex.host === selected.host && underNode(ex.path, selected.node.path));
   }, [history, selected]);
+
+  // burpsy-react-ui-zzz: findings attributed to this node's exchanges through occurrence
+  // exchange ids - the precise link the tree's severity dots summarise. Host-only matching
+  // would credit this node with findings observed on sibling paths.
+  const nodeFindings = useMemo<FindingDetail[]>(() => {
+    if (!selected || !issues.data) return [];
+    const ids = new Set(nodeExchanges.map((ex) => ex.id));
+    return (issues.data.findings ?? []).filter((finding) =>
+      (finding.occurrences ?? []).some((occurrence) => ids.has(occurrence.exchange_id)),
+    );
+  }, [selected, issues.data, nodeExchanges]);
 
   const activeExchange = useMemo(
     () => nodeExchanges.find((ex) => ex.id === selectedExchange) ?? null,
@@ -356,6 +409,18 @@ export function SiteMapPage(): JSX.Element {
         cell: (info) => <span className="cell-dim">{mimeLabel(info.row.original)}</span>,
       },
       {
+        // burpsy-react-ui-esi: History's Comment column over the same exchanges - the note text
+        // lives on the row, so this is display, not a second store.
+        id: "comment",
+        header: "Comment",
+        size: 180,
+        accessorFn: (row: Exchange) => row.notes ?? "",
+        cell: (info) => {
+          const text = info.getValue<string>();
+          return text === "" ? <span className="cell-dim">—</span> : <span title={text}>{text}</span>;
+        },
+      },
+      {
         accessorKey: "duration_ms",
         header: "Time",
         size: 74,
@@ -406,6 +471,29 @@ export function SiteMapPage(): JSX.Element {
             <TreeRow
               key={row.key}
               row={row}
+              getMenuGroups={(target) => {
+                const scope = target.depth === 0 ? "host" : "branch";
+                return [
+                  {
+                    id: "copy",
+                    actions: [
+                      {
+                        id: "copy-urls",
+                        label: `Copy URLs in this ${scope}`,
+                        onSelect: () => {
+                          const urls = urlsUnder(target, history ?? []);
+                          if (!urls.length) {
+                            toast.error(`No captured requests under this ${scope}`);
+                            return;
+                          }
+                          void copyToClipboard(urls.join("\n"));
+                          toast.success(`Copied ${urls.length} URLs from this ${scope}`);
+                        },
+                      },
+                    ],
+                  },
+                ];
+              }}
               selected={row.key === selectedId}
               cursor={row.key === cursorId}
               onToggle={() => toggle(row)}
@@ -520,6 +608,23 @@ export function SiteMapPage(): JSX.Element {
               {s}
             </Badge>
           ))}
+          <Tooltip
+            content={
+              nodeFindings.length
+                ? "Findings observed on this node's exchanges"
+                : "No findings observed on this node's exchanges"
+            }
+          >
+            <Button
+              variant="outline"
+              size="small"
+              disabled={!nodeFindings.length}
+              aria-pressed={showIssues}
+              onClick={() => setShowIssues((current) => !current)}
+            >
+              Issues ({nodeFindings.length})
+            </Button>
+          </Tooltip>
           <Tooltip content="Open the HTTP history tab filtered to this path and everything under it">
             <Button variant="outline" size="small" onClick={() => filterHistory(selected)}>
               <ExternalLink size={13} />
@@ -528,6 +633,39 @@ export function SiteMapPage(): JSX.Element {
           </Tooltip>
         </div>
       </div>
+      {showIssues && nodeFindings.length > 0 ? (
+        <Card className="pane-fill">
+          <SectionHeading title={`Issues under ${selected.depth === 0 ? selected.host : selected.node.path}`} />
+          <SimpleTable headers={["Severity", "Finding", "Host", "Seen"]}>
+            {nodeFindings.map((finding) => (
+              <MenuRow
+                key={finding.id}
+                groups={[
+                  {
+                    id: "open",
+                    actions: [
+                      {
+                        id: "issues",
+                        label: "Open in Issues",
+                        onSelect: () => setRoute("scanner"),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <td>
+                  <Badge tone={findingTone(finding.severity)}>{finding.severity}</Badge>
+                </td>
+                <td title={finding.detail ?? undefined}>{finding.issue_name ?? finding.check_name ?? "Unnamed finding"}</td>
+                <td>{finding.host}</td>
+                <td>
+                  <span className="cell-num">{finding.times_seen}×</span>
+                </td>
+              </MenuRow>
+            ))}
+          </SimpleTable>
+        </Card>
+      ) : null}
       <SplitPane
         storageId="sitemap-detail"
         orientation="vertical"
@@ -553,6 +691,7 @@ export function SiteMapPage(): JSX.Element {
               onSelect={(row) => setSelectedExchange(row.id)}
               onActivate={(row) => void actions.sendToRepeater(row)}
               menuGroups={(row) => actions.menu(row)}
+              rowClassName={(row) => (row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined)}
             />
           )
         }
