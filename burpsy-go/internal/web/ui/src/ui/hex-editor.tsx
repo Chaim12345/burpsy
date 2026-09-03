@@ -1,7 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { bytesToMessage, messageBytes } from "../lib/message-views";
-import { Button } from "./primitives";
+import { Button, Field, Input, Modal } from "./primitives";
+import { ContextMenu, type MenuGroup } from "./menu";
 
 /**
  * The editable Hex view.
@@ -76,6 +77,10 @@ export function HexEditor({
   const [refusal, setRefusal] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
   const [anchor, setAnchor] = useState<number | null>(null);
+  // Structured-insertion dialogs (burpsy-react-ui-297r): which prompt is open, and its draft.
+  const [insertOpen, setInsertOpen] = useState<null | "bytes" | "string">(null);
+  const [insertCount, setInsertCount] = useState("4");
+  const [insertText, setInsertText] = useState("");
   const [column, setColumn] = useState<"hex" | "ascii">("hex");
   const [nibble, setNibble] = useState<0 | 1>(0);
 
@@ -177,16 +182,26 @@ export function HexEditor({
     commit(next);
   }
 
-  function insertByte(): void {
+  /**
+   * Splice bytes in at the caret (burpsy-react-ui-297r). `insertByte` is this with one
+   * zero byte; the count and string menu entries are this with N zeroes and with a
+   * UTF-8 encoding. All three commit through the same exactness check, so an insertion
+   * the transport cannot carry is refused the same loud way as a typed one.
+   */
+  function insertBytes(data: Uint8Array): void {
     const at = Math.min(caretAt, length);
-    const next = new Uint8Array(bytes.length + 1);
+    const next = new Uint8Array(bytes.length + data.length);
     next.set(bytes.subarray(0, at), 0);
-    next[at] = 0;
-    next.set(bytes.subarray(at), at + 1);
+    next.set(data, at);
+    next.set(bytes.subarray(at), at + data.length);
     setAnchor(null);
     setCaret(at);
     setNibble(0);
     commit(next);
+  }
+
+  function insertByte(): void {
+    insertBytes(new Uint8Array([0]));
   }
 
   function typeHexDigit(digit: number): void {
@@ -330,6 +345,36 @@ export function HexEditor({
         ` · ${column === "hex" ? "hex" : "ASCII"} column` +
         (editable && column === "hex" && nibble === 1 ? ", low nibble next" : "");
 
+  const selectedCount = selection ? selection.to - selection.from : 0;
+  const menuGroups: MenuGroup[] = editable
+    ? [
+        {
+          id: "hex-insert",
+          actions: [
+            { id: "insert-byte", label: "Insert byte", onSelect: insertByte },
+            { id: "insert-bytes", label: "Insert bytes…", onSelect: () => setInsertOpen("bytes") },
+            { id: "insert-string", label: "Insert string…", onSelect: () => setInsertOpen("string") },
+          ],
+        },
+        {
+          id: "hex-delete",
+          actions: [
+            {
+              id: "delete-selection",
+              label: selectedCount > 1 ? `Delete ${selectedCount} selected bytes` : "Delete selected byte",
+              danger: true,
+              disabled: !selection,
+              onSelect: () => {
+                if (selection) deleteRange(selection.from, selection.to);
+              },
+            },
+          ],
+        },
+      ]
+    : [];
+
+  const insertCountValid = /^\d+$/.test(insertCount.trim()) && Number(insertCount) >= 1 && Number(insertCount) <= 65535;
+
   return (
     <div className="hex-view">
       <div className="hex-toolbar">
@@ -367,6 +412,7 @@ export function HexEditor({
         </span>
       </div>
 
+      <ContextMenu groups={menuGroups}>
       <div className="hex-scroll" ref={scrollRef}>
         <table
           className="hex-table"
@@ -451,6 +497,75 @@ export function HexEditor({
           </tbody>
         </table>
       </div>
+      </ContextMenu>
+
+      <Modal
+        open={insertOpen === "bytes"}
+        onOpenChange={(open) => {
+          if (!open) setInsertOpen(null);
+        }}
+        title="Insert bytes"
+        description="Zero bytes at the caret. The same commit path as typing, so unrepresentable results are refused, not written."
+      >
+        <div className="stack">
+          <Field label="How many bytes (1-65535)">
+            {(id) => (
+              <Input
+                id={id}
+                inputMode="numeric"
+                value={insertCount}
+                onChange={(event) => setInsertCount(event.target.value)}
+              />
+            )}
+          </Field>
+          <div className="toolbar-end">
+            <Button variant="outline" size="small" onClick={() => setInsertOpen(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="small"
+              disabled={!insertCountValid}
+              onClick={() => {
+                insertBytes(new Uint8Array(Number(insertCount)));
+                setInsertOpen(null);
+              }}
+            >
+              Insert
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={insertOpen === "string"}
+        onOpenChange={(open) => {
+          if (!open) setInsertOpen(null);
+        }}
+        title="Insert string"
+        description="The text as UTF-8 bytes at the caret."
+      >
+        <div className="stack">
+          <Field label="Text to insert">
+            {(id) => <Input id={id} value={insertText} onChange={(event) => setInsertText(event.target.value)} />}
+          </Field>
+          <div className="toolbar-end">
+            <Button variant="outline" size="small" onClick={() => setInsertOpen(null)}>
+              Cancel
+            </Button>
+            <Button
+              size="small"
+              disabled={!insertText}
+              onClick={() => {
+                insertBytes(new TextEncoder().encode(insertText));
+                setInsertText("");
+                setInsertOpen(null);
+              }}
+            >
+              Insert
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* One region for position and for refusals, so a screen reader hears the caret
           move and hears why an edit did not land, without two competing live regions. */}
