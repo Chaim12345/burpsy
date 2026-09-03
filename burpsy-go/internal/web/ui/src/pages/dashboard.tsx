@@ -1,15 +1,16 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Activity, CircleAlert, Copy, FolderTree, Gauge, Play, Plus, Radar, Square } from "lucide-react";
+import { Copy, FolderTree, Plus, Radar, Search, Square } from "lucide-react";
 import { toast } from "sonner";
-import { api, copyToClipboard, formatBytes, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
+import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
 import { useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import { useStartCrawl } from "../lib/data.observe";
 import { useApp } from "../lib/store";
-import type { ActivityRow, CoverageSummary, TaskRow } from "../lib/types";
-import { PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal } from "../ui/primitives";
+import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
+import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Switch, Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/primitives";
+import { DetailList } from "../ui/json";
 import { MenuRow, SimpleTable } from "../ui/table";
 import type { MenuGroup } from "../ui/menu";
 
@@ -76,161 +77,206 @@ function useCancelTask() {
   });
 }
 
-function TaskTable({ tasks, liveFindings, liveEnabled }: { tasks: TaskRow[]; liveFindings?: number; liveEnabled: boolean }): JSX.Element {
-  const cancel = useCancelTask();
-  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
-  const setRoute = useApp((state) => state.setRoute);
-  const setLive = useSetScannerLive();
+/**
+ * The leading "N found" of a result summary, for the tile badge. Summaries that do not match
+ * (there are none today, but the server owns the phrasing) show a dash rather than a zero —
+ * zero found is a claim, and only the server may make it.
+ */
+function foundCount(summary?: string): string {
+  return /([\d,]+)\s+found/.exec(summary ?? "")?.[1] ?? "—";
+}
 
-  // While live auditing is enabled Burp keeps its live task permanently visible even between
-  // sweep batches; the registry only records a row per bounded batch (:577 in liveaudit.go), so
-  // the standing entry is rendered here from /api/scanner/live state instead of faking registry data.
+/**
+ * The standing live-audit entry. While live auditing is enabled Burp keeps its live task
+ * permanently visible even between sweep batches; the registry only records a row per bounded
+ * batch (:577 in liveaudit.go), so the standing entry is synthesised here from /api/scanner/live
+ * state instead of faking registry data.
+ */
+function withStandingLiveTask(tasks: TaskRow[], liveEnabled: boolean): TaskRow[] {
   const batchRunning = tasks.some((task) => task.kind === "live audit" && task.state === "running");
-  const standing: TaskRow | null = liveEnabled && !batchRunning ? {
-    id: -1,
-    kind: "live audit",
-    target: "proxied traffic",
-    state: "running",
-    done: 0,
-    total: 0,
-    fraction: 0,
-    fraction_known: false,
-    cancellable: true,
-    progress: "waiting for in-scope traffic",
-    elapsed_ms: 0,
-    result: { summary: "" },
-  } : null;
-  const rows = standing ? [standing, ...tasks] : tasks;
+  const standing: TaskRow | null = liveEnabled && !batchRunning
+    ? {
+        id: -1,
+        kind: "live audit",
+        target: "proxied traffic",
+        state: "running",
+        done: 0,
+        total: 0,
+        fraction: 0,
+        fraction_known: false,
+        cancellable: true,
+        progress: "waiting for in-scope traffic",
+        elapsed_ms: 0,
+        result: { summary: "" },
+      }
+    : null;
+  return standing ? [standing, ...tasks] : tasks;
+}
 
-  if (!rows.length) {
-    return <Empty title="No tasks" detail="Crawls, audits and attacks appear here with their progress and bounded results." />;
-  }
-  /**
-   * A task's row menu.
-   *
-   * Cancel is the only thing that can be *done* to a task and it is already a row button; the menu
-   * carries it too so the gesture is the same as everywhere else, and adds the copies an operator
-   * needs when a task fails and has to be described in a ticket. `-1` is the synthesised standing
-   * live-audit row, not a real task id, which is why cancelling it goes through setLive instead —
-   * so it is left to its own button rather than given a menu entry that would call the wrong API.
-   */
-  const menuFor = (task: TaskRow): MenuGroup[] => [
-    {
-      id: "task",
-      actions: [
-        ...(task.id !== -1 && task.cancellable && task.state === "running"
-          ? [
-              {
-                id: "cancel",
-                label: `Cancel this ${task.kind} task`,
-                icon: Square,
-                danger: true,
-                disabled: cancel.isPending,
-                onSelect: () => cancel.mutate(task.id),
-              },
-            ]
-          : []),
-        {
-          id: "history",
-          label: `Filter history by ${task.target}`,
-          icon: FolderTree,
-          // The target is a URL or a host depending on the task kind, so this matches on `host ~`
-          // rather than claiming an exact authority it may not have.
-          onSelect: () => {
-            setHistoryQuery(`host ~ "${task.target.replace(/^https?:\/\//, "").split("/")[0] ?? task.target}"`);
-            setRoute("history");
-          },
-        },
-      ],
-    },
-    {
-      id: "copy",
-      actions: [
-        { id: "target", label: "Copy target", icon: Copy, onSelect: () => void copyToClipboard(task.target) },
-        {
-          id: "progress",
-          label: "Copy task status line",
-          icon: Copy,
-          onSelect: () => {
-            void copyToClipboard(
-              `${task.kind} · ${task.target} · ${task.state} · ${task.progress} · ${formatDuration(task.elapsed_ms)}${task.result?.summary ? ` · ${task.result.summary}` : ""}`,
-            );
-            toast.success("Task status copied");
-          },
-        },
-      ],
-    },
-  ];
+/** Burp's dashboard is two panes: a Tasks list on the left, the selected task's detail on the
+ * right. The findings column and the kind/target/state/progress columns of the old table were the
+ * same facts a tile carries — the table form was the only part that differed from Burp, and the
+ * detail pane replaces its per-row controls. */
+function TaskTile({
+  task,
+  ordinal,
+  selected,
+  onSelect,
+  liveFindings,
+  liveEnabled,
+}: {
+  task: TaskRow;
+  ordinal: number;
+  selected: boolean;
+  onSelect: () => void;
+  liveFindings?: number;
+  liveEnabled: boolean;
+}): JSX.Element {
+  const cancel = useCancelTask();
+  const setLive = useSetScannerLive();
+  return (
+    <button
+      type="button"
+      className={selected ? "task-tile task-tile-selected" : "task-tile"}
+      aria-pressed={selected}
+      onClick={onSelect}
+    >
+      <div className="task-tile-head">
+        <strong>
+          {ordinal}. {task.kind === "live audit" ? "Live audit from Proxy (all traffic)" : `${task.kind} (${task.target})`}
+        </strong>
+        {task.id !== -1 && task.cancellable && task.state === "running" ? (
+          <IconButton
+            label={`Cancel ${task.kind} task on ${task.target}`}
+            size="small"
+            disabled={cancel.isPending}
+            onClick={(event) => {
+              event.stopPropagation();
+              cancel.mutate(task.id);
+            }}
+          >
+            <Square size={12} />
+          </IconButton>
+        ) : null}
+      </div>
+      <div className="task-tile-state">
+        <Badge tone={taskTone(task.state)}>{task.state}</Badge>
+        <span className="cell-dim">{task.progress}</span>
+      </div>
+      {task.kind === "live audit" ? (
+        <div className="task-tile-row">
+          <span>Capturing</span>
+          <Switch
+            checked={liveEnabled}
+            label={`Capturing for live audit task ${ordinal}`}
+            onCheckedChange={(next) => {
+              setLive.mutate(
+                { enabled: next },
+                {
+                  onSuccess: () => toast.success(next ? "Live audit started" : "Live audit stopped"),
+                  onError: (failure: unknown) =>
+                    toast.error(failure instanceof Error ? failure.message : "Toggling the live sweep failed"),
+                },
+              );
+            }}
+          />
+        </div>
+      ) : null}
+      <div className="task-tile-row">
+        <span>Issues:</span>
+        {task.kind === "live audit" ? (
+          <Badge tone={liveFindings ? "bad" : "neutral"}>{liveFindings ?? 0}</Badge>
+        ) : (
+          // The badge carries the found count; the full summary sits beside it as plain text.
+          // A severity ladder would be the fabrication the advisory caught: the summary counts
+          // findings without splitting them, so the split lives on the Issues page, which has
+          // the real findings.
+          <>
+            <Badge tone={task.result?.summary ? "warn" : "neutral"}>{foundCount(task.result?.summary)}</Badge>
+            <span className="cell-dim">{task.result?.summary || "no summary"}</span>
+          </>
+        )}
+      </div>
+    </button>
+  );
+}
+
+/**
+ * Burp's left Tasks pane: a filter over the tiles, then one tile per task, newest first. The
+ * selection lives in the parent so the detail pane can follow it, and so a poll that reorders
+ * nothing does not reset what the operator clicked.
+ */
+function TaskSidebar({
+  tasks,
+  liveFindings,
+  liveEnabled,
+  selectedId,
+  onSelect,
+  onNewScan,
+  onNewLive,
+}: {
+  tasks: TaskRow[];
+  liveFindings?: number;
+  liveEnabled: boolean;
+  selectedId: number | null;
+  onSelect: (id: number) => void;
+  onNewScan: () => void;
+  onNewLive: () => void;
+}): JSX.Element {
+  const [filter, setFilter] = useState("");
+  const rows = withStandingLiveTask(tasks, liveEnabled);
+  const needle = filter.trim().toLowerCase();
+  const shown = needle ? rows.filter((task) => `${task.kind} ${task.target}`.toLowerCase().includes(needle)) : rows;
 
   return (
-    <SimpleTable headers={["Kind", "Target", "State", "Progress", "Issues", "Elapsed", ""]}>
-      {rows.map((task) => (
-        <MenuRow key={task.id} groups={menuFor(task)}>
-          <td>
-            <Badge>{task.kind}</Badge>
-          </td>
-          <td title={task.note || task.target}>{task.target}</td>
-          <td>
-            <Badge tone={taskTone(task.state)}>{task.state}</Badge>
-          </td>
-          <td style={{ minWidth: "9rem" }}>
-            <div className="progress-track" title={task.progress}>
-              {task.fraction_known ? (
-                <div className={`progress-fill ${task.state === "running" ? "progress-live" : ""}`} style={{ width: `${Math.round(task.fraction * 100)}%` }} />
-              ) : (
-                <div className="progress-fill progress-unknown" />
-              )}
-            </div>
-            <span className="cell-dim">{task.progress}</span>
-          </td>
-          <td>
-            {task.kind === "live audit" ? (
-              liveFindings === undefined ? (
-                <span className="cell-dim">—</span>
-              ) : (
-                <Badge tone={liveFindings > 0 ? "bad" : undefined}>{liveFindings}</Badge>
-              )
-            ) : (
-              <span className="cell-dim" title={task.result?.summary}>
-                {task.result?.summary || "—"}
-              </span>
-            )}
-          </td>
-          <td>
-            <span className="cell-num">{formatDuration(task.elapsed_ms)}</span>
-          </td>
-          <td>
-            {task.id === -1 ? (
-              <IconButton
-                label="Stop live auditing"
-                size="small"
-                disabled={setLive.isPending}
-                onClick={() =>
-                  setLive.mutate(
-                    { enabled: false },
-                    {
-                      onSuccess: () => toast.success("Live audit stopped"),
-                      onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Stopping the live audit failed"),
-                    },
-                  )
-                }
-              >
-                <Square size={12} />
-              </IconButton>
-            ) : task.cancellable && task.state === "running" ? (
-              <IconButton
-                label={`Cancel ${task.kind} task on ${task.target}`}
-                size="small"
-                disabled={cancel.isPending}
-                onClick={() => cancel.mutate(task.id)}
-              >
-                <Square size={12} />
-              </IconButton>
-            ) : null}
-          </td>
-        </MenuRow>
-      ))}
-    </SimpleTable>
+    <div className="task-sidebar">
+      <div className="task-sidebar-head">
+        <strong>Tasks</strong>
+        <div className="task-sidebar-actions">
+          <Button size="small" onClick={onNewScan}>
+            <Plus size={13} />
+            New scan
+          </Button>
+          <Button size="small" variant="outline" onClick={onNewLive}>
+            <Radar size={13} />
+            New live task
+          </Button>
+        </div>
+      </div>
+      <div className="task-sidebar-filter">
+        <Input
+          aria-label="Filter tasks"
+          placeholder="Filter tasks"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+        />
+        <Search size={13} className="task-sidebar-filter-icon" />
+      </div>
+      {shown.length ? (
+        <div className="task-tile-list">
+          {shown.map((task, index) => (
+            <TaskTile
+              key={task.id}
+              task={task}
+              ordinal={shown.length - index}
+              selected={selectedId === task.id}
+              onSelect={() => onSelect(task.id)}
+              liveFindings={liveFindings}
+              liveEnabled={liveEnabled}
+            />
+          ))}
+        </div>
+      ) : (
+        <Empty
+          title={needle ? "No matching tasks" : "No tasks"}
+          detail={
+            needle
+              ? "No task matches this filter."
+              : "Real-time information on your scans and live tasks is displayed here. Start a new scan or live task to populate this page."
+          }
+        />
+      )}
+    </div>
   );
 }
 
@@ -463,16 +509,24 @@ function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange:
   );
 }
 
+
 export function DashboardPage(): JSX.Element {
   const { data, error, isFetching, refetch } = useDashboard();
   const issues = useIssues();
   const live = useScannerLive();
   const setRoute = useApp((state) => state.setRoute);
+  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
   const [scanOpen, setScanOpen] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
+  // Which task tile is open in the right pane. Null means "first tile" — the same default Burp
+  // applies, where the newest task is selected without a click.
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const sources = useMemo(() => Object.entries(data?.sources ?? {}).sort((a, b) => b[1] - a[1]), [data?.sources]);
-  const incomplete = useMemo(() => (data?.summaries ?? []).filter((item) => !item.breakdown.complete).length, [data?.summaries]);
+  const liveEnabled = live.data?.enabled === true;
+  const liveFindings = live.data?.findings;
+  const tasks = withStandingLiveTask(data?.tasks ?? [], liveEnabled);
+  const selected = tasks.find((task) => task.id === selectedId) ?? tasks[0] ?? null;
 
   if (error) {
     return (
@@ -484,178 +538,233 @@ export function DashboardPage(): JSX.Element {
   }
 
   return (
-    <div className="page">
+    <div className="page page-flush">
       <PageHeader
         title="Dashboard"
-        description="Capture totals, honest coverage accounting, and the work currently in flight."
+        description="Running work on the left; the selected task's outcome and coverage on the right."
         actions={<RefreshButton onClick={() => void refetch()} loading={isFetching} />}
       />
 
-      <div className="metric-grid">
-        <Metric
-          accent
-          label="Exchanges"
-          value={formatCount(data?.exchanges)}
-          detail={`${formatCount(data?.messages)} stored messages`}
-        />
-        <Metric label="Capture store" value={data ? formatBytes(data.stored_bytes) : "—"} detail="on-disk message bytes" />
-        <Metric
-          label="Running tasks"
-          value={formatCount(data?.tasks_running)}
-          detail={`${formatCount(data?.tasks.length)} tracked`}
-          tone={data?.tasks_running ? "info" : undefined}
-        />
-        <Metric
-          label="Coverage gaps"
-          value={formatCount(incomplete)}
-          detail={incomplete ? "summaries without a full verdict" : "every summary is complete"}
-          tone={incomplete ? "warn" : "good"}
-        />
-      </div>
-
-      {issues.data ? (
-        <div className="metric-grid wide">
-          {/* Critical was missing from this row while core.Severity has had it all along, so a
-              critical finding was counted by the API and shown by nothing. The tiles now mirror
-              the severity ladder rather than a subset of it. */}
-          {(["critical", "high", "medium", "low", "info"] as const).map((severity) => (
-            <Metric
-              key={severity}
-              label={`${severity} findings`}
-              value={formatCount(issues.data!.counts?.[severity] ?? 0)}
-              tone={
-                (severity === "critical" || severity === "high") && (issues.data!.counts?.[severity] ?? 0) > 0
-                  ? "bad"
-                  : severity === "medium" && (issues.data!.counts?.medium ?? 0) > 0
-                    ? "warn"
-                    : undefined
-              }
+      <SplitPane
+        storageId="dashboard-tasks"
+        orientation="horizontal"
+        defaultMasterSize="34"
+        minMasterSize="22"
+        master={
+          <TaskSidebar
+            tasks={data?.tasks ?? []}
+            liveFindings={liveFindings}
+            liveEnabled={liveEnabled}
+            selectedId={selected?.id ?? null}
+            onSelect={setSelectedId}
+            onNewScan={() => setScanOpen(true)}
+            onNewLive={() => setLiveOpen(true)}
+          />
+        }
+        detail={
+          selected ? (
+            <TaskDetail
+              task={selected}
+              liveFindings={liveFindings}
+              liveEnabled={liveEnabled}
+              issuesEnabled={issues.data?.enabled === true}
+              summaries={data?.summaries ?? []}
+              sources={sources}
+              events={data?.events ?? []}
+              activity={data?.activity ?? []}
+              onFilterHistory={(query) => {
+                setHistoryQuery(query);
+                setRoute("history");
+              }}
             />
-          ))}
-          {/* A severity the API did not recognise is surfaced rather than left out of the row: the
-              defect this replaced was exactly a class of finding that no tile accounted for. */}
-          {issues.data.counts?.unrecognised ? (
-            <Metric
-              label="unrecognised severity"
-              value={formatCount(issues.data.counts.unrecognised)}
-              tone="warn"
-              detail="reported by the API under a name this row does not know"
-            />
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="dashboard-grid">
-        <Card className="dashboard-wide">
-          <SectionHeading
-            title="Coverage"
-            detail="Findings are a floor, not a total. Skipped, errored and gated work is counted separately."
-          />
-          {data?.summaries.length ? (
-            <div className="summary-grid">
-              {data.summaries.map((summary) => (
-                <CoverageCard key={summary.label} summary={summary} />
-              ))}
-            </div>
-          ) : (
-            <Empty title="No coverage reported" detail="Run a crawl or an audit to produce coverage accounting." />
-          )}
-        </Card>
-
-        <Card>
-          <SectionHeading title="Requests sent by burpsy" detail="Tool traffic, kept separate from proxy history." />
-          <ActivityTable rows={data?.activity.slice(0, 10) ?? []} />
-        </Card>
-
-        <Card>
-          <SectionHeading title="Tool events" detail="State changes that are not requests." />
-          {data?.events.length ? (
-            <div className="event-list">
-              {data.events.slice(0, 12).map((event, index) => (
-                <div className="event-row" key={`${event.kind}-${event.at_ms}-${index}`}>
-                  <span className={`event-dot event-${event.severity}`} />
-                  <div>
-                    <strong>{event.kind}</strong>
-                    <p>{event.detail}</p>
-                  </div>
-                  <time title={new Date(event.at_ms).toLocaleString()}>{relativeTime(event.at_ms)}</time>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <Empty title="No events" detail="Start an audit, a crawl or an attack to populate this feed." />
-          )}
-        </Card>
-
-        <Card className="dashboard-wide">
-          <SectionHeading
-            title="Tasks"
-            detail="Progress and bounded results for active and recent work."
-            actions={
-              <>
-                <Button size="small" onClick={() => setScanOpen(true)}>
-                  <Plus size={13} />
-                  New scan
-                </Button>
-                <Button variant="outline" size="small" onClick={() => setLiveOpen(true)}>
-                  <Radar size={13} />
-                  New live task
-                </Button>
-              </>
-            }
-          />
-          <TaskTable tasks={data?.tasks ?? []} liveFindings={live.data?.findings} liveEnabled={live.data?.enabled === true} />
-        </Card>
-
-        <Card className="dashboard-wide">
-          <SectionHeading
-            title="Traffic sources"
-            detail="Where captured exchanges came from."
-            actions={
-              <button type="button" className="button button-outline button-sm" onClick={() => setRoute("history")}>
-                <Activity size={13} />
-                Open HTTP history
-              </button>
-            }
-          />
-          {sources.length ? (
-            <div className="metric-grid wide">
-              {sources.map(([name, count]) => (
-                <Metric key={name} label={name} value={formatCount(count)} detail="exchanges" />
-              ))}
-            </div>
           ) : (
             <Empty
-              title="No traffic yet"
-              detail="Configure a client to use the proxy, then install the CA certificate to capture HTTPS."
+              title="No tasks"
+              detail="Real-time information on your scans and live tasks is displayed here. Start a new scan or live task to populate this page."
             />
-          )}
-        </Card>
-      </div>
-
-      {data && !data.exchanges ? (
-        <div className="notice">
-          <Gauge size={15} />
-          <div>
-            <strong>Nothing captured yet.</strong> Point a browser or client at the proxy listener, install the CA
-            certificate from the sidebar, then reload this page. Use <Play size={11} /> Intercept to hold traffic, or
-            Repeater to craft a request by hand.
-          </div>
-        </div>
-      ) : null}
-
-      {incomplete ? (
-        <div className="notice notice-warn">
-          <CircleAlert size={15} />
-          <div>
-            {incomplete} coverage {incomplete === 1 ? "summary reports" : "summaries report"} work without a verdict.
-            Treat the finding counts above as a lower bound, not a clean result.
-          </div>
-        </div>
-      ) : null}
+          )
+        }
+      />
 
       <NewScanModal open={scanOpen} onOpenChange={setScanOpen} />
       <NewLiveTaskModal open={liveOpen} onOpenChange={setLiveOpen} />
+    </div>
+  );
+}
+
+/** One task's detail pane: header, Summary / Event log tabs, then the tab's content. Burp keeps
+ * the task's own facts (configuration, progress) on Summary and everything the task produced
+ * (issues, events) on the later tabs; the same split, with burpsy's equivalents in each. */
+function TaskDetail({
+  task,
+  liveFindings,
+  liveEnabled,
+  issuesEnabled,
+  summaries,
+  sources,
+  events,
+  activity,
+  onFilterHistory,
+}: {
+  task: TaskRow;
+  liveFindings?: number;
+  liveEnabled: boolean;
+  issuesEnabled: boolean;
+  summaries: CoverageSummary[];
+  sources: [string, number][];
+  events: ToolEvent[];
+  activity: ActivityRow[];
+  onFilterHistory: (query: string) => void;
+}): JSX.Element {
+  const cancel = useCancelTask();
+  const setLive = useSetScannerLive();
+  const title = task.kind === "live audit" ? "Live audit from Proxy (all traffic)" : `${task.kind} (${task.target})`;
+
+  return (
+    <div className="task-detail">
+      <div className="task-detail-head">
+        <h2>{title}</h2>
+        <div className="task-detail-actions">
+          {task.id !== -1 && task.cancellable && task.state === "running" ? (
+            <IconButton
+              label={`Cancel ${task.kind} task on ${task.target}`}
+              size="small"
+              disabled={cancel.isPending}
+              onClick={() => cancel.mutate(task.id)}
+            >
+              <Square size={12} />
+            </IconButton>
+          ) : null}
+        </div>
+      </div>
+
+      <Tabs defaultValue="summary">
+        <TabsList>
+          <TabsTrigger value="summary">Summary</TabsTrigger>
+          <TabsTrigger value="events">Event log</TabsTrigger>
+          <TabsTrigger value="activity">Activity</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="summary">
+          <div className="task-detail-grid">
+            <Card>
+              <SectionHeading title="Findings" detail={issuesEnabled ? "What this task and the live sweep have reported so far." : "The scanner is disabled; findings below are historical."} />
+              <div className="metric-grid wide">
+                <Metric
+                  accent
+                  label="Findings"
+                  value={task.kind === "live audit" ? (liveFindings ?? 0) : Number(/([\d,]+)/.exec(task.result?.summary ?? "")?.[1]?.replace(/,/g, "") ?? 0) || 0}
+                  detail={task.kind === "live audit" ? "live audit sweep" : "recorded by this task"}
+                />
+                {task.state !== "running" ? (
+                  <Metric label="Elapsed" value={formatDuration(task.elapsed_ms)} />
+                ) : null}
+              </div>
+              {/* Burp's "Most serious vulnerabilities found" table. The per-task result does not
+                  carry the findings themselves — the Issues page does — so the honest equivalent is
+                  the summary line plus the link, not a table of invented rows. */}
+              <div className="task-detail-note">
+                <p className="cell-dim">{task.result?.summary || "No issues recorded for this task."}</p>
+                <Button size="small" variant="outline" onClick={() => onFilterHistory(`host ~ "${task.target.replace(/^https?:\/\//, "").split("/")[0] ?? task.target}"`)}>
+                  <FolderTree size={13} />
+                  Show in HTTP history
+                </Button>
+              </div>
+            </Card>
+
+            <Card>
+              <SectionHeading title="Task configuration" />
+              <DetailList
+                rows={[
+                  { label: "Task type", value: task.kind === "live audit" ? "Live audit" : task.kind },
+                  { label: "Target", value: task.target },
+                  {
+                    label: "Capturing",
+                    value:
+                      task.kind === "live audit" ? (
+                        <Switch
+                          checked={liveEnabled}
+                          label="Capturing for this live audit task"
+                          onCheckedChange={(next) => {
+                            setLive.mutate(
+                              { enabled: next },
+                              {
+                                onSuccess: () => toast.success(next ? "Live audit started" : "Live audit stopped"),
+                                onError: (failure: unknown) =>
+                                  toast.error(failure instanceof Error ? failure.message : "Toggling the live sweep failed"),
+                              },
+                            );
+                          }}
+                        />
+                      ) : (
+                        <Badge tone={taskTone(task.state)}>{task.state}</Badge>
+                      ),
+                  },
+                  { label: "Progress", value: task.progress },
+                ]}
+              />
+            </Card>
+
+            <Card className="task-detail-wide">
+              <SectionHeading title="Coverage" detail="Findings are a floor, not a total. Skipped, errored and gated work is counted separately." />
+              {summaries.length ? (
+                <div className="summary-grid">
+                  {summaries.map((summary) => (
+                    <CoverageCard key={summary.label} summary={summary} />
+                  ))}
+                </div>
+              ) : (
+                <Empty title="No coverage reported" detail="Run a crawl or an audit to produce coverage accounting." />
+              )}
+            </Card>
+
+            <Card className="task-detail-wide">
+              <SectionHeading title="Traffic sources" detail="Where captured exchanges came from." />
+              {sources.length ? (
+                <div className="metric-grid wide">
+                  {sources.map(([name, count]) => (
+                    <Metric key={name} label={name} value={formatCount(count)} detail="exchanges" />
+                  ))}
+                </div>
+              ) : (
+                <Empty
+                  title="No traffic yet"
+                  detail="Configure a client to use the proxy, then install the CA certificate to capture HTTPS."
+                />
+              )}
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="events">
+          <Card>
+            <SectionHeading title="Event log" detail="State changes that are not requests." />
+            {events.length ? (
+              <div className="event-list">
+                {events.slice(0, 20).map((event, index) => (
+                  <div className="event-row" key={`${event.kind}-${event.at_ms}-${index}`}>
+                    <span className={`event-dot event-${event.severity}`} />
+                    <div>
+                      <strong>{event.kind}</strong>
+                      <p>{event.detail}</p>
+                    </div>
+                    <time title={new Date(event.at_ms).toLocaleString()}>{relativeTime(event.at_ms)}</time>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Empty title="No events" detail="Start an audit, a crawl or an attack to populate this feed." />
+            )}
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="activity">
+          <Card>
+            <SectionHeading title="Requests sent by burpsy" detail="Tool traffic, kept separate from proxy history." />
+            <ActivityTable rows={activity.slice(0, 20)} />
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

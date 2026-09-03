@@ -447,6 +447,12 @@ main {
 }
 
 /* Scrolling page: forms, dashboards, anything measured in sections. */
+/* The dashboard hosts a full-height SplitPane, so the page itself must not scroll — the
+   panes scroll internally, and a page-level scroll would fight the pane drag. */
+.page.page-flush {
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr);
+}
 .page {
   min-height: 0;
   overflow-y: auto;
@@ -1996,6 +2002,158 @@ tbody td {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap:var(--s2);
 }
+
+/* --- dashboard: Burp's Tasks sidebar and detail pane -------------------- */
+
+  .task-sidebar {
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: var(--s2);
+    align-content: start;
+  }
+
+  .task-sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s2);
+  }
+
+  .task-sidebar-actions {
+    display: flex;
+    gap: var(--s1);
+  }
+
+  .task-sidebar-filter {
+    position: relative;
+    display: grid;
+  }
+
+  .task-sidebar-filter .input {
+    padding-inline-end: var(--s4);
+  }
+
+  .task-sidebar-filter-icon {
+    position: absolute;
+    inset-inline-end: var(--s2);
+    top: 50%;
+    translate: 0 -50%;
+    color: var(--muted);
+    pointer-events: none;
+  }
+
+  .task-tile-list {
+    min-height: 0;
+    overflow-y: auto;
+    display: grid;
+    gap: var(--s2);
+    align-content: start;
+    padding-inline-end: var(--s1);
+  }
+
+  .task-tile {
+    text-align: left;
+    display: grid;
+    gap: var(--s1);
+    padding: var(--s2);
+    border: 1px solid var(--line);
+    background: var(--surface);
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    border-left: var(--border-strong) solid transparent;
+  }
+
+  .task-tile:hover {
+    border-color: var(--line-strong);
+  }
+
+  .task-tile-selected {
+    border-left-color: var(--accent);
+    background: var(--paper-raised);
+  }
+
+  .task-tile-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s1);
+    min-width: 0;
+  }
+
+  .task-tile-head strong {
+    font-size: var(--fs-sm);
+    /* Task targets are URLs that easily exceed the sidebar width; ellipsis rather than overflow
+       matches Burp, which truncates the same titles in the same place. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .task-tile-state {
+    display: flex;
+    align-items: center;
+    gap: var(--s1);
+    min-width: 0;
+  }
+
+  .task-tile-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s1);
+  }
+
+  .task-detail {
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: var(--s2);
+  }
+
+  .task-detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s2);
+  }
+
+  .task-detail-head h2 {
+    font-size: var(--fs-md);
+    margin: 0;
+  }
+
+  .task-detail-actions {
+    display: flex;
+    gap: var(--s1);
+  }
+
+  .task-detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--gap);
+    align-content: start;
+  }
+
+  .task-detail-wide {
+    grid-column: 1 / -1;
+  }
+
+  .task-detail-note {
+    display: grid;
+    gap: var(--s2);
+    justify-items: start;
+  }
+
+  @media (max-width: 1280px) {
+    .task-detail-grid {
+      grid-template-columns: 1fr;
+    }
+    .task-detail-wide {
+      grid-column: auto;
+    }
+  }
 
 .summary-card {
   border: 1px solid var(--line);
