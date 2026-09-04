@@ -137,7 +137,11 @@ type wsPeer struct {
 // not stripping: the operator would read "extensions removed" on a handshake
 // that still offers them, and then trust a compressed capture.
 func (s *Server) stripWsHandshake(requestData []byte) ([]byte, []string) {
-	if !s.config.stripWsExtensions {
+	if s.config.options != nil {
+		if !s.config.options.Get(OptStripWsExtensions) {
+			return requestData, nil
+		}
+	} else if !s.config.stripWsExtensions {
 		return requestData, nil
 	}
 	out, removed, err := core.StripWsExtensionsHeader(requestData)

@@ -48,6 +48,11 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
   label: "Strip Accept-Encoding from requests",
   detail: "Ask the origin for plaintext: with no decompressor on the proxy path, compressed responses are exactly the ones these rules cannot rewrite.",
  },
+ {
+  key: "strip_sec_websocket_extensions",
+  label: "Strip Sec-WebSocket-Extensions header",
+  detail: "Remove permessage-deflate extension offers from WebSocket handshakes so captured frames are recorded in the clear.",
+ },
 ];
 
 export function ProxySettingsPage(): JSX.Element {

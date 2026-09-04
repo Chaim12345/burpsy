@@ -668,6 +668,9 @@ func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig
 // passed off as plaintext.
 func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 	c.stripWsExtensions = strip
+	if c.options != nil {
+		_ = c.options.Set(OptStripWsExtensions, strip)
+	}
 	return c
 }
 

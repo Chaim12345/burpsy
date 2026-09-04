@@ -51,6 +51,17 @@ func requestWithEncoding() []byte {
 		"\r\n")
 }
 
+func wsUpgradeRequest() []byte {
+	return []byte("GET /chat HTTP/1.1\r\n" +
+		"Host: example.test\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n" +
+		"\r\n")
+}
+
 // gzipBytes compresses one string, for the two unpack fixtures below.
 func gzipBytes(t *testing.T, s string) []byte {
 	t.Helper()
@@ -127,6 +138,10 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			gzReq := gzippedRequest(t, everyRuleMarkup)
 			gzReqOut := o.ApplyRequest(gzReq)
 			reqChanged = reqChanged || string(gzReqOut) != string(gzReq)
+
+			wsReq := wsUpgradeRequest()
+			wsReqOut := o.ApplyRequest(wsReq)
+			reqChanged = reqChanged || string(wsReqOut) != string(wsReq)
 
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+

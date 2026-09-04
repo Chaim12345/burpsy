@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
@@ -87,6 +88,10 @@ const (
 	// — and a response carrying one is counted as SkippedUnsupportedEncoding rather
 	// than reported as unpacked. See internal/httputil.Unpackable.
 	OptUnpackCompressedResponses OptionKey = "unpack_compressed_responses"
+	// OptStripWsExtensions strips the Sec-WebSocket-Extensions header from WebSocket handshakes,
+	// so the origin cannot negotiate permessage-deflate and captured frames stay in the clear.
+	// Burp's proxy.miscellaneous.strip_sec_websocket_extensions_headers_in_incoming_requests.
+	OptStripWsExtensions OptionKey = "strip_sec_websocket_extensions"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -101,6 +106,7 @@ var OptionKeys = []OptionKey{
 	OptStripAcceptEncoding,
 	OptUnpackCompressedRequests,
 	OptUnpackCompressedResponses,
+	OptStripWsExtensions,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The
@@ -229,6 +235,7 @@ func NewOptions() *Options {
 	for _, key := range OptionKeys {
 		flags[key] = false
 	}
+	flags[OptStripWsExtensions] = true
 	return &Options{flags: flags}
 }
 
@@ -350,6 +357,11 @@ func (o *Options) ApplyRequest(raw []byte) []byte {
 	if o.Get(OptStripAcceptEncoding) {
 		if stripped, removed := removeHeader(out, "Accept-Encoding"); removed {
 			o.acceptEncodingStripped.Add(1)
+			out = stripped
+		}
+	}
+	if o.Get(OptStripWsExtensions) && core.IsWsUpgradeRequest(out) {
+		if stripped, _, err := core.StripWsExtensionsHeader(out); err == nil {
 			out = stripped
 		}
 	}
