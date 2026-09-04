@@ -12,6 +12,7 @@ package intruder
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -33,6 +34,7 @@ const (
 	PointHeaderValue
 	PointBodyJSONValue
 	PointBodyNestedValue
+	PointManual
 )
 
 func (k PointKind) String() string {
@@ -59,6 +61,8 @@ func (k PointKind) String() string {
 		return "body_json_value"
 	case PointBodyNestedValue:
 		return "body_nested_value"
+	case PointManual:
+		return "manual"
 	default:
 		return "unknown"
 	}
@@ -104,6 +108,42 @@ type PointConfig struct {
 	EntireBody     bool
 	Cookies        bool
 	Headers        bool
+}
+
+// ManualSpan is an operator-marked payload position: a byte range of the base
+// request, named the way Burp names it — the § pair around a selection. Spans
+// are validated (in bounds, non-overlapping) before they become points, because
+// two overlapping markers would splice two payloads into the same bytes and the
+// result would depend on the splice order.
+type ManualSpan struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// ManualPoints turns validated spans into insertion points. Every check that
+// can fail is done here rather than at the splice, so the caller's error is
+// about the operator's marking, not an engine-internal refusal.
+func ManualPoints(base []byte, spans []ManualSpan) ([]InsertionPoint, error) {
+	points := make([]InsertionPoint, 0, len(spans))
+	for i, span := range spans {
+		if span.Start < 0 || span.End > len(base) || span.Start >= span.End {
+			return nil, fmt.Errorf("manual point %d: start %d, end %d is not a byte range of the %d-byte request", i+1, span.Start, span.End, len(base))
+		}
+		for j, other := range spans {
+			if j >= i {
+				break
+			}
+			if span.Start < other.End && other.Start < span.End {
+				return nil, fmt.Errorf("manual points %d and %d overlap", j+1, i+1)
+			}
+		}
+		points = append(points, InsertionPoint{
+			Kind:  PointManual,
+			Span:  core.Span{Offset: span.Start, Len: span.End - span.Start},
+			Label: fmt.Sprintf("manual %d", i+1),
+		})
+	}
+	return points, nil
 }
 
 // DefaultPointConfig is Burp's own defaults: parameter values on; names/paths/headers off, as

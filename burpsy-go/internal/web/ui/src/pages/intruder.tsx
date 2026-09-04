@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Crosshair, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
@@ -12,6 +12,7 @@ import {
 } from "../lib/data.tools";
 import { usePools } from "../lib/data.pools";
 import { useMessage } from "../lib/data";
+import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
 import {
   DEFAULT_PAYLOADS,
   emptyIntruderConfig,
@@ -573,6 +574,7 @@ export function IntruderPage(): JSX.Element {
     allPoints,
     points,
     selected,
+    manualSpans,
     payloadTexts,
     payloadTypes,
     payloadNumbers,
@@ -597,6 +599,7 @@ export function IntruderPage(): JSX.Element {
   const setAllPoints = field("allPoints");
   const setPoints = field("points");
   const setSelected = field("selected");
+  const setManualSpans = field("manualSpans");
   const setPayloadTexts = field("payloadTexts");
   const setPayloadTypes = field("payloadTypes");
   const setPayloadNumbers = field("payloadNumbers");
@@ -716,12 +719,16 @@ export function IntruderPage(): JSX.Element {
       label: seed.label,
       points: [],
       selected: [],
+      manualSpans: [],
     }));
     setStoredRun(null);
     setIntruderSeed(null);
   }, [seed, setConfig, setIntruderSeed, setStoredRun]);
 
-  const setsNeeded = mode === "sniper" || mode === "battering_ram" ? 1 : Math.max(1, selected.length);
+  // Manual markers take a payload slot exactly like a discovered point does — Burp counts every
+  // mark on the request, however it was made.
+  const pointCount = selected.length + manualSpans.length;
+  const setsNeeded = mode === "sniper" || mode === "battering_ram" ? 1 : Math.max(1, pointCount);
 
   // Keep the payload-set count in step with the mode and the chosen positions.
   useEffect(() => {
@@ -807,7 +814,7 @@ export function IntruderPage(): JSX.Element {
       return countPayloads(payloadTexts[i] ?? "");
     });
   }, [payloadTypes, payloadTexts, payloadNumbers, payloadFiles, payloadBrute, payloadDates, payloadCustom, payloadNulls]);
-  const estimate = useMemo(() => estimateRequests(mode, selected.length, setSizes), [mode, selected.length, setSizes]);
+  const estimate = useMemo(() => estimateRequests(mode, pointCount, setSizes), [mode, pointCount, setSizes]);
   const examples = useMemo(
     () => new Map((result?.examples ?? []).map((example) => [example.first_ordinal, example.payloads])),
     [result],
@@ -821,7 +828,7 @@ export function IntruderPage(): JSX.Element {
   const canRun =
     canDiscover &&
     target.trim() !== "" &&
-    selected.length > 0 &&
+    pointCount > 0 &&
     setSizes.every((size) => size === null || size > 0) &&
     !run.isPending;
 
@@ -841,6 +848,44 @@ export function IntruderPage(): JSX.Element {
     );
   };
 
+  /** A hand-marked position (Burp's Add §): wrap the editor's selection in a marker pair. */
+  const onAddManualSpan = useCallback(
+    (span: { start: number; end: number; text: string }) => {
+      // The editor shows the request with the existing "§" pairs folded in, so its offsets are
+      // display offsets; map them back to raw request bytes before storing.
+      const current = useApp.getState().intruder.manualSpans;
+      const { start, end } = selectionToRawSpan(current, span.start, span.end);
+      const result = addManualSpan(current, start, end, span.text);
+      if (!result.ok) {
+        toast.error(result.reason);
+        return;
+      }
+      setManualSpans(result.spans);
+    },
+    [setManualSpans],
+  );
+
+  // Burp's Auto §: replace the hand marks with the scanner's default set — here, the standard
+  // discovery (not "every candidate"), every found point selected.
+  const onAutoMark = () => {
+    setManualSpans([]);
+    setSelected([]);
+    discover.mutate(
+      { msg_id: Number(msgId), all: false },
+      {
+        onSuccess: (found) => {
+          setPoints(found);
+          setSelected(found.map((point) => point.index));
+          if (!found.length) toast.error("No insertion points were found in that message");
+          else toast.success(`${found.length} insertion ${found.length === 1 ? "point" : "points"} marked`);
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+      },
+    );
+  };
+
+  const onClearMarks = () => setManualSpans([]);
+
   /**
    * The payload text this browser can name, per set, at the moment of launch.
    *
@@ -851,7 +896,7 @@ export function IntruderPage(): JSX.Element {
    */
   const payloadSnapshot = (): IntruderPayloadSnapshot => ({
     mode,
-    points: selected.length,
+    points: pointCount,
     sets: payloadTypes.map((t, i) => {
       if (t === "list") return payloadList(payloadTexts[i] ?? "");
       if (t === "null") return Array.from({ length: Number(payloadNulls[i] ?? "0") || 0 }, () => "");
@@ -880,6 +925,9 @@ export function IntruderPage(): JSX.Element {
       all: allPoints,
       mode,
       points: selected,
+      // Manual markers go as raw byte ranges; the server splices them alongside the discovered
+      // points and refuses one that overruns the request or overlaps another position.
+      ...(manualSpans.length ? { manual_points: manualSpans.map(({ start, end }) => ({ start, end })) } : {}),
       max_requests: maxRequests,
       ...(rules.length ? { payload_rules: rules } : {}),
       // Both grep fields are RE2 patterns on the server. A literal typed in simple mode is quoted
@@ -1071,6 +1119,7 @@ export function IntruderPage(): JSX.Element {
                       setMsgId(event.target.value);
                       setPoints([]);
                       setSelected([]);
+                      setManualSpans([]);
                     }}
                     placeholder="e.g. 42"
                   />
@@ -1101,6 +1150,7 @@ export function IntruderPage(): JSX.Element {
                     setAllPoints(next);
                     setPoints([]);
                     setSelected([]);
+                    setManualSpans([]);
                   }}
                   label="Include every candidate position"
                 />
@@ -1110,9 +1160,43 @@ export function IntruderPage(): JSX.Element {
                 <Search size={14} />
                 {discover.isPending ? "Scanning…" : "Find positions"}
               </Button>
+              {/* Burp's Auto § and Clear §. Add § lives in the editor's selection menu below,
+                  because it needs a selection and the editor is the only thing that has one. */}
+              <Button variant="outline" onClick={onAutoMark} disabled={!canDiscover || discover.isPending}>
+                <Crosshair size={14} />
+                Auto §
+              </Button>
+              <Button variant="outline" onClick={onClearMarks} disabled={!manualSpans.length}>
+                <Trash2 size={14} />
+                Clear §
+              </Button>
             </div>
 
             {discover.error ? <ErrorNotice error={discover.error} onRetry={onDiscover} /> : null}
+
+            {manualSpans.length ? (
+              <div className="row-list point-list">
+                {manualSpans.map((span, i) => (
+                  <div className="point-row" key={`${span.start}-${span.end}`}>
+                    <span>
+                      <strong>manual {i + 1}</strong>
+                      <small>
+                        bytes {span.start}–{span.end} · {span.text || "(empty)"}
+                      </small>
+                    </span>
+                    {/* Manual markers are always used — there is no deselect, only removal. */}
+                    <Badge tone="accent">used</Badge>
+                    <Button
+                      variant="ghost"
+                      aria-label={`Remove manual marker ${i + 1}`}
+                      onClick={() => setManualSpans((current) => current.filter((s) => s !== span))}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {points.length ? (
               <div className="row-list point-list">
@@ -1146,7 +1230,8 @@ export function IntruderPage(): JSX.Element {
                   );
                 })}
               </div>
-            ) : canDiscover ? (
+            ) : manualSpans.length ? null
+            : canDiscover ? (
               <Empty title="No positions loaded" detail="Find positions before launching an attack." />
             ) : (
               <Empty
@@ -1163,14 +1248,19 @@ export function IntruderPage(): JSX.Element {
               <HttpEditor
                 label={`Base request · message ${msgId}`}
                 readOnly
+                // Shown with the markers folded in — the editor displays the same "§"-wrapped
+                // request Burp's Positions tab does. The editor is read-only here, so the display
+                // text cannot drift from the request the stored raw offsets were measured against.
                 value={
-                  baseMessage.data?.text ??
-                  (baseMessage.isFetching
-                    ? "Loading the base request…"
-                    : baseMessage.error
-                      ? `Could not load message ${msgId}.`
-                      : "No bytes stored for this message.")
+                  baseMessage.data?.text
+                    ? displayText(baseMessage.data.text, manualSpans)
+                    : (baseMessage.isFetching
+                      ? "Loading the base request…"
+                      : baseMessage.error
+                        ? `Could not load message ${msgId}.`
+                        : "No bytes stored for this message.")
                 }
+                payloadMarks={{ onAdd: onAddManualSpan }}
                 filename={`intruder-base-${msgId}.txt`}
               />
             </Card>
