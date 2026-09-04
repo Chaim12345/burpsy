@@ -1409,12 +1409,16 @@ func containerEncode(c coding, s string) string {
 }
 
 // nestedDecode strips the nested encoding: JSON and XML are identity (their
-// text IS the buffer), base64 is decoded.
+// text IS the buffer), base64 is decoded — including base64 wrapping JSON,
+// whose inner buffer is the decoded JSON text, not the base64 text. Splicing
+// JSON-relative offsets into undecoded base64 corrupts both layers, which is
+// exactly what the asymmetric encode side (nestedEncode) would otherwise
+// re-encode and hand to a server.
 func nestedDecode(k nestedKind, s string) (string, error) {
 	switch k {
-	case nestedJSON, nestedBase64JSON, nestedXML:
+	case nestedJSON, nestedXML:
 		return s, nil
-	case nestedBase64:
+	case nestedBase64, nestedBase64JSON:
 		b, err := base64.StdEncoding.DecodeString(s)
 		if err != nil {
 			return "", err
@@ -1534,4 +1538,61 @@ func (p *InsertionPoint) applyNested(e *core.RequestEdit, payload string, append
 		return nil, fmt.Errorf("nested point has unsupported location kind %d", p.loc.kind)
 	}
 	return e.ToRaw(), nil
+}
+
+// The exports below exist for Intruder (internal/intruder), which consumes this
+// enumerator rather than keeping a second parser (burpsy-react-ui-33t). One
+// parser means one container model: JSON fields, base64-wrapped values and the
+// refusals behave identically for the Scanner and for Intruder, and an
+// improvement to either lands in both. Everything stays read-only here — the
+// adapter splices raw bytes itself and asks these accessors where and how.
+
+// EscapeJSON escapes s so it can be spliced into a JSON string literal without
+// breaking the document, matching what Apply does for codingJson points.
+func EscapeJSON(s string) string { return jsonEscape(s) }
+
+// BodyJSONWindow reports, when the point is a plain JSON string value inside
+// the request body, the byte window — relative to the body — that the payload
+// replaces. ok is false for every other kind of point: query, header, cookie
+// and form points splice elsewhere, and Intruder discovers those itself.
+func (p InsertionPoint) BodyJSONWindow() (start, end int, ok bool) {
+	if p.loc.kind != locBody || p.coding != codingJson {
+		return 0, 0, false
+	}
+	return p.loc.start, p.loc.end, true
+}
+
+// BodyNestedWindow reports, when the point splices inside an encoded container
+// value stored in the request body (base64-wrapped JSON or text, XML), the byte
+// window — relative to the body — of the *outer* wire value. The payload does
+// not go into this window directly: WireValue rebuilds the whole wire value
+// first, and the rebuilt value replaces this window.
+func (p InsertionPoint) BodyNestedWindow() (start, end int, ok bool) {
+	if p.loc.kind != locBody || p.coding != codingNested {
+		return 0, 0, false
+	}
+	return p.loc.start, p.loc.end, true
+}
+
+// WireValue returns the full wire value the point carries once payload has been
+// spliced in. For a nested point that means decode the container, splice the
+// payload escaped for the inner document, and re-encode; for a plain JSON point
+// it is simply the escaped payload. appending is not modelled: Intruder
+// replaces the window rather than appending to the base value.
+func (p InsertionPoint) WireValue(payload string) (string, error) {
+	switch p.coding {
+	case codingJson:
+		return jsonEscape(payload), nil
+	case codingNested:
+		lvl1 := containerDecode(p.containerCoding, p.BaseValue)
+		inner, err := nestedDecode(p.nested, lvl1)
+		if err != nil {
+			return "", err
+		}
+		innerNew := spliceStr(inner, p.loc.innerStart, p.loc.innerEnd,
+			escapeForNested(p.nested, payload))
+		return containerEncode(p.containerCoding, nestedEncode(p.nested, innerNew)), nil
+	default:
+		return "", fmt.Errorf("intruder point: unsupported coding %d", p.coding)
+	}
 }

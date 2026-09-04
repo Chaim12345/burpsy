@@ -1,6 +1,7 @@
 package bcheck
 
 import (
+	"encoding/base64"
 	"reflect"
 	"strconv"
 	"strings"
@@ -735,6 +736,28 @@ func TestAnyDoesNotReachTheFiveGoOnlyKinds(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Nested expansion tests
+
+// A base64-wrapped JSON value must splice the payload into the *decoded* JSON
+// and re-encode, not into the base64 text. Regression: nestedDecode treated
+// nestedBase64JSON as identity while nestedEncode re-encoded, so Apply spliced
+// JSON-relative offsets into the base64 text and produced a doubly-encoded
+// corrupt value.
+func TestApplySplicesNestedBase64JSONIntoTheDecodedJSON(t *testing.T) {
+	r := req(t, "GET /?p=eyJ0b2tlbiI6InNlZWQifQ%3D%3D HTTP/1.1\r\nHost: x\r\n\r\n")
+	points, _ := EnumerateWithLimit(r, []string{"query"}, -1)
+	if len(points) != 2 {
+		t.Fatalf("want flat + nested points, got %d", len(points))
+	}
+	out, err := points[1].Apply(r, `p"y`, false)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	want := "GET /?p=" + percentEscape(base64.StdEncoding.EncodeToString([]byte(`{"token":"p\"y"}`))) + " HTTP/1.1"
+	if string(out) != want+"\r\nHost: x\r\n\r\n" {
+		t.Errorf("nested splice mismatch:\n got %q\nwant %q", out, want)
+	}
+}
+
 // ---------------------------------------------------------------------------
 
 func Test_tryDecodeNested_JSON(t *testing.T) {
