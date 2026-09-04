@@ -24,6 +24,16 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
   detail: 'Rewrite type="hidden" inputs to type="text" so a hidden field can be edited in the browser.',
  },
  {
+  key: "enable_disabled_form_fields",
+  label: "Enable disabled form fields",
+  detail: "Remove disabled attributes on form fields so greyed-out controls can be edited in the browser.",
+ },
+ {
+  key: "remove_input_field_length_limits",
+  label: "Remove input field length limits",
+  detail: "Remove maxlength attributes from input and textarea form elements.",
+ },
+ {
   key: "remove_object_tags",
   label: "Remove object tags",
   detail: "Strip <object>…</object> elements and everything inside them.",
@@ -42,6 +52,11 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
   key: "convert_https_links_to_http",
   label: "Convert HTTPS links to HTTP",
   detail: "Rewrite https:// to http:// inside href, src and action attribute values.",
+ },
+ {
+  key: "remove_cookie_secure_flag",
+  label: "Remove Secure flag from cookies",
+  detail: "Remove the ; Secure attribute from Set-Cookie headers so session cookies are transmitted over plaintext HTTP.",
  },
  {
   key: "strip_accept_encoding",

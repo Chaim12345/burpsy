@@ -35,12 +35,20 @@ import (
 // applied option can answer yes.
 const everyRuleMarkup = `<html><body>` +
 	`<form onsubmit="validate()" onreset="clear()">` +
-	`<input type="hidden" name="csrf" value="abc">` +
+	`<input type="hidden" name="csrf" value="abc" disabled maxlength="10">` +
 	`</form>` +
 	`<object data="plugin.swf"><param name="a" value="b"></object>` +
 	`<script>tracker()</script>` +
 	`<a href="https://cdn.example.test/app.js" onclick="go()">link</a>` +
 	`</body></html>`
+
+func htmlResponseWithCookie(body string) []byte {
+	return []byte("HTTP/1.1 200 OK\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"Set-Cookie: session=123; Secure\r\n" +
+		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+		"\r\n" + body)
+}
 
 // requestWithEncoding is the request-direction equivalent: a request carrying the one header
 // strip_accept_encoding exists to strip.
@@ -119,7 +127,7 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 		t.Run(string(key), func(t *testing.T) {
 			o := optionsWith(t, key)
 
-			resp := htmlResponse(everyRuleMarkup)
+			resp := htmlResponseWithCookie(everyRuleMarkup)
 			respOut := o.ApplyResponse(resp)
 			respChanged := !strings.EqualFold(string(respOut), string(resp))
 

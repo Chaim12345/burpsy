@@ -65,6 +65,20 @@ func Test_each_response_rule_rewrites_the_markup_it_names(t *testing.T) {
 			want: `<form><input type="text" name="csrf" value="abc"><input type=text name=b><input type='text' name=c><input type="text" name="q"></form>`,
 		},
 		{
+			name:   "enable disabled form fields",
+			key:    OptEnableDisabledFormFields,
+			in:     `<form><input disabled name="a"><select disabled="disabled"><option>1</option></select><textarea disabled='disabled'></textarea><button disabled=true>send</button></form>`,
+			want:   `<form><input name="a"><select><option>1</option></select><textarea></textarea><button>send</button></form>`,
+			absent: []string{"disabled"},
+		},
+		{
+			name:   "remove input field length limits",
+			key:    OptRemoveInputLengthLimits,
+			in:     `<form><input type="text" maxlength="10" name="user"><textarea maxlength='500'></textarea><input maxlength=5></form>`,
+			want:   `<form><input type="text" name="user"><textarea></textarea><input></form>`,
+			absent: []string{"maxlength"},
+		},
+		{
 			name:   "remove object tags",
 			key:    OptRemoveObjectTags,
 			in:     `<p>before</p><object data="x.swf"><param name="a" value="b"></object><object data="y" /><p>after</p>`,
@@ -265,6 +279,26 @@ func Test_a_chunked_html_body_is_rewritten_and_reframed(t *testing.T) {
 			t.Errorf("counters = %+v, want one skipped_unframed", c)
 		}
 	})
+}
+
+func Test_remove_cookie_secure_flag_strips_secure_attribute_from_set_cookie(t *testing.T) {
+	o := optionsWith(t, OptRemoveCookieSecureFlag)
+	raw := []byte("HTTP/1.1 200 OK\r\n" +
+		"Content-Type: text/html\r\n" +
+		"Set-Cookie: session=123; Path=/; Secure; HttpOnly\r\n" +
+		"Set-Cookie: token=abc; secure\r\n" +
+		"Content-Length: 2\r\n\r\n" +
+		"ok")
+	out := string(o.ApplyResponse(raw))
+	if strings.Contains(strings.ToLower(out), "; secure") || strings.Contains(strings.ToLower(out), ";secure") {
+		t.Errorf("Secure flag survived Set-Cookie headers: %q", out)
+	}
+	if !strings.Contains(out, "Set-Cookie: session=123; Path=/; HttpOnly") {
+		t.Errorf("other cookie parameters lost: %q", out)
+	}
+	if c := o.Counters(); c.Modified != 1 {
+		t.Errorf("Modified = %d, want 1", c.Modified)
+	}
 }
 
 func Test_strip_accept_encoding_removes_the_header_and_counts_only_real_strips(t *testing.T) {
