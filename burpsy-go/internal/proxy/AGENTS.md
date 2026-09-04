@@ -59,9 +59,16 @@ Rust crate's `tls.rs` has been extracted to `internal/alpn` here (see that packa
   shape (`burpsyhttp2.RenderRequest`) only when in scope, and captures both halves together through the
   shared producer. The stored bytes are a re-rendering, not the wire octets (HPACK makes byte-exact
   replay impossible).
-- **Match-and-replace here is response-direction only.** `matchReplace.Apply(matchreplace.DirResponse, …)`
-  runs on the response path (`handleTLSResponse` and `completeResponse`); this package does not apply the
-  request direction.
+- **Match-and-replace runs on both directions, and the request side runs before the store.** The response
+  path applies `matchReplace.Apply(matchreplace.DirResponse, …)` in `handleTLSResponse` and `completeResponse`;
+  the request path applies `matchreplace.DirRequest` in `handleHTTP` (right after `toOriginForm`) and in the
+  `interceptTLS` loop — in both, before intercept and before the scope-gated capture, so the bytes forwarded
+  upstream are the bytes recorded (`request_first_line`, `request_header`, `request_body` could never fire
+  before this). The `*matchreplace.RuleSet` is nil until `WithMatchReplace` attaches one; `cmd/burpsy` attaches
+  the *same* object the web layer mutates so the Match & Replace page and the proxy cannot disagree. A body
+  rule's Content-Length fix rides on `Apply`'s `updateContentLength` path, not on proxy code. The h2 relay
+  applies neither direction (it does not intercept), which is why request M&R is wired only into the two
+  HTTP/1 paths that already applied the response direction.
 
 ## Testing Requirements
 

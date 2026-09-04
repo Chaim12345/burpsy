@@ -3,12 +3,12 @@ import { FolderTree, Link2, Search, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
 import { useClearToolLog, useDebounced } from "../lib/data";
-import { useToolLogView } from "../lib/data.workbench";
+import { useSetToolLogCapture, useToolLogView } from "../lib/data.workbench";
 import { useApp } from "../lib/store";
 import type { ToolLogRow } from "../lib/types.workbench";
 import { DetailList } from "../ui/json";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
-import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar } from "../ui/primitives";
+import { Badge, Button, Checkbox, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar } from "../ui/primitives";
 import { VirtualTable, type Column, type VisibilityState } from "../ui/table";
 
 /**
@@ -73,15 +73,54 @@ export function LoggerPage(): JSX.Element {
   const debouncedTerm = useDebounced(term, 260);
   const { data, error, isFetching, refetch } = useToolLogView(tool, debouncedTerm);
   const clearLog = useClearToolLog();
+  const setCapture = useSetToolLogCapture();
 
   const rows = data?.entries ?? [];
 
+  // Method and status-class filters run client-side over the loaded rows: the
+  // server's filter arm is tool-only, and these two are the rest of Burp
+  // Logger's everyday set. Distinct methods come from the data, so a new verb
+  // needs no frontend change — the same trick the tool list uses.
+  const [method, setMethod] = useState("");
+  const [statusClass, setStatusClass] = useState("");
+  const methods = useMemo(
+    () => [...new Set(rows.map((row) => row.method))].sort(),
+    [rows],
+  );
+  const filteredRows = useMemo(
+    () =>
+      rows.filter((row) => {
+        if (method && row.method !== method) return false;
+        if (statusClass) {
+          if (row.status === null) return false;
+          const classDigit = Math.floor(row.status / 100);
+          if (String(classDigit) !== statusClass) return false;
+        }
+        return true;
+      }),
+    [rows, method, statusClass],
+  );
+
   // Selection is held by id so a background refresh cannot drop it.
-  const selected = useMemo(() => rows.find((row) => row.id === selectedId) ?? null, [rows, selectedId]);
+  const selected = useMemo(() => filteredRows.find((row) => row.id === selectedId) ?? null, [filteredRows, selectedId]);
 
   // The tool list comes from the server's histogram rather than a hard-coded set,
   // so a tool that starts logging is filterable without a frontend change.
   const tools = useMemo(() => Object.entries(data?.counts ?? {}).sort(([a], [b]) => a.localeCompare(b)), [data]);
+
+  // The capture axis rides on the same tool names. A tool that is not capturing
+  // has its requests sent and deliberately discarded; the checkbox is how the
+  // operator turns it back on, and `uncaptured` says how much has been lost.
+  const capturing = data?.capturing ?? {};
+  const uncaptured = data?.uncaptured ?? {};
+  const uncapturedTotal = data?.uncaptured_total ?? 0;
+  const captureToggle = (name: string) => (on: boolean) =>
+    setCapture.mutate(
+      { tool: name, on },
+      {
+        onError: (cause) => toast.error(`Could not ${on ? "capture" : "stop capturing"} ${name}: ${cause.message}`),
+      },
+    );
 
   const showInHistory = (expression: string) => {
     setHistoryQuery(expression);
@@ -216,6 +255,14 @@ export function LoggerPage(): JSX.Element {
               <Badge tone={data && data.dropped > 0 ? "warn" : "neutral"}>
                 {(data?.dropped ?? 0).toLocaleString()} dropped
               </Badge>
+              {/* The honest-counting half of the capture axis: requests that were sent
+                  and deliberately not kept read as a real number here, never as a short
+                  log. Shown whenever any tool has capture off. */}
+              {uncapturedTotal > 0 ? (
+                <Badge tone="bad">
+                  {uncapturedTotal.toLocaleString()} sent, not captured
+                </Badge>
+              ) : null}
               <Button variant="danger" onClick={() => setConfirmClear(true)} disabled={!rows.length}>
                 <Trash2 size={14} />
                 Clear log
@@ -247,7 +294,45 @@ export function LoggerPage(): JSX.Element {
               </option>
             ))}
           </Select>
+          <Select aria-label="Method filter" value={method} onChange={(event) => setMethod(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+            <option value="">Any method</option>
+            {methods.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </Select>
+          <Select aria-label="Status class filter" value={statusClass} onChange={(event) => setStatusClass(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+            <option value="">Any status</option>
+            <option value="2">2xx</option>
+            <option value="3">3xx</option>
+            <option value="4">4xx</option>
+            <option value="5">5xx</option>
+            <option value="0">no response</option>
+          </Select>
         </Toolbar>
+        {/* Capture axis — the second, destructive axis Burp Logger keeps separate
+            from display. Each checkbox controls whether that tool's requests are
+            recorded at all; switching off means the next requests are sent and not
+            kept, and the per-tool `uncaptured` count states the loss rather than
+            letting it read as an empty log. Shown as its own quietly-labelled row
+            so it can never be mistaken for one of the display filters above. */}
+        <div className="toolbar capture-axis" style={{ marginTop: 4 }}>
+          <span className="cell-dim" aria-hidden="true">
+            Capture
+          </span>
+          {tools.map(([name]) => {
+            const on = capturing[name] !== false;
+            return (
+              <Checkbox
+                key={name}
+                checked={on}
+                onCheckedChange={captureToggle(name)}
+                label={uncaptured[name] ? `${name} (${uncaptured[name].toLocaleString()} not captured)` : name}
+              />
+            );
+          })}
+        </div>
         {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
       </div>
 
@@ -258,7 +343,7 @@ export function LoggerPage(): JSX.Element {
         master={
           <VirtualTable
             ariaLabel="Requests sent by burpsy's own tools"
-            data={rows}
+            data={filteredRows}
             columns={columns}
             getRowId={(row) => String(row.id)}
             selectedId={selectedId === null ? null : String(selectedId)}

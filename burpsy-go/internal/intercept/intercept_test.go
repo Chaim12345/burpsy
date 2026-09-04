@@ -53,7 +53,7 @@ func TestEngine_UnconditionalListHoldsEverything(t *testing.T) {
 		t.Fatalf("held = %+v", h)
 	}
 	// Resolve it so the map has no dangling entry.
-	if err := e.Forward(h.ID, "", false); err != nil {
+	if err := e.Forward(h.ID, nil, false); err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
 }
@@ -61,7 +61,7 @@ func TestEngine_UnconditionalListHoldsEverything(t *testing.T) {
 func TestEngine_SelectiveRuleHoldsOnlyMatches(t *testing.T) {
 	e := NewEngine()
 	e.SetEnabled(true)
-	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", true, "")
+	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", true, "", RuleActionHold)
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestEngine_SelectiveRuleHoldsOnlyMatches(t *testing.T) {
 func TestEngine_DisabledRuleHoldsNothing(t *testing.T) {
 	e := NewEngine()
 	e.SetEnabled(true)
-	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", false, "")
+	rule, err := NewRule(FieldHost, CategoryLiteral, "internal", false, "", RuleActionHold)
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestEngine_DisabledRuleHoldsNothing(t *testing.T) {
 func TestEngine_RegexRuleMatchesPath(t *testing.T) {
 	e := NewEngine()
 	e.SetEnabled(true)
-	rule, err := NewRule(FieldPath, CategoryRegex, `^/admin/.*`, true, "")
+	rule, err := NewRule(FieldPath, CategoryRegex, `^/admin/.*`, true, "", RuleActionHold)
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestEngine_HeldForwardCarriesEditedBytes(t *testing.T) {
 	edited := "GET /changed HTTP/1.1\r\nHost: a.test\r\n\r\n"
 	go func() {
 		time.Sleep(20 * time.Millisecond)
-		if err := e.Forward(h.ID, edited, false); err != nil {
+		if err := e.Forward(h.ID, ptr(edited), false); err != nil {
 			t.Errorf("Forward: %v", err)
 		}
 	}()
@@ -187,7 +187,7 @@ func TestEngine_ResolvingHeldMessageRemovesItFromTheMap(t *testing.T) {
 		if h == nil {
 			t.Fatalf("iteration %d: message not held", i)
 		}
-		if err := e.Forward(h.ID, "", false); err != nil {
+		if err := e.Forward(h.ID, nil, false); err != nil {
 			t.Fatalf("iteration %d: Forward: %v", i, err)
 		}
 	}
@@ -213,10 +213,10 @@ func TestEngine_SecondResolveIsIgnored(t *testing.T) {
 	e.SetEnabled(true)
 	e.SetRules(DirectionRequest, true, nil)
 	h := e.Hold(reqMessage("a.test", "GET", "/"))
-	if err := e.Forward(h.ID, "", false); err != nil {
+	if err := e.Forward(h.ID, nil, false); err != nil {
 		t.Fatalf("first Forward: %v", err)
 	}
-	if err := e.Forward(h.ID, "GET /again HTTP/1.1\r\n\r\n", false); err == nil {
+	if err := e.Forward(h.ID, ptr("GET /again HTTP/1.1\r\n\r\n"), false); err == nil {
 		t.Fatalf("second Forward succeeded, want error")
 	}
 	if err := e.Drop(h.ID, ""); err == nil {
@@ -226,7 +226,7 @@ func TestEngine_SecondResolveIsIgnored(t *testing.T) {
 
 func TestEngine_ForwardUnknownIDFails(t *testing.T) {
 	e := NewEngine()
-	if err := e.Forward(99, "", false); err == nil {
+	if err := e.Forward(99, nil, false); err == nil {
 		t.Fatalf("Forward on unknown id succeeded")
 	}
 }
@@ -241,7 +241,7 @@ func TestEngine_ResponseFields(t *testing.T) {
 	if m.ContentType != "application/json" {
 		t.Fatalf("content type = %q", m.ContentType)
 	}
-	rule, err := NewRule(FieldStatusCode, CategoryLiteral, "404", true, "")
+	rule, err := NewRule(FieldStatusCode, CategoryLiteral, "404", true, "", RuleActionHold)
 	if err != nil {
 		t.Fatalf("NewRule: %v", err)
 	}
@@ -313,3 +313,81 @@ func TestHeld_StatusField(t *testing.T) {
 		t.Fatalf("status_code = %q", got)
 	}
 }
+
+func TestEngine_DropAllDropsEveryHeldMessageAndCountsOnlyItsOwn(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	e.SetRules(DirectionRequest, true, nil)
+	first := e.Hold(reqMessage("a.test", "GET", "/one"))
+	second := e.Hold(reqMessage("a.test", "GET", "/two"))
+	if first == nil || second == nil {
+		t.Fatalf("expected both messages held")
+	}
+	// Resolve one out from under DropAll: it must not be counted or re-resolved,
+	// because the proxy side of that message already has its answer.
+	if err := e.Forward(first.ID, nil, false); err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	if got := e.DropAll("clear the queue"); got != 1 {
+		t.Fatalf("DropAll = %d, want 1 (the forwarded message was already resolved)", got)
+	}
+	if left := len(e.Held()); left != 0 {
+		t.Fatalf("queue not empty after DropAll: %d left", left)
+	}
+	// The dropped message's proxy side wakes with a drop and no bytes.
+	action, raw := second.Wait()
+	if action != ActionDrop || raw != nil {
+		t.Fatalf("Wait = (%v, %q), want (drop, nil)", action, raw)
+	}
+	// An empty queue drops nothing and says so.
+	if got := e.DropAll("again"); got != 0 {
+		t.Fatalf("DropAll on an empty queue = %d, want 0", got)
+	}
+}
+
+// ForwardAll is the safe half of the DropAll pair, and it must be exactly that:
+// every held message released with the bytes the client sent and nothing added
+// — no edit, no content-length rewrite, because a bulk action never had a human
+// read what it forwards. A queue that can only be emptied by dropping teaches
+// the operator to stop queueing traffic at all, which is why Burp ships both
+// halves from one dropdown (proxyForwardOptionsButton).
+func TestEngine_ForwardAllForwardsEveryHeldMessageUnmodifiedAndCountsOnlyItsOwn(t *testing.T) {
+	e := NewEngine()
+	e.SetEnabled(true)
+	e.SetRules(DirectionRequest, true, nil)
+	first := e.Hold(reqMessage("a.test", "GET", "/one"))
+	second := e.Hold(reqMessage("a.test", "POST", "/two"))
+	if first == nil || second == nil {
+		t.Fatalf("expected both messages held")
+	}
+	// Resolve one out from under ForwardAll: it must not be counted or
+	// re-resolved, because the proxy side of that message already has its answer.
+	if err := e.Drop(first.ID, "resolved first"); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+	if got := e.ForwardAll(); got != 1 {
+		t.Fatalf("ForwardAll = %d, want 1 (the dropped message was already resolved)", got)
+	}
+	if left := len(e.Held()); left != 0 {
+		t.Fatalf("queue not empty after ForwardAll: %d left", left)
+	}
+	// The forwarded message's proxy side wakes with a forward and the exact
+	// bytes the client put on the wire — the rewriteContentLength pass that a
+	// per-id Forward applies on request has no place here.
+	action, raw := second.Wait()
+	if action != ActionForward {
+		t.Fatalf("Wait action = %v, want forward", action)
+	}
+	if string(raw) != string(second.Raw) {
+		t.Fatalf("Wait raw = %q, want the client's own bytes %q", raw, second.Raw)
+	}
+	// An empty queue forwards nothing and says so.
+	if got := e.ForwardAll(); got != 0 {
+		t.Fatalf("ForwardAll on an empty queue = %d, want 0", got)
+	}
+}
+
+// ptr is for the *string argument Forward now takes: nil means "forward unchanged", and a pointer
+// to the empty string means "clear the payload". Those were the same value before, which is the
+// defect this signature fixes.
+func ptr[T any](v T) *T { return &v }

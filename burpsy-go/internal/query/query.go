@@ -88,6 +88,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -102,6 +103,38 @@ type Queryable interface {
 	Status() int  // 0 = absent (no response yet)
 	Mime() string
 	Body() []byte
+	// ResponseLen reports the response's size in bytes, and whether there is a response at all.
+	//
+	// The bool is not optional politeness: 0 is a legitimate length — a 204 has an empty body — so a
+	// bare int64 could not tell "an empty response" from "no response", and `length = 0` would match
+	// every request still in flight. Same reasoning as Status()'s documented 0-means-absent, made
+	// explicit here because for length the absent value collides with a real one.
+	ResponseLen() (int64, bool)
+	// DurationUs reports how long the exchange took, in microseconds, and whether anyone measured
+	// it. Mirrors core.ExchangeDuration, whose Measured flag exists for exactly this reason: an
+	// exchange nobody timed must not report as instantaneous.
+	DurationUs() (int64, bool)
+	// Header returns every value for a response header name, in wire order, and whether the header
+	// was present.
+	//
+	// Every value, not the first: Set-Cookie legally repeats and is the header a predicate is most
+	// often wanted over, so a first-match accessor would pass a response whose SECOND cookie is the
+	// insecure one. See core.StoredMessage.HeaderValues.
+	//
+	// The bool separates absent from present-with-an-empty-value. Both are real — `Set-Cookie:` with
+	// nothing after it is a server bug worth seeing — and an absent header must fail every
+	// comparison, negations included, the way an absent status does.
+	Header(name string) ([]string, bool)
+	// Annotation returns the operator's own highlight colour and comment for this row, and whether
+	// this consumer can answer at all.
+	//
+	// These are the only fields in the grammar describing burpsy's own state rather than the
+	// target's, which is why the bool is not optional. "" for highlight means "no highlight" and is a
+	// real answer an operator wants to filter on ("show me what I have not triaged"), so it cannot
+	// double as "this consumer has no idea" — the crawler's frontier and a match/replace candidate
+	// genuinely have no idea, and must fail every comparison rather than report everything
+	// unhighlighted.
+	Annotation() (highlight, comment string, known bool)
 }
 
 // Expr is a parsed, type-checked query expression. Parse is the only way to obtain one, so every
@@ -121,6 +154,17 @@ type Expr struct {
 	num   uint16 // status value for =, !=, <, <=, >, >=
 	lo    uint16 // status range lower bound, inclusive (op == opIn)
 	hi    uint16 // status range upper bound, inclusive (op == opIn)
+	// The wide numerics, for length and duration. Separate from num/lo/hi rather than widening
+	// those: status is a 16-bit value and the parser rejects anything larger with a message that
+	// says so, which is a real check worth keeping. A response length does not fit in 16 bits at
+	// all — 65535 bytes is a small page — so sharing the field would have silently truncated.
+	num64 int64
+	lo64  int64
+	hi64  int64
+	// key is the header name for fieldHeader. Held separately from str, which carries the value being
+	// compared: `header["set-cookie"] ~ "HttpOnly"` has both, and collapsing them into one string
+	// would make the comparison unable to say which half it was matching.
+	key string
 }
 
 type exprKind int
@@ -141,9 +185,19 @@ const (
 	fieldMime
 	fieldStatus
 	fieldBody
-	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this, so
-	// adding a field above without extending that array is a compile error rather than a silent
-	// out-of-range panic on the first query that names the new field.
+	fieldLength
+	fieldDuration
+	fieldHeader
+	fieldExtension
+	fieldParams
+	fieldHighlight
+	fieldComment
+	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this.
+	//
+	// NOTE: adding a field here is NOT caught by the compiler in fieldOrder — a short
+	// [fieldCount]field literal is legal Go and pads with the zero value, which is fieldHost, so the
+	// omission shows up as Fields() reporting "host" for a query that never named it. That happened
+	// when length and duration were added. TestFieldOrderCoversEveryField is what catches it now.
 	fieldCount = iota
 )
 
@@ -161,6 +215,20 @@ func (f field) String() string {
 		return "status"
 	case fieldBody:
 		return "body"
+	case fieldLength:
+		return "length"
+	case fieldDuration:
+		return "duration"
+	case fieldHeader:
+		return "header"
+	case fieldExtension:
+		return "extension"
+	case fieldParams:
+		return "params"
+	case fieldHighlight:
+		return "highlight"
+	case fieldComment:
+		return "comment"
 	}
 	return "?"
 }
@@ -411,11 +479,26 @@ func (p *parser) parseCmp() (*Expr, error) {
 	fieldAt := p.pos
 	name := p.consumeIdent()
 	if name == "" {
-		return nil, p.errAt(fieldAt, "expected a field name (host, status, method, path, mime, body) or '('")
+		return nil, p.errAt(fieldAt, "expected a field name (%s) or '('", fieldNames())
 	}
 	f, ok := fieldByName(name)
 	if !ok {
-		return nil, p.errAt(fieldAt, "'%s' is not a field this grammar has — the fields are host, status, method, path, mime and body", name)
+		return nil, p.errAt(fieldAt, "'%s' is not a field this grammar has — the fields are %s", name, fieldNames())
+	}
+
+	// header takes a subscript naming which header: header["set-cookie"] ~ "HttpOnly".
+	//
+	// Indexed rather than a flat text match over the whole head, which would have been one line and
+	// no new syntax. A flat match cannot respect header boundaries: a value ending in "set-cookie"
+	// followed by any header beginning "HttpOnly" would satisfy it, and folded continuation lines
+	// make that likelier than it sounds. An operator asking about a header means that header.
+	var headerName string
+	if f == fieldHeader {
+		name, err := p.parseHeaderSubscript()
+		if err != nil {
+			return nil, err
+		}
+		headerName = name
 	}
 
 	o, opAt, err := p.parseOp(f)
@@ -432,11 +515,64 @@ func (p *parser) parseCmp() (*Expr, error) {
 	if f == fieldStatus {
 		return p.parseStatusValue(o)
 	}
+	if f == fieldLength || f == fieldDuration || f == fieldParams {
+		return p.parseNumericValue(f, o)
+	}
 	val, err := p.parseStringValue(f)
 	if err != nil {
 		return nil, err
 	}
-	return &Expr{kind: kindCmp, field: f, op: o, str: val}, nil
+	return &Expr{kind: kindCmp, field: f, op: o, str: val, key: headerName}, nil
+}
+
+// fieldNames lists every field the grammar has, derived from fieldOrder rather than written out.
+//
+// The two "the fields are host, status, method, path, mime and body" messages this replaces were
+// already wrong: length and duration had been added and neither message mentioned them, so an
+// operator who mistyped a field name was told a list that omitted two of the answers. Derived, it
+// cannot drift again.
+func fieldNames() string {
+	names := make([]string, 0, len(fieldOrder))
+	for _, f := range fieldOrder {
+		names = append(names, f.String())
+	}
+	return strings.Join(names, ", ")
+}
+
+// parseHeaderSubscript reads the ["name"] that follows the header field.
+//
+// The name must be quoted. An unquoted bare word is accepted elsewhere in this grammar for values,
+// but a header name can contain characters the identifier lexer would stop at, and accepting a bare
+// word here would make `header[x-foo]` parse as `header[x]` followed by junk — an error reported
+// somewhere unhelpful rather than at the subscript.
+func (p *parser) parseHeaderSubscript() (string, error) {
+	p.skipWs()
+	at := p.pos
+	if p.pos >= len(p.src) || p.peek() != '[' {
+		return "", p.errAt(at, "header needs a subscript naming which header to test — the form is "+
+			"`header[\"set-cookie\"] ~ \"HttpOnly\"`")
+	}
+	p.pos++
+	p.skipWs()
+	if p.pos >= len(p.src) || p.peek() != '"' {
+		return "", p.errAt(p.pos, "a header name must be quoted: `header[\"set-cookie\"]`, not "+
+			"`header[set-cookie]` — an unquoted name would stop at the first character the identifier "+
+			"lexer does not accept and report the error somewhere else")
+	}
+	name, err := p.consumeQuoted()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", p.errAt(at, "a header name cannot be empty — `header[\"\"]` matches no header, and "+
+			"a comparison that cannot match is refused here rather than reported as no rows found")
+	}
+	p.skipWs()
+	if p.pos >= len(p.src) || p.peek() != ']' {
+		return "", p.errAt(p.pos, "expected ']' to close the header subscript")
+	}
+	p.pos++
+	return name, nil
 }
 
 func fieldByName(name string) (field, bool) {
@@ -453,6 +589,20 @@ func fieldByName(name string) (field, bool) {
 		return fieldStatus, true
 	case "body":
 		return fieldBody, true
+	case "length":
+		return fieldLength, true
+	case "duration":
+		return fieldDuration, true
+	case "header":
+		return fieldHeader, true
+	case "extension":
+		return fieldExtension, true
+	case "params":
+		return fieldParams, true
+	case "highlight":
+		return fieldHighlight, true
+	case "comment":
+		return fieldComment, true
 	}
 	return 0, false
 }
@@ -468,6 +618,18 @@ func fieldAllows(f field, o op) bool {
 		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
 	case fieldBody:
 		return o == opContains
+	case fieldLength, fieldDuration:
+		// The same set status has. A range reads better than two clauses for the case an operator
+		// actually wants — "responses between 1 and 2 megabytes" — and `in` already exists.
+		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
+	case fieldHeader:
+		// String operators only. A header value is text, and no ordering on it means anything.
+		return o == opEq || o == opNe || o == opContains
+	case fieldExtension, fieldHighlight, fieldComment:
+		return o == opEq || o == opNe || o == opContains
+	case fieldParams:
+		// A count, so the numeric set — including `in`, for "between two and five parameters".
+		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
 	}
 	return false
 }
@@ -479,6 +641,16 @@ func allowedOps(f field) string {
 		return "=, !=, <, <=, >, >= and `in low..high`"
 	case fieldBody:
 		return "~ (contains) only, since matching a whole body exactly is rarely what \"filter on body content\" means"
+	case fieldLength, fieldDuration:
+		return "=, !=, <, <=, >, >= and `in low..high`"
+	case fieldHeader:
+		return "=, != and ~ (contains), each case-insensitive on the value"
+	case fieldExtension:
+		return "=, != and ~ (contains), case-insensitive"
+	case fieldHighlight, fieldComment:
+		return "=, != and ~ (contains)"
+	case fieldParams:
+		return "=, !=, <, <=, >, >= and `in low..high`"
 	}
 	return "=, != (case-insensitive for host and mime) and ~ (contains)"
 }
@@ -568,6 +740,152 @@ func (p *parser) parseStatusValue(o op) (*Expr, error) {
 		return nil, err
 	}
 	return &Expr{kind: kindCmp, field: fieldStatus, op: opIn, lo: lo, hi: hi}, nil
+}
+
+// parseNumericValue reads a length or duration comparison, including the `in low..high` form.
+func (p *parser) parseNumericValue(f field, o op) (*Expr, error) {
+	lo, err := p.parseScaledNumber(f)
+	if err != nil {
+		return nil, err
+	}
+	if o != opIn {
+		return &Expr{kind: kindCmp, field: f, op: o, num64: lo}, nil
+	}
+	p.skipWs()
+	if !strings.HasPrefix(p.src[p.pos:], "..") {
+		return nil, p.errAt(p.pos, "expected '..' between the bounds of a %s range — the form is `%s in %s`, inclusive of both ends",
+			f, f, numericRangeExample(f))
+	}
+	p.pos += 2
+	hi, err := p.parseScaledNumber(f)
+	if err != nil {
+		return nil, err
+	}
+	// Bounds the wrong way round match nothing, which on this grammar is a verdict indistinguishable
+	// from "no rows are that size". Rejected at parse time, as the type mismatches above are.
+	if lo > hi {
+		return nil, p.errAt(p.pos, "the range for %s is empty: its lower bound (%d) is above its upper bound (%d), so nothing could match it", f, lo, hi)
+	}
+	return &Expr{kind: kindCmp, field: f, op: opIn, lo64: lo, hi64: hi}, nil
+}
+
+func numericRangeExample(f field) string {
+	if f == fieldDuration {
+		return "100ms..2s"
+	}
+	return "1kb..1mb"
+}
+
+// numericUnits is the suffix vocabulary per field, with each suffix's multiplier in the field's own
+// base unit — bytes for length, microseconds for duration.
+//
+// # Why suffixes exist at all
+//
+// The question an operator actually has is "which responses are over a megabyte", and the
+// unsuffixed form of that is `length > 1048576`. Requiring it would be hostile, and worse, easy to
+// get wrong by an order of magnitude in a way the result set would not reveal.
+//
+// # Why a bare number still has one documented meaning
+//
+// Bytes for length, milliseconds for duration — milliseconds because that is what the History
+// column shows, so `duration > 500` means what an operator reading the screen expects. The base
+// unit internally is microseconds, because that is what core.ExchangeDuration stores; the
+// difference is confined to this table.
+var numericUnits = map[field][]struct {
+	suffix string
+	scale  int64
+}{
+	fieldLength: {
+		{"kb", 1024},
+		{"mb", 1024 * 1024},
+		{"gb", 1024 * 1024 * 1024},
+		{"b", 1},
+		{"", 1}, // bare: bytes
+	},
+	fieldDuration: {
+		{"us", 1},
+		{"ms", 1000},
+		{"s", 1000 * 1000},
+		{"", 1000}, // bare: milliseconds, matching the History column
+	},
+	// params is a plain count, so the only accepted form is a bare number. It still needs an entry:
+	// parseScaledNumber looks its field up here, and a missing entry made every `params = 3` fail
+	// with "\"\" is not a unit params accepts — length accepts b, kb, mb and gb", which is both a
+	// refusal of valid input and an offer of megabytes for a count.
+	fieldParams: {
+		{"", 1},
+	},
+}
+
+// parseScaledNumber reads a number with an optional unit suffix and returns it in the field's base
+// unit.
+func (p *parser) parseScaledNumber(f field) (int64, error) {
+	p.skipWs()
+	at := p.pos
+	if p.pos >= len(p.src) {
+		return 0, p.errAt(at, "the query ended while a number for %s was still expected", f)
+	}
+	if p.peek() == '"' {
+		// Same rule as status: a comparison whose types do not fit is refused here rather than
+		// reaching Match and returning false, which reads as "nothing matched".
+		return 0, p.errAt(at, "%s expects a number but found a quoted string — a comparison whose types do not fit is rejected here rather than silently matching nothing", f)
+	}
+	start := p.pos
+	for p.pos < len(p.src) && isDigit(p.src[p.pos]) {
+		p.pos++
+	}
+	if p.pos == start {
+		return 0, p.errAt(at, "%s expects a number but found %q — a comparison whose types do not fit is rejected here rather than silently matching nothing", f, p.restOfToken())
+	}
+	digits := p.src[start:p.pos]
+
+	// The suffix, if any. Read as letters so `1kbx` is an error rather than `1kb` with trailing
+	// junk the parser would then fail on somewhere less helpful.
+	unitStart := p.pos
+	for p.pos < len(p.src) && isAlpha(p.src[p.pos]) {
+		p.pos++
+	}
+	unit := strings.ToLower(p.src[unitStart:p.pos])
+
+	var scale int64
+	found := false
+	for _, candidate := range numericUnits[f] {
+		if candidate.suffix == unit {
+			scale = candidate.scale
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0, p.errAt(unitStart, "%q is not a unit %s accepts — %s", unit, f, unitsFor(f))
+	}
+
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return 0, p.errAt(at, "%s is too large a number for %s", digits, f)
+	}
+	// Overflow is checked rather than allowed to wrap: a wrapped bound becomes a negative number
+	// that matches nothing, or everything, with no error to say why.
+	if scale != 0 && n > math.MaxInt64/scale {
+		return 0, p.errAt(at, "%s%s overflows the range %s can express", digits, unit, f)
+	}
+	return n * scale, nil
+}
+
+// unitsFor names the accepted suffixes, and what a bare number means, so the error is actionable.
+func unitsFor(f field) string {
+	switch f {
+	case fieldDuration:
+		return "duration accepts us, ms and s, and a bare number means milliseconds"
+	case fieldParams:
+		return "params is a count and takes a plain number with no unit"
+	default:
+		// Spelled as a switch with an explicit default rather than an if: the previous form returned
+		// length's units for every field that was not duration, so params was told it accepts
+		// megabytes. A new numeric field now gets length's text only by falling through here
+		// deliberately.
+		return "length accepts b, kb, mb and gb, and a bare number means bytes"
+	}
 }
 
 func (p *parser) parseStatusNumber() (uint16, error) {
@@ -731,6 +1049,89 @@ func (e *Expr) matchCmp(q Queryable) bool {
 	case fieldBody:
 		// Case-sensitive and byte-exact: a body needle is content, not an identifier.
 		return bytes.Contains(q.Body(), []byte(e.str))
+	case fieldLength:
+		length, present := q.ResponseLen()
+		if !present {
+			// No response: not a zero-length one. `length != 0` must not sweep up every request
+			// still in flight, which is precisely what a bare int64 here would have done.
+			return false
+		}
+		return numOp(e, length)
+	case fieldExtension:
+		path := q.Path()
+		if path == "" {
+			return false // no path: nothing to take an extension from
+		}
+		ext, has := pathExtension(path)
+		if !has {
+			// No extension is not an empty extension. `extension != "js"` must not sweep up every
+			// extensionless path, the same rule an absent header follows.
+			return false
+		}
+		// Case-insensitive: a URL naming LOGO.PNG and one naming logo.png name the same file type,
+		// and Burp's own filter folds it.
+		return strOp(e.op, ext, e.str, true)
+	case fieldParams:
+		path := q.Path()
+		if path == "" {
+			return false
+		}
+		// Derived rather than carried, because it is derivable exactly: the count is a property of
+		// the path this row already has, so no adapter has to answer a new question and none can
+		// answer it differently. The UI's Query column computes the same thing client-side from the
+		// same string (see pathParts in history.tsx), which is why this counts QUERY parameters only
+		// and not body parameters — a field named `params` that silently included body parameters
+		// would disagree with the column beside it.
+		return numOp(e, int64(queryParamCount(path)))
+	case fieldHighlight:
+		highlight, _, known := q.Annotation()
+		if !known {
+			return false
+		}
+		// Case-insensitive: the vocabulary is lower-case (core.ValidHighlights) and an operator
+		// typing "Red" means red. "" is a real value here — `highlight = ""` is how you ask for rows
+		// you have not marked — which is exactly why Annotation carries a separate `known` flag
+		// rather than using "" for both.
+		return strOp(e.op, highlight, e.str, true)
+	case fieldComment:
+		_, comment, known := q.Annotation()
+		if !known {
+			return false
+		}
+		// Case-insensitive: a comment is prose the operator wrote, not an identifier, and searching
+		// it case-sensitively would miss their own capitalisation.
+		return strOp(e.op, comment, e.str, true)
+	case fieldHeader:
+		values, present := q.Header(e.key)
+		if !present {
+			// An absent header fails every comparison, `!=` included — the same rule as an absent
+			// status. Without it, `header["x-api-key"] != "leaked"` would be true for every response
+			// that has no such header, which is the opposite of what an operator asking about
+			// x-api-key wants to see.
+			return false
+		}
+		// Any-of over the values. Set-Cookie repeats, and "does any cookie contain HttpOnly" is the
+		// question; requiring all of them would answer a different one. For `!=` this means "some
+		// value differs", which is the reading consistent with the other operators — an operator who
+		// wants "no value equals" writes `not header["x"] = "y"`, and the precedence rules make that
+		// expressible.
+		for _, value := range values {
+			// Case-insensitive on the value: header values are compared this way throughout this
+			// package's string fields except method and path, where a spec says otherwise. No spec
+			// makes a general header value case-sensitive.
+			if strOp(e.op, value, e.str, true) {
+				return true
+			}
+		}
+		return false
+	case fieldDuration:
+		us, measured := q.DurationUs()
+		if !measured {
+			// Nobody timed this exchange. An unmeasured duration is not a fast one, and
+			// `duration < 100ms` reporting it would be the tool inventing a measurement.
+			return false
+		}
+		return numOp(e, us)
 	}
 	// Unreachable: field is set only by parseCmp, from fieldByName.
 	return false
@@ -755,6 +1156,76 @@ func strOp(o op, actual, expected string, caseInsensitive bool) bool {
 		return strings.Contains(actual, expected)
 	}
 	// Unreachable: fieldAllows admits no other operator for a string field.
+	return false
+}
+
+// pathExtension returns the lowercased extension of a path's last segment, and whether it has one.
+//
+// The query string is cut first: `/report.pdf?v=2` has extension "pdf", and a naive last-dot search
+// would find the one in `?v=2.1` on a path with no extension at all. A leading dot on the segment
+// itself (`/.env`) is not an extension either — the whole name is ".env" — because treating it as
+// one would make `extension = "env"` match a dotfile whose type is not env.
+func pathExtension(path string) (string, bool) {
+	if cut := strings.IndexAny(path, "?#"); cut >= 0 {
+		path = path[:cut]
+	}
+	segment := path
+	if slash := strings.LastIndexByte(path, '/'); slash >= 0 {
+		segment = path[slash+1:]
+	}
+	dot := strings.LastIndexByte(segment, '.')
+	if dot <= 0 || dot == len(segment)-1 {
+		// dot <= 0 covers both "no dot" and a leading dot; dot at the end is a trailing dot with no
+		// extension after it.
+		return "", false
+	}
+	return strings.ToLower(segment[dot+1:]), true
+}
+
+// queryParamCount counts the query parameters in a path.
+//
+// Empty pairs are not counted: `?a=1&&b=2` has two parameters, not three, and `?` alone has none. A
+// count that included them would report a number an operator cannot see anywhere on screen.
+func queryParamCount(path string) int {
+	cut := strings.IndexByte(path, '?')
+	if cut < 0 {
+		return 0
+	}
+	query := path[cut+1:]
+	if fragment := strings.IndexByte(query, '#'); fragment >= 0 {
+		query = query[:fragment]
+	}
+	count := 0
+	for _, pair := range strings.Split(query, "&") {
+		if pair != "" {
+			count++
+		}
+	}
+	return count
+}
+
+// numOp is statusOp for the wide numeric fields. Kept separate rather than made generic: status
+// carries its bounds in uint16 and these in int64, and a shared helper would have to widen or
+// narrow one of them at the comparison, which is where an off-by-a-factor hides.
+func numOp(e *Expr, actual int64) bool {
+	switch e.op {
+	case opEq:
+		return actual == e.num64
+	case opNe:
+		return actual != e.num64
+	case opLt:
+		return actual < e.num64
+	case opLe:
+		return actual <= e.num64
+	case opGt:
+		return actual > e.num64
+	case opGe:
+		return actual >= e.num64
+	case opIn:
+		// Inclusive of both ends, as status ranges are.
+		return actual >= e.lo64 && actual <= e.hi64
+	}
+	// Unreachable: fieldAllows admits no other operator for these fields.
 	return false
 }
 

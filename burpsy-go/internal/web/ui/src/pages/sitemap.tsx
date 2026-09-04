@@ -1,18 +1,24 @@
-import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent } from "react";
-import { formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
+import { copyToClipboard, formatBytes, formatDuration, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import { useSitemapDetailed } from "../lib/data.observe";
-import { useExchangeActions } from "../lib/actions";
+import { useIssuesDetailed } from "../lib/data.attack";
+import type { FindingDetail } from "../lib/types.attack";
+import { exchangeUrl, useExchangeActions, useSendShortcuts } from "../lib/actions";
 import { useApp } from "../lib/store";
+import { toast } from "sonner";
 import type { SiteNodeDetail as SiteNode } from "../lib/types.observe";
 import type { Exchange } from "../lib/types";
 import { CrawlLauncher } from "../ui/crawl";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
-import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
-import { Badge, Button, Empty, ErrorNotice, IconButton, Input, Toolbar, Tooltip } from "../ui/primitives";
-import { VirtualTable, type Column } from "../ui/table";
+import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
+import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Toolbar, Tooltip } from "../ui/primitives";
+import { ContextMenu, type MenuGroup } from "../ui/menu";
+import { MenuRow, SimpleTable, VirtualTable, type Column } from "../ui/table";
+import { CrawlPathsView } from "../ui/crawlpaths";
+import { useCrawls, usePassiveScanBranch } from "../lib/data.observe";
 import { cn } from "../lib/cn";
 
 interface FlatRow {
@@ -103,12 +109,15 @@ function TreeRow({
   cursor,
   onToggle,
   onSelect,
+  getMenuGroups,
 }: {
   row: FlatRow;
   selected: boolean;
   cursor: boolean;
   onToggle: () => void;
   onSelect: () => void;
+  /** Right-click menu per row; Burp's tree menu carries host/branch actions (burpsy-react-ui-gfx). */
+  getMenuGroups?: (row: FlatRow) => MenuGroup[];
 }): JSX.Element {
   const { node, depth, hasChildren, expanded } = row;
   const isHost = depth === 0;
@@ -119,6 +128,7 @@ function TreeRow({
   // too, and hosts — where the decision actually gets made — say it in visible text.
   const outOfScope = !node.in_scope;
   return (
+    <ContextMenu groups={getMenuGroups?.(row) ?? []}>
     <div
       role="treeitem"
       aria-level={depth + 1}
@@ -179,7 +189,39 @@ function TreeRow({
         </span>
       </span>
     </div>
+    </ContextMenu>
   );
+}
+
+/** Burp's severity colours for the inline node-findings list (burpsy-react-ui-zzz). */
+function findingTone(severity: string): "bad" | "warn" | "info" | "neutral" {
+  switch (severity) {
+    case "Critical":
+    case "High":
+      return "bad";
+    case "Medium":
+      return "warn";
+    case "Low":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
+
+/** Deduplicated absolute URLs for every captured exchange under a tree row (burpsy-react-ui-gfx). */
+function urlsUnder(row: FlatRow, exchanges: Exchange[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const ex of exchanges) {
+    if (ex.host !== row.host) continue;
+    if (row.depth > 0 && !underNode(ex.path, row.node.path)) continue;
+    const url = exchangeUrl(ex);
+    if (!seen.has(url)) {
+      seen.add(url);
+      out.push(url);
+    }
+  }
+  return out;
 }
 
 export function SiteMapPage(): JSX.Element {
@@ -187,11 +229,23 @@ export function SiteMapPage(): JSX.Element {
   const setRoute = useApp((state) => state.setRoute);
 
   const [filter, setFilter] = useState("");
+  /**
+   * Which of Burp's two site-map views is showing.
+   *
+   * Kept as page state rather than persisted: the URL view is the one an operator wants on arrival,
+   * and a remembered "crawl paths" would greet them with an empty panel on a session where nothing
+   * has crawled yet — which reads as a broken site map rather than as a remembered preference.
+   */
+  const [view, setView] = useState<"urls" | "paths">("urls");
+  const crawls = useCrawls();
+  const passiveScan = usePassiveScanBranch();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [selectedExchange, setSelectedExchange] = useState<number | null>(null);
   const [inspector, setInspector] = useState(false);
+  const [showIssues, setShowIssues] = useState(false);
+  const issues = useIssuesDetailed();
 
   const debouncedFilter = useDebounced(filter, 250);
   const term = debouncedFilter.trim().toLowerCase();
@@ -229,6 +283,7 @@ export function SiteMapPage(): JSX.Element {
     setCursorId(key);
     // The previous node's exchange is meaningless against a different node's table.
     setSelectedExchange(null);
+    setShowIssues(false);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -274,12 +329,28 @@ export function SiteMapPage(): JSX.Element {
     return all.filter((ex) => ex.host === selected.host && underNode(ex.path, selected.node.path));
   }, [history, selected]);
 
+  // burpsy-react-ui-zzz: findings attributed to this node's exchanges through occurrence
+  // exchange ids - the precise link the tree's severity dots summarise. Host-only matching
+  // would credit this node with findings observed on sibling paths.
+  const nodeFindings = useMemo<FindingDetail[]>(() => {
+    if (!selected || !issues.data) return [];
+    const ids = new Set(nodeExchanges.map((ex) => ex.id));
+    return (issues.data.findings ?? []).filter((finding) =>
+      (finding.occurrences ?? []).some((occurrence) => ids.has(occurrence.exchange_id)),
+    );
+  }, [selected, issues.data, nodeExchanges]);
+
   const activeExchange = useMemo(
     () => nodeExchanges.find((ex) => ex.id === selectedExchange) ?? null,
     [nodeExchanges, selectedExchange],
   );
   const request = useMessage(activeExchange?.request);
   const response = useMessage(activeExchange?.response ?? null);
+
+  // Burp's send-to chords are scoped to a table row, not to one tool. Without these, ctrl+R on a
+  // selected Site map row reached the browser and reloaded the console — losing the operator's
+  // tree position and selection to reach the page that has meant "send to Repeater" for years.
+  useSendShortcuts(activeExchange);
 
   const filterHistory = (entry: IndexedNode) => {
     // Quoted so a path carrying an operator character (`?q=a<b`) reaches the parser as one string
@@ -332,7 +403,22 @@ export function SiteMapPage(): JSX.Element {
         accessorKey: "mime",
         header: "MIME",
         size: 90,
-        cell: (info) => <span className="cell-dim">{info.getValue<string | undefined>() || "—"}</span>,
+        // Same dead column as History's, populated by the same fix, and rendered through the same
+        // helper so the two pages cannot come to disagree about what an empty MIME means: an em dash
+        // when no response arrived, "untyped" when one did and named no Content-Type.
+        cell: (info) => <span className="cell-dim">{mimeLabel(info.row.original)}</span>,
+      },
+      {
+        // burpsy-react-ui-esi: History's Comment column over the same exchanges - the note text
+        // lives on the row, so this is display, not a second store.
+        id: "comment",
+        header: "Comment",
+        size: 180,
+        accessorFn: (row: Exchange) => row.notes ?? "",
+        cell: (info) => {
+          const text = info.getValue<string>();
+          return text === "" ? <span className="cell-dim">—</span> : <span title={text}>{text}</span>;
+        },
       },
       {
         accessorKey: "duration_ms",
@@ -385,6 +471,29 @@ export function SiteMapPage(): JSX.Element {
             <TreeRow
               key={row.key}
               row={row}
+              getMenuGroups={(target) => {
+                const scope = target.depth === 0 ? "host" : "branch";
+                return [
+                  {
+                    id: "copy",
+                    actions: [
+                      {
+                        id: "copy-urls",
+                        label: `Copy URLs in this ${scope}`,
+                        onSelect: () => {
+                          const urls = urlsUnder(target, history ?? []);
+                          if (!urls.length) {
+                            toast.error(`No captured requests under this ${scope}`);
+                            return;
+                          }
+                          void copyToClipboard(urls.join("\n"));
+                          toast.success(`Copied ${urls.length} URLs from this ${scope}`);
+                        },
+                      },
+                    ],
+                  },
+                ];
+              }}
               selected={row.key === selectedId}
               cursor={row.key === cursorId}
               onToggle={() => toggle(row)}
@@ -442,6 +551,7 @@ export function SiteMapPage(): JSX.Element {
           readOnly
           value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
           filename={`exchange-${activeExchange.id}-request.txt`}
+          menuGroups={actions.menu(activeExchange)}
         />
         <HttpEditor
           label="Response"
@@ -452,8 +562,15 @@ export function SiteMapPage(): JSX.Element {
               : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
           }
           filename={`exchange-${activeExchange.id}-response.txt`}
+          menuGroups={actions.menu(activeExchange)}
         />
-        {inspector ? <Inspector raw={request.data?.text ?? ""} label="Inspector · request" /> : null}
+        {inspector ? (
+          <Inspector
+            raw={request.data?.text ?? ""}
+            label="Inspector · request"
+            readOnlyNote="This request has already been sent, so it is read-only here. Send it to Repeater to change it and try again."
+          />
+        ) : null}
       </div>
     </div>
   ) : (
@@ -491,6 +608,23 @@ export function SiteMapPage(): JSX.Element {
               {s}
             </Badge>
           ))}
+          <Tooltip
+            content={
+              nodeFindings.length
+                ? "Findings observed on this node's exchanges"
+                : "No findings observed on this node's exchanges"
+            }
+          >
+            <Button
+              variant="outline"
+              size="small"
+              disabled={!nodeFindings.length}
+              aria-pressed={showIssues}
+              onClick={() => setShowIssues((current) => !current)}
+            >
+              Issues ({nodeFindings.length})
+            </Button>
+          </Tooltip>
           <Tooltip content="Open the HTTP history tab filtered to this path and everything under it">
             <Button variant="outline" size="small" onClick={() => filterHistory(selected)}>
               <ExternalLink size={13} />
@@ -499,6 +633,39 @@ export function SiteMapPage(): JSX.Element {
           </Tooltip>
         </div>
       </div>
+      {showIssues && nodeFindings.length > 0 ? (
+        <Card className="pane-fill">
+          <SectionHeading title={`Issues under ${selected.depth === 0 ? selected.host : selected.node.path}`} />
+          <SimpleTable headers={["Severity", "Finding", "Host", "Seen"]}>
+            {nodeFindings.map((finding) => (
+              <MenuRow
+                key={finding.id}
+                groups={[
+                  {
+                    id: "open",
+                    actions: [
+                      {
+                        id: "issues",
+                        label: "Open in Issues",
+                        onSelect: () => setRoute("scanner"),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <td>
+                  <Badge tone={findingTone(finding.severity)}>{finding.severity}</Badge>
+                </td>
+                <td title={finding.detail ?? undefined}>{finding.issue_name ?? finding.check_name ?? "Unnamed finding"}</td>
+                <td>{finding.host}</td>
+                <td>
+                  <span className="cell-num">{finding.times_seen}×</span>
+                </td>
+              </MenuRow>
+            ))}
+          </SimpleTable>
+        </Card>
+      ) : null}
       <SplitPane
         storageId="sitemap-detail"
         orientation="vertical"
@@ -524,6 +691,7 @@ export function SiteMapPage(): JSX.Element {
               onSelect={(row) => setSelectedExchange(row.id)}
               onActivate={(row) => void actions.sendToRepeater(row)}
               menuGroups={(row) => actions.menu(row)}
+              rowClassName={(row) => (row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined)}
             />
           )
         }
@@ -539,9 +707,78 @@ export function SiteMapPage(): JSX.Element {
           title="Site map"
           actions={
             <>
+              {/* Burp's two views (burpsy-react-ui-tix). The URL tree answers "what is on this
+                  host"; crawl paths answers "what should have linked to the page I expected and
+                  cannot find". Different questions, so a toggle rather than a merged tree. */}
+              <div className="chip-row" role="group" aria-label="Site map view">
+                <Button
+                  variant={view === "urls" ? "outline" : "quiet"}
+                  size="small"
+                  aria-pressed={view === "urls"}
+                  onClick={() => setView("urls")}
+                >
+                  URL view
+                </Button>
+                <Button
+                  variant={view === "paths" ? "outline" : "quiet"}
+                  size="small"
+                  aria-pressed={view === "paths"}
+                  onClick={() => setView("paths")}
+                >
+                  Crawl paths
+                </Button>
+              </div>
               <Badge>{(data?.nodes ?? 0).toLocaleString()} nodes</Badge>
               <Badge>{(data?.exchanges ?? 0).toLocaleString()} exchanges</Badge>
               {data?.in_flight ? <Badge tone="info">{data.in_flight} in flight</Badge> : null}
+              {/* Burp's "Passively scan this branch" (burpsy-react-ui-p09). No confirm step: the sweep
+                  sends nothing, it re-reads responses the store already holds. Disabled with a
+                  reason when nothing is selected, rather than acting on an implied whole-store
+                  target — that is what the live audit already does and is not what "this branch"
+                  means. */}
+              <Tooltip
+                content={
+                  selected
+                    ? `Re-run the passive checks over ${selected.host}${selected.depth === 0 ? "" : selected.node.path} — sends nothing, reads what is already captured`
+                    : "Select a host or path in the tree to scan its branch"
+                }
+              >
+                <span>
+                  <Button
+                    variant="outline"
+                    size="small"
+                    disabled={!selected || passiveScan.isPending}
+                    onClick={() => {
+                      if (!selected) return;
+                      passiveScan.mutate(
+                        {
+                          host: selected.host,
+                          // A host node is the whole host; a path node is its own path and below.
+                          path_prefix: selected.depth === 0 ? undefined : selected.node.path,
+                        },
+                        {
+                          onSuccess: (result) => {
+                            // The server's own summary, verbatim: it states the counts WITH their
+                            // caveats, and rewording it here would be a second wording of the one
+                            // thing that must not be optimistic.
+                            if (result.loaded === 0) {
+                              toast.error(result.summary);
+                            } else if (result.findings > 0) {
+                              toast.success(result.summary);
+                            } else {
+                              toast.info(result.summary);
+                            }
+                          },
+                          onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+                        },
+                      );
+                    }}
+                  >
+                    <ShieldCheck size={13} />
+                    {passiveScan.isPending ? "Scanning…" : "Passive scan branch"}
+                  </Button>
+                </span>
+              </Tooltip>
               <CrawlLauncher />
               <RefreshButton onClick={() => void refetch()} loading={isFetching} />
             </>
@@ -549,7 +786,11 @@ export function SiteMapPage(): JSX.Element {
         />
         {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
       </div>
-      <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
+      {view === "paths" ? (
+        <CrawlPathsView runs={crawls.data?.crawls ?? []} />
+      ) : (
+        <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
+      )}
     </div>
   );
 }

@@ -9,9 +9,12 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3 } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import { copyToClipboard } from "../lib/api";
 import { cn } from "../lib/cn";
+import { useApp } from "../lib/store";
 import { ColumnVisibilityMenu } from "./column-visibility-menu";
 import { ContextMenu, type MenuGroup } from "./menu";
 import { Spinner } from "./primitives";
@@ -104,6 +107,12 @@ export interface VirtualTableProps<T> {
    */
   columnVisibility?: VisibilityState;
   onColumnVisibilityChange?: (next: VisibilityState) => void;
+  /**
+   * Pin the viewport to the last row whenever rows are appended. Off by default: a table
+   * that yanks the viewport out from under an operator reading older rows is the failure
+   * this flag exists to avoid, so following is always opt-in per table (burpsy-react-ui-c13).
+   */
+  followNewRows?: boolean;
 }
 
 export function VirtualTable<T>({
@@ -118,13 +127,22 @@ export function VirtualTable<T>({
   rowClassName,
   loading = false,
   empty,
-  density = "comfortable",
+  density: densityProp,
   height = "100%",
   initialSort = [],
   enableColumnVisibility = false,
   columnVisibility: controlledVisibility,
   onColumnVisibilityChange,
+  followNewRows = false,
 }: VirtualTableProps<T>): JSX.Element {
+  // The operator's density preference is the default when a page does not name
+  // one — the store is the single source of truth for it, so a table that never
+  // opts in still honours the Settings/palette/View-menu toggle instead of
+  // silently rendering at the component default forever. The store read is
+  // unconditional (a hook must not sit on the right of `??`, or it would run only
+  // when no prop is passed), and an explicit prop still wins when a page supplies one.
+  const storeDensity = useApp((state) => state.density);
+  const density = densityProp ?? storeDensity;
   const [sorting, setSorting] = useState<SortingState>(initialSort);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -225,6 +243,21 @@ export function VirtualTable<T>({
     // virtualizer identity is stable per scroll element; re-running on it would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIndex]);
+
+  // burpsy-react-ui-c13: follow appended rows while enabled. Growth-only (a filter narrowing
+  // the list must never fling the viewport), and bottom-of-current-order rather than
+  // newest-by-id: under a descending sort the last row is the oldest, and claiming otherwise
+  // would be the same dishonesty as a fabricated count. Selection scroll above still wins on
+  // its own trigger; the two do not fight because this one only fires when the row count grew.
+  const rowCountRef = useRef(rows.length);
+  useEffect(() => {
+    const grew = rows.length > rowCountRef.current;
+    rowCountRef.current = rows.length;
+    if (followNewRows && grew && rows.length > 0) {
+      virtualizer.scrollToIndex(rows.length - 1, { align: "end" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.length, followNewRows]);
 
   const move = useCallback(
     (delta: number | "start" | "end") => {
@@ -335,16 +368,44 @@ export function VirtualTable<T>({
                 {group.headers.map((header) => {
                   const sorted = header.column.getIsSorted();
                   const canSort = header.column.getCanSort();
+                  // Burp's "Copy column" (burpsy-react-ui-3gr3): the underlying values of every
+                  // loaded row, not just the rendered window - copying only the virtualised
+                  // viewport would silently drop rows. Raw values, not badge text ("pending",
+                  // "HTML", "—" are presentation); the data is what a wordlist wants.
+                  const rawHeader = header.column.columnDef.header;
+                  const columnLabel = typeof rawHeader === "string" ? rawHeader : header.column.id;
+                  const copyColumn = () => {
+                    if (!rows.length) {
+                      toast.error("No rows to copy");
+                      return;
+                    }
+                    const lines = rows.map((row) => {
+                      const value: unknown = row.getValue(header.column.id);
+                      return value === null || value === undefined ? "" : String(value);
+                    });
+                    void copyToClipboard(lines.join("\n"));
+                    toast.success(`Copied ${lines.length} ${columnLabel} values`);
+                  };
+                  const label = canSort ? (
+                    <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {sorted === "asc" ? <ArrowUp size={11} /> : sorted === "desc" ? <ArrowDown size={11} /> : null}
+                    </button>
+                  ) : (
+                    <span className="th-label">{flexRender(header.column.columnDef.header, header.getContext())}</span>
+                  );
                   return (
                     <th key={header.id} style={{ width: header.getSize() }} aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}>
-                      {canSort ? (
-                        <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                          {sorted === "asc" ? <ArrowUp size={11} /> : sorted === "desc" ? <ArrowDown size={11} /> : null}
-                        </button>
-                      ) : (
-                        flexRender(header.column.columnDef.header, header.getContext())
-                      )}
+                      <ContextMenu
+                        groups={[
+                          {
+                            id: "column",
+                            actions: [{ id: "copy-column", label: `Copy ${columnLabel} column`, icon: Copy, onSelect: copyColumn }],
+                          },
+                        ]}
+                      >
+                        {label}
+                      </ContextMenu>
                       {header.column.getCanResize() ? (
                         <span
                           role="presentation"
@@ -438,10 +499,52 @@ function TableRow<T>({
   return <ContextMenu groups={menuGroups(row.original)}>{element}</ContextMenu>;
 }
 
-/** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */
-export function SimpleTable({ headers, children, className }: { headers: string[]; children: ReactNode; className?: string }): JSX.Element {
+/**
+ * A `SimpleTable` row with a right-click menu.
+ *
+ * # Why this is a component and not a `menuGroups` prop on SimpleTable
+ *
+ * `SimpleTable` takes its rows as `children`, so it never sees a row object to hand to a menu
+ * factory — the page builds the `<tr>`s itself. That leaves two options, and one of them is a
+ * trap: wrapping the page's `<tr>` in a `<ContextMenu>` inside the `.map()` callback moves the
+ * React key onto a child of the mapped element, which leaves the list keyless. That was tried
+ * here and reverted.
+ *
+ * This is the other option. `MenuRow` *is* the mapped element, so the key goes on it, and the
+ * `<tr>` it renders is the Radix trigger via `asChild` — no wrapper element, so the table markup
+ * stays valid. Every prop other than `groups` is forwarded to the `<tr>`, so a page converts a
+ * row by renaming the tag and adding one prop.
+ */
+export function MenuRow({
+  groups,
+  children,
+  ...rowProps
+}: { groups: MenuGroup[]; children: ReactNode } & React.HTMLAttributes<HTMLTableRowElement>): JSX.Element {
   return (
-    <div className={cn("table-frame", className)}>
+    <ContextMenu groups={groups}>
+      <tr {...rowProps}>{children}</tr>
+    </ContextMenu>
+  );
+}
+
+/** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */
+export function SimpleTable({
+  headers,
+  children,
+  className,
+  density: densityProp,
+}: {
+  headers: string[];
+  children: ReactNode;
+  className?: string;
+  density?: "comfortable" | "compact";
+}): JSX.Element {
+  // Same store fallback as VirtualTable: density is a preference set in one
+  // place and consumed here, and the crossing must not silently stop working.
+  const storeDensity = useApp((state) => state.density);
+  const density = densityProp ?? storeDensity;
+  return (
+    <div className={cn("table-frame", "density-" + density, className)}>
       <div className="table-scroll">
         <table>
           <thead>

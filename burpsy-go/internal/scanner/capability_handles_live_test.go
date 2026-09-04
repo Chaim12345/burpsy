@@ -52,9 +52,12 @@ func TestTheBrowserHandleReachesARealBrowserAndObservesTaint(t *testing.T) {
 	defer srv.Close()
 
 	cc := postureFixture(t, "GET / HTTP/1.1\r\nHost: app.test\r\n\r\n", htmlResponse("ok"), true)
-	provider := NewLazyBrowserProvider(domexec.Options{})
-	cc.Scanner.WithBrowserProvider(provider)
-	t.Cleanup(func() { _ = cc.Scanner.CloseCapabilities() })
+	cc.Scanner.WithBrowserProvider(sharedBrowserProvider())
+	// No CloseCapabilities cleanup: the attached provider is the package-wide shared
+	// Chrome, and closing it here would leave every later DOM test with a dead
+	// browser that reads as zero observations. TestMain owns the close. This
+	// scanner carries no out-of-band collaborator, so the only handle CloseCapabilities
+	// would release is the one TestMain already releases.
 
 	browser, err := cc.Browser(context.Background())
 	if err != nil {
@@ -83,12 +86,13 @@ func TestTheBrowserHandleReachesARealBrowserAndObservesTaint(t *testing.T) {
 	}
 }
 
-// The same provider must hand back one browser, not one per call.
+// The same provider must hand back one browser, not one per call. Runs against the
+// package-shared provider: if an earlier test already launched it, this still holds
+// the pointer-equality contract; if this test runs first, it pays the one launch.
 func TestTheBrowserProviderSharesOneBrowserAcrossChecks(t *testing.T) {
 	chromeAvailable(t)
 
-	provider := NewLazyBrowserProvider(domexec.Options{})
-	defer func() { _ = provider.Close() }()
+	provider := sharedBrowserProvider()
 
 	first, err := provider.Browser(context.Background())
 	if err != nil {

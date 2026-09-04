@@ -6,18 +6,26 @@
 
 /* --- match & replace ------------------------------------------------------- */
 
-/** The five targets targetToCategory() in api_toolkit.go accepts. Anything else compiles to a no-op. */
+/**
+ * The targets targetToCategory() in api_toolkit.go accepts. Anything else is refused with a 400
+ * naming the accepted vocabulary — it does not compile to a no-op rule, which it used to.
+ *
+ * The two WebSocket targets rewrite a whole message payload. A frame has no headers, no first line
+ * and no parameters, so the payload is the only addressable unit.
+ */
 export type MatchReplaceTarget =
   | "request_first_line"
   | "request_header"
   | "request_body"
   | "response_header"
-  | "response_body";
+  | "response_body"
+  | "websocket_to_server"
+  | "websocket_to_client";
 
 /** matchReplaceCategoryName(): the server knows exactly these two. */
 export type MatchReplaceCategory = "literal" | "regex";
 
-export type MatchReplaceDirection = "request" | "response";
+export type MatchReplaceDirection = "request" | "response" | "websocket";
 
 /** What /api/tools/rules/test answers with; `output` is the server's bytesView shape. */
 export interface BytesView {
@@ -181,26 +189,32 @@ export interface SessionLoginResponse {
 
 /* --- scope ---------------------------------------------------------------- */
 
+/**
+ * /api/scope. The Go handler reports each rule's full tuple — host pattern plus optional port
+ * and path arms — so removal can target one rule without touching a same-host sibling.
+ */
 export interface ScopeRuleView {
   kind: "Include" | "Exclude";
   host: string | null;
+  path?: string | null;
+  port?: number | null;
+  protocol?: string | null;
 }
 
-/**
- * /api/scope. Note this differs from types.ts's `Scope`: the Go handler emits
- * {kind, host} rules plus `empty`, and has no port/protocol/path fields at all.
- */
 export interface ScopeView {
   allow_all: boolean;
   rules: ScopeRuleView[];
   empty: boolean;
 }
 
-/** POST /api/scope. Only a host pattern is addressable; there is no port or path arm. */
+/** POST /api/scope. Port, path and protocol are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
   action: "include" | "exclude" | "remove" | "clear";
   kind?: "include" | "exclude";
   pattern?: string;
+  path?: string;
+  port?: number;
+  protocol?: "http" | "https";
 }
 
 /* --- protocols / diagnostics ---------------------------------------------- */
@@ -262,4 +276,50 @@ export interface EventHubStats {
   merges: number;
   fanout_running: boolean;
   pending: Record<string, number>;
+}
+
+/** GET/POST/DELETE /api/proxy/passthrough — the live TLS passthrough host-pattern list. */
+export interface PassthroughView {
+  patterns: string[];
+}
+
+/* --- upstream proxy servers and SOCKS (Unit 9) ---------------------------- */
+
+/**
+ * One upstream proxy rule. `proxy` is always the server's redacted rendering
+ * (`socks5://***@host:1080` when credentials are set) — the API never serves a
+ * password back, so there is nothing here to accidentally put on screen.
+ */
+export interface NetworkProxyRule {
+  pattern: string;
+  proxy: string;
+  kind: string;
+  has_credentials: boolean;
+  /** A rule that exempts its pattern from a broader default. */
+  direct: boolean;
+}
+
+export interface NetworkProxyView {
+  /** False means no policy object is wired, so an edit would be consulted by nothing. */
+  wired: boolean;
+  rules: NetworkProxyRule[];
+  default: string;
+  default_kind: string;
+  default_has_credentials: boolean;
+  /** Distinguishes "nothing configured" from "rules that all resolve to direct". */
+  empty: boolean;
+  /** Egress surfaces holding this policy: "sender", "proxy", "web". */
+  attached: string[];
+  /** Whether edits survive a restart (false with no -db). */
+  persisted: boolean;
+  credentials_supported: boolean;
+  /** Accepted URL schemes, named by the server's own parser. */
+  schemes: string[];
+}
+
+/** POST body. `default` omitted leaves the default alone; "" or "direct" clears it. */
+export interface NetworkProxyUpdate {
+  pattern?: string;
+  proxy?: string;
+  default?: string;
 }

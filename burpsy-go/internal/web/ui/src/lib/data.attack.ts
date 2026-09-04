@@ -18,7 +18,22 @@ import type {
   ScannerCoverage,
 } from "./types.attack";
 
-export type InterceptDirection = "requests" | "responses";
+/**
+ * The four directions the proxy can hold, named exactly as the backend's
+ * `interceptDirectionNames` table spells them — these strings are the URL suffix for
+ * `/api/intercept/rules/{dir}` and the keys inside an exported config bundle, so a typo here is a
+ * 404 rather than a type error.
+ *
+ * The WebSocket pair arrived with 626ac5f, which made `internal/proxy/ws.go` actually hold frames.
+ * Before that the backend could describe a WebSocket hold but never performed one, so shipping
+ * these two as UI would have produced controls that render, accept input, return 200 and change
+ * nothing — the single decorative control the parity audit went looking for.
+ */
+export type InterceptDirection =
+  | "requests"
+  | "responses"
+  | "websocket_to_server"
+  | "websocket_to_client";
 
 /**
  * Keys for the attack-area resources. The intercept-rules key keeps the "intercept" prefix the event
@@ -76,9 +91,12 @@ export function useSaveInterceptRules(dir: InterceptDirection) {
  */
 export function useForwardHeld() {
   const client = useQueryClient();
-  return useMutation<unknown, Error, { id: number; raw: string; fixContentLength: boolean }>({
-    mutationFn: ({ id, raw, fixContentLength }) =>
-      api<unknown>(`/api/intercept/${id}/forward`, json("POST", { raw, fix_content_length: fixContentLength })),
+  return useMutation<unknown, Error, { id: number; raw: string; fixContentLength: boolean; holdResponse?: boolean }>({
+    mutationFn: ({ id, raw, fixContentLength, holdResponse }) =>
+      api<unknown>(
+        `/api/intercept/${id}/forward`,
+        json("POST", { raw, fix_content_length: fixContentLength, hold_response: holdResponse ?? false }),
+      ),
     onSuccess: () => void client.invalidateQueries({ queryKey: keys.intercept }),
   });
 }

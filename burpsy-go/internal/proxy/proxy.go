@@ -15,7 +15,6 @@ import (
 	"io"
 	"math/big"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,11 +22,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/alpn"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/session"
+	upstreamproxy "github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 )
 
@@ -91,6 +93,31 @@ func (p *TlsPolicy) AddPassthroughPort(port uint16) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.passthroughPorts = append(p.passthroughPorts, port)
+}
+
+// Passthrough returns a copy of the host patterns currently passed through without interception.
+// A copy, because callers render this list in the UI while the proxy keeps matching against it.
+func (p *TlsPolicy) Passthrough() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]string, len(p.passthrough))
+	copy(out, p.passthrough)
+	return out
+}
+
+// RemovePassthrough removes the first exact match of pattern and reports whether one was removed.
+// Exact, not glob-equal: "*.bank.test" and "bank.test" are different rules an operator added
+// deliberately, and removing by wildcard equality would delete a rule they did not select.
+func (p *TlsPolicy) RemovePassthrough(pattern string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, existing := range p.passthrough {
+		if existing == pattern {
+			p.passthrough = append(p.passthrough[:i], p.passthrough[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 // WithCommonDefaults returns a TLS policy with common pinned hosts.
@@ -363,6 +390,103 @@ func loadCA(certData, keyData []byte) (*TlsEngine, error) {
 	}, nil
 }
 
+// ImportCA replaces the signing CA at runtime, so an operator can supply their own
+// pair without restarting — Burp's `configPanelCustomCACertificates`.
+//
+// Before this existed the capability was real and filesystem-only: LoadOrGenerateCA
+// reads ca.crt/ca.key from -ca-dir at startup, so using your own CA meant stopping
+// burpsy, placing two files, and starting again — losing the captured traffic. The
+// UI's certificate section could only *download* the generated CA.
+//
+// # The cache is the whole difficulty
+//
+// certPool holds one leaf per host, each signed by the CA being replaced. Clients
+// are about to be told to trust the *new* CA, so every cached leaf becomes a
+// certificate they will reject — and because the cache is checked before anything
+// else, they would keep being served indefinitely. Handshakes would fail with a
+// trust error that looks like a misconfigured trust store, on hosts that worked a
+// moment ago, and the operator would go looking in their browser.
+//
+// So the pool is emptied under the same lock that swaps the CA. Signing waits on
+// that lock, so no leaf can be minted against a half-swapped pair.
+//
+// One race is deliberately left: GetCertificate's fast path reads the pool without
+// the lock, so a handshake already past that read may still present a leaf signed
+// by the old CA. It cannot be prevented from here — that connection's certificate
+// was chosen before the import — and it resolves itself on the next handshake.
+// Recorded rather than papered over.
+//
+// # Validation happens before anything is touched
+//
+// loadCA parses and runs validateCA against a fresh TlsEngine with no side effects,
+// so a bad pair — not a CA, wrong key, expired — leaves the running CA and the
+// cache exactly as they were. Importing a certificate that cannot sign would
+// otherwise take TLS interception down completely, which is a worse outcome than
+// refusing.
+//
+// Persisting to -ca-dir is the caller's job, not this method's: the engine does not
+// know where it was loaded from, and a write failure must not leave the process
+// signing with a CA that will not survive a restart without somebody being told.
+func (e *TlsEngine) ImportCA(certPEM, keyPEM []byte) error {
+	loaded, err := loadCA(certPEM, keyPEM)
+	if err != nil {
+		return err
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.caCert = loaded.caCert
+	e.caPriv = loaded.caPriv
+	// Every cached leaf was signed by the CA just replaced. See above.
+	e.certPool.Range(func(key, _ any) bool {
+		e.certPool.Delete(key)
+		return true
+	})
+	return nil
+}
+
+// CertPEM returns the current CA certificate as PEM.
+//
+// Read under the lock because ImportCA can replace it mid-flight, and because the
+// one caller that matters is the endpoint serving /ca.crt: an operator who imports
+// a CA and then downloads the certificate to install must receive the CA now in
+// use, not the one this process started with. Serving the stale one would have them
+// trust a CA that signs nothing.
+func (e *TlsEngine) CertPEM() []byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.caCert == nil {
+		return nil
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.caCert.Raw})
+}
+
+// CADescription reports who the current CA is and how long it lasts, for a UI that
+// has to show which CA is in force after an import. Returns the subject common
+// name, the NotAfter, and whether there is a CA at all.
+func (e *TlsEngine) CADescription() (subject string, notAfter time.Time, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.caCert == nil {
+		return "", time.Time{}, false
+	}
+	// A CA with no common name is legal, and a CA with a *wholly* empty subject is
+	// legal too — self-signed CAs built by hand often have one. Both fallbacks are
+	// needed: Subject.String() is itself "" for an empty RDN sequence, so the first
+	// fallback alone still rendered a CA with no identity at all. Caught by
+	// TestCADescriptionFallsBackWhenThereIsNoCommonName, which is why the serial is
+	// the last resort — it is the one field a certificate must have, so the operator
+	// can always tell two CAs apart even when neither is named.
+	name := e.caCert.Subject.CommonName
+	if name == "" {
+		name = e.caCert.Subject.String()
+	}
+	if name == "" {
+		name = fmt.Sprintf("(unnamed CA, serial %s)", e.caCert.SerialNumber)
+	}
+	return name, e.caCert.NotAfter, true
+}
+
 // parseCAKey accepts both PKCS#1 and PKCS#8 encodings, so a CA persisted by any
 // Go version or external tool is loadable.
 func parseCAKey(der []byte) (*rsa.PrivateKey, error) {
@@ -415,18 +539,37 @@ type ProxyConfig struct {
 	findings     *core.FindingStore
 	intercept    *intercept.Engine
 	logger       *zap.Logger
+	// clientCerts supplies the TLS client certificate to present on the upstream
+	// leg of an intercepted connection. Nil — the default — means none is ever
+	// offered. See WithClientCerts.
+	clientCerts alpn.ClientCertSource
 	// stripWsExtensions removes the client's Sec-WebSocket-Extensions offer
 	// from a handshake before forwarding it. See WithStripWsExtensions.
 	stripWsExtensions bool
+	// options is the live, operator-editable option set: the response modification
+	// rules and the Accept-Encoding strip. Never nil after NewProxyConfig, and the
+	// same pointer the web API holds — see WithOptions and internal/proxy/options.go.
+	options *Options
+	// cookieJar receives the Set-Cookie headers of every response this listener captures, so an
+	// operator who browses the target logged-in through the proxy has a jar the other tools can draw
+	// on. Nil absorbs nothing, which is what a proxy built without a session coordinator does. See
+	// CookieAbsorber and WithCookieJar.
+	cookieJar CookieAbsorber
+	// upstream is the per-destination upstream proxy policy this proxy's origin-facing leg follows.
+	// Nil dials origins directly, which is what this package did before the policy existed. Shared by
+	// reference with internal/sender and with the /api/network/proxy handler, so an edit made in the
+	// console reaches this leg without a restart — see internal/upstream.
+	upstream *upstreamproxy.Policy
 }
 
 // NewProxyConfig creates a new proxy configuration.
 func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 	return &ProxyConfig{
-		store:  store,
-		tls:    NewTlsPolicy(),
-		scope:  core.NewScopeAllowEverything(),
-		logger: zap.NewNop(), // Default to nop logger
+		store:   store,
+		tls:     NewTlsPolicy(),
+		scope:   core.NewScopeAllowEverything(),
+		options: NewOptions(),
+		logger:  zap.NewNop(), // Default to nop logger
 		// On, matching Burp's default. A proxy that let permessage-deflate be
 		// negotiated would record DEFLATE blocks and call them messages, so the
 		// safe setting is the one that keeps the capture readable.
@@ -443,6 +586,33 @@ func (c *ProxyConfig) WithScope(scope *core.Scope) *ProxyConfig {
 // WithTlsPolicy sets the TLS policy.
 func (c *ProxyConfig) WithTlsPolicy(policy *TlsPolicy) *ProxyConfig {
 	c.tls = policy
+	return c
+}
+
+// WithMatchReplace sets the match-and-replace rule set the proxy applies to live
+// traffic. The same *matchreplace.RuleSet the web layer mutates is attached here — not
+// a copy — so a rule an operator edits on the Match & Replace page takes effect on the
+// wire, and the list that page renders can never disagree with the rules the proxy
+// actually honours. Nil (the default) applies no rules, which is why every read of the
+// field below is nil-guarded. cmd/burpsy shares one object between this config and the
+// web server for exactly the reason it shares one intercept.Engine.
+func (c *ProxyConfig) WithMatchReplace(rs *matchreplace.RuleSet) *ProxyConfig {
+	c.matchReplace = rs
+	return c
+}
+
+// WithUpstreamProxy routes this proxy's origin-facing leg through an upstream proxy policy.
+//
+// The policy is held by reference and consulted per dial, so a rule added through
+// /api/network/proxy applies to the next connection this listener opens — a restart would be the wrong
+// shape for a setting an operator changes while a browser is pointed at the proxy. Attach records that
+// this surface holds it, which is what lets the API report that a rule reaches the listener and not
+// only burpsy's own senders.
+func (c *ProxyConfig) WithUpstreamProxy(policy *upstreamproxy.Policy) *ProxyConfig {
+	c.upstream = policy
+	if policy != nil {
+		policy.Attach("proxy")
+	}
 	return c
 }
 
@@ -465,6 +635,26 @@ func (c *ProxyConfig) WithIntercept(engine *intercept.Engine) *ProxyConfig {
 	return c
 }
 
+// WithClientCerts sets the per-host client-certificate source consulted on the
+// upstream leg of an intercepted TLS connection.
+//
+// Nil-means-off, and the nil case is the one to keep cheap: it is what every
+// session without a client certificate configured runs, and it must cost nothing
+// on a dial. alpn.Dialer installs no handshake callback at all when this is nil,
+// so the common path is byte-for-byte the dial the proxy made before.
+//
+// This is the leg that makes TLS client authentication work through the proxy.
+// The browser's own certificate cannot reach the origin — the browser is talking
+// to burpsy's leaf, and burpsy opens a second connection onward — so before this
+// existed the only way to reach such an app was to put its host on the TLS
+// passthrough list, which is to say to give up interception entirely. ROADMAP.md
+// lists exactly that as a reason hosts land on the passthrough list; this is the
+// answer to it.
+func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig {
+	c.clientCerts = source
+	return c
+}
+
 // WithStripWsExtensions controls whether a WebSocket handshake's
 // Sec-WebSocket-Extensions offer is removed before the request is forwarded.
 //
@@ -480,6 +670,71 @@ func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 	c.stripWsExtensions = strip
 	return c
 }
+
+// CookieAbsorber is the shared session cookie jar, as this package needs to see it.
+//
+// An interface rather than the concrete *session.Coordinator so the absorption hook can be exercised
+// without standing up a coordinator, and so nil stays a legal wiring. internal/session is a leaf
+// package with no burpsy dependencies of its own, so naming its source constant here costs nothing.
+// Implemented by *session.Coordinator.
+//
+// The method takes the raw response bytes, not a parsed header map, and that is the point: a login
+// that sets a session cookie and a CSRF cookie sends two Set-Cookie lines, and every existing
+// absorption call site in the tree hands the coordinator a map[string]string that can hold one of
+// them. The proxy has the actual bytes, so it gives them.
+type CookieAbsorber interface {
+	// AbsorbResponseCookies folds every Set-Cookie header in `response` into the jar for this
+	// authority, returning how many it found.
+	AbsorbResponseCookies(host string, port uint16, tls bool, response []byte) int
+	// AttachAbsorptionSource records that this surface feeds the jar, so an empty jar can be told
+	// apart from a jar nothing is watching.
+	AttachAbsorptionSource(src session.AbsorptionSource)
+}
+
+// WithCookieJar attaches the shared session cookie jar. Every response this listener captures has its
+// Set-Cookie headers absorbed into it.
+//
+// This is the wiring behind Burp's "by default, the cookie jar is updated based on traffic from the
+// Proxy". Without it the jar is fed only by login macros and the crawler's session gate, so an
+// operator who logged in through their browser had an empty jar while the Session page told them
+// their browsing should have filled it — a false statement about how the tool works, which is worse
+// than a missing feature because it is invisible.
+//
+// Attach is called here rather than at the first absorption so the jar can report "the proxy is
+// feeding me and no traffic has flowed yet" as a state distinct from "nothing is feeding me". Nil is
+// the no-op: a proxy built without a coordinator absorbs nothing and says so.
+//
+// The same pointer the web server holds, the single-handle rule this package already applies to the
+// TLS policy, the option set and the match & replace rules — a second jar would attach cookies the
+// Session page cannot see.
+func (c *ProxyConfig) WithCookieJar(jar CookieAbsorber) *ProxyConfig {
+	if jar == nil {
+		return c
+	}
+	c.cookieJar = jar
+	jar.AttachAbsorptionSource(session.SourceProxy)
+	return c
+}
+
+// WithOptions attaches the live option set, so the response modification rules and
+// the Accept-Encoding strip can be turned on and off without restarting the proxy.
+//
+// The same pointer must be handed to the web server (web.Server.WithProxyOptions),
+// for the reason WithTlsPolicy states about the passthrough list: two option sets
+// would let the panel describe rules the relay is not applying. Nil leaves the
+// config's own set in place rather than disabling the feature, so a caller that
+// passes nil by accident gets "every rule off" instead of a nil dereference on the
+// response path.
+func (c *ProxyConfig) WithOptions(options *Options) *ProxyConfig {
+	if options != nil {
+		c.options = options
+	}
+	return c
+}
+
+// Options returns the live option set, for a caller that built the config and now
+// needs to hand the same pointer to the web server.
+func (c *ProxyConfig) Options() *Options { return c.options }
 
 // WithLogger sets the logger.
 func (c *ProxyConfig) WithLogger(logger *zap.Logger) *ProxyConfig {
@@ -624,7 +879,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 	}
 
 	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	upstream, negotiated, err := dialUpstreamTLS(host, addr, offer)
+	upstream, negotiated, err := s.dialUpstreamTLS(host, addr, offer)
 	if err != nil {
 		s.config.logger.Error("upstream TLS dial failed", zap.String("host", host), zap.Error(err))
 		return
@@ -689,6 +944,14 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		requestData := readFullRequest(requestLine, br)
 		startTime := time.Now()
 
+		// Apply Match & Replace on the request — same position and same reasoning as the
+		// plain path in handleHTTP: before intercept, before the scope-gated store, so the
+		// bytes forwarded upstream equal the bytes recorded. Requests inside the tunnel
+		// already arrive origin-form, so there is no toOriginForm step to precede it here.
+		if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
+			requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
+		}
+
 		// Intercept: hold the decrypted request before it is forwarded upstream.
 		if s.config.intercept != nil {
 			if held := s.config.intercept.Hold(intercept.ParseMessage(
@@ -709,6 +972,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		if core.IsWsUpgradeRequest(requestData) {
 			requestData, wsStripped = s.stripWsHandshake(requestData)
 		}
+		requestData = s.applyRequestRules(requestData)
 
 		// Scope decides retention, not egress: an excluded request is still
 		// forwarded, it is simply not kept. The request bytes are not stored
@@ -815,6 +1079,22 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
 	}
+	// Then the blanket response modification rules. This order, not the other one:
+	// a Match & Replace rule is a pattern the operator wrote against the origin's
+	// own bytes, and running "remove all JavaScript" first would delete the text
+	// their rule was written to find. See applyResponseRules.
+	//
+	// Before the scope check, deliberately and unchanged: these are listener-level
+	// rules, so scope decides what is retained and never what is rewritten. What is
+	// new is that an out-of-scope rewrite is now *counted* as unrecorded — this
+	// function has always rewritten out-of-scope HTTPS responses and then skipped the
+	// record below, which left Counters.Modified including responses no history search
+	// could ever turn up. See applyResponseRulesUnrecorded.
+	if inScope {
+		responseData = s.applyResponseRules(responseData)
+	} else {
+		responseData = s.applyResponseRulesUnrecorded(responseData)
+	}
 
 	// Intercept: hold the response before it reaches the client.
 	var notes *string
@@ -862,8 +1142,11 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 }
 
 func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
-	// Connect to upstream
-	upstreamConn, err := net.Dial("tcp", target)
+	// Connect to upstream, through the configured upstream proxy when one covers this destination.
+	// A blind tunnel is the one leg that passes the client's own CONNECT target through unchanged: it
+	// is the only string the client gave us, and re-deriving it from a parse would risk tunnelling
+	// somewhere other than where the client asked.
+	upstreamConn, err := s.dialUpstreamAddr(context.Background(), target)
 	if err != nil {
 		clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		return
@@ -913,6 +1196,11 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 		Protocol:  core.ProtocolHTTP1,
 		StartedMs: uint64(time.Now().UnixMilli()),
 		Source:    core.SourceProxy,
+		// Mime is deliberately left empty, and this is the one site where that is not a degraded
+		// answer. A blind tunnel has no response bytes at all — that is the whole point of the row, as
+		// the comment above explains — so there is no Content-Type to read and nothing to derive one
+		// from. It is also the row with no Response, so a consumer can tell this "" ("nothing came
+		// back") from a response that declared no type: see core.Exchange.Mime.
 	}
 	s.config.store.AddExchange(exchange)
 
@@ -935,10 +1223,29 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 
 	// Parse target
 	host, port, path := parseTarget(target)
+
+	// Read the whole request first, and only then look for a Host header in the bytes
+	// we already hold.
+	//
+	// # Why the order matters — this is Burp's "invisible proxying" case
+	//
+	// A proxy-aware client sends absolute-form (`GET http://host/path`), so parseTarget
+	// has the host and this is the ordinary path. A client that is *not* proxy-aware —
+	// one whose DNS or hosts file points the origin's name at this listener — sends
+	// origin-form (`GET /path`) with the authority only in the Host header, which is
+	// what Burp calls invisible proxying.
+	//
+	// That case used to be handled by calling readHeaders(reader) here, before
+	// readFullRequest. readHeaders consumes the header block off the same *bufio.Reader,
+	// so readFullRequest then started at the blank line and returned the request line
+	// with no headers at all: the Host was found, and every header the client sent —
+	// Host included — was dropped on the way upstream. The origin got a header-less
+	// request, history recorded that same header-less request, and nothing anywhere
+	// said so. Reading the message once and parsing the Host out of the bytes keeps a
+	// single reader position and one copy of the request.
+	requestData := readFullRequest(requestLine, reader)
 	if host == "" {
-		// Try to get from Host header
-		headers := readHeaders(reader)
-		if h := headers.Get("Host"); h != "" {
+		if h := headerValue(requestHead(requestData), "Host"); h != "" {
 			host, port = parseHostPort(h)
 		}
 	}
@@ -947,9 +1254,6 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		clientConn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
-
-	// Read full request
-	requestData := readFullRequest(requestLine, reader)
 
 	// A client speaking to a proxy sends absolute-form — `GET http://host/path HTTP/1.1` (RFC 9112
 	// §3.2.2) — but an origin server must be sent origin-form, `GET /path HTTP/1.1` (§3.2.1). This
@@ -963,6 +1267,21 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// bytes upstream receives. The tunnelled path (handleTunnel, below) needs none of this — requests
 	// inside a CONNECT tunnel already arrive in origin-form.
 	requestData = toOriginForm(requestData, target, path)
+
+	// Apply Match & Replace on the request. Placed here for the same reason the response
+	// direction is applied at the top of completeResponse: everything the proxy does *to*
+	// the bytes happens before the operator's hold queue, before the scope check and before
+	// anything is stored, so what upstream receives, what the operator edits in the intercept
+	// window, and what history records are one set of bytes — the invariant toOriginForm's
+	// comment states. Before the scope check specifically so the out-of-scope forwardOnly path
+	// below sends the identical rewritten bytes it would have recorded had the host been in
+	// scope. Request-direction rules (request_first_line, request_header, request_body) could
+	// never fire until this call existed; only DirResponse was ever applied. A body rule that
+	// changes the body length has its Content-Length corrected inside Apply when the operator
+	// enabled that toggle — the same fix intercept's forward path performs after a body edit.
+	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
+		requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
+	}
 
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
@@ -990,6 +1309,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	if core.IsWsUpgradeRequest(requestData) {
 		requestData, wsStripped = s.stripWsHandshake(requestData)
 	}
+	// The request-direction options run in the same slot, for the same reasons. See
+	// applyRequestRules.
+	requestData = s.applyRequestRules(requestData)
 
 	// Check scope
 	inScope := s.config.scope.Contains(host, port, path, false)
@@ -1049,10 +1371,12 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // them with the post-rewrite status and length, so the row disagreed with the
 // message it indexed whenever a response rule fired.
 func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time) {
-	// Apply Match & Replace on response
+	// Apply Match & Replace on response, then the blanket response modification
+	// rules — same order, and for the same reason, as handleTLSResponse.
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
 	}
+	responseData = s.applyResponseRules(responseData)
 
 	// Intercept: hold the response for the operator before it reaches the client.
 	var notes *string
@@ -1107,6 +1431,61 @@ func interceptDropNote() *string {
 	return &note
 }
 
+// applyResponseRules runs the operator's response modification rules over one
+// response, in the one slot where doing so is safe.
+//
+// That slot is: after Match & Replace, before the intercept hold, before the write to
+// the client and before the record. Everything downstream of here — what the operator
+// sees held, what the client receives, what history stores, what the passive scanner
+// reads — is then the same byte string, which is the invariant every comment on this
+// package's capture sites exists to protect. Applying it after the write would put
+// bytes in history no peer ever saw; applying it after the record would show the
+// operator an origin response the browser never got.
+//
+// A thin wrapper rather than an inline call because both capture sites need it, and
+// because the nil-tolerance belongs in one place: a Server built by a caller that
+// never called WithOptions has no rules on, and must not crash finding that out.
+func (s *Server) applyResponseRules(responseData []byte) []byte {
+	return s.config.options.ApplyResponse(responseData)
+}
+
+// applyResponseRulesUnrecorded is applyResponseRules for a response whose exchange scope
+// will keep out of history.
+//
+// The rules still run — see forwardOnly for why that is the point rather than an oversight
+// — but a rewrite that leaves no trace in history would make Counters.Modified a number the
+// operator cannot reconcile against anything they can look at. So the one thing this adds is
+// the note: the rewrite happened, and here is the reason you will not find it.
+//
+// The comparison is on the slice header and contents both, via bytes.Equal, because
+// ApplyResponse returns its input unchanged when no rule matched — reference equality would
+// be the cheaper test but would silently stop counting the moment ApplyResponse started
+// returning a copy.
+func (s *Server) applyResponseRulesUnrecorded(responseData []byte) []byte {
+	out := s.config.options.ApplyResponse(responseData)
+	if !bytes.Equal(responseData, out) {
+		s.config.options.NoteUnrecordedModification()
+	}
+	return out
+}
+
+// applyRequestRules runs the request-direction options over one outgoing request.
+//
+// Called in the same slot as the WebSocket extension strip — after intercept, before
+// the scope check and before anything is stored — and for the same reasons that
+// comment gives: before the scope check so an out-of-scope forward sends exactly the
+// bytes the recorded path would, and before the store so history shows what upstream
+// received.
+//
+// After intercept, which is worth being explicit about: an operator who edits a held
+// request and puts Accept-Encoding back still gets it stripped while the option is on.
+// That is the right behaviour for a blanket rule — the option says "this proxy does
+// not accept compressed responses", which stays true regardless of what a single
+// request asked for — and it is the same ordering stripWsHandshake already uses.
+func (s *Server) applyRequestRules(requestData []byte) []byte {
+	return s.config.options.ApplyRequest(requestData)
+}
+
 // record hands one completed exchange to scanner.Capture.Record: the shared
 // producer, the same call the crawler makes, which is what CRAWL-02 means by
 // "exactly the same path". It returns the row that was created, or nil when
@@ -1118,7 +1497,20 @@ func interceptDropNote() *string {
 // and permanently stalls every cursor that walks the index in order — see
 // scanner.Capture.Record. The proxy's report of that refusal is this log line;
 // the crawler's is a skip record. Neither invents a row.
+// Cookie absorption happens here, before the capture, for two reasons. It is the one funnel every
+// capture site in this package goes through — HTTP/1, the h2 relay's rendered copy, and the WebSocket
+// handshake — so a site added later inherits it the way it inherits the Source attribution. And it
+// runs before Record's own refusals, because a Set-Cookie the origin sent is a fact about the session
+// whether or not the exchange could be indexed: dropping the cookie because the row failed to store
+// would lose the operator's session for a reason that has nothing to do with their session.
+//
+// Not gated on scope. Absorption is keyed by authority and read back by authority, so a cookie for a
+// host no tool will ever address is inert; refusing to absorb it would instead mean an operator who
+// narrowed scope mid-engagement silently stops accumulating the session they are logged in to.
 func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
+	if s.config.cookieJar != nil && len(x.Response) > 0 {
+		s.config.cookieJar.AbsorbResponseCookies(x.Host, x.Port, x.TLS, x.Response)
+	}
 	ex, err := s.capture().Record(x)
 	if err != nil {
 		s.config.logger.Error("failed to capture exchange",
@@ -1233,22 +1625,14 @@ func parseHostPort(hostPort string) (host string, port uint16) {
 	return
 }
 
-func readHeaders(reader *bufio.Reader) http.Header {
-	headers := make(http.Header)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil || line == "\r\n" || line == "\n" {
-			break
-		}
-		line = strings.TrimSpace(line)
-		if colon := strings.Index(line, ":"); colon > 0 {
-			name := line[:colon]
-			value := strings.TrimSpace(line[colon+1:])
-			headers.Add(name, value)
-		}
-	}
-	return headers
-}
+// readHeaders is gone with its only caller. It parsed the header block off the
+// client's *bufio.Reader so handleHTTP could find a Host header when the request
+// target carried no authority — and because it consumed those bytes, the
+// readFullRequest call that followed returned a request with no headers. The
+// authority is now read out of the fully-buffered request instead (headerValue in
+// options.go), which cannot consume anything. Keeping this function as a helper
+// nothing calls would leave the reader-consuming shape available to the next caller
+// that needs a header early, which is exactly how the bug arrived.
 
 func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	var buf bytes.Buffer
@@ -1285,8 +1669,7 @@ func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 }
 
 func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16) {
-	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	upstreamConn, err := net.Dial("tcp", addr)
+	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return
 	}
@@ -1317,19 +1700,36 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 		if err != nil {
 			return
 		}
-		clientConn.Write(append(head, body...))
+		clientConn.Write(s.applyResponseRulesUnrecorded(append(head, body...)))
 		return
 	}
 
 	// Copy exactly one response back; keep-alive connections never EOF.
+	//
+	// The response modification rules run here too, and that is the fix for a real
+	// asymmetry rather than a nicety. handleTLSResponse has always applied them before
+	// its own `if inScope` check, so an out-of-scope HTTPS response was rewritten; this
+	// path returned early and wrote the origin's bytes through untouched, so an
+	// out-of-scope plaintext response was not. Same option, same scope verdict, opposite
+	// behaviour decided by whether the destination happened to use TLS.
+	//
+	// The direction of the fix is set by what these rules are. "Remove all JavaScript"
+	// and "remove <object> tags" are defensive — an operator turns them on to stop
+	// content reaching their browser — and a defence that silently lapses for part of the
+	// traffic is worse than one that is off, because the panel says it is on. It is also
+	// what applyRequestRules already documents for the request direction: rules run
+	// before the scope check so an out-of-scope forward sends exactly the bytes the
+	// recorded path would. Scope decides what is *retained*, never what is *rewritten*.
+	//
+	// Unrecorded, hence the counter: nothing here is stored, so the rewrite is real but
+	// invisible in history, and Counters.ModifiedUnrecorded is what makes it accountable.
 	if resp, err := readHTTPResponse(upstreamConn); err == nil {
-		clientConn.Write(resp)
+		clientConn.Write(s.applyResponseRulesUnrecorded(resp))
 	}
 }
 
 func (s *Server) forwardRequest(requestData []byte, host string, port uint16) ([]byte, error) {
-	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	upstreamConn, err := net.Dial("tcp", addr)
+	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return nil, err
 	}

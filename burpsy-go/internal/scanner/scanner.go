@@ -20,6 +20,10 @@ import (
 
 // ActiveScanner performs active security scanning.
 type ActiveScanner struct {
+	// mu guards config and corpus. Both are read on every audit's dispatch path and, since the
+	// scan configuration became runtime-editable, written from the web layer while audits run —
+	// readers take a value snapshot so a mid-audit edit is atomic from the check's point of view.
+	mu     sync.RWMutex
 	store  *core.TrafficStore
 	logger *zap.Logger
 	config *ScanConfig
@@ -30,6 +34,14 @@ type ActiveScanner struct {
 	// auditCfg is the budget/breaker configuration, when an operator set one explicitly. Nil defers
 	// to AuditConfig, which derives it from ScanConfig.
 	auditCfg *AuditConfig
+	// pace bounds how fast and how concurrently probes leave this scanner: a named resource pool's
+	// limits, attached to every AuthorisedSender probeGate hands out. Nil means unpaced, which is
+	// exactly what every audit did before pools existed.
+	//
+	// Note what this does *not* do: it does not bound how many items AuditSession works on at once
+	// (ScanConfig.MaxConcurrency still does), because Burp's dialog says "max concurrent requests"
+	// and an item can send many. Bounding items would let a pool of two send twenty.
+	pace sender.Pacer
 	// corpus holds the loaded BCheck corpus's active checks (given host/path/request/insertion
 	// point), dispatched by the audit engine exactly like the built-in table entries. Nil until
 	// WithCorpusChecks supplies one — a process without --bchecks audits the built-ins only, so
@@ -224,21 +236,72 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 			CheckPathTraversal: true,
 			CheckSSRF:          true,
 			CheckXXE:           false,
+			// Passive families default ON: they are network-free response analysis, which is what
+			// "passive scanning" means in Burp and what an operator expects a scanner to do without
+			// being asked. Every one stays switchable at runtime via /api/scanner/config.
+			CheckHeaders:         true,
+			CheckPassivePosture:  true,
+			CheckPassiveAnalysis: true,
+			CheckHostDiscovery:   true,
 		},
 		findings: make([]*Finding, 0),
 	}
 }
 
-// WithConfig sets the scan configuration.
+// WithConfig sets the scan configuration. The pointer is installed under the config lock; after
+// this call the scanner owns mutation discipline for the struct, so callers must treat their
+// ScanConfig as handed over rather than as a live handle to keep editing.
 func (s *ActiveScanner) WithConfig(config *ScanConfig) *ActiveScanner {
+	s.mu.Lock()
 	s.config = config
+	s.mu.Unlock()
 	return s
+}
+
+// ConfigSnapshot returns a value copy of the scan configuration, taken atomically. Readers that
+// want a stable view across a long audit take one snapshot at entry instead of re-reading fields
+// that an operator may be flipping underneath them.
+func (s *ActiveScanner) ConfigSnapshot() ScanConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.config == nil {
+		return ScanConfig{}
+	}
+	return *s.config
+}
+
+// UpdateScanConfig applies fn to the live configuration under the write lock and returns the
+// confirmed result. This is the runtime door /api/scanner/config PUT walks through; fn mutates
+// the pointed-to struct directly and validation belongs to the caller that decoded the request.
+func (s *ActiveScanner) UpdateScanConfig(fn func(*ScanConfig)) ScanConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.config == nil {
+		fn(&ScanConfig{})
+		s.config = &ScanConfig{}
+		return *s.config
+	}
+	fn(s.config)
+	return *s.config
 }
 
 // WithSender sets the HTTP sender used to dispatch test requests.
 // Without a sender, checks fall back to inspecting the stored exchange response.
 func (s *ActiveScanner) WithSender(snd *sender.Sender) *ActiveScanner {
 	s.sender = snd
+	return s
+}
+
+// WithPace bounds every probe this scanner sends by a resource pool's limits.
+//
+// Attached to the scanner rather than passed per audit because the bound has to be *shared*: two
+// concurrent audits under one pool must contend for the same in-flight slots and spend the same
+// rate budget, or the pool bounds each audit and not the target. The caller therefore builds one
+// limiter per pool and hands the same one in — see web.Server.scannerFor.
+//
+// nil clears it, and nil is the default. An audit with no pool runs exactly as it always did.
+func (s *ActiveScanner) WithPace(p sender.Pacer) *ActiveScanner {
+	s.pace = p
 	return s
 }
 
@@ -261,10 +324,12 @@ func (s *ActiveScanner) WithToolRunner(r bcheck.ToolRunner) *ActiveScanner {
 // The checks come from the same LoadDir that built the passive scanner — the audit engine and
 // the passive scanner must never disagree about which corpus is loaded.
 func (s *ActiveScanner) WithCorpusChecks(checks []*bcheck.Check) *ActiveScanner {
+	s.mu.Lock()
 	s.corpus = checks
 	if s.config != nil && len(checks) > 0 {
 		s.config.CheckCorpus = true
 	}
+	s.mu.Unlock()
 	return s
 }
 
@@ -335,12 +400,18 @@ func (noEngagementScope) MayContainHost(string, uint16, bool) bool { return true
 
 // probeGate binds the engagement scope and this scanner's sender to one exchange's authority, so
 // every probe at it is authorised against the bytes it will actually put on the wire.
+//
+// It is also where a resource pool takes effect. Dozens of checks call this and then Send, and there
+// is no line above them all that could bound the traffic — but every one of them gets its sender
+// from here, so attaching the pacer at this one construction point bounds all of them. A fresh
+// AuthorisedSender per call is fine and the shared limiter is the whole point: the senders are
+// per-exchange, the bound is per-pool.
 func (s *ActiveScanner) probeGate(exchange *core.Exchange) *sender.AuthorisedSender {
 	var gate sender.ScopeChecker = noEngagementScope{}
 	if s.scope != nil {
 		gate = s.scope
 	}
-	return sender.NewAuthorisedSender(gate, s.sender, exchange.Host, exchange.Port, exchange.TLS)
+	return sender.NewAuthorisedSender(gate, s.sender, exchange.Host, exchange.Port, exchange.TLS).WithPace(s.pace)
 }
 
 // sendTestRequest dispatches a crafted test request through the sender when
@@ -433,7 +504,24 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 // rather than a fabricated one. headers overrides/adds request headers for probes that inject
 // through User-Agent/Referer rather than the query string (Zsn3/Zexx's real insertion points per
 // out/strings/map_root.tsv); nil sends the request with only its normal headers.
-func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.Exchange, testURL string, headers map[string]string) *sender.Response {
+//
+// # method is a parameter, and that is the whole point
+//
+// This used to set `Method: exchange.Method`, silently inheriting the captured request's method.
+// Seven of its eleven call sites probe a *different* path from the exchange — `/robots.txt`,
+// `/trace.axd`, `/Default.aspx`, backup-file candidates, a `.burpsy-control-404` control, and
+// the HTTP-PUT check's own read-back — and for those the captured method is simply irrelevant.
+// An API exercised through the proxy with POST therefore produced `POST /robots.txt`, got a 405,
+// and the check recorded "clean". A default-ON family reporting a clean result for a probe that
+// was never meaningfully sent.
+//
+// Making the method a parameter rather than fixing the seven call sites in place is deliberate:
+// a caller that genuinely wants the exchange's own method — the four same-path header-injection
+// probes, which are re-sending *this* request with one header changed — now says
+// `exchange.Method` out loud. The intent is visible at the call site instead of being a property
+// of the helper, so the next probe added here cannot inherit a method by accident. That is the
+// same "make it unrepresentable" move as `builtInConfigKeys`, applied to a signature.
+func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.Exchange, method, testURL string, headers map[string]string) *sender.Response {
 	if s.sender == nil {
 		return nil
 	}
@@ -441,7 +529,7 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 	meter.attempt()
 	gate := s.probeGate(exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
-		Method:  exchange.Method,
+		Method:  method,
 		Host:    exchange.Host,
 		Path:    testURL,
 		Headers: headers,
@@ -624,15 +712,11 @@ func (s *PassiveScanner) checkSecurityHeaders(exchange *core.Exchange, findings 
 	respHeaders := s.getResponseHeaders(exchange)
 	lines := strings.Split(respHeaders, "\r\n")
 
-	hasXFrameOptions := false
 	hasXContentTypeOptions := false
 	hasCSP := false
 
 	for _, line := range lines {
 		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "x-frame-options:") {
-			hasXFrameOptions = true
-		}
 		if strings.HasPrefix(lower, "x-content-type-options:") {
 			hasXContentTypeOptions = true
 		}
@@ -641,18 +725,26 @@ func (s *PassiveScanner) checkSecurityHeaders(exchange *core.Exchange, findings 
 		}
 	}
 
-	if !hasXFrameOptions {
-		*findings = append(*findings, &Finding{
-			Name:        "Missing X-Frame-Options Header",
-			Severity:    "low",
-			Confidence:  "certain",
-			Description: "The X-Frame-Options header is missing, making the site vulnerable to clickjacking",
-			URL:         fmt.Sprintf("%s://%s:%d%s", map[bool]string{true: "https", false: "http"}[exchange.TLS], exchange.Host, exchange.Port, exchange.Path),
-			Method:      exchange.Method,
-			Solution:    "Add X-Frame-Options: DENY or SAMEORIGIN header",
-			Timestamp:   time.Now(),
-		})
-	}
+	// No "Missing X-Frame-Options Header" finding here, deliberately.
+	//
+	// It used to emit one whenever the header was absent, at severity low. `checkFrameableResponse`
+	// (checks_passive_analysis.go) reports the same condition as "Frameable response (potential
+	// Clickjacking)" at info, and `advisory/aliases.go` maps this check's name onto *that*
+	// catalogue entry — so both landed on type_index 0x005009a0. `/api/issues` showed one
+	// condition twice, at two severities, inflating counts and splitting a single problem across
+	// two severity buckets for anything that sorts or totals by severity. See
+	// BURP_PARITY_GAP_ANALYSIS.md §3.0.3b.
+	//
+	// The duplicate is why it was looked at; being *wrong* is why this one went rather than the
+	// other. `IsFrameable` consults X-Frame-Options **and** CSP `frame-ancestors`, because
+	// frame-ancestors supersedes the older header. This check only asked whether the header
+	// string was present, so a site correctly defended by `frame-ancestors 'none'` and nothing
+	// else was reported as clickjackable. That is a false positive on a correct defence, and no
+	// amount of deduplication downstream would have fixed it.
+	//
+	// Nothing here tracks X-Frame-Options any more, and the loop above no longer looks for it:
+	// the only reader was the finding this comment replaces. `checkFrameableResponse` reads the
+	// header itself, from the raw response, so there is nothing to hand it.
 
 	if !hasXContentTypeOptions {
 		*findings = append(*findings, &Finding{

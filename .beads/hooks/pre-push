@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+# mcp-agent-mail chain-runner (pre-push)
+import os
+import sys
+import stat
+import subprocess
+from pathlib import Path
+
+HOOK_DIR = Path(__file__).parent
+RUN_DIR = HOOK_DIR / 'hooks.d' / 'pre-push'
+ORIG = HOOK_DIR / 'pre-push.orig'
+
+def _is_exec(p: Path) -> bool:
+    try:
+        st = p.stat()
+        return bool(st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+    except Exception:
+        return False
+
+def _list_execs() -> list[Path]:
+    if not RUN_DIR.exists() or not RUN_DIR.is_dir():
+        return []
+    items = sorted([p for p in RUN_DIR.iterdir() if p.is_file()], key=lambda p: p.name)
+    # On POSIX, honor exec bit; on Windows, include all files (we'll dispatch .py via python).
+    if os.name == 'posix':
+        try:
+            items = [p for p in items if _is_exec(p)]
+        except Exception:
+            pass
+    return items
+
+def _run_child(path: Path, * , stdin_bytes=None):
+    # On Windows, prefer 'python' for .py plugins to avoid PATHEXT reliance.
+    try:
+        if os.name != 'posix' and path.suffix.lower() == '.py':
+            return subprocess.run([sys.executable, str(path)], input=stdin_bytes, check=False).returncode
+        return subprocess.run([str(path)], input=stdin_bytes, check=False).returncode
+    except OSError as exc:
+        print(f'mcp-agent-mail chain-runner: could not execute {path.name}: {exc}', file=sys.stderr)
+        return 126
+
+def _remember_failure(path: Path, rc: int, first_failure: int) -> int:
+    if rc == 0:
+        return first_failure
+    print(f'mcp-agent-mail chain-runner: {path.name} exited with status {rc}', file=sys.stderr)
+    return first_failure or rc
+
+# Read STDIN once (Git passes ref tuples); forward to children
+stdin_bytes = sys.stdin.buffer.read()
+first_failure = 0
+for exe in _list_execs():
+    rc = _run_child(exe, stdin_bytes=stdin_bytes)
+    first_failure = _remember_failure(exe, rc, first_failure)
+
+if ORIG.exists():
+    rc = _run_child(ORIG, stdin_bytes=stdin_bytes)
+    first_failure = _remember_failure(ORIG, rc, first_failure)
+sys.exit(first_failure)
+
+# --- BEGIN BEADS INTEGRATION v1.2.2 ---
+# This section is managed by beads. Do not remove these markers.
+if command -v bd >/dev/null 2>&1; then
+  export BD_GIT_HOOK=1
+  _bd_timeout=${BEADS_HOOK_TIMEOUT:-300}
+  _bd_used_perl=0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_bd_timeout" bd hooks run pre-push "$@"
+    _bd_exit=$?
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$_bd_timeout" bd hooks run pre-push "$@"
+    _bd_exit=$?
+  elif command -v perl >/dev/null 2>&1; then
+    _bd_used_perl=1
+    perl -e 'alarm shift; exec @ARGV' "$_bd_timeout" bd hooks run pre-push "$@"
+    _bd_exit=$?
+  else
+    echo >&2 "beads: hook 'pre-push' running without timeout; install coreutils or perl to enable BEADS_HOOK_TIMEOUT"
+    bd hooks run pre-push "$@"
+    _bd_exit=$?
+  fi
+  if [ $_bd_exit -eq 124 ] || { [ $_bd_used_perl -eq 1 ] && [ $_bd_exit -eq 142 ]; }; then
+    echo >&2 "beads: hook 'pre-push' timed out after ${_bd_timeout}s — continuing without beads"
+    _bd_exit=0
+  fi
+  if [ $_bd_exit -eq 3 ]; then
+    echo >&2 "beads: database not initialized — skipping hook 'pre-push'"
+    _bd_exit=0
+  fi
+  if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
+fi
+# --- END BEADS INTEGRATION v1.2.2 ---

@@ -499,6 +499,16 @@ type AuditConfig struct {
 	// with the size of the site rather than with the size of the batch. A caller that shares one is
 	// responsible for bounding it — see AuditLedger.Units and the sweep's own unit cap.
 	Ledger *AuditLedger
+	// Items is an optional queue that retains what the engine decided about each item, so a surface
+	// outside the call can read it. Nil — the default — keeps every existing caller's cost exactly
+	// where it was: a CLI audit and a unit test allocate nothing and enumerate nothing.
+	//
+	// Separate from Ledger, and deliberately so. Ledger is load-bearing: it decides what is admitted,
+	// and dropping it changes what the engine does. Items is pure observation: dropping it changes
+	// only what can be read afterwards. Folding the two into one field would make a reporting surface
+	// able to alter admission, which is the wrong direction of dependency for the thing whose job is
+	// to say what the engine did.
+	Items *AuditItemLedger
 }
 
 // DefaultAuditBudget is the default wall-clock budget for one audit run.

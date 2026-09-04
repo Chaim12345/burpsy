@@ -24,8 +24,10 @@ now empty: there is no longer a row whose blocker is resolved but whose evaluato
 
 This document counts *wiring* — which primitives exist and which rows they make runnable.
 It is not a statement about runtime behaviour: how many rows are demonstrated end-to-end
-against a live target (145/183) is tracked separately in
+against a live target is tracked separately in
 [SCANNER-COVERAGE.md](./SCANNER-COVERAGE.md) and the dated handoffs.
+(The count is deliberately not repeated here: an inline figure next to a pointer drifted
+from the authority it pointed at once already.)
 
 `WiredIssues` counts 139, not 183, because it maps only the rows attributable to one of the
 24 primitives in this document. The other 44 are runnable too, and split into two groups:

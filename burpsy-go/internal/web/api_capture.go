@@ -45,10 +45,22 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Proxy history is proxy traffic — plus crawled traffic, which travels the identical
+	// capture path (CRAWL-02), and anything no producer claimed, which hiding would make
+	// invisible rather than absent. Tool-originated sends — Repeater resends, Intruder
+	// payloads, Scanner probes — belong in Logger, the view whose whole subject is "requests
+	// burpsy itself made"; showing them here would make HTTP history and Logger the same list
+	// with different columns, and turn "how many requests did I proxy" into a question history
+	// answers wrongly.
+	//
 	// Newest first (the store appends in arrival order).
 	views := make([]*ExchangeView, 0, len(exchanges))
 	for i := len(exchanges) - 1; i >= 0; i-- {
 		ex := exchanges[i]
+		switch ex.Source {
+		case core.SourceRepeater, core.SourceIntruder, core.SourceScanner:
+			continue
+		}
 		if filter != nil && !filter.match(ex) {
 			continue
 		}
@@ -91,6 +103,20 @@ func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
 	legacy := strings.HasPrefix(path, "/api/exchanges/")
 	path = strings.TrimPrefix(path, "/api/exchange/")
 	path = strings.TrimPrefix(path, "/api/exchanges/")
+	// The CSRF PoC generator rides the same subtree: /api/exchange/{id}/csrf.
+	if strings.HasSuffix(path, "/csrf") {
+		if legacy {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.ParseUint(strings.TrimSuffix(path, "/csrf"), 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
+			return
+		}
+		s.handleCSRF(w, r, core.ExchangeID(id))
+		return
+	}
 	id, err := strconv.ParseUint(path, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
@@ -171,11 +197,25 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	messages, exchanges := s.store.Count()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(StatsView{
+	view := StatsView{
 		Exchanges:   exchanges,
 		Messages:    messages,
 		StoredBytes: s.store.Bytes(),
-	})
+		ProxyBind:   s.proxyBind,
+		WebBind:     s.webBind,
+	}
+	// caCertPEM exists iff -intercept-tls was passed
+	if s.caCertPEM != nil {
+		view.TLSInterception = true
+	}
+	// "off" rather than "": a blank field is indistinguishable from a field this build does not
+	// report, and the whole point of showing this is that an operator can tell the difference.
+	view.DOMEngine = "off"
+	if s.domEngine != "" {
+		view.DOMEngine = s.domEngine
+	}
+	view.DOMChecks = s.scanner.DOMCapabilityConfigured()
+	json.NewEncoder(w).Encode(view)
 }
 
 // ---- scope -------------------------------------------------------------------------------------
@@ -193,6 +233,8 @@ type ScopeRequest struct {
 	// gap that left burpsy unable to say "this host, but not /admin".
 	Path string  `json:"path,omitempty"`
 	Port *uint16 `json:"port,omitempty"`
+	// Protocol limits the rule to one scheme: "http" or "https". Empty means either.
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // normaliseScopePath validates an optional path prefix and returns nil for "no path".
@@ -211,9 +253,29 @@ func normaliseScopePath(raw string) (*string, error) {
 	return &trimmed, nil
 }
 
+// normaliseScopeProtocol validates an optional protocol arm and returns nil for "either scheme".
+//
+// Only "http" and "https" are accepted, because those are the only schemes a request through this
+// proxy can speak. Anything else would build a rule that silently matches nothing — the worst outcome
+// for a scope rule: the operator believes a restriction is in force and it is not.
+func normaliseScopeProtocol(raw string) (*string, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	if trimmed == "" {
+		return nil, nil
+	}
+	if trimmed != "http" && trimmed != "https" {
+		return nil, fmt.Errorf("A scope protocol must be http or https; got %q", raw)
+	}
+	return &trimmed, nil
+}
+
 // buildScopeRule turns a request into the narrowest rule it describes.
 func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule, error) {
 	path, err := normaliseScopePath(req.Path)
+	if err != nil {
+		return nil, err
+	}
+	protocol, err := normaliseScopeProtocol(req.Protocol)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +286,7 @@ func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule,
 	if req.Port != nil {
 		rule.Port = req.Port
 	}
+	rule.Protocol = protocol
 	return rule, nil
 }
 
@@ -248,6 +311,8 @@ type scopeRuleView struct {
 	// in path are the ordinary case, and removing by host alone would delete the wrong one.
 	Path *string `json:"path,omitempty"`
 	Port *uint16 `json:"port,omitempty"`
+	// Protocol is omitted when the rule matches either scheme.
+	Protocol *string `json:"protocol,omitempty"`
 }
 
 func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +324,7 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 			kind = "Exclude"
 		}
 		pattern := rule.Pattern
-		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port})
+		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port, Protocol: rule.Protocol})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -385,7 +450,17 @@ type issueFindingView struct {
 	// Param is the parameter this finding was observed at, omitted when the finding is about a
 	// resource rather than one of its inputs. An insertion-point BCheck or a DOM sink names it;
 	// everything else stays absent so the UI renders an em dash, not an empty cell.
-	Param       string                `json:"param,omitempty"`
+	Param string `json:"param,omitempty"`
+	// Params is every distinct parameter a merged finding covers, in first-seen order. Findings of one
+	// type against one target are merged into a single row, so a reflected XSS reachable through five
+	// parameters is one row here — and without this field that row shows only the first, which makes
+	// the merge read as four results going missing.
+	//
+	// core.Finding.Params, the TypeScript `params?: string[]`, and TestIssuesSurfacesMergedParams all
+	// existed before this field did: the store kept the set, the console rendered it, the test asserted
+	// it, and the wire shape in between silently dropped it. Nothing about that was visible except the
+	// one red test, which is why it is wired here rather than left to the next reader.
+	Params      []string              `json:"params,omitempty"`
 	Occurrences []issueOccurrenceView `json:"occurrences"`
 	TimesSeen   int                   `json:"times_seen"`
 	// Advisory is the catalogue entry for this issue class, when one resolves. Omitted rather than
@@ -420,21 +495,15 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		Detail:      strPtr(f.Description),
 		Remediation: strPtr(f.Remediation),
 		Param:       f.Param,
+		Params:      f.Params,
 		TimesSeen:   len(f.Occurrences),
 		TaskID:      f.TaskID,
 	}
 	if def, note := s.advisories.Resolve(f.Name); def != nil {
-		v.Advisory = &issueAdvisoryView{
-			TypeIndex:             def.HexIndex(),
-			Name:                  def.Name,
-			Description:           def.Description,
-			Remediation:           def.Remediation,
-			DescriptionParagraphs: advisory.PlainParagraphs(def.Description),
-			RemediationParagraphs: advisory.PlainParagraphs(def.Remediation),
-			TypicalSeverity:       string(def.Severity),
-			References:            advisoryLinks(def.References, nil),
-			Classifications:       advisoryLinks(nil, def.Classification),
-		}
+		// Built by the same function GET /api/advisories/{typeIndex} uses, so the browsable catalogue
+		// and a finding's attached advisory cannot come to disagree about the shape they share.
+		view := advisoryDetailView(def)
+		v.Advisory = &view
 	} else {
 		v.AdvisoryNote = note
 	}
@@ -520,13 +589,43 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		"findings": views,
 	}
 	if len(views) > 0 {
-		counts := map[string]int{"high": 0, "medium": 0, "low": 0, "info": 0}
+		// Keyed on core.Severity's own String() values, lower-cased, because the previous keys were
+		// guessed and two of them did not exist: findings report "Informational" and "Critical",
+		// while the map held "info" and had no critical bucket at all. The `if _, ok` guard then
+		// dropped both classes silently, so the headline disagreed with its own list — a Critical
+		// finding did not appear in the counts anywhere, and `info: 0` positively asserted there
+		// were no informational findings while several sat in the same response.
+		//
+		// "info" is still emitted alongside "informational" because the dashboard's tiles read that
+		// key; dropping it would trade a wrong number for a missing one.
+		counts := map[string]int{"critical": 0, "high": 0, "medium": 0, "low": 0, "informational": 0, "info": 0}
+		unknown := map[string]int{}
 		for _, v := range views {
-			if _, ok := counts[strings.ToLower(v.Severity)]; ok {
-				counts[strings.ToLower(v.Severity)]++
+			key := strings.ToLower(v.Severity)
+			if _, ok := counts[key]; ok {
+				counts[key]++
+				if key == "informational" {
+					counts["info"]++
+				}
+				continue
 			}
+			// A severity this handler does not recognise is reported, never discarded. Silently
+			// dropping it is what produced this bug; a named bucket makes the next new severity
+			// visible the first time it is returned instead of the first time someone adds up the
+			// column by hand.
+			unknown[key]++
+		}
+		if len(unknown) > 0 {
+			counts["unrecognised"] = 0
+			for _, n := range unknown {
+				counts["unrecognised"] += n
+			}
+			body["unrecognised_severities"] = unknown
 		}
 		body["counts"] = counts
+		// The invariant the old code broke, now stated on the wire: the buckets account for every
+		// finding in `findings`. "info" is a duplicate of "informational" and is excluded from the sum.
+		body["counted"] = len(views)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
@@ -583,9 +682,13 @@ func (f *queryFilter) match(ex *core.Exchange) bool {
 	return f.expr.Match(filteredExchangeQuery{store: f.store, ex: ex})
 }
 
-// filteredExchangeQuery binds a store so Body() can resolve the request message. Mime is not
-// carried on the exchange and stays empty, which the query evaluator reads as "absent" — so every
-// `mime` comparison, `!=` included, is false here rather than some of them matching every row.
+// filteredExchangeQuery binds a store so Body() can resolve the request message.
+//
+// Mime used to be hardcoded empty here, with a comment explaining that the exchange did not carry
+// it. That was true and it made every `mime` comparison in a /api/history?q= query false — so the
+// DSL field the grammar advertises, and that reference.ts documents to the operator, silently
+// matched nothing at all. core.Exchange.Mime now carries it, denormalised at capture, so the
+// comparison is answered from the index row without resolving a response.
 type filteredExchangeQuery struct {
 	store *core.TrafficStore
 	ex    *core.Exchange
@@ -600,13 +703,87 @@ func (f filteredExchangeQuery) Status() int {
 	}
 	return int(*f.ex.Status)
 }
-func (f filteredExchangeQuery) Mime() string { return "" }
+
+// Mime is the stored media type, "" when the response declared none or has not arrived. The query
+// evaluator reads "" as absent, so every comparison on it stays false rather than half of them
+// matching every untyped row — which is the right reading for both of those cases.
+func (f filteredExchangeQuery) Mime() string { return f.ex.Mime }
 func (f filteredExchangeQuery) Body() []byte {
 	msg, err := f.store.Get(f.ex.Request)
 	if err != nil {
 		return nil
 	}
 	return msg.Body()
+}
+
+// ResponseLen answers from the index row, which is the whole point of ResponseLen existing on
+// core.Exchange: /api/history serves index rows and must not open a response to size one.
+//
+// Presence is decided by Response, not by the length being non-zero. A 204 is a zero-length
+// response and a request still in flight is no response at all; collapsing those would make
+// `length = 0` match every pending request, and `length != 0` hide every empty one.
+func (f filteredExchangeQuery) ResponseLen() (int64, bool) {
+	if f.ex.Response == nil {
+		return 0, false
+	}
+	return int64(f.ex.ResponseLen), true
+}
+
+// Annotation answers from the index row, which is where both live. known is unconditionally true:
+// this consumer is a captured exchange, so "no highlight" and "no comment" are real answers about it
+// rather than an inability to tell.
+//
+// core.Exchange.Notes is a *string because an unset note and an empty note are distinguishable in
+// the store; both read as "" here, which is right for a text search — an operator asking
+// `comment ~ "x"` does not care which kind of nothing they have.
+func (f filteredExchangeQuery) Annotation() (string, string, bool) {
+	comment := ""
+	if f.ex.Notes != nil {
+		comment = *f.ex.Notes
+	}
+	return f.ex.Highlight, comment, true
+}
+
+// Header reads the RESPONSE head, resolved from the store on demand.
+//
+// Note the asymmetry with Body above, which deliberately returns the *request* body for the history
+// filter. Headers are the response's: `header["set-cookie"]` and `header["server"]` are questions
+// about what came back, and no operator writing a history filter means the request's headers by
+// that word. Stated here because the two fields on the same type reading opposite messages would
+// otherwise look like a bug.
+//
+// Resolved lazily and not memoised, unlike auditedExchangeQuery: this type is constructed per row
+// per request and discarded, so there is no second call to save. A query naming no header field
+// never reaches this method and so never opens a response.
+func (f filteredExchangeQuery) Header(name string) ([]string, bool) {
+	if f.ex.Response == nil {
+		return nil, false
+	}
+	msg, err := f.store.Get(*f.ex.Response)
+	if err != nil {
+		// Unreadable is absent, not empty: every comparison fails, and the alternative would be
+		// reporting "no such header" as a fact about the response.
+		return nil, false
+	}
+	raw, present := msg.HeaderValues(name)
+	if !present {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		out = append(out, string(value))
+	}
+	return out, true
+}
+
+// DurationUs carries core.ExchangeDuration's Measured flag straight through rather than reducing it
+// to a number. That flag exists so an exchange nobody timed does not report as instantaneous, and
+// flattening it here would undo it at the one place an operator can ask about timing.
+func (f filteredExchangeQuery) DurationUs() (int64, bool) {
+	if !f.ex.Duration.Measured {
+		return 0, false
+	}
+	return int64(f.ex.Duration.Us), true
 }
 
 // sortable status helpers for the sitemap
@@ -636,7 +813,8 @@ func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if len(s.caCertPEM) == 0 {
+	pemBytes := s.currentCACertPEM()
+	if len(pemBytes) == 0 {
 		http.Error(w, "TLS interception is not enabled, so there is no CA to trust; start with -intercept-tls", http.StatusNotFound)
 		return
 	}
@@ -644,12 +822,12 @@ func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 	// for the download the UI link triggers.
 	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
 	w.Header().Set("Content-Disposition", `attachment; filename="burpsy-ca.crt"`)
-	w.Header().Set("Content-Length", strconv.Itoa(len(s.caCertPEM)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(pemBytes)))
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if _, err := w.Write(s.caCertPEM); err != nil {
+	if _, err := w.Write(pemBytes); err != nil {
 		s.logger.Warn("failed to write CA certificate", zap.Error(err))
 	}
 }

@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "burpsy_react_ui",
+  "project_id": "f0e8f7da-c118-4e09-8385-15a3979b6a9c"
+}

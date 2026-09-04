@@ -84,9 +84,12 @@ func (k *bcheckSink) Send(target *bcheck.Target, raw []byte) ([]byte, error) {
 // with outbound sends — is left out rather than guessed at: PassiveScanner's
 // ActiveChecks already excludes the passive set, and this guard covers the
 // remainder rather than dispatching them under an invented scope.
-func (s *ActiveScanner) corpusActiveChecks() []activeCheck {
-	out := make([]activeCheck, 0, len(s.corpus))
-	for _, c := range s.corpus {
+// corpusActiveChecks builds the dispatch set for the loaded corpus's active checks from a corpus
+// slice the caller already read under the config lock. toolRunner is read directly: it is
+// installed once at construction and never mutated afterwards.
+func (s *ActiveScanner) corpusActiveChecks(corpus []*bcheck.Check) []activeCheck {
+	out := make([]activeCheck, 0, len(corpus))
+	for _, c := range corpus {
 		scope, ok := DispatchScopeForGiven(c.Given)
 		if !ok {
 			continue

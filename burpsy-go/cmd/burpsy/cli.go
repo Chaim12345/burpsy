@@ -21,6 +21,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 )
 
@@ -90,7 +91,13 @@ func registerCLI(cmds ...*cliCommand) {
 // same passive set the proxy would run. tools is the -tools allowlist (name=path,
 // comma-separated) for `run tool` statements; empty keeps tool checks counted
 // but excluded from the audit set.
-func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) (*cliContext, error) {
+func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, dom string, upstreamPolicy *upstream.Policy) (*cliContext, error) {
+	// Before the store is opened: a -dom that names nothing resolvable is refused here rather than
+	// at the first DOM check, where it would read as a scan that found nothing.
+	domOpts, domErr := domEngineOptions(dom)
+	if domErr != nil {
+		return nil, domErr
+	}
 	logger := zap.NewNop()
 	var store *core.TrafficStore
 	var err error
@@ -124,6 +131,10 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		logger.Info("bchecks loaded", zap.String("dir", bchecksDir), zap.String("report", ps.Report().Summary()))
 	}
 	senderCfg := sender.DefaultSenderConfig()
+	// Every sender this context builds — the repeater, the intruder's per-request senders and the
+	// active scanner's — shares the one policy, so -upstream-proxy covers the CLI's egress as
+	// completely as it covers the server's. Nil is the ordinary unconfigured case and dials directly.
+	senderCfg.Upstream = upstreamPolicy
 	// The -tools allowlist becomes a runner only if something was configured. A malformed entry
 	// refuses construction here, before any scan — a typo must not surface mid-scan as checks
 	// that silently cannot run. Nil keeps tool checks counted-but-excluded (see
@@ -161,11 +172,22 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		// and refuses any probe whose own URL leaves the engagement. WithCorpusChecks is a no-op
 		// when no corpus was loaded, so the built-in table is the whole set then. WithToolRunner
 		// carries the -tools allowlist; a nil runner keeps tool checks counted-but-excluded.
+		//
+		// The five capability handles below close the gap where the engine could do work the
+		// shipped binary could never reach: without the ledger the 10 stored/second-order checks
+		// refuse, without the coordinator access-control and CSRF refuse, without the JS/JWT
+		// checks those families refuse despite vendored data compiled into the binary. The
+		// session coordinator is ctx.sess itself — the same single-handle rule as Scope — so the
+		// session rules the CLI edits govern the scanner's comparisons too.
 		scanner: scanner.NewActiveScanner(store, logger).
 			WithSender(sender.NewSender(senderCfg)).
 			WithScope(scope).
 			WithCorpusChecks(corpusChecks).
-			WithToolRunner(toolRunner),
+			WithToolRunner(toolRunner).
+			WithStoredLedger(scanner.NewStoredLedger()).
+			WithProvenanceLedger(scanner.NewProvenanceLedger()).
+			WithJsLibraryCheck(scanner.NewJsLibraryCheck(scanner.VendoredJsVulnDb())).
+			WithJwtWeakSecretCheck(scanner.NewJwtWeakSecretCheck(scanner.BundledJwtWordlist())),
 		mr:        matchreplace.NewRuleSet(),
 		toolLog:   toollog.New(),
 		organizer: organizer.New(),
@@ -176,6 +198,16 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 
 		toolAllowlist: toolAllowlist,
 	}
+	// The provider is lazy, so naming an engine costs nothing until a DOM check asks for it; a scan
+	// with no DOM-based check in its set never starts a browser at all.
+	if domOpts != nil {
+		ctx.scanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
+	}
+	// The session coordinator is attached here rather than in the literal above because ctx.sess
+	// does not exist yet inside it. Sharing the CLI's instance — not a copy — is the same
+	// single-handle rule as Scope: session rules the CLI edits govern the scanner's
+	// access-control and CSRF comparisons too.
+	ctx.scanner.WithSessionCoordinator(ctx.sess)
 	// Before loadState, which restores persisted findings: SetDedupPolicy rebuilds the index anyway,
 	// but installing it first means the restore builds the right keys the first time.
 	ctx.findings.SetDedupPolicy(scanner.DedupPolicy())
@@ -186,7 +218,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 }
 
 // runCLI dispatches to a subcommand and exits. Returns the process exit code.
-func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools string) int {
+func runCLI(name string, args []string, captureDir string, segmentBytes uint64, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, dom string, upstreamPolicy *upstream.Policy) int {
 	if name == "help" || name == "-h" || name == "--help" {
 		printCLIHelp()
 		return 0
@@ -196,7 +228,7 @@ func runCLI(name string, args []string, captureDir string, segmentBytes uint64, 
 		fmt.Fprintf(os.Stderr, "burpsy: unknown command %q (see \"burpsy help\")\n", name)
 		return 2
 	}
-	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools)
+	ctx, err := newCLIContext(captureDir, segmentBytes, scopeInclude, scopeExclude, dbFile, bchecksDir, tools, dom, upstreamPolicy)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "burpsy: %v\n", err)
 		return 1
@@ -214,7 +246,7 @@ func printCLIHelp() {
 	fmt.Println("Server mode (default, no command): run the proxy and web UI.")
 	fmt.Println("Server flags: -proxy -web -capture-dir -scope-include -scope-exclude",
 		"-intercept-tls -ca-dir -segment-bytes -tls-passthrough -tls-passthrough-port",
-		"-tls-defaults -store-verify -bchecks -tools")
+		"-tls-defaults -store-verify -bchecks -tools -upstream-proxy -upstream-proxy-rule")
 	fmt.Println()
 	fmt.Println("Commands (drive engines directly, no HTTP):")
 	fmt.Println()
@@ -241,6 +273,16 @@ func sortedCLINames() []string {
 // yields nil (no runner). A malformed entry is an error — a typo in a name or
 // path must refuse construction, not surface mid-scan as a tool that never ran.
 func parseToolAllowlist(s string) (map[string]string, error) {
+	return parseNamePathAllowlist("-tools", s)
+}
+
+// parseNamePathAllowlist is the shared name=path,name=path parser behind -tools and -plugins.
+//
+// One parser because the two flags are the same decision made twice: which executables on this machine
+// may this process run. Sharing it means a fix to the format (a trimmed space, a rejected duplicate)
+// cannot land for one flag and not the other. The flag name is threaded through only so the error names
+// the flag the operator actually typed.
+func parseNamePathAllowlist(flagName, s string) (map[string]string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, nil
@@ -254,10 +296,10 @@ func parseToolAllowlist(s string) (map[string]string, error) {
 		name, path, ok := strings.Cut(pair, "=")
 		name, path = strings.TrimSpace(name), strings.TrimSpace(path)
 		if !ok || name == "" || path == "" {
-			return nil, fmt.Errorf("bad -tools entry %q: want name=path", pair)
+			return nil, fmt.Errorf("bad %s entry %q: want name=path", flagName, pair)
 		}
 		if _, dup := out[name]; dup {
-			return nil, fmt.Errorf("duplicate -tools entry %q", name)
+			return nil, fmt.Errorf("duplicate %s entry %q", flagName, name)
 		}
 		out[name] = path
 	}

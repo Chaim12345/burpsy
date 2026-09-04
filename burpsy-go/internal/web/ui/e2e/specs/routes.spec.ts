@@ -1,7 +1,7 @@
 // Every route renders, names itself, and logs nothing.
 //
 // One test per route rather than one loop inside one test, so a failure names the route in its title
-// and the other sixteen still report. A single "all routes" test that fails tells you the console is
+// and the other nineteen still report. A single "all routes" test that fails tells you the console is
 // broken somewhere.
 
 import { expect, gotoApp, gotoRoute, test } from "../harness/fixtures";
@@ -82,11 +82,19 @@ test.describe("routes", () => {
   });
 
   test("the sub-tab row appears only for tools that own more than one view", async ({ page }) => {
+    // The row is conditional, and a regression that always renders it eats a row of vertical
+    // space on every route whose tool owns a single leaf.
+    //
+    // The expected count is DERIVED from ROUTES rather than written as a literal. It used to be a
+    // hardcoded 4, which went stale the moment Proxy gained the Proxy-settings leaf: the test then
+    // failed for a correct UI, which teaches the next reader to edit the number instead of looking.
+    const proxyLeaves = ROUTES.filter((route) => route.tool === "proxy").length;
+    expect(proxyLeaves).toBeGreaterThan(1); // otherwise this test is asserting nothing
     // Proxy owns four leaves, Repeater one. The row is conditional, and a regression that always
-    // renders it eats a row of vertical space on eleven of the seventeen routes.
+    // renders it eats a row of vertical space on ten of the twenty routes.
     await gotoRoute(page, ROUTES.find((route) => route.id === "history")!);
     await expect(page.locator("nav.sub-tabs")).toBeVisible();
-    await expect(page.locator("nav.sub-tabs button")).toHaveCount(4);
+    await expect(page.locator("nav.sub-tabs button")).toHaveCount(proxyLeaves);
 
     await gotoRoute(page, ROUTES.find((route) => route.id === "repeater")!);
     await expect(page.locator("nav.sub-tabs")).toHaveCount(0);

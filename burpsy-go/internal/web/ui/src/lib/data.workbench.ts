@@ -3,6 +3,7 @@ import { api, json, query } from "./api";
 import { useResource } from "./data";
 import type {
   CompareResponse,
+  UninterestingHeaders,
   DecodeResponse,
   EncodeResponse,
   HashResponse,
@@ -32,17 +33,39 @@ export const workbenchKeys = {
 /* --- supported values, read off the Go handlers --------------------------- */
 
 /**
- * Layers `decodeLayer` in api_toolkit.go actually implements. Anything else
- * falls through its `default` and is returned unchanged while still being named
- * in `layers`, so offering (say) gzip here would report a decode that never
- * happened. base64url is accepted but is an alias of base64 server-side.
+ * Layers `decodeLayer` in api_toolkit.go implements. It resolves the name through
+ * the codec table (tools.ParseLayer) and answers 400 for anything outside it, so
+ * an unknown layer is a visible error rather than a decode that never happened.
+ * base64url uses the URL-safe alphabet here and on the encode side.
  */
-export const DECODE_LAYERS = ["url", "html", "base64", "base64url", "hex", "jwt", "ascii"] as const;
+/**
+ * The decode layers the console offers.
+ *
+ * gzip and deflate were absent while `internal/tools/codec.go` had `LayerGzip` and `LayerDeflate`
+ * and the handler already resolved the strings "gzip", "deflate" and "zlib" — so the capability
+ * shipped and no operator could reach it (burpsy-react-ui-37b). Burp's own Operations list names
+ * GZIP, and a compressed response is one of the commonest things to paste into a decoder.
+ *
+ * Keep this in step with AllLayers() in codec.go. `internal/web/toolkit_codec_honesty_test.go`
+ * already asserts against this array, which is why it lives here rather than in the page.
+ */
+export const DECODE_LAYERS = ["url", "html", "base64", "base64url", "hex", "gzip", "deflate", "jwt", "ascii"] as const;
 
-/** Encodings `handleToolsEncode` implements; its `default` is a passthrough. */
-export const ENCODE_ENCODINGS = ["url", "html", "base64", "base64url", "hex", "ascii", "rot13"] as const;
+/**
+ * Encodings `handleToolsEncode` implements, via the same codec table. Anything
+ * else is a 400 naming the accepted set; there is no passthrough branch, so the
+ * `encoding` echoed back always describes the bytes in `output`.
+ */
+/**
+ * The encode directions the console offers.
+ *
+ * gzip and deflate are genuinely encodable — codec.go's Encode has `case LayerGzip` and
+ * `case LayerDeflate` — unlike LayerJWT, which is decode-only by construction and is therefore
+ * absent here on purpose.
+ */
+export const ENCODE_ENCODINGS = ["url", "html", "base64", "base64url", "hex", "gzip", "deflate", "ascii", "rot13"] as const;
 
-/** Weakest first, matching the handler's switch. sha256 is its default branch. */
+/** Weakest first. These four are the whole accepted set; anything else is a 400. */
 export const HASH_ALGORITHMS = ["md5", "sha1", "sha256", "sha512"] as const;
 
 /** How the Sequencer may read a token's bits. Empty string means "let the server detect". */
@@ -176,12 +199,40 @@ export function useTransformPipeline() {
 /* --- comparer ------------------------------------------------------------- */
 
 /**
+ * The header names the Comparer discounts — Burp's `configPanelUninterestingRequestHeaders` and
+ * `configPanelUninterestingResponseHeaders` (W6 #81/#82), which had no counterpart here at all.
+ *
+ * Comparing two responses is how an operator decides whether an input changed behaviour, and the
+ * comparison is drowned by headers that differ on every request and mean nothing: `Date` always
+ * differs, `ETag` and `Age` usually do, a request-id differs by construction.
+ *
+ * Nothing is ever hidden. The backend labels differences that fall inside a discounted header and
+ * reports both verdicts — see `CompareResponse.identical_ignoring_uninteresting`.
+ */
+export const useUninterestingHeaders = () =>
+  useResource<UninterestingHeaders>(["uninteresting-headers"], "/api/headers/uninteresting");
+
+/** Replace the discount lists. Omit a direction to leave it untouched. */
+export function useSetUninterestingHeaders() {
+  const client = useQueryClient();
+  return useMutation<UninterestingHeaders, Error, { request?: string[]; response?: string[] }>({
+    mutationFn: (body) =>
+      api<UninterestingHeaders>("/api/headers/uninteresting", json("PUT", body)),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["uninteresting-headers"] }),
+  });
+}
+
+/**
  * The handler reads flat `a` / `b` strings and has no granularity parameter, so
  * every comparison is byte-level.
  */
 export function useCompare() {
-  return useMutation<CompareResponse, Error, { a: string; b: string }>({
-    mutationFn: ({ a, b }) => api<CompareResponse>("/api/tools/compare", json("POST", { a, b })),
+  return useMutation<CompareResponse, Error, { a: string; b: string; response?: boolean }>({
+    // `response` selects which uninteresting-header list applies (W6 #81/#82). Omitted means the
+    // request list, which is empty unless the operator populated it — so leaving it out reproduces
+    // the behaviour this endpoint had before the field existed.
+    mutationFn: ({ a, b, response }) =>
+      api<CompareResponse>("/api/tools/compare", json("POST", { a, b, response })),
   });
 }
 
@@ -196,3 +247,24 @@ export function useLoadMessage() {
 
 export const useToolLogView = (filter: string, search: string, limit = 1_000) =>
   useResource<ToolLogView>(workbenchKeys.toolLog(filter, search, limit), `/api/tools/log${query({ limit, filter, search })}`);
+
+/**
+ * Toggle one tool's capture axis. This is the destructive arm, so the UI must
+ * show it as such — turning capture off means that tool's next requests are
+ * sent and deliberately not recorded, and only the `uncaptured` counter will
+ * say so. Mutates via POST /api/tools/log; invalidates the logger read (and
+ * the dashboard's, under the same "toollog" prefix) so the new axis is shown.
+ */
+export const useSetToolLogCapture = () => {
+  const queryClient = useQueryClient();
+  return useMutation<Record<string, boolean>, Error, { tool: string; on: boolean }>({
+    mutationFn: ({ tool, on }) =>
+      api<Record<string, boolean>>("/api/tools/log", json("POST", { tool, on })),
+    onSuccess: () => {
+      // Invalidate every filter/search combination under the "toollog" prefix,
+      // matching workbenchKeys.toolLog's shape, so the refreshed read reflects
+      // the new capture axis regardless of the currently-selected filters.
+      void queryClient.invalidateQueries({ queryKey: ["toollog"] });
+    },
+  });
+};

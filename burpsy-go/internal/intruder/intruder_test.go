@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,46 +20,6 @@ import (
 
 func testLogger() *zap.Logger {
 	return zap.NewNop()
-}
-
-func TestPayloadGeneratorGenerateNumbers(t *testing.T) {
-	pg := NewPayloadGenerator()
-	got := pg.GenerateNumbers(1, 5)
-	want := []string{"1", "2", "3", "4", "5"}
-	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("payload[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
-func TestPayloadGeneratorGenerateFromFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "payloads.txt")
-	content := "admin\nroot\n\n  spaced  \n"
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-
-	pg := NewPayloadGenerator()
-	got, err := pg.GenerateFromFile(path)
-	if err != nil {
-		t.Fatalf("GenerateFromFile: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("len = %d, want 3 (blank line skipped)", len(got))
-	}
-	if got[2] != "spaced" {
-		t.Errorf("payload[2] = %q, want %q (trimmed)", got[2], "spaced")
-	}
-
-	// Missing file must surface the error.
-	if _, err := pg.GenerateFromFile(filepath.Join(dir, "nope.txt")); err == nil {
-		t.Error("expected error for missing file, got nil")
-	}
 }
 
 // TestRunSendsOverPlainHTTP starts a local HTTP server and drives a real
@@ -206,16 +164,6 @@ func TestInjectPayloadMarkers(t *testing.T) {
 	}
 	if strings.Contains(got, "§") {
 		t.Errorf("markers left in request: %q", got)
-	}
-}
-
-func TestGenerateNumbersInvertedRangeReturnsEmpty(t *testing.T) {
-	// Regression for H5: GenerateNumbers(5, 1) used to panic in make with a
-	// negative length. It must return an empty slice instead.
-	pg := NewPayloadGenerator()
-	got := pg.GenerateNumbers(5, 1)
-	if len(got) != 0 {
-		t.Fatalf("len = %d, want 0 for inverted range", len(got))
 	}
 }
 

@@ -2,6 +2,7 @@
 package sender
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -11,23 +12,41 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
-	"github.com/burpsy-go/burpsy/internal/httputil"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 )
 
 // Sender handles HTTP request sending.
 type Sender struct {
+	// mu guards client, config and net together, because they are one decision: the transport is built
+	// from the other two, so a reader that saw a new setting and an old client would dial with a
+	// timeout nothing configured.
+	//
+	// It also fixes a race that was already here. WithTimeout and WithTLSVerify mutated
+	// client.Timeout and the transport's TLSClientConfig in place, which is a data race against any
+	// concurrent Send — and the fields they wrote are exactly the ones the settings surface now
+	// changes at runtime, so leaving them unguarded would have turned a latent race into a routine one.
+	mu     sync.RWMutex
 	client *http.Client
 	config *SenderConfig
+	net    NetworkSettings
 	// protocols is what this sender has learnt about each authority's ALPN, plus the protocol-coverage
 	// counters. One per Sender rather than one per authority handle, so an intruder run and the scan
-	// that preceded it share what either of them discovered — see protocol.go.
+	// that preceded it share what either of them discovered — see protocol.go. Its own state is
+	// atomic, so it is deliberately outside mu.
 	protocols *ProtocolCache
+	// upstream is the resolved upstream proxy policy every dial in this file goes through, and nil
+	// only when neither SenderConfig.ProxyURL nor SenderConfig.Upstream was set.
+	upstream *upstream.Policy
+	// upstreamErr is a proxy configuration this sender cannot honour. Non-nil makes every dial fail
+	// with it: an operator who configured a proxy must not have their traffic go out direct because
+	// the configuration was unusable. See NewSender.
+	upstreamErr error
 }
 
 // SenderConfig holds configuration for the sender.
@@ -46,11 +65,51 @@ type SenderConfig struct {
 	// Explicit, never ambient. The transport used to carry http.ProxyFromEnvironment, so an
 	// $HTTP_PROXY exported for any unrelated reason silently re-routed burpsy's own attack traffic
 	// through a third party that no scope decision was ever made about — and the authority actually
-	// dialled is the one thing AuthorisedSender exists to pin down. burpsy's proxy listener does not
-	// route through this field (internal/proxy dials origins itself), so nothing in the tool
-	// depended on the old behaviour.
-	ProxyURL  string
+	// dialled is the one thing AuthorisedSender exists to pin down.
+	//
+	// It is the *whole-sender* proxy: a single destination-independent upstream. Set Upstream instead
+	// for per-destination rules; the two are equivalent when Upstream has one default rule and no
+	// patterns, and NewSender folds a ProxyURL into exactly that so there is one resolution path
+	// rather than two. Setting both is a configuration error and NewSender refuses to guess between
+	// them — see NewSender.
+	ProxyURL string
+	// Upstream is the per-destination upstream proxy policy this sender's egress follows: an ordered
+	// host-pattern list with a default, shared by reference so a live edit through
+	// /api/network/proxy reaches every sender holding it. Nil dials origins directly.
+	Upstream  *upstream.Policy
 	UserAgent string
+	// ClientCerts, when set, supplies the TLS client certificate to present to a host that asks for
+	// one. Nil means none is ever offered — the behaviour before client TLS authentication existed.
+	//
+	// The type is alpn's one-method interface, not internal/netauth's concrete store, so this package
+	// keeps its existing dependency set and a test can bind one certificate without building a
+	// credential store. Held here rather than on Sender because both dial paths need it and both read
+	// their knobs from the config.
+	ClientCerts alpn.ClientCertSource
+	// PlatformAuth, when set, is consulted for an Authorization header to present on the typed send
+	// path — Burp's Settings → Network → Platform authentication.
+	//
+	// Deliberately not applied to the raw-bytes path. SendRawOutcome's contract is that it sends what
+	// the caller wrote, verbatim, and the desync and smuggling probes this tool exists to send depend
+	// on that byte-for-byte fidelity; splicing a header into those bytes would change the framing the
+	// probe is measuring. A raw caller that wants a credential presented sets the header itself, which
+	// it is already constructing the request line by hand to do.
+	PlatformAuth PlatformAuth
+}
+
+// PlatformAuth is the per-host credential lookup the typed send path consults.
+//
+// An interface for the same reason ClientCerts is one: internal/netauth owns the rules, the schemes
+// and the secrets, and this package only needs to ask two questions of them. Satisfied by
+// *netauth.Credentials.
+type PlatformAuth interface {
+	// Authorization returns the header value to present for one request, and whether there is one.
+	// False is an ordinary answer, not a failure: a Digest rule has nothing to send until the host has
+	// challenged once.
+	Authorization(host, method, uri string) (string, bool)
+	// Learn records a challenge from a 401 so the next attempt can authenticate, reporting whether the
+	// challenge is usable. See netauth.Credentials.Learn.
+	Learn(host, wwwAuthenticate string) (bool, error)
 }
 
 // DefaultSenderConfig returns default sender configuration.
@@ -78,51 +137,272 @@ func DefaultSenderConfig() *SenderConfig {
 //
 // Burp's Repeater does not follow redirects by default either, so an operator sees the 30x rather
 // than its consequence.
+// # Every dial goes through the upstream proxy policy, not only the typed one
+//
+// SenderConfig.ProxyURL used to configure http.Transport.Proxy and nothing else, which covered exactly
+// one of this package's five dial sites: Send's typed path. SendRaw, the pipelined desync probes, the
+// frame-program path and the ALPN discovery handshake all opened their own sockets and ignored it. A
+// proxy setting that covers the repeater but not the smuggling probe is the "partial result looking
+// complete" defect in its purest form, so the policy is resolved once here and every dial in this
+// package — see dialPlain and dialTLS — goes through it.
+//
+// The typed path keeps net/http's own HTTP-proxy handling (absolute-form for cleartext, CONNECT for
+// TLS) because that is ordinary client behaviour over bytes net/http composed itself. The raw paths
+// tunnel with CONNECT instead, because their bytes are operator-authored and frequently malformed on
+// purpose — see upstream.Proxy.DialContext. SOCKS is applied in the dialer for both, so there is one
+// SOCKS implementation rather than net/http's for one path and ours for the others.
 func NewSender(config *SenderConfig) *Sender {
 	if config == nil {
 		config = DefaultSenderConfig()
 	}
+	settings := networkFromConfig(config)
+	policy, policyErr := resolveUpstream(config)
+	return &Sender{
+		client:      buildClient(config, settings),
+		config:      config,
+		net:         settings,
+		protocols:   newProtocolCache(),
+		upstream:    policy,
+		upstreamErr: policyErr,
+	}
+}
+
+// networkFromConfig derives the starting network settings from a SenderConfig, so every existing caller
+// keeps the behaviour it had before these settings existed.
+//
+// SenderConfig.Timeout becomes the total bound, because that is what it was: it set both the client
+// timeout and the dialer timeout, and the client timeout is the one that bounded the exchange.
+//
+// # Connect gets 10s, and that is a deliberate change
+//
+// Two literals disagreed about the connect bound. The transport's DialContext used config.Timeout
+// (30 seconds by default) while its TLSHandshakeTimeout was 10 seconds, so a plaintext dial had three
+// times the budget of a TLS handshake for no stated reason. A single named setting has to pick one, and
+// 10s is the right pick: a TCP connect that has not completed in ten seconds is not going to, and the
+// tighter of two accidental values is the one that was actually deliberate. The alternative — taking
+// the looser 30s — would have widened a bound nobody asked to widen in order to avoid admitting the
+// literals disagreed.
+//
+// A caller that asked for a *shorter* total than that keeps it: clamping connect down to the total is
+// what preserves `&SenderConfig{Timeout: 3 * time.Second}` meaning a three-second dial, which is what
+// several tests rely on.
+func networkFromConfig(config *SenderConfig) NetworkSettings {
+	settings := DefaultNetworkSettings()
+	total := int(config.Timeout / time.Millisecond)
+	settings.Timeouts.TotalMS = total
+	if total > 0 && settings.Timeouts.ConnectMS > total {
+		settings.Timeouts.ConnectMS = total
+	}
+	return settings
+}
+
+// buildClient builds the typed path's http.Client for one (config, settings) pair.
+//
+// Split out of NewSender because ApplyNetwork has to build a new one: http.Transport's timeouts are
+// read when a connection is established rather than on every request, so mutating the live transport's
+// fields would both race with in-flight sends and leave already-idle connections on the old values. A
+// fresh transport per settings change costs one connection pool, which is the honest price of a
+// timeout change that actually takes effect.
+func buildClient(config *SenderConfig, settings NetworkSettings) *http.Client {
+	// Resolved here rather than passed in because every caller of buildClient already holds the
+	// config this derives from, and threading it through four call sites would let one of them
+	// forget. A policy that cannot be built is carried, not swallowed: see the Proxy hook below.
+	policy, policyErr := resolveUpstream(config)
 
 	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   config.Timeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		// The dial composes BOTH network concerns, and taking either merge side alone would have
+		// dropped one of them silently:
+		//
+		//   * the hostname-resolution table, via overrideAddr on the address and the configured
+		//     resolver inside settings.dialer() — where the request actually goes;
+		//   * the upstream proxy policy, via upstream.Dialer — what opens the socket.
+		//
+		// Base is what keeps them from cancelling out. Without it upstream.Dialer builds its own bare
+		// net.Dialer, so configuring a proxy would quietly also mean "and stop honouring my resolver".
+		// A nil policy makes upstream.Dialer a plain net.Dialer, so an unconfigured sender dials
+		// exactly as it always did.
+		//
+		// Only the host part of the address is substituted, which leaves the TLS ServerName the
+		// transport derived from the URL untouched — an override changes where a request goes, never
+		// which vhost it asks for.
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := upstream.Dialer{
+				Policy:  policy,
+				Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
+				Base:    settings.dialer(),
+			}
+			return dialer.DialContext(ctx, network, settings.overrideAddr(addr))
+		},
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
+		TLSHandshakeTimeout:   time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
+		ResponseHeaderTimeout: time.Duration(settings.Timeouts.ReadMS) * time.Millisecond,
+		ExpectContinueTimeout: time.Duration(settings.Continue.ExpectTimeoutMS) * time.Millisecond,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: !config.TLSVerify,
 		},
 	}
 
-	if config.ProxyURL != "" {
-		proxyURL, err := url.Parse(config.ProxyURL)
-		if err != nil {
-			// A proxy the operator asked for and that cannot be used must fail the send, not
-			// silently become a direct connection: "my traffic went straight to the target" is the
-			// one outcome an operator who configured a proxy did not ask for.
-			transport.Proxy = func(*http.Request) (*url.URL, error) {
-				return nil, fmt.Errorf("sender proxy URL %q is unusable: %w", config.ProxyURL, err)
+	if config.ClientCerts != nil {
+		// The typed path does not go through dialTLS — it hands the whole exchange to
+		// http.Transport — so the client-certificate hook has to be installed here as well as
+		// there. TLSClientConfig cannot carry it: GetClientCertificate is not told which host it is
+		// being asked about (see alpn.Dialer.ClientCerts), and this transport is shared across every
+		// authority the sender talks to, so one shared callback could not choose per host.
+		// DialTLSContext is the hook that still knows the address.
+		//
+		// Installed only when a certificate source is attached, so a sender without one keeps the
+		// stdlib's own TLS setup byte for byte and this feature cannot regress the common path.
+		//
+		// config, not config.TLSVerify: WithTLSVerify mutates the config this closure was built from,
+		// so reading the field at dial time keeps the two paths in agreement. Capturing the bool would
+		// have frozen it, and WithTLSVerify would have silently stopped working for TLS sends.
+		transport.DialTLSContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("unusable TLS target %q: %w", addr, err)
 			}
-		} else {
-			transport.Proxy = http.ProxyURL(proxyURL)
+			// Composed with the other two dial concerns, exactly as dialTLS is: the resolution
+			// table decides the address and the resolver, the upstream policy decides what opens
+			// the socket under the handshake, and the certificate source decides what is presented
+			// on it. A client-cert dial that quietly stopped honouring either of the other two
+			// would be the half-covered settings defect these units exist to close.
+			dialer := alpn.Dialer{
+				InsecureSkipVerify: !config.TLSVerify,
+				Timeout:            time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
+				Resolver:           settings.dialer().Resolver,
+				ClientCerts:        config.ClientCerts,
+			}
+			if policy != nil && !policy.Empty() {
+				dialer.Carry = upstream.Dialer{Policy: policy, Timeout: config.Timeout, Base: settings.dialer()}.DialContext
+			}
+			addr = settings.overrideAddr(addr)
+			// EgressOffer(true) matches ForceAttemptHTTP2 above: the transport inspects the negotiated
+			// protocol on the connection it is handed and uses h2 when ALPN chose it, so offering h2
+			// here keeps the protocol behaviour the same as the stdlib dial it replaces.
+			conn, _, err := dialer.Dial(ctx, host, addr, alpn.EgressOffer(true))
+			if err != nil {
+				return nil, err
+			}
+			return conn, nil
 		}
 	}
 
-	return &Sender{
-		client: &http.Client{
-			Transport: transport,
-			Timeout:   config.Timeout,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-		config:    config,
-		protocols: newProtocolCache(),
+	if policyErr != nil {
+		// A proxy the operator asked for and that cannot be used must fail the send, not silently
+		// become a direct connection: "my traffic went straight to the target" is the one outcome an
+		// operator who configured a proxy did not ask for. Transport.Proxy is the earliest hook that
+		// can refuse the typed path; the raw paths refuse in dialPlain/dialTLS.
+		transport.Proxy = func(*http.Request) (*url.URL, error) { return nil, policyErr }
+	} else if policy != nil {
+		transport.Proxy = policy.HTTPProxyForRequest
 	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   settings.exchangeTimeout(),
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// Network reports the settings this sender is currently applying.
+func (s *Sender) Network() NetworkSettings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.net
+}
+
+// ApplyNetwork installs new network settings and rebuilds the typed path's transport for them.
+//
+// It validates first and changes nothing on refusal: a half-applied settings document — the new
+// timeouts in force and the new resolution table not, say — is a state no operator asked for and none
+// could diagnose. Sends already in flight finish on the old client, which is the only coherent
+// answer for a request whose dial already happened under the old rules.
+func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
+	normalised := settings.Normalise()
+	if err := normalised.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.net = normalised
+	s.client = buildClient(s.config, normalised)
+	return nil
+}
+
+// httpClient returns the client to send one typed request with.
+func (s *Sender) httpClient() *http.Client {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.client
+}
+
+// tlsVerify reports whether certificate verification is on, under the lock that guards config.
+func (s *Sender) tlsVerify() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.TLSVerify
+}
+
+// userAgent is the User-Agent header a request with none of its own is given.
+func (s *Sender) userAgent() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.UserAgent
+}
+
+// resolveUpstream turns the two proxy fields into the one policy every dial follows.
+//
+// Both set is refused rather than resolved by precedence: ProxyURL and Upstream are two answers to
+// "where does this sender's traffic go", and picking one would send traffic somewhere the operator did
+// not unambiguously ask for. A ProxyURL alone becomes a policy with that default and no patterns,
+// which is the same thing expressed once.
+func resolveUpstream(config *SenderConfig) (*upstream.Policy, error) {
+	if config.ProxyURL != "" && config.Upstream != nil {
+		return nil, fmt.Errorf("sender has both ProxyURL %q and an upstream proxy policy; set one",
+			config.ProxyURL)
+	}
+	if config.Upstream != nil {
+		config.Upstream.Attach("sender")
+		return config.Upstream, nil
+	}
+	if config.ProxyURL == "" {
+		return nil, nil
+	}
+	policy := upstream.NewPolicy()
+	if err := policy.SetDefault(config.ProxyURL); err != nil {
+		return nil, fmt.Errorf("sender proxy URL is unusable: %w", err)
+	}
+	policy.Attach("sender")
+	return policy, nil
+}
+
+// dialPlain opens one cleartext TCP connection to an authority, through the upstream proxy policy.
+//
+// The single cleartext dial site for this whole package: sendHTTP1Plain, dialOne's cleartext arm and
+// dialForProgram's cleartext arm all come here, so a proxy setting cannot cover some of them and not
+// others. That was the state before — three independent net.Dialers, none of which had heard of
+// SenderConfig.ProxyURL.
+func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.Conn, error) {
+	if s.upstreamErr != nil {
+		return nil, s.upstreamErr
+	}
+	// Both concerns, composed in the one place every raw plaintext dial goes through.
+	//
+	// dialAddress applies the hostname-resolution override; Base carries the configured resolver into
+	// whatever TCP connection upstream.Dialer opens, to the proxy or to the origin. Building a bare
+	// net.Dialer here instead — which is what this did before the network settings landed — would have
+	// meant that configuring a proxy silently stopped honouring the operator's resolver.
+	settings := s.Network()
+	dialer := upstream.Dialer{
+		Policy:  s.upstream,
+		Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
+		Base:    settings.dialer(),
+	}
+	return dialer.DialContext(ctx, "tcp", settings.dialAddress(host, port))
 }
 
 // Protocols reports which protocol carried this sender's sends, why the HTTP/1.1 ones did, and what is
@@ -166,9 +446,38 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 // dialTLS opens one TLS connection with the given ALPN offer, through the shared negotiation logic the
 // proxy's upstream leg uses. Certificate verification follows SenderConfig.TLSVerify, unlike the proxy's
 // leg — see internal/alpn.
+//
+// The upstream proxy carries the connection, not the handshake: alpn.Dialer.Carry gets the tunnel and
+// the TLS session is still end-to-end with the origin, so the certificate verified and the protocol
+// negotiated are the origin's own. A proxy that terminated TLS here would be reporting its own ALPN as
+// the target's.
 func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string) (*tls.Conn, string, error) {
-	dialer := alpn.Dialer{InsecureSkipVerify: !s.config.TLSVerify, Timeout: s.config.Timeout}
-	return dialer.Dial(ctx, host, net.JoinHostPort(host, strconv.Itoa(int(port))), offer)
+	if s.upstreamErr != nil {
+		return nil, "", s.upstreamErr
+	}
+	// Same composition as dialPlain, for the TLS path. The resolution table decides the address and
+	// the resolver; the upstream policy decides what opens the socket under the handshake.
+	//
+	// The TLS session stays end-to-end with the origin either way: Carry hands alpn.Dialer an already
+	// open tunnel and the handshake runs on top of it, so the certificate verified and the protocol
+	// negotiated are the origin's, not the proxy's. Base is what stops the proxied branch from losing
+	// the operator's resolver on its way to the proxy.
+	settings := s.Network()
+	connect := time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond
+	// All three dial concerns in one place. A client certificate configured for this host is
+	// presented here too, which covers every raw-bytes TLS path in the package at once:
+	// SendRawOutcome, ProtocolFor's discovery handshake, dialOne's pipelining and desync probes, and
+	// dialForProgram's frame programs all funnel through this function.
+	dialer := alpn.Dialer{
+		InsecureSkipVerify: !s.config.TLSVerify,
+		Timeout:            connect,
+		Resolver:           settings.dialer().Resolver,
+		ClientCerts:        s.config.ClientCerts,
+	}
+	if s.upstream != nil && !s.upstream.Empty() {
+		dialer.Carry = upstream.Dialer{Policy: s.upstream, Timeout: connect, Base: settings.dialer()}.DialContext
+	}
+	return dialer.Dial(ctx, host, settings.dialAddress(host, port), offer)
 }
 
 // Request represents a raw HTTP request.
@@ -191,6 +500,12 @@ type Response struct {
 	Body       []byte
 	Version    string
 	Duration   time.Duration
+	// Raw is the exact bytes this response arrived as, when they are known. The typed transport path
+	// builds a Response straight off http.Response and has no byte image to attach — nil here means
+	// "ask whoever sent it", never "the response was empty". Parsers that start from bytes
+	// (responseFromRaw) set it, which is what lets a redirect chain hand its caller the final
+	// response's real bytes instead of a reconstruction.
+	Raw []byte
 	// Outcome is which protocol carried the request, and why it was not HTTP/2 when it was not.
 	//
 	// Version already carries the stdlib's protocol string ("HTTP/2.0"), which is the same fact in a form
@@ -251,10 +566,17 @@ func (s *Sender) Render(req *Request) ([]byte, error) {
 		host = target.Host
 	}
 
+	dropExpect := s.Network().Continue.RemoveExpect
 	headers := make(map[string]string, len(req.Headers)+1)
 	haveUserAgent := false
 	for k, v := range req.Headers {
 		if strings.EqualFold(k, "Host") {
+			continue
+		}
+		// Dropped here as well as in Send, so the rendered bytes the scope gate reads are the bytes the
+		// transport will write. A header stripped on only one of the two paths is how a gate comes to
+		// authorise a request that is not the one sent.
+		if dropExpect && strings.EqualFold(k, "Expect") {
 			continue
 		}
 		if strings.EqualFold(k, "User-Agent") {
@@ -262,10 +584,10 @@ func (s *Sender) Render(req *Request) ([]byte, error) {
 		}
 		headers[k] = v
 	}
-	if !haveUserAgent && s.config.UserAgent != "" {
+	if agent := s.userAgent(); !haveUserAgent && agent != "" {
 		// Mirrors what Send fills in, so the rendered request is the one that would be sent rather
 		// than one header short of it.
-		headers["User-Agent"] = s.config.UserAgent
+		headers["User-Agent"] = agent
 	}
 	names := make([]string, 0, len(headers))
 	for k := range headers {
@@ -291,13 +613,61 @@ func (s *Sender) Render(req *Request) ([]byte, error) {
 // It stays exported because the active scanner reaches it through its own scope check
 // (ActiveScanner.sendTestRequest) and because AuthorisedSender.SendRequest is built on it. New
 // callers want the authorised entry point.
+// # Platform authentication
+//
+// A credential configured for the target's host is presented here — preemptively for Basic, and after
+// one challenge for Digest. See sendOnce and the retry below.
 func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
-	startTime := time.Now()
-
 	target, err := effectiveTarget(req)
 	if err != nil {
 		return nil, err
 	}
+
+	resp, challenges, err := s.sendOnce(ctx, req, target)
+	if err != nil {
+		return nil, err
+	}
+
+	// The Digest second leg. A 401 carrying a challenge is not a failure for a host we hold a
+	// credential for: it is the nonce the response has to be computed against, which is the only way
+	// Digest can work at all. Learn caches it and reports whether it is answerable; a second 401 with
+	// the same nonce means the credential itself was rejected, and Learn returns false so this cannot
+	// loop.
+	//
+	// Bounded at exactly one retry, deliberately. A loop bounded by an attempt count would keep
+	// sending the operator's credentials at a host that keeps refusing them, which on an engagement is
+	// how an account gets locked out.
+	if resp.StatusCode == http.StatusUnauthorized && s.config.PlatformAuth != nil && len(challenges) > 0 {
+		host, _, _, authErr := authorityOf(target.String())
+		if authErr == nil {
+			for _, challenge := range challenges {
+				usable, _ := s.config.PlatformAuth.Learn(host, challenge)
+				if !usable {
+					continue
+				}
+				retried, _, retryErr := s.sendOnce(ctx, req, target)
+				if retryErr != nil {
+					// The retry failed at the transport. The first response is real and already read, so
+					// it is returned rather than replaced by an error about a request the caller never
+					// asked for.
+					return resp, nil
+				}
+				return retried, nil
+			}
+		}
+	}
+	return resp, nil
+}
+
+// sendOnce performs exactly one typed exchange and reports any authentication challenges the response
+// carried.
+//
+// Split out of Send so the Digest retry is one more call rather than a second copy of the request
+// construction: two constructions of the same request is how a retry ends up differing from the
+// original in a way nobody intended. The body is rebuilt from req.Body on each call, which is what
+// makes a retry possible at all — an io.Reader would already be drained.
+func (s *Sender) sendOnce(ctx context.Context, req *Request, target *url.URL) (*Response, []string, error) {
+	startTime := time.Now()
 
 	var bodyReader io.Reader
 	if len(req.Body) > 0 {
@@ -306,7 +676,7 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, target.String(), bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	for k, v := range req.Headers {
@@ -318,18 +688,47 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 	}
 
 	if httpReq.Header.Get("User-Agent") == "" {
-		httpReq.Header.Set("User-Agent", s.config.UserAgent)
+		httpReq.Header.Set("User-Agent", s.userAgent())
 	}
 
-	httpResp, err := s.client.Do(httpReq)
+	// The typed path is the one place a request header is removed on the operator's instruction, and
+	// only here: the raw path carries the operator's own bytes, and stripping a header out of those
+	// would be this package editing a probe it was asked to send verbatim. A peer that stalls on
+	// Expect: 100-continue is what the setting is for, and a caller who wants that behaviour on raw
+	// bytes edits the bytes.
+	if s.Network().Continue.RemoveExpect {
+		httpReq.Header.Del("Expect")
+	}
+
+	// A caller's own Authorization header always wins. An operator editing a request in Repeater and
+	// typing a credential into it means that credential, and a per-host rule silently replacing it
+	// would make the request they are looking at not the request that goes out.
+	if s.config.PlatformAuth != nil && httpReq.Header.Get("Authorization") == "" {
+		if host, _, _, err := authorityOf(target.String()); err == nil {
+			method := req.Method
+			if method == "" {
+				method = http.MethodGet
+			}
+			// RequestURI, not the full URL: the Digest response hashes the request-target exactly as it
+			// appears on the request line, so any other rendering produces a hash the server cannot
+			// reproduce.
+			if value, ok := s.config.PlatformAuth.Authorization(host, method, target.RequestURI()); ok {
+				httpReq.Header.Set("Authorization", value)
+			}
+		}
+	}
+
+	// httpClient(), not s.client: the accessor takes the read lock, and ApplyNetwork rebuilds the
+	// client under the write lock when a timeout changes. Reading the field directly would race it.
+	httpResp, err := s.httpClient().Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer httpResp.Body.Close()
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	headers := make(map[string]string)
@@ -338,6 +737,11 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 			headers[k] = vv[0]
 		}
 	}
+
+	// Every WWW-Authenticate value, not just the first. A server may send Basic and Digest as two
+	// separate headers, and Response.Headers keeps only one value per name — so the map above would
+	// hide the Digest challenge behind the Basic one exactly when it is needed.
+	challenges := httpResp.Header.Values("Www-Authenticate")
 
 	duration := time.Since(startTime)
 
@@ -349,7 +753,7 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 		Version:    httpResp.Proto,
 		Duration:   duration,
 		Outcome:    s.observe(target, httpResp),
-	}, nil
+	}, challenges, nil
 }
 
 // observe records what the stdlib transport actually negotiated for one typed send.
@@ -455,6 +859,9 @@ func (s *Sender) SendRawOutcome(
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
 	}
 	defer conn.Close()
+	// See cancel.go: without this, cancelling the context leaves the read blocked until the
+	// configured timeout, whatever the caller asked for.
+	defer watchCancel(ctx, conn)()
 	if plan.wantH2 {
 		// Learnt only when h2 was actually offered. A handshake that offered http/1.1 alone and got
 		// http/1.1 back is no evidence at all about whether the target speaks h2, and recording it as
@@ -463,7 +870,7 @@ func (s *Sender) SendRawOutcome(
 	}
 
 	if plan.wantH2 && negotiated == alpn.H2 {
-		s.setDeadline(ctx, conn)
+		s.setDeadline(ctx, conn, host)
 		resp, err := sendOverH2(ctx, conn, plan.http2)
 		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), err)
 		return resp, out, err
@@ -485,7 +892,7 @@ func (s *Sender) SendRawOutcome(
 			}
 		}
 	}
-	resp, err := s.writeHTTP1(ctx, conn, plan.http1)
+	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
 	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, err)
 	return resp, out, err
 }
@@ -585,52 +992,109 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 
 // sendHTTP1Plain dials cleartext and writes one request.
 func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte) ([]byte, error) {
-	dialer := &net.Dialer{Timeout: s.config.Timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	conn, err := s.dialPlain(ctx, host, port)
 	if err != nil {
 		return nil, fmt.Errorf("connection failed: %w", err)
 	}
 	defer conn.Close()
-	return s.writeHTTP1(ctx, conn, raw)
+	// Cancelling the context must unblock the read, not merely be noticed after it. See cancel.go.
+	defer watchCancel(ctx, conn)()
+	return s.writeHTTP1(ctx, conn, host, raw)
 }
 
 // writeHTTP1 writes one request on an open connection and reads exactly one response back.
-func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, raw []byte) ([]byte, error) {
-	s.setDeadline(ctx, conn)
+//
+// host is carried in rather than read off the connection because it decides two things the address
+// cannot: whether this authority's responses are declared open-ended, and — under a resolution
+// override — the connection's remote address is not the host at all.
+func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw []byte) ([]byte, error) {
+	settings := s.Network()
+	s.setDeadline(ctx, conn, host)
 	if _, err := conn.Write(raw); err != nil {
-		return nil, fmt.Errorf("write failed: %w", err)
+		return nil, fmt.Errorf("write failed: %w", explainCancellation(ctx, err))
 	}
-	// Read exactly one response; keep-alive connections never EOF.
-	response, err := httputil.ReadHTTPResponse(conn)
+	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
+	// the response — see read.go.
+	response, err := readResponse(
+		bufio.NewReader(conn),
+		settings.Continue.Understand100,
+		settings.Streaming.isStreaming(host),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("read failed: %w", err)
+		// explainCancellation, because an unblocked read reports a deadline error: reporting a
+		// cancelled send as "read failed: i/o timeout" would blame the target for a decision the
+		// operator made. See cancel.go.
+		return nil, fmt.Errorf("read failed: %w", explainCancellation(ctx, err))
 	}
 	return response, nil
 }
 
 // setDeadline bounds one exchange by the context's deadline when it has one, and by the configured
-// timeout otherwise. The context wins because a caller that set one is describing the whole operation,
-// which the configured per-send timeout knows nothing about.
-func (s *Sender) setDeadline(ctx context.Context, conn net.Conn) {
+// read timeout otherwise. The context wins because a caller that set one is describing the whole
+// operation, which the configured per-send timeout knows nothing about.
+//
+// The per-send bound now comes from NetworkSettings.readTimeout rather than one Timeout standing in for
+// everything, which is what lets a declared streaming host wait longer than an ordinary one without
+// every other send waiting that long too. Zero means no deadline of our own — the previous code could
+// not express that, because a zero SenderConfig.Timeout set a deadline in the past and failed every
+// read instantly.
+func (s *Sender) setDeadline(ctx context.Context, conn net.Conn, host string) {
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 		return
 	}
-	conn.SetDeadline(time.Now().Add(s.config.Timeout))
+	if bound := s.Network().readTimeout(host); bound > 0 {
+		conn.SetDeadline(time.Now().Add(bound))
+	}
 }
+
+// WithTimeout sets the total timeout for the sender, rebuilding the transport so the change reaches
+// connections opened after it.
+// CarriesPlatformAuth reports whether this sender was built with a
+// platform-authentication lookup attached.
+//
+// # Why this is exported at all
+//
+// It exists so the panel can tell the operator the truth. Both network-authentication
+// sources are constructor-time properties of a Sender — the client-certificate hook is
+// installed into the http.Transport by NewSender, and an http.Transport must not have
+// its dial hooks rewritten after first use — so there is no honest way to attach one to
+// a running sender, and this package deliberately offers no method that pretends
+// otherwise.
+//
+// The consequence is a wiring order that can be got wrong: a Sender built without these
+// and a credential store the API can write to would give an operator a rule on the panel
+// that no request ever carries. That is precisely the "partial result looking complete"
+// failure this codebase treats as a bug, so the API asks these two questions and says
+// what it finds instead of assuming. cmd/burpsy builds every sender with both attached,
+// so the shipped binary answers true; a Server assembled without them answers false and
+// the panel says the rules are stored but not presented.
+func (s *Sender) CarriesPlatformAuth() bool { return s.config.PlatformAuth != nil }
+
+// CarriesClientCerts reports whether this sender was built with a client-certificate
+// source attached. See CarriesPlatformAuth for why this is a question worth asking.
+func (s *Sender) CarriesClientCerts() bool { return s.config.ClientCerts != nil }
 
 // WithTimeout sets the timeout for the sender.
 func (s *Sender) WithTimeout(timeout time.Duration) *Sender {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.config.Timeout = timeout
-	s.client.Timeout = timeout
+	s.net.Timeouts.TotalMS = int(timeout / time.Millisecond)
+	if total := s.net.Timeouts.TotalMS; total > 0 && s.net.Timeouts.ConnectMS > total {
+		s.net.Timeouts.ConnectMS = total
+	}
+	s.client = buildClient(s.config, s.net)
 	return s
 }
 
 // WithTLSVerify sets TLS verification.
 func (s *Sender) WithTLSVerify(verify bool) *Sender {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.config.TLSVerify = verify
-	if transport, ok := s.client.Transport.(*http.Transport); ok {
-		transport.TLSClientConfig.InsecureSkipVerify = !verify
-	}
+	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
+	// every handshake, including one happening on another goroutine right now.
+	s.client = buildClient(s.config, s.net)
 	return s
 }

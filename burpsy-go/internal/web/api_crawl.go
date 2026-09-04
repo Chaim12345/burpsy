@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -14,6 +15,8 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/crawler"
 	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 )
 
@@ -127,10 +130,20 @@ type crawlStartReq struct {
 	RetentionQuery string `json:"retention_query"`
 	// SubmitForms defaults off, and that is a requirement rather than a default: a crawl that submits
 	// forms writes to the application.
-	SubmitForms       bool              `json:"submit_forms"`
-	MaxRequests       int               `json:"max_requests"`
-	MaxDepth          int               `json:"max_depth"`
-	MaxDurationSecs   int               `json:"max_duration_secs"`
+	SubmitForms     bool `json:"submit_forms"`
+	MaxRequests     int  `json:"max_requests"`
+	MaxDepth        int  `json:"max_depth"`
+	MaxDurationSecs int  `json:"max_duration_secs"`
+	// Pool names a saved resource pool to run under. Empty leaves the crawl on this package's own
+	// documented defaults, which is what every caller predating pools sends.
+	//
+	// It is checked against the saved set and an unknown name is a 400 — never a fallback to the
+	// defaults. A crawl that ran at five requests a second because its pool had been renamed, while
+	// the operator believed a two-a-second pool was in force, is precisely the failure a named pool
+	// exists to prevent.
+	Pool string `json:"pool"`
+	// RequestsPerSecond is the inline form, kept working: a pool is a resolution step, not a
+	// replacement. Naming both is refused rather than silently resolved one way — see handleCrawlStart.
 	RequestsPerSecond float64           `json:"requests_per_second"`
 	UserAgent         string            `json:"user_agent"`
 	Headers           map[string]string `json:"headers"`
@@ -172,16 +185,67 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	taskID, seeds, err := s.startCrawl(req)
+	if err != nil {
+		http.Error(w, err.Error(), crawlStartStatus(err))
+		return
+	}
+	run, _ := s.crawls.get(taskID)
+	state := ""
+	if run != nil {
+		state = run.State
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"task_id": taskID,
+		"seeds":   seeds,
+		"state":   state,
+	})
+}
 
+// crawlStartStatus maps a start failure to its status. A pool the operator named and that is not
+// saved is 404 — the request is well formed and the world is not what they thought — while a
+// malformed configuration is 400. Told apart because the fix differs: reload versus retype.
+func crawlStartStatus(err error) int {
+	if errors.Is(err, pool.ErrNoSuchPool) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadRequest
+}
+
+// startCrawl validates a crawl request, registers the task and starts the crawl, returning the task
+// id and the seeds it actually took.
+//
+// Split out of the handler so a *scheduled* crawl is the same crawl: the schedule runner hands its
+// saved params here rather than re-implementing seed trimming, limit defaults and pool resolution.
+// Two code paths that both "start a crawl" would drift, and the one that drifted would be the
+// unattended one nobody watches.
+func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 	seeds := make([]string, 0, len(req.Seeds))
-	for _, s := range req.Seeds {
-		if t := strings.TrimSpace(s); t != "" {
+	for _, seed := range req.Seeds {
+		if t := strings.TrimSpace(seed); t != "" {
 			seeds = append(seeds, t)
 		}
 	}
 	if len(seeds) == 0 {
-		http.Error(w, "At least one seed URL is required", http.StatusBadRequest)
-		return
+		return 0, nil, errors.New("At least one seed URL is required")
+	}
+
+	// A named pool and an inline rate are refused together rather than resolved in some order. Both
+	// are the operator stating the crawl's rate, and picking one would mean the number they typed in
+	// the box was ignored — with no way for them to tell, since a crawl reports the rate it ran at
+	// and not the rate it was told twice.
+	if req.Pool != "" && req.RequestsPerSecond > 0 {
+		return 0, nil, fmt.Errorf(
+			"this crawl names both the pool %q and requests_per_second %v; the pool already states a "+
+				"rate, so send one or the other", req.Pool, req.RequestsPerSecond)
+	}
+	var poolLimit *intruder.RateLimit
+	if req.Pool != "" {
+		limit, err := s.pools.Limit(req.Pool)
+		if err != nil {
+			return 0, nil, fmt.Errorf("%w (saved pools: %s)", err, availablePools(s.pools))
+		}
+		poolLimit = &limit
 	}
 
 	limits := crawler.DefaultLimits()
@@ -213,17 +277,17 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		SubmitForms:       req.SubmitForms,
 		Limits:            limits,
 		RequestsPerSecond: req.RequestsPerSecond,
+		Pool:              poolLimit,
 		UserAgent:         req.UserAgent,
 		Headers:           req.Headers,
 		Logger:            s.logger,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return 0, nil, err
 	}
 
 	task := s.tasks.Start(dash.KindCrawl, strings.Join(seeds, ", "), uint64(limits.MaxRequests))
-	run := s.crawls.start(task.ID(), seeds)
+	s.crawls.start(task.ID(), seeds)
 
 	// Detached from the request context on purpose: a crawl outlives the HTTP call that started it,
 	// and binding it to r.Context() would cancel the whole crawl the moment the operator's browser
@@ -245,9 +309,16 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		s.live.notify(changeDashboard)
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"task_id": task.ID(),
-		"seeds":   seeds,
-		"state":   run.State,
-	})
+	return task.ID(), seeds, nil
+}
+
+// availablePools names the saved pools for an error message, so a refusal says what *is* there.
+// "none are saved" rather than an empty list: the two readings of a blank space are "there are none"
+// and "the message is broken", and only one of them is true.
+func availablePools(reg *pool.Registry) string {
+	names := reg.Names()
+	if len(names) == 0 {
+		return "none are saved"
+	}
+	return strings.Join(names, ", ")
 }

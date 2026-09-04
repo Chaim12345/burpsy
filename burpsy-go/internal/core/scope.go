@@ -27,6 +27,9 @@ type ScopeRule struct {
 	// PathPrefix, when set, limits the rule to paths starting with it. Nil matches any path,
 	// which is what every host-only rule built before this field existed means.
 	PathPrefix *string
+	// Protocol, when set ("http" or "https"), limits the rule to that scheme. Nil matches either,
+	// which is what every rule built before this field existed means.
+	Protocol *string
 }
 
 // NewScopeRule creates a new scope rule from a pattern.
@@ -84,10 +87,17 @@ func (r *ScopeRule) Matches(host string, port uint16) bool {
 	return r.Regex.MatchString(host)
 }
 
-// MatchesRequest checks host, port and path prefix against one request.
-func (r *ScopeRule) MatchesRequest(host string, port uint16, path string) bool {
+// MatchesRequest checks host, port, path prefix and protocol against one request.
+func (r *ScopeRule) MatchesRequest(host string, port uint16, path string, isTLS bool) bool {
 	if !r.Matches(host, port) {
 		return false
+	}
+	// The wire decides scheme: https is TLS on the connection the request actually uses, not a
+	// property of the URL string. A rule with a protocol arm matches only its own scheme.
+	if r.Protocol != nil {
+		if (*r.Protocol == "https") != isTLS {
+			return false
+		}
 	}
 	if r.PathPrefix != nil && !strings.HasPrefix(path, *r.PathPrefix) {
 		return false
@@ -235,7 +245,7 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 	// Excludes always win: a matching exclude rule takes the host out of scope
 	// regardless of any include rules.
 	for _, rule := range s.rules {
-		if rule.Kind == ScopeExclude && rule.MatchesRequest(host, port, path) {
+		if rule.Kind == ScopeExclude && rule.MatchesRequest(host, port, path, isTLS) {
 			return false
 		}
 	}
@@ -245,7 +255,7 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 	for _, rule := range s.rules {
 		if rule.Kind == ScopeInclude {
 			hasIncludeRule = true
-			if rule.MatchesRequest(host, port, path) {
+			if rule.MatchesRequest(host, port, path, isTLS) {
 				return true
 			}
 		}
@@ -276,7 +286,7 @@ func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bo
 // asymmetry is safe because this is a pre-filter: a too-permissive answer here only means the
 // attack starts and its per-request gate reports the refusals, never that a refused request goes
 // out.
-func (s *Scope) MayContainHost(host string, port uint16, _ bool) bool {
+func (s *Scope) MayContainHost(host string, port uint16, isTLS bool) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.allowAll {
@@ -289,10 +299,11 @@ func (s *Scope) MayContainHost(host string, port uint16, _ bool) bool {
 		}
 		switch {
 		case rule.Kind == ScopeInclude:
-			// Any include that names this host/port keeps it possible, path prefix or not.
+			// Any include that names this host/port keeps it possible, protocol arm or not.
 			possible = true
-		case rule.PathPrefix != nil:
-			// A path-scoped exclude removes some paths and leaves the rest reachable.
+		case rule.PathPrefix != nil || rule.Protocol != nil:
+			// A path- or protocol-scoped exclude removes some requests and leaves the rest
+			// of the host reachable — an https-only exclude says nothing about http.
 		default:
 			// Only a whole-host exclude puts the host beyond reach.
 			possible = false
@@ -393,7 +404,7 @@ func (s *Scope) Explain(host string, port uint16, path string, isTLS bool) strin
 		return "allowed: " + where + " (scope allows everything)"
 	}
 	for _, rule := range s.rules {
-		if rule.Kind == ScopeExclude && rule.MatchesRequest(host, port, path) {
+		if rule.Kind == ScopeExclude && rule.MatchesRequest(host, port, path, isTLS) {
 			return "refused: " + where + " is excluded by scope rule " + rule.Pattern
 		}
 	}
@@ -401,7 +412,7 @@ func (s *Scope) Explain(host string, port uint16, path string, isTLS bool) strin
 	for _, rule := range s.rules {
 		if rule.Kind == ScopeInclude {
 			hasInclude = true
-			if rule.MatchesRequest(host, port, path) {
+			if rule.MatchesRequest(host, port, path, isTLS) {
 				return "allowed: " + where + " matches include rule " + rule.Pattern
 			}
 		}

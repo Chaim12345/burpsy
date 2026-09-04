@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
@@ -178,16 +177,29 @@ func (a *AuthorisedSender) sendFrameProgram(
 		return res, fmt.Errorf("refused: this build cannot act on verdict %d", int(res.Authorisation.Verdict))
 	}
 
+	// Paced after the authorisation switch above and before the dial, matching Send: a refused
+	// program never spends a pool's budget, and a program that will go out holds its slot for the
+	// whole dial-write-read window because that window is what "in flight" means. This is a
+	// connection-level send with no driver loop above it, which is precisely the case the pacer
+	// exists for — the "Hidden HTTP 2" check reaches the wire through here and nowhere else.
+	release, err := a.pacing(ctx)
+	if err != nil {
+		return res, err
+	}
+	defer release()
+
 	conn, negotiated, err := a.dialForProgram(ctx, forceH2)
 	if err != nil {
 		return res, err
 	}
 	defer conn.Close()
+	// See cancel.go.
+	defer watchCancel(ctx, conn)()
 	res.Negotiated = negotiated
 
 	res.Sent = program.Encode()
 	res.Started = time.Now()
-	a.net.setDeadline(ctx, conn)
+	a.net.setDeadline(ctx, conn, a.host)
 	if _, err := conn.Write(res.Sent); err != nil {
 		res.Duration = time.Since(res.Started)
 		return res, fmt.Errorf("writing the frame program: %w", err)
@@ -270,9 +282,7 @@ func (a *AuthorisedSender) programRequestURL(req burpsyhttp2.ProgramRequest) str
 // which for that probe is the entire finding.
 func (a *AuthorisedSender) dialForProgram(ctx context.Context, forceH2 bool) (net.Conn, string, error) {
 	if !a.tls {
-		dialer := &net.Dialer{Timeout: a.net.config.Timeout}
-		conn, err := dialer.DialContext(ctx, "tcp",
-			net.JoinHostPort(a.host, strconv.Itoa(int(a.port))))
+		conn, err := a.net.dialPlain(ctx, a.host, a.port)
 		if err != nil {
 			return nil, "", fmt.Errorf("connection failed: %w", err)
 		}

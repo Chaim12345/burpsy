@@ -15,14 +15,44 @@ type fakeRow struct {
 	status int    // 0 = absent, as Queryable documents
 	mime   string
 	body   []byte
+	// Absence is explicit for both, matching Queryable: a length of 0 is a real length (a 204) and
+	// an unmeasured duration is not a fast one, so neither can be inferred from the value.
+	length     int64
+	hasLength  bool
+	durationUs int64
+	measured   bool
+	// headers is keyed by LOWERCASED name, because Header's contract is case-insensitive and a stub
+	// that matched case exactly would pass a test the real adapters would fail.
+	headers map[string][]string
+
+	highlight       string
+	comment         string
+	annotationKnown bool
 }
 
-func (f fakeRow) Host() string   { return f.host }
-func (f fakeRow) Method() string { return f.method }
-func (f fakeRow) Path() string   { return f.path }
-func (f fakeRow) Status() int    { return f.status }
-func (f fakeRow) Mime() string   { return f.mime }
-func (f fakeRow) Body() []byte   { return f.body }
+func (f fakeRow) Host() string               { return f.host }
+func (f fakeRow) Method() string             { return f.method }
+func (f fakeRow) Path() string               { return f.path }
+func (f fakeRow) Status() int                { return f.status }
+func (f fakeRow) Mime() string               { return f.mime }
+func (f fakeRow) Body() []byte               { return f.body }
+func (f fakeRow) ResponseLen() (int64, bool) { return f.length, f.hasLength }
+
+// headers is nil by default, so a stub that says nothing about headers reports every header
+// absent — which fails every comparison, the same rule the real adapters carry.
+// annotationKnown defaults to FALSE, so a stub that says nothing about annotations reports that it
+// cannot answer — not that the row is unhighlighted. A default of true would make every existing
+// test row claim "" as a real highlight.
+func (f fakeRow) Annotation() (string, string, bool) {
+	return f.highlight, f.comment, f.annotationKnown
+}
+
+func (f fakeRow) Header(name string) ([]string, bool) {
+	values, ok := f.headers[strings.ToLower(name)]
+	return values, ok
+}
+
+func (f fakeRow) DurationUs() (int64, bool) { return f.durationUs, f.measured }
 
 func row() fakeRow {
 	return fakeRow{
@@ -495,6 +525,21 @@ func (c ruleCandidate) Path() string { return "" }
 func (c ruleCandidate) Status() int  { return c.responseCode }
 func (c ruleCandidate) Mime() string { return c.contentType }
 func (c ruleCandidate) Body() []byte { return []byte(c.rawBody) }
+
+// A match-and-replace candidate has bytes in hand, so its length is a real answer; nothing timed it,
+// so its duration is absent. Exactly the mix Queryable's two bools exist to express — and the reason
+// this consumer is in the test suite: it is structurally unlike a history row and must still answer
+// honestly rather than be given zeroes to satisfy the interface.
+func (c ruleCandidate) ResponseLen() (int64, bool) { return int64(len(c.rawBody)), true }
+func (c ruleCandidate) DurationUs() (int64, bool)  { return 0, false }
+
+// A match-and-replace candidate models a request line and a body, not a parsed head, so it reports
+// every header absent. Honest for this consumer: it genuinely cannot see headers, and absent fails
+// every comparison rather than answering one wrongly.
+func (c ruleCandidate) Header(string) ([]string, bool) { return nil, false }
+
+// A match-and-replace candidate is not a stored exchange, so nobody has annotated it.
+func (c ruleCandidate) Annotation() (string, string, bool) { return "", "", false }
 
 func TestTheSameParsedQueryDrivesTwoUnrelatedConsumers(t *testing.T) {
 	e, err := Parse(`status in 200..299 and (host = "example.com" or host = "other.test") and body ~ "hi"`)

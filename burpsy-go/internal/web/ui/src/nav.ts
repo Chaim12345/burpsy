@@ -1,11 +1,14 @@
 import {
+  BookOpen,
   Braces,
   ChartNoAxesCombined,
   Combine,
+  RadioTower,
   Crosshair,
   FileClock,
   Gauge,
   NotebookTabs,
+  Plug,
   Radar,
   Repeat2,
   Settings,
@@ -14,15 +17,22 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { ComponentType } from "react";
+import { IssueDefinitionsPage } from "./pages/advisories";
+import { AuditQueuePage } from "./pages/auditqueue";
 import { ComparerPage } from "./pages/comparer";
+import { CollaboratorPage } from "./pages/collaborator";
+import { ContentDiscoveryPage } from "./pages/contentdiscovery";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
+import { DiscoverPage } from "./pages/discover";
+import { ExtenderApisPage, ExtenderOptionsPage, ExtensionsPage } from "./pages/extensions";
 import { HistoryPage } from "./pages/history";
 import { InterceptPage } from "./pages/intercept";
 import { IntruderPage } from "./pages/intruder";
 import { LoggerPage } from "./pages/logger";
 import { MatchReplacePage } from "./pages/matchreplace";
 import { OrganizerPage } from "./pages/organizer";
+import { ProxySettingsPage } from "./pages/proxysettings";
 import { RepeaterPage } from "./pages/repeater";
 import { ScannerPage } from "./pages/scanner";
 import { SequencerPage } from "./pages/sequencer";
@@ -77,8 +87,26 @@ export const TOOLS: NavTool[] = [
     hotkey: "2",
     leaves: [
       { id: "sitemap", label: "Site map", description: "Hosts, paths, and observed behaviour", page: SiteMapPage },
-      { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
       { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
+      { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
+      { id: "auditqueue", label: "Audit queue", description: "What the active audit did with each exchange, and why any were skipped", page: AuditQueuePage },
+      {
+        id: "advisories",
+        label: "Issue definitions",
+        // Reads as the companion to Issues, and sits next to it: Issues is what was found, this is
+        // what can be described. Burp keeps the same pair under Target for the same reason.
+        description: "Every issue class the catalogue describes, found or not",
+        page: IssueDefinitionsPage,
+      },
+      {
+        id: "contentdiscovery",
+        // Burp reaches "Discover content" from a site-map right-click, so it belongs beside the
+        // site map rather than on the DISCOVER tab, which is a different feature that happens to
+        // share the word — see pages/contentdiscovery.tsx and pages/discover.tsx.
+        label: "Content discovery",
+        description: "Sweep a path space with ffuf, and what the scope check dropped",
+        page: ContentDiscoveryPage,
+      },
     ],
   },
   {
@@ -95,6 +123,12 @@ export const TOOLS: NavTool[] = [
         label: "Match & Replace",
         description: "Reviewable traffic transformations",
         page: MatchReplacePage,
+      },
+      {
+        id: "proxysettings",
+        label: "Proxy settings",
+        description: "Response modification rules and their outcome counters",
+        page: ProxySettingsPage,
       },
     ],
   },
@@ -118,6 +152,19 @@ export const TOOLS: NavTool[] = [
     icon: Repeat2,
     hotkey: "5",
     leaves: [{ id: "repeater", label: "Repeater", description: "Craft and resend requests", page: RepeaterPage }],
+  },
+  {
+    id: "collaborator",
+    label: "Collaborator",
+    icon: RadioTower,
+    leaves: [
+      {
+        id: "collaborator",
+        label: "Collaborator",
+        description: "Out-of-band interactions and blind-XSS callbacks",
+        page: CollaboratorPage,
+      },
+    ],
   },
   {
     id: "sequencer",
@@ -164,6 +211,52 @@ export const TOOLS: NavTool[] = [
     icon: ShieldCheck,
     leaves: [
       { id: "session", label: "Session", description: "Login macros and recovery behaviour", page: SessionPage },
+    ],
+  },
+  {
+    // Burp 2026.7.3 calls this tab Extensions (verified against the live AX tree: Installed,
+    // BApp Store, APIs, Custom scan checks, Bambda library). The BApp Store is a hosted catalogue
+    // this tool has no counterpart for - see pages/extensions.tsx for why a tab listing nothing
+    // would be worse than no tab at all. The tool id stays "extender": it is the URL hash.
+    id: "extender",
+    label: "Extensions",
+    icon: Plug,
+    leaves: [
+      {
+        id: "extensions",
+        label: "Installed",
+        description: "Local JSON-RPC plugins, their consoles and what they registered",
+        page: ExtensionsPage,
+      },
+      {
+        id: "extenderoptions",
+        label: "Options",
+        description: "How a plugin is admitted, and the bounds it runs under",
+        page: ExtenderOptionsPage,
+      },
+      {
+        id: "extenderapis",
+        label: "APIs",
+        description: "The JSON-RPC contract a plugin is written against",
+        page: ExtenderApisPage,
+      },
+    ],
+  },
+  {
+    // Burp's DISCOVER constant, the tab that used to be called Learn, sits second
+    // to last — right before Settings — and so does this. What it holds is not
+    // Burp's link farm: see pages/discover.tsx for why an in-app reference is the
+    // honest analogue and a list of outbound links is not.
+    id: "discover",
+    label: "Discover",
+    icon: BookOpen,
+    leaves: [
+      {
+        id: "discover",
+        label: "Discover",
+        description: "Query grammar, BCheck syntax, hotkeys, and the deliberate gaps",
+        page: DiscoverPage,
+      },
     ],
   },
   {

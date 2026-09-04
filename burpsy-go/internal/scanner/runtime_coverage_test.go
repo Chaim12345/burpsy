@@ -48,7 +48,6 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
-	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/vulnapp"
@@ -206,11 +205,11 @@ func buildRuntimeTarget(t *testing.T) *runtimeTarget {
 		domCfg := runtimeScanConfig()
 		domCfg.CheckDOM = true
 		// Headless unless BURPSY_DOM_HEADED=1, which is for watching a flow live.
-		headed := os.Getenv("BURPSY_DOM_HEADED") == "1"
+		// The provider is the package-wide shared Chrome — see runtime_shared_test.go.
 		rt.domScan = NewActiveScanner(rt.store, zap.NewNop()).
 			WithSender(runtimeSender()).
 			WithStoredLedger(NewStoredLedger()).
-			WithBrowserProvider(NewLazyBrowserProvider(domexec.Options{Headed: headed})).
+			WithBrowserProvider(sharedBrowserProvider()).
 			WithConfig(domCfg)
 	}
 
@@ -236,7 +235,7 @@ func buildRuntimeTarget(t *testing.T) *runtimeTarget {
 		storedDomCfg.CheckStored = true
 		storedDomCfg.CheckDOM = true
 		storedDomCfg.PendingDeadline = 5 * time.Second
-		rt.storedDomBrowsers = NewLazyBrowserProvider(domexec.Options{Headed: os.Getenv("BURPSY_DOM_HEADED") == "1"})
+		rt.storedDomBrowsers = sharedBrowserProvider()
 		rt.storedDomScan = NewActiveScanner(rt.store, zap.NewNop()).
 			WithSender(runtimeSender()).
 			WithStoredLedger(NewStoredLedger()).

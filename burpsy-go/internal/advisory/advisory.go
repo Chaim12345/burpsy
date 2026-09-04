@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -74,6 +75,12 @@ type Definition struct {
 	Severity       Severity         `json:"typicalSeverity"`
 	References     []Reference      `json:"references"`
 	Classification []Classification `json:"vulnerabilityClassifications"`
+
+	// fileIndex is the index implied by the definition's own filename (%08x of typeIndex; see
+	// HexIndex). Kept so the loader can tell which of two colliding definitions actually owns
+	// the index. Unexported and unserialised: it is provenance about where the definition came
+	// from, not part of the advisory the operator reads.
+	fileIndex int
 }
 
 // HexIndex is the type index in the hexadecimal form Burp's own UI and filenames use, so an operator
@@ -88,6 +95,11 @@ type Catalogue struct {
 	byIndex map[int]*Definition
 	byName  map[string]*Definition // normalised name -> definition
 	ordered []*Definition
+	// shadowed holds definitions that lost an index collision. They stay in ordered and in
+	// byName — they are real definitions, reachable by name — they simply are not what ByIndex
+	// answers for their declared index. Exposed via ShadowedByIndex so a caller counting the
+	// catalogue can report "183 loaded, 181 indexable" instead of implying those agree.
+	shadowed []*Definition
 }
 
 // Load reads the bundled catalogue.
@@ -119,7 +131,46 @@ func loadFS(fsys fs.FS, dir string) (*Catalogue, error) {
 			return nil, fmt.Errorf("%s has no name", e.Name())
 		}
 		def := &d
-		c.byIndex[d.TypeIndex] = def
+		if fileIdx, ok := indexFromFilename(e.Name()); ok {
+			def.fileIndex = fileIdx
+		} else {
+			def.fileIndex = d.TypeIndex
+		}
+		// Two definitions genuinely collide on typeIndex, and the collision is Burp's own:
+		// 00101200_ReactServerComponentsRemoteCodeExecutionReact2shell.json declares Perl code
+		// injection's index (1052160), and 09008000_BambdaGeneratedIssue.json declares BCheck's
+		// (150994944). Burp's shipped KnowledgeBase/Issues carries the identical mismatch — 183
+		// files, 181 distinct indices — so this data is faithful to the oracle and must NOT be
+		// "corrected" here. Editing a typeIndex to tidy an internal map would be a divergence
+		// from Burp dressed up as a bug fix.
+		//
+		// What was wrong was this map's behaviour. A bare assignment let whichever file was read
+		// last win, so ByIndex(1052160) answered "React Server Components RCE" to a caller asking
+		// for Perl code injection — and GET /api/advisories/{index} served that wrong advisory,
+		// with the wrong severity and remediation, to the operator. NormaliseName's own comment
+		// says a match that attaches the wrong advisory to a finding is worse than no advisory;
+		// that rule was enforced on the name path and quietly not on this one.
+		//
+		// The filename decides, because it is the authoritative half: the convention is %08x of
+		// the index, Burp's own resource list is where these names come from, and in both
+		// collisions exactly one file's name agrees with its own field. That file owns the index.
+		// The loser is recorded as shadowed rather than dropped, so the loss is countable.
+		if prior, taken := c.byIndex[d.TypeIndex]; taken {
+			priorAgrees := prior.TypeIndex == prior.fileIndex
+			thisAgrees := d.TypeIndex == def.fileIndex
+			if thisAgrees && !priorAgrees {
+				c.shadowed = append(c.shadowed, prior)
+				c.byIndex[d.TypeIndex] = def
+			} else {
+				// The incumbent agrees with its filename, or neither does. Keep the incumbent so
+				// the result is deterministic rather than a function of directory order.
+				c.shadowed = append(c.shadowed, def)
+			}
+		} else {
+			c.byIndex[d.TypeIndex] = def
+		}
+		// byName is deliberately untouched by the collision: the colliding definitions have
+		// distinct names, so both stay reachable by name even when one cannot own its index.
 		c.byName[NormaliseName(d.Name)] = def
 		c.ordered = append(c.ordered, def)
 	}
@@ -180,9 +231,61 @@ func (c *Catalogue) All() []*Definition {
 }
 
 // Len reports how many definitions loaded.
+//
+// This is the count of definitions, not the count of reachable indices, and the two differ:
+// see IndexedLen and ShadowedByIndex. Len stays the definition count because that is the true
+// answer to "how big is the catalogue" — the shadowed entries are real advisories, readable by
+// name — but a caller reporting Len as though every entry were addressable by index would be
+// overstating by two.
 func (c *Catalogue) Len() int {
 	if c == nil {
 		return 0
 	}
 	return len(c.ordered)
+}
+
+// IndexedLen reports how many distinct indices ByIndex can answer for.
+//
+// Len minus IndexedLen is exactly len(ShadowedByIndex). Kept as its own method rather than
+// left for callers to compute, because the subtraction is the kind of thing a caller does once
+// and then forgets when the numbers drift.
+func (c *Catalogue) IndexedLen() int {
+	if c == nil {
+		return 0
+	}
+	return len(c.byIndex)
+}
+
+// ShadowedByIndex returns the definitions that lost an index collision, in load order.
+//
+// Non-empty is the normal, expected state for faithful Burp data: two of Burp's own definition
+// files declare a neighbour's typeIndex, so two advisories are not addressable by index. It is
+// exported so that anything counting or displaying the catalogue can say so out loud instead of
+// presenting a total that quietly does not add up. An empty result means every definition owns
+// its index — which would be true of a corrected data set, and this API does not need to change
+// if that ever happens upstream.
+func (c *Catalogue) ShadowedByIndex() []*Definition {
+	if c == nil {
+		return nil
+	}
+	return c.shadowed
+}
+
+// indexFromFilename reads the index a definition's filename claims.
+//
+// The convention is "%08x_Name.json" (HexIndex), so the prefix before the first underscore is
+// the index in hex. Returns false for any name that does not follow it, which the loader treats
+// as "this file makes no claim" rather than as an error — a definition with an unconventional
+// name is still a definition, and refusing to load the catalogue over a filename would take the
+// whole advisory surface down to enforce a naming rule.
+func indexFromFilename(name string) (int, bool) {
+	prefix, _, found := strings.Cut(name, "_")
+	if !found || len(prefix) != 8 {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(prefix, 16, 64)
+	if err != nil {
+		return 0, false
+	}
+	return int(v), true
 }

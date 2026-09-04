@@ -243,6 +243,18 @@ type Config struct {
 	Limits Limits
 	// RequestsPerSecond caps the request rate. Zero takes DefaultRequestsPerSecond.
 	RequestsPerSecond float64
+	// Pool is a resolved named resource pool's limits, or nil for this package's own defaults.
+	//
+	// It is the *resolved* RateLimit rather than a pool name because this package has no business
+	// looking names up: the caller that holds the registry resolves once — see internal/pool — and
+	// hands the answer down. Set, it overrides RequestsPerSecond and replaces the per-host
+	// DefaultAutoThrottle with the pool's own.
+	//
+	// One of a pool's three bounds cannot be honoured here and is not silently dropped: MaxInFlight.
+	// The crawl loop sends one request and waits for the response before building the next, so a
+	// ceiling above 1 bounds nothing. Report.Pool says which pool ran and Report.PoolConcurrency
+	// records the ceiling that did not apply, and pool.Support() states the same thing on the API.
+	Pool *intruder.RateLimit
 	// UserAgent is the User-Agent header sent. Empty takes DefaultUserAgent.
 	UserAgent string
 	// Headers are extra request headers, sent on every request — a Cookie header from a
@@ -287,6 +299,28 @@ type Fetch struct {
 	// RetentionExcluded records that the crawl-retention query did not match this response, so it was
 	// captured and scanned but not traversed.
 	RetentionExcluded bool `json:"retention_excluded,omitempty"`
+
+	// FoundAt is the URL of the page this one was discovered on, empty for a seed.
+	//
+	// # Why a successful fetch needs it, when refusals already had it
+	//
+	// frontierItem.foundAt existed and was documented "reporting only": every SkipRecord carried it,
+	// so the crawler could say why a URL it declined had been considered. Nothing carried it for a
+	// URL the crawl actually fetched, so the graph the crawler walks was reconstructible only for
+	// the parts it refused.
+	//
+	// That is the data behind Burp's "Crawl paths view", and the reason burpsy had no such view was
+	// not a missing UI — it was that the edge was thrown away on success. Depth already said HOW FAR
+	// a page was from a seed; this says WHICH WAY, which is the question an operator has when a page
+	// they expected is absent: not "how deep is it" but "what should have linked to it".
+	//
+	// Empty means seed, and a reader must not treat empty as "unknown provenance": a seed genuinely
+	// has no referring page. LinkText below is what distinguishes the two in a rendering.
+	FoundAt string `json:"found_at,omitempty"`
+	// LinkText is the link text or form label this URL was reached through, empty for a seed and for
+	// a link with no text. Carried because "which of the four links to /logout was followed" is not
+	// answerable from the URL alone, and because a rendering needs something to label an edge with.
+	LinkText string `json:"link_text,omitempty"`
 }
 
 // Report is one crawl's whole outcome.
@@ -307,6 +341,15 @@ type Report struct {
 	FormSubmission bool `json:"form_submission"`
 	// RobotsPolicy is the constant of the same name — carried, not implied.
 	RobotsPolicy string `json:"robots_policy"`
+	// Pool is the named resource pool this crawl ran under, empty when it ran under this package's
+	// own defaults. Carried so a report can say what bounded it rather than leaving the reader to
+	// infer a rate from timestamps.
+	Pool string `json:"pool,omitempty"`
+	// PoolConcurrency is the pool's max-concurrent-requests ceiling, when a pool set one. Present
+	// *because* it was not honoured: the crawl loop is sequential, so this records the bound that did
+	// not apply. An operator who set 8 and sees 8 here alongside a sequential crawl has been told the
+	// truth; a field omitted because it was unused would have told them nothing.
+	PoolConcurrency int `json:"pool_concurrency,omitempty"`
 
 	// Fetched, Refused, Failed and NotCaptured partition every request the loop attempted, exactly
 	// once each. Fetched counts requests that reached the shared capture path; Refused counts the
@@ -425,8 +468,19 @@ type Crawler struct {
 	limiter      *intruder.RateLimiter
 	hostLimiters map[string]*intruder.RateLimiter
 	requestsPer  float64
-	skips        *skipLedger
-	logger       *zap.Logger
+	// rateCapped says whether requestsPer is a cap at all. Only a named pool can turn the cap off,
+	// and the two facts have to travel together — a bare 0 would otherwise read as "zero requests a
+	// second", which is a stall rather than an absence of a limit.
+	rateCapped bool
+	// throttle is the per-host AutoThrottle, from the pool when there is one. nil is throttling off.
+	throttle *intruder.AutoThrottle
+	// poolName and poolConcurrency are carried for the report only: the name so a crawl can say what
+	// bounded it, and the concurrency ceiling so it can say which of that pool's bounds it could not
+	// honour. Neither is read on the request path.
+	poolName        string
+	poolConcurrency int
+	skips           *skipLedger
+	logger          *zap.Logger
 
 	// senders caches one AuthorisedSender per origin. Cached because AuthorisedSender counts its own
 	// sends and refusals per target, and building a fresh one per request would throw those counters
@@ -572,9 +626,42 @@ func New(cfg Config) (*Crawler, error) {
 		loginPage = re
 	}
 
-	rps := cfg.RequestsPerSecond
-	if rps <= 0 {
-		rps = DefaultRequestsPerSecond
+	// Three states, not two: a rate this crawl was given, this package's default, and — only ever
+	// from a named pool — no rate cap at all. The third is why `capped` exists rather than a bare
+	// float: a pool whose delay between requests is zero is an operator saying "concurrency only",
+	// and folding that into DefaultRequestsPerSecond would impose a cap they explicitly did not set.
+	// It is safe here in a way it would not be elsewhere because the loop is sequential: "no rate
+	// cap" on this path still means one request at a time.
+	rps, capped := cfg.RequestsPerSecond, cfg.RequestsPerSecond > 0
+	if !capped {
+		rps, capped = DefaultRequestsPerSecond, true
+	}
+	// The per-host throttle comes from the pool when there is one, so switching automatic throttling
+	// off in a pool switches it off here. That is a real loss of protection for an unattended crawl
+	// and it is the operator's own instruction, made in a dialog that says so, rather than a default
+	// this package quietly overrides.
+	throttle := intruder.DefaultAutoThrottle()
+	poolName := ""
+	poolConcurrency := 0
+	if p := cfg.Pool; p != nil {
+		poolName = p.Name
+		poolConcurrency = p.MaxInFlight
+		throttle = p.AutoThrottle
+		if p.PerSecond != nil {
+			rps, capped = *p.PerSecond, true
+		} else {
+			rps, capped = 0, false
+		}
+	}
+	// perSecond hands each limiter its own pointer. One shared pointer would be a single mutable
+	// rate behind every limiter in the crawl, which is a bug waiting for the first caller that
+	// writes through it.
+	perSecond := func() *float64 {
+		if !capped {
+			return nil
+		}
+		v := rps
+		return &v
 	}
 	maxRecords := cfg.MaxSkipRecords
 	if maxRecords == 0 {
@@ -593,7 +680,9 @@ func New(cfg Config) (*Crawler, error) {
 		// count the loop would ignore. Burst of 1 is strict spacing, which is what politeness means
 		// for an unattended traversal. No AutoThrottle on the aggregate limiter: a 429 belongs to the
 		// host that sent it, so throttling lives on the per-host limiters instead.
-		limiter: intruder.NewRateLimiter(&intruder.RateLimit{PerSecond: &rps, Burst: 1, MaxInFlight: 1, Name: "crawl"}),
+		limiter: intruder.NewRateLimiter(&intruder.RateLimit{
+			PerSecond: perSecond(), Burst: 1, MaxInFlight: 1, Name: limiterName("crawl", poolName),
+		}),
 		skips:   newSkipLedger(maxRecords),
 		logger:  logger,
 		senders: make(map[string]*sender.AuthorisedSender),
@@ -607,6 +696,10 @@ func New(cfg Config) (*Crawler, error) {
 		hostLimiters:      make(map[string]*intruder.RateLimiter),
 		robotsSeeded:      make(map[string]bool),
 		requestsPer:       rps,
+		rateCapped:        capped,
+		throttle:          throttle,
+		poolName:          poolName,
+		poolConcurrency:   poolConcurrency,
 		retention:         retention,
 		loginPage:         loginPage,
 	}
@@ -621,6 +714,17 @@ func New(cfg Config) (*Crawler, error) {
 		c.credentialOrigins[originKey(s)] = true
 	}
 	return c, nil
+}
+
+// limiterName labels a limiter with what it bounds and, when a named pool is in force, which pool
+// that is. The name reaches an operator through AttackReport.Pool and the limiter's own PoolName, so
+// "crawl:api.example.com:443 (out-of-hours)" answers both halves of "what slowed this down" without
+// the reader having to correlate two fields.
+func limiterName(scope, pool string) string {
+	if pool == "" {
+		return scope
+	}
+	return scope + " (" + pool + ")"
 }
 
 // unavailablePreFetch returns the queried fields that no frontier URL can answer. Derived from the
@@ -677,6 +781,10 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		RetentionQuery: c.cfg.RetentionQuery,
 		FormSubmission: c.cfg.SubmitForms,
 		RobotsPolicy:   RobotsPolicy,
+		// Both from the crawler rather than from cfg, so what is reported is the pool the limiters
+		// were actually built from and not the pool the caller meant to pass.
+		Pool:            c.poolName,
+		PoolConcurrency: c.poolConcurrency,
 	}
 	lim := LimitReport{Limits: c.limits}
 
@@ -837,7 +945,12 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	if item.depth > lim.DeepestDepth {
 		lim.DeepestDepth = item.depth
 	}
-	fetch := Fetch{URL: item.url.String(), Method: item.method, ExchangeID: ex.ID, Depth: item.depth}
+	// FoundAt and LinkText come straight off the frontier item, which has carried them all along for
+	// the refusal reports. Populating them here is the whole of what a crawl-paths view needed.
+	fetch := Fetch{
+		URL: item.url.String(), Method: item.method, ExchangeID: ex.ID, Depth: item.depth,
+		FoundAt: item.foundAt, LinkText: item.text,
+	}
 	if ex.Status != nil {
 		fetch.Status = int(*ex.Status)
 	}
@@ -937,14 +1050,16 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 
 	// Gate (b) of DSL-03: crawl *retention*, evaluated after the fetch with the full grammar, because
-	// by now every field the grammar has really does have a value. It gates traversal and nothing
+	// by now every field the grammar has really does have a value — including `header`, which is why
+	// the stored response is handed to fetchedRow rather than only its body. `duration` is the one
+	// exception and reports itself unmeasured: the crawler does not time fetches at this layer. It gates traversal and nothing
 	// else. CRAWL-02 means this response is already captured and already scanned — it cannot be
 	// un-captured, and calling this a scope exclusion would make the crawl's counts disagree with the
 	// store's. So it is a response-category skip, and the request that produced it still counts as a
 	// fetch.
 	if c.retention != nil && !c.retention.Match(fetchedRow{
 		host: item.url.Hostname(), method: item.method, path: item.url.Path, status: fetch.Status,
-		mime: contentType, body: body,
+		mime: contentType, body: body, resp: msg,
 	}) {
 		fetch.RetentionExcluded = true
 		c.skips.record(SkipRecord{
@@ -1369,11 +1484,12 @@ func (c *Crawler) recordFingerprintBudget(item frontierItem, foundAt string, lim
 // frontierRow is what a crawl-scope query is evaluated against (DSL-03).
 //
 // Host, Method and Path are the request the crawler is about to build, and are real answers. Status,
-// Mime and Body report absent, because before the fetch there is no response — and New has already
-// refused any query that names them, so no comparison ever reaches those three. They are implemented
-// as absent rather than left to panic because query.Queryable requires all six, and because a
-// caller constructing this type directly should get the documented "absent fields are absent"
-// behaviour rather than a crash.
+// Mime, Body, ResponseLen and DurationUs report absent, because before the fetch there is no
+// response — and New has already refused any query that names them, so no comparison ever reaches
+// them (unavailablePreFetch derives its answer from the field list, so a field added to the grammar
+// defaults to unavailable). They are implemented as absent rather than left to panic because
+// query.Queryable requires all of them, and because a caller constructing this type directly should
+// get the documented "absent fields are absent" behaviour rather than a crash.
 type frontierRow struct {
 	host   string
 	method string
@@ -1387,6 +1503,18 @@ func (r frontierRow) Status() int    { return 0 }
 func (r frontierRow) Mime() string   { return "" }
 func (r frontierRow) Body() []byte   { return nil }
 
+// Both absent, not zero: there is no response to have a size, and nothing has been timed.
+func (r frontierRow) ResponseLen() (int64, bool) { return 0, false }
+func (r frontierRow) DurationUs() (int64, bool)  { return 0, false }
+
+// No response, so no headers. New refuses any query naming this field before the fetch.
+func (r frontierRow) Header(string) ([]string, bool) { return nil, false }
+
+// known=false, not empty strings: the crawler is deciding whether to fetch a URL, so there is no
+// exchange to have been annotated, and reporting "" would tell a query that every frontier URL is
+// unhighlighted and uncommented — a claim rather than an absence.
+func (r frontierRow) Annotation() (string, string, bool) { return "", "", false }
+
 // fetchedRow is what a crawl-retention query is evaluated against: a response that exists, so every
 // field the grammar has is a real answer rather than an absence. This is the difference between the
 // two DSL-03 gates, and the reason the pre-fetch one has to refuse queries this one accepts.
@@ -1397,6 +1525,11 @@ type fetchedRow struct {
 	status int
 	mime   string
 	body   []byte
+	// resp is the stored response, carried so Header can answer from the real head rather than
+	// reporting every header absent. Without it the retention gate would evaluate
+	// `header["set-cookie"] ~ "x"` as false for every response, which is a verdict about the target
+	// rather than an admission that this type could not see its headers.
+	resp *core.StoredMessage
 }
 
 func (r fetchedRow) Host() string   { return r.host }
@@ -1405,6 +1538,42 @@ func (r fetchedRow) Path() string   { return r.path }
 func (r fetchedRow) Status() int    { return r.status }
 func (r fetchedRow) Mime() string   { return r.mime }
 func (r fetchedRow) Body() []byte   { return r.body }
+
+// ResponseLen is present because the response is: this type exists only after a fetch. len(body) is
+// the honest answer even when the body is empty — a 204 is a zero-length response, not an absent one,
+// which is the distinction the bool carries.
+func (r fetchedRow) ResponseLen() (int64, bool) { return int64(len(r.body)), true }
+
+// DurationUs is UNMEASURED. The crawler does not time its fetches at this layer, and reporting 0
+// would tell an operator every crawled response arrived instantaneously — a measurement nobody made.
+// If crawl timing is wanted, thread it onto this struct; returning false is what keeps the absence
+// visible until then.
+func (r fetchedRow) DurationUs() (int64, bool) { return 0, false }
+
+// Header reads the stored response head. Absent when there is no stored response to read, which is
+// distinct from a header that is genuinely not there — and both fail every comparison, so a caller
+// cannot tell them apart from the verdict alone. That is acceptable here and stated rather than
+// hidden: this type only exists after a successful fetch, so resp being nil means the read-back
+// failed, and that path already recorded a SkipResponseUnreadable.
+// known=false for the same reason as frontierRow: the retention gate runs immediately after the
+// fetch, before an operator has seen the row, so an annotation cannot exist yet. A later re-scan
+// through a different consumer can answer it.
+func (r fetchedRow) Annotation() (string, string, bool) { return "", "", false }
+
+func (r fetchedRow) Header(name string) ([]string, bool) {
+	if r.resp == nil {
+		return nil, false
+	}
+	raw, present := r.resp.HeaderValues(name)
+	if !present {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		out = append(out, string(value))
+	}
+	return out, true
+}
 
 // senderFor returns the AuthorisedSender bound to one origin, building it on first use. The scope
 // handle passed in is the crawl's, so every send this package makes is checked against the same
@@ -1444,12 +1613,17 @@ func (c *Crawler) limiterFor(u *url.URL) *intruder.RateLimiter {
 	if l, ok := c.hostLimiters[key]; ok {
 		return l
 	}
-	per := c.requestsPer
+	var per *float64
+	if c.rateCapped {
+		v := c.requestsPer
+		per = &v
+	}
 	l := intruder.NewRateLimiter(&intruder.RateLimit{
-		PerSecond: &per, Burst: 1, MaxInFlight: 1, Name: "crawl:" + key,
+		PerSecond: per, Burst: 1, MaxInFlight: 1, Name: limiterName("crawl:"+key, c.poolName),
 		// A run of 429s or 503s from one host halves the rate at that host for the next fifty grants.
 		// An unattended crawl needs this: nobody is watching to notice the target asking for mercy.
-		AutoThrottle: intruder.DefaultAutoThrottle(),
+		// A named pool supplies its own reaction here, including "none" — see Config.Pool.
+		AutoThrottle: c.throttle,
 	})
 	c.hostLimiters[key] = l
 	return l

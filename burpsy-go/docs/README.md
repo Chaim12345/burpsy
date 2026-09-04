@@ -23,7 +23,9 @@ aspirational behavior is documented as if it exists.
   conformance vs. runtime coverage, and how coverage is reported.
 - **[SCANNER-COVERAGE.md](./SCANNER-COVERAGE.md)** — the 183-issue Burp catalog:
   which rows are runnable, which are declined, and why — plus the runtime
-  demonstration layer (145/183 end-to-end, pinned by test).
+  demonstration layer (**160**/183 end-to-end, measured and pinned by test;
+  corrected from a stale "145" on 2026-08-27 — the old figure understated reality,
+  see the provenance note there).
 - **[SCANNER-INFRA.md](./SCANNER-INFRA.md)** — the capability primitives behind
   the catalog checks and the wiring that sits on them.
 - **[SCANNER-INFRA-ROADMAP.md](./SCANNER-INFRA-ROADMAP.md)** — a plan, not a

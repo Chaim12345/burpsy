@@ -49,13 +49,31 @@ asserts every declared vulnerability is reported while its **safe counterpart** 
 
 | Bucket | Count |
 |---|---:|
-| Catalog rows with an end-to-end runtime demonstration | **145 / 183** |
-| Rows registered but not runtime-demonstrated | 38 / 183 |
+| Catalog rows with an end-to-end runtime demonstration | **160 / 183** |
+| Rows registered but not runtime-demonstrated | 23 / 183 |
 
-- The 145 is pinned by `wantDemonstrated` in `runtime_coverage_test.go` — removing a
-  manifest entry fails the suite rather than quietly lowering the published number. It
-  counts **distinct rows**, not endpoints (148 vulnerable endpoints in the manifest; some
-  rows have two).
+- The 160 is both *measured* and pinned by `wantDemonstrated = 160` in `runtime_coverage_test.go`
+  — removing a manifest entry fails the suite rather than quietly lowering the published number. It
+  counts **distinct rows**, not endpoints (163 vulnerable endpoints in the manifest; some rows have
+  two).
+- Provenance (2026-08-27): reproduced with
+  `go test ./internal/scanner/ -run TestTheScannerDetects -count=1 -v -timeout 30m`, which printed
+  verbatim:
+
+  > `runtime detection: 160 distinct catalog rows demonstrated across 163 endpoints, 0 missed`
+
+- **Correction of a stale figure:** this table previously read **145 / 183** with 38 not
+  demonstrated. The number was transcribed from the 145-era snapshot recorded in
+  [HANDOFF-2026-08-18.md](./HANDOFF-2026-08-18.md) and never re-derived against the live object after the
+  pin moved, so it understated real coverage for two days. The direction of that error is worth
+  naming because every other wrong figure on this branch inflated; an understated claim still
+  erodes trust once noticed, which is why it is corrected here rather than silently overwritten.
+  Registry context from the same day, measured by walking `NativeCheckRegistry()`: **183 total /
+  183 runnable / 0 declined / no duplicate names**; the 23 undemonstrated names group into
+  stored-DOM platform walls (WebSQL removed from Chromium, `[object File]` canaries, navigation-only
+  sinks), OOB/collaborator dependence, request smuggling's non-conformant-listener requirement,
+  generated-issue placeholders, and native checks without a planted vulnerable endpoint — the
+  per-row list lives in the handoff's registered-only section.
 - Coverage grows by planting another vulnerability in `internal/vulnapp`, not by editing a
   constant: the assertions come from the manifest declaration.
 - The exact 38 registered-only rows, grouped by why they lack a demonstration (stored-DOM

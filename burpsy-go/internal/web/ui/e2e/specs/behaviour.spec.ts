@@ -4,8 +4,10 @@
 // checked by reading a rendered colour, not by reading back the attribute it just set, because an
 // attribute no stylesheet consumes would satisfy the second and change nothing on screen.
 
+import { request as httpRequest } from "node:http";
 import { activePane, expect, gotoApp, gotoRoute, pinTheme, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
+import { readHarness } from "../harness/server";
 
 const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
 
@@ -41,20 +43,23 @@ test.describe("shell behaviour", () => {
     // zustand persists theme under burpsy.workspace and partialize keeps it. An operator who picks
     // light and gets dark back on the next page load will not pick it twice.
     //
+    // Since the FlatLaf restyle (7d0c7d5) the shell ships dark (Darcula) as its first-launch
+    // default regardless of the OS colour scheme, so this flow pins both facts at once: first
+    // launch is dark even under an OS that says light, and an operator's explicit choice survives
+    // a reload that would otherwise fall back to the dark default.
+    //
     // Deliberately NOT using pinTheme here: addInitScript runs on EVERY document load, reloads
-    // included, so it would rewrite localStorage back to its own value before the app boots and the
-    // test would report a persistence bug that does not exist. The starting theme comes from the
-    // emulated colour scheme instead, and the assertion is only that the toggle's choice survives.
+    // included, so it would rewrite localStorage back to its own value before the app boots and
+    // the test would report a persistence bug that does not exist.
     await page.emulateMedia({ colorScheme: "light" });
     await gotoApp(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    await page.getByRole("button", { name: "Use light theme" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
-    await page.getByRole("button", { name: "Use dark theme" }).click();
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-
-    // Reloaded with the OS preference still saying light: only the persisted choice can keep it dark.
     await page.reload();
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   });
 
   test("mod+K opens the command palette, and it navigates", async ({ page, consoleErrors }) => {
@@ -130,16 +135,16 @@ test.describe("data views", () => {
   });
 
   test("Proxy HTTP history holds proxy traffic only", async ({ page }) => {
-    // EXPECTED TO FAIL — a real finding, left failing on purpose.
+    // The harness sends exactly one request through Repeater, and it must not show up here. In
+    // Burp, Proxy › HTTP history is proxy traffic; a Repeater send appears in Logger, which is the
+    // view whose whole subject is "requests the tool itself made". burpsy now enforces that split:
+    // the repeater tags its exchange SourceRepeater, /api/history drops repeater/intruder/scanner-
+    // attributed rows, and persist round-trips the attribution so a restart cannot bring the row
+    // back. The sibling test below already proves Logger holds the send.
     //
-    // The harness sends exactly one request through Repeater, and it shows up here as a sixth row.
-    // In Burp, Proxy › HTTP history is proxy traffic; a Repeater send appears in Logger, which is the
-    // view whose whole subject is "requests the tool itself made". burpsy has both views, and the
-    // sibling test below already proves Logger holds the Repeater send — so this row makes the two
-    // views the same list with different columns, and makes "how many requests did I proxy" a
-    // question HTTP history answers wrongly.
-    //
-    // Kept as its own test so the five assertions above still report independently of it.
+    // This was a deliberate red test pinning the leak (2026-08); the fix landed and this is now
+    // the regression guard. Kept as its own test so the five assertions above still report
+    // independently of it.
     await gotoRoute(page, route("history"));
     await expect(page.locator("tr.data-row", { hasText: "/repeated" })).toHaveCount(0);
   });
@@ -147,12 +152,15 @@ test.describe("data views", () => {
   test("a table header sorts, and reorders the rows", async ({ page, consoleErrors }) => {
     await gotoRoute(page, route("history"));
     const rows = page.locator("tr.data-row");
-    // EXPECTED TO FAIL for the same reason as "Proxy HTTP history holds proxy traffic only": the
-    // Repeater send leaks into history as a sixth row, making this assertion resolve to 6 not 5.
-    // The bug is documented there; this failure is a symptom, not an independent defect.
+    // Five rows exactly: the Repeater send no longer leaks into history (see the test above), so
+    // the count is the five proxied exchanges and nothing else.
     await expect(rows).toHaveCount(5);
 
-    const paths = async () => (await rows.locator("td").nth(3).allInnerTexts()).map((text) => text.trim());
+    // All five path cells: only the Path column renders a <code> element, so targeting it
+    // avoids the column-index fragility that .nth(3) across a flattened td list caused (it
+    // narrowed to one cell, not one per row — the sort assertion was comparing 1-element arrays).
+    const paths = async () =>
+      (await page.locator("tr.data-row code").allInnerTexts()).map((text) => text.trim());
     const pathHeader = page.locator("th", { has: page.getByRole("button", { name: "Path" }) });
 
     // Unsorted, history is in capture order — which is the order the harness proxied them in, and
@@ -294,22 +302,24 @@ test.describe("Intruder tabs", () => {
 
 test.describe("preferences reach the rendered UI", () => {
   test("the density command changes the table's row class", async ({ page, consoleErrors }) => {
-    // EXPECTED TO FAIL — a real finding, left failing on purpose.
-    //
     // Density is a preference set in one place and consumed in another, and that crossing is exactly
-    // where a preference quietly stops being read. It has: the store holds `density`, Settings offers
-    // a Select for it, the palette and the View menu each offer a toggle, and the toggle fires a
-    // success toast — but `density={...}` is passed to none of the 24 VirtualTable/SimpleTable call
-    // sites, so every table renders at the component's own default and nothing on screen ever gets
-    // denser. Four controls and a confirmation for a value no table reads.
+    // where a preference quietly stops being read. The store holds density, Settings offers a Select
+    // for it, and the palette and the View menu each offer a toggle. The tables consume it directly:
+    // VirtualTable and SimpleTable fall back to the store's value when no page passes an explicit
+    // density prop (src/ui/table.tsx), so the toggle reaches every table at once instead of needing
+    // 24 call sites kept in sync — the drift that made this a deliberate red test (2026-08). The fix
+    // landed; this is now the regression guard.
+    //
+    // Since the FlatLaf restyle (7d0c7d5) the first-launch default is compact (Burp's own density),
+    // so the flow starts from compact and asserts the command moves the table to comfortable.
     await gotoRoute(page, route("history"));
-    await expect(page.locator(".table-frame")).toHaveClass(/density-comfortable/);
+    await expect(page.locator(".table-frame")).toHaveClass(/density-compact/);
 
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByLabel("Search commands").fill("compact");
+    await page.getByLabel("Search commands").fill("comfortable");
     await page.locator("#palette-results [role=option]").first().click();
 
-    await expect(page.locator(".table-frame")).toHaveClass(/density-compact/);
+    await expect(page.locator(".table-frame")).toHaveClass(/density-comfortable/);
     expect(consoleErrors).toEqual([]);
   });
 
@@ -440,7 +450,7 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
       // "Reflect it in the query text" (DESIGN.md / the task brief): the toggle's effect is visible
       // as real DSL, not a second hidden filter — the operator can read it, and could have typed it.
       await expect(queryBox).toHaveValue('NOT host = "127.0.0.1"');
-      await expect(page.getByText("No exchange matches this filter")).toBeVisible();
+      await expect(page.getByText("No exchange matches these filters")).toBeVisible();
       await expect(rows).toHaveCount(0);
 
       // Turning it back off restores the capture and removes exactly the clause it added.
@@ -452,6 +462,313 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
       // every later test's traffic out of scope too.
       await page.request.post("/api/scope", { data: { action: "clear" } });
     }
+
+    expect(consoleErrors).toEqual([]);
+  });
+});
+
+/**
+ * A GET through the proxy that RESOLVES WITH THE BODY, unlike the harness's own
+ * viaProxy which only waits for the end of the stream. The body is the assertion:
+ * the throwaway origin echoes `ORIGIN-OK <method> <url>`, so reading it back is
+ * how a test learns what bytes the proxy actually forwarded — as opposed to what
+ * the console displayed, which is the thing under test and cannot vouch for itself.
+ *
+ * `agent: false` for the same reason the harness does it; see viaProxy's comment.
+ *
+ * Module scope rather than inside the "Unit 14" describe: the Intercept spec below
+ * also resolves held traffic through it, and a describe-scoped function is not in
+ * that test's scope at all — a ReferenceError, not a failure of the thing under test.
+ */
+function proxyGet(proxyPort: number, url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const request = httpRequest(
+      { host: "127.0.0.1", port: proxyPort, method: "GET", path: url, headers: { Host: target.host }, agent: false },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        response.once("end", () => resolve(body));
+      },
+    );
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+test.describe("the editable Inspector — Unit 14", () => {
+  test("an Inspector edit changes the request Repeater actually sends", async ({ page, consoleErrors }) => {
+    const { targetPort } = readHarness();
+    const origin = `http://127.0.0.1:${targetPort}`;
+    await gotoRoute(page, route("repeater"));
+
+    // A fresh browser has no persisted tabs, so the page opens on its empty state.
+    await page.getByRole("button", { name: "New request" }).first().click();
+    await page.getByLabel("Target", { exact: true }).fill(origin);
+
+    const requestEditor = page.locator(".editor-grid-inspected > *").first();
+    await expect(requestEditor).toContainText("GET /");
+
+    // Edit the request target through the Inspector, not the Raw view — the whole
+    // claim being tested is that the Inspector writes the message the tool sends.
+    const inspector = page.locator(".inspector");
+    const targetField = inspector.getByLabel("Request attributes value for Target");
+    await targetField.fill("/inspector-edited");
+    await inspector.getByRole("button", { name: "Apply" }).click();
+
+    // First: the edit reached the raw bytes, spliced rather than reflowed.
+    await expect(requestEditor).toContainText("GET /inspector-edited HTTP/1.1");
+    // And the field is no longer dirty, so Apply has gone.
+    await expect(inspector.getByRole("button", { name: "Apply" })).toHaveCount(0);
+
+    // Then the assertion that matters: send it, and let the ORIGIN say what it received.
+    // A console that displayed the edit but sent the old bytes passes the check above
+    // and fails this one.
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const responseEditor = page.locator(".editor-grid-inspected > *").nth(1);
+    await expect(responseEditor).toContainText("ORIGIN-OK GET /inspector-edited");
+  });
+});
+
+test.describe("extender", () => {
+  test("the extensions tab says what a plugin is and that nothing is allowlisted", async ({
+    page,
+    consoleErrors,
+    failedRequests,
+  }) => {
+    // The harness starts burpsy without -plugins, which is the common case and the one that must not
+    // read as "this feature is missing". So the assertion is on what the empty state *says*: the flag
+    // that admits a plugin, and the absence of any store to browse.
+    await gotoRoute(page, route("extensions"));
+
+    await expect(page.getByText("No plugin is allowlisted", { exact: false }).first()).toBeVisible();
+    await expect(page.locator(".empty")).toContainText("-plugins");
+    await expect(page.locator(".empty")).toContainText("no registry");
+    // And the header states the substrate, so an operator does not go looking for a jar or a store.
+    await expect(page.locator(".page-header")).toContainText("JSON-RPC");
+    await expect(page.locator(".page-header")).toContainText("no store");
+
+    // An empty allowlist is a state, not a failure: the counts render and the table does not.
+    await expect(page.locator(".metric").filter({ hasText: "Allowlisted" })).toContainText("0");
+    await expect(page.locator("table")).toHaveCount(0);
+
+    expect(consoleErrors).toEqual([]);
+    expect(failedRequests).toEqual([]);
+  });
+
+  test("the options tab reports this process's bounds and that there is no store", async ({
+    page,
+    consoleErrors,
+  }) => {
+    await gotoRoute(page, route("extenderoptions"));
+
+    // Read from the running server rather than hardcoded: the same values the API serves.
+    const policy = await page.request.get("/api/extensions").then((response) => response.json());
+    expect(policy.policy.registry).toBeNull();
+
+    await expect(page.getByText("There is no store")).toBeVisible();
+    await expect(page.locator(".notice-warn")).toContainText("BApp Store");
+    // The two absences that are stated rather than left to be inferred.
+    await expect(page.getByText("never used")).toBeVisible();
+    await expect(page.locator("code", { hasText: "-plugins name=" })).toBeVisible();
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("adding a header in the Inspector puts it on the wire", async ({ page, consoleErrors }) => {
+    const { targetPort } = readHarness();
+    await gotoRoute(page, route("repeater"));
+    await page.getByRole("button", { name: "New request" }).first().click();
+    await page.getByLabel("Target", { exact: true }).fill(`http://127.0.0.1:${targetPort}`);
+
+    const inspector = page.locator(".inspector");
+    // The headers section starts collapsed only when empty; a template request has a
+    // Host header, so it is open and its count is honest about what is in it.
+    const headers = inspector.locator(".inspector-section").filter({ hasText: "Request headers" });
+    await headers.getByRole("button", { name: "Add" }).click();
+    await headers.getByLabel("New Request headers name").fill("X-Inspector");
+    await headers.getByLabel("New Request headers value").fill("unit-14");
+    await headers.getByRole("button", { name: "Apply" }).click();
+
+    const requestEditor = page.locator(".editor-grid-inspected > *").first();
+    await expect(requestEditor).toContainText("X-Inspector: unit-14");
+
+    // And it comes back as a row of the Inspector's own headers section, which is the
+    // round trip: written into the bytes, then re-parsed out of them.
+    await expect(headers.getByLabel("Request headers value for X-Inspector")).toHaveValue("unit-14");
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("a Repeater response is inspectable but says why it is not editable", async ({ page, consoleErrors }) => {
+    const { targetPort } = readHarness();
+    await gotoRoute(page, route("repeater"));
+    await page.getByRole("button", { name: "New request" }).first().click();
+    await page.getByLabel("Target", { exact: true }).fill(`http://127.0.0.1:${targetPort}`);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+
+    const inspector = page.locator(".inspector");
+    await expect(inspector.getByLabel("Request attributes value for Method")).toBeVisible();
+
+    await inspector.getByRole("button", { name: "Inspect the response" }).click();
+
+    // The response's fields are readable — the Set-Cookie the origin sets is right there —
+    // and the pane states why they cannot be typed into, rather than offering a dead field.
+    await expect(inspector).toContainText("Response attributes");
+    await expect(inspector).toContainText("A response that has already arrived cannot be edited");
+    await expect(inspector.getByLabel(/Response attributes value for/)).toHaveCount(0);
+    await expect(inspector).toContainText("E2E_SESSION");
+
+    await inspector.getByRole("button", { name: "Inspect the request" }).click();
+    await expect(inspector.getByLabel("Request attributes value for Method")).toBeVisible();
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("the Inspector's decoder decodes a value and writes it back", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("repeater"));
+    await page.getByRole("button", { name: "New request" }).first().click();
+
+    const inspector = page.locator(".inspector");
+    // Put a percent-encoded query parameter on the request to have something to decode.
+    const query = inspector.locator(".inspector-section").filter({ hasText: "Query parameters" });
+    // A fresh template has no query parameters, so under the panel's "auto" state the empty
+    // section is collapsed — the same first impression an operator gets. Expanding it is
+    // part of the flow under test, not a detour around one.
+    await query.getByRole("button", { name: /Query parameters/ }).click();
+    await query.getByRole("button", { name: "Add" }).click();
+    await query.getByLabel("New Query parameters name").fill("next");
+    await query.getByLabel("New Query parameters value").fill("%2Fhome%3Fa%3D1");
+    await query.getByRole("button", { name: "Apply" }).click();
+
+    // Encoding the value on the way in is the writers' job, so what is stored is the
+    // double-encoded form; the row reads back the once-decoded text.
+    const valueField = query.getByLabel("Query parameters value for next");
+    await expect(valueField).toHaveValue("%2Fhome%3Fa%3D1");
+
+    // Send it to the Selection section and run a URL decode over it.
+    await query.getByRole("button", { name: "Decode next" }).click();
+    const selection = inspector.locator(".inspector-selection");
+    await expect(selection.getByLabel("Selection text")).toHaveValue("%2Fhome%3Fa%3D1");
+
+    await selection.getByRole("button", { name: "Add decoder" }).click();
+    await selection.getByLabel("Decoder 1 encoding").selectOption("url-decode");
+    await expect(selection.getByLabel("Selection text")).toHaveValue("/home?a=1");
+
+    // Apply writes the DECODED text back into the parameter it came from.
+    await selection.getByRole("button", { name: "Apply" }).click();
+    await expect(query.getByLabel("Query parameters value for next")).toHaveValue("/home?a=1");
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("the Inspector dock preference survives a reload", async ({ page, consoleErrors }) => {
+    await gotoRoute(page, route("repeater"));
+    await page.getByRole("button", { name: "New request" }).first().click();
+
+    const inspector = page.locator(".inspector");
+    await expect(inspector).toHaveClass(/inspector-dock-right/);
+
+    await inspector.getByRole("button", { name: "Inspector settings" }).click();
+    await page.getByRole("radio", { name: "Left" }).check();
+
+    // Docking left has to move the pane, not just relabel a setting: the Inspector's
+    // left edge must end up left of the request editor's.
+    await expect(inspector).toHaveClass(/inspector-dock-left/);
+    const inspectorBox = await inspector.boundingBox();
+    const editorBox = await page.locator(".editor-grid-inspected > .editor-shell").first().boundingBox();
+    expect(inspectorBox!.x).toBeLessThan(editorBox!.x);
+
+    await page.reload();
+    await expect(page.locator("main h1")).toHaveText(/^Repeater/);
+    await expect(page.locator(".inspector")).toHaveClass(/inspector-dock-left/);
+
+    // Put it back: the store is persisted per browser profile, and Playwright reuses
+    // the context across tests in a file.
+    await page.locator(".inspector").getByRole("button", { name: "Inspector settings" }).click();
+    await page.getByRole("radio", { name: "Right" }).check();
+    await expect(page.locator(".inspector")).toHaveClass(/inspector-dock-right/);
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  test("an Inspector edit in Intercept changes the bytes actually forwarded", async ({ page, consoleErrors }) => {
+    const { proxyPort, targetPort } = readHarness();
+    const origin = `http://127.0.0.1:${targetPort}`;
+
+    // Interception is global to the one shared burpsy process, so it is turned back off
+    // in `finally` no matter how this test ends — leaving it on would hang every later
+    // test's traffic behind a held message nobody forwards.
+    await page.request.post("/api/intercept/enable", { data: { enabled: true } });
+    // The master switch alone holds NOTHING. intercept.NewEngine() leaves both direction
+    // lists zero-valued, so List.Active is false, and a list that is off holds no messages
+    // regardless of the master switch (internal/intercept/intercept.go:151-161). Activating
+    // the request list with no rules is the "unconditional" state -- hold everything inbound.
+    await page.request.put("/api/intercept/rules/requests", { data: { active: true, rules: [] } });
+    let inFlight: Promise<string> | null = null;
+    try {
+      await gotoRoute(page, route("intercept"));
+
+      // Fire the request and DO NOT await it: the proxy is holding it, so it only
+      // resolves once this test forwards it below.
+      inFlight = proxyGet(proxyPort, `${origin}/held-original`);
+
+      const row = page.locator("tr.data-row", { hasText: "/held-original" });
+      await expect(row).toBeVisible();
+      await row.click();
+
+      const inspector = page.locator(".inspector");
+      await inspector.getByLabel("Request attributes value for Target").fill("/forwarded-by-inspector");
+      await inspector.getByRole("button", { name: "Apply" }).click();
+
+      // The held-bytes editor is the buffer Forward sends, so the edit has to show there.
+      await expect(page.locator(".held-grid-inspected > *").first()).toContainText("GET /forwarded-by-inspector");
+
+      // exact: the toolbar now also carries "Forward all (n)" (b2e3a8f), and role-name
+      // matching is substring-by-default, so the unqualified name resolves to two buttons.
+      await page.getByRole("button", { name: "Forward", exact: true }).click();
+
+      // The origin is the witness. It echoes the path it was asked for, so this fails if
+      // the console showed the edit and forwarded the original bytes.
+      const body = await inFlight;
+      inFlight = null;
+      expect(body).toContain("ORIGIN-OK GET /forwarded-by-inspector");
+      expect(body).not.toContain("/held-original");
+    } finally {
+      await page.request.post("/api/intercept/enable", { data: { enabled: false } });
+      await page.request.put("/api/intercept/rules/requests", { data: { active: false, rules: [] } });
+      await page.request.post("/api/intercept/drop-all", { data: {} }).catch(() => null);
+      // A request still parked in the proxy would keep its socket open into teardown.
+      if (inFlight) await inFlight.catch(() => null);
+    }
+  });
+
+  test("the APIs tab renders exactly the method set the server dispatches", async ({
+    page,
+    consoleErrors,
+  }) => {
+    // The point of this one: the tab is generated from the host's method table, so a method added to
+    // the protocol appears here without anyone editing the page — and a page that had drifted into
+    // prose would fail this the moment the two disagreed.
+    const contract = await page.request.get("/api/extensions/apis").then((response) => response.json());
+    expect(contract.methods.length).toBeGreaterThan(0);
+
+    await gotoRoute(page, route("extenderapis"));
+
+    for (const method of contract.methods as { name: string }[]) {
+      await expect(page.locator("code", { hasText: method.name }).first()).toBeVisible();
+    }
+    // Three registration points, and the tab says why the other ten are absent.
+    expect(contract.kinds).toHaveLength(3);
+    // By role, not by text: the heading, its own detail line and one row of the unsupported table all
+    // talk about the ten registration points that hand Burp a Swing object, which is the point of the
+    // section — matching on the words would resolve to three elements.
+    await expect(page.getByRole("heading", { name: "Registration points" })).toBeVisible();
+    await expect(page.locator(".section-heading", { hasText: "Registration points" })).toContainText("Swing");
+    await expect(page.getByRole("heading", { name: "What a plugin cannot do" })).toBeVisible();
 
     expect(consoleErrors).toEqual([]);
   });

@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Download, ExternalLink, Globe, Play, ShieldAlert, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, Play, ShieldAlert, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
-import { formatDuration } from "../lib/api";
+import { copyToClipboard, formatDuration } from "../lib/api";
+import { useExchangeActions } from "../lib/actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import {
   useIssuesDetailed,
@@ -13,8 +14,10 @@ import {
 } from "../lib/data.attack";
 import { useApp } from "../lib/store";
 import type { AuditResult, FindingDetail } from "../lib/types.attack";
-import type { AdvisoryLink, Occurrence } from "../lib/types";
+import type { Occurrence } from "../lib/types";
+import { AdvisoryReader } from "../ui/advisory";
 import { HttpEditor } from "../ui/editor";
+import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { LoadingPanel, PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import {
   Badge,
@@ -231,73 +234,6 @@ interface HostGroup {
 
 /** Burp lists an issue under every path it was found at, so one finding with three occurrences is
  * three tree leaves and one advisory — not one leaf that hides where it actually happened. */
-/**
- * The issue-definition catalogue entry for a finding.
- *
- * The catalogue is 183 entries of long-form description, remediation and taxonomy — the thing that
- * turns a one-line check name into something an operator can act on and put in front of a client. It
- * was already resolved server-side and served on /api/issues, and then rendered nowhere: this panel
- * showed only the check's own two lines. This is the missing half.
- *
- * Prose arrives pre-split into plain-text paragraphs, so there is no markup to trust here. Links are
- * separate typed fields, rendered as real anchors from data rather than parsed out of a string.
- */
-function AdvisoryPanel({ finding }: { finding: FindingDetail }): JSX.Element | null {
-  const advisory = finding.advisory;
-  if (!advisory) {
-    // A deliberate absence is stated. "No catalogue entry, and here is why" and "nothing looked" are
-    // different claims, and a blank panel reads as a loading failure.
-    return finding.advisory_note ? (
-      <div>
-        <h3>Issue definition</h3>
-        <p className="prose cell-dim">{finding.advisory_note}</p>
-      </div>
-    ) : null;
-  }
-  return (
-    <div className="advisory-catalogue">
-      <h3>
-        Issue definition — {advisory.name} <span className="cell-dim">({advisory.type_index})</span>
-      </h3>
-      {advisory.typical_severity ? (
-        <p className="field-hint">This issue class is typically {advisory.typical_severity.toLowerCase()} severity.</p>
-      ) : null}
-      {(advisory.description_paragraphs ?? []).map((text, i) => (
-        <p className="prose" key={`d${i}`}>
-          {text}
-        </p>
-      ))}
-      {(advisory.remediation_paragraphs ?? []).length ? (
-        <>
-          <h3>Recommended remediation</h3>
-          {(advisory.remediation_paragraphs ?? []).map((text, i) => (
-            <p className="prose" key={`r${i}`}>
-              {text}
-            </p>
-          ))}
-        </>
-      ) : null}
-      <AdvisoryLinks label="Classifications" links={advisory.classifications} />
-      <AdvisoryLinks label="References" links={advisory.references} />
-    </div>
-  );
-}
-
-function AdvisoryLinks({ label, links }: { label: string; links?: AdvisoryLink[] }): JSX.Element | null {
-  if (!links || links.length === 0) return null;
-  return (
-    <div className="stack-tight">
-      <span className="eyebrow">{label}</span>
-      {links.map((link) => (
-        <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer" className="advisory-link">
-          {link.title || link.url}
-          <ExternalLink size={11} />
-        </a>
-      ))}
-    </div>
-  );
-}
-
 function groupFindings(findings: FindingDetail[]): HostGroup[] {
   const byHost = new Map<string, Map<string, IssueLeaf[]>>();
   for (const finding of findings) {
@@ -339,6 +275,8 @@ export function ScannerPage(): JSX.Element {
   const runAudit = useRunAudit();
   const focusExchange = useApp((state) => state.focusExchange);
   const setRoute = useApp((state) => state.setRoute);
+  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
+  const actions = useExchangeActions();
 
   const [severity, setSeverity] = useState("all");
   const [confidence, setConfidence] = useState("all");
@@ -414,6 +352,107 @@ export function ScannerPage(): JSX.Element {
     );
   };
 
+  /**
+   * The issue-triage menu, on a tree leaf.
+   *
+   * # What is here and what Burp has that this cannot
+   *
+   * Burp's issue context menu carries Set severity, Set confidence, Report issue, Go to issue and
+   * Delete issue. Three of those five are not offered, and the reason is the same for all three:
+   * `/api/issues` is registered GET-only (internal/web/server.go:727) — there is no PATCH to move a
+   * severity or a confidence onto a finding, and no DELETE to remove one. A menu entry that opened
+   * a picker and then dropped the choice on the floor would be the exact defect this audit is
+   * about, so they are absent rather than decorative. Tracked on burpsy-react-ui-3fr.
+   *
+   * What is here: Burp's "Go to issue" (both directions — the finding's exchange in HTTP history,
+   * and the host filtered in history), its "Report issue" as the three report exports the command
+   * palette already offers, the copies an operator writing a ticket needs, and — when the
+   * finding's exchange is inside the loaded window — the full cross-tool matrix on that exchange,
+   * because retesting a finding means sending its request to Repeater.
+   *
+   * The exchange is resolved per leaf rather than reused from the selection: right-clicking a leaf
+   * that is not selected must act on the leaf under the pointer.
+   */
+  const menuForLeaf = (leaf: IssueLeaf): MenuGroup[] => {
+    const finding = leaf.finding;
+    const exchangeId = leaf.occurrence?.exchange_id;
+    const leafExchange = exchangeId === undefined ? null : ((history ?? []).find((ex) => ex.id === exchangeId) ?? null);
+    const groups: MenuGroup[] = [
+      {
+        id: "goto",
+        actions: [
+          ...(exchangeId === undefined
+            ? []
+            : [
+                {
+                  id: "goto-exchange",
+                  label: `Show exchange #${exchangeId} in HTTP history`,
+                  icon: ExternalLink,
+                  onSelect: () => {
+                    focusExchange(exchangeId);
+                    setRoute("history");
+                  },
+                },
+              ]),
+          {
+            id: "goto-host",
+            label: `Filter history by ${finding.host}`,
+            icon: Globe,
+            onSelect: () => {
+              setHistoryQuery(`host = ${finding.host}`);
+              setRoute("history");
+            },
+          },
+        ],
+      },
+      {
+        id: "copy",
+        actions: [
+          {
+            id: "copy-name",
+            label: "Copy issue name",
+            icon: Copy,
+            onSelect: () => {
+              void copyToClipboard(findingName(finding));
+              toast.success("Issue name copied");
+            },
+          },
+          {
+            id: "copy-location",
+            label: "Copy issue location",
+            icon: Copy,
+            onSelect: () => {
+              void copyToClipboard(`${findingName(finding)} — ${finding.host}${leaf.occurrence?.path ?? ""}`);
+              toast.success("Issue location copied");
+            },
+          },
+          {
+            id: "copy-detail",
+            label: "Copy issue detail",
+            icon: Copy,
+            disabled: !finding.detail,
+            onSelect: () => {
+              void copyToClipboard(finding.detail ?? "");
+              toast.success("Issue detail copied");
+            },
+          },
+        ],
+      },
+      {
+        id: "report",
+        title: "Report",
+        actions: [
+          // The whole-scan exports, not a per-issue one: /api/report/{fmt} reports the scan, and
+          // there is no per-finding report endpoint to point a single-issue entry at.
+          { id: "html", label: "Export scan report (HTML)", icon: FileDown, onSelect: () => window.open("/api/report/html", "_blank") },
+          { id: "json", label: "Export scan report (JSON)", icon: FileDown, onSelect: () => window.open("/api/report/json", "_blank") },
+          { id: "sarif", label: "Export scan report (SARIF)", icon: FileDown, onSelect: () => window.open("/api/report/sarif", "_blank") },
+        ],
+      },
+    ];
+    return leafExchange ? [...groups, ...actions.menu(leafExchange)] : groups;
+  };
+
   const treePane = (
     <div className="pane">
       <Toolbar className="pane-toolbar">
@@ -487,8 +526,8 @@ export function ScannerPage(): JSX.Element {
                           </div>
                           {pathOpen
                             ? path.leaves.map((leaf) => (
+                                <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)}>
                                 <div
-                                  key={leaf.key}
                                   role="treeitem"
                                   aria-level={3}
                                   aria-selected={leaf.key === selectedKey}
@@ -522,6 +561,7 @@ export function ScannerPage(): JSX.Element {
                                     <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
                                   </span>
                                 </div>
+                                </ContextMenu>
                               ))
                             : null}
                         </div>
@@ -614,7 +654,10 @@ export function ScannerPage(): JSX.Element {
             <h3>Remediation</h3>
             <p className="prose">{selected.finding.remediation ?? "no remediation recorded"}</p>
           </div>
-          <AdvisoryPanel finding={selected.finding} />
+          {/* The catalogue entry the check resolved to, rendered by the same component the browsable
+              Issue definitions screen uses. Passing the note as well as the advisory is what keeps
+              "no catalogue entry, and here is why" distinct from "nothing looked". */}
+          <AdvisoryReader advisory={selected.finding.advisory} note={selected.finding.advisory_note} />
           {selected.finding.occurrences.length > 1 ? (
             <div>
               <h3>All occurrences ({selected.finding.occurrences.length})</h3>
@@ -650,6 +693,7 @@ export function ScannerPage(): JSX.Element {
               readOnly
               value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
               filename={`finding-${selected.finding.id}-request.txt`}
+              menuGroups={actions.menu(exchange)}
             />
           )}
         </TabsContent>
@@ -671,6 +715,7 @@ export function ScannerPage(): JSX.Element {
                   : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
               }
               filename={`finding-${selected.finding.id}-response.txt`}
+              menuGroups={actions.menu(exchange)}
             />
           )}
         </TabsContent>

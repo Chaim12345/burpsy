@@ -117,6 +117,21 @@ func (c Config) resolve(tool string) (string, error) {
 	return path, nil
 }
 
+// Available reports whether a tool can be launched at all, without launching it:
+// nil when the operator allowlisted the name and the binary it maps to is
+// executable, ErrNotAllowed or ErrUnavailable otherwise.
+//
+// It exists so a caller can refuse *before* it registers work. A surface that
+// only learned the tool was missing from a finished run would have to show an
+// empty result and explain it afterwards, which is the shape this package spends
+// its whole design avoiding. It is deliberately the same code path resolve takes,
+// so the pre-flight answer and the run's answer cannot disagree — a second
+// hand-rolled allowlist lookup at a call site is how they would.
+func (c Config) Available(tool string) error {
+	_, err := c.resolve(tool)
+	return err
+}
+
 // The typed refusals. A caller distinguishes them with errors.Is; a report
 // distinguishes them through Outcome. Both exist because "the operator did not
 // allow this tool", "the binary is missing" and "this target is out of scope"

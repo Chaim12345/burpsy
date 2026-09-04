@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -341,49 +340,4 @@ func (i *Intruder) Stop() {
 	}
 	i.progress.Status = "stopped"
 	i.progressMu.Unlock()
-}
-
-// PayloadGenerator generates payloads for attacks.
-type PayloadGenerator struct{}
-
-// NewPayloadGenerator creates a new payload generator.
-func NewPayloadGenerator() *PayloadGenerator {
-	return &PayloadGenerator{}
-}
-
-// GenerateNumbers generates numeric payloads from start to end inclusive.
-// An inverted range (start > end) yields no payloads rather than panicking in
-// make with a negative length.
-func (pg *PayloadGenerator) GenerateNumbers(start, end int) []string {
-	if end < start {
-		return []string{}
-	}
-	payloads := make([]string, end-start+1)
-	for i := start; i <= end; i++ {
-		payloads[i-start] = fmt.Sprintf("%d", i)
-	}
-	return payloads
-}
-
-// GenerateFromFile loads payloads from a file, one payload per line.
-// Blank lines are skipped; surrounding whitespace is trimmed.
-func (pg *PayloadGenerator) GenerateFromFile(filename string) ([]string, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	var payloads []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			payloads = append(payloads, line)
-		}
-	}
-	return payloads, nil
-}
-
-// GenerateCustom generates payloads from a custom list.
-func (pg *PayloadGenerator) GenerateCustom(payloads []string) []string {
-	return payloads
 }

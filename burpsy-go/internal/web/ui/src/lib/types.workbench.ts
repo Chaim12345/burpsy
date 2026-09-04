@@ -92,16 +92,40 @@ export interface CompareOp {
   b_offset: number;
   b_len: number;
   text?: string;
+  /**
+   * The difference lies entirely inside a header the operator asked burpsy to discount — W6
+   * #81/#82. The op is still returned with its real offsets and text; the console dims it and
+   * counts it rather than dropping it, because the bytes really do differ.
+   */
+  uninteresting?: boolean;
 }
 
 export interface CompareResponse {
   identical: boolean;
+  /**
+   * Every difference was inside a discounted header. Deliberately separate from `identical`,
+   * which stays false — these messages are not identical, and conflating the two would tell the
+   * operator the bytes matched when they did not.
+   */
+  identical_ignoring_uninteresting: boolean;
+  /** How many ops were discounted, so a dimmed diff can say why it looks empty. */
+  uninteresting_ops: number;
+  /** The list actually applied, so the panel and the result cannot disagree about what was used. */
+  uninteresting_headers_applied: string[];
   /** Counts trailing-only runs: a "replace" is in neither total. */
   deleted_tokens: number;
   inserted_tokens: number;
   truncated: boolean;
   ops_omitted: number;
   ops: CompareOp[];
+}
+
+/** Which discount list applies, and the surfaces that consult them. */
+export interface UninterestingHeaders {
+  request: string[];
+  response: string[];
+  default_response: string[];
+  applies_to: string[];
 }
 
 /* --- sequencer ------------------------------------------------------------ */
@@ -274,5 +298,16 @@ export interface ToolLogView {
   dropped: number;
   /** Per-tool histogram over every match, seeded with every known tool. */
   counts: Record<string, number>;
+  /**
+   * The capture axis: which tools are being recorded at all, distinct from the
+   * display axis. A tool missing (false) has its requests sent and deliberately
+   * not kept — see `uncaptured`. Not to be collapsed into `counts`: capture is
+   * destructive, display is not.
+   */
+  capturing: Record<string, boolean>;
+  /** Per-tool count of requests capture refused. Only ever moves forward. */
+  uncaptured: Record<string, number>;
+  /** Sum of `uncaptured`, so the count line can say the whole loss at once. */
+  uncaptured_total: number;
   entries: ToolLogRow[];
 }

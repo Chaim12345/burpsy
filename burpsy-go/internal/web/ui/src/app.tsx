@@ -5,107 +5,51 @@ import {
   Command,
   Database,
   FileDown,
+  FileUp,
   Gauge,
   Keyboard,
   Moon,
   Network,
   Plus,
   Repeat2,
+  RotateCcw,
   Rows3,
   Settings,
   ShieldCheck,
   Sun,
   Unplug,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
-import { formatBytes, formatCount, relativeTime, templateRequest } from "./lib/api";
+import { api, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, templateRequest } from "./lib/api";
 import { queryClient, useConnection, useEventStream, useScope, useStats } from "./lib/data";
 import { useCaCert } from "./lib/data.policy";
+import { onDesktopEvent } from "./lib/runtime";
 import { resolveTheme, useApp } from "./lib/store";
+import type { Exchange } from "./lib/types";
+import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
+import { useChord, useKeymap } from "./lib/keymap";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
 import { DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
-interface ShortcutRow {
-  keys: string[];
-  label: string;
-  /** Set when the binding differs from Burp's, so the reason is visible. */
-  note?: string;
-}
-
-/**
- * Burp's bindings, kept where a browser allows it. The exceptions are called out
- * rather than silently changed, because a Burp user's muscle memory is the point.
- */
-const SHORTCUT_GROUPS: { title: string; rows: ShortcutRow[] }[] = [
-  {
-    title: "Send to",
-    rows: [
-      { keys: ["mod", "R"], label: "Send the selected exchange to Repeater" },
-      { keys: ["mod", "I"], label: "Send the selected exchange to Intruder" },
-      { keys: ["Enter"], label: "Send the focused row to Repeater" },
-      { keys: ["right-click"], label: "All send-to and copy actions for a row" },
-    ],
-  },
-  {
-    title: "Proxy",
-    rows: [
-      { keys: ["mod", "F"], label: "Forward the held message" },
-      { keys: ["alt", "T"], label: "Toggle interception", note: "Burp uses mod+T; browsers reserve it for a new tab" },
-    ],
-  },
-  {
-    title: "Message editor",
-    rows: [
-      { keys: ["mod", "U"], label: "URL-encode the selection" },
-      { keys: ["mod", "shift", "U"], label: "URL-decode the selection" },
-      { keys: ["mod", "H"], label: "HTML-encode the selection" },
-      { keys: ["mod", "shift", "H"], label: "HTML-decode the selection" },
-      { keys: ["mod", "B"], label: "Base64-encode the selection" },
-      { keys: ["mod", "shift", "B"], label: "Base64-decode the selection" },
-      { keys: ["mod", "S"], label: "Search in the editor" },
-      { keys: ["mod", "Enter"], label: "Send the request in Repeater" },
-    ],
-  },
-  {
-    title: "Navigation",
-    rows: [
-      { keys: ["mod", "K"], label: "Command palette" },
-      {
-        keys: ["alt", "1…0"],
-        label: "Switch tool",
-        note: "Burp uses mod+shift+letter; browsers reserve most of those",
-      },
-      { keys: ["↑", "↓"], label: "Move through the table" },
-      { keys: ["PgUp", "PgDn"], label: "Move a page through the table" },
-      { keys: ["Home", "End"], label: "First or last row" },
-    ],
-  },
-  {
-    title: "Appearance and help",
-    rows: [
-      { keys: ["mod", "shift", "L"], label: "Toggle light and dark theme" },
-      { keys: ["?"], label: "Show this list" },
-    ],
-  },
-];
 
 function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
+  const keymap = useKeymap();
   return (
     <Modal open={open} onOpenChange={onOpenChange} title="Keyboard shortcuts" description="mod is ⌘ on macOS and Ctrl elsewhere.">
       <div className="shortcut-table">
-        {SHORTCUT_GROUPS.map((group) => (
+        {shortcutGroups().map((group) => (
           <div key={group.title}>
             <div className="shortcut-group">{group.title}</div>
-            {group.rows.map((entry) => (
-              <div className="shortcut-row" key={entry.label}>
+            {group.rows.map((entry: ShortcutAction) => (
+              <div className="shortcut-row" key={entry.id}>
                 <div>
-                  {entry.keys.map((key, i) => (
+                  {chordKeys(entry, keymap).map((key, i) => (
                     <span key={key}>{i > 0 ? "+" : null}<Kbd>{key}</Kbd></span>
                   ))}
                 </div>
@@ -230,25 +174,153 @@ function App(): JSX.Element {
     setTheme(next);
   }, [theme, setTheme]);
 
+  // File > Export History from the desktop shell exports the full capture (the
+  // History page's button exports the loaded, filtered view). Index rows only —
+  // never bodies — so the CSV cannot leak payloads.
+  const exportHistoryCSV = useCallback(async () => {
+    try {
+      const rows = await api<Exchange[]>("/api/history?limit=100000");
+      if (rows.length === 0) {
+        toast.error("No history rows to export");
+        return;
+      }
+      downloadText("history.csv", historyToCSV(rows), "text/csv");
+      toast.success(`Exported ${rows.length} exchanges to CSV`);
+    } catch {
+      toast.error("History export failed");
+    }
+  }, []);
+
+  // Desktop menu bridge: cmd/desktop's buildMenu emits burpsy:navigate (Tools
+  // items) and burpsy:menu (File/View/Help items) as Wails events. The shell
+  // subscribes here; in web mode onDesktopEvent returns null and this effect is
+  // a no-op — every action stays reachable through the hotkeys and the palette,
+  // so a menu click and a keyboard shortcut drive the identical handler.
+  useEffect(() => {
+    const offNavigate = onDesktopEvent("burpsy:navigate", (route) => {
+      if (typeof route === "string") navigate(route);
+    });
+    const offMenu = onDesktopEvent("burpsy:menu", (action) => {
+      switch (action) {
+        case "toggle-theme":
+          toggleTheme();
+          break;
+        case "command-palette":
+          setPaletteOpen(true);
+          break;
+        case "shortcuts":
+          setShortcutsOpen(true);
+          break;
+        case "export-history":
+          void exportHistoryCSV();
+          break;
+        default:
+          break;
+      }
+    });
+    return () => {
+      offNavigate?.();
+      offMenu?.();
+    };
+  }, [navigate, toggleTheme, exportHistoryCSV, setPaletteOpen, setShortcutsOpen]);
+
+  const paletteChord = useChord("nav.palette");
+  const shortcutsChord = useChord("help.shortcuts");
+  const themeChord = useChord("view.toggleTheme");
+  const nextToolChord = useChord("nav.nextTool");
+  const prevToolChord = useChord("nav.prevTool");
+
+  // Burp's Ctrl+Alt+Left / Ctrl+Alt+Right. Cycling is a separate action from alt+1…0 because
+  // there are thirteen tools and ten digits: four tabs are reachable only this way.
+  const cycleTool = useCallback(
+    (delta: number) => {
+      const tools = TOOLS;
+      const currentTool = toolOf(route);
+      const at = tools.findIndex((entry) => entry.id === currentTool.id);
+      if (at === -1) return;
+      // Wraps, because a cycle that stops at the ends makes the last tab unreachable from the
+      // first without counting.
+      const next = tools[(at + delta + tools.length) % tools.length]!;
+      navigate(entryLeaf(next));
+    },
+    [route, navigate],
+  );
+  useHotkeys(nextToolChord, (event) => { event.preventDefault(); cycleTool(1); },
+    { enableOnFormTags: true }, [nextToolChord, cycleTool]);
+  useHotkeys(prevToolChord, (event) => { event.preventDefault(); cycleTool(-1); },
+    { enableOnFormTags: true }, [prevToolChord, cycleTool]);
+
+  // Bound from the keymap, not a literal: the Settings table edits these, and a literal here
+  // would mean an operator's rebind changed the row the modal displays and nothing else.
   useHotkeys(
-    "mod+k",
+    paletteChord,
     (event) => {
       event.preventDefault();
       setPaletteOpen(true);
     },
     { enableOnFormTags: true },
+    [paletteChord, setPaletteOpen],
   );
 
-  useHotkeys("shift+slash", () => setShortcutsOpen(true));
+  useHotkeys(shortcutsChord, () => setShortcutsOpen(true), { enableOnFormTags: false }, [shortcutsChord]);
   useHotkeys(
-    "mod+shift+l",
+    themeChord,
     (event) => {
       event.preventDefault();
       toggleTheme();
     },
     { enableOnFormTags: true },
-    [toggleTheme],
+    [themeChord, toggleTheme],
   );
+
+  const [importResult, setImportResult] = useState<{ ok: boolean; detail: string } | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  const exportConfiguration = useCallback(() => {
+    // A blob download rather than window.open: an operator wants a file to carry between
+    // engagements, not a browser tab rendering JSON.
+    void fetch("/api/config/export")
+      .then((res) => {
+        if (!res.ok) throw new Error(`export failed (${res.status})`);
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "burpsy-config.json";
+        link.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((err) => setImportResult({ ok: false, detail: String(err) }));
+  }, []);
+
+  const importConfiguration = useCallback(async (file: File) => {
+    const text = await file.text();
+    try {
+      const res = await fetch("/api/config/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: text,
+      });
+      const body: unknown = await res.json().catch(() => null);
+      if (!res.ok || !body || typeof body !== "object" || !("status" in body)) {
+        const detail =
+          body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : res.statusText;
+        setImportResult({ ok: false, detail });
+        return;
+      }
+      const counts = body as { scope_rules?: number; intercept_dirs?: number; session_rules?: number };
+      // Every surface the bundle touched just changed underneath the open pages.
+      void queryClient.invalidateQueries();
+      setImportResult({
+        ok: true,
+        detail: `${counts.scope_rules ?? 0} scope rule(s), ${counts.intercept_dirs ?? 0} intercept list(s), ${counts.session_rules ?? 0} session rule(s) applied.`,
+      });
+    } catch (err) {
+      setImportResult({ ok: false, detail: String(err) });
+    }
+  }, []);
 
   const hotkeyTools = useMemo(() => TOOLS.filter((entry) => entry.hotkey), []);
   useHotkeys(
@@ -360,7 +432,7 @@ function App(): JSX.Element {
       ],
     },
     {
-      label: "Project",
+      label: "File",
       groups: [
         {
           id: "report",
@@ -368,6 +440,13 @@ function App(): JSX.Element {
             { id: "html", label: "Export report (HTML)", icon: FileDown, onSelect: () => window.open("/api/report/html", "_blank") },
             { id: "json", label: "Export report (JSON)", icon: FileDown, onSelect: () => window.open("/api/report/json", "_blank") },
             { id: "sarif", label: "Export report (SARIF)", icon: FileDown, onSelect: () => window.open("/api/report/sarif", "_blank") },
+          ],
+        },
+        {
+          id: "config",
+          actions: [
+            { id: "export-config", label: "Export configuration", icon: FileDown, onSelect: () => exportConfiguration() },
+            { id: "import-config", label: "Import configuration…", icon: FileUp, onSelect: () => importInputRef.current?.click() },
           ],
         },
         {
@@ -410,6 +489,23 @@ function App(): JSX.Element {
       ],
     },
     {
+      label: "Tools",
+      groups: [
+        {
+          id: "tools",
+          // One item per tool, in tab order — the menu-bar twin of the tool-tab strip, which is
+          // where Burp's own Tools menu starts. entryLeaf lands on each tool's first page.
+          actions: TOOLS.map((entry) => ({
+            id: `tool-${entry.id}`,
+            label: entry.label,
+            icon: entry.icon,
+            shortcut: entry.hotkey ? `alt+${entry.hotkey}` : undefined,
+            onSelect: () => navigate(entryLeaf(entry)),
+          })),
+        },
+      ],
+    },
+    {
       label: "View",
       groups: [
         {
@@ -438,6 +534,23 @@ function App(): JSX.Element {
               label: `${density === "compact" ? "Comfortable" : "Compact"} table rows`,
               icon: Rows3,
               onSelect: () => setDensity(density === "compact" ? "comfortable" : "compact"),
+            },
+          ],
+        },
+        {
+          id: "layout",
+          actions: [
+            {
+              id: "reset-layout",
+              label: "Reset panel layout",
+              icon: RotateCcw,
+              onSelect: () => {
+                for (let i = localStorage.length - 1; i >= 0; i--) {
+                  const key = localStorage.key(i);
+                  if (key?.startsWith("burpsy.split.")) localStorage.removeItem(key);
+                }
+                window.location.reload();
+              },
             },
           ],
         },
@@ -516,6 +629,9 @@ function App(): JSX.Element {
             <IconButton label="Keyboard shortcuts (?)" onClick={() => setShortcutsOpen(true)}>
               <Keyboard size={15} />
             </IconButton>
+            <IconButton label="Settings" onClick={() => navigate("settings")}>
+              <Settings size={15} />
+            </IconButton>
             <IconButton
               label={resolveTheme(theme) === "dark" ? "Use light theme" : "Use dark theme"}
               onClick={toggleTheme}
@@ -561,6 +677,10 @@ function App(): JSX.Element {
             <Database size={11} />
             {stats.data ? formatBytes(stats.data.stored_bytes) : "—"} stored
           </span>
+          <span title="The proxy listener every client points at (the -proxy address)">
+            <Network size={11} />
+            {stats.data?.proxy_bind ?? "proxy: —"}
+          </span>
           <span>
             <Network size={11} />
             {formatCount(stats.data?.exchanges)} exchanges
@@ -586,6 +706,29 @@ function App(): JSX.Element {
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
       <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {/* Hidden on purpose: the File menu item is the affordance; the input only has to accept the
+          chosen file. Cleared after every change so picking the same file twice still fires. */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: "none" }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void importConfiguration(file);
+          event.target.value = "";
+        }}
+      />
+      <Modal
+        open={importResult !== null}
+        onOpenChange={(open) => {
+          if (!open) setImportResult(null);
+        }}
+        title={importResult?.ok ? "Configuration imported" : "Import failed"}
+        description={importResult?.detail}
+      >
+        <p>Scope, intercept rules and session handling rules are affected.</p>
+      </Modal>
       <Toaster position="bottom-right" theme={resolveTheme(theme)} closeButton duration={3800} />
     </Tooltip.Provider>
   );

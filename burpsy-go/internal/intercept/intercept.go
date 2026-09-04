@@ -20,19 +20,57 @@ import (
 	"time"
 )
 
-// Direction names the two rule lists / hold queues.
+// Direction names one rule list / hold queue.
+//
+// # Why WebSocket is two directions and not one
+//
+// Burp intercepts WebSocket frames per direction, because the operator's reason for holding
+// one is asymmetric: a client→server frame is the thing they want to tamper with, and a
+// server→client frame is the thing they want to read before the page sees it. Collapsing them
+// into a single "websocket" list would mean an operator who wants to edit outgoing frames also
+// has every incoming frame stop in front of them, which on a chatty socket is unusable.
 type Direction int
 
 const (
 	DirectionRequest Direction = iota
 	DirectionResponse
+	// DirectionWebSocketToServer is a frame the client sent, held before it is relayed upstream.
+	DirectionWebSocketToServer
+	// DirectionWebSocketToClient is a frame the origin sent, held before it reaches the browser.
+	DirectionWebSocketToClient
+	// DirectionCount is how many directions exist and must stay last. The Engine sizes its list
+	// array from it, so adding a direction above without extending anything is a compile error
+	// rather than a silent misroute.
+	DirectionCount = iota
 )
 
+// directionNames is indexed by Direction, so a new direction that is not named here fails the
+// exhaustiveness test rather than borrowing a neighbour's label.
+var directionNames = [DirectionCount]string{
+	DirectionRequest:           "request",
+	DirectionResponse:          "response",
+	DirectionWebSocketToServer: "websocket_to_server",
+	DirectionWebSocketToClient: "websocket_to_client",
+}
+
+// String names the direction.
+//
+// It used to be `if d == DirectionRequest { "request" }; return "response"` — a two-value
+// assumption that would have reported every WebSocket direction as "response" the moment one
+// existed, in the API, in the held queue and in the logs. Indexed now, and out-of-range says so
+// rather than guessing.
 func (d Direction) String() string {
-	if d == DirectionRequest {
-		return "request"
+	if d < 0 || int(d) >= DirectionCount {
+		return "unknown_direction"
 	}
-	return "response"
+	return directionNames[d]
+}
+
+// IsWebSocket reports whether this direction carries WebSocket frames rather than HTTP
+// messages. Callers that can only handle one or the other ask this instead of comparing against
+// a list of constants they would have to keep in step.
+func (d Direction) IsWebSocket() bool {
+	return d == DirectionWebSocketToServer || d == DirectionWebSocketToClient
 }
 
 // Field is what a rule matches against.
@@ -97,6 +135,39 @@ const (
 	CategoryLiteral
 )
 
+// Action is what a matching rule does: Burp's per-rule "Do intercept" versus
+// "Don't intercept". The zero value holds, so every rule written before this
+// field existed keeps doing what it always did.
+type RuleAction int
+
+const (
+	// RuleActionHold stalls a matching message in the queue.
+	RuleActionHold RuleAction = iota
+	// RuleActionPass lets a matching message through without holding it.
+	RuleActionPass RuleAction = iota
+)
+
+// ParseRuleAction maps the wire/UI name to an Action. Anything else is refused at
+// save time, like a malformed regex: a rule that silently held when the operator
+// asked it to pass (or the reverse) would be a coin flip on the wire.
+func ParseRuleAction(s string) (RuleAction, error) {
+	switch s {
+	case "hold", "intercept", "":
+		return RuleActionHold, nil
+	case "pass", "dont_intercept", "don't intercept":
+		return RuleActionPass, nil
+	default:
+		return RuleActionHold, fmt.Errorf("unknown rule action %q: want \"hold\" or \"pass\"", s)
+	}
+}
+
+func (a RuleAction) String() string {
+	if a == RuleActionPass {
+		return "pass"
+	}
+	return "hold"
+}
+
 // Rule is one hold condition. Enabled rules are ANDed with the list switch;
 // a list with any enabled rule holds only matching messages, a list with no
 // enabled rules holds everything (unconditional).
@@ -106,19 +177,21 @@ type Rule struct {
 	StringMatch string
 	Enabled     bool
 	Comment     string
+	Action      RuleAction
 
 	re *regexp.Regexp
 }
 
 // NewRule compiles a rule, refusing a malformed regex (matching Burp, which
 // reports a bad pattern when the list is saved rather than when it fires).
-func NewRule(field Field, cat Category, match string, enabled bool, comment string) (*Rule, error) {
+func NewRule(field Field, cat Category, match string, enabled bool, comment string, action RuleAction) (*Rule, error) {
 	r := &Rule{
 		Field:       field,
 		Category:    cat,
 		StringMatch: match,
 		Enabled:     enabled,
 		Comment:     comment,
+		Action:      action,
 	}
 	if cat == CategoryRegex && match != "" {
 		re, err := regexp.Compile(match)
@@ -183,6 +256,13 @@ type Message struct {
 	Status      *int
 	ContentType string
 	Raw         []byte
+	// Opcode is the WebSocket frame opcode's name ("text", "binary", …) and is
+	// empty for HTTP, which has no equivalent. It is carried because "text" and
+	// "binary" are different editing contexts: an operator handed a binary frame
+	// with no marking will reasonably treat the payload as text, and an edit made
+	// on that assumption goes on the wire as a valid frame with a corrupted body.
+	// Burp labels the frame type for the same reason.
+	Opcode string
 }
 
 // FieldValue returns the message's value for a rule field, or "" when the
@@ -267,6 +347,8 @@ type Held struct {
 	Status    *int
 	Raw       []byte
 	HeldAt    time.Time
+	// Opcode mirrors Message.Opcode: the WebSocket frame type, empty for HTTP.
+	Opcode string
 
 	done     chan struct{}
 	mu       sync.Mutex
@@ -305,15 +387,60 @@ func (h *Held) resolve(a Action, raw []byte, reason string) bool {
 
 // Engine is the intercept controller shared by the proxy and the web API.
 type Engine struct {
-	mu        chan struct{}
-	enabled   bool
-	requests  List
-	responses List
-	nextID    uint64
-	held      map[uint64]*Held
+	mu      chan struct{}
+	enabled bool
+	// lists is indexed by Direction rather than being one named field per direction.
+	//
+	// It was `requests` and `responses`, selected with `if d == DirectionRequest { … } else { … }`
+	// in three places. That else is a silent misroute waiting for a third direction: a WebSocket
+	// frame would have been matched against the response rules and held or released on the wrong
+	// operator's intent. Indexing makes the direction the address instead of a branch, so adding
+	// one cannot land in the wrong list.
+	lists  [DirectionCount]List
+	nextID uint64
+	held   map[uint64]*Held
+	// pending one-shot response holds (burpsy-react-ui-v6jw): Burp's "Do intercept >
+	// Response to this request". Each names the request it was armed from; the first
+	// response with identical attributes is held and the entry consumed, so arming
+	// never leaks onto later unrelated traffic.
+	pending []pendingResponse
 	// onChange is an optional signal that the queue or the switch changed (see OnChange).
 	onChange func()
+
+	// inScopeOnly is Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1). Off by default,
+	// matching Burp and matching the safer reading: a queue that silently skipped traffic would make
+	// an operator think interception was broken rather than filtered.
+	inScopeOnly bool
+	// scope answers whether a message's authority is in the engagement scope. Nil means no scope was
+	// attached, and see shouldHold for why that makes inScopeOnly refuse to filter rather than
+	// filter everything out.
+	scope ScopeChecker
 }
+
+// ScopeChecker is the engagement scope, narrowed to the one question this package asks.
+//
+// An interface rather than a *core.Scope so internal/intercept keeps no dependency on the store's
+// package, and — more usefully — so a test can pin the in-scope-only behaviour without building a
+// scope. It matches core.Scope.Contains exactly.
+type ScopeChecker interface {
+	Contains(host string, port uint16, path string, isTLS bool) bool
+}
+
+// pendingResponse is one armed "hold the response to this request".
+type pendingResponse struct {
+	// holdID is the held request this was armed from. Drop(id) retracts the arming,
+	// because a dropped request has no response coming and a stale entry would fire
+	// on a later unrelated request with identical attributes.
+	holdID uint64
+	host   string
+	port   uint16
+	method string
+	path   string
+}
+
+// maxPendingResponses bounds armed-but-unforwarded response holds. Arming without
+// forwarding would otherwise grow this list without bound, one entry per click.
+const maxPendingResponses = 256
 
 // NewEngine creates an intercept engine with both lists off.
 func NewEngine() *Engine {
@@ -321,6 +448,41 @@ func NewEngine() *Engine {
 		mu:   make(chan struct{}, 1),
 		held: make(map[uint64]*Held),
 	}
+}
+
+// ArmResponseHold arms a one-shot hold for the response to one held request
+// (burpsy-react-ui-v6jw). Only a held request qualifies: arming from anything else
+// names a response that cannot be paired with anything.
+func (e *Engine) ArmResponseHold(id uint64) error {
+	e.mu <- struct{}{}
+	defer e.signalChange()
+	defer func() { <-e.mu }()
+	h := e.held[id]
+	if h == nil {
+		return fmt.Errorf("no held message %d", id)
+	}
+	if h.Direction != DirectionRequest {
+		return fmt.Errorf("message %d is not a held request", id)
+	}
+	if len(e.pending) >= maxPendingResponses {
+		return fmt.Errorf("too many armed response holds (%d)", len(e.pending))
+	}
+	e.pending = append(e.pending, pendingResponse{
+		holdID: h.ID,
+		host:   h.Host,
+		port:   h.Port,
+		method: h.Method,
+		path:   h.Path,
+	})
+	return nil
+}
+
+// PendingResponses counts armed one-shot response holds. Read by tests and by any
+// surface that wants to say an arming is outstanding rather than silently holding one.
+func (e *Engine) PendingResponses() int {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	return len(e.pending)
 }
 
 // OnChange installs the signal called after the held queue or the intercept switch changes, or nil to
@@ -355,6 +517,44 @@ func (e *Engine) signalChange() {
 	}
 }
 
+// SetScope attaches the engagement scope, which the in-scope-only filter consults.
+//
+// Separate from SetInScopeOnly because they come from different places: the scope is wired once at
+// construction and the filter is an operator toggle. Wiring them together would have made the
+// toggle able to arrive before the scope did.
+func (e *Engine) SetScope(s ScopeChecker) {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	e.scope = s
+}
+
+// InScopeOnly reports whether the queue is filtered to in-scope traffic.
+func (e *Engine) InScopeOnly() bool {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	return e.inScopeOnly
+}
+
+// SetInScopeOnly turns Burp's "Only intercept in-scope messages" on or off.
+//
+// Held messages are untouched, exactly as SetEnabled leaves them: a message already held was held
+// under the rules in force at the time, and dropping it now because the filter changed would discard
+// traffic an operator is mid-decision on.
+func (e *Engine) SetInScopeOnly(v bool) {
+	e.mu <- struct{}{}
+	e.inScopeOnly = v
+	<-e.mu
+	e.signalChange()
+}
+
+// ScopeAttached reports whether a scope is wired, so a surface can say why the in-scope-only toggle
+// would not do anything rather than offering a control that silently does nothing.
+func (e *Engine) ScopeAttached() bool {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	return e.scope != nil
+}
+
 // Enabled reports the master switch.
 func (e *Engine) Enabled() bool {
 	e.mu <- struct{}{}
@@ -376,6 +576,13 @@ func (e *Engine) SetEnabled(v bool) {
 // SetRules replaces one direction's list. A malformed regex is refused and the
 // list is left unchanged, matching Burp's save-time compilation.
 func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
+	// Refused before any work, because the direction is now an array index. It arrives from a
+	// decoded API request, so an out-of-range value must be an error rather than a panic on the
+	// proxy's own goroutine — and an error naming the value rather than a silent write to
+	// whichever list happened to be adjacent.
+	if !d.valid() {
+		return fmt.Errorf("unknown intercept direction %d", int(d))
+	}
 	compiled := make([]*Rule, 0, len(rules))
 	for i := range rules {
 		r := &rules[i]
@@ -390,6 +597,7 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 				StringMatch: r.StringMatch,
 				Enabled:     r.Enabled,
 				Comment:     r.Comment,
+				Action:      r.Action,
 				re:          re,
 			})
 			continue
@@ -400,28 +608,33 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 			StringMatch: r.StringMatch,
 			Enabled:     r.Enabled,
 			Comment:     r.Comment,
+			Action:      r.Action,
 		})
 	}
 
 	e.mu <- struct{}{}
 	defer e.signalChange()
 	defer func() { <-e.mu }()
-	if d == DirectionRequest {
-		e.requests = List{Active: active, Rules: compiled}
-	} else {
-		e.responses = List{Active: active, Rules: compiled}
-	}
+	e.lists[d] = List{Active: active, Rules: compiled}
 	return nil
 }
 
-// Rules returns one direction's list.
+// Rules returns one direction's list. An unknown direction returns the zero list — inactive,
+// no rules — rather than another direction's, because answering with a neighbour's rules is how
+// the old two-field version would have misreported a WebSocket direction as the response list.
 func (e *Engine) Rules(d Direction) List {
 	e.mu <- struct{}{}
 	defer func() { <-e.mu }()
-	if d == DirectionRequest {
-		return copyList(e.requests)
+	if !d.valid() {
+		return List{}
 	}
-	return copyList(e.responses)
+	return copyList(e.lists[d])
+}
+
+// valid reports whether the direction addresses a real list. Every indexing site asks this, so
+// an out-of-range Direction from a decoded API request cannot panic the proxy.
+func (d Direction) valid() bool {
+	return d >= 0 && int(d) < DirectionCount
 }
 
 func copyList(l List) List {
@@ -443,12 +656,31 @@ func (e *Engine) shouldHold(d Direction, m *Message) bool {
 	if !e.enabled {
 		return false
 	}
-	var l List
-	if d == DirectionRequest {
-		l = e.requests
-	} else {
-		l = e.responses
+	if !d.valid() {
+		return false
 	}
+	// The in-scope-only filter, checked before the rules: it is a narrowing of what the queue may
+	// contain at all, not another rule to match against.
+	//
+	// With no scope attached this does NOT filter. A nil scope means nothing has told this engine
+	// what is in scope, and treating that as "nothing is in scope" would empty the queue while the
+	// toggle claimed only to be narrowing it — an operator would see interception stop working and
+	// have no way to connect it to a switch they flipped. ScopeAttached exists so a surface can say
+	// so out loud instead.
+	if e.inScopeOnly && e.scope != nil && !e.scope.Contains(m.Host, m.Port, m.Path, m.TLS) {
+		return false
+	}
+	// One-shot response holds fire before the rule lists and consume themselves, so an
+	// arming applies to exactly one response: the next one with identical attributes.
+	if d == DirectionResponse {
+		for i, p := range e.pending {
+			if p.host == m.Host && p.port == m.Port && p.method == m.Method && p.path == m.Path {
+				e.pending = append(e.pending[:i], e.pending[i+1:]...)
+				return true
+			}
+		}
+	}
+	l := e.lists[d]
 	if !l.Active {
 		return false
 	}
@@ -459,9 +691,15 @@ func (e *Engine) shouldHold(d Direction, m *Message) bool {
 	if len(enabled) == 0 {
 		return false
 	}
+	// First matching rule wins (burpsy-react-ui-35i4): Burp's per-rule Do/Don't
+	// intercept. A list of hold-only rules behaves exactly as before — the first
+	// match holds, and reaching the end means no rule matched — so every list
+	// written before actions existed evaluates identically. The default below is
+	// deliberately not "hold": with enabled rules present and nothing matching,
+	// the list passes, which is the same default the loop above implemented.
 	for _, r := range enabled {
 		if r.Match(m) {
-			return true
+			return r.Action == RuleActionHold
 		}
 	}
 	return false
@@ -487,6 +725,7 @@ func (e *Engine) Hold(m *Message) *Held {
 		Method:    m.Method,
 		Path:      m.Path,
 		Status:    m.Status,
+		Opcode:    m.Opcode,
 		Raw:       append([]byte{}, m.Raw...),
 		HeldAt:    time.Now(),
 		done:      make(chan struct{}),
@@ -517,7 +756,27 @@ func (e *Engine) Get(id uint64) *Held {
 // bytes (the original when empty) to the proxy. fixContentLength rewrites the
 // Content-Length header to match the body, since editing a body without fixing
 // its length produces a corrupt exchange.
-func (e *Engine) Forward(id uint64, edited string, fixContentLength bool) error {
+// Forward resolves a held message as forwarded.
+//
+// edited nil means "unchanged" and sends the bytes as held. A non-nil pointer replaces them,
+// including a pointer to the empty string, which clears the payload.
+//
+// # Why a pointer
+//
+// This took a plain string, and treated "" as "unchanged". For HTTP that is harmless: an empty
+// request or response is meaningless, so nobody could want one. For a WebSocket frame an empty
+// payload is ordinary — a keepalive, a cleared field — and an operator who selected the payload and
+// deleted it got the ORIGINAL forwarded instead, with a 200 and no indication their edit had been
+// discarded. "Absent" and "empty" are different requests and are now different values.
+//
+// # Why fixContentLength is ignored for WebSocket
+//
+// The console's toggle defaults to on (intercept.tsx), and rewriteContentLength splits on the first
+// CRLFCRLF. A frame payload has no Content-Length, but a payload that happens to contain a blank
+// line looks like a header block to that function — so forwarding a held WebSocket message with the
+// default settings would have injected a Content-Length header into the middle of application data.
+// Skipped by direction, because the direction is a fact and the bytes are a guess.
+func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool) error {
 	e.mu <- struct{}{}
 	h := e.held[id]
 	<-e.mu
@@ -525,10 +784,10 @@ func (e *Engine) Forward(id uint64, edited string, fixContentLength bool) error 
 		return fmt.Errorf("no held message %d", id)
 	}
 	raw := h.Raw
-	if edited != "" {
-		raw = []byte(edited)
+	if edited != nil {
+		raw = []byte(*edited)
 	}
-	if fixContentLength {
+	if fixContentLength && !h.Direction.IsWebSocket() {
 		raw = rewriteContentLength(raw)
 	}
 	if !h.resolve(ActionForward, raw, "") {
@@ -556,12 +815,100 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	if !h.resolve(ActionDrop, nil, reason) {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
+	e.mu <- struct{}{}
+	kept := e.pending[:0]
+	for _, p := range e.pending {
+		if p.holdID != id {
+			kept = append(kept, p)
+		}
+	}
+	e.pending = kept
+	<-e.mu
 	// Remove from the hold map; see Forward for why.
 	e.mu <- struct{}{}
 	delete(e.held, id)
 	<-e.mu
 	e.signalChange()
 	return nil
+}
+
+// ForwardAll resolves every held message as forwarded, unmodified, in one pass
+// and returns how many this call forwarded. It is the safe half of the pair
+// DropAll is the destructive half of — Burp ships both from one dropdown
+// (proxyForwardOptionsButton: "Forward" / "Forward all", mirrored by "Drop" /
+// "Drop all") — and it exists because a queue that can only be emptied by
+// dropping teaches the operator to stop queueing traffic at all.
+//
+// "Unmodified" is the point and the difference from per-id Forward: no edited
+// bytes and no content-length rewrite, because a bulk action never had a human
+// read what it is forwarding. Each message resolves through the same once-only
+// gate Drop applies per id, so a message resolved elsewhere (another operator,
+// a client that gave up waiting) is left to whoever resolved it and is not
+// counted. One change signal fires at the end no matter how many were
+// forwarded: N forwards are one queue event, not N, so the live-update fan-out
+// sees a single change for one operator action instead of one per message.
+func (e *Engine) ForwardAll() int {
+	e.mu <- struct{}{}
+	all := make([]*Held, 0, len(e.held))
+	for _, h := range e.held {
+		all = append(all, h)
+	}
+	<-e.mu
+	forwarded := make([]*Held, 0, len(all))
+	for _, h := range all {
+		// h.Raw, not nil: the resolve payload IS the proxy side's answer, and nil
+		// reads as an empty message there — a forward of nothing. The client's own
+		// held bytes are the unmodified content this method promises.
+		if h.resolve(ActionForward, h.Raw, "") {
+			forwarded = append(forwarded, h)
+		}
+	}
+	if len(forwarded) == 0 {
+		return 0
+	}
+	// Remove what this call resolved, then signal with the lock released —
+	// the same two-step shape as Forward, batched over the queue.
+	e.mu <- struct{}{}
+	for _, h := range forwarded {
+		delete(e.held, h.ID)
+	}
+	<-e.mu
+	e.signalChange()
+	return len(forwarded)
+}
+
+// DropAll resolves every held message as dropped in one pass and returns how
+// many this call dropped. A message already resolved elsewhere (another
+// operator, a client that gave up waiting) is left to whoever resolved it and
+// is not counted — the same once-only resolve gate Drop applies per id. One
+// change signal fires at the end no matter how many dropped: N drops are one
+// queue event, not N, so the live-update fan-out sees a single change for one
+// operator action instead of one per message.
+func (e *Engine) DropAll(reason string) int {
+	e.mu <- struct{}{}
+	all := make([]*Held, 0, len(e.held))
+	for _, h := range e.held {
+		all = append(all, h)
+	}
+	<-e.mu
+	dropped := make([]*Held, 0, len(all))
+	for _, h := range all {
+		if h.resolve(ActionDrop, nil, reason) {
+			dropped = append(dropped, h)
+		}
+	}
+	if len(dropped) == 0 {
+		return 0
+	}
+	// Remove what this call resolved, then signal with the lock released —
+	// the same two-step shape as Drop, batched over the queue.
+	e.mu <- struct{}{}
+	for _, h := range dropped {
+		delete(e.held, h.ID)
+	}
+	<-e.mu
+	e.signalChange()
+	return len(dropped)
 }
 
 // fixContentLength rewrites the Content-Length header to match the body. If the

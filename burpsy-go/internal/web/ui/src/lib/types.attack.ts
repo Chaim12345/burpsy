@@ -27,6 +27,12 @@ export interface HeldMessageDetail {
   held_ms: number;
   len: number;
   raw: string;
+  /**
+   * WebSocket frame type — "text", "binary", or a control opcode. Absent for HTTP, which has no
+   * equivalent, so this is optional rather than an empty string: "not applicable" and "unknown" are
+   * different, and only one of them should render a badge.
+   */
+  opcode?: string;
 }
 
 /**
@@ -42,6 +48,14 @@ export interface InterceptStateDetail {
   held: HeldMessageDetail[];
   holds_every_request?: boolean;
   holds_every_response?: boolean;
+  /** Burp's "Only intercept in-scope messages". */
+  in_scope_only: boolean;
+  /**
+   * Whether the engine has a scope to consult. False makes `in_scope_only` inert, and the page says
+   * so rather than offering a toggle that changes nothing — the same reason `wired` sits beside
+   * `enabled`.
+   */
+  scope_attached: boolean;
 }
 
 /** One condition in an interception rule list. Mirrors intercept.ts's RuleSpec / `interceptRuleSpec`. */
@@ -51,6 +65,12 @@ export interface InterceptRuleSpec {
   string_match: string;
   enabled: boolean;
   comment: string;
+  /**
+   * What a match does: Burp's per-rule Do/Don't intercept (burpsy-react-ui-35i4).
+   * Absent means hold — the wire omits it and the server defaults it — so every list
+   * written before actions existed reads back unchanged.
+   */
+  action?: "hold" | "pass";
 }
 
 /** GET/PUT body for /api/intercept/rules/{requests|responses} — Go's `interceptListState`. */

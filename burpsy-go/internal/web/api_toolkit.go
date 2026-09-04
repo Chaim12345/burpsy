@@ -1,6 +1,8 @@
 package web
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -556,7 +558,62 @@ type matchReplaceGetResp struct {
 	Config           matchReplaceSetSpec `json:"config"`
 }
 
+// matchReplaceTargetNames is the accepted rule_type vocabulary, in the engine's own
+// declaration order. It is the single list both directions use: targetToCategory refuses
+// anything outside it, and the error names it so a caller learns the vocabulary from the
+// rejection rather than from the source.
+var matchReplaceTargetNames = []string{
+	"request_header",
+	"request_body",
+	"request_first_line",
+	"response_header",
+	"response_body",
+	"websocket_to_server",
+	"websocket_to_client",
+}
+
+// matchReplaceUnappliedTargets are rule_types the engine declares but cannot apply.
+//
+// They are refused with their own message rather than being reported as unknown, because
+// "unknown rule_type" would be a lie: the Target exists, `targetsDir` routes it, and
+// `matchReplaceTargetName` can name it. What is missing is the applier.
+var matchReplaceUnappliedTargets = map[string]string{
+	"request_param_name":  "TargetRequestParamName",
+	"request_param_value": "TargetRequestParamValue",
+}
+
 // targetToCategory maps the UI's rule_type to the engine's Target.
+//
+// # Why the unknown case is an error and not a default
+//
+// It used to return `0, nil`, and both call sites discarded the error with `target, _ :=`.
+// `matchreplace.Target` is an iota enum whose zero value is TargetRequestHeader, so a
+// misspelled or unsupported rule_type did not fail — it silently produced a rule that
+// rewrote **request headers on live traffic**. The operator asked to rewrite one thing and
+// got a rule against another, with a 200 and a `{"compiled":N}` that counted it as accepted.
+//
+// That is the exact failure mode this project is built against, and it was worse than an
+// ordinary tolerant-parser bug because the affected surface is the proxy: the wrong answer
+// was applied to real requests, not merely displayed. A rule the engine cannot express is
+// now a 400 that names what is accepted.
+//
+// # And why request_param_name / request_param_value are refused
+//
+// I added those two here in 4469cf1 and it was wrong. My justification was that "the engine
+// already matches on them (matchreplace.go:129)" — but that line is `targetsDir`, which says
+// which *direction* a target belongs to. The applier is `applyOne`, and it has no case for
+// either: both fell through to `default: return applyBody(...)`.
+//
+// So accepting them turned a parameter rule into a whole-body substring rewrite. A
+// param-name rule replacing "secret" with "harmless" against
+// `user=admin&secret=hunter2&nonsecret=keep` yielded `user=admin&harmless=hunter2&nonharmless=keep`
+// — it rewrote `nonsecret`, an unrelated parameter, and answered 200 with a compiled count.
+// I reintroduced the very defect the rest of this comment describes, by verifying against
+// one function and asserting about another.
+//
+// They are refused until the appliers exist, and refused *by name* rather than as unknown,
+// because the Target is real — what is missing is the code that applies it. A declined path
+// beats a plausible-looking wrong one.
 func targetToCategory(ruleType string) (matchreplace.Target, error) {
 	switch ruleType {
 	case "request_first_line":
@@ -569,8 +626,21 @@ func targetToCategory(ruleType string) (matchreplace.Target, error) {
 		return matchreplace.TargetResponseHeader, nil
 	case "response_body":
 		return matchreplace.TargetResponseBody, nil
+	case "websocket_to_server":
+		return matchreplace.TargetWebSocketToServer, nil
+	case "websocket_to_client":
+		return matchreplace.TargetWebSocketToClient, nil
+	case "":
+		return 0, fmt.Errorf("rule_type is required; accepted values are %s", strings.Join(matchReplaceTargetNames, ", "))
 	default:
-		return 0, nil
+		if engineName, unapplied := matchReplaceUnappliedTargets[ruleType]; unapplied {
+			return 0, fmt.Errorf(
+				"rule_type %q is declared by the engine as %s but has no applier yet, so a rule "+
+					"using it would be applied as a whole-body rewrite and could change unrelated "+
+					"parameters; refused until it is implemented. Accepted values are %s",
+				ruleType, engineName, strings.Join(matchReplaceTargetNames, ", "))
+		}
+		return 0, fmt.Errorf("unknown rule_type %q; accepted values are %s", ruleType, strings.Join(matchReplaceTargetNames, ", "))
 	}
 }
 
@@ -617,8 +687,15 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rules := make([]*matchreplace.Rule, 0, len(set.Rules))
-	for _, spec := range set.Rules {
-		target, _ := targetToCategory(spec.RuleType)
+	for i, spec := range set.Rules {
+		// Rejected before any rule is installed, and the index is named: this is a
+		// whole-list PUT, so a rule the engine cannot express must leave the live set
+		// untouched rather than replacing it with a partially-correct one.
+		target, err := targetToCategory(spec.RuleType)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Rule %d: %s", i, err.Error()), http.StatusBadRequest)
+			return
+		}
 		cat := matchreplace.CategoryLiteral
 		if spec.Category == "regex" {
 			cat = matchreplace.CategoryRegex
@@ -638,6 +715,19 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]int{"compiled": len(rules)})
 }
 
+// matchReplaceTargetName is targetToCategory's inverse, and must stay total over the
+// engine's enum.
+//
+// TargetRequestParamName and TargetRequestParamValue were missing and fell through to a
+// `return "request_body"` default, so a param rule read back as a body rule. Combined with
+// PUT's old coercion that made the round trip actively destructive: GET a param rule, PUT it
+// back unchanged, and it became a body rule against live traffic. Both are named now.
+//
+// The default no longer guesses. An enum value with no wire name is a build where this
+// function was not updated alongside the engine, and answering "request_body" would let that
+// omission reach the operator disguised as a real rule; the string says what happened
+// instead, and the round-trip test in api_toolkit_test.go asserts every declared Target maps
+// to a name that targetToCategory accepts back.
 func matchReplaceTargetName(t matchreplace.Target) string {
 	switch t {
 	case matchreplace.TargetRequestFirstLine:
@@ -646,12 +736,20 @@ func matchReplaceTargetName(t matchreplace.Target) string {
 		return "request_header"
 	case matchreplace.TargetRequestBody:
 		return "request_body"
+	case matchreplace.TargetRequestParamName:
+		return "request_param_name"
+	case matchreplace.TargetRequestParamValue:
+		return "request_param_value"
 	case matchreplace.TargetResponseHeader:
 		return "response_header"
 	case matchreplace.TargetResponseBody:
 		return "response_body"
+	case matchreplace.TargetWebSocketToServer:
+		return "websocket_to_server"
+	case matchreplace.TargetWebSocketToClient:
+		return "websocket_to_client"
 	default:
-		return "request_body"
+		return fmt.Sprintf("unrecognised_target_%d", int(t))
 	}
 }
 
@@ -683,8 +781,15 @@ func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	rules := make([]*matchreplace.Rule, 0, len(req.DraftRules))
-	for _, spec := range req.DraftRules {
-		target, _ := targetToCategory(spec.RuleType)
+	for i, spec := range req.DraftRules {
+		// The dry-run path refuses the same input the live path refuses. If it coerced
+		// where the live path rejects, the preview would be a demonstration of behaviour
+		// the operator can never actually install — the one thing a dry run must not do.
+		target, err := targetToCategory(spec.RuleType)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Draft rule %d: %s", i, err.Error()), http.StatusBadRequest)
+			return
+		}
 		cat := matchreplace.CategoryLiteral
 		if spec.Category == "regex" {
 			cat = matchreplace.CategoryRegex
@@ -728,10 +833,19 @@ func bytesEqual(a, b []byte) bool {
 
 // toolLogEntry mirrors toollog.ts's LogEntry.
 type toolLogEntry struct {
-	ID     uint64 `json:"id"`
-	Tool   string `json:"tool"`
-	Host   string `json:"host"`
-	Port   uint16 `json:"port"`
+	ID   uint64 `json:"id"`
+	Tool string `json:"tool"`
+	Host string `json:"host"`
+	Port uint16 `json:"port"`
+	// TLS is whether the exchange this row records was carried over TLS.
+	//
+	// toollog.Entry has carried the flag since the log existed; this projection dropped it, so the
+	// Logger pane had to infer the scheme from the port — honestly, and it said so in a comment — and
+	// therefore emitted `http://` for every HTTPS service not on 443. Copy URL and Copy as curl both
+	// read that, so an operator pasted a wrong-scheme URL into a terminal or a report and debugged
+	// their copy rather than their target. Most internal and staging targets are HTTPS on a port
+	// other than 443.
+	TLS    bool   `json:"tls"`
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Status *int   `json:"status"`
@@ -757,17 +871,57 @@ type toolLogResp struct {
 	Dropped uint64         `json:"dropped"`
 	Counts  map[string]int `json:"counts"`
 	Entries []toolLogEntry `json:"entries"`
+	// Capturing is the capture axis: which tools are being recorded at all,
+	// distinct from the display axis the caller filters by. A tool absent here
+	// is a tool whose requests were sent and deliberately not kept.
+	Capturing map[string]bool `json:"capturing"`
+	// Uncaptured reports, per tool, how many requests capture refused. The
+	// honest-counting counterpart of the capture axis: switching a tool off must
+	// read as "N requests not captured", never as a short log.
+	Uncaptured map[string]uint64 `json:"uncaptured"`
+	// UncapturedTotal is the sum of Uncaptured, so a caller showing 20 of 4000
+	// can also say how many request-gone-forever the log is silent about.
+	UncapturedTotal uint64 `json:"uncaptured_total"`
 }
 
 func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.toolLogGet(w, r)
+	case http.MethodPost:
+		s.toolLogSetCapture(w, r)
 	case http.MethodDelete:
 		s.toolLogClear(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// toolLogSetCaptureReq toggles the capture axis for one tool. The tool is a
+// name (from Tool.String()), never an ordinal: ordinals are the durable
+// mirror's stability contract, and the wire has always used names.
+type toolLogSetCaptureReq struct {
+	Tool string `json:"tool"`
+	On   bool   `json:"on"`
+}
+
+// toolLogSetCapture serves POST /api/tools/log — the destructive arm of the
+// two axes: turning a tool's capture off means its next requests are sent and
+// deliberately not recorded, and the uncaptured counters start counting them.
+func (s *Server) toolLogSetCapture(w http.ResponseWriter, r *http.Request) {
+	var req toolLogSetCaptureReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "body must be JSON with tool and on", http.StatusBadRequest)
+		return
+	}
+	tool, ok := toollog.ToolFromName(req.Tool)
+	if !ok {
+		http.Error(w, "unknown tool", http.StatusBadRequest)
+		return
+	}
+	s.toolLog.SetCapturing(tool, req.On)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{req.Tool + ".capturing": s.toolLog.Capturing(tool)})
 }
 
 // toolLogGet serves GET /api/tools/log?filter=&search=&limit=.
@@ -818,13 +972,26 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	capturing := make(map[string]bool, len(toollog.ToolAll))
+	uncaptured := make(map[string]uint64, len(toollog.ToolAll))
+	var uncapturedTotal uint64
+	for _, t := range toollog.ToolAll {
+		capturing[t.String()] = s.toolLog.Capturing(t)
+		n := s.toolLog.Uncaptured(t)
+		uncaptured[t.String()] = n
+		uncapturedTotal += n
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(toolLogResp{
-		Total:   len(matched),
-		Shown:   len(view),
-		Dropped: s.toolLog.Dropped(),
-		Counts:  counts,
-		Entries: view,
+		Total:           len(matched),
+		Shown:           len(view),
+		Dropped:         s.toolLog.Dropped(),
+		Counts:          counts,
+		Entries:         view,
+		Capturing:       capturing,
+		Uncaptured:      uncaptured,
+		UncapturedTotal: uncapturedTotal,
 	})
 }
 
@@ -933,26 +1100,116 @@ func decodeLayer(dec *tools.Decoder, encoding, input string) (string, []string, 
 }
 
 // smartDecode runs the input through the known layers in order until decoding stops changing it.
+// guessBase64 accepts the unpadded alphabets the strict decoder rejects.
+//
+// tools.Decoder.DecodeBase64 already tries standard and URL-safe, both *padded*. Raw
+// (unpadded) base64 is what every JWT segment uses, so on a tool whose operators paste
+// tokens all day the strict path fails on the single most common input.
+func guessBase64(dec *tools.Decoder, s string) (string, error) {
+	if out, err := dec.DecodeBase64(s); err == nil {
+		return out, nil
+	}
+	for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil {
+			return string(b), nil
+		}
+	}
+	return "", fmt.Errorf("not base64 under any known alphabet")
+}
+
+// guessHex accepts the separators the strict decoder does not.
+//
+// DecodeHex strips spaces and a single leading "0x". It rejects the framings a security tool
+// actually meets: colon-delimited fingerprints and MAC addresses (de:ad:be:ef), dash- or
+// comma-delimited dumps, per-byte 0x prefixes, and anything spanning lines.
+func guessHex(dec *tools.Decoder, s string) (string, error) {
+	if out, err := dec.DecodeHex(s); err == nil {
+		return out, nil
+	}
+	cleaned := strings.NewReplacer(
+		":", "", "-", "", ",", "", ".", "",
+		" ", "", "\t", "", "\n", "", "\r", "",
+		"0x", "", "0X", "",
+	).Replace(s)
+	if cleaned == "" || len(cleaned)%2 != 0 {
+		// An odd number of nibbles is not hex with separators removed; it is something else.
+		// Guessing a leading zero would invent a byte the operator never pasted.
+		return "", fmt.Errorf("not hex after removing separators")
+	}
+	b, err := hex.DecodeString(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("not hex after removing separators")
+	}
+	return string(b), nil
+}
+
+// smartDecode peels encoding layers off input, reporting which layers it removed.
+//
+// # guess is a real parameter now
+//
+// It used to be accepted and never referenced — the four steps ran in a fixed order whichever
+// way the Decoder's "guess base64 / hex alphabets" checkbox was set. The parity audit found it
+// as the *one* decorative control in roughly eighty (§5.1): it rendered, accepted input,
+// returned 200 and plausible output, and changed nothing. On a security-analysis toggle that
+// is the worst possible place for it, because the operator reads the output as evidence.
+//
+// Now it selects the alphabet-tolerant decoders above. Off keeps the strict behaviour exactly,
+// so nothing that worked before decodes differently; on additionally accepts unpadded base64
+// and separator-delimited hex.
+//
+// A guessed layer is *named* as guessed in the returned layer list — "base64 (guessed
+// alphabet)" rather than "base64". The operator is told which of their input's layers needed a
+// looser reading, because "this decoded cleanly" and "this decoded once I relaxed the
+// alphabet" are different facts about a payload, and on this tool the difference can matter.
+// plausibleDecode still gates every acceptance, so relaxing the alphabet does not relax the
+// bar for calling something decoded.
 func smartDecode(dec *tools.Decoder, input string, guess bool) (string, []string) {
 	current := input
 	var layers []string
+
+	// strictThenGuess returns the decoded value and whether the strict decoder had to be
+	// relaxed to get it. The bool is what lets the layer list stay honest about which reading
+	// succeeded, rather than reporting a guessed layer as if it had decoded cleanly.
+	strictThenGuess := func(strict, loose func(string) (string, error)) func(string) (string, bool, error) {
+		return func(s string) (string, bool, error) {
+			if out, err := strict(s); err == nil {
+				return out, false, nil
+			}
+			if !guess {
+				return "", false, fmt.Errorf("strict decode failed and alphabet guessing is off")
+			}
+			out, err := loose(s)
+			return out, err == nil, err
+		}
+	}
+	never := func(fn func(string) (string, error)) func(string) (string, bool, error) {
+		return func(s string) (string, bool, error) {
+			out, err := fn(s)
+			return out, false, err
+		}
+	}
+
 	steps := []struct {
 		name string
-		fn   func(string) (string, error)
+		fn   func(string) (string, bool, error)
 	}{
-		{"base64", dec.DecodeBase64},
-		{"url", dec.DecodeURL},
-		{"hex", dec.DecodeHex},
-		{"html", func(s string) (string, error) { return dec.DecodeHTML(s), nil }},
+		{"base64", strictThenGuess(dec.DecodeBase64, func(s string) (string, error) { return guessBase64(dec, s) })},
+		{"url", never(dec.DecodeURL)},
+		{"hex", strictThenGuess(dec.DecodeHex, func(s string) (string, error) { return guessHex(dec, s) })},
+		{"html", never(func(s string) (string, error) { return dec.DecodeHTML(s), nil })},
 	}
 	for _, step := range steps {
 		for i := 0; i < 3; i++ { // repeated layers (e.g. double-encoding)
-			next, err := step.fn(current)
+			next, guessed, err := step.fn(current)
 			if err != nil || next == current || !plausibleDecode(current, next) {
 				break
 			}
 			current = next
-			layers = append(layers, step.name)
+			name := step.name
+			if guessed {
+				name += " (guessed alphabet)"
+			}
+			layers = append(layers, name)
 		}
 	}
 	if len(layers) == 0 {
@@ -1102,6 +1359,12 @@ type compareOp struct {
 	BOffset int    `json:"b_offset"`
 	BLen    int    `json:"b_len"`
 	Text    string `json:"text,omitempty"`
+	// Uninteresting marks a difference lying entirely inside a header line the operator has told
+	// burpsy to discount — W6 #81/#82. The op is still reported with its real offsets and text:
+	// the console dims it and counts it separately rather than dropping it, because "the only
+	// differences were in headers you chose to ignore" and "these messages are identical" are
+	// different facts and only one of them is true.
+	Uninteresting bool `json:"uninteresting,omitempty"`
 }
 
 // handleToolsCompare mirrors comparer.ts's CompareResp. The engine produces a byte-level
@@ -1115,69 +1378,79 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		A string `json:"a"`
 		B string `json:"b"`
+		// Response selects which uninteresting-header list applies. Defaults to false, i.e. the
+		// request list, which is empty unless the operator populated it — so an old client that
+		// does not send this field gets exactly the behaviour it had before the field existed.
+		Response bool `json:"response"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	a, b := []byte(req.A), []byte(req.B)
-	ops := compareOps(a, b)
-	deleted, inserted := 0, 0
-	for _, op := range ops {
+	diff := diffBytes(a, b)
+	ops := diff.Ops
+
+	// Tag differences that fall inside a discounted header. Spans are computed per side because the
+	// same header sits at different offsets in two messages of different lengths, and an op's A and B
+	// ranges must each be inside one for the difference to be attributable to that header alone.
+	spansA := uninterestingSpansIn(a, s.uninteresting, req.Response)
+	spansB := uninterestingSpansIn(b, s.uninteresting, req.Response)
+
+	deleted, inserted, discounted := 0, 0, 0
+	for i := range ops {
+		op := &ops[i]
+		if op.Kind == "equal" {
+			continue
+		}
+		switch op.Kind {
+		case "delete":
+			// Present only in A, so only A's spans can account for it.
+			op.Uninteresting = coveredBy(spansA, op.AOffset, op.ALen)
+		case "insert":
+			op.Uninteresting = coveredBy(spansB, op.BOffset, op.BLen)
+		default:
+			// A replace must be discounted on both sides. Covered in A alone would mean the bytes it
+			// was replaced *with* are somewhere the operator did not discount.
+			op.Uninteresting = coveredBy(spansA, op.AOffset, op.ALen) &&
+				coveredBy(spansB, op.BOffset, op.BLen)
+		}
+		if op.Uninteresting {
+			discounted++
+		}
 		if op.Kind == "delete" {
 			deleted += op.ALen
 		} else if op.Kind == "insert" {
 			inserted += op.BLen
 		}
 	}
+
 	identical := len(ops) == 1 && ops[0].Kind == "equal"
+	// True when every difference was discounted. Deliberately distinct from `identical`: these
+	// messages are not identical, and a UI that conflated the two would tell the operator the bytes
+	// matched when they did not.
+	identicalIgnoring := identical
+	if !identical {
+		identicalIgnoring = true
+		for _, op := range ops {
+			if op.Kind != "equal" && !op.Uninteresting {
+				identicalIgnoring = false
+				break
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"identical":       identical,
-		"deleted_tokens":  deleted,
-		"inserted_tokens": inserted,
-		"truncated":       false,
-		"ops_omitted":     0,
-		"ops":             ops,
+		"identical":                        identical,
+		"identical_ignoring_uninteresting": identicalIgnoring,
+		"uninteresting_ops":                discounted,
+		"uninteresting_headers_applied":    s.uninteresting.headers(req.Response),
+		"deleted_tokens":                   deleted,
+		"inserted_tokens":                  inserted,
+		"truncated":                        diff.Truncated,
+		"ops_omitted":                      0,
+		"ops":                              ops,
 	})
-}
-
-// compareOps converts two byte slices into a run of equal/replace/insert/delete ops.
-func compareOps(a, b []byte) []compareOp {
-	var ops []compareOp
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	i := 0
-	for i < minLen {
-		if a[i] == b[i] {
-			start := i
-			for i < minLen && a[i] == b[i] {
-				i++
-			}
-			ops = append(ops, compareOp{Kind: "equal", AOffset: start, ALen: i - start, BOffset: start, BLen: i - start})
-			continue
-		}
-		startA, startB := i, i
-		for i < minLen && a[i] != b[i] {
-			i++
-		}
-		ops = append(ops, compareOp{
-			Kind:    "replace",
-			AOffset: startA,
-			ALen:    i - startA,
-			BOffset: startB,
-			BLen:    i - startB,
-			Text:    string(a[startA:i]),
-		})
-	}
-	if len(a) > minLen {
-		ops = append(ops, compareOp{Kind: "delete", AOffset: minLen, ALen: len(a) - minLen, BOffset: len(b), BLen: 0, Text: string(a[minLen:])})
-	} else if len(b) > minLen {
-		ops = append(ops, compareOp{Kind: "insert", AOffset: len(a), ALen: 0, BOffset: minLen, BLen: len(b) - minLen, Text: string(b[minLen:])})
-	}
-	return ops
 }
 
 // ---- Organizer ---------------------------------------------------------------------------------
@@ -1186,7 +1459,11 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizer.List()})
+		// organizerView, not organizer.List(): the console's in-scope/status/MIME filters need fields
+		// an organizer.Item does not have, and the resolution happens here because that is where the
+		// traffic store and the scope are. See api_organizer_view.go, particularly for what happens
+		// to an item whose exchange has been evicted.
+		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizerView()})
 	case http.MethodPost:
 		var req struct {
 			Exchange int `json:"exchange"`

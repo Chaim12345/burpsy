@@ -80,11 +80,41 @@ type stubRow struct {
 	status int
 	mime   string
 	body   []byte
+	// Both absences are explicit, so a stub that says nothing about length or timing reports them
+	// as absent rather than as zero — the same distinction the real adapters carry.
+	length     int64
+	hasLength  bool
+	durationUs int64
+	measured   bool
+	// headers is keyed by LOWERCASED name, because Header's contract is case-insensitive and a stub
+	// that matched case exactly would pass a test the real adapters would fail.
+	headers map[string][]string
+
+	highlight       string
+	comment         string
+	annotationKnown bool
 }
 
-func (r stubRow) Host() string   { return r.host }
-func (r stubRow) Method() string { return r.method }
-func (r stubRow) Path() string   { return r.path }
-func (r stubRow) Status() int    { return r.status }
-func (r stubRow) Mime() string   { return r.mime }
-func (r stubRow) Body() []byte   { return r.body }
+func (r stubRow) Host() string               { return r.host }
+func (r stubRow) Method() string             { return r.method }
+func (r stubRow) Path() string               { return r.path }
+func (r stubRow) Status() int                { return r.status }
+func (r stubRow) Mime() string               { return r.mime }
+func (r stubRow) Body() []byte               { return r.body }
+func (r stubRow) ResponseLen() (int64, bool) { return r.length, r.hasLength }
+
+// headers is nil by default, so a stub that says nothing about headers reports every header
+// absent — which fails every comparison, the same rule the real adapters carry.
+// annotationKnown defaults to FALSE, so a stub that says nothing about annotations reports that it
+// cannot answer — not that the row is unhighlighted. A default of true would make every existing
+// test row claim "" as a real highlight.
+func (r stubRow) Annotation() (string, string, bool) {
+	return r.highlight, r.comment, r.annotationKnown
+}
+
+func (r stubRow) Header(name string) ([]string, bool) {
+	values, ok := r.headers[strings.ToLower(name)]
+	return values, ok
+}
+
+func (r stubRow) DurationUs() (int64, bool) { return r.durationUs, r.measured }

@@ -80,6 +80,35 @@ export interface CrawlSkipRecord {
   detail: string;
 }
 
+/**
+ * One request the crawl made, and how it got there.
+ *
+ * `found_at` is the crawl-paths edge: the URL of the page this one was discovered on, absent for a
+ * seed. Absent means *seed*, not "unknown" — a seed genuinely has no referring page, and a renderer
+ * must not label it as unattributed.
+ *
+ * `depth` says how far from a seed this is; `found_at` says which way. Two pages at depth 2 can be
+ * reached through entirely different parents, which is why depth alone could not produce a
+ * reachability view.
+ */
+export interface CrawlFetch {
+  url: string;
+  method: string;
+  /** 0 when the response could not be parsed — not a real status. */
+  status: number;
+  exchange_id: number;
+  depth: number;
+  fingerprint?: string;
+  /** Set when this response's contents had already been seen at another URL, so its links were not requeued. */
+  duplicate_of?: string;
+  /** Captured and scanned, but not traversed: the retention query did not match. */
+  retention_excluded?: boolean;
+  /** The page this was found on. Absent for a seed. */
+  found_at?: string;
+  /** The link text or form label followed to get here. Absent for a seed, or an untitled link. */
+  link_text?: string;
+}
+
 export interface CrawlReport {
   seeds: string[];
   query?: string;
@@ -97,6 +126,8 @@ export interface CrawlReport {
   duplicate_locations: number;
   elapsed: number;
   skips?: { counts?: CrawlSkipCount[]; records?: CrawlSkipRecord[] };
+  /** Every request the crawl attempted, carrying the crawl-paths edge. Absent on an empty crawl. */
+  fetches?: CrawlFetch[];
 }
 
 export interface CrawlRun {

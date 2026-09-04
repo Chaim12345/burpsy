@@ -10,8 +10,10 @@ import type {
   MatchReplaceConfig,
   MatchReplaceResponse,
   MessageView,
+  OrganizerEdit,
   OrganizerItem,
   Scope,
+  ScannerConfig,
   SessionRule,
   SessionRules,
   SiteMap,
@@ -46,6 +48,7 @@ export const keys = {
   intercept: ["intercept"] as const,
   sitemap: ["sitemap"] as const,
   crawls: ["crawls"] as const,
+  discovery: ["discovery"] as const,
   wsConnections: ["ws", "connections"] as const,
   wsHistory: (exchange: number) => ["ws", "history", exchange] as const,
   wsMessage: (id: number) => ["ws", "message", id] as const,
@@ -56,8 +59,25 @@ export const keys = {
   sessionCookies: ["session", "cookies"] as const,
   protocols: ["protocols"] as const,
   scannerConfigs: ["scanner", "configs"] as const,
+  scannerConfig: ["scanner", "config"] as const,
   scannerCoverage: ["scanner", "coverage"] as const,
   scannerLive: ["scanner", "live"] as const,
+  auditItems: ["scanner", "audit-items"] as const,
+  collaborator: ["collaborator"] as const,
+  collaboratorInteractions: ["collaborator", "interactions"] as const,
+  blindxss: ["blindxss"] as const,
+  proxyOptions: ["proxy", "options"] as const,
+  networkSettings: ["network", "settings"] as const,
+  pools: ["pools"] as const,
+  schedules: ["schedules"] as const,
+  // Extender. The console key is parameterised by plugin and by line limit, and shares the
+  // ["extensions"] prefix so a load or an unload invalidates the row and the console together.
+  extensions: ["extensions"] as const,
+  extensionConsole: (name: string, limit: number) => ["extensions", "console", name, limit] as const,
+  extensionApis: ["extensions", "apis"] as const,
+  networkProxy: ["network", "proxy"] as const,
+  networkAuth: ["network", "auth"] as const,
+  networkClientCerts: ["network", "client-certs"] as const,
 };
 
 /**
@@ -70,7 +90,10 @@ const INVALIDATION: Record<string, string[][]> = {
   issues: [["issues"], ["dashboard"], ["scanner"]],
   scanner: [["issues"], ["dashboard"], ["scanner"]],
   toollog: [["toollog"], ["dashboard"]],
-  dashboard: [["dashboard"]],
+  // A finished content-discovery run notifies changeDashboard and nothing else — it fetched
+  // nothing through burpsy, so no history row, site-map node or finding moved. That makes this
+  // entry the only event that can tell the console a sweep has results.
+  dashboard: [["dashboard"], ["discovery"]],
   task: [["dashboard"]],
   tasks: [["dashboard"]],
   ws: [["ws"], ["stats"], ["dashboard"]],
@@ -208,6 +231,21 @@ export function useResource<T>(key: readonly unknown[], url: string, enabled = t
 /* --- reads --------------------------------------------------------------- */
 
 export const useStats = () => useResource<Stats>(keys.stats, "/api/stats");
+export const useScannerConfig = () => useResource<ScannerConfig>(keys.scannerConfig, "/api/scanner/config");
+
+/** PUT /api/scanner/config — apply a partial patch of audit-family switches and knobs. The server
+ *  answers with the whole confirmed state and persists it for the next start, so the confirmed
+ *  response is what the cache gets, never the optimistic draft. */
+export function useSaveScannerConfig() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (patch: Partial<ScannerConfig>) => api<ScannerConfig>("/api/scanner/config", json("PUT", patch)),
+    onSuccess: (confirmed) => {
+      queryClient.setQueryData(keys.scannerConfig, confirmed);
+      invalidate([keys.scannerCoverage]);
+    },
+  });
+}
 export const useScope = () => useResource<Scope>(keys.scope, "/api/scope");
 export const useDashboard = () => useResource<Dashboard>(keys.dashboard, "/api/dashboard");
 export const useIssues = () => useResource<Issues>(keys.issues, "/api/issues");
@@ -299,7 +337,7 @@ export function useOrganizerMutations() {
       onSuccess: done,
     }),
     save: useMutation({
-      mutationFn: (item: OrganizerItem) => api<unknown>(`/api/tools/organizer/${item.id}`, json("POST", item)),
+      mutationFn: (item: OrganizerEdit) => api<unknown>(`/api/tools/organizer/${item.id}`, json("POST", item)),
       onSuccess: done,
     }),
     remove: useMutation({
@@ -343,6 +381,17 @@ export function useInterceptControls() {
       mutationFn: (enabled: boolean) => api<unknown>("/api/intercept/enable", json("POST", { enabled })),
       onSuccess: done,
     }),
+    /** Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1). Its own route, not a second
+     * field on /enable: two independent switches, and an endpoint named "enable" carrying a filter
+     * would make a caller setting one have to restate the other. */
+    setInScopeOnly: useMutation({
+      mutationFn: (inScopeOnly: boolean) =>
+        api<{ in_scope_only: boolean; scope_attached: boolean }>(
+          "/api/intercept/in-scope-only",
+          json("POST", { in_scope_only: inScopeOnly }),
+        ),
+      onSuccess: done,
+    }),
     forward: useMutation({
       mutationFn: ({ id, raw }: { id: number; raw: string }) =>
         api<unknown>(`/api/intercept/${id}/forward`, json("POST", { raw, fix_content_length: true })),
@@ -351,6 +400,32 @@ export function useInterceptControls() {
     drop: useMutation({
       mutationFn: (id: number) =>
         api<unknown>(`/api/intercept/${id}/drop`, json("POST", { reason: "dropped by operator" })),
+      onSuccess: done,
+    }),
+    /**
+     * Drop every held message in one round trip (burpsy-react-ui-t6f).
+     *
+     * The route answers the count it ACTUALLY dropped, which is the useful part and the reason this
+     * is not just a loop over the visible rows: a message resolved elsewhere between the page's last
+     * poll and this request is not counted, so the number cannot overstate. The caller shows it, and
+     * says so when it differs from what was on screen — that difference is how an operator learns
+     * the queue moved under them rather than assuming the button half-worked.
+     */
+    /**
+     * Forward every held message in one round trip (burpsy-react-ui-4v3) — the safe half of the
+     * pair dropAll is the destructive half of, and Burp ships both from one dropdown. The route
+     * takes no body on purpose: a bulk forward applies no edits and no content-length rewrite,
+     * because nobody has looked at what it sends. The count it answers is what the engine
+     * actually forwarded — a message resolved elsewhere between the page's last poll and this
+     * request is not counted, so the number cannot overstate.
+     */
+    forwardAll: useMutation({
+      mutationFn: () => api<{ forwarded: number }>("/api/intercept/forward-all", json("POST", {})),
+      onSuccess: done,
+    }),
+    dropAll: useMutation({
+      mutationFn: () =>
+        api<{ dropped: number }>("/api/intercept/drop-all", json("POST", { reason: "dropped by operator" })),
       onSuccess: done,
     }),
   };

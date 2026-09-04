@@ -311,10 +311,12 @@ func toolLogEntryView(e *toollog.Entry) toolLogEntry {
 		status = &st
 	}
 	return toolLogEntry{
-		ID:     e.ID,
-		Tool:   e.Tool.String(),
-		Host:   e.Host,
-		Port:   e.Port,
+		ID:   e.ID,
+		Tool: e.Tool.String(),
+		Host: e.Host,
+		Port: e.Port,
+		// The flag the record has always held. See toolLogEntry.TLS for what dropping it cost.
+		TLS:    e.TLS,
 		Method: e.Method,
 		Path:   e.Path,
 		Status: status,

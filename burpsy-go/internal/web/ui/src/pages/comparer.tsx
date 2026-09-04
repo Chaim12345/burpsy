@@ -7,7 +7,7 @@ import { useApp } from "../lib/store";
 import type { CompareOp } from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Input, Metric, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Input, Metric, Select, Toolbar } from "../ui/primitives";
 
 /** Ops carry byte offsets, so slicing has to go through the same byte view the server used. */
 function byteSlice(text: string, offset: number, length: number): string {
@@ -23,6 +23,8 @@ interface Segment {
   mark: string;
   a: string;
   b: string;
+  /** Carried through from the op so the pane can dim a discounted header difference. */
+  uninteresting?: boolean;
 }
 
 /**
@@ -48,12 +50,12 @@ function buildSegments(ops: CompareOp[], aText: string, bText: string): { segmen
     const hunk = hunks++;
     if (op.kind === "insert") {
       const text = op.text ?? byteSlice(bText, op.b_offset, op.b_len);
-      segments.push({ key, kind: "insert", hunk, mark: "+", a: GAP_CHAR.repeat([...text].length), b: text });
+      segments.push({ key, kind: "insert", hunk, mark: "+", a: GAP_CHAR.repeat([...text].length), b: text, uninteresting: op.uninteresting });
       continue;
     }
     if (op.kind === "delete") {
       const text = op.text ?? byteSlice(aText, op.a_offset, op.a_len);
-      segments.push({ key, kind: "delete", hunk, mark: "−", a: text, b: GAP_CHAR.repeat([...text].length) });
+      segments.push({ key, kind: "delete", hunk, mark: "−", a: text, b: GAP_CHAR.repeat([...text].length), uninteresting: op.uninteresting });
       continue;
     }
     // "replace": both sides carry bytes; the shorter one is padded so the panes stay level.
@@ -67,6 +69,7 @@ function buildSegments(ops: CompareOp[], aText: string, bText: string): { segmen
       mark: "~",
       a: left + GAP_CHAR.repeat(width - [...left].length),
       b: right + GAP_CHAR.repeat(width - [...right].length),
+      uninteresting: op.uninteresting,
     });
   }
   return { segments, hunks, omitted: ops.length - drawn.length };
@@ -96,7 +99,7 @@ function Pane({
             <span
               key={segment.key}
               data-hunk={segment.hunk}
-              className={`diff-${segment.kind}${segment.hunk === currentHunk ? " diff-hunk-current" : ""}`}
+              className={`diff-${segment.kind}${segment.hunk === currentHunk ? " diff-hunk-current" : ""}${segment.uninteresting ? " diff-uninteresting" : ""}`}
               title={`${segment.kind} at byte ${side === "a" ? "A" : "B"} offset`}
             >
               <span className="diff-mark">{segment.mark}</span>
@@ -118,6 +121,13 @@ export function ComparerPage(): JSX.Element {
   const [msgA, setMsgA] = useState("");
   const [msgB, setMsgB] = useState("");
   const [currentHunk, setCurrentHunk] = useState(-1);
+  /**
+   * Which uninteresting-header list to apply (W6 #81/#82). Defaults to the response list because
+   * comparing two responses is what the Comparer is overwhelmingly used for, and because the
+   * response list is the one with defaults — leaving this at "request" would apply an empty list and
+   * make the whole setting look inert on the surface it exists to serve.
+   */
+  const [side, setSide] = useState<"response" | "request">("response");
   const paneRef = useRef<HTMLDivElement>(null);
 
   const compare = useCompare();
@@ -179,12 +189,16 @@ export function ComparerPage(): JSX.Element {
   const run = () => {
     setCurrentHunk(-1);
     compare.mutate(
-      { a, b },
+      { a, b, response: side === "response" },
       {
         onSuccess: (response) =>
           response.identical
             ? toast.success("The two inputs are byte-for-byte identical")
-            : toast.success(`${response.ops.filter((op) => op.kind !== "equal").length} difference(s) found`),
+            : response.identical_ignoring_uninteresting
+              ? toast.success(
+                  `Differences only in discounted header(s): ${response.uninteresting_headers_applied.join(", ")}`,
+                )
+              : toast.success(`${response.ops.filter((op) => op.kind !== "equal").length} difference(s) found`),
         onError: (cause) => toast.error(`Comparison failed: ${cause.message}`),
       },
     );
@@ -253,9 +267,42 @@ export function ComparerPage(): JSX.Element {
 
       {/* The handler reads two flat strings and has no granularity parameter, so a
           word-level option here would be a control that changes nothing. */}
+      {/* The old wording said only that this build compares BYTES rather than words. That was true
+          about granularity and silent about something worse: the diff had no alignment at all, so one
+          inserted byte reported the whole remainder as changed. Now it aligns, and the notice says
+          what the actual remaining limit is. */}
       <div className="notice">
-        This build compares bytes. The server exposes no word-level mode, so no granularity control is offered rather
-        than one that silently does the same thing.
+        Byte-level, aligned. Differences are matched up across insertions and deletions, so a
+        one-character change reads as a one-character change. There is no word-level mode, and none is
+        offered rather than a control that silently did the same thing.
+        {result?.truncated ? (
+          <>
+            {" "}
+            <strong>
+              These two inputs differ too extensively to align, so the differing region is shown as one
+              block rather than matched up.
+            </strong>
+          </>
+        ) : null}
+      </div>
+
+      {/* Which discount list applies. A control rather than a guess: burpsy cannot reliably tell a
+          pasted request from a pasted response, and picking wrong would apply the wrong list
+          silently. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <label htmlFor="compare-side" style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
+          Discount headers as:
+        </label>
+        <Select
+          id="compare-side"
+          aria-label="Which uninteresting-header list to apply"
+          value={side}
+          onChange={(event) => setSide(event.target.value as "response" | "request")}
+          style={{ width: "auto" }}
+        >
+          <option value="response">Responses</option>
+          <option value="request">Requests</option>
+        </Select>
       </div>
 
       <div className="two-col">
@@ -268,10 +315,20 @@ export function ComparerPage(): JSX.Element {
       {result ? (
         <>
           <div className="metric-grid">
+            {/* Three verdicts, not two. "identical" stays byte-exact; the middle case — the bytes
+                differ but only inside headers the operator chose to discount (W6 #81/#82) — is the
+                one they usually care about, and collapsing it into either neighbour would be a
+                false statement. */}
             <Metric
               label="Verdict"
-              value={result.identical ? "identical" : "different"}
-              tone={result.identical ? "good" : "warn"}
+              value={
+                result.identical
+                  ? "identical"
+                  : result.identical_ignoring_uninteresting
+                    ? "same but for discounted headers"
+                    : "different"
+              }
+              tone={result.identical || result.identical_ignoring_uninteresting ? "good" : "warn"}
               accent
               detail={`${result.ops.length} aligned run(s)`}
             />
@@ -279,6 +336,17 @@ export function ComparerPage(): JSX.Element {
             <Metric label="Deleted" value={formatBytes(result.deleted_tokens)} detail="only in A" />
             <Metric label="Inserted" value={formatBytes(result.inserted_tokens)} detail="only in B" />
           </div>
+
+          {result.uninteresting_ops > 0 ? (
+            <div className="notice">
+              {result.uninteresting_ops} difference(s) fall inside header(s) you have discounted
+              {result.uninteresting_headers_applied.length > 0
+                ? `: ${result.uninteresting_headers_applied.join(", ")}`
+                : ""}
+              . They are dimmed below rather than removed — the bytes really do differ. Edit the list
+              in Settings → Uninteresting headers.
+            </div>
+          ) : null}
 
           {result.truncated || result.ops_omitted > 0 || omitted > 0 ? (
             <div className="notice notice-warn">

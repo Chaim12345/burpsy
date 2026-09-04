@@ -69,17 +69,21 @@ var activeCheckSet = nativeActiveCheckSet()
 // bits describe different checks for different items. That also fixes the snapshot point for the
 // corpus: a corpus loaded mid-session joins the next run, never a run already in flight.
 func (s *ActiveScanner) enabledChecks() []activeCheck {
-	if s == nil || s.config == nil {
+	if s == nil {
 		return nil
 	}
-	out := make([]activeCheck, 0, len(activeCheckSet)+len(s.corpus))
+	cfg := s.ConfigSnapshot()
+	s.mu.RLock()
+	corpus := s.corpus
+	s.mu.RUnlock()
+	out := make([]activeCheck, 0, len(activeCheckSet)+len(corpus))
 	for _, c := range activeCheckSet {
-		if c.enabled(s.config) {
+		if c.enabled(&cfg) {
 			out = append(out, c)
 		}
 	}
-	if s.config.CheckCorpus {
-		out = append(out, s.corpusActiveChecks()...)
+	if cfg.CheckCorpus {
+		out = append(out, s.corpusActiveChecks(corpus)...)
 	}
 	return out
 }
@@ -335,6 +339,18 @@ type AuditOutcome struct {
 	// Unmeasurable counts checks included in Ran whose evidence was inconclusive, so their empty
 	// verdict is undecided rather than clean. A qualifier on Ran, not a tenth disposition.
 	Unmeasurable int `json:"unmeasurable"`
+	// UnitsPlanned and UnitsAbandoned count dispatch *units*, not checks, and are deliberately not
+	// part of the nine-way partition Considered() sums — a unit holds many checks, so adding them
+	// there would double-count.
+	//
+	// They exist because "an abandoned unit" and "the checks inside abandoned units" are different
+	// facts and the second one alone cannot answer an operator's question. UnitAbandoned says 40
+	// checks were not started; UnitsAbandoned says that was 2 units, which against
+	// ConsecutiveUnitFailuresToFailItem = 2 is exactly why the item then failed. Before these were
+	// recorded that inference was not available anywhere, so a failed item could not be traced to the
+	// threshold that failed it.
+	UnitsPlanned   int `json:"units_planned"`
+	UnitsAbandoned int `json:"units_abandoned"`
 	// Error names why an item was refused before any dispatch. Non-empty exactly for
 	// ItemStateOutOfScope and ItemStateUnauditable.
 	Error string `json:"error,omitempty"`
@@ -535,8 +551,9 @@ func (s *ActiveScanner) AuditConfig() AuditConfig {
 		return *s.auditCfg
 	}
 	cfg := DefaultAuditConfig()
-	if s.config != nil && s.config.Timeout > 0 {
-		cfg.TimeBudget = s.config.Timeout
+	snap := s.ConfigSnapshot()
+	if snap.Timeout > 0 {
+		cfg.TimeBudget = snap.Timeout
 	}
 	return cfg
 }
@@ -568,7 +585,12 @@ func (s *ActiveScanner) WithScope(scope *core.Scope) *ActiveScanner {
 // operator who clicks audit again means it.
 func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.ExchangeID, cfg AuditConfig) (AuditOutcome, []*Finding) {
 	run := newAuditRun(cfg)
-	return s.auditItem(ctx, exchangeID, run, s.enabledChecks())
+	checks := s.enabledChecks()
+	// Queued before dispatch, not after it answers. An audit of a slow host holds this goroutine for
+	// up to the whole time budget, and a queue that only showed items once they finished would be
+	// empty for exactly as long as the operator most wanted to look at it.
+	cfg.Items.Enqueue(exchangeID, len(checks))
+	return s.auditItem(ctx, exchangeID, run, checks)
 }
 
 // AuditSession audits a batch of exchanges under one shared budget, ledger and set of circuit
@@ -612,12 +634,20 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 	var paused atomic.Bool
 
 	workers := 1
-	if s.config != nil && s.config.MaxConcurrency > 1 {
-		workers = s.config.MaxConcurrency
+	if snap := s.ConfigSnapshot(); snap.MaxConcurrency > 1 {
+		workers = snap.MaxConcurrency
 		if workers > len(exchangeIDs) {
 			workers = len(exchangeIDs)
 		}
 	}
+	// Every item joins the queue as Pending before any worker starts, which is what makes the queue a
+	// queue rather than a log of finished work: a batch of 200 is 200 Pending rows the instant the
+	// sweep tick begins, and they move to Auditing and then to a terminal state as workers reach
+	// them. Enqueued in the order requested, so the queue's own order is the caller's order.
+	for _, id := range exchangeIDs {
+		cfg.Items.Enqueue(id, len(checks))
+	}
+
 	queue := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
@@ -633,22 +663,21 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 				// item is never an item that came back clean.
 				switch {
 				case paused.Load():
-					out.Items[slot] = ItemOutcome{
-						ExchangeID: exchangeID,
-						Outcome:    s.refuseWholeItem(ItemStatePaused, len(checks), func(o *AuditOutcome) *int { return &o.SessionPaused }),
-					}
+					o := s.refuseWholeItem(ItemStatePaused, len(checks), func(o *AuditOutcome) *int { return &o.SessionPaused })
+					out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
+					cfg.Items.Resolve(exchangeID, nil, o, cfg, auditItemNote(o, cfg))
 					continue
 				case run.outOfTime() || ctx.Err() != nil:
 					o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.NotRun })
 					o.TimedOut = true
 					o.Cancelled = ctx.Err() != nil
 					out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
+					cfg.Items.Resolve(exchangeID, nil, o, cfg, auditItemNote(o, cfg))
 					continue
 				case run.overRequestBudget(0):
-					out.Items[slot] = ItemOutcome{
-						ExchangeID: exchangeID,
-						Outcome:    s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.RequestBudgetSpent }),
-					}
+					o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.RequestBudgetSpent })
+					out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
+					cfg.Items.Resolve(exchangeID, nil, o, cfg, auditItemNote(o, cfg))
 					continue
 				}
 
@@ -750,29 +779,39 @@ func plan(ex *core.Exchange, checks []activeCheck) (units []dispatchUnit, steps 
 // GetFindings and Export read from — the same contract Audit has always had.
 func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeID, run *auditRun, checks []activeCheck) (AuditOutcome, []*Finding) {
 	var o AuditOutcome
+	// refuse resolves the item in the queue as well as returning it, so an item the engine declined
+	// before any dispatch is a row an operator can see rather than a return value one caller read.
+	// Every path out of this prologue goes through it: a queue missing exactly the items nothing
+	// looked at would be the honest-counting failure this whole surface exists to close.
+	refuse := func(ex *core.Exchange, state ItemState, why string) (AuditOutcome, []*Finding) {
+		refused := o.refuse(state, why)
+		run.cfg.Items.Resolve(exchangeID, ex, refused, run.cfg, auditItemNote(refused, run.cfg))
+		return refused, nil
+	}
 	if len(checks) == 0 {
 		// Nothing was enabled, so nothing was declined either. Audited with zero considered is the
 		// honest reading, and it is what the Rust original returns for an empty check set.
 		o.State = ItemStateAudited
+		run.cfg.Items.Resolve(exchangeID, nil, o, run.cfg, "")
 		return o, nil
 	}
 	ex, err := s.store.GetExchange(exchangeID)
 	if err != nil || ex == nil {
-		return o.refuse(ItemStateUnauditable, "no such exchange"), nil
+		return refuse(nil, ItemStateUnauditable, "no such exchange")
 	}
 	// Scope first, before a single byte is built. Sending unsolicited requests to a host outside the
 	// engagement is the one bug in this package that would matter outside the tool.
 	if s.scope != nil && !s.scope.Contains(ex.Host, ex.Port, ex.Path, ex.TLS) {
-		return o.refuse(ItemStateOutOfScope, fmt.Sprintf("%s is out of scope", ex.Host)), nil
+		return refuse(ex, ItemStateOutOfScope, fmt.Sprintf("%s is out of scope", ex.Host))
 	}
 	// Every built-in check either reads this exchange's stored response or falls back to it when a
 	// probe fails, so without one nothing here can produce evidence. Refused rather than run,
 	// because a check set that inspected an empty body would come back clean.
 	if ex.Response == nil {
-		return o.refuse(ItemStateUnauditable, "exchange has no response yet"), nil
+		return refuse(ex, ItemStateUnauditable, "exchange has no response yet")
 	}
 	if _, err := s.store.Get(*ex.Response); err != nil {
-		return o.refuse(ItemStateUnauditable, "response not in store"), nil
+		return refuse(ex, ItemStateUnauditable, "response not in store")
 	}
 
 	// Feed this response to the stored-input ledger before any check runs.
@@ -800,6 +839,16 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// every point rather than reconstructed afterwards.
 	units, steps, undispatchable := plan(ex, checks)
 	o.Skipped += undispatchable
+	o.UnitsPlanned = len(units)
+
+	// The queue's row for this item, filled in at the one moment every fact it needs is in hand: the
+	// plan's shape, the configuration in force, and this request's insertion points. Enumeration is
+	// skipped entirely when nothing is reading the queue — it is one request parse, cheap beside a
+	// probe but not free, and a CLI audit should not pay for a table it has no way to show.
+	if run.cfg.Items != nil {
+		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), DefaultProbeInsertionKinds)
+		run.cfg.Items.Begin(exchangeID, ex, run.cfg, len(units), len(steps), points, kinds)
+	}
 
 	var found []*Finding
 	var stop Disposition
@@ -824,6 +873,10 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 
 			check := steps[pos].check
 			pos++
+			// One call per step consumed, whatever disposition it lands in — placed here, at the single
+			// point pos advances, rather than beside each of the nine outcomes below. A progress counter
+			// maintained at nine sites is one that eventually disagrees with the plan it is a fraction of.
+			run.cfg.Items.Step(exchangeID)
 			if abandoned {
 				o.UnitAbandoned++
 				continue
@@ -901,6 +954,13 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			o.Findings += len(verdict)
 			found = append(found, verdict...)
 		}
+		// Counted before the stop test, not after it: a unit the check-failure breaker gave up on was
+		// abandoned whether or not the budget then ended the item, and attributing it only in the
+		// no-stop case would make the count that explains a failed item disappear in exactly the runs
+		// where an operator is asking why.
+		if abandoned {
+			o.UnitsAbandoned++
+		}
 		if stopped {
 			break
 		}
@@ -947,5 +1007,6 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		s.findings = append(s.findings, found...)
 		s.findingsMu.Unlock()
 	}
+	run.cfg.Items.Resolve(exchangeID, ex, o, run.cfg, auditItemNote(o, run.cfg))
 	return o, found
 }

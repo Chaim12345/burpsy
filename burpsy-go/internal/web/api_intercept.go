@@ -24,6 +24,10 @@ type interceptRuleSpec struct {
 	Match    string `json:"string_match"`
 	Enabled  bool   `json:"enabled"`
 	Comment  string `json:"comment"`
+	// Action is "hold" (Do intercept) or "pass" (Don't intercept), Burp's per-rule
+	// action. Absent means hold, so every list written before actions existed reads back
+	// unchanged.
+	Action string `json:"action,omitempty"`
 }
 
 // interceptListState mirrors intercept.ts's ListState (the PUT body and the GET rules body).
@@ -48,6 +52,10 @@ type heldView struct {
 	HeldMs    int64  `json:"held_ms"`
 	Len       int    `json:"len"`
 	Raw       string `json:"raw"`
+	// Opcode is the WebSocket frame type ("text", "binary", …) and is absent for
+	// HTTP. Sent because a held frame's payload alone does not say how to read it:
+	// an operator shown binary bytes with no marking will edit them as text.
+	Opcode string `json:"opcode,omitempty"`
 }
 
 type interceptStatusResp struct {
@@ -58,6 +66,12 @@ type interceptStatusResp struct {
 	Held               []heldView `json:"held"`
 	HoldsEveryRequest  *bool      `json:"holds_every_request,omitempty"`
 	HoldsEveryResponse *bool      `json:"holds_every_response,omitempty"`
+	// InScopeOnly is Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1).
+	InScopeOnly bool `json:"in_scope_only"`
+	// ScopeAttached reports whether the engine has a scope to consult. False makes InScopeOnly inert,
+	// and the console says so rather than offering a toggle that silently changes nothing — the same
+	// reason `wired` exists beside `enabled`.
+	ScopeAttached bool `json:"scope_attached"`
 }
 
 func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +104,7 @@ func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
 			HeldMs:    now.Sub(h.HeldAt).Milliseconds(),
 			Len:       len(h.Raw),
 			Raw:       string(h.Raw),
+			Opcode:    h.Opcode,
 		})
 	}
 
@@ -102,6 +117,8 @@ func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
 		Held:               views,
 		HoldsEveryRequest:  &holdsEveryReq,
 		HoldsEveryResponse: &holdsEveryResp,
+		InScopeOnly:        s.intercept.InScopeOnly(),
+		ScopeAttached:      s.intercept.ScopeAttached(),
 	})
 }
 
@@ -122,16 +139,108 @@ func (s *Server) handleInterceptEnable(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"enabled": req.Enabled})
 }
 
-// directionFor maps the URL suffix (requests|responses) to a Direction.
-func directionFor(s string) (intercept.Direction, bool) {
-	switch s {
-	case "requests":
-		return intercept.DirectionRequest, true
-	case "responses":
-		return intercept.DirectionResponse, true
-	default:
-		return intercept.DirectionRequest, false
+// handleInterceptInScopeOnly serves POST /api/intercept/in-scope-only — Burp's "Only intercept
+// in-scope messages".
+//
+// Its own route rather than a second field on /api/intercept/enable: they are two independent
+// switches, and an endpoint named "enable" that also carried a filter would make a caller setting one
+// have to restate the other, which is how a UI ends up turning interception off by accident.
+//
+// The answer echoes both the new value and whether a scope is attached, so a caller cannot conclude
+// the filter is in force when there is nothing for it to filter against.
+func (s *Server) handleInterceptInScopeOnly(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
+	var req struct {
+		InScopeOnly bool `json:"in_scope_only"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	s.intercept.SetInScopeOnly(req.InScopeOnly)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{
+		"in_scope_only":  req.InScopeOnly,
+		"scope_attached": s.intercept.ScopeAttached(),
+	})
+}
+
+// handleInterceptForwardAll serves POST /api/intercept/forward-all and resolves every
+// held message as forwarded, unmodified, in one round trip — the queue toolbar's
+// "Forward all", the safe half of the pair whose destructive half is above. The
+// count in the answer is what the engine actually forwarded on this call: a
+// message resolved elsewhere between the page's last poll and this request is
+// not double-counted, so the toast the UI shows cannot overstate. There is no
+// body to read on purpose: the engine applies no edits and no content-length
+// rewrite, because nobody has looked at what a bulk forward sends.
+func (s *Server) handleInterceptForwardAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	forwarded := s.intercept.ForwardAll()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"forwarded": forwarded})
+}
+
+// handleInterceptDropAll serves POST /api/intercept/drop-all and resolves every
+// held message as dropped in one round trip — the queue toolbar's "Drop all".
+// The count in the answer is what the engine actually dropped on this call: a
+// message resolved elsewhere between the page's last poll and this request is
+// not double-counted, so the toast the UI shows cannot overstate.
+func (s *Server) handleInterceptDropAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Reason == "" {
+		req.Reason = "dropped by operator"
+	}
+	dropped := s.intercept.DropAll(req.Reason)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"dropped": dropped})
+}
+
+// interceptDirectionNames is the wire name for every intercept direction, and it
+// is the only place these strings are written down.
+//
+// It exists as one table because the names had been spelled out twice — here for
+// the URL suffix and again inside handleConfigExport's loop — and the two lists
+// were allowed to disagree. That is not hypothetical: the export loop covered
+// requests and responses only, so the moment a third direction became routable
+// an exported bundle would have carried none of its rules while the importer
+// happily accepted them. A donor's WebSocket rules would vanish in transit and
+// the round trip would still report success, which is the same defect shape as
+// the session_rules omitempty bug in api_config.go.
+//
+// Ordered rather than a map so export writes its keys deterministically; a
+// config file whose key order changes between two identical exports is
+// needlessly hard to diff.
+var interceptDirectionNames = []struct {
+	Name string
+	Dir  intercept.Direction
+}{
+	{"requests", intercept.DirectionRequest},
+	{"responses", intercept.DirectionResponse},
+	{"websocket_to_server", intercept.DirectionWebSocketToServer},
+	{"websocket_to_client", intercept.DirectionWebSocketToClient},
+}
+
+// directionFor maps a wire name to a Direction.
+func directionFor(s string) (intercept.Direction, bool) {
+	for _, d := range interceptDirectionNames {
+		if d.Name == s {
+			return d.Dir, true
+		}
+	}
+	return intercept.DirectionRequest, false
 }
 
 func specToRules(specs []interceptRuleSpec) ([]intercept.Rule, error) {
@@ -145,12 +254,17 @@ func specToRules(specs []interceptRuleSpec) ([]intercept.Rule, error) {
 		if sp.Category == "literal" {
 			cat = intercept.CategoryLiteral
 		}
+		action, err := intercept.ParseRuleAction(sp.Action)
+		if err != nil {
+			return nil, err
+		}
 		rules = append(rules, intercept.Rule{
 			Field:       field,
 			Category:    cat,
 			StringMatch: sp.Match,
 			Enabled:     sp.Enabled,
 			Comment:     sp.Comment,
+			Action:      action,
 		})
 	}
 	return rules, nil
@@ -169,6 +283,7 @@ func rulesToSpecs(rules []*intercept.Rule) []interceptRuleSpec {
 			Match:    r.StringMatch,
 			Enabled:  r.Enabled,
 			Comment:  r.Comment,
+			Action:   r.Action.String(),
 		})
 	}
 	return specs
@@ -238,12 +353,26 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 	switch parts[1] {
 	case "forward":
 		var req struct {
-			Raw              string `json:"raw"`
-			FixContentLength bool   `json:"fix_content_length"`
+			// A pointer so an explicitly empty string clears the payload while an absent key
+			// forwards what was held. On a WebSocket frame an empty payload is ordinary, and the
+			// old plain string treated "" as "unchanged" — so an operator who deleted the payload
+			// got the original forwarded, answered 200, with no sign the edit was discarded.
+			Raw              *string `json:"raw"`
+			FixContentLength bool    `json:"fix_content_length"`
+			// HoldResponse arms a one-shot hold for this request's response (burpsy-react-ui-v6jw):
+			// Burp's "Do intercept > Response to this request". Refused for anything but a held
+			// request, by the engine.
+			HoldResponse bool `json:"hold_response"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
+		}
+		if req.HoldResponse {
+			if err := s.intercept.ArmResponseHold(id); err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
 		}
 		if err := s.intercept.Forward(id, req.Raw, req.FixContentLength); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)

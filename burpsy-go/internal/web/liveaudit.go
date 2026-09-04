@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -295,16 +294,23 @@ func (q *auditedExchangeQuery) response() *core.StoredMessage {
 
 // Mime is the response Content-Type with any parameters stripped, so `mime = "text/html"` matches
 // `text/html; charset=utf-8` — the form servers actually send.
+//
+// The stored value first, because since core.Exchange carries Mime this is the same answer without
+// resolving the response at all. The fallback is not dead code: a row restored from a database
+// written before the mime column existed has an empty Mime and real response bytes, and reading the
+// header is strictly better than reporting "absent" for a response whose type is right there. Both
+// paths go through core.MimeFromContentType so the two cannot reduce the value differently — the
+// local strip-and-trim that used to live here also did not fold case, which made this row's `mime`
+// comparison disagree with the History column beside it on a server sending `text/HTML`.
 func (q *auditedExchangeQuery) Mime() string {
+	if q.ex.Mime != "" {
+		return q.ex.Mime
+	}
 	msg := q.response()
 	if msg == nil {
 		return ""
 	}
-	raw := string(msg.Header("Content-Type"))
-	if i := strings.IndexByte(raw, ';'); i >= 0 {
-		raw = raw[:i]
-	}
-	return strings.TrimSpace(raw)
+	return core.MimeFromContentType(string(msg.Header("Content-Type")))
 }
 
 func (q *auditedExchangeQuery) Body() []byte {
@@ -313,6 +319,50 @@ func (q *auditedExchangeQuery) Body() []byte {
 		return nil
 	}
 	return msg.Body()
+}
+
+// Annotation answers from the index row. See filteredExchangeQuery.Annotation for why known is true.
+func (q *auditedExchangeQuery) Annotation() (string, string, bool) {
+	comment := ""
+	if q.ex.Notes != nil {
+		comment = *q.ex.Notes
+	}
+	return q.ex.Highlight, comment, true
+}
+
+// Header reads the response head through the same memoised resolution Mime and Body use, so a query
+// naming a header and a body resolves the message once rather than twice.
+func (q *auditedExchangeQuery) Header(name string) ([]string, bool) {
+	msg := q.response()
+	if msg == nil {
+		return nil, false
+	}
+	raw, present := msg.HeaderValues(name)
+	if !present {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		out = append(out, string(value))
+	}
+	return out, true
+}
+
+// ResponseLen and DurationUs both read the index row rather than the message, so neither forces the
+// lazy response resolution above. Same absence rules as filteredExchangeQuery: presence comes from
+// Response and from Measured, never from the value being non-zero.
+func (q *auditedExchangeQuery) ResponseLen() (int64, bool) {
+	if q.ex.Response == nil {
+		return 0, false
+	}
+	return int64(q.ex.ResponseLen), true
+}
+
+func (q *auditedExchangeQuery) DurationUs() (int64, bool) {
+	if !q.ex.Duration.Measured {
+		return 0, false
+	}
+	return int64(q.ex.Duration.Us), true
 }
 
 // liveAuditAdmits is the sweep's whole admission decision for one exchange: the engagement scope, then
@@ -585,6 +635,11 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// The ledger is the one part of the config that outlives this tick — see liveAuditRun.
 	cfg := s.scanner.AuditConfig()
 	cfg.Ledger = run.auditLedger(s.liveAudit, s.events, s.logger)
+	// The sweep is the highest-volume producer of audit items, so it is the one that makes the queue
+	// worth having: this is where "swept 400" becomes 400 rows an operator can ask which of them the
+	// budget bounded. The queue's own cap (scanner.DefaultAuditItemCap) is what keeps a sweep that
+	// runs for hours from growing it without limit, and the endpoint reports the evictions.
+	cfg.Items = s.auditItems
 	outcome, findings := s.scanner.AuditSession(ctx, ids, cfg)
 	s.liveAudit.recordCollapsed(uint64(outcome.AlreadyCovered()))
 	task.Advance(uint64(len(ids)))

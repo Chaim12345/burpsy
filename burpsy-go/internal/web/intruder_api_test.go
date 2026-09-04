@@ -63,6 +63,9 @@ type wireRunReport struct {
 		Sent         int    `json:"sent"`
 		Failed       int    `json:"failed"`
 		Truncated    bool   `json:"truncated"`
+		Attempts     []struct {
+			Ordinal int `json:"ordinal"`
+		} `json:"attempts"`
 	} `json:"report"`
 	Examples    []wireBucketExample  `json:"examples"`
 	PayloadSets []wirePayloadSetView `json:"payload_sets"`
@@ -273,6 +276,74 @@ func TestIntruderRunServesTheFullReport(t *testing.T) {
 	sort.Strings(got)
 	if want := []string{"good", "nicely"}; !slices.Equal(got, want) {
 		t.Fatalf("examples resolve to %v, want every payload %v", got, want)
+	}
+}
+
+// Examples must name every attempt ordinal the report kept, not only the first ordinal of each
+// bucket — and the name must be the payload actually sent, post payload-processing-rule, not the
+// pre-rule text the browser typed. add_prefix is count-preserving (it drops nothing), so both
+// payloads still land in the request; and both prefixed payloads are the same length, so the echo
+// target puts them in the *same* bucket — meaning only one of the two ordinals is a bucket's
+// first_ordinal. The other's payload can only come from a wire example, not from the bucket loop.
+// This pins the fix for burpsy-react-ui-fvx: without it, the second ordinal's example would be
+// missing and the bundled UI would fall back to the browser's stale pre-rule text.
+func TestIntruderRunExamplesCoverEveryAttemptWithThePostRulePayload(t *testing.T) {
+	addr := echoServer(t)
+
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	id := requestMessage(t, store, "GET /search?q=alpha&page=2 HTTP/1.1\r\nHost: shop.test\r\n\r\n")
+
+	var points []wirePoint
+	postJSONInto(t, srv, "/api/intruder/points", map[string]any{"msg_id": id, "all": false}, &points)
+	var qIndex int = -1
+	for i := range points {
+		if points[i].Kind == "url_param_value" && points[i].Label == "q" {
+			qIndex = i
+			break
+		}
+	}
+	if qIndex < 0 {
+		t.Fatalf("no q point in %+v", points)
+	}
+
+	var out wireRunReport
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":       id,
+		"target":       "http://" + addr,
+		"mode":         "sniper",
+		"points":       []int{qIndex},
+		"payload_sets": [][]string{{"aa", "bb"}},
+		"payload_rules": []map[string]any{
+			{"rule": "add_prefix", "text": "X"},
+		},
+		"max_requests": 100,
+		"rps":          1000,
+	}, &out)
+	if code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200", code)
+	}
+	if len(out.Report.Attempts) != 2 {
+		t.Fatalf("attempts = %d, want 2 (aa and bb both survive add_prefix)", len(out.Report.Attempts))
+	}
+	// Both prefixed payloads ("Xaa", "Xbb") are 3 bytes, so the echo target puts them in one
+	// bucket: at most one of the two ordinals is that bucket's first_ordinal.
+	byOrdinal := make(map[int][]string, len(out.Examples))
+	for _, ex := range out.Examples {
+		byOrdinal[ex.FirstOrdinal] = ex.Payloads
+	}
+	want := map[int]string{0: "Xaa", 1: "Xbb"}
+	for _, a := range out.Report.Attempts {
+		pl, ok := byOrdinal[a.Ordinal]
+		if !ok || len(pl) == 0 {
+			t.Fatalf("attempt %d has no example in %+v", a.Ordinal, out.Examples)
+		}
+		if pl[0] != want[a.Ordinal] {
+			t.Fatalf("attempt %d example = %q, want the post-rule payload %q (not the pre-rule browser text)", a.Ordinal, pl[0], want[a.Ordinal])
+		}
 	}
 }
 

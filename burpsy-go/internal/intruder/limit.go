@@ -31,6 +31,11 @@ package intruder
 // two attacks share a bucket, and this package keeps no registry of pools: an attack gets one
 // RateLimiter, and cross-attack state belongs to whichever layer owns the attacks.
 //
+// internal/pool is that layer. It owns names, lifetimes and persistence, and resolves a saved pool
+// to exactly one RateLimit — so a *named* pool is a resolution step in front of this type, never a
+// second limiter beside it. Nothing was moved down here to make that work: this file still has no
+// map from name to anything.
+//
 // AutoThrottle reacts to the target. N consecutive responses with a status the operator listed
 // (429 and 503 by default) divide the rate for the next M grants, then it recovers. This is the
 // reason a limiter needs Observe: a token bucket that only ever hears about sends cannot notice
@@ -38,6 +43,7 @@ package intruder
 // AutoThrottle configured, every code path here behaves as it did before it existed.
 
 import (
+	"context"
 	"math"
 	"sync"
 	"time"
@@ -213,6 +219,43 @@ func (l *RateLimiter) Acquire() *Permit {
 		time.Sleep(wait)
 	}
 	return &Permit{limiter: l}
+}
+
+// Pace is Acquire for a caller that has a context, returning the release function rather than a
+// Permit. It is the shape sender.Pacer requires, so a limiter can be handed to an AuthorisedSender
+// and bound every send that leaves through it — which is how a *named* resource pool reaches the
+// audit path, where there is no driver loop of the intruder's shape to put an Acquire in.
+//
+// Two departures from Acquire, both because a context exists here and did not there:
+//
+//   - the in-flight slot is waited for on a select, so a caller queued behind a full pool is
+//     released by cancellation instead of waiting for a slot that may never come;
+//   - the rate wait is a timer, not a Sleep, for the same reason. A pool with a large delay between
+//     requests would otherwise make a cancelled audit sit out its whole spacing before noticing —
+//     one request's delay per queued worker, which on a wide pool is the difference between stopping
+//     and appearing to hang.
+//
+// The slot is returned before returning the error, so a cancellation between taking the slot and
+// finishing the wait does not leak it. The returned release is never nil on success and is
+// idempotent, matching Permit.Release.
+func (l *RateLimiter) Pace(ctx context.Context) (func(), error) {
+	select {
+	case l.slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	permit := &Permit{limiter: l}
+	if wait := l.reserve(time.Now()); wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			permit.Release()
+			return nil, ctx.Err()
+		}
+	}
+	return permit.Release, nil
 }
 
 // reserve charges one request to the bucket and returns how long the caller must wait to spend it.

@@ -164,6 +164,66 @@ func WsUnmask(payload []byte, mask [4]byte, offset uint64) {
 	}
 }
 
+// EncodeWsFrame builds a single unfragmented frame carrying payload. It is the
+// inverse of ParseWsFrameHeader, and it exists for exactly one caller: the
+// interception path, which must put an operator-edited payload back on the wire.
+// Capture never encodes anything — it only ever reads — so until frames could be
+// held there was nothing in this package that needed to write one.
+//
+// mask nil sends the frame unmasked; non-nil masks the payload with it. That is
+// not a stylistic choice. RFC 6455 §5.1 requires every client-to-server frame to
+// be masked and forbids masking server-to-client frames, and a peer that
+// receives the wrong one is required to fail the connection. So the caller
+// passes the mask when it is relaying toward the server and nil when it is
+// relaying toward the client, and getting that backwards is a dropped
+// connection rather than a subtle corruption — which is the better failure of
+// the two, but it is still the caller's decision to make and not this
+// function's to guess.
+//
+// The mask is applied to a copy. Masking in place would be faster and would also
+// scribble over the operator's edited bytes, which the caller still holds and
+// which are recorded as evidence of what they sent.
+//
+// FIN is always set. The interception path only ever holds whole unfragmented
+// data frames — see wsHoldable in internal/proxy/ws.go for why fragmented and
+// compressed frames are relayed untouched instead — so a continuation frame is
+// never re-encoded and this function does not need to express one.
+func EncodeWsFrame(opcode WsOpcode, payload []byte, mask *[4]byte) []byte {
+	n := len(payload)
+	// 2 header bytes, up to 8 more for an extended length, 4 more for a mask.
+	out := make([]byte, 0, 2+8+4+n)
+
+	out = append(out, 0x80|byte(opcode&0x0f)) // FIN, no RSV: never compressed.
+
+	maskBit := byte(0)
+	if mask != nil {
+		maskBit = 0x80
+	}
+	switch {
+	case n < 126:
+		out = append(out, maskBit|byte(n))
+	case n <= 0xFFFF:
+		out = append(out, maskBit|126, byte(n>>8), byte(n))
+	default:
+		out = append(out, maskBit|127)
+		// 8-byte big-endian. The reserved high bit is necessarily clear: n came
+		// from len() on an in-memory slice, so it cannot reach 1<<63.
+		for shift := 56; shift >= 0; shift -= 8 {
+			out = append(out, byte(uint64(n)>>uint(shift)))
+		}
+	}
+
+	if mask == nil {
+		return append(out, payload...)
+	}
+	out = append(out, mask[:]...)
+	masked := make([]byte, n)
+	copy(masked, payload)
+	// Offset 0: this is a whole frame, so its mask starts at the key's first byte.
+	WsUnmask(masked, *mask, 0)
+	return append(out, masked...)
+}
+
 // WsEvent is one reassembled application message or control frame, ready to be
 // recorded. The payload is unmasked and truncated to the cap; the shortfall is
 // counted rather than hidden, because a 3 MiB message shown as 1 MiB with no
@@ -176,6 +236,13 @@ type WsEvent struct {
 	Fragments uint32
 	Dropped   uint64
 	Note      string
+	// Compressed reports that the message's first frame had RSV1 set, i.e. this payload is a
+	// permessage-deflate stream rather than the message.
+	//
+	// A field rather than something a caller infers from Note. The note is prose for an operator and
+	// gets reworded; a consumer deciding whether to inflate needs a fact, and string-matching a
+	// human-readable sentence for it is the kind of coupling that breaks silently on a copy edit.
+	Compressed bool
 }
 
 // wsDest says where a frame's payload is going. A control frame interleaves
@@ -212,13 +279,17 @@ type WsReassembler struct {
 	partial       []byte
 	partialOpcode WsOpcode
 	partialOpen   bool
-	fragments     uint32
-	dropped       uint64
-	noteMsg       string
-	ctrl          []byte
-	ctrlDropped   uint64
-	ctrlNote      string
-	ready         []*WsEvent
+	// partialCompressed is RSV1 from the message's FIRST frame. Per RFC 7692 §6.1 only that frame
+	// carries the flag; continuations of a compressed message do not repeat it, so reading it from
+	// any later frame would report false.
+	partialCompressed bool
+	fragments         uint32
+	dropped           uint64
+	noteMsg           string
+	ctrl              []byte
+	ctrlDropped       uint64
+	ctrlNote          string
+	ready             []*WsEvent
 }
 
 // NewWsReassembler creates a reassembler that keeps at most maxMessageBytes of
@@ -334,6 +405,11 @@ func (r *WsReassembler) beginFrame(hdr *WsFrameHeader) {
 		if hdr.RSV != 0 {
 			r.note(wsRsvNote(hdr.RSV))
 		}
+		// Only the first frame of a message carries RSV1 (RFC 7692 §6.1), which is why this is
+		// guarded on fragments == 0 rather than set from whichever frame happens to be in hand.
+		if r.fragments == 0 && hdr.RSV&WsRsv1 != 0 {
+			r.partialCompressed = true
+		}
 		r.fragments++
 	}
 	r.inFlight = &wsInFlight{hdr: *hdr, dest: dest}
@@ -416,13 +492,15 @@ func (r *WsReassembler) flushPartial(fragments uint32) {
 		opcode = WsOpcodeContinuation
 	}
 	r.ready = append(r.ready, &WsEvent{
-		Opcode:    opcode,
-		Payload:   r.partial,
-		Fragments: fragments,
-		Dropped:   r.dropped,
-		Note:      r.noteMsg,
+		Opcode:     opcode,
+		Payload:    r.partial,
+		Fragments:  fragments,
+		Dropped:    r.dropped,
+		Note:       r.noteMsg,
+		Compressed: r.partialCompressed,
 	})
 	r.partial = nil
+	r.partialCompressed = false
 	r.partialOpcode = WsOpcodeContinuation
 	r.partialOpen = false
 	r.fragments = 0

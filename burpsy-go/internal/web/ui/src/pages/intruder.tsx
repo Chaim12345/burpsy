@@ -1,22 +1,46 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Crosshair, Plus, Search, Trash2, Zap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Crosshair, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
-import { useIntruderPoints, useIntruderRun } from "../lib/data.tools";
+import { api, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import {
+  AttackActionStale,
+  useIntruderAttackAction,
+  useIntruderAttacks,
+  useIntruderPoints,
+  useIntruderRun,
+  type IntruderRunRequest,
+} from "../lib/data.tools";
+import { usePools } from "../lib/data.pools";
 import { useMessage } from "../lib/data";
-import { useApp } from "../lib/store";
+import {
+  DEFAULT_PAYLOADS,
+  emptyIntruderConfig,
+  useApp,
+  type IntruderConfig,
+  type IntruderPayloadSnapshot,
+} from "../lib/store";
 import {
   ATTACK_MODES,
   HASH_ALGORITHMS,
   PAYLOAD_LAYERS,
   PAYLOAD_RULES,
+  assignmentAt,
+  attackProgress,
+  customIteratorSize,
+  customIteratorSlots,
+  dateSetSize,
   emptyRule,
   estimateRequests,
+  planSetLengths,
+  quoteRegex,
+  resolvePayloads,
   type AttackMode,
+  type IntruderAttacksResp,
   type PayloadRuleName,
   type PayloadRuleSpec,
-  type PointView,
+  type ResolvedPayload,
   type RunView,
+  type SetSize,
 } from "../lib/types.tools";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader, SectionHeading } from "../ui/layout";
@@ -37,12 +61,11 @@ import {
   Input,
   Select,
   Switch,
+  Modal,
   Textarea,
   Tooltip,
 } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
-
-const DEFAULT_PAYLOADS = "admin\nroot\ntest\n' OR 1=1--\n../../etc/passwd";
 
 function countPayloads(text: string): number {
   return text.split("\n").filter((line) => line.trim() !== "").length;
@@ -141,13 +164,178 @@ function RuleRow({
 }
 
 /**
+ * One resolved payload combination as a string, and whether every part of it is real payload text.
+ *
+ * A part the browser cannot name is rendered as its position in its set rather than omitted or
+ * guessed, because "set 2 payload #18" tells the operator where to look and an invented payload
+ * tells them something false.
+ */
+function payloadLabel(parts: ResolvedPayload[]): { text: string; complete: boolean } {
+  if (!parts.length) return { text: "", complete: false };
+  const complete = parts.every((part) => part.text !== null);
+  const text = parts
+    .map((part) => (part.text === null ? `set ${part.set + 1} payload #${part.index + 1}` : part.text === "" ? "(empty)" : part.text))
+    .join(" | ");
+  return { text, complete };
+}
+
+/**
+ * A payload cell. Three visibly different states, never collapsed into one:
+ * resolved text, a position-only reference, and no answer at all.
+ */
+function PayloadCell({ parts, ordinal }: { parts: ResolvedPayload[] | null; ordinal: number }): JSX.Element {
+  if (!parts) {
+    return (
+      <span
+        className="cell-dim"
+        title={`Attempt ${ordinal} could not be decoded: the report does not carry enough of the plan to place its payloads.`}
+      >
+        unknown
+      </span>
+    );
+  }
+  const { text, complete } = payloadLabel(parts);
+  return (
+    <code
+      title={
+        complete
+          ? text
+          : `${text} — the payloads of a server-side set (a file, or a set a processing rule changed) never cross the wire, so only their position in the set is known.`
+      }
+      className={complete ? undefined : "cell-dim"}
+    >
+      {text}
+    </code>
+  );
+}
+
+/** The stored request or response behind a result row, opened from the Results tab. */
+function StoredMessage({ id, label, onClose }: { id: number; label: string; onClose: () => void }): JSX.Element {
+  const message = useMessage(id);
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      title={label}
+      description={`Stored message ${id}`}
+      wide
+    >
+      <HttpEditor
+        label={label}
+        readOnly
+        value={
+          message.data?.text ??
+          (message.isFetching
+            ? "Loading the stored response…"
+            : message.error
+              ? `Could not load message ${id}: ${message.error instanceof Error ? message.error.message : String(message.error)}`
+              : "No bytes stored for this message.")
+        }
+        filename={`intruder-message-${id}.txt`}
+      />
+    </Modal>
+  );
+}
+
+/** Open-the-response control. Absent responses say so rather than showing a dead button. */
+function ResponseCell({
+  id,
+  label,
+  onOpen,
+}: {
+  id: number | null;
+  label: string;
+  onOpen: (id: number, label: string) => void;
+}): JSX.Element {
+  if (id === null) {
+    return (
+      <span className="cell-dim" title="No response was stored for this attempt.">
+        —
+      </span>
+    );
+  }
+  return (
+    <Button variant="outline" size="small" onClick={() => onOpen(id, label)}>
+      <FileSearch size={13} />
+      View
+    </Button>
+  );
+}
+
+/**
  * The attack report, presented as accounting rather than a payload dump: every
  * bound the engine applied (capped, truncated, skipped, unbucketed) is shown, so
  * a small result set is never mistaken for a complete one.
  */
-function AttackResult({ view, examples }: { view: RunView; examples: Map<number, string[]> }): JSX.Element {
+function AttackResult({
+  view,
+  examples,
+  snapshot,
+  onOpenMessage,
+}: {
+  view: RunView;
+  examples: Map<number, string[]>;
+  snapshot: IntruderPayloadSnapshot | null;
+  onOpenMessage: (id: number, label: string) => void;
+}): JSX.Element {
   const { report, payload_sets: sets } = view;
+
+  /**
+   * Decode an attempt's ordinal into its payload combination.
+   *
+   * The server sends an `examples` entry for every ordinal it kept a row for — every bucket's
+   * first ordinal, and every attempt in the (detail-limited) attempts table — resolved server-side
+   * from the post-processing-rule payload sets (api_tools.go's payloadsAt), so a rule that
+   * transforms bytes without dropping any (add_prefix, hash, …) still names the payload that was
+   * actually sent. That covers every row this page renders today; the fallback below recomputes
+   * the ordinal from the plan — pure arithmetic on the index, which is what
+   * internal/intruder/plan.go's Fill is (burpsy-react-ui-fvx) — for an older server that predates
+   * that coverage, or an ordinal outside what Examples carries. The set lengths come from the
+   * report's own per-set counts, so the fallback arithmetic runs against the sets the engine
+   * actually used, not the sets the form currently holds.
+   */
+  const payloadsAt = useMemo(() => {
+    const setCounts = sets.map((set) => set.count);
+    const mode = snapshot?.mode ?? report.kind;
+    const points = snapshot?.points ?? 0;
+    const lengths = planSetLengths(mode, points, setCounts);
+    // A set whose server-reported count disagrees with the browser's list is a set whose indices
+    // moved — a processing rule skipped a payload — so its text is treated as unknown.
+    const known = setCounts.map((count, index) => {
+      const items = snapshot?.sets[index] ?? null;
+      return items && items.length === count ? items : null;
+    });
+    return (ordinal: number): ResolvedPayload[] | null => {
+      const fromServer = examples.get(ordinal);
+      // An empty example list is the server saying it could not place that ordinal either, so it
+      // must fall through to "unknown" rather than render as a blank payload.
+      if (fromServer?.length) return fromServer.map((text, index) => ({ set: index, index: -1, text }));
+      const slots = assignmentAt(mode, points, lengths, report.planned, ordinal);
+      if (!slots || !slots.length) return null;
+      return resolvePayloads(slots, known);
+    };
+  }, [examples, report.kind, report.planned, sets, snapshot]);
+  /**
+   * A stopped attack describes a *prefix* of its payload sets, and the denominator has to say so.
+   *
+   * An intruder task is cancellable from the Dashboard (api_tools.go:711 registers the cancel;
+   * dashboard.tsx offers Cancel on any cancellable running task), so this is reachable today. With
+   * `planned` as the denominator the panel read "Sent 12 of 400 planned" — asserting the target was
+   * asked 400 times and answered 12, when it was asked 12. `enumerated` is how many plan positions
+   * were actually reached, which is the count the results are a prefix of.
+   *
+   * The absent-field fallback lives in attackProgress, where it is pinned by test.
+   */
+  const { stopped, paused, reached } = attackProgress(report);
+
   const caveats = [
+    stopped
+      ? `Attack ${paused ? "paused" : "stopped"} after ${formatCount(reached)} of ${formatCount(
+          report.planned,
+        )} planned requests${report.stop_reason ? ` — ${report.stop_reason}` : ""}. Everything below describes that prefix of the payload sets, not the whole attack.`
+      : null,
     report.truncated ? `Capped at ${formatCount(report.max_requests)} requests` : null,
     !report.combinations_exact ? "Combination count is a floor, not an exact total" : null,
     report.buckets_truncated ? "Result buckets were truncated" : null,
@@ -162,10 +350,14 @@ function AttackResult({ view, examples }: { view: RunView; examples: Map<number,
         <Badge tone="neutral" className="sr-only">
           report
         </Badge>
-        <div className="card metric metric-accent">
+        <div className={stopped ? "card metric metric-accent row-flag-bad" : "card metric metric-accent"}>
           <span>Sent</span>
           <strong>{formatCount(report.sent)}</strong>
-          <small>of {formatCount(report.planned)} planned</small>
+          <small>
+            {stopped
+              ? `of ${formatCount(reached)} reached · plan was ${formatCount(report.planned)}`
+              : `of ${formatCount(report.planned)} planned`}
+          </small>
         </div>
         <div className="card metric">
           <span>Combinations</span>
@@ -207,7 +399,7 @@ function AttackResult({ view, examples }: { view: RunView; examples: Map<number,
           detail="Responses grouped by status, length and reflection. Interesting rows are the ones that differ from the crowd."
         />
         {report.buckets.length ? (
-          <SimpleTable headers={["Status", "Length", "Reflected", "Count", "Grep", "First payload"]}>
+          <SimpleTable headers={["Status", "Length", "Reflected", "Count", "Grep", "First payload", "Response"]}>
             {report.buckets.map((bucket) => (
               <tr key={`${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}>
                 <td>
@@ -225,9 +417,14 @@ function AttackResult({ view, examples }: { view: RunView; examples: Map<number,
                   {bucket.grep_extract ? <code title={bucket.grep_extract}> {bucket.grep_extract}</code> : null}
                 </td>
                 <td>
-                  <code title={(examples.get(bucket.first_ordinal) ?? []).join(" | ")}>
-                    {(examples.get(bucket.first_ordinal) ?? [`#${bucket.first_ordinal}`]).join(" | ")}
-                  </code>
+                  <PayloadCell parts={payloadsAt(bucket.first_ordinal)} ordinal={bucket.first_ordinal} />
+                </td>
+                <td>
+                  <ResponseCell
+                    id={bucket.example_response_id}
+                    label={`Response to attempt ${bucket.first_ordinal}`}
+                    onOpen={onOpenMessage}
+                  />
                 </td>
               </tr>
             ))}
@@ -304,11 +501,14 @@ function AttackResult({ view, examples }: { view: RunView; examples: Map<number,
             title="Attempts"
             detail={`Per-request detail, capped by the server at ${formatCount(report.detail_limit)} rows.`}
           />
-          <SimpleTable headers={["#", "Status", "Length", "Time", "Reflected", "Grep", "Error"]}>
+          <SimpleTable headers={["#", "Payload", "Status", "Length", "Time", "Reflected", "Grep", "Error", "Response"]}>
             {report.attempts.map((attempt) => (
               <tr key={attempt.ordinal} className={attempt.error ? "row-flag-bad" : undefined}>
                 <td>
                   <span className="cell-num">{attempt.ordinal}</span>
+                </td>
+                <td>
+                  <PayloadCell parts={payloadsAt(attempt.ordinal)} ordinal={attempt.ordinal} />
                 </td>
                 <td>
                   {attempt.status === null ? <Badge tone="bad">—</Badge> : <Badge tone={statusTone(attempt.status)}>{attempt.status}</Badge>}
@@ -322,6 +522,13 @@ function AttackResult({ view, examples }: { view: RunView; examples: Map<number,
                 <td>{attempt.reflected ? <Badge tone="warn">yes</Badge> : <span className="cell-dim">no</span>}</td>
                 <td>{attempt.grep_matched ? <Badge tone="info">match</Badge> : <span className="cell-dim">—</span>}</td>
                 <td title={attempt.error ?? ""}>{attempt.error ?? <span className="cell-dim">—</span>}</td>
+                <td>
+                  <ResponseCell
+                    id={attempt.response_id}
+                    label={`Response to attempt ${attempt.ordinal}`}
+                    onOpen={onOpenMessage}
+                  />
+                </td>
               </tr>
             ))}
           </SimpleTable>
@@ -335,39 +542,184 @@ export function IntruderPage(): JSX.Element {
   const seed = useApp((state) => state.intruderSeed);
   const setIntruderSeed = useApp((state) => state.setIntruderSeed);
 
-  const [msgId, setMsgId] = useState("");
-  const [target, setTarget] = useState("");
-  const [label, setLabel] = useState("");
-  const [mode, setMode] = useState<AttackMode>("sniper");
-  const [allPoints, setAllPoints] = useState(false);
-  const [points, setPoints] = useState<PointView[]>([]);
-  const [selected, setSelected] = useState<number[]>([]);
-  const [payloadTexts, setPayloadTexts] = useState<string[]>([DEFAULT_PAYLOADS]);
-  const [rules, setRules] = useState<PayloadRuleSpec[]>([]);
-  const [grepMatch, setGrepMatch] = useState("");
-  const [grepExtract, setGrepExtract] = useState("");
-  const [maxRequests, setMaxRequests] = useState(1000);
-  const [maxInFlight, setMaxInFlight] = useState(8);
-  const [rps, setRps] = useState("");
-  const [result, setResult] = useState<RunView | null>(null);
-  const [legacyResult, setLegacyResult] = useState<unknown>(null);
-  const [tab, setTab] = useState("positions");
+  // The whole configuration lives in the store, not in this component: app.tsx mounts one page at
+  // a time, so component-local state was destroyed by any nav click, taking the finished report
+  // with it (burpsy-react-ui-rby). The field setters below keep the shape the JSX already used.
+  const config = useApp((state) => state.intruder);
+  const setConfig = useApp((state) => state.setIntruder);
+  const storedRun = useApp((state) => state.intruderRun);
+  const setStoredRun = useApp((state) => state.setIntruderRun);
+  const tab = useApp((state) => state.intruderTab);
+  const setTab = useApp((state) => state.setIntruderTab);
+
+  /** A setter for one configuration field, accepting a value or an updater like useState's. */
+  function field<K extends keyof IntruderConfig>(key: K) {
+    return (value: IntruderConfig[K] | ((current: IntruderConfig[K]) => IntruderConfig[K])) =>
+      setConfig((current) => {
+        const next =
+          typeof value === "function" ? (value as (c: IntruderConfig[K]) => IntruderConfig[K])(current[key]) : value;
+        // An updater that returns its input means "no change" — the payload-set length sync below
+        // relies on that, and a new object every time would re-render the page for nothing.
+        if (next === current[key]) return current;
+        return { ...current, [key]: next };
+      });
+  }
+
+  const {
+    msgId,
+    target,
+    label,
+    mode,
+    allPoints,
+    points,
+    selected,
+    payloadTexts,
+    payloadTypes,
+    payloadNumbers,
+    payloadFiles,
+    payloadBrute,
+    payloadDates,
+    payloadCustom,
+    payloadNulls,
+    rules,
+    grepMatch,
+    grepMatchMode,
+    grepExtract,
+    poolName,
+    maxRequests,
+    maxInFlight,
+    rps,
+  } = config;
+
+  const setMsgId = field("msgId");
+  const setTarget = field("target");
+  const setMode = field("mode");
+  const setAllPoints = field("allPoints");
+  const setPoints = field("points");
+  const setSelected = field("selected");
+  const setPayloadTexts = field("payloadTexts");
+  const setPayloadTypes = field("payloadTypes");
+  const setPayloadNumbers = field("payloadNumbers");
+  const setPayloadFiles = field("payloadFiles");
+  const setPayloadBrute = field("payloadBrute");
+  const setPayloadDates = field("payloadDates");
+  const setPayloadCustom = field("payloadCustom");
+  const setPayloadNulls = field("payloadNulls");
+  const setRules = field("rules");
+  const setGrepMatch = field("grepMatch");
+  const setGrepMatchMode = field("grepMatchMode");
+  const setGrepExtract = field("grepExtract");
+  const setPoolName = field("poolName");
+  const setMaxRequests = field("maxRequests");
+  const setMaxInFlight = field("maxInFlight");
+  const setRps = field("rps");
+
+  const result = storedRun?.view ?? null;
+  const legacyResult = storedRun?.legacy ?? null;
+  const snapshot = storedRun?.snapshot ?? null;
+
+  // Which stored message the Results tab has open. Deliberately not persisted: an operator
+  // returning to the page wants the report, not a dialog they left open yesterday.
+  const [openMessage, setOpenMessage] = useState<{ id: number; label: string } | null>(null);
+  // Starting over now has to be deliberate. The configuration and report survive navigation and
+  // reload, so the only thing that can destroy them is this, and it asks first.
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const discover = useIntruderPoints();
   const run = useIntruderRun();
+  const pools = usePools();
   const baseMessage = useMessage(msgId ? Number(msgId) : null);
 
-  // A send-to handoff from History or Repeater arrives through the store.
+  // Live attack control (pause/resume/stop). /run is synchronous, so this page cannot read its own
+  // attack's task_id from the run response — that arrives only when the attack is already over. It
+  // finds the id by watching GET /api/intruder/attacks while its run is in flight, and identifying
+  // the attack that appeared *after* it launched (target- and kind-matched). priorIds is the set of
+  // attacks already running at launch, captured so a second identical attack started elsewhere is
+  // not mistaken for this one.
+  const priorIds = useRef<Set<number>>(new Set());
+  const [myTaskId, setMyTaskId] = useState<number | null>(null);
+  const attacks = useIntruderAttacks(run.isPending);
+  const attackAction = useIntruderAttackAction();
+
+  // The attacks list reports `target` as bare host:port (the server's targetParts collapses the URL
+  // to that; api_types.go), so the page's URL-shaped target has to be reduced the same way before it
+  // can match. Mirrors targetParts' scheme-default ports so "https://h" and "h:443" compare equal.
+  const targetAuthority = (raw: string): string => {
+    let t = raw.trim();
+    let tls = false;
+    const scheme = t.indexOf("://");
+    if (scheme >= 0) {
+      tls = t.slice(0, scheme).toLowerCase() === "https";
+      t = t.slice(scheme + 3);
+    }
+    const cut = t.search(/[/?]/);
+    if (cut >= 0) t = t.slice(0, cut);
+    if (!/:\d+$/.test(t)) t = `${t}:${tls ? 443 : 80}`;
+    return t;
+  };
+
+  // Lock onto our task id once it appears, and never re-pick within one run: once identified, the id
+  // is stable until the run ends, so a later poll that races the attack's own status change cannot
+  // move the controls to a different attack.
+  useEffect(() => {
+    if (!run.isPending || myTaskId !== null) return;
+    const authority = targetAuthority(target);
+    const candidates = (attacks.data?.attacks ?? []).filter(
+      (a) =>
+        !priorIds.current.has(a.task_id) &&
+        a.target === authority &&
+        a.kind === mode &&
+        (a.status === "running" || a.status === "paused"),
+    );
+    if (candidates.length) {
+      // The newest matching attack is this page's: it just launched, and older identical attacks (if
+      // any) were captured in priorIds already.
+      setMyTaskId(candidates.reduce((best, a) => (a.task_id > best.task_id ? a : best)).task_id);
+    }
+  }, [attacks.data, run.isPending, myTaskId, target, mode]);
+
+  // When the run ends (completed or stopped), drop the id so the controls disappear with it.
+  useEffect(() => {
+    if (!run.isPending) setMyTaskId(null);
+  }, [run.isPending]);
+
+  const myAttack = myTaskId === null ? null : (attacks.data?.attacks ?? []).find((a) => a.task_id === myTaskId) ?? null;
+
+  const controlAttack = (action: "pause" | "resume" | "stop") => {
+    if (myTaskId === null) return;
+    attackAction.mutate(
+      { task_id: myTaskId, action },
+      {
+        onSuccess: () => {
+          if (action === "stop") toast.info("Stopping — the report will show everything that was sent");
+          else toast.success(action === "pause" ? "Attack paused" : "Attack resumed");
+        },
+        onError: (error) =>
+          error instanceof AttackActionStale
+            ? toast.info("The attack already finished — its report is on the way")
+            : toast.error(error instanceof Error ? error.message : String(error)),
+      },
+    );
+  };
+
+  // A send-to handoff from History or Repeater arrives through the store. It replaces only what is
+  // tied to the specific request — the base message, the target, the discovered positions — and the
+  // report, which belongs to the request that produced it. Payload sets, processing rules, grep and
+  // limits are kept: they are the operator's typed work, and a send-to is not consent to discard it.
+  // "New attack" in the header is the deliberate full reset, and it asks first.
   useEffect(() => {
     if (!seed) return;
-    if (seed.msgId !== null) setMsgId(String(seed.msgId));
-    setTarget(seed.target);
-    setLabel(seed.label);
-    setPoints([]);
-    setSelected([]);
-    setResult(null);
+    setConfig((current) => ({
+      ...current,
+      msgId: seed.msgId !== null ? String(seed.msgId) : current.msgId,
+      target: seed.target,
+      label: seed.label,
+      points: [],
+      selected: [],
+    }));
+    setStoredRun(null);
     setIntruderSeed(null);
-  }, [seed, setIntruderSeed]);
+  }, [seed, setConfig, setIntruderSeed, setStoredRun]);
 
   const setsNeeded = mode === "sniper" || mode === "battering_ram" ? 1 : Math.max(1, selected.length);
 
@@ -378,9 +730,83 @@ export function IntruderPage(): JSX.Element {
       if (current.length > setsNeeded) return current.slice(0, setsNeeded);
       return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "")];
     });
+    setPayloadTypes((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "list" as const)];
+    });
+    setPayloadNumbers((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => ({ from: "1", to: "100", step: "1" }))];
+    });
+    setPayloadFiles((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "")];
+    });
+    setPayloadBrute((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => ({ charset: "abc", min_len: "1", max_len: "3" }))];
+    });
+    setPayloadDates((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => ({ from: "2024-01-01", to: "2024-12-31", step: "1", format: "yyyy-MM-dd" }))];
+    });
+    setPayloadCustom((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => ({ positions: "a,b\nc,d", separator: "" }))];
+    });
+    setPayloadNulls((current) => {
+      if (current.length === setsNeeded) return current;
+      if (current.length > setsNeeded) return current.slice(0, setsNeeded);
+      return [...current, ...Array.from({ length: setsNeeded - current.length }, () => "10")];
+    });
   }, [setsNeeded]);
 
-  const setSizes = useMemo(() => payloadTexts.map(countPayloads), [payloadTexts]);
+  /**
+   * How many payloads each set will produce, or null when the browser cannot know.
+   *
+   * `file`, `dates` and `custom_iterator` used to return the constants 1, 10 and 4 here, which the
+   * header badge presented as a request count and the over-budget guard used as a bound: a
+   * 50,000-line wordlist read "1 request", and an 8,000-combination iterator could not trip the
+   * warning that exists to stop an accidental outage (burpsy-react-ui-1ww). Dates and iterators are
+   * arithmetic, so they are computed. A server-side file is genuinely unknowable from here, so it
+   * says so instead of standing in a number.
+   */
+  const setSizes = useMemo<SetSize[]>(() => {
+    return payloadTypes.map((t, i): SetSize => {
+      if (t === "numbers") {
+        const n = payloadNumbers[i];
+        if (!n) return 0;
+        const from = Number(n.from), to = Number(n.to), step = Number(n.step) || 1;
+        if (!Number.isFinite(from) || !Number.isFinite(to) || step === 0) return 0;
+        return Math.floor(Math.abs(to - from) / Math.abs(step)) + 1;
+      }
+      if (t === "file") return null;
+      if (t === "brute_force") {
+        const b = payloadBrute[i];
+        if (!b) return 0;
+        const charset = b.charset.length || 1;
+        const min = Number(b.min_len) || 0, max = Number(b.max_len) || 0;
+        if (max < min || min < 1) return 0;
+        let total = 0;
+        for (let l = min; l <= max; l++) total += Math.pow(charset, l);
+        return Math.min(total, 200000);
+      }
+      if (t === "dates") {
+        const d = payloadDates[i];
+        if (!d) return 0;
+        return dateSetSize(d.from, d.to, Number(d.step) || 1);
+      }
+      if (t === "custom_iterator") return customIteratorSize(payloadCustom[i]?.positions ?? "");
+      if (t === "null") return Number(payloadNulls[i] ?? "0") || 0;
+      return countPayloads(payloadTexts[i] ?? "");
+    });
+  }, [payloadTypes, payloadTexts, payloadNumbers, payloadFiles, payloadBrute, payloadDates, payloadCustom, payloadNulls]);
   const estimate = useMemo(() => estimateRequests(mode, selected.length, setSizes), [mode, selected.length, setSizes]);
   const examples = useMemo(
     () => new Map((result?.examples ?? []).map((example) => [example.first_ordinal, example.payloads])),
@@ -390,8 +816,14 @@ export function IntruderPage(): JSX.Element {
   // `>= 0` and an integer check: message ids count from zero, so message 0 is a real base request —
   // `> 0` disabled Discover for it, and a decimal typed by accident passed.
   const canDiscover = msgId.trim() !== "" && Number.isInteger(Number(msgId)) && Number(msgId) >= 0;
+  // A null size is a file set, whose size only the server knows — unknown must not read as empty
+  // and block the launch.
   const canRun =
-    canDiscover && target.trim() !== "" && selected.length > 0 && setSizes.every((size) => size > 0) && !run.isPending;
+    canDiscover &&
+    target.trim() !== "" &&
+    selected.length > 0 &&
+    setSizes.every((size) => size === null || size > 0) &&
+    !run.isPending;
 
   const onDiscover = () => {
     setSelected([]);
@@ -409,34 +841,99 @@ export function IntruderPage(): JSX.Element {
     );
   };
 
-  const onRun = () => {
-    setResult(null);
-    setLegacyResult(null);
-    const body = {
+  /**
+   * The payload text this browser can name, per set, at the moment of launch.
+   *
+   * Only sets the browser is itself the source of truth for: a `list` is what the operator typed,
+   * and `null` payloads are empty strings by definition. A file lives on the server; the generated
+   * kinds are the server's arithmetic. Getting one of those wrong would put a confidently wrong
+   * payload next to a result row, so they are left unnamed rather than reconstructed here.
+   */
+  const payloadSnapshot = (): IntruderPayloadSnapshot => ({
+    mode,
+    points: selected.length,
+    sets: payloadTypes.map((t, i) => {
+      if (t === "list") return payloadList(payloadTexts[i] ?? "");
+      if (t === "null") return Array.from({ length: Number(payloadNulls[i] ?? "0") || 0 }, () => "");
+      return null;
+    }),
+  });
+
+  const onRun = async () => {
+    setStoredRun(null);
+    setMyTaskId(null);
+    // Snapshot the attacks already running, so the one that appears next is unambiguously ours even
+    // if an identical attack is running elsewhere. Best-effort: if the list cannot be read, fall
+    // back to an empty prior set and the target/kind/newest match still finds it.
+    try {
+      const prior = await api<IntruderAttacksResp>("/api/intruder/attacks");
+      priorIds.current = new Set(prior.attacks.map((a) => a.task_id));
+    } catch {
+      priorIds.current = new Set();
+    }
+    const snapshotAtLaunch = payloadSnapshot();
+    const useSources = payloadTypes.some((t) => t !== "list");
+    const usePool = poolName.trim() !== "";
+    const body: Record<string, unknown> = {
       msg_id: Number(msgId),
       target: target.trim(),
       all: allPoints,
       mode,
       points: selected,
-      payload_sets: payloadTexts.map(payloadList),
       max_requests: maxRequests,
-      max_in_flight: maxInFlight,
       ...(rules.length ? { payload_rules: rules } : {}),
-      ...(grepMatch.trim() ? { grep_match: grepMatch.trim() } : {}),
+      // Both grep fields are RE2 patterns on the server. A literal typed in simple mode is quoted
+      // here so it matches itself; regex mode sends what was typed (burpsy-react-ui-tpy).
+      ...(grepMatch.trim()
+        ? { grep_match: grepMatchMode === "simple" ? quoteRegex(grepMatch.trim()) : grepMatch.trim() }
+        : {}),
       ...(grepExtract.trim() ? { grep_extract: grepExtract.trim() } : {}),
-      ...(rps.trim() ? { rps: Number(rps) } : {}),
+      // A named pool states rps, concurrency and throttling itself; the server refuses a request
+      // that carries both, so the inline pair is omitted rather than sent and dropped.
+      ...(usePool
+        ? { pool: poolName.trim() }
+        : { max_in_flight: maxInFlight, ...(rps.trim() ? { rps: Number(rps) } : {}) }),
     };
-    run.mutate(body, {
+    if (useSources) {
+      body.payload_sources = payloadTypes.map((t, i) => {
+        if (t === "numbers") {
+          const n = payloadNumbers[i] ?? { from: "1", to: "100", step: "1" };
+          return { type: "numbers", from: Number(n.from), to: Number(n.to), step: Number(n.step) || 1 };
+        }
+        if (t === "file") {
+          return { type: "file", filename: (payloadFiles[i] ?? "").trim() };
+        }
+        if (t === "brute_force") {
+          const b = payloadBrute[i] ?? { charset: "abc", min_len: "1", max_len: "3" };
+          return { type: "brute_force", charset: b.charset, min_len: Number(b.min_len) || 1, max_len: Number(b.max_len) || 1 };
+        }
+        if (t === "dates") {
+          const d = payloadDates[i] ?? { from: "2024-01-01", to: "2024-12-31", step: "1", format: "yyyy-MM-dd" };
+          return { type: "dates", from: d.from, to: d.to, step: Number(d.step) || 1, format: d.format };
+        }
+        if (t === "custom_iterator") {
+          const c = payloadCustom[i] ?? { positions: "a,b\nc,d", separator: "" };
+          return { type: "custom_iterator", positions: customIteratorSlots(c.positions), separator: c.separator };
+        }
+        if (t === "null") {
+          return { type: "null", count: Number(payloadNulls[i] ?? "0") || 0 };
+        }
+        return { type: "list", items: payloadList(payloadTexts[i] ?? "") };
+      });
+    } else {
+      body.payload_sets = payloadTexts.map(payloadList);
+    }
+    run.mutate(body as unknown as IntruderRunRequest, {
       onSuccess: (payload) => {
         // Naming a mode always selects the full report shape, but stay defensive:
         // an older server could still answer with the flat legacy array.
         if (payload && typeof payload === "object" && "report" in payload) {
           const view = payload as RunView;
-          setResult(view);
+          setStoredRun({ view, legacy: null, snapshot: snapshotAtLaunch });
           setTab("results");
           toast.success(`${formatCount(view.report.sent)} requests sent in ${formatDuration(view.report.elapsed_ms)}`);
         } else {
-          setLegacyResult(payload);
+          setStoredRun({ view: null, legacy: payload, snapshot: snapshotAtLaunch });
           setTab("results");
           toast.success("Attack finished");
         }
@@ -445,7 +942,11 @@ export function IntruderPage(): JSX.Element {
     });
   };
 
+  // Only a known count can be over budget. When the estimate is a floor the guard may still fire —
+  // a floor above the cap is certainly above it — but its silence proves nothing, which is why the
+  // header says the number is a floor rather than presenting it as a count.
   const overBudget = estimate.count > maxRequests;
+  const selectedPool = pools.data?.pools.find((pool) => pool.name === poolName) ?? null;
 
   return (
     <div className="page-fill">
@@ -455,11 +956,61 @@ export function IntruderPage(): JSX.Element {
           description={label || "Payload-driven attacks with explicit bounds and honest result accounting."}
           actions={
             <>
-              <Badge tone={overBudget ? "warn" : "neutral"}>
-                {formatCount(estimate.count)} request{estimate.count === 1 ? "" : "s"}
-              </Badge>
+              <Tooltip
+                content={
+                  estimate.exact
+                    ? "Requests this configuration implies"
+                    : "A floor, not a count: a payload set reads a file on the server and its size is not knowable in the browser"
+                }
+              >
+                <Badge tone={overBudget ? "warn" : estimate.exact ? "neutral" : "info"}>
+                  {estimate.exact ? "" : "≥ "}
+                  {formatCount(estimate.count)} request{estimate.count === 1 && estimate.exact ? "" : "s"}
+                </Badge>
+              </Tooltip>
+              {msgId !== "" || result || legacyResult ? (
+                <Button variant="outline" onClick={() => setConfirmReset(true)}>
+                  <RotateCcw size={14} />
+                  New attack
+                </Button>
+              ) : null}
+              {/* Live controls for the attack in flight. They appear only once this page's task id
+                  has been located in the attacks list — a control that cannot yet name its target is
+                  worse than no control, so until then the badge says it is still locating. */}
+              {run.isPending ? (
+                myAttack ? (
+                  <>
+                    <Badge tone={myAttack.status === "paused" ? "warn" : "accent"}>
+                      {myAttack.status === "paused" ? "paused" : "running"}
+                    </Badge>
+                    {myAttack.status === "paused" ? (
+                      <Tooltip content="Resume the paused attack">
+                        <Button variant="outline" onClick={() => controlAttack("resume")} disabled={attackAction.isPending}>
+                          <Play size={14} />
+                          Resume
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip content="Pause the attack; it holds its place and can be resumed">
+                        <Button variant="outline" onClick={() => controlAttack("pause")} disabled={attackAction.isPending}>
+                          <Pause size={14} />
+                          Pause
+                        </Button>
+                      </Tooltip>
+                    )}
+                    <Tooltip content="Stop the attack; the report will show everything sent so far">
+                      <Button variant="outline" onClick={() => controlAttack("stop")} disabled={attackAction.isPending}>
+                        <Square size={14} />
+                        Stop
+                      </Button>
+                    </Tooltip>
+                  </>
+                ) : (
+                  <Badge tone="info">locating attack…</Badge>
+                )
+              ) : null}
               <Tooltip content={canRun ? "Run the attack" : "Choose a message, target, positions and payloads first"}>
-                <button type="button" className="button button-primary" onClick={onRun} disabled={!canRun}>
+                <button type="button" className="button button-primary" onClick={() => void onRun()} disabled={!canRun}>
                   <Zap size={14} />
                   {run.isPending ? "Attacking…" : "Launch attack"}
                 </button>
@@ -472,9 +1023,18 @@ export function IntruderPage(): JSX.Element {
           <div className="notice notice-warn" style={{ marginTop: "var(--s2)" }}>
             <AlertTriangle size={15} />
             <div>
-              This configuration implies {formatCount(estimate.count)} requests but the cap is{" "}
-              {formatCount(maxRequests)}. The server will stop at the cap and mark the report truncated. Raise the cap or
-              narrow the payload sets.
+              This configuration implies {estimate.exact ? "" : "at least "}
+              {formatCount(estimate.count)} requests but the cap is {formatCount(maxRequests)}. The server will stop at
+              the cap and mark the report truncated. Raise the cap or narrow the payload sets.
+            </div>
+          </div>
+        ) : !estimate.exact ? (
+          <div className="notice" style={{ marginTop: "var(--s2)" }}>
+            <AlertTriangle size={15} />
+            <div>
+              A payload set reads a file on the server, so the browser cannot size this attack: the count above is a
+              floor and the cap of {formatCount(maxRequests)} has not been checked against the file's real length. The
+              server enforces the cap and marks the report truncated if it is reached.
             </div>
           </div>
         ) : null}
@@ -630,29 +1190,237 @@ export function IntruderPage(): JSX.Element {
               />
             </div>
             <div className="card-pad stack">
-              {payloadTexts.map((text, index) => (
-                <Field
-                  key={index}
-                  label={
-                    setsNeeded === 1
-                      ? `Payloads (${setSizes[index] ?? 0})`
-                      : `Set ${index + 1} (${setSizes[index] ?? 0})`
-                  }
-                >
-                  {(id) => (
-                    <Textarea
-                      id={id}
-                      value={text}
-                      onChange={(event) =>
-                        setPayloadTexts((current) =>
-                          current.map((value, position) => (position === index ? event.target.value : value)),
-                        )
-                      }
-                      placeholder={index === 0 ? DEFAULT_PAYLOADS : "one payload per line"}
-                    />
-                  )}
-                </Field>
-              ))}
+              {Array.from({ length: setsNeeded }, (_, index) => {
+                const t = payloadTypes[index] ?? "list";
+                return (
+                  <Card key={index} className="card-pad" style={{ border: "1px solid var(--line)" }}>
+                    <div className="toolbar" style={{ marginBottom: 8 }}>
+                      {/* "unknown" rather than a number for a server-side file: the count in this
+                          label is the same number the header badge and the over-budget guard use. */}
+                      <Field
+                        label={`${setsNeeded === 1 ? "Set" : `Set ${index + 1}`} (${
+                          setSizes[index] === null ? "unknown" : formatCount(setSizes[index] ?? 0)
+                        })`}
+                      >
+                        {(id) => (
+                          <Select
+                            id={id}
+                            value={t}
+                            onChange={(e) =>
+                              setPayloadTypes((cur) => cur.map((v, i) => (i === index ? (e.target.value as typeof t) : v)))
+                            }
+                          >
+                            <option value="list">Simple list</option>
+                            <option value="numbers">Numbers</option>
+                            <option value="file">File (server path)</option>
+                            <option value="brute_force">Brute force</option>
+                            <option value="dates">Dates</option>
+                            <option value="custom_iterator">Custom iterator</option>
+                            <option value="null">Null payloads</option>
+                          </Select>
+                        )}
+                      </Field>
+                      <Badge tone={t === "list" ? "neutral" : "accent"}>{t}</Badge>
+                    </div>
+                    {t === "list" ? (
+                      <Field label="One payload per line">
+                        {(id) => (
+                          <Textarea
+                            id={id}
+                            value={payloadTexts[index] ?? ""}
+                            onChange={(event) =>
+                              setPayloadTexts((current) =>
+                                current.map((value, position) => (position === index ? event.target.value : value)),
+                              )
+                            }
+                            placeholder={index === 0 ? DEFAULT_PAYLOADS : "one payload per line"}
+                          />
+                        )}
+                      </Field>
+                    ) : t === "numbers" ? (
+                      <div className="form-grid">
+                        <Field label="From">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadNumbers[index]?.from ?? "1"}
+                              onChange={(e) =>
+                                setPayloadNumbers((cur) => cur.map((v, i) => (i === index ? { ...v, from: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="To">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadNumbers[index]?.to ?? "100"}
+                              onChange={(e) =>
+                                setPayloadNumbers((cur) => cur.map((v, i) => (i === index ? { ...v, to: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="Step">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadNumbers[index]?.step ?? "1"}
+                              onChange={(e) =>
+                                setPayloadNumbers((cur) => cur.map((v, i) => (i === index ? { ...v, step: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    ) : t === "file" ? (
+                      <Field label="Server file path" hint="File must exist on server; blank lines skipped">
+                        {(id) => (
+                          <Input
+                            id={id}
+                            value={payloadFiles[index] ?? ""}
+                            onChange={(e) =>
+                              setPayloadFiles((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
+                            }
+                            placeholder="/tmp/payloads.txt or ./wordlists/sqli.txt"
+                          />
+                        )}
+                      </Field>
+                    ) : t === "brute_force" ? (
+                      <div className="form-grid">
+                        <Field label="Charset">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadBrute[index]?.charset ?? "abc"}
+                              onChange={(e) =>
+                                setPayloadBrute((cur) => cur.map((v, i) => (i === index ? { ...v, charset: e.target.value } : v)))
+                              }
+                              placeholder="abc"
+                            />
+                          )}
+                        </Field>
+                        <Field label="Min length">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadBrute[index]?.min_len ?? "1"}
+                              onChange={(e) =>
+                                setPayloadBrute((cur) => cur.map((v, i) => (i === index ? { ...v, min_len: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="Max length">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadBrute[index]?.max_len ?? "3"}
+                              onChange={(e) =>
+                                setPayloadBrute((cur) => cur.map((v, i) => (i === index ? { ...v, max_len: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    ) : t === "dates" ? (
+                      <div className="form-grid">
+                        <Field label="From (YYYY-MM-DD)">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadDates[index]?.from ?? "2024-01-01"}
+                              onChange={(e) =>
+                                setPayloadDates((cur) => cur.map((v, i) => (i === index ? { ...v, from: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="To">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadDates[index]?.to ?? "2024-12-31"}
+                              onChange={(e) =>
+                                setPayloadDates((cur) => cur.map((v, i) => (i === index ? { ...v, to: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="Step (days)">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              type="number"
+                              value={payloadDates[index]?.step ?? "1"}
+                              onChange={(e) =>
+                                setPayloadDates((cur) => cur.map((v, i) => (i === index ? { ...v, step: e.target.value } : v)))
+                              }
+                            />
+                          )}
+                        </Field>
+                        <Field label="Format">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadDates[index]?.format ?? "yyyy-MM-dd"}
+                              onChange={(e) =>
+                                setPayloadDates((cur) => cur.map((v, i) => (i === index ? { ...v, format: e.target.value } : v)))
+                              }
+                              placeholder="yyyy-MM-dd"
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    ) : t === "custom_iterator" ? (
+                      <div className="stack">
+                        <Field label="Positions (one set per line, comma-separated)" hint="Two or more lines, each line is a slot: a,b,c">
+                          {(id) => (
+                            <Textarea
+                              id={id}
+                              value={payloadCustom[index]?.positions ?? "a,b\nc,d"}
+                              onChange={(e) =>
+                                setPayloadCustom((cur) => cur.map((v, i) => (i === index ? { ...v, positions: e.target.value } : v)))
+                              }
+                              placeholder="a,b,c&#10;1,2,3"
+                            />
+                          )}
+                        </Field>
+                        <Field label="Separator">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadCustom[index]?.separator ?? ""}
+                              onChange={(e) =>
+                                setPayloadCustom((cur) => cur.map((v, i) => (i === index ? { ...v, separator: e.target.value } : v)))
+                              }
+                              placeholder="e.g. / or empty"
+                            />
+                          )}
+                        </Field>
+                      </div>
+                    ) : t === "null" ? (
+                      <Field label="Count (number of empty payloads)">
+                        {(id) => (
+                          <Input
+                            id={id}
+                            type="number"
+                            value={payloadNulls[index] ?? "10"}
+                            onChange={(e) =>
+                              setPayloadNulls((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
+                            }
+                          />
+                        )}
+                      </Field>
+                    ) : null}
+                  </Card>
+                );
+              })}
             </div>
           </Card>
 
@@ -692,8 +1460,71 @@ export function IntruderPage(): JSX.Element {
         <TabsContent value="pool" className="tool-pane">
           <Card>
             <SectionHeading
-              title="Resource pool"
-              detail="An attack is always bounded; these are the limits the engine enforces."
+              title="Saved resource pool"
+              detail="Bind this attack to a pool created in Settings → Resource pools, so several tools share one authorised rate."
+            />
+            {pools.error ? (
+              <ErrorNotice error={pools.error} onRetry={() => pools.refetch()} />
+            ) : (
+              <>
+                <div className="form-grid">
+                  <Field
+                    label="Resource pool"
+                    hint="A pool states the rate and concurrency; selecting one replaces the inline limits below."
+                  >
+                    {(id) => (
+                      <Select
+                        id={id}
+                        value={poolName}
+                        disabled={pools.isLoading || !pools.data?.pools.length}
+                        onChange={(event) => setPoolName(event.target.value)}
+                      >
+                        <option value="">Inline limits (no saved pool)</option>
+                        {(pools.data?.pools ?? []).map((pool) => (
+                          <option key={pool.name} value={pool.name}>
+                            {pool.name}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </Field>
+                </div>
+                {pools.isLoading ? (
+                  <p className="field-hint">Loading saved pools…</p>
+                ) : !pools.data?.pools.length ? (
+                  <p className="field-hint">
+                    No pools are saved. Create one under Settings → Resource pools; until then this attack runs on the
+                    inline limits below.
+                  </p>
+                ) : null}
+                {/* A pool the report will name but whose bounds are gone is the failure this guards:
+                    the server refuses an unknown name outright, so say so before the launch does. */}
+                {poolName && !pools.isLoading && !selectedPool ? (
+                  <div className="notice notice-warn">
+                    <AlertTriangle size={15} />
+                    <div>
+                      The pool <strong>{poolName}</strong> is no longer saved. The server refuses an attack naming a pool
+                      it cannot resolve, so pick another pool or go back to inline limits.
+                    </div>
+                  </div>
+                ) : null}
+                {selectedPool ? (
+                  <p className="field-hint">
+                    <strong>{selectedPool.name}</strong> enforces {formatCount(selectedPool.max_concurrent)} concurrent
+                    request{selectedPool.max_concurrent === 1 ? "" : "s"}
+                    {selectedPool.delay_ms ? ` and a ${formatDuration(selectedPool.delay_ms)} delay between them` : " with no delay between them"}
+                    {selectedPool.throttle ? ", plus automatic throttling" : ""}. Max requests below still applies — it
+                    bounds the attack's size, not its rate.
+                  </p>
+                ) : null}
+              </>
+            )}
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Inline limits"
+              detail="An attack is always bounded. Max requests always applies; concurrency and rate apply only when no pool is selected."
             />
             <div className="form-grid">
               <Field label="Max requests">
@@ -707,53 +1538,101 @@ export function IntruderPage(): JSX.Element {
                   />
                 )}
               </Field>
-              <Field label="Max concurrent requests">
+              <Field
+                label="Max concurrent requests"
+                hint={poolName ? "Set by the selected pool." : undefined}
+              >
                 {(id) => (
                   <Input
                     id={id}
                     type="number"
                     min={1}
-                    value={maxInFlight}
+                    disabled={poolName !== ""}
+                    value={poolName ? (selectedPool ? selectedPool.max_concurrent : "") : maxInFlight}
                     onChange={(event) => setMaxInFlight(Number(event.target.value) || 1)}
                   />
                 )}
               </Field>
-              <Field label="Requests per second" hint="Blank leaves it unthrottled.">
+              <Field
+                label="Requests per second"
+                hint={poolName ? "Set by the selected pool." : "Blank leaves it unthrottled."}
+              >
                 {(id) => (
                   <Input
                     id={id}
                     type="number"
                     min={0}
                     step="0.5"
-                    value={rps}
+                    disabled={poolName !== ""}
+                    value={poolName ? "" : rps}
                     onChange={(event) => setRps(event.target.value)}
-                    placeholder="unlimited"
+                    placeholder={poolName ? "from the pool" : "unlimited"}
                   />
                 )}
               </Field>
             </div>
+            {poolName ? (
+              <p className="field-hint">
+                Concurrency and rate are disabled because a pool is selected. The server refuses a request that carries
+                both — a pool already answers “how fast may this attack run”, and accepting a second answer would mean
+                dropping one while the report still named the pool.
+              </p>
+            ) : null}
           </Card>
         </TabsContent>
 
         <TabsContent value="settings" className="tool-pane">
+          {/* Both fields are compiled by RE2 on the server (buildGrep in api_tools.go). They used to
+              be labelled and placeheld as literal strings, so following the placeholder produced a
+              control that silently did nothing useful (burpsy-react-ui-tpy). Match type is Burp's
+              own answer to that: a simple string is quoted here before it is sent. */}
           <Card>
             <SectionHeading
               title="Grep — match and extract"
-              detail="Count responses containing a marker, or capture a value out of each response."
+              detail="Count the responses that match, or capture a value out of each response."
             />
             <div className="form-grid">
-              <Field label="Grep match" hint="Counts responses containing this string.">
+              <Field label="Match type" hint="Whether Grep match is a literal string or a regular expression.">
+                {(id) => (
+                  <Select
+                    id={id}
+                    value={grepMatchMode}
+                    onChange={(event) => setGrepMatchMode(event.target.value as "simple" | "regex")}
+                  >
+                    <option value="simple">Simple string</option>
+                    <option value="regex">Regular expression</option>
+                  </Select>
+                )}
+              </Field>
+              <Field
+                label="Grep match"
+                hint={
+                  grepMatchMode === "simple"
+                    ? "Counts responses containing this exact text. Regex characters in it are escaped for you."
+                    : "Counts responses matching this regular expression (RE2). Alternate with |."
+                }
+              >
                 {(id) => (
                   <Input
                     id={id}
                     value={grepMatch}
                     onChange={(event) => setGrepMatch(event.target.value)}
-                    placeholder="error, root:, welcome"
+                    placeholder={grepMatchMode === "simple" ? "root:" : "error|root:|welcome"}
                   />
                 )}
               </Field>
-              <Field label="Grep extract" hint="Captures the text after this marker.">
-                {(id) => <Input id={id} value={grepExtract} onChange={(event) => setGrepExtract(event.target.value)} placeholder="token=" />}
+              <Field
+                label="Grep extract (regular expression)"
+                hint="Captures the first capture group of the first match, or the whole match when the pattern has no group. A pattern with no group returns the marker itself."
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={grepExtract}
+                    onChange={(event) => setGrepExtract(event.target.value)}
+                    placeholder="token=([^&\s;]+)"
+                  />
+                )}
               </Field>
             </div>
           </Card>
@@ -762,7 +1641,14 @@ export function IntruderPage(): JSX.Element {
         <TabsContent value="results" className="tool-pane">
           {run.error ? <ErrorNotice error={run.error} onRetry={onRun} /> : null}
 
-          {result ? <AttackResult view={result} examples={examples} /> : null}
+          {result ? (
+            <AttackResult
+              view={result}
+              examples={examples}
+              snapshot={snapshot}
+              onOpenMessage={(id, messageLabel) => setOpenMessage({ id, label: messageLabel })}
+            />
+          ) : null}
 
           {legacyResult ? (
             <Card>
@@ -778,6 +1664,7 @@ export function IntruderPage(): JSX.Element {
               action={
                 <Badge tone="info">
                   <Crosshair size={11} />
+                  {estimate.exact ? "" : "at least "}
                   {formatCount(estimate.count)} requests planned
                 </Badge>
               }
@@ -785,6 +1672,35 @@ export function IntruderPage(): JSX.Element {
           ) : null}
         </TabsContent>
       </Tabs>
+
+      {openMessage ? (
+        <StoredMessage id={openMessage.id} label={openMessage.label} onClose={() => setOpenMessage(null)} />
+      ) : null}
+
+      <Modal
+        open={confirmReset}
+        onOpenChange={setConfirmReset}
+        title="Start a new attack?"
+        description="This discards the current configuration and the report it produced. Neither can be recovered."
+      >
+        <div className="toolbar">
+          <Button variant="outline" onClick={() => setConfirmReset(false)}>
+            Keep this attack
+          </Button>
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => {
+              setConfig(emptyIntruderConfig());
+              setStoredRun(null);
+              setTab("positions");
+              setConfirmReset(false);
+            }}
+          >
+            Discard and start over
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -35,18 +35,31 @@ type xssConfirm func(body, canary string) bool
 // must be present AS MARKUP, not as escaped text. Shared by the text-node, RCDATA, comment and
 // quoted-attribute-tag-breakout payloads, all of which emit the same element.
 func confirmMarkupBreakout(body, canary string) bool {
-	marker := xssHTMLBreakoutMarker(canary)
-	// Presence first. htmlMarkerIsParsedAsMarkup is a REFINEMENT of a presence check, not a
-	// replacement for one: it answers "given the marker is here, is it markup rather than text",
-	// and it deliberately returns true in the vacuous cases so a caller that already found the
-	// marker does not lose a verdict. Calling it without establishing presence inverts that
-	// courtesy into a false positive, which is exactly what happened - a body that escaped the
-	// payload, and even one that stripped it to bare alphanumerics, was reported as a breakout
-	// because there was no canary to place and the function said so by returning true.
-	if !strings.Contains(body, marker) {
-		return false
-	}
-	return htmlMarkerIsParsedAsMarkup(body, marker)
+	// The crafted element must exist as a PARSED element carrying the canary as its own id.
+	//
+	// Presence of the marker bytes is not enough, and neither is "the canary landed in some
+	// attribute value". htmlMarkerIsParsedAsMarkup answers the second question and returns true for
+	// any attribute placement without checking which element or attribute, so a host that escapes
+	// `"` to `&quot;` and leaves `<`/`>` alone - correct escaping for a quoted attribute, since
+	// nothing can close the value - still had the marker bytes sitting inside its own value, was
+	// classified as an attribute occurrence, and was reported as a tag breakout. The browser creates
+	// zero elements there.
+	//
+	// The parser already knows the difference: it reports tag=svg attr=id for a real breakout and
+	// tag=input attr=value for the escaped one. Asking it for the crafted element is both simpler
+	// and strictly stronger than asking whether the bytes are present.
+	return anyAttr(body, func(tag, name, value string) bool {
+		return tag == "svg" && name == "id" && value == canary
+	})
+}
+
+// confirmAltHandlerBreakout is confirmMarkupBreakout for the payload whose handler avoids the usual
+// blocklist: the crafted <details> must exist with the canary inside its own ontoggle.
+func confirmAltHandlerBreakout(body, canary string) bool {
+	want := "alert(" + canary + ")"
+	return anyAttr(body, func(tag, name, value string) bool {
+		return tag == "details" && name == "ontoggle" && strings.TrimSpace(value) == want
+	})
 }
 
 // confirmEventAttrInjection is the evidence for attribute injection: the canary must be inside the
@@ -57,8 +70,34 @@ func confirmMarkupBreakout(body, canary string) bool {
 // already there - so the evidence is not "markup appeared" but "the canary is now JavaScript that
 // the browser will run on an event".
 func confirmEventAttrInjection(body, canary string) bool {
+	// The handler's value must be EXACTLY the expression the payload injected.
+	//
+	// "the canary sits in some on* attribute" is not evidence of an injection, and for the
+	// inline-handler context it is not evidence of anything at all: that fact is what classified the
+	// context in the first place, so the confirmation could never fail. A host reflecting into
+	// `onclick="track('…')"` with correct JS-literal and attribute escaping was reported as XSS at
+	// high/firm, which is this project's worst category.
+	//
+	// An injected handler carries the payload's expression and nothing else. A reflection into an
+	// existing handler carries the surrounding call, so `track('alert(C)')` is not `alert(C)` and is
+	// correctly refused. isKnownEventAttr keeps a renamed or unknown attribute from counting as
+	// executable.
+	want := "alert(" + canary + ")"
 	return anyAttr(body, func(tag, name, value string) bool {
-		return isEventAttrName(name) && strings.Contains(value, canary)
+		return isKnownEventAttr(name) && strings.TrimSpace(value) == want
+	})
+}
+
+// confirmHandlerLiteralBreakout is the evidence for the inline-handler context, where the value is
+// already JavaScript and the payload has to leave the string literal it landed in.
+//
+// The attribute value IS a script, so the same lexer that decides the <script> case decides this
+// one. Correct escaping keeps the canary inside the literal and is refused; a real breakout puts it
+// in code position.
+func confirmHandlerLiteralBreakout(body, canary string) bool {
+	return anyAttr(body, func(tag, name, value string) bool {
+		return isKnownEventAttr(name) && strings.Contains(value, canary) &&
+			jsBreakoutConfirmed(value, canary)
 	})
 }
 
@@ -68,7 +107,7 @@ func confirmEventAttrInjection(body, canary string) bool {
 func confirmJavaScriptURL(body, canary string) bool {
 	want := javascriptURLPayload(canary)
 	return anyAttr(body, func(tag, name, value string) bool {
-		if !isURLAttrName(name) {
+		if !isExecutableURLAttr(name) {
 			return false
 		}
 		// ZAP's isJavaScriptSchemeInjectionValid: the scheme has to LEAD the value. A canary
@@ -86,10 +125,16 @@ func confirmJavaScriptURL(body, canary string) bool {
 // element in the decoded form.
 func confirmSrcdocBreakout(body, canary string) bool {
 	marker := xssHTMLBreakoutMarker(canary)
-	if strings.Contains(body, marker) {
-		// Raw markup in the response is a plain tag breakout, which the tag payload confirms.
-		// Not this one.
-		return false
+	// No early return on raw markup. That guard delegated to "the tag payload", but the chooser adds
+	// exactly one payload for an HTML-valued attribute - this one - so there was nothing in flight to
+	// delegate to, and a host that BOTH entity-decodes into srcdoc and echoes raw markup is
+	// vulnerable twice over yet was confirmed by neither. The guard was inverted with respect to
+	// severity. A raw-markup host is caught by the crafted-element check, and a decoding host by the
+	// decoded-value check below.
+	if anyAttr(body, func(tag, name, value string) bool {
+		return tag == "svg" && name == "id" && value == canary
+	}) {
+		return true
 	}
 	// Token().Attr hands back the value already entity-decoded, which is precisely the transform
 	// the attribute parser applies before parsing srcdoc's content as HTML. So the decoded value
@@ -130,17 +175,44 @@ func anyAttr(body string, pred func(tag, name, value string) bool) bool {
 	}
 }
 
-// isEventAttrName reports whether the attribute is an inline event handler, whose value a browser
-// executes as JavaScript.
-func isEventAttrName(name string) bool {
-	return strings.HasPrefix(name, "on") && len(name) > 2
+// isExecutableURLAttr reports whether a javascript: value in this attribute actually RUNS in a
+// current browser.
+//
+// Measured in Chrome rather than assumed, because the list of attributes that hold a URL is much
+// longer than the list that will execute one: img src, iframe src, script src, video poster, body
+// background, blockquote cite, object data and a ping all refuse the scheme. Only a navigation
+// target runs it. Treating "holds a URL" as "executes a URL" reported reflection into <img src> - an
+// everyday shape for avatars and image proxies - as XSS at high/firm, with evidence claiming an
+// execution that cannot happen.
+//
+// formaction and a href both reach it through a user action, which is true of the real defect too.
+func isExecutableURLAttr(name string) bool {
+	switch name {
+	case "href", "action", "formaction":
+		return true
+	}
+	return false
 }
 
-// isURLAttrName reports whether the attribute's value is resolved as a URL, so a scheme in it is
-// executable.
-func isURLAttrName(name string) bool {
+// isKnownEventAttr reports whether the attribute is an inline handler a browser will execute.
+//
+// A prefix test on "on" was wrong in the direction that matters: it accepts on_focus, on-focus,
+// onxyzzy and even "one", so a sanitiser that neutralises a handler by RENAMING it - a real defence -
+// left something this predicate called executable, and the defence read as the defect. Only names
+// browsers actually dispatch belong here.
+func isKnownEventAttr(name string) bool {
 	switch name {
-	case "href", "src", "action", "formaction", "data", "poster", "background", "cite", "longdesc":
+	case "onclick", "ondblclick", "onmousedown", "onmouseup", "onmouseover", "onmousemove",
+		"onmouseout", "onmouseenter", "onmouseleave", "onkeydown", "onkeypress", "onkeyup",
+		"onfocus", "onblur", "onfocusin", "onfocusout", "onchange", "oninput", "onsubmit",
+		"onreset", "onselect", "onload", "onunload", "onerror", "onabort", "onbeforeunload",
+		"onresize", "onscroll", "ontoggle", "onanimationstart", "onanimationend",
+		"onanimationiteration", "ontransitionend", "onplay", "onplaying", "onpause", "onended",
+		"oncanplay", "onloadeddata", "onloadstart", "onprogress", "onwheel", "oncontextmenu",
+		"ondrag", "ondragend", "ondragenter", "ondragleave", "ondragover", "ondragstart", "ondrop",
+		"oncopy", "oncut", "onpaste", "onpageshow", "onpagehide", "onbeforeinput", "onsearch",
+		"onauxclick", "onpointerdown", "onpointerup", "onpointerover", "onpointerenter",
+		"onpointerleave", "onpointermove", "ontouchstart", "ontouchend", "ontouchmove":
 		return true
 	}
 	return false

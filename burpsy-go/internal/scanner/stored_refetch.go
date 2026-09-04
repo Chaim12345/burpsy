@@ -221,6 +221,12 @@ func (s *ActiveScanner) recordRefetch(t refetchTarget, body string) (*core.Excha
 		Request: reqID, Response: &respID,
 		Host: t.exchange.Host, Port: t.exchange.Port, TLS: t.exchange.TLS,
 		Method: "GET", Path: t.path,
+		// Read from the bytes actually stored above, which name no Content-Type — so this is "" and the
+		// History row will say the response declared no type. That is the truth about these bytes and it
+		// is left alone: the re-fetch wraps a body it holds as a string with a minimal synthetic head,
+		// and inventing a Content-Type here would put a type on the row that no server ever sent and
+		// that the stored response a reader can open does not contain.
+		Mime: core.MimeEssence([]byte(respRaw)),
 	}
 	s.store.AddExchange(ex)
 	return ex, nil

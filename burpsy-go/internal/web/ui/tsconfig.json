@@ -10,7 +10,11 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    // @types/bun, so the `bun test` files under src/lib typecheck instead of failing to resolve
+    // "bun:test". They are inside "include" and should be checked like any other source: a test
+    // that does not compile is a test that is not running.
+    "types": ["bun"]
   },
   "include": ["src"]
 }

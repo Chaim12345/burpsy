@@ -35,87 +35,155 @@ type ValidityRule struct {
 	Not             *ValidityRule   `json:"not,omitempty"`
 }
 
+// Evaluate decides whether a response shows a still-valid session.
+//
+// # Every stated clause is evaluated, and they compose as a conjunction
+//
+// This used to be a first-stated-field-wins if-chain: each clause `return`ed
+// unconditionally, so in a rule stating more than one condition only the first was ever
+// read and the rest were dead code.
+//
+// That was the worst defect in the parity audit, because of what reads this. `recovery.go`
+// gates re-login on `Evaluate(...) == Valid` in four places, so an operator writing
+//
+//	{"status_is": 200, "body_not_contains": "Please log in"}
+//
+// meaning "200 **and** not the login page" got only the status check. A logged-out login
+// page answers 200, so the rule reported Valid, the scanner never re-authenticated, and an
+// authenticated scan silently degraded into an unauthenticated one — while still reporting
+// `state=audited, skipped=0`. A clean bill of health over work that never happened.
+//
+// # Why conjunction rather than refusing the flat form
+//
+// The audit proposed refusing a flat multi-field rule and directing the operator to `All{}`.
+// That is smaller, but it makes the intuitive spelling permanently unusable and it breaks
+// any such rule already sitting in persisted config — rules that are broken today, so the
+// refusal would surface real breakage, but it would also refuse the reading the operator
+// plainly intended.
+//
+// Conjunction is not a guess about that intent: `All{}` in this same file already defines
+// the tri-state composition, and this reuses it verbatim. A rule stating one clause behaves
+// exactly as before, so nothing that works today changes. A rule stating several now means
+// what it says.
+//
+// Precedence follows `All{}`: a definite Invalid wins over an Indeterminate, because a clause
+// that positively disproves the session is more informative than one that could not be
+// decided. A rule stating nothing at all is still Indeterminate — silence is not consent.
 func (vr *ValidityRule) Evaluate(status int, hdrs map[string]string, body []byte) ValidityState {
 	if vr == nil {
 		return Indeterminate
 	}
+
+	stated := 0
+	verdict := Valid
+	// note folds one clause's verdict into the running conjunction. Invalid is sticky and
+	// outranks Indeterminate; both outrank Valid.
+	note := func(s ValidityState) {
+		stated++
+		switch {
+		case s == Invalid:
+			verdict = Invalid
+		case s == Indeterminate && verdict != Invalid:
+			verdict = Indeterminate
+		}
+	}
+
 	if vr.StatusIs != nil {
-		if status == 0 {
-			return Indeterminate
+		// A response with no status is not evidence either way — it is an unmeasured clause,
+		// not a failed one.
+		switch {
+		case status == 0:
+			note(Indeterminate)
+		case status == *vr.StatusIs:
+			note(Valid)
+		default:
+			note(Invalid)
 		}
-		if status == *vr.StatusIs {
-			return Valid
-		}
-		return Invalid
 	}
 	if vr.BodyContains != "" {
-		if bytes.Contains(body, []byte(vr.BodyContains)) {
-			return Valid
-		}
-		return Invalid
+		note(boolState(bytes.Contains(body, []byte(vr.BodyContains))))
 	}
 	if vr.BodyNotContains != "" {
-		if bytes.Contains(body, []byte(vr.BodyNotContains)) {
-			return Invalid
-		}
-		return Valid
+		note(boolState(!bytes.Contains(body, []byte(vr.BodyNotContains))))
 	}
 	if vr.HeaderPresent != "" {
-		for k := range hdrs {
-			if strings.EqualFold(k, vr.HeaderPresent) {
-				return Valid
-			}
-		}
-		return Invalid
+		note(boolState(hasHeader(hdrs, vr.HeaderPresent)))
 	}
 	if vr.HeaderAbsent != "" {
-		for k := range hdrs {
-			if strings.EqualFold(k, vr.HeaderAbsent) {
-				return Invalid
-			}
-		}
-		return Valid
+		note(boolState(!hasHeader(hdrs, vr.HeaderAbsent)))
 	}
 	if vr.All != nil {
-		allV := true
-		for _, s := range vr.All {
-			r := s.Evaluate(status, hdrs, body)
-			if r == Invalid {
-				return Invalid
-			}
-			if r == Indeterminate {
-				allV = false
-			}
-		}
-		if allV {
-			return Valid
-		}
-		return Indeterminate
+		note(evaluateAll(vr.All, status, hdrs, body))
 	}
 	if vr.Any != nil {
-		best := Invalid
-		for _, s := range vr.Any {
-			r := s.Evaluate(status, hdrs, body)
-			if r == Valid {
-				return Valid
-			}
-			if r == Indeterminate {
-				best = Indeterminate
-			}
-		}
-		return best
+		note(evaluateAny(vr.Any, status, hdrs, body))
 	}
 	if vr.Not != nil {
-		r := vr.Not.Evaluate(status, hdrs, body)
-		if r == Valid {
+		note(negate(vr.Not.Evaluate(status, hdrs, body)))
+	}
+
+	if stated == 0 {
+		return Indeterminate
+	}
+	return verdict
+}
+
+func boolState(ok bool) ValidityState {
+	if ok {
+		return Valid
+	}
+	return Invalid
+}
+
+func hasHeader(hdrs map[string]string, name string) bool {
+	for k := range hdrs {
+		if strings.EqualFold(k, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// evaluateAll is the original All{} semantics, extracted unchanged so the top-level
+// conjunction above and an explicit All{} block cannot drift apart.
+func evaluateAll(subs []*ValidityRule, status int, hdrs map[string]string, body []byte) ValidityState {
+	allV := true
+	for _, s := range subs {
+		switch s.Evaluate(status, hdrs, body) {
+		case Invalid:
 			return Invalid
+		case Indeterminate:
+			allV = false
 		}
-		if r == Indeterminate {
-			return Indeterminate
-		}
+	}
+	if allV {
 		return Valid
 	}
 	return Indeterminate
+}
+
+func evaluateAny(subs []*ValidityRule, status int, hdrs map[string]string, body []byte) ValidityState {
+	best := Invalid
+	for _, s := range subs {
+		switch s.Evaluate(status, hdrs, body) {
+		case Valid:
+			return Valid
+		case Indeterminate:
+			best = Indeterminate
+		}
+	}
+	return best
+}
+
+func negate(s ValidityState) ValidityState {
+	switch s {
+	case Valid:
+		return Invalid
+	case Indeterminate:
+		return Indeterminate
+	default:
+		return Valid
+	}
 }
 
 // --- Extraction ---
@@ -722,6 +790,10 @@ type Coordinator struct {
 	// a working macro with a broken one.
 	observedMu sync.Mutex
 	observed   map[RuleID][]MacroStep
+
+	// absorb records which surfaces feed the cookie jar and how much traffic they have offered it,
+	// so an empty jar can be told apart from a jar nothing is watching. See internal/session/absorb.go.
+	absorb absorption
 }
 
 func NewCoordinator(logger *zap.Logger) *Coordinator {
@@ -883,10 +955,18 @@ func (c *Coordinator) MatchingRule(host string) *SessionRule {
 	return nil
 }
 
+// HandleResponse absorbs this response's cookies and evaluates the matching rule's validity check.
+//
+// `hdrs` is a map, so it carries at most one Set-Cookie: a response that set two cookies arrives here
+// having already lost one, before this function is entered. Callers that hold the raw response bytes
+// must use AbsorbResponseCookies instead, which reads every line. This signature is kept for the
+// callers that only ever had a parsed map to give.
 func (c *Coordinator) HandleResponse(host string, port uint16, tls bool, status int, hdrs map[string]string, body []byte) {
+	c.absorb.responses.Add(1)
 	for k, v := range hdrs {
 		if strings.EqualFold(k, "Set-Cookie") {
 			c.jarMgr.AbsorbSetCookie(host, port, tls, v)
+			c.absorb.cookies.Add(1)
 		}
 	}
 	rule := c.MatchingRule(host)
@@ -992,9 +1072,12 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 		}
 		results = append(results, res)
 		// Absorb cookies set by this step.
+		c.absorb.attach(SourceMacro)
+		c.absorb.responses.Add(1)
 		for k, v := range res.Headers {
 			if strings.EqualFold(k, "Set-Cookie") {
 				c.jarMgr.AbsorbSetCookie(host, port, tls, v)
+				c.absorb.cookies.Add(1)
 			}
 		}
 		// Run this step's own extractions against its response.

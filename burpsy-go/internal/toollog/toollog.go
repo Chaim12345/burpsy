@@ -64,6 +64,19 @@ func (t Tool) String() string {
 	}
 }
 
+// ToolFromName resolves a tool name (as Tool.String produces) back to its
+// Tool, for wire round-trips that must speak names not ordinals. The second
+// return is false for "unknown" and for any other unrecognised string, so a
+// caller can refuse rather than silently mis-record.
+func ToolFromName(name string) (Tool, bool) {
+	for _, t := range ToolAll {
+		if t.String() == name {
+			return t, true
+		}
+	}
+	return Tool(0), false
+}
+
 // Entry is one record in the tool log.
 type Entry struct {
 	ID     uint64
@@ -95,12 +108,40 @@ type Entry struct {
 func Bytes(n int) *int { return &n }
 
 // ToolLog is a bounded, oldest-first-evicting log of tool activity.
+//
+// It carries two independent axes, and they must not be collapsed into one:
+// the **capture** axis decides which tools' requests are recorded at all, and
+// the display axis (the caller's filter over All()) decides what is shown.
+// The distinction is Burp Logger's Zfp2 model and it is not cosmetic: capture
+// is destructive — a request refused here is gone forever, because no bytes
+// were kept — while hiding a row is reversible. A UI that presented "stop
+// showing scanner rows" as the same control as "stop recording scanner
+// requests" would let an operator believe unrecorded traffic could be
+// un-hidden later. See the uncaptured counters below for how the loss is
+// reported rather than hidden.
 type ToolLog struct {
 	mu       sync.RWMutex
 	entries  []*Entry
 	capacity int
 	dropped  uint64
 	nextID   uint64
+
+	// capturing is the capture axis as a bitmask over tool ordinals: bit t set
+	// means Tool(t)'s Record calls store an entry; clear means they are
+	// refused. Atomic rather than lock-held because Record sits on the path of
+	// every request any tool sends (see OnChange) and the read must stay a
+	// single word load there. Every tool captures by default — the zero value
+	// of this field would mean nothing records, so New seeds it explicitly.
+	capturing atomic.Uint32
+
+	// uncaptured counts, per tool ordinal, the Record calls capture refused.
+	// This is the honest-counting counterpart of the axis: switching a tool's
+	// capture off must not look like an empty log — it looks like a log plus a
+	// number of requests that were sent and deliberately not kept. Like
+	// Dropped, these survive Clear (clearing the buffer does not un-send the
+	// traffic it no longer describes) and reset on Restore (a snapshot carries
+	// no such history to restore).
+	uncaptured [len(ToolAll)]atomic.Uint64
 
 	// onRecord is an optional write-through hook (see SetPersistenceSink). It
 	// runs under the lock, must not call back into the log, and must not fail
@@ -115,7 +156,16 @@ type ToolLog struct {
 
 const DefaultCapacity = 100000
 
-func New() *ToolLog { return &ToolLog{capacity: DefaultCapacity} }
+// captureAll is every tool-ordinal bit set: the seed New applies so the zero
+// value of an unseeded log cannot mean "record nothing". 1<<n - 1 sets the low
+// n bits, which is exactly the eight tool ordinals.
+const captureAll = uint32(1)<<len(ToolAll) - 1
+
+func New() *ToolLog {
+	l := &ToolLog{capacity: DefaultCapacity}
+	l.capturing.Store(captureAll)
+	return l
+}
 
 func (l *ToolLog) WithCapacity(c int) *ToolLog {
 	l.mu.Lock()
@@ -124,10 +174,21 @@ func (l *ToolLog) WithCapacity(c int) *ToolLog {
 	return l
 }
 
-// Record adds one entry and returns its ID. respLen is the response's byte count, or nil when no
-// response was received — see Entry.ResponseLen for why the caller must choose between the two rather
-// than defaulting to zero.
+// Record adds one entry and returns its ID, or 0 when the tool's capture is
+// switched off — in which case nothing was stored and the request is gone; the
+// Uncaptured counter for the tool is what says so. respLen is the response's
+// byte count, or nil when no response was received — see Entry.ResponseLen for
+// why the caller must choose between the two rather than defaulting to zero.
+//
+// 0 is unambiguous as the refusal marker because ids come from nextID, which
+// counts *stored* rows from 1: a stored row never has id 0.
 func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, path string, status int, respLen *int, durMs uint64, note string) uint64 {
+	if !l.Capturing(tool) {
+		if tool >= 0 && int(tool) < len(l.uncaptured) {
+			l.uncaptured[tool].Add(1)
+		}
+		return 0
+	}
 	id := atomic.AddUint64(&l.nextID, 1)
 	// Copied rather than aliased: the length belongs to the caller, who is free to reuse or overwrite
 	// it once this returns, and a logged row whose value changed after it was recorded is not a log.
@@ -165,6 +226,86 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		l.onChange()
 	}
 	return id
+}
+
+var (
+	// ToolBits masks the tool ordinal's single bit in the capturing bitmask. The
+	// shifted 1 is `int64(1) << uint(tool)` per tool; encoding it per-tool keeps
+	// the per-call shift off Record's hot path (Record looks up capturing via
+	// Capturing, below, which still shifts — see its doc).
+	ToolBits = [...]uint32{
+		ToolRepeater:  1 << 0,
+		ToolIntruder:  1 << 1,
+		ToolScanner:   1 << 2,
+		ToolSequencer: 1 << 3,
+		ToolComparer:  1 << 4,
+		ToolSession:   1 << 5,
+		ToolDecoder:   1 << 6,
+		ToolCrawler:   1 << 7,
+	}
+)
+
+// Capturing reports whether the tool's requests are currently recorded.
+// A single word load, meant for Record's per-send path.
+func (l *ToolLog) Capturing(tool Tool) bool {
+	if tool < 0 || int(tool) >= len(ToolBits) {
+		return false
+	}
+	return l.capturing.Load()&uint32(ToolBits[tool]) != 0
+}
+
+// SetCapturing switches one tool's capture on or off. Switching off is the
+// destructive act: the requests are sent and deliberately not kept, and the
+// Uncaptured counter starts counting them rather than letting the log read as
+// empty.
+func (l *ToolLog) SetCapturing(tool Tool, on bool) {
+	if tool < 0 || int(tool) >= len(ToolBits) {
+		return
+	}
+	mask := uint32(ToolBits[tool])
+	for {
+		cur := l.capturing.Load()
+		var next uint32
+		if on {
+			next = cur | mask
+		} else {
+			next = cur &^ mask
+		}
+		if l.capturing.CompareAndSwap(cur, next) {
+			return
+		}
+	}
+}
+
+// SetAllCapturing switches every tool's capture at once. on=false is the
+// nuclear "capture nothing" state; it is still reported as uncaptured counts
+// rather than as an empty log.
+func (l *ToolLog) SetAllCapturing(on bool) {
+	var next uint32
+	if on {
+		next = captureAll
+	}
+	l.capturing.Store(next)
+}
+
+// Uncaptured reports how many requests the tool sent that capture refused.
+// The counter only moves forward: clearing the log does not un-send traffic.
+func (l *ToolLog) Uncaptured(tool Tool) uint64 {
+	if tool < 0 || int(tool) >= len(l.uncaptured) {
+		return 0
+	}
+	return l.uncaptured[tool].Load()
+}
+
+// UncapturedAll returns a copy of the per-tool uncaptured counters, indexed by
+// the tool ordinal, for callers that project the whole axis to the wire. The
+// returned slice is fresh; mutating it does not touch the log.
+func (l *ToolLog) UncapturedAll() []uint64 {
+	out := make([]uint64, len(l.uncaptured))
+	for i := range l.uncaptured {
+		out[i] = l.uncaptured[i].Load()
+	}
+	return out
 }
 
 // OnChange installs the signal called after the log changes, or nil to remove it.
@@ -209,6 +350,9 @@ func (l *ToolLog) Restore(entries []*Entry) {
 		l.nextID = max
 	}
 	l.dropped = 0
+	for i := range l.uncaptured {
+		l.uncaptured[i].Store(0)
+	}
 }
 
 func (l *ToolLog) All() []*Entry {

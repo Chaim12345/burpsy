@@ -124,7 +124,7 @@ func (s *ActiveScanner) RenderStoredTargets(ctx context.Context) (StoredDOMRende
 	if s.stored == nil {
 		return out, fmt.Errorf("stored DOM render: no stored-input ledger, so nothing was planted to look for")
 	}
-	if !domChecksEnabled(s.config) {
+	if snap := s.ConfigSnapshot(); !domChecksEnabled(&snap) {
 		out.Declined = "DOM checks are not enabled for this scan, so no page was rendered"
 		return out, nil
 	}
@@ -231,6 +231,11 @@ func (s *ActiveScanner) storeRenderedDocument(t refetchTarget, html string) (*co
 		Request: reqID, Response: &respID,
 		Host: t.exchange.Host, Port: t.exchange.Port, TLS: t.exchange.TLS,
 		Method: "GET", Path: t.path,
+		// Taken from the head written just above rather than hardcoded "text/html", so the row and the
+		// stored response cannot come to disagree if that head is ever edited. It is a rendered
+		// document, which genuinely is HTML — the X-Burpsy-Document header is what says no server sent
+		// it, and that caveat belongs on the response, not smuggled into the type column.
+		Mime: core.MimeEssence([]byte(respRaw)),
 	}
 	s.store.AddExchange(ex)
 	return ex, nil

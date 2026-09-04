@@ -2,6 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { cn } from "../lib/cn";
+import { paletteRecency, recordPaletteUse } from "../lib/palette-recency";
 import { Kbd } from "./primitives";
 
 export interface PaletteAction {
@@ -57,8 +58,17 @@ export function CommandPalette({
   const listRef = useRef<HTMLDivElement>(null);
 
   const matches = useMemo(() => {
+    const recency = paletteRecency();
     return actions
-      .map((action) => ({ action, rank: score(action, term.trim()) }))
+      .map((action) => {
+        const rank = score(action, term.trim());
+        // Recency only breaks ties between equal text ranks (the empty query's flat 1, or two
+        // actions matching equally well): among equal ranks the larger recency sequence — the
+        // more recently run — sorts first. A genuinely better text match still wins over a
+        // recently-run worse one, because rank dominates the comparison (Burp's palette
+        // behaves the same way).
+        return { action, rank: rank * 1000 + (recency[action.id] ?? 0) };
+      })
       .filter((entry) => entry.rank > 0)
       .sort((a, b) => b.rank - a.rank)
       .slice(0, 60)
@@ -83,6 +93,7 @@ export function CommandPalette({
   const commit = (action: PaletteAction | undefined) => {
     if (!action) return;
     onOpenChange(false);
+    recordPaletteUse(action.id);
     action.run();
   };
 

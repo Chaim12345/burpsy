@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
-import { ArrowDown, ArrowUp, Plus, Send, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Combine, ArrowRightLeft, FileCode2, FileOutput, Globe, Link2, Plus, Repeat2, Send, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { formatBytes, formatDuration } from "../lib/api";
+import { api, copyToClipboard, downloadText, formatBytes, formatDuration, json } from "../lib/api";
+import { exchangeUrl, rawToCurl } from "../lib/actions";
+import { useChord } from "../lib/keymap";
+import { useApp } from "../lib/store";
 import { useInterceptControls } from "../lib/data";
 import {
   useForwardHeld,
@@ -13,6 +16,7 @@ import {
 } from "../lib/data.attack";
 import type { HeldMessageDetail, InterceptRuleSpec } from "../lib/types.attack";
 import { HttpEditor } from "../ui/editor";
+import { Inspector } from "../ui/inspector";
 import { PageHeader, SplitPane } from "../ui/layout";
 import {
   Badge,
@@ -23,6 +27,7 @@ import {
   ErrorNotice,
   IconButton,
   Input,
+  Modal,
   Metric,
   Select,
   Switch,
@@ -31,8 +36,10 @@ import {
   TabsList,
   TabsTrigger,
   Toolbar,
+  Tooltip,
 } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
+import type { MenuGroup } from "../ui/menu";
 
 const FIELDS: { value: InterceptRuleSpec["field"]; label: string }[] = [
   { value: "host", label: "Host" },
@@ -49,15 +56,67 @@ const CATEGORIES: { value: InterceptRuleSpec["category"]; label: string }[] = [
   { value: "literal", label: "Literal" },
 ];
 
-/** A new row's field defaults to what that direction is usually written against: a host for a
- * request, a status code for a response — matching the vanilla intercept.ts default. */
+/**
+ * Everything that differs between the four directions, in one table.
+ *
+ * It is a table because the page previously carried `direction === "requests" ? … : …` in four
+ * separate places, and every one of those ternaries silently treats a WebSocket direction as a
+ * response — so adding the WebSocket panels by widening the union alone would have labelled them
+ * "Response interception rules" and defaulted their rules to matching a status code, which a frame
+ * does not have.
+ *
+ * `defaultField` is the field a new row is usually written against. A WebSocket frame has no method
+ * and no status code, so host is the only sensible default of the seven.
+ */
+/**
+ * What the queue filter can be set to. These are `Direction.String()` values from Go — singular,
+ * and underscored for WebSocket — because they are compared against `held[].direction`. They are
+ * deliberately NOT the same strings as `InterceptDirection`, which is the plural rule-endpoint
+ * suffix; conflating the two yields a filter that always matches nothing.
+ */
+type HeldDirectionFilter =
+  | "all"
+  | "request"
+  | "response"
+  | "websocket_to_server"
+  | "websocket_to_client";
+
+const DIRECTIONS: Record<
+  InterceptDirection,
+  { title: string; noun: string; defaultField: InterceptRuleSpec["field"] }
+> = {
+  requests: { title: "Request", noun: "request", defaultField: "host" },
+  responses: { title: "Response", noun: "response", defaultField: "status_code" },
+  websocket_to_server: {
+    title: "WebSocket → server",
+    noun: "client frame",
+    defaultField: "host",
+  },
+  websocket_to_client: {
+    title: "WebSocket → client",
+    noun: "server frame",
+    defaultField: "host",
+  },
+};
+
+/**
+ * Final path segment's extension without the dot (burpsy-react-ui-35i4): mirrors the
+ * proxy's extensionOf, which is what the engine will match the rule against.
+ */
+function extensionOf(path: string): string {
+  const segment = path.split("?")[0]?.split("/").pop() ?? "";
+  const dot = segment.lastIndexOf(".");
+  return dot < 0 ? "" : segment.slice(dot + 1);
+}
+
 function defaultRule(dir: InterceptDirection): InterceptRuleSpec {
   return {
-    field: dir === "requests" ? "host" : "status_code",
+    field: DIRECTIONS[dir].defaultField,
     enabled: true,
     string_match: "",
     category: "regex",
     comment: "",
+    action: "hold",
   };
 }
 
@@ -73,7 +132,7 @@ function describeRules(active: boolean, rules: InterceptRuleSpec[], noun: string
 function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Element {
   const { data, error, isFetching, refetch } = useInterceptRules(direction);
   const save = useSaveInterceptRules(direction);
-  const noun = direction === "requests" ? "request" : "response";
+  const { title, noun } = DIRECTIONS[direction];
 
   const [active, setActive] = useState(false);
   const [rules, setRules] = useState<InterceptRuleSpec[]>([]);
@@ -134,7 +193,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
           setActive(resp.active);
           setRules(resp.rules);
           setDirty(false);
-          toast.success(`${direction === "requests" ? "Request" : "Response"} rules saved`);
+          toast.success(`${title} rules saved`);
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
       },
@@ -146,7 +205,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
   if (data && !data.wired) {
     return (
       <div className="notice notice-warn">
-        {direction === "requests" ? "Request" : "Response"} interception rules are not wired up.
+        {title} interception rules are not wired up.
       </div>
     );
   }
@@ -194,6 +253,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
                 <th style={{ width: "18%" }}>Field</th>
                 <th>Match</th>
                 <th style={{ width: "12%" }}>Kind</th>
+                <th style={{ width: "14%" }}>Action</th>
                 <th style={{ width: "18%" }}>Comment</th>
                 <th style={{ width: "10%" }}>Order</th>
                 <th style={{ width: "6%" }} />
@@ -202,7 +262,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
             <tbody>
               {rules.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="cell-dim">
+                  <td colSpan={8} className="cell-dim">
                     no rules — every {noun} is held while this list is on
                   </td>
                 </tr>
@@ -263,6 +323,21 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
                       </Select>
                     </td>
                     <td>
+                      <Select
+                        aria-label={`Action for rule ${index + 1}`}
+                        title="Do intercept holds a match; Don't intercept lets it through"
+                        value={rule.action ?? "hold"}
+                        onChange={(event) =>
+                          update((list) =>
+                            list.map((r, i) => (i === index ? { ...r, action: event.target.value as InterceptRuleSpec["action"] } : r)),
+                          )
+                        }
+                      >
+                        <option value="hold">Do intercept</option>
+                        <option value="pass">Don&apos;t intercept</option>
+                      </Select>
+                    </td>
+                    <td>
                       <Input
                         aria-label={`Comment for rule ${index + 1}`}
                         value={rule.comment}
@@ -318,12 +393,35 @@ export function InterceptPage(): JSX.Element {
   // hard-codes fix_content_length and this page offers it as a toggle.
   const controls = useInterceptControls();
   const forwardHeld = useForwardHeld();
+  const reqRules = useInterceptRules("requests");
+  const resRules = useInterceptRules("responses");
+  const saveReqRules = useSaveInterceptRules("requests");
+  const saveResRules = useSaveInterceptRules("responses");
+  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
+  const setRoute = useApp((state) => state.setRoute);
+  const setComparerSlot = useApp((state) => state.setComparerSlot);
+  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // burpsy-react-ui-s5g7: the checkbox subset for bulk forward/drop. Separate from the
+  // single selection that drives the detail pane: checking boxes must not yank the editor
+  // to another message, and the bulk actions send unedited row bytes (like Forward all),
+  // never one row's edit buffer under N ids.
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  /**
+   * Drop-all needs a confirm step: it discards traffic that cannot be recovered, and unlike a single
+   * Drop it does so for messages the operator has not looked at.
+   */
+  const [confirmDropAll, setConfirmDropAll] = useState(false);
   const [raw, setRaw] = useState("");
   const [fixContentLength, setFixContentLength] = useState(true);
+  const [directionFilter, setDirectionFilter] = useState<HeldDirectionFilter>("all");
+  const [inspector, setInspector] = useState(true);
 
-  const held = data?.held ?? [];
+  const heldAll = data?.held ?? [];
+  // Apply direction filter to the held queue — the operator can focus on
+  // just requests or just responses without losing the other half.
+  const held = directionFilter === "all" ? heldAll : heldAll.filter((h) => h.direction === directionFilter);
   // Selection is held by id, not object identity, so a poll that rebuilds every row cannot silently
   // drop the operator's selection.
   const selected = useMemo(() => held.find((h) => h.id === selectedId) ?? null, [held, selectedId]);
@@ -339,6 +437,10 @@ export function InterceptPage(): JSX.Element {
   // selection that no longer exists in the queue rather than let the editor go stale.
   useEffect(() => {
     if (selectedId !== null && data && !held.some((h) => h.id === selectedId)) setSelectedId(null);
+    if (data) {
+      const live = new Set(held.map((h) => h.id));
+      setSelectedIds((current) => (current.every((id) => live.has(id)) ? current : current.filter((id) => live.has(id))));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
@@ -350,56 +452,381 @@ export function InterceptPage(): JSX.Element {
     controls.setEnabled.mutate(!data.enabled, { onError: (err) => toast.error(err instanceof Error ? err.message : String(err)) });
   };
 
-  const forward = () => {
-    if (!selected) return;
+  /**
+   * Forward one held message by id, with its body and the Content-Length decision passed in.
+   *
+   * Taking all three explicitly is the point. The previous shape closed over `selected` and `raw`,
+   * which was fine for the toolbar — it only ever acts on the selection — and wrong for anything
+   * that acts on a row the operator pointed at instead. A caller that set the selection and then
+   * invoked a closure captured at the previous render would forward the PREVIOUS message, with the
+   * previous message's edit buffer as its body, and the success toast would name the one that
+   * actually went. See burpsy-react-ui-3g5.
+   */
+  const forwardMessage = (id: number, body: string, fixCL: boolean, holdResponse = false) => {
     forwardHeld.mutate(
-      { id: selected.id, raw, fixContentLength },
+      { id, raw: body, fixContentLength: fixCL, holdResponse },
       {
         onSuccess: () => {
           setSelectedId(null);
-          toast.success(`Held message #${selected.id} forwarded`);
+          toast.success(`Held message #${id} forwarded`);
         },
         onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
       },
     );
   };
 
-  const drop = () => {
-    if (!selected) return;
-    controls.drop.mutate(selected.id, {
+  /**
+   * Burp's "Don't intercept ..." quick actions (burpsy-react-ui-35i4): append a pass rule
+   * built from the message in front of the operator, then save the whole list. The list is
+   * read from the last poll rather than refetched first: a rule added elsewhere between the
+   * poll and this click would be dropped by the PUT, and that lossy read-modify-write is the
+   * documented shape of this page's rule editing (the RuleEditor tab saves whole lists too).
+   * First-match-wins evaluation means the new rule belongs at the TOP: appended at the end it
+   * would sit behind broader hold rules and never fire, silently doing nothing.
+   */
+  const addPassRule = (
+    dir: "requests" | "responses",
+    field: InterceptRuleSpec["field"],
+    match: string,
+    comment: string,
+  ) => {
+    const current = dir === "requests" ? reqRules.data : resRules.data;
+    if (!current) {
+      toast.error("Rule list has not loaded yet");
+      return;
+    }
+    const save = dir === "requests" ? saveReqRules : saveResRules;
+    const rule: InterceptRuleSpec = {
+      field,
+      category: "literal",
+      string_match: match,
+      enabled: true,
+      comment,
+      action: "pass",
+    };
+    save.mutate(
+      { active: current.active, rules: [rule, ...current.rules] },
+      {
+        onSuccess: () => toast.success(`Pass rule added — ${match} will no longer be held`),
+        onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+      },
+    );
+  };
+
+  const dropMessage = (id: number) => {
+    controls.drop.mutate(id, {
       onSuccess: () => {
         setSelectedId(null);
-        toast.success(`Held message #${selected.id} dropped`);
+        toast.success(`Held message #${id} dropped`);
       },
       onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
     });
   };
 
+  /**
+   * burpsy-react-ui-s5g7: forward/drop the checkbox subset, one resolved message at a time.
+   * Sequential, not parallel: the queue shifts under each resolution and the toasts name what
+   * actually happened, so a message resolved elsewhere mid-run is reported as skipped rather
+   * than double-counted. Bulk sends carry unedited row bytes (like Forward all) — the edit
+   * buffer belongs to the detail selection alone.
+   */
+  const forwardSelected = async () => {
+    const targets = held.filter((h) => selectedIds.includes(h.id));
+    let ok = 0;
+    const failed: number[] = [];
+    for (const target of targets) {
+      try {
+        await forwardHeld.mutateAsync({ id: target.id, raw: target.raw, fixContentLength: fixContentLength, holdResponse: false });
+        ok += 1;
+      } catch {
+        failed.push(target.id);
+      }
+    }
+    setSelectedIds((current) => current.filter((id) => failed.includes(id)));
+    if (selectedId !== null && !failed.includes(selectedId) && targets.some((t) => t.id === selectedId)) setSelectedId(null);
+    toast.success(
+      failed.length ? `Forwarded ${ok}, ${failed.length} failed (${failed.join(", ")})` : `Forwarded ${ok} message${ok === 1 ? "" : "s"}`,
+    );
+  };
+
+  const dropSelected = async () => {
+    const ids = selectedIds.filter((id) => held.some((h) => h.id === id));
+    let ok = 0;
+    const failed: number[] = [];
+    for (const id of ids) {
+      try {
+        await controls.drop.mutateAsync(id);
+        ok += 1;
+      } catch {
+        failed.push(id);
+      }
+    }
+    setSelectedIds((current) => current.filter((id) => failed.includes(id)));
+    if (selectedId !== null && !failed.includes(selectedId) && ids.includes(selectedId)) setSelectedId(null);
+    if (failed.length) toast.error(`Dropped ${ok}, ${failed.length} failed (${failed.join(", ")})`);
+    else toast.success(`Dropped ${ok} message${ok === 1 ? "" : "s"}`);
+  };
+
+  /**
+   * The send-to matrix for a held message.
+   *
+   * # Why this cannot just call lib/actions.ts's menu()
+   *
+   * That factory takes an `Exchange`: a row in the traffic store with an id and message ids behind
+   * it. A held message is none of those things yet — it exists only in the proxy's hold, has no
+   * response, and has no stored message the server can be asked for. So the actions that need a
+   * stored message are built here from the bytes the hold already handed us (`row.raw`), and the
+   * one that cannot be built at all is left out rather than faked:
+   *
+   * - Send to Intruder is absent. Intruder splices payloads into a *stored* message id, which a
+   *   held message does not have. Forward it and send from HTTP history, or send it to Repeater
+   *   here and use Repeater's own hand-off, which sends once to create the stored message first.
+   *
+   * Everything else is the same matrix every other HTTP table offers, and the point of it is the
+   * first entry: forking a copy to Repeater WITHOUT resolving the hold. Before this, a held
+   * request had to be forwarded or dropped before it could be worked on, so the operator lost the
+   * hold to get the copy — and forking an intercepted request to Repeater is the single most
+   * common thing done from Burp's Intercept tab.
+   *
+   * `row`, never the selection or the edit buffer: a right-click selects the row, but the buffer
+   * belongs to whatever was selected at the previous render. Sending one message's bytes under
+   * another's id is the bug burpsy-react-ui-3g5 already cost this file once.
+   */
+  const heldMenu = (row: HeldMessageDetail): MenuGroup[] => {
+    const url = exchangeUrl(row);
+    const label = `held #${row.id} ${row.method} ${row.path}`;
+    return [
+      {
+        id: "send",
+        actions: [
+          {
+            id: "repeater",
+            label: "Send to Repeater",
+            icon: Repeat2,
+            onSelect: () => {
+              openRepeaterTab({
+                name: label.slice(0, 42),
+                target: `${row.tls ? "https" : "http"}://${row.host}:${row.port}`,
+                protocol: row.tls ? "https" : "http",
+                request: row.raw,
+              });
+              setRoute("repeater");
+              toast.success(`Held message #${row.id} copied to Repeater — it is still held here`);
+            },
+          },
+          {
+            id: "compare-a",
+            label: "Send to Comparer (A)",
+            icon: Combine,
+            onSelect: () => {
+              setComparerSlot("a", row.raw);
+              setRoute("comparer");
+            },
+          },
+          {
+            id: "compare-b",
+            label: "Send to Comparer (B)",
+            icon: ArrowRightLeft,
+            onSelect: () => {
+              setComparerSlot("b", row.raw);
+              setRoute("comparer");
+            },
+          },
+          {
+            id: "decoder",
+            label: "Send to Decoder",
+            icon: FileOutput,
+            onSelect: () => {
+              setDecoderSeed({ label, input: row.raw });
+              setRoute("decoder");
+            },
+          },
+        ],
+      },
+      {
+        id: "hold",
+        title: "Resolve the hold",
+        actions: [
+          {
+            id: "forward",
+            label: "Forward",
+            icon: Send,
+            shortcut: "Ctrl+F",
+            // row.raw, not the edit buffer: there is no edit buffer for a row that is not
+            // selected, and sending the selection's bytes under another row's id is exactly the
+            // confusion this menu was built to avoid.
+            //
+            // fixContentLength, not a hardcoded true: two forward paths disagreeing about
+            // whether they rewrite a header is invisible from either one.
+            onSelect: () => forwardMessage(row.id, row.raw, fixContentLength),
+          },
+          {
+            id: "drop",
+            label: "Drop",
+            icon: Trash2,
+            danger: true,
+            onSelect: () => dropMessage(row.id),
+          },
+        ],
+      },
+      {
+        id: "rules",
+        title: "Interception rules from this message",
+        actions: [
+          ...(row.direction === "request"
+            ? [
+                {
+                  id: "dont-intercept-host",
+                  label: `Don't intercept requests to ${row.host}`,
+                  onSelect: () => addPassRule("requests", "host", row.host, `from held #${row.id}`),
+                },
+                ...(extensionOf(row.path)
+                  ? [
+                      {
+                        id: "dont-intercept-ext",
+                        label: `Don't intercept requests for .${extensionOf(row.path)} files`,
+                        onSelect: () =>
+                          addPassRule("requests", "extension", extensionOf(row.path), `from held #${row.id}`),
+                      },
+                    ]
+                  : []),
+                {
+                  id: "intercept-response",
+                  label: "Do intercept the response to this request",
+                  onSelect: () => forwardMessage(row.id, row.raw, fixContentLength, true),
+                },
+              ]
+            : row.direction === "response"
+              ? [
+                  {
+                    id: "dont-intercept-host",
+                    label: `Don't intercept responses from ${row.host}`,
+                    onSelect: () => addPassRule("responses", "host", row.host, `from held #${row.id}`),
+                  },
+                ]
+              : []),
+        ],
+      },
+      {
+        id: "copy",
+        actions: [
+          {
+            id: "url",
+            label: "Copy URL",
+            icon: Link2,
+            onSelect: () => {
+              void copyToClipboard(url);
+              toast.success("URL copied");
+            },
+          },
+          {
+            id: "curl",
+            label: "Copy as curl",
+            icon: Terminal,
+            onSelect: () => {
+              void copyToClipboard(rawToCurl(row.raw, url));
+              toast.success("curl command copied");
+            },
+          },
+          {
+            id: "to-file",
+            label: "Copy request to file",
+            icon: FileCode2,
+            onSelect: () =>
+              downloadText(`held-${row.id}-${row.method}.txt`.replace(/[^a-z0-9.\-]+/gi, "_"), row.raw),
+          },
+        ],
+      },
+      {
+        id: "scope",
+        actions: [
+          {
+            id: "add-scope",
+            label: `Add ${row.host} to scope`,
+            icon: ShieldCheck,
+            onSelect: () => {
+              void api<unknown>("/api/scope", json("POST", { action: "include", pattern: row.host }))
+                .then(() => toast.success(`${row.host} added to scope`))
+                .catch((error: unknown) =>
+                  toast.error(`Could not scope ${row.host}: ${error instanceof Error ? error.message : String(error)}`),
+                );
+            },
+          },
+          {
+            id: "browser",
+            label: "Open URL in browser",
+            icon: Globe,
+            onSelect: () => {
+              window.open(url, "_blank", "noopener");
+              toast.info("Opened in your browser — it is captured only if that browser uses burpsy's proxy");
+            },
+          },
+        ],
+      },
+    ];
+  };
+
+  // The toolbar's two actions: the selection, its edit buffer, and the operator's toggle.
+  const forward = () => {
+    if (!selected) return;
+    forwardMessage(selected.id, raw, fixContentLength);
+  };
+
+  const drop = () => {
+    if (!selected) return;
+    dropMessage(selected.id);
+  };
+
   // Burp's proxy bindings. ctrl+F forwards — in Burp that is Forward, not Find, and
   // the editor's search lives on ctrl+S to match. alt+T stands in for Burp's ctrl+T
   // because Chrome and Firefox reserve ctrl+T for a new tab and a page cannot claim it.
+  // Both chords come from the keymap registry rather than being literals here: `proxy.forward` and
+  // `proxy.toggleIntercept` are rebindable rows in Settings -> Hotkeys, and that table was running
+  // duplicate detection on overrides nothing ever read.
+  const forwardChord = useChord("proxy.forward");
+  const toggleChord = useChord("proxy.toggleIntercept");
   useHotkeys(
-    "mod+f",
+    forwardChord,
     (event) => {
       if (!selected) return;
       event.preventDefault();
       forward();
     },
     { enableOnFormTags: true, enableOnContentEditable: true },
-    [selected],
+    [forwardChord, selected],
   );
   useHotkeys(
-    "alt+t",
+    toggleChord,
     (event) => {
       event.preventDefault();
       toggle();
     },
     { enableOnFormTags: true },
-    [data],
+    [toggleChord, data],
   );
 
   const columns = useMemo<Column<HeldMessageDetail>[]>(
     () => [
+      {
+        id: "select",
+        header: "✓",
+        size: 40,
+        enableSorting: false,
+        cell: (info) => {
+          const id = info.row.original.id;
+          return (
+            <Checkbox
+              checked={selectedIds.includes(id)}
+              onCheckedChange={(checked) => {
+                setSelectedIds((current) =>
+                  checked ? (current.includes(id) ? current : [...current, id]) : current.filter((v) => v !== id),
+                );
+              }}
+              label={`Select held #${id} for bulk forward or drop`}
+            />
+          );
+        },
+      },
       { accessorKey: "id", header: "#", size: 56, cell: (info) => <span className="cell-num">{info.getValue<number>()}</span> },
       {
         accessorKey: "direction",
@@ -428,7 +855,7 @@ export function InterceptPage(): JSX.Element {
       { accessorKey: "held_ms", header: "Held", size: 80, cell: (info) => <span className="cell-num">{formatDuration(info.getValue<number>())}</span> },
       { accessorKey: "len", header: "Len", size: 76, cell: (info) => <span className="cell-num">{formatBytes(info.getValue<number>())}</span> },
     ],
-    [],
+    [selectedIds],
   );
 
   const detail = selected ? (
@@ -443,20 +870,79 @@ export function InterceptPage(): JSX.Element {
           </strong>
         </div>
         <div className="detail-actions">
+          {/* The frame type, when there is one. A WebSocket payload alone does not say how to read
+              it, and an operator handed unlabelled binary bytes will edit them as text and forward a
+              structurally valid frame with a corrupted body. Warn tone on binary because that is
+              the case where the editor below is the wrong tool. */}
+          {selected.opcode ? (
+            <Badge tone={selected.opcode === "text" ? "info" : "warn"}>{selected.opcode}</Badge>
+          ) : null}
           <Badge tone={selected.direction === "request" ? "info" : "good"}>{selected.direction}</Badge>
+          <IconButton
+            label={inspector ? "Hide Inspector" : "Show Inspector"}
+            size="small"
+            aria-pressed={inspector}
+            onClick={() => setInspector((current) => !current)}
+          >
+            <Columns3 size={13} />
+          </IconButton>
           <IconButton label="Clear selection" size="small" onClick={() => setSelectedId(null)}>
             <X size={13} />
           </IconButton>
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", minHeight: 0 }}>
-        <HttpEditor label="Held bytes" value={raw} onChange={setRaw} filename={`held-${selected.id}.txt`} />
+        <div className={inspector ? "held-grid-inspected" : "held-grid"}>
+          <HttpEditor
+            label="Held bytes"
+            value={raw}
+            onChange={setRaw}
+            filename={`held-${selected.id}.txt`}
+            menuGroups={heldMenu(selected)}
+          />
+          {/* The Inspector edits `raw` — the same buffer the Forward button sends — so an
+              edit made here is in the bytes that reach the client or the upstream, not a
+              second draft that has to be copied across. This is the surface where that
+              matters most: the message is held open and nothing else can change it. */}
+          {inspector ? (
+            <Inspector
+              raw={raw}
+              label={`Inspector · held ${selected.direction}`}
+              onChange={setRaw}
+            />
+          ) : null}
+        </div>
         <Toolbar style={{ borderTop: "1px solid var(--line)" }}>
           <Checkbox
             checked={fixContentLength}
             onCheckedChange={setFixContentLength}
             label="Fix Content-Length when forwarding"
           />
+          {/* Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1). Disabled with the
+              reason shown when no scope is attached, rather than offered as a control that silently
+              does nothing — the engine deliberately refuses to filter in that case, because an empty
+              queue an operator cannot connect to a switch they flipped is worse than an unfiltered
+              one. */}
+          <Tooltip
+            content={
+              data?.scope_attached
+                ? "Hold only traffic the engagement scope allows. Messages already held are untouched."
+                : "No scope is attached to the intercept engine, so this would not filter anything."
+            }
+          >
+            <span>
+              <Checkbox
+                checked={data?.in_scope_only ?? false}
+                disabled={!data?.scope_attached}
+                onCheckedChange={(next) =>
+                  controls.setInScopeOnly.mutate(next === true, {
+                    onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+                  })
+                }
+                label="Only intercept in-scope messages"
+              />
+            </span>
+          </Tooltip>
           <span style={{ flex: 1 }} />
           <Button onClick={forward} disabled={forwardHeld.isPending}>
             <Send size={14} />
@@ -466,7 +952,100 @@ export function InterceptPage(): JSX.Element {
             <Trash2 size={14} />
             Drop
           </Button>
+          {/* Burp's queue toolbar pairs Forward with "Forward all" and Drop with "Drop all"
+              (proxyForwardOptionsButton), and the destructive half shipped without the safe one
+              (burpsy-react-ui-4v3): a queue that can only be emptied by dropping teaches the
+              operator to stop queueing traffic at all. No confirmation, unlike Drop all — this
+              forwards exactly what the clients sent, and the destructive direction is the one
+              that needs the guard.
+
+              Disabled, not hidden, when the queue is empty: a control that vanishes reads as a
+              missing feature, and an operator who used it once will look for it again. */}
+          <Button
+            variant="outline"
+            onClick={() => {
+              const expected = held.length;
+              controls.forwardAll.mutate(undefined, {
+                onSuccess: (result) => {
+                  setSelectedId(null);
+                  const forwarded = result.forwarded;
+                  if (forwarded === expected) {
+                    toast.success(`Forwarded ${forwarded} held message${forwarded === 1 ? "" : "s"}`);
+                  } else {
+                    toast.success(
+                      `Forwarded ${forwarded} of the ${expected} shown — the rest resolved elsewhere before this request arrived`,
+                    );
+                  }
+                },
+                onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+              });
+            }}
+            disabled={held.length === 0 || controls.forwardAll.isPending}
+            title={held.length === 0 ? "Nothing is held" : `Forward all ${held.length} held messages unmodified`}
+          >
+            <Send size={14} />
+            Forward all{held.length > 0 ? ` (${held.length})` : ""}
+          </Button>
+          {/* Burp's queue toolbar has this, and burpsy's route has answered the count actually
+              dropped since it was written — nothing called it (burpsy-react-ui-t6f).
+
+              Disabled, not hidden, when the queue is empty: a control that vanishes reads as a
+              missing feature, and an operator who used it once will look for it again. */}
+          <Button
+            variant="outline"
+            onClick={() => setConfirmDropAll(true)}
+            disabled={held.length === 0 || controls.dropAll.isPending}
+            title={held.length === 0 ? "Nothing is held" : `Drop all ${held.length} held messages`}
+          >
+            <Trash2 size={14} />
+            Drop all{held.length > 0 ? ` (${held.length})` : ""}
+          </Button>
         </Toolbar>
+
+        <Modal
+          open={confirmDropAll}
+          onOpenChange={(open) => {
+            if (!open) setConfirmDropAll(false);
+          }}
+          title={`Drop all ${held.length} held messages?`}
+          description="Each client sees its request fail. Dropped traffic is not recoverable, and this discards messages you have not looked at."
+        >
+          <div className="page-actions">
+            <Button variant="outline" onClick={() => setConfirmDropAll(false)}>
+              Keep them held
+            </Button>
+            <Button
+              variant="danger"
+              disabled={controls.dropAll.isPending}
+              onClick={() => {
+                // `expected` is read before the call so the two numbers can be compared. The route
+                // answers what it actually dropped, and a message resolved elsewhere between the
+                // last poll and this request is not counted — so a smaller number is not an error,
+                // it is the queue having moved. Saying so is how the operator learns that rather
+                // than concluding the button half-worked.
+                const expected = held.length;
+                controls.dropAll.mutate(undefined, {
+                  onSuccess: (result) => {
+                    setConfirmDropAll(false);
+                    setSelectedId(null);
+                    const dropped = result.dropped;
+                    if (dropped === expected) {
+                      toast.success(`Dropped ${dropped} held message${dropped === 1 ? "" : "s"}`);
+                    } else {
+                      toast.success(
+                        `Dropped ${dropped} of the ${expected} shown — the rest resolved elsewhere before this request arrived`,
+                      );
+                    }
+                  },
+                  onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+                });
+              }}
+            >
+              <Trash2 size={13} />
+              {controls.dropAll.isPending ? "Dropping…" : `Drop all ${held.length}`}
+            </Button>
+          </div>
+        </Modal>
       </div>
     </div>
   ) : (
@@ -498,7 +1077,26 @@ export function InterceptPage(): JSX.Element {
           <Metric accent label="Pending" value={data?.pending ?? 0} />
           <Metric label="Mode" value={data?.enabled ? "Holding" : "Passing"} />
           <Metric label="Transport" value={data?.wired ? "Connected" : "Unavailable"} />
-          <Metric label="Queue depth" value={held.length} />
+          <Metric label="Queue depth" value={heldAll.length} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <label htmlFor="direction-filter" style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>Show:</label>
+            <Select
+              id="direction-filter"
+              aria-label="Filter by direction"
+              value={directionFilter}
+              onChange={(e) => setDirectionFilter(e.target.value as HeldDirectionFilter)}
+              style={{ width: "auto" }}
+            >
+              <option value="all">All messages</option>
+              <option value="request">Requests only</option>
+              <option value="response">Responses only</option>
+              {/* These values are Go's Direction.String(), which is what the API puts on each held
+                  row — not the plural rule-endpoint suffixes. Using the wrong one filters to nothing
+                  and looks exactly like an empty queue. */}
+              <option value="websocket_to_server">WebSocket → server only</option>
+              <option value="websocket_to_client">WebSocket → client only</option>
+            </Select>
+          </div>
         </div>
       </div>
 
@@ -508,6 +1106,24 @@ export function InterceptPage(): JSX.Element {
           <TabsTrigger value="rules">Interception rules</TabsTrigger>
         </TabsList>
         <TabsContent value="queue" style={{ display: "grid", minHeight: 0 }}>
+          {selectedIds.length > 0 ? (
+            <Toolbar aria-label="Bulk actions for the checked messages">
+              <span className="cell-dim">
+                {selectedIds.length} checked
+              </span>
+              <Button size="small" onClick={() => void forwardSelected()} disabled={forwardHeld.isPending}>
+                <Send size={13} />
+                Forward checked
+              </Button>
+              <Button size="small" variant="danger" onClick={() => void dropSelected()} disabled={controls.drop.isPending}>
+                <Trash2 size={13} />
+                Drop checked
+              </Button>
+              <Button size="small" variant="outline" onClick={() => setSelectedIds([])}>
+                Clear
+              </Button>
+            </Toolbar>
+          ) : null}
           <SplitPane
             storageId="intercept"
             orientation="vertical"
@@ -520,6 +1136,8 @@ export function InterceptPage(): JSX.Element {
                 getRowId={(row) => String(row.id)}
                 selectedId={selectedId === null ? null : String(selectedId)}
                 onSelect={(row) => setSelectedId(row.id)}
+        onActivate={(row) => setSelectedId(row.id)}
+        menuGroups={heldMenu}
                 loading={isFetching && !data}
                 empty={
                   <Empty
@@ -536,6 +1154,26 @@ export function InterceptPage(): JSX.Element {
           <div className="two-col">
             <RuleEditor direction="requests" />
             <RuleEditor direction="responses" />
+            <RuleEditor direction="websocket_to_server" />
+            <RuleEditor direction="websocket_to_client" />
+          </div>
+          {/* Stated on the surface where the operator switches these on, because the limits are not
+              guessable from the controls and each one changes what the queue will contain. See
+              wsHoldable in internal/proxy/ws.go. */}
+          <div className="notice" style={{ marginTop: 10 }}>
+            <strong>What WebSocket interception does not hold.</strong> Control frames (ping, pong,
+            close) are always relayed: holding a ping stalls the peer&apos;s keepalive and holding a
+            close leaves a socket that cannot be ended. Compressed frames are relayed untouched too, and
+            they only occur if you have turned off <code>Sec-WebSocket-Extensions</code> stripping in
+            proxy options. They are now <em>decoded for WebSocket history</em> where the handshake
+            agreed <code>no_context_takeover</code>, so you can read them — but they are still not
+            offered for editing, because re-compressing one message of a shared compression stream
+            would corrupt every later message on that connection, not just the edited one.
+            <br />
+            Fragmented messages <em>are</em> reassembled and offered whole, so nothing is relayed until
+            the final fragment arrives. Forwarding without editing relays the original frames exactly
+            as they came; an edit is sent as one unfragmented frame. A message larger than 1&nbsp;MiB is
+            relayed unheld rather than buffered without bound.
           </div>
         </TabsContent>
       </Tabs>

@@ -16,6 +16,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/session"
 )
 
 // BrowserProvider hands out a shared headless browser. It is an interface so a check's tests
@@ -77,14 +78,46 @@ func (l *lazyBrowser) Close() error {
 	if l.browser == nil {
 		return nil
 	}
-	return l.browser.Close()
+	err := l.browser.Close()
+	// Idempotent: the test binary closes this provider through two doors (a scanner's
+	// CloseCapabilities and TestMain's own teardown), and a second Close must be a
+	// no-op rather than an error a caller has to interpret.
+	l.browser = nil
+	return err
 }
 
 // WithBrowserProvider installs the browser handle. Without it, DOM checks report a missing
 // capability instead of an empty observation set.
+//
+// Attaching an engine also switches the DOM families on (ScanConfig.CheckDOM), the same way
+// WithCorpusChecks switches CheckCorpus on for a loaded corpus, and WithConfig can turn it back
+// off again. The two knobs are load-bearing in opposite directions and half-opening either one is
+// a defect with no error message: an engine with the families still gated is a browser launched
+// for checks that cannot dispatch, and reads as a clean scan of a page nobody looked at. A nil
+// provider leaves the switch alone, so a process with no engine does not turn a knob that gates
+// nothing.
 func (s *ActiveScanner) WithBrowserProvider(p BrowserProvider) *ActiveScanner {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.browsers = p
+	if p != nil && s.config != nil {
+		s.config.CheckDOM = true
+	}
 	return s
+}
+
+// DOMCapabilityConfigured reports whether an engine was named for this scan. It answers from
+// configuration alone and never starts anything: the provider is lazy on purpose, so "an engine
+// is configured" and "an engine works" are separate questions with separate answers — the second
+// is what Browser() reports, per check, naming the failure.
+//
+// It exists because a caller that wires the engine (cmd/burpsy) cannot otherwise see whether it
+// succeeded, and a silently unwired binary reports every DOM check as capability-less while
+// looking correctly configured from the outside.
+// A nil receiver answers false, like enabledChecks: a server with no scanner attached has no DOM
+// capability, and making the caller check twice invites the check being forgotten once.
+func (s *ActiveScanner) DOMCapabilityConfigured() bool {
+	return s != nil && s.browsers != nil
 }
 
 // WithStoredLedger installs a stored-input ledger shared across the scan. Without it, stored
@@ -100,6 +133,44 @@ func (s *ActiveScanner) StoredLedgerHandle() *StoredLedger {
 		return nil
 	}
 	return s.stored
+}
+
+// The four accessors below mirror StoredLedgerHandle: nil-safe reads of the capability
+// handles, so a surface (Settings' capability report, a test) can state what the shipped
+// binary actually wired instead of inferring it from flags. Nil is a supported state and
+// the checks' own error paths already say "no X configured for this scan" — these exist
+// so the wiring question has a direct answer.
+
+// ProvenanceLedgerHandle returns the provenance ledger, or nil when none was installed.
+func (s *ActiveScanner) ProvenanceLedgerHandle() *ProvenanceLedger {
+	if s == nil {
+		return nil
+	}
+	return s.provenance
+}
+
+// SessionCoordinatorHandle returns the session coordinator, or nil when none was installed.
+func (s *ActiveScanner) SessionCoordinatorHandle() *session.Coordinator {
+	if s == nil {
+		return nil
+	}
+	return s.sessions
+}
+
+// JsLibraryCheckHandle returns the JS-library vulnerability check, or nil when none was installed.
+func (s *ActiveScanner) JsLibraryCheckHandle() *JsLibraryCheck {
+	if s == nil {
+		return nil
+	}
+	return s.jsLib
+}
+
+// JwtWeakSecretCheckHandle returns the JWT weak-secret check, or nil when none was installed.
+func (s *ActiveScanner) JwtWeakSecretCheckHandle() *JwtWeakSecretCheck {
+	if s == nil {
+		return nil
+	}
+	return s.jwtWeak
 }
 
 // CloseCapabilities releases every scan-scoped external handle: the browser and the collaborator

@@ -187,3 +187,36 @@ func TestReportExportsJSONAndSARIF(t *testing.T) {
 		}
 	}
 }
+
+func TestScopePostWithProtocolArmGatesByScheme(t *testing.T) {
+	s := newTestServer()
+	if rec := postJSON(t, s, "/api/scope", map[string]any{"action": "include", "pattern": "app.test", "protocol": "https"}); rec.Code != http.StatusOK {
+		t.Fatalf("include with protocol = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+
+	var view struct {
+		Rules []scopeRuleView `json:"rules"`
+	}
+	if err := json.Unmarshal(get(t, s, "/api/scope").Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode scope view: %v", err)
+	}
+	if len(view.Rules) != 1 || view.Rules[0].Protocol == nil || *view.Rules[0].Protocol != "https" {
+		t.Fatalf("scope view = %+v; an arm that does not survive the wire cannot be edited back by the UI", view.Rules)
+	}
+
+	raw := []byte("GET / HTTP/1.1\r\nHost: app.test\r\n\r\n")
+	if s.scope.AuthoriseRaw("app.test", 443, true, raw) != nil {
+		t.Error("an https-scoped include refused the https request it was written for")
+	}
+	if s.scope.AuthoriseRaw("app.test", 80, false, raw) == nil {
+		t.Error("an https-scoped include authorised plain http; the arm is decorative and the operator's restriction is not in force")
+	}
+}
+
+func TestScopePostRefusesAnUnknownProtocol(t *testing.T) {
+	s := newTestServer()
+	rec := postJSON(t, s, "/api/scope", map[string]any{"action": "include", "pattern": "app.test", "protocol": "gopher"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown protocol = %d, want 400; a scheme no request can speak builds a rule that silently matches nothing — the worst outcome for a scope rule", rec.Code)
+	}
+}

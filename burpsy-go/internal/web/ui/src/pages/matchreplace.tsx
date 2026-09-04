@@ -14,13 +14,15 @@ import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/l
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Switch, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
-/** The five targets the Go handler compiles; anything else silently becomes a no-op rule. */
+/** The targets the Go handler compiles. An unknown one is refused with a 400, not silently accepted. */
 const TARGETS: { value: MatchReplaceTarget; label: string }[] = [
   { value: "request_first_line", label: "Request line" },
   { value: "request_header", label: "Request header" },
   { value: "request_body", label: "Request body" },
   { value: "response_header", label: "Response header" },
   { value: "response_body", label: "Response body" },
+  { value: "websocket_to_server", label: "WebSocket → server" },
+  { value: "websocket_to_client", label: "WebSocket → client" },
 ];
 
 const CATEGORIES: { value: MatchReplaceCategory; label: string }[] = [
@@ -30,8 +32,27 @@ const CATEGORIES: { value: MatchReplaceCategory; label: string }[] = [
 
 const TARGET_LABEL = new Map(TARGETS.map((target) => [target.value, target.label]));
 
+/**
+ * Which half of the traffic a target belongs to.
+ *
+ * A table rather than the ternary this was. That ternary read "response if it is one of two response
+ * targets, otherwise request" — so the moment WebSocket targets existed they would have been
+ * reported as affecting *requests*, and the summary badge would have told the operator a WebSocket
+ * rule rewrites their HTTP requests. Same shape as the if-chain that had to be replaced in
+ * internal/matchreplace's targetsDir, for the same reason.
+ */
+const TARGET_DIRECTION: Record<MatchReplaceTarget, MatchReplaceDirection> = {
+  request_first_line: "request",
+  request_header: "request",
+  request_body: "request",
+  response_header: "response",
+  response_body: "response",
+  websocket_to_server: "websocket",
+  websocket_to_client: "websocket",
+};
+
 function directionOf(target: MatchReplaceTarget): MatchReplaceDirection {
-  return target === "response_header" || target === "response_body" ? "response" : "request";
+  return TARGET_DIRECTION[target] ?? "request";
 }
 
 /** The wire allows any string; only these five do anything, so an unknown one is shown as-is and kept. */
@@ -158,12 +179,15 @@ export function MatchReplacePage(): JSX.Element {
   const draftAffects = useMemo(() => {
     let request = false;
     let response = false;
+    let websocket = false;
     for (const rule of rules) {
       if (!rule.enabled) continue;
-      if (directionOf(rule.rule_type) === "response") response = true;
+      const dir = directionOf(rule.rule_type);
+      if (dir === "response") response = true;
+      else if (dir === "websocket") websocket = true;
       else request = true;
     }
-    return { request, response };
+    return { request, response, websocket };
   }, [rules]);
 
   if (error) {

@@ -163,6 +163,58 @@ func (m *StoredMessage) Header(name string) []byte {
 	return nil
 }
 
+// HeaderValuesFromRaw is HeaderValues for bytes that are not in the store.
+//
+// The CLI's history filter holds raw response bytes rather than a StoredMessage, and duplicating the
+// span arithmetic there would be a second implementation of "which bytes are this header's value" —
+// the kind of duplication that drifts and then disagrees with the store about what a message
+// contains. Same absent-versus-empty contract as HeaderValues.
+func HeaderValuesFromRaw(raw []byte, direction Direction, name string) ([][]byte, bool) {
+	shape, err := Parse(raw, direction)
+	if err != nil {
+		return nil, false
+	}
+	want := []byte(name)
+	var out [][]byte
+	for _, h := range shape.Headers {
+		n := raw[h.Name.Offset:h.Name.End()]
+		if len(n) == len(want) && bytes.EqualFold(n, want) {
+			out = append(out, raw[h.Value.Offset:h.Value.End()])
+		}
+	}
+	return out, out != nil
+}
+
+// HeaderValues returns every value for a header name, in wire order, and whether the header was
+// present at all.
+//
+// # Why this exists beside Header
+//
+// Header returns the first match, which is right for the single-valued headers its callers ask
+// about — Content-Type, Content-Length — and wrong for the ones worth querying. Set-Cookie legally
+// appears many times and is the header an operator most often wants a predicate over ("is any
+// cookie missing HttpOnly"); Header can only ever see the first, so a check built on it would pass a
+// response whose second Set-Cookie is the insecure one.
+//
+// The bool separates "header absent" from "header present with an empty value". Both are real and
+// they mean different things: a `Set-Cookie:` with nothing after it is a server bug worth seeing,
+// and folding it into absence would hide it. Callers that treat absence as failing every comparison
+// — the query package does — need the distinction to avoid reporting an empty-valued header as
+// missing.
+//
+// Names are matched case-insensitively per RFC 7230 §3.2.
+func (m *StoredMessage) HeaderValues(name string) ([][]byte, bool) {
+	want := []byte(name)
+	var out [][]byte
+	for _, h := range m.Shape.Headers {
+		n := m.Slice(h.Name)
+		if len(n) == len(want) && bytes.EqualFold(n, want) {
+			out = append(out, m.Slice(h.Value))
+		}
+	}
+	return out, out != nil
+}
+
 // Body returns the message body.
 func (m *StoredMessage) Body() []byte {
 	return m.Slice(m.Shape.Body)
@@ -301,7 +353,30 @@ type Exchange struct {
 	Path        string
 	Status      *uint16
 	ResponseLen int
-	StartedMs   uint64
+	// Mime is the response's media type with parameters stripped and lowercased — "text/html" for a
+	// response whose header read `Content-Type: text/HTML; charset=utf-8`. See MimeEssence, which is
+	// the only thing that computes it.
+	//
+	// # Why it is stored on the row rather than derived when asked for
+	//
+	// For exactly the reason Status and ResponseLen are, and it is worth naming because deriving it
+	// looks free: the Content-Type header is right there in the response bytes. It is not free,
+	// because of where it would be read. /api/history serves an index row per exchange and never a
+	// payload, so listing 100,000 captured exchanges touches no response body at all — that property
+	// is the reason the wire shape is a view of ids and lengths, and internal/web/exchangeView is
+	// handed only an *Exchange with no access to the message store precisely so it cannot break it.
+	// A MIME column filled in at list time would read 100,000 response heads off disk to render one
+	// screen of 24-pixel rows, turning the cheapest endpoint in the tool into the most expensive.
+	// So the answer is computed once, where the bytes are already in hand, and carried.
+	//
+	// # Empty is two different facts, and this field cannot tell them apart
+	//
+	// "" means either "no response yet" or "a response that named no usable Content-Type". Consumers
+	// must not render those identically: Response (nil or not) is what separates them, and it is
+	// already on the row and already on the wire, so no second field is needed. The UI's History and
+	// Sitemap columns both rely on exactly that pair — see the mimeLabel note in ui/src/lib/api.ts.
+	Mime      string
+	StartedMs uint64
 	// Duration is how long the exchange took, or the explicit "nobody measured this". See
 	// ExchangeDuration for why it is not a millisecond count.
 	Duration ExchangeDuration
@@ -333,6 +408,14 @@ type Exchange struct {
 	// A pointer rather than a zero sentinel, because exchange 0 is a real exchange and is very often
 	// the first thing an operator sends to Repeater.
 	ParentID *ExchangeID
+	// Cookies names the cookies the response set, in first-seen order. Computed once at
+	// capture by CookieNames, for the same reason Mime is: listing history must never read
+	// response bytes. Nil means none were set — like Mime, only Response separates "none
+	// set" from "no response yet".
+	Cookies []string
+	// Title is the response's HTML <title> text, or "" when it has none. Computed once at
+	// capture by ResponseTitle: a list-time parse would read bodies to render a column.
+	Title string
 }
 
 // Source names the surface an exchange came from.

@@ -21,18 +21,30 @@ import (
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/domexec"
 )
 
 var (
 	sharedTargetOnce sync.Once
 	sharedTarget     *runtimeTarget
 	sharedTargetTB   testing.TB
+	// One headless Chrome for the whole test binary. Five separate providers across
+	// the live-capability and runtime-coverage tests each used to launch their own
+	// process — five real Chrome starts whose only difference was the port chromedp
+	// picked. The provider is lazy, so a run with BURPSY_ALLOW_NO_CHROME=1 never
+	// starts one at all, and the skip messages still say what was not exercised.
+	sharedChromeOnce sync.Once
+	sharedChrome     BrowserProvider
 )
 
 // TestMain owns the shared target's teardown.
 //
 // t.Cleanup cannot: it would close the servers when the FIRST test finished, and every later test
 // would then audit a dead host and report every row as silent - a whole-suite false negative.
+// The same reasoning owns the shared browser: closing it in the first test's cleanup would leave
+// every later DOM check staring at a dead process, which reads as zero observations, which reads
+// as clean - the exact miscount this package exists to prevent.
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if sharedTarget != nil {
@@ -46,7 +58,31 @@ func TestMain(m *testing.M) {
 			_ = sharedTarget.domScan.CloseCapabilities()
 		}
 	}
+	if sharedChrome != nil {
+		_ = sharedChrome.Close()
+	}
 	os.Exit(code)
+}
+
+// sharedBrowserProvider returns the package-wide browser provider, launching Chrome on first use.
+//
+// Safe to share because Browser hands out an isolated tab per call (see domexec's newTab contract):
+// concurrent or sequential checks never see each other's instrumentation state. That is the same
+// guarantee a production scan already relies on when it drives many DOM checks through one browser,
+// so the tests are exercising the handle exactly the way the scanner will.
+func sharedBrowserProvider() BrowserProvider {
+	sharedChromeOnce.Do(func() {
+		// BURPSY_DOM_REMOTE attaches to a running CDP server (obscura serve /
+		// lightpanda serve) instead of launching Chrome — the same hook
+		// domexec's own tests use, so the whole DOM surface here can be driven
+		// by an alternative engine without code changes. Empty means exec
+		// Chrome as before.
+		sharedChrome = NewLazyBrowserProvider(domexec.Options{
+			Headed:    os.Getenv("BURPSY_DOM_HEADED") == "1",
+			RemoteURL: os.Getenv("BURPSY_DOM_REMOTE"),
+		})
+	})
+	return sharedChrome
 }
 
 // sharedRuntimeTarget returns the package-wide target, building it on first use.

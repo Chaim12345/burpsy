@@ -19,9 +19,13 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/netauth"
 	"github.com/burpsy-go/burpsy/internal/organizer"
+	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 
 	_ "modernc.org/sqlite"
@@ -34,6 +38,17 @@ import (
 type Store struct {
 	db     *sql.DB
 	logger *zap.Logger
+	// path is where this database lives, kept so a backup can name itself after it and so the
+	// backup endpoint can report which file it snapshotted. Open is the only writer.
+	path string
+}
+
+// Path is the database file this store was opened on.
+func (s *Store) Path() string {
+	if s == nil {
+		return ""
+	}
+	return s.path
 }
 
 // Open opens (creating if necessary) the database at path and ensures the
@@ -56,12 +71,51 @@ func Open(path string, logger *zap.Logger) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("set busy_timeout: %w", err)
 	}
-	s := &Store{db: db, logger: logger}
+	s := &Store{db: db, logger: logger, path: path}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// Backup writes a consistent snapshot of the database to dest.
+//
+// # Why VACUUM INTO and not a file copy
+//
+// This store runs in WAL mode (see Open). A live WAL database is *two or three* files — the main
+// database, the -wal, and the -shm — and the main file alone is not a database anyone can open:
+// committed pages may exist only in the WAL. Copying it while the proxy is recording produces a
+// backup that is either stale, internally inconsistent, or torn mid-page, and the operator would not
+// discover which until they tried to restore it. Under a `cp`-style backup the failure mode is a
+// file that looks the right size and opens to a corrupt schema.
+//
+// VACUUM INTO takes SQLite's own read snapshot and writes a complete, defragmented, single-file
+// database — no WAL to carry alongside it, and consistent by construction. It is also the only
+// option here that needs no second connection and no driver-specific backup API, which matters
+// because modernc.org/sqlite is a translation of the C source rather than a binding and does not
+// expose the online-backup handle.
+//
+// The cost is real and worth stating: VACUUM INTO reads the whole database and writes the whole
+// snapshot, so it is O(size) in both time and disk. That is why the scheduled backup exists as a
+// schedule rather than as something that fires on every write.
+//
+// dest must not exist — SQLite refuses to overwrite, and that refusal is kept rather than worked
+// around, because silently replacing a previous backup is how an operator ends up with one copy
+// when they believed they had a series.
+func (s *Store) Backup(dest string) error {
+	if s == nil || s.db == nil {
+		return errors.New("no database is open, so there is nothing to back up")
+	}
+	if dest == "" {
+		return errors.New("backup destination is empty")
+	}
+	// The parameter is bound rather than interpolated. VACUUM INTO takes an expression, so a bound
+	// value works, and a path is operator input — it arrives from a schedule's params.
+	if _, err := s.db.Exec(`VACUUM INTO ?`, dest); err != nil {
+		return fmt.Errorf("backup to %s: %w", dest, err)
+	}
+	return nil
 }
 
 func (s *Store) migrate() error {
@@ -86,7 +140,9 @@ CREATE TABLE IF NOT EXISTS exchanges (
 	duration_ms   INTEGER NOT NULL,
 	notes         TEXT,
 	protocol      INTEGER NOT NULL,
-	related       TEXT
+	related       TEXT,
+	cookies       TEXT,
+	title         TEXT
 );
 CREATE TABLE IF NOT EXISTS findings (
 	id          INTEGER PRIMARY KEY,
@@ -111,6 +167,14 @@ CREATE TABLE IF NOT EXISTS scope_rules_v2 (
 	pattern     TEXT NOT NULL,
 	port        INTEGER,
 	path_prefix TEXT
+);
+CREATE TABLE IF NOT EXISTS scope_rules_v3 (
+	ord         INTEGER PRIMARY KEY,
+	kind        TEXT NOT NULL,
+	pattern     TEXT NOT NULL,
+	port        INTEGER,
+	path_prefix TEXT,
+	protocol    TEXT
 );
 CREATE TABLE IF NOT EXISTS matchreplace_rules (
 	ord      INTEGER PRIMARY KEY,
@@ -142,6 +206,20 @@ CREATE TABLE IF NOT EXISTS organizer_items (
 	note      TEXT NOT NULL,
 	highlight TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS platform_auth (
+	ord      INTEGER PRIMARY KEY,
+	host     TEXT NOT NULL,
+	scheme   TEXT NOT NULL,
+	username TEXT NOT NULL,
+	password TEXT NOT NULL,
+	realm    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS client_certs (
+	ord        INTEGER PRIMARY KEY,
+	host       TEXT NOT NULL,
+	path       TEXT NOT NULL,
+	passphrase TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tool_log (
 	id          INTEGER PRIMARY KEY,
 	tool        INTEGER NOT NULL,
@@ -158,6 +236,13 @@ CREATE TABLE IF NOT EXISTS tool_log (
 `
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("create schema: %w", err)
+	}
+	// Resource pools and scheduled tasks, kept in pools.go beside their own load and save so the
+	// three halves of one round trip are read together. Applied as a second statement rather than
+	// appended to the string above for that reason alone — CREATE TABLE IF NOT EXISTS is idempotent
+	// either way.
+	if _, err := s.db.Exec(poolSchema); err != nil {
+		return fmt.Errorf("create pool schema: %w", err)
 	}
 	// messages gained (segment, offset, length) when the store stopped keeping
 	// payload bytes on the heap: with a capture directory the bytes are already
@@ -219,6 +304,40 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	// highlight) — a legacy row written before this column existed never has an opinion either way, so
 	// there is nothing to distinguish it from an exchange explicitly cleared.
 	if err := s.addColumn("exchanges", "highlight", "TEXT"); err != nil {
+		return err
+	}
+	// exchanges gained source so HTTP history can keep tool-originated sends (Repeater, Intruder,
+	// Scanner) out of what is proxy traffic by attribution, not by luck. NULL reads back as the
+	// unattributed zero value — the same fail-safe direction the Source type itself takes: a legacy
+	// row claims no producer, and an unattributed row stays visible in history rather than being
+	// dropped as though a tool had owned it.
+	if err := s.addColumn("exchanges", "source", "TEXT"); err != nil {
+		return err
+	}
+	// exchanges gained mime because the History MIME column and its type filter had been shipped
+	// against a field nothing ever populated — the filter matched no row for any value an operator
+	// could pick, and emptied the table instead of saying so. The value is the response's media type,
+	// computed once at capture from bytes already in hand (core.MimeEssence) rather than derived at
+	// list time, because /api/history must not open a response body to render a row.
+	//
+	// NULL and "" both read back as "" and neither is an error. That is the same shape as highlight,
+	// and here it collapses two states that the row itself keeps apart anyway: a legacy row written
+	// before this column existed, and a response that named no Content-Type. Neither can be told from
+	// the other by this column, and neither needs to be — response_msg is what distinguishes "nothing
+	// came back" from "something came back untyped", which is the distinction a reader actually acts
+	// on. Backfilling old rows is deliberately not attempted: it would mean reading every stored
+	// response at startup, which is the exact cost this column exists to avoid paying at list time.
+	if err := s.addColumn("exchanges", "mime", "TEXT"); err != nil {
+		return err
+	}
+	// exchanges gained cookies and title for the History Cookies and Title columns, denormalised
+	// at capture like mime and for the same reason: a list-time derivation would read response
+	// bytes per row. NULL reads back as unattributed (no cookies / no title), and backfilling
+	// is not attempted for the same cost reason mime documents above.
+	if err := s.addColumn("exchanges", "cookies", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.addColumn("exchanges", "title", "TEXT"); err != nil {
 		return err
 	}
 	// findings gained a target and a param set, both for deduplication (core.FindingStore.Add). The
@@ -357,6 +476,10 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	if err != nil {
 		related = nil
 	}
+	cookies, err := json.Marshal(ex.Cookies)
+	if err != nil {
+		cookies = nil
+	}
 	var status any
 	if ex.Status != nil {
 		status = int(*ex.Status)
@@ -368,12 +491,12 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
-		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
-		ex.Highlight)
+		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title)
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -471,7 +594,7 @@ func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
 func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
-		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight
+		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -491,12 +614,33 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		var durationMs uint64
 		var durationUs sql.NullInt64
 		var highlight sql.NullString
+		var source sql.NullString
+		var mime sql.NullString
+		var cookies []byte
+		var title sql.NullString
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
-			&durationMs, &notes, &protocol, &related, &durationUs, &highlight); err != nil {
+			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title); err != nil {
 			return nil, err
 		}
 		ex.Highlight = highlight.String
+		// NullString rather than string for the same reason source uses one: a row written before the
+		// column existed scans as NULL, and scanning NULL into a string is an error that would fail the
+		// whole restore of a legacy database rather than losing one cell of it. "" is the right reading
+		// — this build cannot know what type that response declared, and will not guess.
+		ex.Mime = mime.String
+		// Same NULL-tolerant shape as Related: a legacy row scans NULL bytes, which unmarshal
+		// to nothing, and the row keeps its zero values rather than failing the restore.
+		if len(cookies) > 0 {
+			if err := json.Unmarshal(cookies, &ex.Cookies); err != nil {
+				return nil, err
+			}
+		}
+		ex.Title = title.String
+		// NULL reads back as the unattributed zero value, not a guess: see the migrate note on this
+		// column. History keeps such rows — losing the attribution must not masquerade as tool traffic
+		// being dropped.
+		ex.Source = core.Source(source.String)
 		switch {
 		case durationUs.Valid && durationUs.Int64 >= 0:
 			ex.Duration = core.MeasuredMicros(uint64(durationUs.Int64))
@@ -657,15 +801,20 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 // The legacy table is still written, best-effort and as lossily as it always was, for one reason: an
 // older build reads *only* that table, and core.Scope with no rules is default-allow. Stopping the
 // legacy write would turn a downgrade into an engagement with no scope at all, which is the one failure
-// direction worth carrying a duplicate table to avoid.
+// direction worth carrying a duplicate table to avoid. scope_rules_v2 is mirrored for the same reason:
+// a v2-era build reads only v2, so dropping its write would hand that downgrade an empty scope.
 func (s *Store) SaveScope(rules []*core.ScopeRule) {
-	if _, err := s.db.Exec(`DELETE FROM scope_rules_v2`); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM scope_rules_v3`); err != nil {
 		s.log("scope clear", err)
 		return
 	}
+	if _, err := s.db.Exec(`DELETE FROM scope_rules_v2`); err != nil {
+		// Not fatal: the v3 table is the one that will be read back.
+		s.log("scope clear v2", err)
+	}
 	if _, err := s.db.Exec(`DELETE FROM scope_rules`); err != nil {
 		s.log("scope clear legacy", err)
-		// Not fatal: the v2 table is the one that will be read back.
+		// Not fatal: the v3 table is the one that will be read back.
 	}
 	for i, r := range rules {
 		var port any
@@ -676,15 +825,27 @@ func (s *Store) SaveScope(rules []*core.ScopeRule) {
 		if r.PathPrefix != nil {
 			pathPrefix = *r.PathPrefix
 		}
+		var protocol any
+		if r.Protocol != nil {
+			protocol = *r.Protocol
+		}
 		kind := scopeKindName(r.Kind)
 		if _, err := s.db.Exec(
-			`INSERT INTO scope_rules_v2 (ord, kind, pattern, port, path_prefix) VALUES (?, ?, ?, ?, ?)`,
-			i, kind, r.Pattern, port, pathPrefix); err != nil {
+			`INSERT INTO scope_rules_v3 (ord, kind, pattern, port, path_prefix, protocol) VALUES (?, ?, ?, ?, ?, ?)`,
+			i, kind, r.Pattern, port, pathPrefix, protocol); err != nil {
 			// Returning here would leave the durable scope narrower *or* wider than the live one with no
 			// record of which rules made it, so every remaining rule is still attempted and every failure
 			// is named.
 			s.log("scope rule", fmt.Errorf("rule %d (%s %s): %w", i, kind, r.Pattern, err))
 			continue
+		}
+		// The v2 mirror drops the protocol arm — a scheme-wide rule on a downgraded build is wider than
+		// the operator set, but it is what a build without the column can represent, and the alternative
+		// is no rule at all. A failure here costs that build one rule, not this one.
+		if _, err := s.db.Exec(
+			`INSERT INTO scope_rules_v2 (ord, kind, pattern, port, path_prefix) VALUES (?, ?, ?, ?, ?)`,
+			i, kind, r.Pattern, port, pathPrefix); err != nil {
+			s.log("scope rule v2 mirror", err)
 		}
 		// The legacy mirror, whose key cannot hold two rules that differ only by port or path. A failure
 		// here is logged and stepped over: it costs a downgraded build one rule, not this one.
@@ -705,23 +866,24 @@ func scopeKindName(k core.ScopeRuleKind) string {
 
 // LoadScope restores scope rules, in the order they were saved.
 //
-// scope_rules_v2 is authoritative when it holds anything. The legacy table is read when v2 is **empty**,
-// which is a database written before v2 existed — and such a row cannot carry a path prefix, so the rule
-// comes back host-and-port-wide. That is stated rather than papered over: it is the widening the v2 table
-// exists to stop, and it cannot be recovered from data that never held it.
+// scope_rules_v3 is authoritative when it holds anything; v2 is read when v3 is **empty** — a database
+// written by a v2-era build, whose rows cannot carry a protocol, so those rules come back scheme-wide.
+// The legacy table is read when both are empty, which is a database written before v2 existed — and
+// such a row cannot carry a path prefix either, so the rule comes back host-and-port-wide. Both widenings
+// are stated rather than papered over: they are what the newer tables exist to stop, and they cannot be
+// recovered from data that never held them.
 //
-// Note "empty", not "absent": migrate creates v2 on open, so every old database arrives here with an
-// empty v2 beside a populated legacy table. Treating "v2 is the current table" as reason enough to read
-// only v2 would hand core.Scope zero rules, and an empty core.Scope is default-allow — the fallback is
-// what stops an upgrade from failing open. Pinned by
-// TestLoadScopeFallsBackToAnEmptyV2AndAPopulatedLegacyTable, which asserts v2 is present and empty first
-// so it cannot pass for the wrong reason.
+// Note "empty", not "absent": migrate creates every generation on open, so an old database arrives here
+// with empty current tables beside populated older ones. Treating "v3 exists" as reason enough to read
+// only v3 would hand core.Scope zero rules, and an empty core.Scope is default-allow — the fallbacks are
+// what stop an upgrade from failing open. Pinned by TestLoadScopeFallsBackToAnEmptyV2AndAPopulatedLegacyTable
+// and TestAV2EraDatabaseStillRestoresItsRules.
 func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
-	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix FROM scope_rules_v2 ORDER BY ord`)
+	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix, protocol FROM scope_rules_v3 ORDER BY ord`)
 	if err != nil {
 		return nil, err
 	}
-	out, err := scanScopeRows(rows, true)
+	out, err := scanScopeRows(rows, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -729,11 +891,23 @@ func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
 		s.checkLegacyScopeDivergence(out)
 		return out, nil
 	}
-	legacy, err := s.db.Query(`SELECT kind, pattern, port, NULL FROM scope_rules`)
+	v2rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix, NULL FROM scope_rules_v2 ORDER BY ord`)
 	if err != nil {
 		return nil, err
 	}
-	return scanScopeRows(legacy, false)
+	out, err = scanScopeRows(v2rows, true, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > 0 {
+		s.checkLegacyScopeDivergence(out)
+		return out, nil
+	}
+	legacy, err := s.db.Query(`SELECT kind, pattern, port, NULL, NULL FROM scope_rules`)
+	if err != nil {
+		return nil, err
+	}
+	return scanScopeRows(legacy, false, false)
 }
 
 // checkLegacyScopeDivergence reports a legacy scope row that this build did not write.
@@ -811,14 +985,15 @@ func scopeTriple(kind, pattern string, port *uint16) string {
 // rule from the pattern alone. A rule restricted to one port therefore came back matching every port on
 // that host — silently authorising traffic the operator had not authorised, for an include rule, and
 // silently excluding traffic they had allowed, for an exclude one.
-func scanScopeRows(rows *sql.Rows, withPath bool) ([]*core.ScopeRule, error) {
+func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRule, error) {
 	defer rows.Close()
 	var out []*core.ScopeRule
 	for rows.Next() {
 		var kind, pattern string
 		var port sql.NullInt64
 		var pathPrefix sql.NullString
-		if err := rows.Scan(&kind, &pattern, &port, &pathPrefix); err != nil {
+		var protocol sql.NullString
+		if err := rows.Scan(&kind, &pattern, &port, &pathPrefix, &protocol); err != nil {
 			return nil, err
 		}
 		// kind is stored as a string ("include"/"exclude") for readability.
@@ -834,6 +1009,10 @@ func scanScopeRows(rows *sql.Rows, withPath bool) ([]*core.ScopeRule, error) {
 		if withPath && pathPrefix.Valid && pathPrefix.String != "" {
 			prefix := pathPrefix.String
 			r.PathPrefix = &prefix
+		}
+		if hasProtocol && protocol.Valid && protocol.String != "" {
+			scheme := protocol.String
+			r.Protocol = &scheme
 		}
 		out = append(out, r)
 	}
@@ -891,6 +1070,116 @@ func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, bool, error) {
 		flag = v == "true"
 	}
 	return rules, flag, nil
+}
+
+// ---- Network authentication: platform credentials and client certificates ----------------------
+
+// The two tables written below are the only secret-bearing rows in this database.
+//
+// They hold plaintext: a platform-authentication password, and the passphrase to a
+// PKCS#12 file. That is a deliberate decision and it is stated here rather than in a
+// commit message nobody will find. There is no key-management story in this tool to
+// encrypt them under — no keyring dependency, no operator-supplied master
+// passphrase, no OS credential store binding — and a local obfuscation (an XOR, a
+// hard-coded AES key in the binary) would be trivially reversible by anyone holding
+// the file while looking like protection to the operator reading about it. The
+// honest arrangement is plaintext plus this notice: the SQLite mirror is
+// secret-bearing, and an operator who cannot accept that should run without -db,
+// which leaves the credentials in memory for the life of the process and nowhere
+// else.
+//
+// Note what is *not* stored: the decoded private key from a PKCS#12 file. Only the
+// path and the passphrase are kept, so the operator's file stays the single
+// authority for the identity and deleting it removes the identity everywhere —
+// rather than burpsy holding a second copy with a second lifetime that survives the
+// revocation.
+
+// SavePlatformAuth replaces the platform-authentication rule set.
+//
+// Order is preserved because it is semantic: netauth.Credentials is first-match-wins,
+// so a restore that reordered the rules would change which credential a host gets.
+func (s *Store) SavePlatformAuth(rows []netauth.CredentialRow) {
+	if _, err := s.db.Exec(`DELETE FROM platform_auth`); err != nil {
+		s.log("platform auth clear", err)
+		return
+	}
+	for i, row := range rows {
+		if _, err := s.db.Exec(
+			`INSERT OR REPLACE INTO platform_auth (ord, host, scheme, username, password, realm)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			i, row.Host, row.Scheme, row.Username, row.Password, row.Realm); err != nil {
+			// The op name carries the host but never the password. Every error path in this
+			// file goes through s.log to zap, which is exactly the sink a secret must not
+			// reach — a logged credential outlives the session in a file nobody redacts.
+			s.log("platform auth rule for "+row.Host, err)
+			return
+		}
+	}
+}
+
+// LoadPlatformAuth restores the persisted platform-authentication rows in rule order.
+//
+// Returns rows, not a live store: rebuilding the store is netauth.RestoreCredentials'
+// job, and it re-validates every row rather than trusting one. A row whose scheme this
+// build no longer implements must be dropped and named, not coerced into Basic, and
+// this package has no business deciding that.
+//
+// An empty database yields an empty slice and a nil error. "Nothing stored" is not a
+// failure — it is what a first run looks like.
+func (s *Store) LoadPlatformAuth() ([]netauth.CredentialRow, error) {
+	rows, err := s.db.Query(`SELECT host, scheme, username, password, realm FROM platform_auth ORDER BY ord`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []netauth.CredentialRow
+	for rows.Next() {
+		var row netauth.CredentialRow
+		if err := rows.Scan(&row.Host, &row.Scheme, &row.Username, &row.Password, &row.Realm); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// SaveClientCerts replaces the client-certificate binding set.
+func (s *Store) SaveClientCerts(rows []netauth.ClientCertRow) {
+	if _, err := s.db.Exec(`DELETE FROM client_certs`); err != nil {
+		s.log("client certs clear", err)
+		return
+	}
+	for i, row := range rows {
+		if _, err := s.db.Exec(
+			`INSERT OR REPLACE INTO client_certs (ord, host, path, passphrase) VALUES (?, ?, ?, ?)`,
+			i, row.Host, row.Path, row.Passphrase); err != nil {
+			s.log("client cert binding for "+row.Host, err)
+			return
+		}
+	}
+}
+
+// LoadClientCerts restores the persisted client-certificate bindings in match order.
+//
+// Same shape and same reason as LoadPlatformAuth: rows out, and
+// netauth.RestoreClientCerts re-reads each PKCS#12 file. A file the operator deleted
+// between sessions therefore fails at restore and is *reported*, rather than
+// producing a binding that sits on the panel and is never presented.
+func (s *Store) LoadClientCerts() ([]netauth.ClientCertRow, error) {
+	rows, err := s.db.Query(`SELECT host, path, passphrase FROM client_certs ORDER BY ord`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []netauth.ClientCertRow
+	for rows.Next() {
+		var row netauth.ClientCertRow
+		if err := rows.Scan(&row.Host, &row.Path, &row.Passphrase); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // ---- Session rules -----------------------------------------------------------------------------
@@ -1103,6 +1392,215 @@ func (s *Store) getSetting(key string) (string, error) {
 		return "", nil
 	}
 	return v, err
+}
+
+// SaveTlsPassthrough replaces the persisted TLS passthrough host-pattern list.
+//
+// One settings value holding a JSON array rather than its own table: this is a
+// single small ordered list whose rows have no identity of their own, so a table
+// would be ceremony without being structure. The save is whole-list because the
+// web endpoint mirrors the policy's live list after every mutation — an
+// incremental add/remove API would give the mirror a second chance to drift from
+// what the proxy actually matches against.
+func (s *Store) SaveTlsPassthrough(patterns []string) {
+	if patterns == nil {
+		patterns = []string{}
+	}
+	encoded, err := json.Marshal(patterns)
+	if err != nil {
+		s.log("tls passthrough encode", err)
+		return
+	}
+	if err := s.setSetting("tls.passthrough", string(encoded)); err != nil {
+		s.log("tls passthrough save", err)
+	}
+}
+
+// LoadTlsPassthrough restores the pattern list. A database that never saved one
+// yields an empty list and no error: absence of state is the empty state, not a
+// failure worth waking the operator up for.
+func (s *Store) LoadTlsPassthrough() ([]string, error) {
+	v, err := s.getSetting("tls.passthrough")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SaveScanConfig persists the scan-configuration overrides as one settings value. Same reasoning
+// as SaveTlsPassthrough: one small JSON blob with no per-row identity, saved whole by the web
+// endpoint after every edit so the durable copy cannot drift from what the running scanner obeys.
+func (s *Store) SaveScanConfig(cfg scanner.ScanConfig) error {
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("scanconfig.overrides", string(encoded))
+}
+
+// LoadScanConfig restores the persisted overrides. Absence of state yields a nil config and no
+// error — an old database simply means "use NewActiveScanner's defaults", and a nil lets the
+// caller skip the apply instead of clobbering those defaults with a zero struct.
+func (s *Store) LoadScanConfig() (*scanner.ScanConfig, error) {
+	v, err := s.getSetting("scanconfig.overrides")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	cfg := &scanner.ScanConfig{}
+	if err := json.Unmarshal([]byte(v), cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// SaveProxyOptions persists the proxy response-modification switches as one settings value.
+//
+// Same shape and reasoning as SaveTlsPassthrough: one small flag document with no per-row
+// identity, written whole by the web endpoint after every accepted edit so the durable copy
+// cannot drift from what the relay obeys.
+//
+// # What is deliberately not saved
+//
+// The outcome counters. They are the record of what this process observed — considered,
+// modified, skipped-compressed, skipped-not-HTML — and restoring them would present another
+// run's observations as this one's. `options.go` keeps the counters precisely so a rule that
+// fired zero times is distinguishable from a rule that was never allowed to look; a restored
+// non-zero count would destroy exactly that distinction on the first request after a restart.
+// Flags are configuration and survive; counters are measurement and start at zero.
+func (s *Store) SaveProxyOptions(flags map[string]bool) {
+	if flags == nil {
+		flags = map[string]bool{}
+	}
+	encoded, err := json.Marshal(flags)
+	if err != nil {
+		s.log("proxy options encode", err)
+		return
+	}
+	if err := s.setSetting("proxy.options", string(encoded)); err != nil {
+		s.log("proxy options save", err)
+	}
+}
+
+// LoadProxyOptions restores the persisted switches. A database that never saved any yields a
+// nil map and no error: absence of state is "every rule off", which is what NewOptions already
+// built, so the caller skips the apply rather than writing a pile of explicit falses.
+//
+// Unknown keys are returned as they were stored rather than filtered here. The caller owns the
+// vocabulary and is the only layer that can say *which* key it did not recognise — dropping
+// them silently at this level would turn a renamed or retired option into a switch that
+// vanished without explanation, and the restore path reports them instead.
+func (s *Store) LoadProxyOptions() (map[string]bool, error) {
+	v, err := s.getSetting("proxy.options")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	out := map[string]bool{}
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SaveNetworkSettings persists the network settings as one settings value.
+//
+// Same shape as SaveScanConfig and for the same reason: one small document with no per-row identity,
+// written whole by the web endpoint after every accepted edit. Written whole also settles what a
+// removed row means — an override deleted from the table is absent from the next save rather than
+// lingering as a row nothing referenced, which is what an incremental API would have had to remember.
+//
+// The value stored is the *confirmed* settings the sender is running, not the patch that produced them,
+// so a restore reproduces the state the operator last saw rather than replaying a sequence of edits.
+func (s *Store) SaveNetworkSettings(n sender.NetworkSettings) error {
+	encoded, err := json.Marshal(n)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("network.settings", string(encoded))
+}
+
+// LoadNetworkSettings restores the persisted network settings.
+//
+// Absence yields a nil and no error — an old database means "use sender's own defaults", and a nil lets
+// the caller skip the apply rather than overwrite those defaults with a zero struct whose every timeout
+// is zero. That distinction is load-bearing here in a way it is not for most settings: a zero-valued
+// NetworkSettings is not a neutral starting point, it is "no connect bound, no read bound, redirects
+// with an unnamed mode", and applying one would be refused by Validate at best and silently change
+// every timeout at worst.
+//
+// A stored document that no longer parses is returned as an error rather than dropped. Refuse-by-default
+// on unparseable input: an operator whose resolution overrides failed to load must be told, because the
+// alternative is requests quietly going where DNS points instead of where they said.
+func (s *Store) LoadNetworkSettings() (*sender.NetworkSettings, error) {
+	v, err := s.getSetting("network.settings")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	out := &sender.NetworkSettings{}
+	if err := json.Unmarshal([]byte(v), out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---- Upstream proxy ----------------------------------------------------------------------------
+
+// upstreamProxyKey is the settings row the upstream proxy policy lives in.
+//
+// A key/value row rather than a table of its own, following matchreplace.update_content_length and the
+// scan-config override: the whole policy is a handful of strings replaced wholesale on every edit, so a
+// table would buy ordering and per-row updates that nothing here needs, and would need a migration the
+// settings row does not.
+const upstreamProxyKey = "network.proxy"
+
+// SaveUpstreamProxy mirrors the upstream proxy policy into the settings row, replacing whatever was
+// there.
+//
+// # Credentials are written in the clear, and that is stated rather than hidden
+//
+// The snapshot carries any proxy password, because a policy restored without it would come back looking
+// configured and start failing authentication — the same class of lie as a rule that silently stopped
+// proxying. The database this writes to already holds every captured request, Authorization headers
+// included, so it is not a new secret-bearing artefact; it does mean the -db file must be treated as
+// engagement material. The API never serves these values back and no log line carries them — see
+// upstream.Proxy.Display, and upstream.Proxy.Raw for why this is the one caller that sees them.
+func (s *Store) SaveUpstreamProxy(policy *upstream.Policy) {
+	raw, err := json.Marshal(policy.Snapshot())
+	if err != nil {
+		s.log("upstream proxy marshal", err)
+		return
+	}
+	if err := s.setSetting(upstreamProxyKey, string(raw)); err != nil {
+		s.log("upstream proxy", err)
+	}
+}
+
+// LoadUpstreamProxy restores the upstream proxy policy from the settings row into policy.
+//
+// An absent row is not an error and leaves the policy untouched: no row means no proxy was ever
+// configured, which is the same state as a fresh policy. A row that does not parse *is* an error and is
+// returned rather than swallowed — the caller decides whether to start under a policy it could not
+// read, and starting with traffic silently going out direct is not a decision to make behind an
+// operator's back.
+func (s *Store) LoadUpstreamProxy(policy *upstream.Policy) error {
+	if policy == nil {
+		return nil
+	}
+	raw, err := s.getSetting(upstreamProxyKey)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", upstreamProxyKey, err)
+	}
+	if raw == "" {
+		return nil
+	}
+	var snap upstream.Snapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		return fmt.Errorf("stored upstream proxy policy is not readable JSON: %w", err)
+	}
+	return policy.Restore(snap)
 }
 
 // ---- Restore -----------------------------------------------------------------------------------

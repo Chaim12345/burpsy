@@ -1,0 +1,179 @@
+package web
+
+import (
+	"bytes"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/burpsy-go/burpsy/internal/sender"
+)
+
+// repeaterSendOptions is one send's overrides — Burp Repeater's config-override menu, carried per
+// request rather than as global state. Every field is optional and absent means "the standing
+// behaviour": the redirect policy falls back to the network settings, the protocol preference to
+// auto, and the request transforms to off. A per-send override must not have to mutate the global
+// table to take effect — that would be raced by every other send in the process.
+//
+// What is deliberately absent: an ALPN override (the sender's protocol choice is per-authority
+// cached and h2 carries no ALPN knob a raw-byte send could honour — offering it would be a switch
+// that does nothing), and "process cookies in redirections" as a separate switch (hops are built by
+// sender.FollowRedirects, which does not replay cookies; the honest answer is that the feature does
+// not exist yet, not a checkbox that lies).
+type repeaterSendOptions struct {
+	// RedirectMode overrides the network settings' policy for this one send: "never", "on_site",
+	// "in_scope", "always", or empty for the standing policy. The scope still authorises every hop —
+	// see sender.RedirectAlways for why "always" here is not Burp's "anywhere".
+	RedirectMode string `json:"redirect_mode,omitempty"`
+	// ProtocolPreference pins the transport: "auto" (the default) or "http1" to put the bytes on the
+	// wire as written. Pinning is reported as a downgrade, never silent — see ProtocolPreferenceHTTP1.
+	ProtocolPreference string `json:"protocol_preference,omitempty"`
+	// ProcessCookies attaches the session coordinator's cookie jar for the target when the request
+	// carries no Cookie header of its own. A header the operator wrote always wins.
+	ProcessCookies bool `json:"process_cookies,omitempty"`
+	// StripConnection removes any Connection header before sending. Burp's switch exists because a
+	// replayed capture's hop-by-hop header can break the fresh connection a replay dials.
+	StripConnection bool `json:"strip_connection,omitempty"`
+	// NormalizeLineEndings rewrites bare LF to CRLF across the request. A request pasted from a
+	// Unix editor has LF endings, and some servers treat the bare-LF request line as malformed.
+	NormalizeLineEndings bool `json:"normalize_line_endings,omitempty"`
+	// UpdateContentLength recomputes Content-Length from the body when a body is present. An
+	// operator who edited a body without fixing the header sends a request that truncates or
+	// overruns; this makes the header follow the body instead of the other way round.
+	UpdateContentLength bool `json:"update_content_length,omitempty"`
+}
+
+// validate refuses the whole options object when any key it names is not understood, naming the key
+// — the same validate-all-before-apply contract the proxy options PUT uses. A partial apply would
+// send bytes shaped by an option the caller believes was something else.
+func (o repeaterSendOptions) validate() error {
+	switch sender.RedirectMode(o.RedirectMode) {
+	case "", sender.RedirectNever, sender.RedirectOnSite, sender.RedirectInScope, sender.RedirectAlways:
+	default:
+		return fmt.Errorf("redirect_mode: unknown mode %q (want never, on_site, in_scope, always, or empty for the standing policy)", o.RedirectMode)
+	}
+	switch o.ProtocolPreference {
+	case "", "auto", "http1":
+	default:
+		return fmt.Errorf("protocol_preference: unknown preference %q (want auto, http1, or empty for auto)", o.ProtocolPreference)
+	}
+	return nil
+}
+
+// protocolPreference maps the wire value onto the sender's enum. Only called post-validate.
+func (o repeaterSendOptions) protocolPreference() sender.ProtocolPreference {
+	if o.ProtocolPreference == "http1" {
+		return sender.ProtocolPreferenceHTTP1
+	}
+	return sender.ProtocolPreferenceAuto
+}
+
+// redirectPolicy is the policy this send follows: the override when one was given, otherwise the
+// network settings' standing policy.
+func (o repeaterSendOptions) redirectPolicy(standing sender.RedirectSettings) sender.RedirectSettings {
+	if o.RedirectMode == "" {
+		return standing
+	}
+	// The hop budget is an anti-loop bound, not a policy choice, so the override keeps the
+	// standing budget and replaces only the mode.
+	return sender.RedirectSettings{Mode: sender.RedirectMode(o.RedirectMode), MaxHops: standing.MaxHops}
+}
+
+// applyToRequest returns the bytes to put on the wire: the operator's request with the enabled
+// transforms applied in a fixed order (cookies, Connection strip, line endings, Content-Length —
+// length last, so it measures the body the earlier steps settled). The input is never modified.
+func (o repeaterSendOptions) applyToRequest(raw []byte, cookieHeader string) []byte {
+	next := raw
+	if o.ProcessCookies && cookieHeader != "" && !repeaterHasHeader(next, "Cookie") {
+		next = repeaterInsertHeader(next, "Cookie", cookieHeader)
+	}
+	if o.StripConnection {
+		next = repeaterRemoveHeader(next, "Connection")
+	}
+	if o.NormalizeLineEndings {
+		// Two steps: folding CRLF to LF first means an already-CRLF request comes back unchanged
+		// instead of growing a CR on every line.
+		next = bytes.ReplaceAll(next, []byte("\r\n"), []byte("\n"))
+		next = bytes.ReplaceAll(next, []byte("\n"), []byte("\r\n"))
+	}
+	if o.UpdateContentLength {
+		next = repeaterUpdateContentLength(next)
+	}
+	return next
+}
+
+// repeaterHeadBody cuts a request into its header block and body at the first blank line. head is
+// the header lines *without* their final CRLF, so a reconstruction is join(head) + CRLF + CRLF +
+// body and no step can double the blank line. terminated is false when no blank line exists: there
+// is no body to speak of and no well-defined place to append a header — callers that add headers
+// skip it. (Named with the repeater prefix because api_sequencer_capture.go already owns the
+// unprefixed shape with a different arity.)
+func repeaterHeadBody(raw []byte) (head, body []byte, terminated bool) {
+	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+		return raw[:i], raw[i+4:], true
+	}
+	return raw, nil, false
+}
+
+// repeaterHasHeader reports whether the header block already carries a header with the given name
+// (case-insensitive, as it must be — "cookie" matches "Cookie:").
+func repeaterHasHeader(raw []byte, name string) bool {
+	head, _, _ := repeaterHeadBody(raw)
+	for _, line := range bytes.Split(head, []byte("\r\n")) {
+		if i := bytes.IndexByte(line, ':'); i > 0 && strings.EqualFold(string(line[:i]), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// repeaterRemoveHeader deletes every header line with the given name, case-insensitively, and
+// rebuilds the request. The blank-line terminator is re-added exactly once because head carries no
+// trailing CRLF.
+func repeaterRemoveHeader(raw []byte, name string) []byte {
+	head, body, terminated := repeaterHeadBody(raw)
+	lines := bytes.Split(head, []byte("\r\n"))
+	kept := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		if i := bytes.IndexByte(line, ':'); i > 0 && strings.EqualFold(string(line[:i]), name) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	out := bytes.Join(kept, []byte("\r\n"))
+	if terminated {
+		return append(append(out, '\r', '\n', '\r', '\n'), body...)
+	}
+	return out
+}
+
+// repeaterInsertHeader adds one header at the end of the header block. A request with no header
+// terminator is left alone — there is nowhere honest to put it.
+func repeaterInsertHeader(raw []byte, name, value string) []byte {
+	head, body, terminated := repeaterHeadBody(raw)
+	if !terminated {
+		return raw
+	}
+	out := append(append([]byte{}, head...), []byte("\r\n"+name+": "+value+"\r\n\r\n")...)
+	return append(out, body...)
+}
+
+// repeaterUpdateContentLength rewrites Content-Length from the actual body. When a body exists and
+// no Content-Length header is present, one is added; when the body is empty the header is removed
+// rather than written as zero, because a GET carrying "Content-Length: 0" is the kind of
+// discrepancy some servers reject and none need.
+func repeaterUpdateContentLength(raw []byte) []byte {
+	_, body, terminated := repeaterHeadBody(raw)
+	if !terminated {
+		return raw
+	}
+	hadLength := repeaterHasHeader(raw, "Content-Length")
+	if len(body) == 0 {
+		if !hadLength {
+			return raw
+		}
+		return repeaterRemoveHeader(raw, "Content-Length")
+	}
+	next := repeaterRemoveHeader(raw, "Content-Length")
+	return repeaterInsertHeader(next, "Content-Length", strconv.Itoa(len(body)))
+}
