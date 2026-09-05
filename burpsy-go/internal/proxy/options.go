@@ -87,6 +87,19 @@ const (
 	// — and a response carrying one is counted as SkippedUnsupportedEncoding rather
 	// than reported as unpacked. See internal/httputil.Unpackable.
 	OptUnpackCompressedResponses OptionKey = "unpack_compressed_responses"
+	// OptStripWsExtensions removes the client's Sec-WebSocket-Extensions offer from
+	// an upgrade request before it is forwarded, so the origin cannot negotiate
+	// permessage-deflate and the relayed frames are captured in the clear rather
+	// than as opaque DEFLATE blocks. Burp's
+	// proxy.miscellaneous.strip_sec_websocket_extensions_headers_in_incoming_requests.
+	//
+	// Not a response rule and not applied through ApplyRequest: it rewrites the
+	// handshake, which no other message ever carries, so the strip lives on the
+	// WebSocket path (stripWsHandshake) and reads this set live — the same
+	// set-on/off-without-a-restart contract the response rules have. On by
+	// default, seeded by NewProxyConfig, because a proxy that let the extension
+	// be negotiated would record compressed frames and call them messages.
+	OptStripWsExtensions OptionKey = "strip_sec_websocket_extensions"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -101,6 +114,7 @@ var OptionKeys = []OptionKey{
 	OptStripAcceptEncoding,
 	OptUnpackCompressedRequests,
 	OptUnpackCompressedResponses,
+	OptStripWsExtensions,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The

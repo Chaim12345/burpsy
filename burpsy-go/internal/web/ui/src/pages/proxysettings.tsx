@@ -120,6 +120,34 @@ export function ProxySettingsPage(): JSX.Element {
 
    <Card>
     <SectionHeading title="Transport adjustments" detail="Not response rules, but part of the same knob set." />
+    <div className="switch-grid" style={{ marginBottom: "var(--gap)" }}>
+     <label className="switch-row" htmlFor="proxy-opt-strip_sec_websocket_extensions">
+      <span>
+       <span>Strip Sec-WebSocket-Extensions from handshakes</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Remove the client's permessage-deflate offer before an upgrade is forwarded, so the origin cannot negotiate
+        compression and frames are captured in the clear. On by default; turn it off for an origin that requires the
+        extension — compressed frames are then recorded with a note. Applies from the next WebSocket handshake.
+       </span>
+      </span>
+      <Switch
+       id="proxy-opt-strip_sec_websocket_extensions"
+       label="Strip Sec-WebSocket-Extensions from handshakes"
+       checked={d.options["strip_sec_websocket_extensions"] === true}
+       onCheckedChange={(on) =>
+        setOptions.mutate(
+         { strip_sec_websocket_extensions: on },
+         {
+          onSuccess: () =>
+           toast.success(
+            `Sec-WebSocket-Extensions stripping ${on ? "on" : "off"} — applies from the next WebSocket handshake`,
+           ),
+          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
+         },
+        )}
+      />
+     </label>
+    </div>
     <SimpleTable headers={["Adjustment", "Count"]}>
      <tr>
       <td>Accept-Encoding stripped from requests</td>

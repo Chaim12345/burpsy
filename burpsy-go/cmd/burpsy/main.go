@@ -425,13 +425,14 @@ func main() {
 	// The proxy's live option set — Burp's response-modification switches. One set handed to both
 	// the relay and the web API, the same single-pointer rule as the TLS policy and the Match &
 	// Replace rules: a panel that described a different set than the relay applies is the drift
-	// this project keeps closing.
-	proxyOptions := proxy.NewOptions()
+	// this project keeps closing. proxyOptions aliases the config's own set (picked up below,
+	// after the builder chain) rather than a second NewOptions, because NewProxyConfig seeds
+	// engine defaults into its set — the WebSocket handshake strip starts on — and a fresh
+	// all-off set attached over it would silently have turned that default off.
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
 		WithMatchReplace(matchReplaceRules).
-		WithOptions(proxyOptions).
 		WithLogger(logger).
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
@@ -452,6 +453,7 @@ func main() {
 		// passthrough list — which is to say by giving up interception, which is the one
 		// thing the operator started this tool to do.
 		WithClientCerts(clientCerts)
+	proxyOptions := proxyConfig.Options()
 
 	// Start proxy server
 	ctx, cancel := context.WithCancel(context.Background())

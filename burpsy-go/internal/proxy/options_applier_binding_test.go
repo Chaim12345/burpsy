@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"go.uber.org/zap"
 )
 
 // ---- every listed option must actually be applied ---------------------------------------
@@ -63,6 +66,21 @@ func gzipBytes(t *testing.T, s string) []byte {
 		t.Fatalf("gzip close: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// wsUpgradeFixture is the handshake the WebSocket strip acts on: it carries exactly the
+// offer strip_sec_websocket_extensions exists to remove. Unlike the other fixtures this one
+// is applied through the handshake path (stripWsHandshake) rather than ApplyRequest — the
+// offer lives only on an upgrade, and stripping it on every relayed request would be the
+// wrong scope — so the binding check offers every key both appliers.
+func wsUpgradeFixture() []byte {
+	return []byte("GET /chat HTTP/1.1\r\n" +
+		"Host: example.test\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
 }
 
 // gzippedHTMLResponse and gzippedRequest are the fixtures the two unpack options act on.
@@ -127,6 +145,18 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			gzReq := gzippedRequest(t, everyRuleMarkup)
 			gzReqOut := o.ApplyRequest(gzReq)
 			reqChanged = reqChanged || string(gzReqOut) != string(gzReq)
+
+			// The handshake fixture, for the WebSocket strip. A Server is built per key
+			// with exactly that key enabled — optionsWith already produces the set — so
+			// this stays a no-second-table check: a key bound on the handshake path is
+			// caught here, and a key bound nowhere changes nothing anywhere.
+			upgrade := wsUpgradeFixture()
+			srv := NewServer(NewProxyConfig(core.NewTrafficStore()).
+				WithOptions(optionsWith(t, key)).
+				WithScope(testScope()).
+				WithLogger(zap.NewNop()))
+			handshakeOut, _ := srv.stripWsHandshake(upgrade)
+			reqChanged = reqChanged || string(handshakeOut) != string(upgrade)
 
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+

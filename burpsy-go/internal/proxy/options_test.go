@@ -299,6 +299,30 @@ func Test_strip_accept_encoding_removes_the_header_and_counts_only_real_strips(t
 	}
 }
 
+// The strip is the one option whose engine default is on: NewProxyConfig seeds it
+// so a fresh proxy keeps captures readable, and every other option stays off until
+// an operator moves it. Pin both halves — the seed and the off state — because a
+// silent default drift would either leak compressed frames into history (seed lost)
+// or lock testers out of origins that require the extension (seed forced).
+func Test_the_websocket_handshake_strip_defaults_on_and_round_trips(t *testing.T) {
+	c := NewProxyConfig(core.NewTrafficStore())
+	if !c.Options().Get(OptStripWsExtensions) {
+		t.Fatal("a fresh proxy does not strip Sec-WebSocket-Extensions; history would record permessage-deflate frames as though they were plaintext")
+	}
+	if err := c.Options().Set(OptStripWsExtensions, false); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if c.Options().Get(OptStripWsExtensions) {
+		t.Fatal("Set(false) did not take")
+	}
+	// The builder writes the same set, not a second copy — a second copy would let
+	// the panel and the handshake disagree about what stripping is on.
+	c.WithStripWsExtensions(true)
+	if !c.Options().Get(OptStripWsExtensions) {
+		t.Fatal("WithStripWsExtensions wrote somewhere other than the live option set")
+	}
+}
+
 func Test_an_unknown_option_key_is_refused_by_name(t *testing.T) {
 	o := NewOptions()
 	err := o.Set(OptionKey("remove_all_javescript"), true)

@@ -543,12 +543,10 @@ type ProxyConfig struct {
 	// leg of an intercepted connection. Nil — the default — means none is ever
 	// offered. See WithClientCerts.
 	clientCerts alpn.ClientCertSource
-	// stripWsExtensions removes the client's Sec-WebSocket-Extensions offer
-	// from a handshake before forwarding it. See WithStripWsExtensions.
-	stripWsExtensions bool
 	// options is the live, operator-editable option set: the response modification
-	// rules and the Accept-Encoding strip. Never nil after NewProxyConfig, and the
-	// same pointer the web API holds — see WithOptions and internal/proxy/options.go.
+	// rules, the Accept-Encoding strip and the WebSocket handshake strip. Never nil
+	// after NewProxyConfig, and the same pointer the web API holds — see WithOptions
+	// and internal/proxy/options.go.
 	options *Options
 	// cookieJar receives the Set-Cookie headers of every response this listener captures, so an
 	// operator who browses the target logged-in through the proxy has a jar the other tools can draw
@@ -564,17 +562,23 @@ type ProxyConfig struct {
 
 // NewProxyConfig creates a new proxy configuration.
 func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
-	return &ProxyConfig{
+	c := &ProxyConfig{
 		store:   store,
 		tls:     NewTlsPolicy(),
 		scope:   core.NewScopeAllowEverything(),
 		options: NewOptions(),
 		logger:  zap.NewNop(), // Default to nop logger
-		// On, matching Burp's default. A proxy that let permessage-deflate be
-		// negotiated would record DEFLATE blocks and call them messages, so the
-		// safe setting is the one that keeps the capture readable.
-		stripWsExtensions: true,
 	}
+	// On, matching Burp's default. A proxy that let permessage-deflate be
+	// negotiated would record DEFLATE blocks and call them messages, so the
+	// safe setting is the one that keeps the capture readable. Seeded into the
+	// live option set rather than a separate flag, so the operator's switch and
+	// the relay's decision cannot disagree: Set cannot fail here, the key was
+	// just put in OptionKeys.
+	if err := c.options.Set(OptStripWsExtensions, true); err != nil {
+		panic("proxy: " + err.Error())
+	}
+	return c
 }
 
 // WithScope sets the scope for the proxy.
@@ -666,8 +670,15 @@ func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig
 // not be locked out by a capture-quality decision. With stripping off, frames
 // that arrive compressed are recorded with a note saying so; they are never
 // passed off as plaintext.
+//
+// The setting lives in the live option set (OptStripWsExtensions), so it is
+// the very value the Proxy settings panel edits: a caller here seeds it, an
+// operator edit changes it, and the handshake reads it per connection — one
+// value, no restart.
 func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
-	c.stripWsExtensions = strip
+	if err := c.options.Set(OptStripWsExtensions, strip); err != nil {
+		panic("proxy: " + err.Error())
+	}
 	return c
 }
 
