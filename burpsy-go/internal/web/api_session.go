@@ -808,7 +808,7 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 		resp, err := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls).SendRequest(ctx, req)
 		if err != nil {
 			// nil: the step never got a response to measure.
-			s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, nil, 0, err.Error())
+			s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, nil, 0, err.Error(), nil)
 			return nil, err
 		}
 		hdrs := make(map[string]string, len(resp.Headers))
@@ -824,7 +824,7 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 		// understates the wire by the headers — narrower than a repeater row's, and still a measurement,
 		// which nil would not be.
 		s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode,
-			toollog.Bytes(len(resp.Body)), uint64(resp.Duration.Milliseconds()), "")
+			toollog.Bytes(len(resp.Body)), uint64(resp.Duration.Milliseconds()), "", nil)
 		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil
 	}
 }

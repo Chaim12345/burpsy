@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 // Tool identifies which tool sent a request. There is deliberately no
@@ -100,6 +102,16 @@ type Entry struct {
 	StartedMs   uint64
 	DurationMs  uint64
 	Note        string
+	// Exchange is the traffic-store exchange this row came from, or nil when the row has no bytes
+	// to show: a transport failure received nothing to store, and a row standing for a whole run
+	// (an audit) is not one exchange. Nil is also every row recorded before the link existed —
+	// those rows stay metadata-only rather than pretending.
+	//
+	// Logger's message viewer resolves bytes through this link on demand (the same
+	// exchange-id-then-fetch pattern the organizer uses), so no request/response copy is stored
+	// here: the traffic store already holds the bytes once, and a second copy would double the
+	// memory Burp manages with its explicit capture limit.
+	Exchange *core.ExchangeID
 }
 
 // Bytes wraps a measured response length for Record's respLen argument. Callers that received no
@@ -179,10 +191,12 @@ func (l *ToolLog) WithCapacity(c int) *ToolLog {
 // Uncaptured counter for the tool is what says so. respLen is the response's
 // byte count, or nil when no response was received — see Entry.ResponseLen for
 // why the caller must choose between the two rather than defaulting to zero.
+// exchange is the traffic-store exchange the bytes live under, or nil when the
+// row has none to point at — see Entry.Exchange.
 //
 // 0 is unambiguous as the refusal marker because ids come from nextID, which
 // counts *stored* rows from 1: a stored row never has id 0.
-func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, path string, status int, respLen *int, durMs uint64, note string) uint64 {
+func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, path string, status int, respLen *int, durMs uint64, note string, exchange *core.ExchangeID) uint64 {
 	if !l.Capturing(tool) {
 		if tool >= 0 && int(tool) < len(l.uncaptured) {
 			l.uncaptured[tool].Add(1)
@@ -197,6 +211,13 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		n := *respLen
 		length = &n
 	}
+	// Same copy, same reason: the caller's exchange pointer may point into a loop variable it
+	// immediately reuses, and a link that later follows the caller around is not a link.
+	var ex *core.ExchangeID
+	if exchange != nil {
+		id := *exchange
+		ex = &id
+	}
 	e := &Entry{
 		ID:          id,
 		Tool:        tool,
@@ -210,6 +231,7 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		StartedMs:   uint64(time.Now().UnixMilli()),
 		DurationMs:  durMs,
 		Note:        note,
+		Exchange:    ex,
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -161,7 +161,7 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		// Surface the dial/parse error to the UI so Repeater is not silently empty.
 		// nil, not zero: the send never reached a response, which is a different fact from a response
 		// that arrived with no bytes in it.
-		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "SEND", "", 0, nil, 0, err.Error())
+		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "SEND", "", 0, nil, 0, err.Error(), nil)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -214,7 +214,7 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
 	// cannot disagree about the size of one send.
 	s.toolLog.Record(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status),
-		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "")
+		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "", &ex.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(repeaterSendResp{

@@ -2,10 +2,12 @@ import { useMemo, useState } from "react";
 import { FolderTree, Link2, Search, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
-import { useClearToolLog, useDebounced } from "../lib/data";
+import { useClearToolLog, useDebounced, useMessage } from "../lib/data";
+import { useExchange } from "../lib/data.observe";
 import { useSetToolLogCapture, useToolLogView } from "../lib/data.workbench";
 import { useApp } from "../lib/store";
 import type { ToolLogRow } from "../lib/types.workbench";
+import { HttpEditor } from "../ui/editor";
 import { DetailList } from "../ui/json";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar } from "../ui/primitives";
@@ -23,12 +25,80 @@ function rowUrl(row: ToolLogRow): string {
 }
 
 /**
- * The log stores a request line, not the bytes that were sent: no headers, no
- * body. The curl this builds is therefore the request line only, and the menu
- * label says so rather than implying a replayable command.
+ * The log row itself stores a request line, not bytes; where the send produced a
+ * traffic-store exchange, the row's `exchange` link resolves to the stored
+ * request/response and the detail pane shows them. The curl this builds is
+ * still assembled from the logged line alone, and the menu label says so rather
+ * than implying a replayable command.
  */
 function rowCurl(row: ToolLogRow): string {
   return `curl -i -X ${row.method || "GET"} ${JSON.stringify(rowUrl(row))}`;
+}
+
+/**
+ * The bytes behind a logged row, resolved on demand through the row's exchange
+ * link: /api/exchange for the id pair, /api/message for each half — the same
+ * exchange-id-then-fetch pattern wshistory and repeater use when they start
+ * from an id. The log never stores its own copy of the bytes; the traffic store
+ * holds them once and Burp's capture limit manages that, so a second copy would
+ * double the memory a capture setting accounts for.
+ *
+ * The link can dangle — a row restored from an older database against a
+ * traffic store that no longer holds that exchange — and a dangling link is
+ * shown as exactly that ("no longer in the traffic store"), not as an empty
+ * editor, which would read as "this exchange was empty".
+ */
+function LogBytesViewer({ row }: { row: ToolLogRow }): JSX.Element {
+  const exchangeId = row.exchange;
+  if (exchangeId === null) {
+    return (
+      <Empty
+        title="No message bytes for this row"
+        detail="This row has timing and error text only: the send never produced a stored exchange (a transport failure, or a row standing for a whole run such as an audit). Rows logged before bytes were linked carry no exchange either."
+      />
+    );
+  }
+
+  return <LinkedBytes exchangeId={exchangeId} rowId={row.id} />;
+}
+
+function LinkedBytes({ exchangeId, rowId }: { exchangeId: number; rowId: number }): JSX.Element {
+  const exchange = useExchange(exchangeId);
+  const request = useMessage(exchange.data?.request);
+  const response = useMessage(exchange.data?.response ?? null);
+
+  if (exchange.isFetching && !exchange.data) {
+    return <Empty title="Loading message bytes…" detail={`Resolving exchange #${exchangeId} in the traffic store.`} />;
+  }
+  if (exchange.error || !exchange.data) {
+    return (
+      <Empty
+        title="Message bytes unavailable"
+        detail={`This row points at exchange #${exchangeId}, which is no longer in the traffic store. The metadata above is everything the log still holds for it.`}
+      />
+    );
+  }
+  const requestText = request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.");
+  const responseText =
+    exchange.data.response === null
+      ? "No response was captured for this exchange."
+      : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."));
+  return (
+    <div className="editor-grid" style={{ minHeight: 240 }}>
+      <HttpEditor
+        label="Request"
+        readOnly
+        value={requestText}
+        filename={`toollog-${rowId}-request.txt`}
+      />
+      <HttpEditor
+        label="Response"
+        readOnly
+        value={responseText}
+        filename={`toollog-${rowId}-response.txt`}
+      />
+    </div>
+  );
 }
 
 /**
@@ -232,11 +302,16 @@ export function LoggerPage(): JSX.Element {
           },
         ]}
       />
+      {/* The bytes behind the row, when the send produced a stored exchange: shown
+          under the metadata rather than instead of it, because the timings and the
+          error text are the log's own contribution and stay readable while the
+          editors load. */}
+      <LogBytesViewer row={selected} />
     </div>
   ) : (
     <Empty
       title="No row selected"
-      detail="Choose a logged request to read its timing and error text in full. Right-click a row to copy its URL or jump to the same host in HTTP history."
+      detail="Choose a logged request to read its timing, error text and — where the send produced a stored exchange — its request and response bytes. Right-click a row to copy its URL or jump to the same host in HTTP history."
     />
   );
 
@@ -370,7 +445,7 @@ export function LoggerPage(): JSX.Element {
                     icon: Terminal,
                     onSelect: () => {
                       void copyToClipboard(rowCurl(row));
-                      toast.success("curl command copied — the log stores no headers or body");
+                      toast.success("curl command copied — built from the logged request line; select the row to read the stored bytes");
                     },
                   },
                 ],

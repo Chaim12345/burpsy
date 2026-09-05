@@ -299,6 +299,15 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("tool_log", "response_len", "INTEGER"); err != nil {
 		return err
 	}
+	// tool_log gained exchange_id so a restored row keeps its link to the traffic-store exchange its
+	// bytes live under — Logger's message viewer resolves request/response through it. Nullable for the
+	// same reason response_len is: NULL means no linked exchange (a transport failure, a whole-run row,
+	// or anything written before this column existed), and a viewer must show that as "no bytes to
+	// show", not as exchange 0 — the stores are position-is-the-id counters from zero, so 0 is a real
+	// exchange.
+	if err := s.addColumn("tool_log", "exchange_id", "INTEGER"); err != nil {
+		return err
+	}
 	// exchanges gained highlight for the same reason notes did: an operator annotation, not traffic,
 	// so it lives beside notes rather than in its own table. NULL and "" both read back as "" (no
 	// highlight) — a legacy row written before this column existed never has an opinion either way, so
@@ -1333,12 +1342,18 @@ func (s *Store) SaveToolLog(e *toollog.Entry) {
 	if e.ResponseLen != nil {
 		responseLen = int64(*e.ResponseLen)
 	}
+	// Same for the exchange link: NULL is "no linked exchange", and 0 is exchange 0, which is a real
+	// row in a position-is-the-id store.
+	var exchangeID any
+	if e.Exchange != nil {
+		exchangeID = int64(*e.Exchange)
+	}
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO tool_log
-		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, exchange_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, int(e.Tool), e.Host, int(e.Port), boolInt(e.TLS), e.Method, e.Path,
-		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen)
+		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen, exchangeID)
 	if err != nil {
 		s.log("tool_log", err)
 	}
@@ -1351,7 +1366,7 @@ func (s *Store) SaveToolLog(e *toollog.Entry) {
 // the exact claim this field was added to stop making: that the response was empty.
 func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len
+		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, exchange_id
 		 FROM tool_log ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -1361,8 +1376,8 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	for rows.Next() {
 		e := &toollog.Entry{}
 		var tool, port, tls, status int
-		var responseLen sql.NullInt64
-		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen); err != nil {
+		var responseLen, exchangeID sql.NullInt64
+		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen, &exchangeID); err != nil {
 			return nil, err
 		}
 		e.Tool = toollog.Tool(tool)
@@ -1372,6 +1387,13 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 		if responseLen.Valid {
 			n := int(responseLen.Int64)
 			e.ResponseLen = &n
+		}
+		// NULL reads back as no link — a row that never had one, or one written by an older build. It must
+		// not become exchange 0: the traffic store counts rows from zero, so 0 is a real exchange and
+		// defaulting to it would show the viewer the wrong message pair.
+		if exchangeID.Valid {
+			id := core.ExchangeID(exchangeID.Int64)
+			e.Exchange = &id
 		}
 		out = append(out, e)
 	}

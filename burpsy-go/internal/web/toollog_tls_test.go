@@ -25,9 +25,9 @@ func TestToolLogWireCarriesTheTLSFlag(t *testing.T) {
 	// The exact failing case from the report: HTTPS on a non-443 port, plus a plaintext row on a port
 	// that is not 80, so a projection that hardcoded either answer fails on one of them.
 	srv.toolLog.Record(toollog.ToolRepeater, "api.example", 8443, true, "GET", "/v1/x", 200,
-		toollog.Bytes(12), 5, "")
+		toollog.Bytes(12), 5, "", nil)
 	srv.toolLog.Record(toollog.ToolRepeater, "plain.example", 8080, false, "GET", "/v1/y", 200,
-		toollog.Bytes(12), 5, "")
+		toollog.Bytes(12), 5, "", nil)
 
 	var log struct {
 		Entries []struct {
@@ -64,7 +64,7 @@ func TestToolLogWireCarriesTheTLSFlag(t *testing.T) {
 func TestDashboardActivityCarriesTheTLSFlagToo(t *testing.T) {
 	srv := newTestServer()
 	srv.toolLog.Record(toollog.ToolRepeater, "api.example", 8443, true, "GET", "/v1/x", 200,
-		toollog.Bytes(12), 5, "")
+		toollog.Bytes(12), 5, "", nil)
 
 	var dashboard struct {
 		Activity []struct {

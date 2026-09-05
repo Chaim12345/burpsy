@@ -208,7 +208,7 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 	if gerr == nil {
 		// nil: this row stands for a whole audit of the exchange, not for one request/response pair, so
 		// there is no single response whose length it could honestly report.
-		s.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, nil, 0, "audit")
+		s.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, nil, 0, "audit", &ex.ID)
 	}
 	for _, f := range findings {
 		s.findings.Add(s.activeFinding(f, task.ID()))

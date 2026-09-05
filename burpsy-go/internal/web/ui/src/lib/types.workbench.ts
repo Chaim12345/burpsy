@@ -288,6 +288,14 @@ export interface ToolLogRow {
   started_ms: number;
   duration_ms: number;
   error: string | null;
+  /**
+   * The traffic-store exchange this row's request/response bytes live under, or null when the row
+   * has none to show: a send that failed at the transport received nothing to store, and a row
+   * standing for a whole run (an audit) is not one exchange. Rows recorded before the link existed
+   * are null too — they stay metadata-only rather than pretending. The detail pane resolves bytes
+   * through this id on demand; the log never stores a second copy.
+   */
+  exchange: number | null;
 }
 
 export interface ToolLogView {

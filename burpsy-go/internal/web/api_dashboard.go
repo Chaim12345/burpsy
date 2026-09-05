@@ -310,7 +310,7 @@ func toolLogEntryView(e *toollog.Entry) toolLogEntry {
 		st := e.Status
 		status = &st
 	}
-	return toolLogEntry{
+	view := toolLogEntry{
 		ID:   e.ID,
 		Tool: e.Tool.String(),
 		Host: e.Host,
@@ -329,6 +329,11 @@ func toolLogEntryView(e *toollog.Entry) toolLogEntry {
 		DurationMs:  e.DurationMs,
 		Error:       strPtrIf(e.Note != "", e.Note),
 	}
+	if e.Exchange != nil {
+		id := uint64(*e.Exchange)
+		view.Exchange = &id
+	}
+	return view
 }
 
 // toolLogMatches is the log's filter, shared for the same reason as the projection.
