@@ -92,6 +92,183 @@ func (s *ActiveScanner) enabledChecks() []activeCheck {
 // AuditOutcome.Considered must equal for a dispatched item.
 func (s *ActiveScanner) ActiveCheckCount() int { return len(s.enabledChecks()) }
 
+// auditLevelPassiveFamilies are the ScanConfig switches the passive check families hang from. They
+// are what `scanner/issues_reported/scan_type_passive` gates: a shipped configuration that turns
+// passive checking off zeroes exactly these, and a check survives only if its own family switch
+// still admits it — so a family added without a row here would simply ignore the gate, which is
+// why the test walks the ScanConfig switch list against these maps.
+var auditLevelPassiveFamilies = []string{
+	"CheckPassiveAnalysis",
+	"CheckPassivePosture",
+	"CheckHostDiscovery",
+	"CheckHeaders",
+}
+
+// auditLevelActiveFamilies are the ScanConfig switches every family that SENDS anything hangs
+// from. Burp's three active tiers (light/medium/intrusive) collapse onto them because this engine
+// has no per-check intrusiveness ranking — see auditLevelNotes.
+var auditLevelActiveFamilies = []string{
+	"CheckSqli",
+	"CheckXss",
+	"CheckPathTraversal",
+	"CheckSSRF",
+	"CheckXXE",
+	"CheckJwtWeak",
+	"CheckJSVulns",
+	"CheckCachePoisoning",
+	"CheckActiveInjection",
+	"CheckExtendedActive",
+	"CheckReflectionProbes",
+	"CheckResponseDependence",
+	"CheckExtendedCoverage",
+	"CheckOutOfBand",
+	"CheckStored",
+	"CheckCorpus",
+}
+
+// auditLevelJavaScriptFamilies is the DOM family.
+var auditLevelJavaScriptFamilies = []string{"CheckDOM"}
+
+// auditLevelNotesText is the honest statement of where the issues_reported overlay bends, reported
+// beside the resolved configuration so an operator comparing burpsy against Burp's own preview of
+// the same preset sees the difference explained rather than discovered.
+const auditLevelNotesText = "burpsy has no per-check intrusiveness ranking, so Burp's light/medium/intrusive " +
+	"active tiers collapse to one gate: every tier the configuration sets to false turns the active " +
+	"check families off, and any tier set to true leaves the base switch set alone. Per-issue " +
+	"selection (scan_only_selected_issues, select_individual_issues, selected_issues) is not applied."
+
+// auditLevelNotes reports the approximation text when the configuration narrows the check set, and
+// nothing when it does not — a run under the base switches has nothing to disclaim.
+func auditLevelNotes(cfg AuditConfig) string {
+	if cfg.hasAuditLevelGate() {
+		return auditLevelNotesText
+	}
+	return ""
+}
+
+// enabledChecksUnder is the check set one run dispatches under an audit-level overlay: the base
+// switch set from ScanConfig, narrowed by the `scanner/issues_reported/*` keys the run's
+// configuration carries. Unset keys leave the base alone, so a run without an overlay is exactly
+// enabledChecks.
+func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
+	if !cfg.hasAuditLevelGate() {
+		return s.enabledChecks()
+	}
+	base := s.ConfigSnapshot()
+	if cfg.PassiveChecks.Set && cfg.PassiveChecks.Value == 0 {
+		zeroFamilies(&base, auditLevelPassiveFamilies)
+	}
+	if activeTiersAllOff(cfg) {
+		zeroFamilies(&base, auditLevelActiveFamilies)
+	}
+	if cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0 {
+		zeroFamilies(&base, auditLevelJavaScriptFamilies)
+	}
+	return s.enabledChecksIn(base)
+}
+
+// hasAuditLevelGate reports whether the configuration narrows the check set at all.
+func (cfg AuditConfig) hasAuditLevelGate() bool {
+	if cfg.PassiveChecks.Set && cfg.PassiveChecks.Value == 0 {
+		return true
+	}
+	if activeTiersAllOff(cfg) {
+		return true
+	}
+	return cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0
+}
+
+// activeTiersAllOff is the collapsed tier gate: every tier the preset SET says false. A preset
+// that sets only the light tier to false genuinely disables its light checks under Burp; here it
+// disables every active check, which auditLevelNotes says out loud. Any tier set true means the
+// preset wants active checking, so the base switches stand.
+func activeTiersAllOff(cfg AuditConfig) bool {
+	anyTrue := false
+	anySet := false
+	for _, t := range []OptUint32{cfg.LightActiveChecks, cfg.MediumActiveChecks, cfg.IntrusiveActiveChecks} {
+		if !t.Set {
+			continue
+		}
+		anySet = true
+		if t.Value != 0 {
+			anyTrue = true
+		}
+	}
+	return anySet && !anyTrue
+}
+
+// zeroFamilies flips the named ScanConfig switches off in place.
+func zeroFamilies(cfg *ScanConfig, families []string) {
+	for _, f := range families {
+		switch f {
+		case "CheckSqli":
+			cfg.CheckSqli = false
+		case "CheckXss":
+			cfg.CheckXss = false
+		case "CheckPathTraversal":
+			cfg.CheckPathTraversal = false
+		case "CheckSSRF":
+			cfg.CheckSSRF = false
+		case "CheckXXE":
+			cfg.CheckXXE = false
+		case "CheckJwtWeak":
+			cfg.CheckJwtWeak = false
+		case "CheckJSVulns":
+			cfg.CheckJSVulns = false
+		case "CheckCachePoisoning":
+			cfg.CheckCachePoisoning = false
+		case "CheckHeaders":
+			cfg.CheckHeaders = false
+		case "CheckCorpus":
+			cfg.CheckCorpus = false
+		case "CheckExtendedCoverage":
+			cfg.CheckExtendedCoverage = false
+		case "CheckReflectionProbes":
+			cfg.CheckReflectionProbes = false
+		case "CheckHostDiscovery":
+			cfg.CheckHostDiscovery = false
+		case "CheckResponseDependence":
+			cfg.CheckResponseDependence = false
+		case "CheckPassivePosture":
+			cfg.CheckPassivePosture = false
+		case "CheckPassiveAnalysis":
+			cfg.CheckPassiveAnalysis = false
+		case "CheckActiveInjection":
+			cfg.CheckActiveInjection = false
+		case "CheckDOM":
+			cfg.CheckDOM = false
+		case "CheckExtendedActive":
+			cfg.CheckExtendedActive = false
+		case "CheckOutOfBand":
+			cfg.CheckOutOfBand = false
+		case "CheckStored":
+			cfg.CheckStored = false
+		}
+	}
+}
+
+// enabledChecksIn is enabledChecks against an explicit configuration snapshot instead of the
+// scanner's own — the mechanism the audit-level gate overlays with. The ledger bit-stability rule
+// is unchanged: the set is snapshotted once per run, before any item is admitted.
+func (s *ActiveScanner) enabledChecksIn(cfg ScanConfig) []activeCheck {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	corpus := s.corpus
+	s.mu.RUnlock()
+	out := make([]activeCheck, 0, len(activeCheckSet)+len(corpus))
+	for _, c := range activeCheckSet {
+		if c.enabled(&cfg) {
+			out = append(out, c)
+		}
+	}
+	if cfg.CheckCorpus {
+		out = append(out, s.corpusActiveChecks(corpus)...)
+	}
+	return out
+}
+
 // UnimplementedCheckCount reports how many of those checks have no implementation behind them and
 // can therefore only ever come back DispositionUnsupported.
 //
@@ -585,7 +762,7 @@ func (s *ActiveScanner) WithScope(scope *core.Scope) *ActiveScanner {
 // operator who clicks audit again means it.
 func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.ExchangeID, cfg AuditConfig) (AuditOutcome, []*Finding) {
 	run := newAuditRun(cfg)
-	checks := s.enabledChecks()
+	checks := s.enabledChecksUnder(cfg)
 	// Queued before dispatch, not after it answers. An audit of a slow host holds this goroutine for
 	// up to the whole time budget, and a queue that only showed items once they finished would be
 	// empty for exactly as long as the operator most wanted to look at it.
@@ -623,7 +800,7 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.Exchang
 // whichever worker reaches the admission gate first. The totals are identical either way; only the
 // attribution moves. Items come back in the order requested regardless.
 func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.ExchangeID, cfg AuditConfig) (*SessionOutcome, []*Finding) {
-	checks := s.enabledChecks()
+	checks := s.enabledChecksUnder(cfg)
 	run := newAuditRun(cfg)
 	breaker := newSessionBreaker(cfg)
 	out := &SessionOutcome{Items: make([]ItemOutcome, len(exchangeIDs))}
@@ -846,7 +1023,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// skipped entirely when nothing is reading the queue — it is one request parse, cheap beside a
 	// probe but not free, and a CLI audit should not pay for a table it has no way to show.
 	if run.cfg.Items != nil {
-		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), DefaultProbeInsertionKinds)
+		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds())
 		run.cfg.Items.Begin(exchangeID, ex, run.cfg, len(units), len(steps), points, kinds)
 	}
 

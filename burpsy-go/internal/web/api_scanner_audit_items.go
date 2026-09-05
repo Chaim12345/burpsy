@@ -311,12 +311,12 @@ func (s *Server) handleScannerAuditItemAction(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	cfg, named, cerr := s.resolveAuditConfig(req.Config)
+	cfg, named, unapplied, cerr := s.resolveAuditConfig(req.Config)
 	if cerr != nil {
 		http.Error(w, cerr.Error(), http.StatusBadRequest)
 		return
 	}
-	body := s.runAudit(r.Context(), core.ExchangeID(id), cfg, named)
+	body := s.runAudit(r.Context(), core.ExchangeID(id), cfg, named, unapplied)
 	// The refreshed queue row, so a client does not have to re-list to see the attempt it just caused.
 	// Nil rather than an invented row when the ledger has already evicted it — which a cap of 500 and
 	// a busy sweep make possible in principle — because a fabricated row would misreport the state of
@@ -350,7 +350,15 @@ func (s *Server) auditItemRow(id core.ExchangeID) *scanner.AuditItem {
 // forgot the field would run correctly and simply never appear in the queue, and a queue missing the
 // audits from one entry point is worse than no queue at all — it reads as "nothing audited that
 // exchange".
+//
+// The exception is the configuration that asks not to be queued — Burp's
+// `scanner/issues_reported/store_issues_within_queue_items` set to false. The engine never builds
+// the queue itself, so "the caller may attach it" is the only enforcement point the key has; a
+// configuration that set it false skips the attachment without any other behaviour changing.
 func (s *Server) withAuditItems(cfg scanner.AuditConfig) scanner.AuditConfig {
+	if cfg.StoreQueueItems.Set && cfg.StoreQueueItems.Value == 0 {
+		return cfg
+	}
 	cfg.Items = s.auditItems
 	return cfg
 }

@@ -75,7 +75,7 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 	// been supplied. Nor is existence checked here: an id that names no capture is already answered
 	// honestly one layer down, as outcome.state "unauditable" carrying the reason — a richer reply
 	// than a bare 404, and through the same shape every other audit uses.
-	cfg, named, cerr := s.resolveAuditConfig(req.Config)
+	cfg, named, unapplied, cerr := s.resolveAuditConfig(req.Config)
 	if cerr != nil {
 		http.Error(w, cerr.Error(), http.StatusBadRequest)
 		return
@@ -86,7 +86,7 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.runAudit(ctx, req.ExchangeID, cfg, named))
+	json.NewEncoder(w).Encode(s.runAudit(ctx, req.ExchangeID, cfg, named, unapplied))
 }
 
 // handleAuditByPath serves POST /api/audit/{id}, running an active scan over one exchange.
@@ -116,7 +116,7 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	cfg, named, cerr := s.resolveAuditConfig(req.Config)
+	cfg, named, unapplied, cerr := s.resolveAuditConfig(req.Config)
 	if cerr != nil {
 		http.Error(w, cerr.Error(), http.StatusBadRequest)
 		return
@@ -127,7 +127,7 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.runAudit(ctx, core.ExchangeID(id), cfg, named))
+	json.NewEncoder(w).Encode(s.runAudit(ctx, core.ExchangeID(id), cfg, named, unapplied))
 }
 
 // auditTarget names one audited exchange for the task list, falling back to the id when the exchange
@@ -155,7 +155,7 @@ func auditTarget(store *core.TrafficStore, id core.ExchangeID) string {
 //
 // scanner.ts renders this by pretty-printing the JSON it gets back, so the richer body needs no
 // change on the TypeScript side — there is no typed audit response to keep in sync.
-func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string) map[string]interface{} {
+func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string) map[string]interface{} {
 	if s.scanner == nil {
 		// Built with the engagement scope: an active audit sends real traffic, and the engine refuses
 		// an out-of-scope exchange before it plans any work. The corpus's active checks ride along

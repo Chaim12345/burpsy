@@ -32,7 +32,9 @@ import (
 // auditConfigView is one AuditConfig as JSON.
 //
 // MaxRequests is a pointer because OptUint32 distinguishes "uncapped" from "capped at zero", and those
-// are opposite instructions — null and 0 keep them apart where a plain number could not.
+// are opposite instructions — null and 0 keep them apart where a plain number could not. The
+// issues_reported gates follow the same rule: null inherits the base switch set, true and false are
+// the overlay's explicit answer.
 type auditConfigView struct {
 	TimeBudgetMs                          int64   `json:"time_budget_ms"`
 	MaxRequests                           *uint32 `json:"max_requests"`
@@ -40,6 +42,24 @@ type auditConfigView struct {
 	ConsecutiveUnitFailuresToFailItem     uint32  `json:"consecutive_unit_failures_to_fail_item"`
 	PauseSessionAfterFailedItems          uint32  `json:"pause_session_after_failed_items"`
 	PauseSessionAtFailedItemPercentage    uint8   `json:"pause_session_at_failed_item_percentage"`
+	PassiveChecks                         *bool   `json:"passive_checks"`
+	LightActiveChecks                     *bool   `json:"light_active_checks"`
+	MediumActiveChecks                    *bool   `json:"medium_active_checks"`
+	IntrusiveActiveChecks                 *bool   `json:"intrusive_active_checks"`
+	JavaScriptAnalysis                    *bool   `json:"javascript_analysis"`
+	StoreQueueItems                       *bool   `json:"store_queue_items"`
+	// InsertionKinds is the point class list the run enumerates when the configuration carries an
+	// explicit one; null means the engine default (the four core classes).
+	InsertionKinds []string `json:"insertion_kinds"`
+}
+
+// optBoolPtr maps an OptUint32 bool onto a JSON pointer: unset becomes null.
+func optBoolPtr(v scanner.OptUint32) *bool {
+	if !v.Set {
+		return nil
+	}
+	b := v.Value != 0
+	return &b
 }
 
 func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
@@ -49,10 +69,19 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 		ConsecutiveUnitFailuresToFailItem:     cfg.ConsecutiveUnitFailuresToFailItem,
 		PauseSessionAfterFailedItems:          cfg.PauseSessionAfterFailedItems,
 		PauseSessionAtFailedItemPercentage:    cfg.PauseSessionAtFailedItemPercentage,
+		PassiveChecks:                         optBoolPtr(cfg.PassiveChecks),
+		LightActiveChecks:                     optBoolPtr(cfg.LightActiveChecks),
+		MediumActiveChecks:                    optBoolPtr(cfg.MediumActiveChecks),
+		IntrusiveActiveChecks:                 optBoolPtr(cfg.IntrusiveActiveChecks),
+		JavaScriptAnalysis:                    optBoolPtr(cfg.JavaScriptAnalysis),
+		StoreQueueItems:                       optBoolPtr(cfg.StoreQueueItems),
 	}
 	if cfg.MaxRequests.Set {
 		n := cfg.MaxRequests.Value
 		v.MaxRequests = &n
+	}
+	if len(cfg.InsertionKinds) > 0 {
+		v.InsertionKinds = cfg.InsertionKinds
 	}
 	return v
 }
@@ -95,7 +124,7 @@ func (s *Server) handleScannerConfigs(w http.ResponseWriter, r *http.Request) {
 		// inferred from the length of the list, because "6 configurations" reads as Burp having six.
 		"shipped_by_burp":   scanner.BurpShippedConfigCount,
 		"implemented_here":  len(scanner.BuiltInConfigs),
-		"omitted_reason":    "the other configurations set only crawl, insertion-point, parameter-relocation and JavaScript-analysis keys, which this engine does not have; they are omitted rather than offered as knobs that would do nothing",
+		"omitted_reason":    "the other configurations set only crawl, parameter-relocation and per-issue selection keys; insertion-point and check-class keys are honoured, per-issue selection and crawl tuning are not, and anything unapplied is reported per run rather than dropped",
 		"how_to_run_under":  "POST /api/audit/{exchange_id} or /api/scanner/audit with {\"config\": \"<name>\"}",
 		"applies_to_server": "the CLI flag -scan-config sets the default above for every audit this server runs",
 	})
@@ -116,16 +145,21 @@ func (s *Server) auditBaseConfig() scanner.AuditConfig {
 // An empty name is the default and is not an error. An unknown name is an error carrying the known
 // names: silently auditing under the default would run a configuration the operator did not ask for and
 // report success, which is the same class of lie as a skipped check reporting as a pass.
-func (s *Server) resolveAuditConfig(name string) (scanner.AuditConfig, string, error) {
+//
+// The returned report names every key the preset sets that this engine could not apply — the
+// not-silent half of honouring a shipped configuration. The caller echoes it beside the resolved
+// configuration.
+func (s *Server) resolveAuditConfig(name string) (scanner.AuditConfig, string, []string, error) {
 	base := s.auditBaseConfig()
 	if name == "" {
-		return base, "", nil
+		return base, "", nil, nil
 	}
 	preset, ok := scanner.BuiltInConfigByName(name)
 	if !ok {
-		return base, "", &unknownConfigError{Name: name, Known: scanner.BuiltInConfigNames()}
+		return base, "", nil, &unknownConfigError{Name: name, Known: scanner.BuiltInConfigNames()}
 	}
-	return preset.Apply(base), preset.Name, nil
+	applied, unapplied := preset.ApplyWithReport(base)
+	return applied, preset.Name, unapplied, nil
 }
 
 // unknownConfigError names the configuration that was asked for and every one that exists, because

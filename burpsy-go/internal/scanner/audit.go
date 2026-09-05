@@ -464,6 +464,11 @@ func (s ItemState) MarshalJSON() ([]byte, error) { return json.Marshal(s.Label()
 // answers "which checks are in the set", AuditConfig answers "how much work may be admitted, and
 // when to stop". The one field that could have disagreed — a wall-clock timeout — is not duplicated;
 // see ActiveScanner.AuditConfig for how ScanConfig.Timeout feeds this.
+//
+// The `scanner/issues_reported/*` and `scanner/insertion_point_types/*` keys are the sanctioned
+// exception: a shipped configuration names check classes and point classes a run must honour, and
+// a preset overlay (BuiltInConfig.Apply) writes them here. The overlay is an approximation and
+// auditLevelNotes says exactly where it bends.
 type AuditConfig struct {
 	// TimeBudget is the wall-clock ceiling for the whole run.
 	TimeBudget time.Duration
@@ -509,6 +514,29 @@ type AuditConfig struct {
 	// able to alter admission, which is the wrong direction of dependency for the thing whose job is
 	// to say what the engine did.
 	Items *AuditItemLedger
+	// PassiveChecks is Burp's `scanner/issues_reported/scan_type_passive`: false turns off the
+	// passive check families for this run (auditLevelPassiveFamilies). Unset inherits the base
+	// ScanConfig switch set.
+	PassiveChecks OptUint32
+	// LightActiveChecks, MediumActiveChecks and IntrusiveActiveChecks are Burp's
+	// `scan_type_light_active`, `scan_type_medium_active` and `scan_type_intrusive_active`. This
+	// engine has no per-check intrusiveness ranking, so the three tiers collapse to one gate: every
+	// tier that is set to false turns the active families off; any tier set true leaves the base
+	// switch set alone. auditLevelNotes records the approximation.
+	LightActiveChecks     OptUint32
+	MediumActiveChecks    OptUint32
+	IntrusiveActiveChecks OptUint32
+	// JavaScriptAnalysis is Burp's `scanner/issues_reported/scan_type_javascript_analysis`: false
+	// turns off the DOM family (ScanConfig.CheckDOM) for this run.
+	JavaScriptAnalysis OptUint32
+	// InsertionKinds names the bcheck point classes this run enumerates, overriding the engine
+	// default (DefaultProbeInsertionKinds) when non-empty. Written by the
+	// `scanner/insertion_point_types/*` preset keys; a run-level caller may set it directly.
+	InsertionKinds []string
+	// StoreQueueItems is Burp's `scanner/issues_reported/store_issues_within_queue_items`: false
+	// asks the caller that owns the queue not to attach it. Unset or true leaves the caller's own
+	// behaviour alone — the engine never builds the queue itself.
+	StoreQueueItems OptUint32
 }
 
 // DefaultAuditBudget is the default wall-clock budget for one audit run.
@@ -516,6 +544,16 @@ type AuditConfig struct {
 // Sized so a completely unresponsive host fails fast rather than occupying a goroutine for the
 // product of every check and its read timeout.
 const DefaultAuditBudget = 120 * time.Second
+
+// insertionKinds is the point classes this run enumerates: the configuration's own list when the
+// overlay or the caller set one, the engine default otherwise. The "none" sentinel from a
+// fully-disabled overlay is returned as-is — no kind matches it, which is the point.
+func (cfg AuditConfig) insertionKinds() []string {
+	if len(cfg.InsertionKinds) > 0 {
+		return cfg.InsertionKinds
+	}
+	return DefaultProbeInsertionKinds
+}
 
 // DefaultAuditConfig is the shipped default.
 //
@@ -562,6 +600,34 @@ type BuiltInConfig struct {
 	PauseSessionAfterFailedItems          OptUint32
 	// MaximumAuditTimeMinutes is `scanner/audit_optimization/maximum_crawl_and_audit_time`.
 	MaximumAuditTimeMinutes OptUint32
+
+	// The eight `scanner/insertion_point_types/*` keys. Each is one point class the run enumerates;
+	// true keeps it, false removes it from the engine default set. The mapping to bcheck kinds is
+	// insertionPointKindFor.
+	InsertURLParams       OptUint32
+	InsertBodyParams      OptUint32
+	InsertCookies         OptUint32
+	InsertHTTPHeaders     OptUint32
+	InsertParamName       OptUint32
+	InsertURLPathFilename OptUint32
+	InsertURLPathFolders  OptUint32
+	InsertEntireBody      OptUint32
+
+	// The nine `scanner/issues_reported/*` keys. See AuditConfig for how each is honoured; the three
+	// per-issue selection keys (scan_only_selected_issues, select_individual_issues, selected_issues)
+	// have no field because this engine has no per-issue selection — their rows carry no read and
+	// Apply reports them unapplied rather than pretending.
+	PassiveChecks         OptUint32
+	LightActiveChecks     OptUint32
+	MediumActiveChecks    OptUint32
+	IntrusiveActiveChecks OptUint32
+	JavaScriptAnalysis    OptUint32
+	StoreQueueItems       OptUint32
+
+	// UnrepresentableKeys records keys a parsed source named that this engine has no field for — the
+	// per-issue selection trio. Only ParseBurpConfig fills it; the six transcribed presets never do.
+	// ApplyWithReport reports them unapplied, so a loaded configuration never drops a key silently.
+	UnrepresentableKeys []string
 }
 
 // builtInConfigKeys is the one description of what a shipped configuration can change.
@@ -575,9 +641,12 @@ type BuiltInConfig struct {
 //
 // read and apply are a pair per row: read pulls the preset's value for the key, apply is the only
 // place that knows which AuditConfig field it lands in and in what unit. Test
-// Test_every_built_in_config_field_has_a_key_row asserts the row count matches the number of fields on
-// BuiltInConfig, so a field added without a row fails rather than being quietly unreportable and
-// quietly not applied.
+// Test_every_built_in_config_field_has_a_key_row asserts every OptUint32 field on BuiltInConfig has
+// exactly one row.
+//
+// applies records whether setting the key changes what the engine does. A false row is represented
+// on the wire and in Apply's report — never silently dropped — because this engine has no
+// mechanism behind it. The three per-issue selection keys are the only ones.
 var builtInConfigKeys = []struct {
 	// name is the key as this engine's own API spells it.
 	name string
@@ -585,9 +654,13 @@ var builtInConfigKeys = []struct {
 	// Burp's own UI can find the same knob.
 	burpKey string
 	// what is one line an operator can act on: what changes when this key is set.
-	what  string
-	read  func(BuiltInConfig) OptUint32
+	what string
+	// read pulls the key's value from a preset. Nil on an applies=false row.
+	read func(BuiltInConfig) OptUint32
+	// apply overlays the value onto a run configuration. Nil on an applies=false row.
 	apply func(*AuditConfig, uint32)
+	// applies reports whether the key changes engine behaviour when set.
+	applies bool
 }{
 	{
 		name:    "consecutive_check_failures_to_abandon_unit",
@@ -595,6 +668,7 @@ var builtInConfigKeys = []struct {
 		what:    "how many checks may fail in a row before the rest of that dispatch unit is abandoned (0 disables the breaker)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.ConsecutiveCheckFailuresToAbandonUnit },
 		apply:   func(a *AuditConfig, v uint32) { a.ConsecutiveCheckFailuresToAbandonUnit = v },
+		applies: true,
 	},
 	{
 		name:    "consecutive_unit_failures_to_fail_item",
@@ -602,6 +676,7 @@ var builtInConfigKeys = []struct {
 		what:    "how many dispatch units may be abandoned in a row before the whole item is failed (0 disables the breaker)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.ConsecutiveUnitFailuresToFailItem },
 		apply:   func(a *AuditConfig, v uint32) { a.ConsecutiveUnitFailuresToFailItem = v },
+		applies: true,
 	},
 	{
 		name:    "pause_session_after_failed_items",
@@ -609,6 +684,7 @@ var builtInConfigKeys = []struct {
 		what:    "how many failed items pause the whole session (0 means never pause on a count)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.PauseSessionAfterFailedItems },
 		apply:   func(a *AuditConfig, v uint32) { a.PauseSessionAfterFailedItems = v },
+		applies: true,
 	},
 	{
 		name:    "maximum_audit_time_minutes",
@@ -616,6 +692,145 @@ var builtInConfigKeys = []struct {
 		what:    "the wall-clock ceiling for the whole run, in minutes",
 		read:    func(c BuiltInConfig) OptUint32 { return c.MaximumAuditTimeMinutes },
 		apply:   func(a *AuditConfig, v uint32) { a.TimeBudget = time.Duration(v) * time.Minute },
+		applies: true,
+	},
+
+	// scanner/insertion_point_types — where the audit enumerates insertion points. Setting any of
+	// these keys materialises the run's point set from the engine default and then applies each
+	// set key on top; see Apply.
+	{
+		name:    "insert_url_params",
+		burpKey: "scanner/insertion_point_types/insert_url_params",
+		what:    "whether query-string parameters are enumerated as insertion points",
+		read:    func(c BuiltInConfig) OptUint32 { return c.InsertURLParams },
+		apply:   applyInsertionKind("query"),
+		applies: true,
+	},
+	{
+		name:    "insert_body_params",
+		burpKey: "scanner/insertion_point_types/insert_body_params",
+		what:    "whether form and structured body parameters are enumerated as insertion points",
+		read:    func(c BuiltInConfig) OptUint32 { return c.InsertBodyParams },
+		apply:   applyInsertionKind("body"),
+		applies: true,
+	},
+	{
+		name:    "insert_cookies",
+		burpKey: "scanner/insertion_point_types/insert_cookies",
+		what:    "whether cookies are enumerated as insertion points",
+		read:    func(c BuiltInConfig) OptUint32 { return c.InsertCookies },
+		apply:   applyInsertionKind("cookie"),
+		applies: true,
+	},
+	{
+		name:    "insert_http_headers",
+		burpKey: "scanner/insertion_point_types/insert_http_headers",
+		what:    "whether request headers are enumerated as insertion points",
+		read:    func(c BuiltInConfig) OptUint32 { return c.InsertHTTPHeaders },
+		apply:   applyInsertionKind("header"),
+		applies: true,
+	},
+	{
+		name:    "insert_param_name",
+		burpKey: "scanner/insertion_point_types/insert_param_name",
+		what:    "whether parameter *names* (URL and body) are enumerated as insertion points",
+		read:    func(c BuiltInConfig) OptUint32 { return c.InsertParamName },
+		apply:   applyInsertionKind("param_name_url", "param_name_body"),
+		applies: true,
+	},
+	{
+		name:    "insert_url_path_filename",
+		burpKey: "scanner/insertion_point_types/insert_url_path_filename",
+		what:    "whether the URL path's final segment is enumerated as an insertion point",
+		read:    func(c BuiltInConfig) OptUint32 { return c.InsertURLPathFilename },
+		apply:   applyInsertionKind("url_path_filename"),
+		applies: true,
+	},
+	{
+		name:    "insert_url_path_folders",
+		burpKey: "scanner/insertion_point_types/insert_url_path_folders",
+		what:    "whether the URL path's folder segments are enumerated as insertion points",
+		read:    func(c BuiltInConfig) OptUint32 { return c.InsertURLPathFolders },
+		apply:   applyInsertionKind("url_path_folder"),
+		applies: true,
+	},
+	{
+		name:    "insert_entire_body",
+		burpKey: "scanner/insertion_point_types/insert_entire_body",
+		what:    "whether the whole body is enumerated as one insertion point, independent of any parameter",
+		read:    func(c BuiltInConfig) OptUint32 { return c.InsertEntireBody },
+		apply:   applyInsertionKind("entire_body"),
+		applies: true,
+	},
+
+	// scanner/issues_reported — which check classes the run admits. The mapping is documented on
+	// AuditConfig and auditLevelNotes; per-check intrusiveness ranking does not exist here, so the
+	// three Burp tiers collapse to one active gate.
+	{
+		name:    "scan_type_passive",
+		burpKey: "scanner/issues_reported/scan_type_passive",
+		what:    "whether the passive check families run (0 turns them off for the run)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.PassiveChecks },
+		apply:   func(a *AuditConfig, v uint32) { a.PassiveChecks = SomeUint32(v) },
+		applies: true,
+	},
+	{
+		name:    "scan_type_light_active",
+		burpKey: "scanner/issues_reported/scan_type_light_active",
+		what:    "one of Burp's three active tiers; every tier set to 0 turns the active families off (0 here), any set to 1 leaves the base switches alone",
+		read:    func(c BuiltInConfig) OptUint32 { return c.LightActiveChecks },
+		apply:   func(a *AuditConfig, v uint32) { a.LightActiveChecks = SomeUint32(v) },
+		applies: true,
+	},
+	{
+		name:    "scan_type_medium_active",
+		burpKey: "scanner/issues_reported/scan_type_medium_active",
+		what:    "one of Burp's three active tiers; every tier set to 0 turns the active families off (0 here), any set to 1 leaves the base switches alone",
+		read:    func(c BuiltInConfig) OptUint32 { return c.MediumActiveChecks },
+		apply:   func(a *AuditConfig, v uint32) { a.MediumActiveChecks = SomeUint32(v) },
+		applies: true,
+	},
+	{
+		name:    "scan_type_intrusive_active",
+		burpKey: "scanner/issues_reported/scan_type_intrusive_active",
+		what:    "one of Burp's three active tiers; every tier set to 0 turns the active families off (0 here), any set to 1 leaves the base switches alone",
+		read:    func(c BuiltInConfig) OptUint32 { return c.IntrusiveActiveChecks },
+		apply:   func(a *AuditConfig, v uint32) { a.IntrusiveActiveChecks = SomeUint32(v) },
+		applies: true,
+	},
+	{
+		name:    "scan_type_javascript_analysis",
+		burpKey: "scanner/issues_reported/scan_type_javascript_analysis",
+		what:    "whether the DOM-based checks run (0 turns them off for the run)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.JavaScriptAnalysis },
+		apply:   func(a *AuditConfig, v uint32) { a.JavaScriptAnalysis = SomeUint32(v) },
+		applies: true,
+	},
+	{
+		name:    "store_issues_within_queue_items",
+		burpKey: "scanner/issues_reported/store_issues_within_queue_items",
+		what:    "whether the caller's audit queue retains per-item records (0 asks the caller not to attach it)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.StoreQueueItems },
+		apply:   func(a *AuditConfig, v uint32) { a.StoreQueueItems = SomeUint32(v) },
+		applies: true,
+	},
+	{
+		name:    "scan_only_selected_issues",
+		burpKey: "scanner/issues_reported/scan_only_selected_issues",
+		what:    "not applied: this engine has no per-issue selection to restrict a scan to",
+		applies: false,
+	},
+	{
+		name:    "select_individual_issues",
+		burpKey: "scanner/issues_reported/select_individual_issues",
+		what:    "not applied: this engine has no per-issue selection, only family switches",
+		applies: false,
+	},
+	{
+		name:    "selected_issues",
+		burpKey: "scanner/issues_reported/selected_issues",
+		what:    "not applied: this engine has no per-issue selection, only family switches",
+		applies: false,
 	},
 }
 
@@ -636,6 +851,10 @@ type BuiltInConfigKey struct {
 	Value uint32 `json:"value,omitempty"`
 	// Set reports whether this preset's source file sets the key at all.
 	Set bool `json:"set"`
+	// Applies reports whether setting the key changes what this engine does. False keys are listed
+	// anyway — a shipped configuration loads without silently dropping keys — and Apply reports
+	// them as unapplied.
+	Applies bool `json:"applies"`
 }
 
 // Keys returns every key a shipped configuration can carry, in a fixed order, each carrying this
@@ -648,26 +867,157 @@ type BuiltInConfigKey struct {
 func (c BuiltInConfig) Keys() []BuiltInConfigKey {
 	out := make([]BuiltInConfigKey, 0, len(builtInConfigKeys))
 	for _, k := range builtInConfigKeys {
-		v := k.read(c)
+		var v OptUint32
+		if k.read != nil {
+			v = k.read(c)
+		}
 		out = append(out, BuiltInConfigKey{
 			Name:    k.name,
 			BurpKey: k.burpKey,
 			What:    k.what,
 			Value:   v.Value,
 			Set:     v.Set,
+			Applies: k.applies,
 		})
 	}
 	return out
 }
 
-// Apply overlays this preset's keys onto a base configuration, leaving unset keys alone.
-func (c BuiltInConfig) Apply(base AuditConfig) AuditConfig {
-	for _, k := range builtInConfigKeys {
-		if v := k.read(c); v.Set {
-			k.apply(&base, v.Value)
+// insertionPointKindFor maps an insertion_point_types key to the bcheck point classes it governs.
+// Every key in the table's insertion section must map to at least one kind — asserted by
+// Test_every_insertion_point_key_maps_to_a_bcheck_kind — so a key that lost its mapping cannot
+// silently stop selecting points.
+var insertionPointKindFor = map[string][]string{
+	"insert_url_params":        {"query"},
+	"insert_body_params":       {"body"},
+	"insert_cookies":           {"cookie"},
+	"insert_http_headers":      {"header"},
+	"insert_param_name":        {"param_name_url", "param_name_body"},
+	"insert_url_path_filename": {"url_path_filename"},
+	"insert_url_path_folders":  {"url_path_folder"},
+	"insert_entire_body":       {"entire_body"},
+}
+
+// applyInsertionKind builds the row's apply: 1 adds the kinds, 0 removes them.
+func applyInsertionKind(kinds ...string) func(*AuditConfig, uint32) {
+	return func(a *AuditConfig, v uint32) {
+		if v != 0 {
+			a.InsertionKinds = addKinds(a.InsertionKinds, kinds...)
+			return
+		}
+		a.InsertionKinds = removeKinds(a.InsertionKinds, kinds...)
+	}
+}
+
+// addKinds appends every kind not already present, preserving order.
+func addKinds(kinds []string, add ...string) []string {
+	seen := make(map[string]bool, len(kinds)+len(add))
+	for _, k := range kinds {
+		seen[k] = true
+	}
+	for _, k := range add {
+		if !seen[k] {
+			kinds = append(kinds, k)
+			seen[k] = true
 		}
 	}
-	return base
+	return kinds
+}
+
+// removeKinds filters kinds in place, preserving order.
+func removeKinds(kinds []string, drop ...string) []string {
+	dropSet := make(map[string]bool, len(drop))
+	for _, k := range drop {
+		dropSet[k] = true
+	}
+	out := kinds[:0]
+	for _, k := range kinds {
+		if !dropSet[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// anyInsertionKeySet reports whether the preset touches the insertion_point_types section at all.
+func (c BuiltInConfig) anyInsertionKeySet() bool {
+	for _, k := range builtInConfigKeys {
+		if strings.HasPrefix(k.burpKey, "scanner/insertion_point_types/") && k.read != nil {
+			if k.read(c).Set {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// insertionDefaultKinds is the point set an insertion_point_types overlay starts from: everything
+// the eight keys govern, minus entire body. This matches the engine's own default (the four core
+// classes) plus the four finer classes Burp's defaults leave on but this engine had no reason to
+// enumerate unasked. The overlay is explicit — an operator naming the section is specifying point
+// selection — so the base is the full Burp-shaped set rather than the engine's conservative one.
+func insertionDefaultKinds() []string {
+	return []string{"query", "header", "cookie", "body", "param_name_url", "param_name_body", "url_path_filename", "url_path_folder"}
+}
+
+// applyInsertionPointTypes materialises the run's point set and overlays every key this preset
+// sets. Called once from Apply before the table walk.
+func (c BuiltInConfig) applyInsertionPointTypes(a *AuditConfig) {
+	a.InsertionKinds = insertionDefaultKinds()
+	for _, k := range builtInConfigKeys {
+		if !strings.HasPrefix(k.burpKey, "scanner/insertion_point_types/") {
+			continue
+		}
+		if v := k.read(c); v.Set {
+			k.apply(a, v.Value)
+		}
+	}
+	if len(a.InsertionKinds) == 0 {
+		// Every point class was explicitly disabled. Empty means "the engine default" elsewhere, so
+		// pin a sentinel no kind matches rather than letting zero fall back to the default.
+		a.InsertionKinds = []string{"none"}
+	}
+}
+
+// Apply overlays this preset's keys onto a base configuration, leaving unset keys alone.
+//
+// Keys this engine cannot apply (Applies false in Keys) are recorded by ApplyWithReport; this
+// shorthand keeps the long-standing call sites unchanged and simply drops them, which is why a
+// caller honouring a shipped configuration should prefer ApplyWithReport.
+func (c BuiltInConfig) Apply(base AuditConfig) AuditConfig {
+	applied, _ := c.ApplyWithReport(base)
+	return applied
+}
+
+// ApplyWithReport overlays this preset like Apply and additionally returns every key the preset
+// sets that this engine cannot apply. The report is the not-silent half of the contract: a shipped
+// configuration loads, and the caller can say in the same breath exactly which of its keys did
+// nothing here rather than letting them vanish.
+//
+// A field-less key counts as set only when UnrepresentableKeys records it — the parser's record of
+// keys the source named that have no field to land in.
+func (c BuiltInConfig) ApplyWithReport(base AuditConfig) (AuditConfig, []string) {
+	if c.anyInsertionKeySet() {
+		c.applyInsertionPointTypes(&base)
+	}
+	parsed := make(map[string]bool, len(c.UnrepresentableKeys))
+	for _, name := range c.UnrepresentableKeys {
+		parsed[name] = true
+	}
+	var unapplied []string
+	for _, k := range builtInConfigKeys {
+		switch {
+		case k.read == nil:
+			if parsed[k.name] {
+				unapplied = append(unapplied, k.name)
+			}
+		case k.read(c).Set && !k.applies:
+			unapplied = append(unapplied, k.name)
+		case k.read(c).Set:
+			k.apply(&base, k.read(c).Value)
+		}
+	}
+	return base, unapplied
 }
 
 // BuiltInConfigNames lists every shipped configuration's name, in table order.

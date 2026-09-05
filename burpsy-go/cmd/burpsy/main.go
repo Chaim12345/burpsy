@@ -745,13 +745,22 @@ func domEngineOptions(flagValue string) (*domexec.Options, error) {
 	}
 }
 
+// resolveScanConfig turns -scan-config into the AuditConfig every audit this process runs defaults to.
+//
+// Four answers, kept apart: an empty flag is the shipped default; "list" prints the available names and
+// exits 0, because a name containing spaces and hyphens is not guessable and an operator should not have
+// to read the source to find one; a path ending in .json (or containing a path separator) is one of
+// Burp's own configuration files, parsed with ParseBurpConfig so the engine honours its
+// insertion-point and check-class keys and reports what it cannot apply; anything else must resolve as a
+// built-in name, and a name that does not is fatal rather than a warning that starts the process under a
+// configuration the operator did not ask for.
 func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 	base := scanner.DefaultAuditConfig()
 	switch name {
 	case "":
 		return base, nil
 	case "list":
-		fmt.Println("built-in scan configurations (-scan-config NAME):")
+		fmt.Println("built-in scan configurations (-scan-config NAME, or -scan-config /path/to/burp-config.json):")
 		for _, c := range scanner.BuiltInConfigs {
 			fmt.Printf("  %s\n", c.Name)
 			for _, k := range c.Keys() {
@@ -763,17 +772,37 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 			}
 		}
 		fmt.Printf("\n%d of the %d configurations Burp ships set a key this engine implements; the rest\n"+
-			"configure crawling, insertion points, parameter relocation and JavaScript analysis, which\n"+
-			"this engine does not have, and are omitted rather than offered as knobs that do nothing.\n",
+			"configure crawling and per-issue selection, which this engine does not have, and their\n"+
+			"unapplied keys are reported rather than dropped. A Burp configuration file can be loaded\n"+
+			"directly by passing its path instead of a name.\n",
 			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount)
 		os.Exit(0)
+	}
+	if strings.HasSuffix(name, ".json") || strings.ContainsRune(name, '/') || strings.ContainsRune(name, os.PathSeparator) {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			return base, fmt.Errorf("-scan-config: reading configuration file: %w", err)
+		}
+		parsed, perr := scanner.ParseBurpConfig(data)
+		if perr != nil {
+			return base, fmt.Errorf("-scan-config: %w", perr)
+		}
+		applied, unapplied := parsed.ApplyWithReport(base)
+		if len(unapplied) > 0 {
+			fmt.Printf("scan configuration %s: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
+		}
+		return applied, nil
 	}
 	preset, ok := scanner.BuiltInConfigByName(name)
 	if !ok {
 		return base, fmt.Errorf("no built-in scan configuration is named %q; run -scan-config list to see the %d available",
 			name, len(scanner.BuiltInConfigs))
 	}
-	return preset.Apply(base), nil
+	applied, unapplied := preset.ApplyWithReport(base)
+	if len(unapplied) > 0 {
+		fmt.Printf("scan configuration %q: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
+	}
+	return applied, nil
 }
 
 // startBlindXSS binds the blind-XSS callback listener, or explains why it could not.
