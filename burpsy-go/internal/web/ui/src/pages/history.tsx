@@ -6,6 +6,7 @@ import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, m
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useHistory, useMessage, useStats } from "../lib/data";
 import { useScopeView } from "../lib/data.policy";
+import { compileHistorySearch } from "../lib/history-search";
 import { QUERY_PANEL } from "../lib/reference";
 import { useApp } from "../lib/store";
 import { HIGHLIGHTS, type Exchange } from "../lib/types";
@@ -505,11 +506,14 @@ export function HistoryPage(): JSX.Element {
   // Extension include/exclude, comma-separated, matched against the derived extension.
   const [showExtensions, setShowExtensions] = useState("");
   const [hideExtensions, setHideExtensions] = useState("");
-  // Search modifiers over the existing term (proxyHttpSearch*Checkbox). An invalid regex is
-  // reported in place rather than silently matching nothing.
+  // Search modifiers (proxyHttpSearch*Checkbox) modify the dedicated search field below, not the
+  // DSL box: the box is a statement the server evaluates, and compiling it as a RegExp was how
+  // "Regular expression" emptied the table on a query the operator never typed as a pattern
+  // (burpsy-react-ui-vlf). An invalid regex is reported in place rather than matching nothing.
   const [searchCase, setSearchCase] = useState(false);
   const [searchRegex, setSearchRegex] = useState(false);
   const [searchNegate, setSearchNegate] = useState(false);
+  const [searchText, setSearchText] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
   /**
    * Per-column filter inputs (8sa). Their own state, but not their own filtering: each edit rewrites
@@ -608,32 +612,15 @@ export function HistoryPage(): JSX.Element {
   const showList = useMemo(() => parseExtList(showExtensions), [showExtensions]);
   const hideList = useMemo(() => parseExtList(hideExtensions), [hideExtensions]);
 
-  // The search term compiled into a predicate, plus the reason it could not be. An invalid regex
-  // is the case that matters: silently matching nothing would read as "no such traffic", which is
-  // the difference between an empty result and a broken filter.
-  const { searchMatcher, searchError } = useMemo(() => {
-    const needle = debouncedTerm.trim();
-    if (needle === "" || !searchRegex && !searchCase && !searchNegate) {
-      // No modifiers in play: the DSL box already handles plain terms server-side.
-      if (needle === "" || !searchRegex) return { searchMatcher: null, searchError: null };
-    }
-    if (searchRegex) {
-      try {
-        const re = new RegExp(needle, searchCase ? "" : "i");
-        return { searchMatcher: (hay: string) => re.test(hay), searchError: null };
-      } catch (failure) {
-        return {
-          searchMatcher: null,
-          searchError: failure instanceof Error ? failure.message : "invalid regular expression",
-        };
-      }
-    }
-    const cmp = searchCase ? needle : needle.toLowerCase();
-    return {
-      searchMatcher: (hay: string) => (searchCase ? hay : hay.toLowerCase()).includes(cmp),
-      searchError: null,
-    };
-  }, [debouncedTerm, searchRegex, searchCase, searchNegate]);
+  // The search field compiled into a predicate, plus the reason it could not be. It is debounced
+  // on its own clock, exactly like the DSL box, so typing does not recompile per keystroke. An
+  // invalid regex is the case that matters: silently matching nothing would read as "no such
+  // traffic", which is the difference between an empty result and a broken filter.
+  const debouncedSearchText = useDebounced(searchText, 260);
+  const { matcher: searchMatcher, error: searchError } = useMemo(
+    () => compileHistorySearch(debouncedSearchText, { caseSensitive: searchCase, regex: searchRegex }),
+    [debouncedSearchText, searchCase, searchRegex],
+  );
 
   const filtersActive =
     (onlyParameterized ? 1 : 0) + (onlyCommented ? 1 : 0) + (onlyHighlighted ? 1 : 0) +
@@ -671,7 +658,7 @@ export function HistoryPage(): JSX.Element {
     }
     if (hideNoResponse) names.push("hiding rows with no response");
     if (scopeOnly) names.push("in-scope only");
-    if (searchMatcher) names.push(searchNegate ? "search (inverted)" : "search");
+    if (searchMatcher) names.push(`search "${debouncedSearchText}"${searchNegate ? " (inverted)" : ""}`);
     if (onlyParameterized) names.push("with query parameters");
     if (onlyCommented) names.push("commented");
     if (onlyHighlighted) names.push("highlighted");
@@ -679,7 +666,7 @@ export function HistoryPage(): JSX.Element {
     if (hideList.length > 0) names.push(`hiding ${hideList.join(", ")}`);
     return names;
   }, [
-    debouncedTerm, method, mimeSet, statusSet, hideNoResponse, scopeOnly, searchMatcher, searchNegate,
+    debouncedTerm, method, mimeSet, statusSet, hideNoResponse, scopeOnly, searchMatcher, searchNegate, debouncedSearchText,
     onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
   ]);
   // ovow: names describe the *applied* filters; suspended, there are none to name no matter
@@ -1323,6 +1310,20 @@ export function HistoryPage(): JSX.Element {
 
           <div>
             <div className="shortcut-group">Search modifiers</div>
+            {/* Burp's dedicated search field (proxyHttpSearch*Checkbox modify it). Deliberately its
+                own input, not the top-bar box: that box is a DSL statement the server evaluates,
+                and a regex tick over it turned `host ~ "api" AND status = 200` into a pattern that
+                matches nothing — the defect this field exists to remove (burpsy-react-ui-vlf). */}
+            <Field label="Search for" hint="Text or pattern over method, host, path, MIME and comment. Separate from the filter box above — the modifiers apply only here.">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={searchText}
+                  onChange={(event) => setSearchText(event.target.value)}
+                  placeholder="text or pattern"
+                />
+              )}
+            </Field>
             <Checkbox checked={searchCase} onCheckedChange={setSearchCase} label="Case sensitive" />
             <Checkbox checked={searchRegex} onCheckedChange={setSearchRegex} label="Regular expression" />
             <Checkbox
@@ -1350,6 +1351,7 @@ export function HistoryPage(): JSX.Element {
                 setOnlyHighlighted(false);
                 setShowExtensions("");
                 setHideExtensions("");
+                setSearchText("");
                 setSearchCase(false);
                 setSearchRegex(false);
                 setSearchNegate(false);
