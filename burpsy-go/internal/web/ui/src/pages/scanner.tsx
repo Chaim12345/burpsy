@@ -1,19 +1,12 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, Play, ShieldAlert, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
-import { copyToClipboard, formatDuration } from "../lib/api";
+import { copyToClipboard } from "../lib/api";
 import { useExchangeActions } from "../lib/actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
-import {
-  useIssuesDetailed,
-  useRunAudit,
-  useScannerConfigs,
-  useScannerCoverage,
-  useScannerLive,
-  useSetScannerLive,
-} from "../lib/data.attack";
+import { useIssuesDetailed } from "../lib/data.attack";
 import { useApp } from "../lib/store";
-import type { AuditResult, FindingDetail } from "../lib/types.attack";
+import type { FindingDetail } from "../lib/types.attack";
 import type { Occurrence } from "../lib/types";
 import { AdvisoryReader } from "../ui/advisory";
 import { HttpEditor } from "../ui/editor";
@@ -22,15 +15,11 @@ import { LoadingPanel, PageHeader, RefreshButton, SplitPane } from "../ui/layout
 import {
   Badge,
   Button,
-  Card,
   Empty,
   ErrorNotice,
   Input,
   LinkButton,
-  Metric,
-  Modal,
   Select,
-  Switch,
   Tabs,
   TabsContent,
   TabsList,
@@ -39,8 +28,7 @@ import {
   Tooltip,
   type Tone,
 } from "../ui/primitives";
-import { SimpleTable } from "../ui/table";
-import { DetailList, JsonView } from "../ui/json";
+import { DetailList } from "../ui/json";
 import { cn } from "../lib/cn";
 
 const SEVERITIES = ["Critical", "High", "Medium", "Low", "Informational"];
@@ -90,124 +78,6 @@ function findingName(f: FindingDetail): string {
  * row is louder than the row label it is meant to qualify. */
 function SeverityDot({ severity }: { severity: string }): JSX.Element {
   return <span className={`sev-dot sev-${severity.toLowerCase()}`} title={severity} aria-label={severity} />;
-}
-
-/* ---- audit configuration, kept out of the way ---------------------------------------------------
-   These three panels are settings, not findings. They used to sit above the table and pushed the
-   first finding below the fold on a laptop; they now live behind one toolbar button. */
-
-function LiveAuditCard(): JSX.Element {
-  const { data, error, isFetching } = useScannerLive();
-  const setLive = useSetScannerLive();
-
-  const toggle = () => {
-    if (!data?.wired) {
-      toast.error("Live active audit is not wired up on this server");
-      return;
-    }
-    setLive.mutate(
-      { enabled: !data.enabled },
-      { onError: (err) => toast.error(err instanceof Error ? err.message : String(err)) },
-    );
-  };
-
-  const gaps: string[] = [];
-  if (data && data.behind > 0) gaps.push(`${data.behind.toLocaleString()} not reached yet`);
-  if (data?.skipped) gaps.push(`${data.skipped.toLocaleString()} given up on`);
-  if (data?.stalled_at !== undefined) gaps.push(`waiting on #${data.stalled_at}`);
-
-  return (
-    <Card>
-      <div className="section-heading">
-        <div>
-          <h2>Live active audit</h2>
-          <p>Audits new in-scope traffic as it is captured. Active checks are never sent automatically while this is off.</p>
-        </div>
-        <Switch checked={data?.enabled ?? false} onCheckedChange={toggle} label="Live active audit" />
-      </div>
-      {error ? <ErrorNotice error={error} /> : null}
-      {data && !data.wired ? <div className="notice notice-warn">{data.hint ?? "not available"}</div> : null}
-      {data && data.wired ? (
-        <>
-          <div className="metric-grid compact">
-            <Metric label="Exchanges swept" value={(data.swept ?? 0).toLocaleString()} />
-            <Metric label="Findings" value={(data.findings ?? 0).toLocaleString()} />
-          </div>
-          <div className="chip-row">
-            {data.behind > 0 ? (
-              <Badge tone="warn" title="captured but not yet reached by the sweep cursor">
-                {data.behind.toLocaleString()} not swept yet
-              </Badge>
-            ) : null}
-            {data.skipped ? (
-              <Badge tone="warn" title="the sweep stopped waiting for a response; not counted as clean">
-                {data.skipped.toLocaleString()} given up on
-              </Badge>
-            ) : null}
-            {data.stalled_at !== undefined ? <Badge tone="warn">waiting on #{data.stalled_at}</Badge> : null}
-            {data.collapsed ? (
-              <Badge title="checks the shared ledger refused as already covered — this work ran, it is not a gap">
-                {data.collapsed.toLocaleString()} already covered
-              </Badge>
-            ) : null}
-            {data.ledger_resets ? <Badge tone="warn">{data.ledger_resets.toLocaleString()} ledger reset(s)</Badge> : null}
-          </div>
-          <p className="field-hint">
-            {gaps.length === 0
-              ? "complete — the sweep is caught up, nothing skipped and nothing waiting"
-              : `a floor, not a total: ${gaps.join("; ")}`}
-            {data.query ? ` · filtered to ${data.query}` : ""}
-          </p>
-        </>
-      ) : null}
-      {!data && isFetching ? <LoadingPanel /> : null}
-    </Card>
-  );
-}
-
-function CoverageCard(): JSX.Element {
-  const { data, error, isFetching } = useScannerCoverage();
-  return (
-    <Card>
-      <div className="section-heading">
-        <div>
-          <h2>Passive check coverage</h2>
-          <p>{data ? (data.summary ?? `${data.loaded ?? 0} BCheck(s) loaded`) : "How much of the captured traffic each passive check has actually run against."}</p>
-        </div>
-      </div>
-      {error ? <ErrorNotice error={error} /> : null}
-      {!data && isFetching ? <LoadingPanel /> : null}
-      {data && !data.enabled ? <div className="notice notice-warn">{data.hint ?? "passive BCheck scanning is not enabled"}</div> : null}
-      {data?.enabled ? (
-        <>
-          {data.partition?.length ? (
-            <div className="chip-row">
-              {data.partition.map((p) => (
-                <Badge key={p.state}>
-                  {p.count} {p.state}
-                </Badge>
-              ))}
-            </div>
-          ) : null}
-          <SimpleTable headers={["Check", "Ran", "Findings", "Errored", "State"]}>
-            {(data.checks ?? []).map((check) => (
-              <tr key={check.name}>
-                <td>{check.name}</td>
-                <td className="cell-num">{check.ran.toLocaleString()}</td>
-                <td className="cell-num">{check.findings.toLocaleString()}</td>
-                <td className="cell-num">{check.errored.toLocaleString()}</td>
-                <td>
-                  <Badge tone={check.errored > 0 ? "warn" : "good"} title={check.last_error}>
-                    {check.state}
-                  </Badge>
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
-        </>
-      ) : null}
-    </Card>
-  );
 }
 
 /* ---- the issue tree ---------------------------------------------------------------------------- */
@@ -271,8 +141,6 @@ function groupFindings(findings: FindingDetail[]): HostGroup[] {
 
 export function ScannerPage(): JSX.Element {
   const { data: issues, error, isFetching, refetch } = useIssuesDetailed();
-  const configsQuery = useScannerConfigs();
-  const runAudit = useRunAudit();
   const focusExchange = useApp((state) => state.focusExchange);
   const setRoute = useApp((state) => state.setRoute);
   const setHistoryQuery = useApp((state) => state.setHistoryQuery);
@@ -283,10 +151,6 @@ export function ScannerPage(): JSX.Element {
   const [term, setTerm] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [exchangeId, setExchangeId] = useState("");
-  const [configName, setConfigName] = useState("");
-  const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const debouncedTerm = useDebounced(term, 260);
   // Same cache key the history tab uses: the advisory's Request/Response tabs need the message ids,
@@ -331,26 +195,6 @@ export function ScannerPage(): JSX.Element {
   }, [history, selected]);
   const request = useMessage(exchange?.request);
   const response = useMessage(exchange?.response ?? null);
-
-  const runOnExchange = () => {
-    const id = Number(exchangeId);
-    // `< 0` and Number.isInteger, not `<= 0` and isFinite: exchange 0 is a real exchange, and 1.5 is
-    // finite but is not an id.
-    if (!Number.isInteger(id) || id < 0) {
-      toast.error("Enter an exchange id — a whole number, counting from 0");
-      return;
-    }
-    runAudit.mutate(
-      { exchangeId: id, config: configName || undefined },
-      {
-        onSuccess: (result) => {
-          setAuditResult(result);
-          toast.success(result.error ? `Audit refused: ${result.error}` : `Audit ran against #${id}`);
-        },
-        onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
-      },
-    );
-  };
 
   /**
    * The issue-triage menu, on a tree leaf.
@@ -740,12 +584,12 @@ export function ScannerPage(): JSX.Element {
                   {count} {s}
                 </Badge>
               ))}
-              <Tooltip content="Live audit, passive coverage, and targeted audit">
-                <Button variant="outline" size="small" onClick={() => setSettingsOpen(true)}>
-                  <SlidersHorizontal size={13} />
-                  Audit settings
-                </Button>
-              </Tooltip>
+              {/* burpsy-react-ui-1yd: the launch controls (live audit, targeted audit, the check
+                  switches) moved to the Scanner leaf, so a scan is started from one surface. */}
+              <Button variant="outline" size="small" onClick={() => setRoute("scannerlaunch")}>
+                <SlidersHorizontal size={13} />
+                Scanner controls
+              </Button>
               {REPORT_FORMATS.map((f) => (
                 <LinkButton key={f.format} href={`/api/report/${f.format}`} download>
                   <Download size={13} />
@@ -781,67 +625,6 @@ export function ScannerPage(): JSX.Element {
 
       <SplitPane storageId="issues" orientation="horizontal" defaultMasterSize="34" minMasterSize="20" master={treePane} detail={advisory} />
 
-      <Modal open={settingsOpen} onOpenChange={setSettingsOpen} title="Audit settings" description="What the scanner runs, and what it has already covered." wide>
-        <div className="stack">
-          <LiveAuditCard />
-          <CoverageCard />
-          <div className="audit-strip">
-            <div>
-              <ShieldAlert size={20} />
-              <span>
-                <strong>Targeted audit</strong>
-                <small>Run the configured checks against one captured exchange.</small>
-              </span>
-            </div>
-            <Select aria-label="Scan configuration" title="Scan configuration" value={configName} onChange={(event) => setConfigName(event.target.value)}>
-              <option value="">server default</option>
-              {(configsQuery.data?.configs ?? []).map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
-            <Input
-              type="number"
-              value={exchangeId}
-              onChange={(event) => setExchangeId(event.target.value)}
-              aria-label="Exchange ID"
-              title="Exchange ID"
-              placeholder="Exchange ID"
-              style={{ maxWidth: "var(--w-xs)" }}
-            />
-            <Button onClick={runOnExchange} disabled={!exchangeId || runAudit.isPending}>
-              <Play size={14} />
-              {runAudit.isPending ? "Auditing…" : "Audit"}
-            </Button>
-          </div>
-          {auditResult ? (
-            <Card>
-              <div className="section-heading">
-                <div>
-                  <h2>Audit result — exchange #{auditResult.exchange_id}</h2>
-                  <p>{auditResult.summary ?? (auditResult.error ? "refused" : "completed")}</p>
-                </div>
-                <Badge tone={auditResult.error ? "bad" : "good"}>{auditResult.config_name || "server default"}</Badge>
-              </div>
-              {auditResult.error ? <ErrorNotice error={auditResult.error} /> : null}
-              <DetailList
-                rows={[
-                  { label: "Active checks", value: auditResult.active_checks },
-                  { label: "Unimplemented checks", value: auditResult.unimplemented },
-                  { label: "Time budget", value: formatDuration(auditResult.config.time_budget_ms) },
-                  { label: "Max requests", value: auditResult.config.max_requests ?? "uncapped" },
-                ]}
-              />
-              {/* The engine's outcome/dispositions/breakdown are scanner-internal and not worth a bespoke
-                  shape here; JsonView is the documented fallback for an irregular payload. */}
-              {auditResult.breakdown ? <JsonView value={auditResult.breakdown} label="breakdown" defaultOpen={1} /> : null}
-              {auditResult.outcome ? <JsonView value={auditResult.outcome} label="outcome" defaultOpen={1} /> : null}
-              {auditResult.dispositions ? <JsonView value={auditResult.dispositions} label="dispositions" defaultOpen={0} /> : null}
-            </Card>
-          ) : null}
-        </div>
-      </Modal>
     </div>
   );
 }
