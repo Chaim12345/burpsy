@@ -200,3 +200,34 @@ func contains(ks []PointKind, want PointKind) bool {
 	}
 	return false
 }
+
+func TestFindsJSONAndXMLBodyPoints(t *testing.T) {
+	// JSON body request
+	mJSON := storeReq(t, "POST /api/user HTTP/1.1\r\nHost: t.test\r\nContent-Type: application/json\r\nContent-Length: 31\r\n\r\n{\"username\":\"john\",\"age\":\"30\"}")
+	ptsJSON := FindPoints(mJSON, DefaultPointConfig())
+	hasKV(t, ptsJSON, PointBodyParamValue, "username")
+	hasKV(t, ptsJSON, PointBodyParamValue, "age")
+
+	// Apply JSON point payload
+	var usernamePt *InsertionPoint
+	for i := range ptsJSON {
+		if ptsJSON[i].Label == "username" {
+			usernamePt = &ptsJSON[i]
+			break
+		}
+	}
+	if usernamePt == nil {
+		t.Fatal("missing username point in JSON request")
+	}
+	appliedJSON := Apply(mJSON.Raw(), usernamePt, []byte("admin"))
+	if !bytes.Contains(appliedJSON, []byte("{\"username\":\"admin\",\"age\":\"30\"}")) {
+		t.Errorf("failed to apply payload to JSON point: %s", appliedJSON)
+	}
+
+	// XML body request
+	mXML := storeReq(t, "POST /api/soap HTTP/1.1\r\nHost: t.test\r\nContent-Type: application/xml\r\nContent-Length: 42\r\n\r\n<user><name>john</name><role>admin</role></user>")
+	ptsXML := FindPoints(mXML, DefaultPointConfig())
+	if len(ptsXML) == 0 {
+		t.Fatal("expected points for XML body")
+	}
+}

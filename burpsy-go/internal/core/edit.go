@@ -299,10 +299,14 @@ func (e *RequestEdit) ToRaw() []byte {
 	return []byte(sb.String())
 }
 
-// strictHeaderEnd reports the end of the header block and the start of the body.
+// StrictHeaderEnd reports the end of the header block and the start of the body.
 // Unlike the message parser's findHeaderEnd it refuses a buffer with no
 // terminator at all rather than treating the whole thing as head; see
 // ErrNoHeaderTerminator for why the difference is deliberate.
+func StrictHeaderEnd(raw []byte) (headEnd, bodyStart int, ok bool) {
+	return strictHeaderEnd(raw)
+}
+
 func strictHeaderEnd(raw []byte) (headEnd, bodyStart int, ok bool) {
 	for i := 0; i < len(raw); i++ {
 		if raw[i] != '\n' {

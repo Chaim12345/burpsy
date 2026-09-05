@@ -160,6 +160,24 @@ const (
 	locRelocateCookieToBody
 )
 
+// RawSpan returns the byte span (offset and length) in the raw request for this point.
+func (p *InsertionPoint) RawSpan(req []byte) core.Span {
+	_, err := core.ParseRequestEdit(req)
+	if err != nil {
+		return core.Span{}
+	}
+	switch p.loc.kind {
+	case locBody:
+		_, bodyStart, ok := core.StrictHeaderEnd(req)
+		if !ok {
+			return core.Span{}
+		}
+		return core.Span{Offset: bodyStart + p.loc.start, Len: p.loc.end - p.loc.start}
+	default:
+		return core.Span{}
+	}
+}
+
 // loc is a byte range within one component of the base request: the query
 // string, the value of header `index`, a range within that value, or the body.
 type loc struct {
@@ -655,6 +673,19 @@ func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined
 		return
 	}
 
+	if strings.Contains(ctype, "xml") || strings.HasPrefix(trimmed, "<") {
+		for _, sp := range xmlTextSpans(body) {
+			*out = append(*out, InsertionPoint{
+				Kind:      IpBody,
+				Name:      "xml",
+				BaseValue: body[sp[0]:sp[1]],
+				loc:       loc{kind: locBody, start: sp[0], end: sp[1]},
+				coding:    codingRaw,
+			})
+		}
+		return
+	}
+
 	// A missing Content-Type on a `k=v&k=v` body is still a form as far as
 	// every server is concerned; requiring the header would leave those bodies
 	// untested.
@@ -675,7 +706,7 @@ func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined
 
 	*declined = append(*declined, Declined{
 		What:   "request body",
-		Reason: "body matches no modelled container (multipart, XML or plain text): splicing would corrupt framing the server rejects before the code under test sees the payload",
+		Reason: "body matches no modelled container (multipart or plain text): splicing would corrupt framing the server rejects before the code under test sees the payload",
 	})
 }
 

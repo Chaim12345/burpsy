@@ -505,8 +505,9 @@ export function HistoryPage(): JSX.Element {
   // Extension include/exclude, comma-separated, matched against the derived extension.
   const [showExtensions, setShowExtensions] = useState("");
   const [hideExtensions, setHideExtensions] = useState("");
-  // Search modifiers over the existing term (proxyHttpSearch*Checkbox). An invalid regex is
-  // reported in place rather than silently matching nothing.
+  // Dedicated substring/regex search term in the More Filters popover (burpsy-react-ui-vlf).
+  const [searchTerm, setSearchTerm] = useState("");
+  const debouncedSearchTerm = useDebounced(searchTerm, 260);
   const [searchCase, setSearchCase] = useState(false);
   const [searchRegex, setSearchRegex] = useState(false);
   const [searchNegate, setSearchNegate] = useState(false);
@@ -612,11 +613,8 @@ export function HistoryPage(): JSX.Element {
   // is the case that matters: silently matching nothing would read as "no such traffic", which is
   // the difference between an empty result and a broken filter.
   const { searchMatcher, searchError } = useMemo(() => {
-    const needle = debouncedTerm.trim();
-    if (needle === "" || !searchRegex && !searchCase && !searchNegate) {
-      // No modifiers in play: the DSL box already handles plain terms server-side.
-      if (needle === "" || !searchRegex) return { searchMatcher: null, searchError: null };
-    }
+    const needle = debouncedSearchTerm.trim();
+    if (needle === "") return { searchMatcher: null, searchError: null };
     if (searchRegex) {
       try {
         const re = new RegExp(needle, searchCase ? "" : "i");
@@ -633,12 +631,12 @@ export function HistoryPage(): JSX.Element {
       searchMatcher: (hay: string) => (searchCase ? hay : hay.toLowerCase()).includes(cmp),
       searchError: null,
     };
-  }, [debouncedTerm, searchRegex, searchCase, searchNegate]);
+  }, [debouncedSearchTerm, searchRegex, searchCase]);
 
   const filtersActive =
     (onlyParameterized ? 1 : 0) + (onlyCommented ? 1 : 0) + (onlyHighlighted ? 1 : 0) +
     (showList.length > 0 ? 1 : 0) + (hideList.length > 0 ? 1 : 0) +
-    (searchMatcher ? 1 : 0);
+    (debouncedSearchTerm.trim() !== "" ? 1 : 0);
 
   /**
    * Every narrowing currently in force, named as an operator would name it.
@@ -671,7 +669,7 @@ export function HistoryPage(): JSX.Element {
     }
     if (hideNoResponse) names.push("hiding rows with no response");
     if (scopeOnly) names.push("in-scope only");
-    if (searchMatcher) names.push(searchNegate ? "search (inverted)" : "search");
+    if (debouncedSearchTerm.trim() !== "") names.push(searchNegate ? `search "${debouncedSearchTerm.trim()}" (inverted)` : `search "${debouncedSearchTerm.trim()}"`);
     if (onlyParameterized) names.push("with query parameters");
     if (onlyCommented) names.push("commented");
     if (onlyHighlighted) names.push("highlighted");
@@ -1322,7 +1320,18 @@ export function HistoryPage(): JSX.Element {
           </div>
 
           <div>
-            <div className="shortcut-group">Search modifiers</div>
+            <div className="shortcut-group">Substring / Regex search</div>
+            <Field label="Search term" hint="Searches method, host, path, MIME and comment.">
+              {(id) => (
+                <Input
+                  id={id}
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  placeholder="Substring or regular expression..."
+                />
+              )}
+            </Field>
+            <div style={{ marginTop: 8 }} />
             <Checkbox checked={searchCase} onCheckedChange={setSearchCase} label="Case sensitive" />
             <Checkbox checked={searchRegex} onCheckedChange={setSearchRegex} label="Regular expression" />
             <Checkbox
@@ -1350,6 +1359,7 @@ export function HistoryPage(): JSX.Element {
                 setOnlyHighlighted(false);
                 setShowExtensions("");
                 setHideExtensions("");
+                setSearchTerm("");
                 setSearchCase(false);
                 setSearchRegex(false);
                 setSearchNegate(false);

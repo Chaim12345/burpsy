@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
@@ -45,6 +46,10 @@ const (
 	// OptUnhideHiddenFormFields rewrites `type="hidden"` to `type="text"` on
 	// `<input>` elements, so a hidden field can be edited in the browser.
 	OptUnhideHiddenFormFields OptionKey = "unhide_hidden_form_fields"
+	// OptEnableDisabledFormFields removes `disabled` attributes on form fields so greyed-out controls can be edited.
+	OptEnableDisabledFormFields OptionKey = "enable_disabled_form_fields"
+	// OptRemoveInputLengthLimits removes `maxlength` attributes from form input/textarea controls.
+	OptRemoveInputLengthLimits OptionKey = "remove_input_field_length_limits"
 	// OptRemoveObjectTags removes `<object>…</object>` elements and their content.
 	OptRemoveObjectTags OptionKey = "remove_object_tags"
 	// OptRemoveJSFormValidation removes `onsubmit` and `onreset` handler
@@ -56,6 +61,8 @@ const (
 	// OptConvertHTTPSLinks rewrites `https://` to `http://` inside href, src and
 	// action attribute values.
 	OptConvertHTTPSLinks OptionKey = "convert_https_links_to_http"
+	// OptRemoveCookieSecureFlag removes the `; Secure` attribute from Set-Cookie headers.
+	OptRemoveCookieSecureFlag OptionKey = "remove_cookie_secure_flag"
 	// OptStripAcceptEncoding removes the Accept-Encoding header from requests on
 	// the way out. Burp's own wording for this option ends "(if not unpacking
 	// compressed data)", which is exactly this build's situation: it has no
@@ -87,6 +94,14 @@ const (
 	// — and a response carrying one is counted as SkippedUnsupportedEncoding rather
 	// than reported as unpacked. See internal/httputil.Unpackable.
 	OptUnpackCompressedResponses OptionKey = "unpack_compressed_responses"
+	// OptStripWsExtensions strips the Sec-WebSocket-Extensions header from WebSocket handshakes,
+	// so the origin cannot negotiate permessage-deflate and captured frames stay in the clear.
+	// Burp's proxy.miscellaneous.strip_sec_websocket_extensions_headers_in_incoming_requests.
+	OptStripWsExtensions OptionKey = "strip_sec_websocket_extensions"
+	// OptInvisibleProxying enables support for invisible proxying (non-proxy-aware clients).
+	OptInvisibleProxying OptionKey = "invisible_proxying"
+	// OptDontLogOutOfScopeItems prevents logging/storing out-of-scope items in proxy history.
+	OptDontLogOutOfScopeItems OptionKey = "dont_log_out_of_scope_items"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -94,13 +109,19 @@ const (
 // caller guess, and so a key added here appears in both without a second edit.
 var OptionKeys = []OptionKey{
 	OptUnhideHiddenFormFields,
+	OptEnableDisabledFormFields,
+	OptRemoveInputLengthLimits,
 	OptRemoveObjectTags,
 	OptRemoveJSFormValidation,
 	OptRemoveAllJavaScript,
 	OptConvertHTTPSLinks,
+	OptRemoveCookieSecureFlag,
 	OptStripAcceptEncoding,
 	OptUnpackCompressedRequests,
 	OptUnpackCompressedResponses,
+	OptStripWsExtensions,
+	OptInvisibleProxying,
+	OptDontLogOutOfScopeItems,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The
@@ -126,10 +147,13 @@ var ErrUnknownOption = errors.New("unknown proxy option")
 // arriving in this set would make every response look eligible.
 var responseRules = []OptionKey{
 	OptUnhideHiddenFormFields,
+	OptEnableDisabledFormFields,
+	OptRemoveInputLengthLimits,
 	OptRemoveObjectTags,
 	OptRemoveJSFormValidation,
 	OptRemoveAllJavaScript,
 	OptConvertHTTPSLinks,
+	OptRemoveCookieSecureFlag,
 }
 
 // Counters is one snapshot of what the response rules actually did.
@@ -181,18 +205,10 @@ type Counters struct {
 	// ModifiedUnrecorded is the subset of Modified that scope kept out of history:
 	// the rules rewrote the bytes the client received, and no exchange exists to
 	// show it.
-	//
-	// It exists because without it Modified is unreconcilable. The rules run on all
-	// traffic through the listener — that is what a listener-level rule means, and it
-	// is the same ordering applyRequestRules already uses so an out-of-scope forward
-	// sends the bytes the recorded path would — but only in-scope exchanges are
-	// stored. So an operator reading "responses_modified: 40" could search all of
-	// history, find four modified responses, and have no way to learn whether the
-	// other thirty-six were a counter bug or a scope decision. This says which.
-	//
-	// Modified - ModifiedUnrecorded is the number findable in history, by
-	// construction.
 	ModifiedUnrecorded uint64 `json:"responses_modified_unrecorded"`
+	// DroppedOutOfScope counts exchanges that were dropped from recording because
+	// dont_log_out_of_scope_items was enabled.
+	DroppedOutOfScope uint64 `json:"dropped_out_of_scope"`
 }
 
 // Options is the live option set. Safe for concurrent use: the proxy reads it once
@@ -216,6 +232,7 @@ type Options struct {
 	acceptEncodingStripped atomic.Uint64
 	dechunked              atomic.Uint64
 	modifiedUnrecorded     atomic.Uint64
+	droppedOutOfScope      atomic.Uint64
 }
 
 // NewOptions returns an option set with every rule off.
@@ -229,6 +246,7 @@ func NewOptions() *Options {
 	for _, key := range OptionKeys {
 		flags[key] = false
 	}
+	flags[OptStripWsExtensions] = true
 	return &Options{flags: flags}
 }
 
@@ -294,7 +312,17 @@ func (o *Options) Counters() Counters {
 		AcceptEncodingStripped:     o.acceptEncodingStripped.Load(),
 		Dechunked:                  o.dechunked.Load(),
 		ModifiedUnrecorded:         o.modifiedUnrecorded.Load(),
+		DroppedOutOfScope:          o.droppedOutOfScope.Load(),
 	}
+}
+
+// NoteDroppedOutOfScope records an exchange dropped from store recording because
+// dont_log_out_of_scope_items was enabled.
+func (o *Options) NoteDroppedOutOfScope() {
+	if o == nil {
+		return
+	}
+	o.droppedOutOfScope.Add(1)
 }
 
 // NoteUnrecordedModification records that one response the rules rewrote will not appear
@@ -350,6 +378,11 @@ func (o *Options) ApplyRequest(raw []byte) []byte {
 	if o.Get(OptStripAcceptEncoding) {
 		if stripped, removed := removeHeader(out, "Accept-Encoding"); removed {
 			o.acceptEncodingStripped.Add(1)
+			out = stripped
+		}
+	}
+	if o.Get(OptStripWsExtensions) && core.IsWsUpgradeRequest(out) {
+		if stripped, _, err := core.StripWsExtensionsHeader(out); err == nil {
 			out = stripped
 		}
 	}
@@ -513,6 +546,24 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		return raw
 	}
 
+	headModified := false
+	if enabled[OptRemoveCookieSecureFlag] {
+		newHead := removeCookieSecureFlag(head)
+		if !bytes.Equal(newHead, head) {
+			head = newHead
+			headModified = true
+		}
+	}
+
+	if !isHTMLResponse(head) {
+		if headModified {
+			o.modified.Add(1)
+			return rebuild(head, sep, body, false, false)
+		}
+		o.skippedNotHTML.Add(1)
+		return raw
+	}
+
 	chunked := strings.EqualFold(headerValue(head, "Transfer-Encoding"), "chunked")
 	plain := body
 	if chunked {
@@ -541,11 +592,17 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 	if enabled[OptUnhideHiddenFormFields] {
 		out = unhideHiddenFormFields(out)
 	}
+	if enabled[OptEnableDisabledFormFields] {
+		out = enableDisabledFormFields(out)
+	}
+	if enabled[OptRemoveInputLengthLimits] {
+		out = removeInputLengthLimits(out)
+	}
 	if enabled[OptConvertHTTPSLinks] {
 		out = convertHTTPSLinks(out)
 	}
 
-	if bytes.Equal(out, plain) {
+	if !headModified && bytes.Equal(out, plain) {
 		// Nothing fired. Return the original bytes, chunk framing and all: a
 		// response the rules did not change must not be re-framed as a side effect
 		// of having been looked at.
@@ -592,10 +649,13 @@ var (
 	// Three patterns because RE2 has no backreferences, so `type=(["']?)hidden\1`
 	// is not expressible — and matching the quotes independently would rewrite
 	// `type="hidden'` into something that was never valid either way.
-	reHiddenDouble   = regexp.MustCompile(`(?is)(<input\b[^>]*?\btype\s*=\s*)"hidden"`)
-	reHiddenSingle   = regexp.MustCompile(`(?is)(<input\b[^>]*?\btype\s*=\s*)'hidden'`)
-	reHiddenBare     = regexp.MustCompile(`(?is)(<input\b[^>]*?\btype\s*=\s*)hidden\b`)
-	reHTTPSAttribute = regexp.MustCompile(`(?is)(\s(?:href|src|action)\s*=\s*["']?)https://`)
+	reHiddenDouble      = regexp.MustCompile(`(?is)(<input\b[^>]*?\btype\s*=\s*)"hidden"`)
+	reHiddenSingle      = regexp.MustCompile(`(?is)(<input\b[^>]*?\btype\s*=\s*)'hidden'`)
+	reHiddenBare        = regexp.MustCompile(`(?is)(<input\b[^>]*?\btype\s*=\s*)hidden\b`)
+	reDisabledAttr      = regexp.MustCompile(`(?is)\sdisabled\b(\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?`)
+	reMaxLengthAttr     = regexp.MustCompile(`(?is)\smaxlength\b(\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?`)
+	reCookieSecureFlag  = regexp.MustCompile(`(?i)(Set-Cookie\s*:[^\r\n]*?);\s*Secure\b`)
+	reHTTPSAttribute    = regexp.MustCompile(`(?is)(\s(?:href|src|action)\s*=\s*["']?)https://`)
 )
 
 func removeAllJavaScript(body []byte) []byte {
@@ -624,6 +684,18 @@ func unhideHiddenFormFields(body []byte) []byte {
 	out := reHiddenDouble.ReplaceAll(body, []byte(`${1}"text"`))
 	out = reHiddenSingle.ReplaceAll(out, []byte(`${1}'text'`))
 	return reHiddenBare.ReplaceAll(out, []byte(`${1}text`))
+}
+
+func enableDisabledFormFields(body []byte) []byte {
+	return reDisabledAttr.ReplaceAll(body, nil)
+}
+
+func removeInputLengthLimits(body []byte) []byte {
+	return reMaxLengthAttr.ReplaceAll(body, nil)
+}
+
+func removeCookieSecureFlag(msg []byte) []byte {
+	return reCookieSecureFlag.ReplaceAll(msg, []byte(`${1}`))
 }
 
 func convertHTTPSLinks(body []byte) []byte {

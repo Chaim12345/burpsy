@@ -14,6 +14,7 @@ import { Badge, Card, ErrorNotice, Metric, Switch } from "../ui/primitives";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
 import { formatCount } from "../lib/api";
+import { useStats } from "../lib/data";
 import { useProxyOptions, useSetProxyOptions } from "../lib/data.proxyoptions";
 
 // One row of the panel: key, label, what it does. Order matches proxy.OptionKeys.
@@ -22,6 +23,16 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
   key: "unhide_hidden_form_fields",
   label: "Unhide hidden form fields",
   detail: 'Rewrite type="hidden" inputs to type="text" so a hidden field can be edited in the browser.',
+ },
+ {
+  key: "enable_disabled_form_fields",
+  label: "Enable disabled form fields",
+  detail: "Remove disabled attributes on form fields so greyed-out controls can be edited in the browser.",
+ },
+ {
+  key: "remove_input_field_length_limits",
+  label: "Remove input field length limits",
+  detail: "Remove maxlength attributes from input and textarea form elements.",
  },
  {
   key: "remove_object_tags",
@@ -44,15 +55,36 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
   detail: "Rewrite https:// to http:// inside href, src and action attribute values.",
  },
  {
+  key: "remove_cookie_secure_flag",
+  label: "Remove Secure flag from cookies",
+  detail: "Remove the ; Secure attribute from Set-Cookie headers so session cookies are transmitted over plaintext HTTP.",
+ },
+ {
   key: "strip_accept_encoding",
   label: "Strip Accept-Encoding from requests",
   detail: "Ask the origin for plaintext: with no decompressor on the proxy path, compressed responses are exactly the ones these rules cannot rewrite.",
+ },
+ {
+  key: "strip_sec_websocket_extensions",
+  label: "Strip Sec-WebSocket-Extensions header",
+  detail: "Remove permessage-deflate extension offers from WebSocket handshakes so captured frames are recorded in the clear.",
+ },
+ {
+  key: "invisible_proxying",
+  label: "Support invisible proxying",
+  detail: "Enable invisible proxying support for non-proxy-aware clients (clients whose DNS/hosts point at the proxy).",
+ },
+ {
+  key: "dont_log_out_of_scope_items",
+  label: "Don't log out-of-scope items",
+  detail: "Stop recording and storing out-of-scope requests and responses in Proxy history.",
  },
 ];
 
 export function ProxySettingsPage(): JSX.Element {
  const state = useProxyOptions();
  const setOptions = useSetProxyOptions();
+ const stats = useStats();
 
  if (state.isLoading) return <LoadingPanel label="Loading proxy options" />;
  if (state.error || !state.data)
@@ -65,9 +97,19 @@ export function ProxySettingsPage(): JSX.Element {
   <div className="stack">
    <PageHeader
     title="Proxy settings"
-    description="Response-modification rules the relay applies live, and the counters that say whether they changed anything."
+    description="Response-modification rules, listener options, and options the relay applies live."
     actions={<RefreshButton onClick={() => void state.refetch()} loading={state.isFetching} />}
    />
+   <Card>
+    <SectionHeading
+     title="Proxy listener"
+     detail="Current proxy bind address and options."
+    />
+    <div className="metric-grid">
+     <Metric label="Bind address" value={stats.data?.proxy_bind ?? "127.0.0.1:8080"} detail="Configured listener address" />
+     <Metric label="TLS Interception" value={stats.data?.tls_interception ? "Enabled" : "Active"} />
+    </div>
+   </Card>
    <Card>
     <SectionHeading
      title="Response modification"
@@ -108,6 +150,7 @@ export function ProxySettingsPage(): JSX.Element {
      <Metric label="Skipped: compressed" value={c.skipped_compressed} detail="turn on strip-Accept-Encoding to reach these" />
      <Metric label="Skipped: not HTML" value={c.skipped_not_html} />
      <Metric label="Skipped: unframed" value={c.skipped_unframed} />
+     <Metric label="Dropped: out of scope" value={c.dropped_out_of_scope ?? 0} detail="prevented from history recording" />
     </div>
     {c.responses_considered > 0 && c.responses_modified === 0 ? (
      <p className="cell-dim" style={{ marginTop: "var(--gap)" }}>

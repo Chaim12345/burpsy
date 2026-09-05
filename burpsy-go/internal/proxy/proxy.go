@@ -668,6 +668,9 @@ func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig
 // passed off as plaintext.
 func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 	c.stripWsExtensions = strip
+	if c.options != nil {
+		_ = c.options.Set(OptStripWsExtensions, strip)
+	}
 	return c
 }
 
@@ -1137,6 +1140,8 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 
 			Notes: notes,
 		})
+	} else if s.config.options.Get(OptDontLogOutOfScopeItems) {
+		s.config.options.NoteDroppedOutOfScope()
 	}
 	return keepServing
 }
@@ -1317,6 +1322,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	inScope := s.config.scope.Contains(host, port, path, false)
 
 	if !inScope {
+		if s.config.options.Get(OptDontLogOutOfScopeItems) {
+			s.config.options.NoteDroppedOutOfScope()
+		}
 		// Forward without storing
 		s.forwardOnly(clientConn, reader, requestData, host, port)
 		return

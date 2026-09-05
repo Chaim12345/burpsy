@@ -35,12 +35,20 @@ import (
 // applied option can answer yes.
 const everyRuleMarkup = `<html><body>` +
 	`<form onsubmit="validate()" onreset="clear()">` +
-	`<input type="hidden" name="csrf" value="abc">` +
+	`<input type="hidden" name="csrf" value="abc" disabled maxlength="10">` +
 	`</form>` +
 	`<object data="plugin.swf"><param name="a" value="b"></object>` +
 	`<script>tracker()</script>` +
 	`<a href="https://cdn.example.test/app.js" onclick="go()">link</a>` +
 	`</body></html>`
+
+func htmlResponseWithCookie(body string) []byte {
+	return []byte("HTTP/1.1 200 OK\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"Set-Cookie: session=123; Secure\r\n" +
+		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+		"\r\n" + body)
+}
 
 // requestWithEncoding is the request-direction equivalent: a request carrying the one header
 // strip_accept_encoding exists to strip.
@@ -48,6 +56,17 @@ func requestWithEncoding() []byte {
 	return []byte("GET /page HTTP/1.1\r\n" +
 		"Host: example.test\r\n" +
 		"Accept-Encoding: gzip, deflate, br\r\n" +
+		"\r\n")
+}
+
+func wsUpgradeRequest() []byte {
+	return []byte("GET /chat HTTP/1.1\r\n" +
+		"Host: example.test\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n" +
 		"\r\n")
 }
 
@@ -108,7 +127,7 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 		t.Run(string(key), func(t *testing.T) {
 			o := optionsWith(t, key)
 
-			resp := htmlResponse(everyRuleMarkup)
+			resp := htmlResponseWithCookie(everyRuleMarkup)
 			respOut := o.ApplyResponse(resp)
 			respChanged := !strings.EqualFold(string(respOut), string(resp))
 
@@ -127,6 +146,10 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			gzReq := gzippedRequest(t, everyRuleMarkup)
 			gzReqOut := o.ApplyRequest(gzReq)
 			reqChanged = reqChanged || string(gzReqOut) != string(gzReq)
+
+			wsReq := wsUpgradeRequest()
+			wsReqOut := o.ApplyRequest(wsReq)
+			reqChanged = reqChanged || string(wsReqOut) != string(wsReq)
 
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+

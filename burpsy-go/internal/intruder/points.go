@@ -13,6 +13,7 @@ package intruder
 import (
 	"bytes"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 )
 
@@ -206,6 +207,34 @@ func FindPoints(msg *core.StoredMessage, cfg *PointConfig) []InsertionPoint {
 		if isForm && (cfg.BodyParams || cfg.ParamNames) {
 			pushKVPoints(raw, body, cfg.BodyParams, cfg.ParamNames,
 				PointBodyParamValue, PointBodyParamName, &out)
+		} else if cfg.BodyParams || cfg.ParamNames {
+			kinds := []string{}
+			if cfg.BodyParams {
+				kinds = append(kinds, "body")
+			}
+			if cfg.ParamNames {
+				kinds = append(kinds, "param_name_body")
+			}
+			pts, _ := bcheck.Enumerate(raw, kinds)
+			for _, p := range pts {
+				span := p.RawSpan(raw)
+				if span.IsEmpty() {
+					continue
+				}
+				if p.Kind == bcheck.IpBody && cfg.BodyParams {
+					out = append(out, InsertionPoint{
+						Kind:  PointBodyParamValue,
+						Span:  span,
+						Label: p.Name,
+					})
+				} else if p.Kind == bcheck.IpParamNameBody && cfg.ParamNames {
+					out = append(out, InsertionPoint{
+						Kind:  PointBodyParamName,
+						Span:  span,
+						Label: p.Name,
+					})
+				}
+			}
 		}
 		if cfg.EntireBody {
 			out = append(out, InsertionPoint{
