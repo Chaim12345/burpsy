@@ -1,11 +1,18 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"go.uber.org/zap"
@@ -158,6 +165,14 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			handshakeOut, _ := srv.stripWsHandshake(upgrade)
 			reqChanged = reqChanged || string(handshakeOut) != string(upgrade)
 
+			// The listener-level fixture, for invisible proxying: an origin-form request
+			// whose only authority is a Host header, driven through a real ListenAndServe
+			// loop against one shared origin — once with the key enabled alone, once with
+			// everything off. Only a key that decides the Host-header fallback can make
+			// the two answers differ, and no per-key table is needed: every key is offered
+			// the fixture, and the ones that do not act on it produce identical answers.
+			reqChanged = reqChanged || invisibleProxyFixture(t, key)
+
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+
 					"direction. Either it has no applier — in which case the API is advertising "+
@@ -210,6 +225,70 @@ func Test_KnownOption_agrees_with_the_advertised_list(t *testing.T) {
 			t.Errorf("KnownOption accepted %q, which is not in OptionKeys", bogus)
 		}
 	}
+}
+
+// invisibleProxyFixture drives one origin-form request through a real ListenAndServe
+// loop with the key enabled alone and again with everything off, and answers whether
+// the two runs differed. Shared by every key in the binding test: the keys that do not
+// decide the Host-header fallback return false, the one that does returns true.
+func invisibleProxyFixture(t *testing.T, key OptionKey) bool {
+	t.Helper()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "binding-invisible")
+	}))
+	defer origin.Close()
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split origin addr: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("origin port: %v", err)
+	}
+
+	answer := func(options *Options) string {
+		srv := NewServer(NewProxyConfig(core.NewTrafficStore()).
+			WithOptions(options).
+			WithScope(testScope()).
+			WithLogger(zap.NewNop()))
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			_ = srv.ListenAndServe(ctx, "127.0.0.1:0")
+		}()
+		deadline := time.Now().Add(5 * time.Second)
+		var addr string
+		for {
+			if addr = srv.ListenerAddr(); addr != "" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("fixture proxy never started listening")
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatalf("dial fixture proxy: %v", err)
+		}
+		defer conn.Close()
+		req := "GET /binding HTTP/1.1\r\n" +
+			"Host: " + host + ":" + strconv.Itoa(port) + "\r\n" +
+			"Connection: close\r\n\r\n"
+		if _, err := conn.Write([]byte(req)); err != nil {
+			t.Fatalf("write fixture request: %v", err)
+		}
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		out, err := io.ReadAll(bufio.NewReader(conn))
+		if err != nil {
+			t.Fatalf("read fixture response: %v", err)
+		}
+		return string(out)
+	}
+
+	withKey := answer(optionsWith(t, key))
+	allOff := answer(NewOptions())
+	return withKey != allOff
 }
 
 // Every advertised option must be settable and must read back. Snapshot is what the panel

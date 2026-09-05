@@ -100,6 +100,18 @@ const (
 	// default, seeded by NewProxyConfig, because a proxy that let the extension
 	// be negotiated would record compressed frames and call them messages.
 	OptStripWsExtensions OptionKey = "strip_sec_websocket_extensions"
+	// OptInvisibleProxy decides whether an origin-form request (`GET /path`) whose
+	// authority arrives only in its Host header is forwarded to that host — Burp's
+	// "Support invisible proxying (enable only if needed)". A non-proxy-aware client
+	// whose DNS points an origin's name at this listener speaks exactly this shape;
+	// with the option off the listener answers 400, which is the honest answer for a
+	// plain proxy that was sent a request it cannot attribute.
+	//
+	// Seeded ON, unlike Burp's default-off, because this engine has always honoured
+	// the Host-header fallback: flipping the default would break working setups on
+	// upgrade in exchange for nothing. The switch exists so the behaviour can be
+	// tightened, and the divergence from Burp's default is deliberate and stated.
+	OptInvisibleProxy OptionKey = "invisible_proxy"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -115,6 +127,7 @@ var OptionKeys = []OptionKey{
 	OptUnpackCompressedRequests,
 	OptUnpackCompressedResponses,
 	OptStripWsExtensions,
+	OptInvisibleProxy,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The

@@ -578,6 +578,13 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 	if err := c.options.Set(OptStripWsExtensions, true); err != nil {
 		panic("proxy: " + err.Error())
 	}
+	// On, deliberately diverging from Burp's default-off: this engine has always
+	// honoured the Host-header fallback for origin-form requests, and flipping that
+	// default would break working setups on upgrade for no gain. The switch exists
+	// so an operator can tighten the listener; see OptInvisibleProxy for the trade.
+	if err := c.options.Set(OptInvisibleProxy, true); err != nil {
+		panic("proxy: " + err.Error())
+	}
 	return c
 }
 
@@ -756,6 +763,14 @@ func (c *ProxyConfig) WithLogger(logger *zap.Logger) *ProxyConfig {
 // Server represents the proxy server.
 type Server struct {
 	config *ProxyConfig
+
+	// listener is the socket the accept loop serves, and listenerMu guards both the
+	// pointer and the identity checks the loop makes after a failed Accept. Rebind
+	// serialises on rebindMu so two concurrent re-binds cannot interleave their
+	// listen/swap/close halves; the accept loop itself never takes rebindMu.
+	listener   net.Listener
+	listenerMu sync.Mutex
+	rebindMu   sync.Mutex
 }
 
 // NewServer creates a new proxy server.
@@ -765,13 +780,84 @@ func NewServer(config *ProxyConfig) *Server {
 	}
 }
 
+// ErrNoListener reports that Rebind was asked to move a listener that is not running.
+var ErrNoListener = errors.New("proxy listener is not running")
+
+// ListenerAddr returns the address the live listener is bound to, in net.Addr form
+// (an ephemeral port is resolved), or "" when nothing is listening.
+func (s *Server) ListenerAddr() string {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
+	if s.listener == nil {
+		return ""
+	}
+	return s.listener.Addr().String()
+}
+
+// Rebind moves the live listener to addr without dropping the process: the new
+// socket is opened first, so a bind failure leaves the current listener serving
+// untouched and is returned as an error rather than becoming an outage. In-flight
+// connections on the old socket are not disturbed — only Accept is retired.
+// It answers with the address that was serving before the move.
+func (s *Server) Rebind(addr string) (string, error) {
+	s.rebindMu.Lock()
+	defer s.rebindMu.Unlock()
+
+	previous := s.ListenerAddr()
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return previous, fmt.Errorf("failed to bind proxy on %s: %w", addr, err)
+	}
+
+	s.listenerMu.Lock()
+	old := s.listener
+	s.listener = ln
+	s.listenerMu.Unlock()
+
+	// Closing the old socket unblocks its Accept; the loop's next iteration adopts
+	// the replacement. A nil old means Rebind was called before ListenAndServe —
+	// legitimate: the loop binds from this field when it starts.
+	if old != nil {
+		old.Close()
+	}
+	s.config.logger.Info("proxy listener rebound",
+		zap.String("addr", ln.Addr().String()),
+		zap.String("previous", previous))
+	return previous, nil
+}
+
+// currentListener hands the accept loop the socket to block on this iteration.
+func (s *Server) currentListener() net.Listener {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
+	return s.listener
+}
+
+// closeListener shuts the live socket down and clears it, so a second
+// ListenAndServe cannot inherit a closed listener by accident.
+func (s *Server) closeListener() {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
+	if s.listener != nil {
+		s.listener.Close()
+		s.listener = nil
+	}
+}
+
 // ListenAndServe starts the proxy server.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	if s.currentListener() != nil {
+		return errors.New("proxy is already listening")
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to bind proxy on %s: %w", addr, err)
 	}
-	defer listener.Close()
+	s.listenerMu.Lock()
+	s.listener = listener
+	s.listenerMu.Unlock()
+	defer s.closeListener()
 
 	s.config.logger.Info("proxy listening", zap.String("addr", addr))
 
@@ -782,8 +868,21 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		default:
 		}
 
+		// Re-read per iteration: after a Rebind the previous socket is closed and
+		// its Accept errors immediately, which reads below as a failure but is in
+		// fact the handover — the loop adopts the replacement instead of dying.
+		listener = s.currentListener()
+		if listener == nil {
+			return ctx.Err()
+		}
 		conn, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if s.currentListener() != listener {
+				continue
+			}
 			s.config.logger.Warn("accept failed", zap.Error(err))
 			continue
 		}
@@ -1256,7 +1355,12 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// single reader position and one copy of the request.
 	requestData := readFullRequest(requestLine, reader)
 	if host == "" {
-		if h := headerValue(requestHead(requestData), "Host"); h != "" {
+		// The fallback is what "invisible proxying" means here, and it is gated:
+		// with the option off a listener that was sent an origin-form request it
+		// cannot attribute answers 400 below rather than guessing an authority out
+		// of the headers. Burp's switch ("enable only if needed"), honoured live
+		// through the option set so no restart separates the tick from the behaviour.
+		if h := headerValue(requestHead(requestData), "Host"); h != "" && s.config.options.Get(OptInvisibleProxy) {
 			host, port = parseHostPort(h)
 		}
 	}

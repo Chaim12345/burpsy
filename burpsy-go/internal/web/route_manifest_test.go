@@ -460,6 +460,10 @@ var manifest = map[string]route{
 		summary: "import an operator-supplied CA certificate and private key, replacing the signing CA " +
 			"and clearing the leaf cache; refuses the whole pair if it is not a usable CA",
 	},
+	"/api/proxy/listener": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "the proxy listener's bind address: GET answers where it is bound now (ephemeral ports resolved), PUT re-binds it live; the new socket opens before the old closes, so a failed bind leaves the current listener serving. Not persisted: -proxy-bind stays authoritative at boot",
+	},
 	"/api/proxy/options": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters",

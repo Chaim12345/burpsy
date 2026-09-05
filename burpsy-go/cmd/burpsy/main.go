@@ -588,6 +588,10 @@ func main() {
 		// The same option set the relay holds, so the Proxy settings panel's switches and the
 		// response path's rules are one state.
 		WithProxyOptions(proxyOptions).
+		// The relay itself, so the console can read where its listener is bound and move it
+		// at runtime (burpsy-react-ui-77m): a bind change that used to need a process restart
+		// is now a PUT, and the panel reports the address the accept loop actually serves.
+		WithProxyServer(proxyServer).
 		// The raw -tools map, for the surfaces that delegate a whole phase to an external binary rather
 		// than one tool per insertion point: POST /api/discovery runs ffuf. Without -tools that route
 		// refuses and names the missing tool, which is the difference between "not configured" and "this
