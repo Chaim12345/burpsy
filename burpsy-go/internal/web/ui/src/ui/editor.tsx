@@ -7,7 +7,7 @@ import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Se
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
-import { byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
+import { breakGlyphs, byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
 import {
   base64Decode,
   base64Encode,
@@ -125,22 +125,6 @@ class EOLMarker extends WidgetType {
     span.textContent = this.glyph;
     return span;
   }
-}
-
-/**
- * The break bytes behind each rendered line, read off the raw message rather than the
- * CodeMirror document: CM6 normalises CRLF to LF when it parses the doc, so the document
- * itself can no longer tell a CRLF message from an LF one - and certifying "LF only" on a
- * CRLF message is the one wrong answer this toggle must never give. The raw text and the
- * document agree line-for-line (every break spelling still breaks exactly one line), so the
- * nth break in the raw text is the break after the nth rendered line.
- */
-function breakGlyphs(text: string): string[] {
-  const glyphs: string[] = [];
-  for (const match of text.matchAll(/\r\n|\r|\n/g)) {
-    glyphs.push(match[0] === "\r\n" ? "␍␊" : match[0] === "\n" ? "␊" : "␍");
-  }
-  return glyphs;
 }
 
 function buildEOLMarkers(view: EditorView, raw: string): DecorationSet {
