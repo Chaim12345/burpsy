@@ -742,6 +742,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
 	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)
 	s.mux.HandleFunc("/api/issues", s.handleIssues)
+	// The write path for the same resource: operator triage and delete, per finding. Registered as a
+	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
+	// here without ambiguity.
+	s.mux.HandleFunc("/api/issues/", s.handleIssueByID)
 	s.mux.HandleFunc("/api/findings", s.handleFindings) // legacy alias for /api/issues
 	// The issue-definition catalogue, independent of whether anything was found. Two patterns because
 	// they are two operations on two shapes: the exact path lists index rows, the subtree serves one

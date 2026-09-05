@@ -372,6 +372,14 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "findings, with the catalogue advisory each resolved to",
 	},
+	"/api/issues/": {
+		// riskDestructive is on for the whole subtree because DELETE discards a finding — evidence,
+		// per this file's own definition of the class — while the PUT beside it only writes burpsy's
+		// own state (a triage decision) and would be riskLocal alone. One pattern, one class: the
+		// manifest has no per-verb risk split, and understating the DELETE is the worse error.
+		methods: []string{"PUT", "PATCH", "DELETE"}, risk: riskDestructive, subPath: "0",
+		summary: "operator triage of one finding — severity/confidence override, false-positive, comment — or delete it",
+	},
 	"/api/message/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
@@ -971,7 +979,10 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// snapshots and deletes the rest, so a caller invoking it in a loop rolls the whole retention
 	// window off the disk irreversibly while every individual response reports success. Same shape as
 	// clearing the tool log, which is what this class was created for.
-	equal("destructive", destructive, []string{"/api/backup", "/api/tools/log"})
+	// /api/issues/ joins because its DELETE discards a finding — engagement evidence, per the class
+	// definition. The PUT on the same subtree is only a triage note on evidence that survives it; it
+	// rides along rather than splitting one pattern across two classes.
+	equal("destructive", destructive, []string{"/api/backup", "/api/issues/", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

@@ -4,9 +4,11 @@ import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { useExchangeActions } from "../lib/actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
-import { useIssuesDetailed } from "../lib/data.attack";
+import { useIssueTriage, useIssuesDetailed } from "../lib/data.attack";
+import { triageMenuGroups } from "../lib/issue-triage";
 import { useApp } from "../lib/store";
 import type { FindingDetail } from "../lib/types.attack";
+import type { IssueTriagePatch } from "../lib/issue-triage";
 import type { Occurrence } from "../lib/types";
 import { AdvisoryReader } from "../ui/advisory";
 import { HttpEditor } from "../ui/editor";
@@ -24,6 +26,7 @@ import {
   TabsContent,
   TabsList,
   TabsTrigger,
+  Textarea,
   Toolbar,
   Tooltip,
   type Tone,
@@ -78,6 +81,40 @@ function findingName(f: FindingDetail): string {
  * row is louder than the row label it is meant to qualify. */
 function SeverityDot({ severity }: { severity: string }): JSX.Element {
   return <span className={`sev-dot sev-${severity.toLowerCase()}`} title={severity} aria-label={severity} />;
+}
+
+/**
+ * The advisory pane's operator-comment editor (burpsy-react-ui-pwd). Local draft state — the save
+ * button sends the whole editor's text as the new comment, and an empty draft sent deliberately
+ * clears the comment, which is why the button reads "Clear comment" once there is one: both
+ * directions are one write on the wire, and hiding that behind a separate control would make
+ * clearing look different from editing when the server treats them identically.
+ */
+function TriageCommentEditor({ finding, onSave }: { finding: FindingDetail; onSave: (comment: string) => void }): JSX.Element {
+  const [draft, setDraft] = useState(finding.comment);
+  const unchanged = draft === finding.comment;
+  return (
+    <div>
+      <h3>Operator comment</h3>
+      <Textarea
+        aria-label="Operator comment"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder="A note for whoever works this issue next — why it was marked, what it duplicates…"
+        rows={3}
+      />
+      <div className="actions">
+        <Button variant="outline" size="small" disabled={unchanged} onClick={() => onSave(draft)}>
+          {draft.trim() === "" && finding.comment ? "Clear comment" : "Save comment"}
+        </Button>
+        {finding.comment && !unchanged ? (
+          <Button variant="ghost" size="small" onClick={() => setDraft(finding.comment)}>
+            Discard
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 /* ---- the issue tree ---------------------------------------------------------------------------- */
@@ -145,12 +182,46 @@ export function ScannerPage(): JSX.Element {
   const setRoute = useApp((state) => state.setRoute);
   const setHistoryQuery = useApp((state) => state.setHistoryQuery);
   const actions = useExchangeActions();
+  const triage = useIssueTriage();
 
   const [severity, setSeverity] = useState("all");
   const [confidence, setConfidence] = useState("all");
   const [term, setTerm] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  /**
+   * One triage write, one toast (burpsy-react-ui-pwd). A refusal is surfaced rather than swallowed:
+   * a false-positive mark that silently failed comes back on the next refetch as an unfixed
+   * finding, which reads as the operator's edit being ignored.
+   */
+  const applyTriage = (finding: FindingDetail, patch: IssueTriagePatch, message: string) => {
+    triage.triage.mutate(
+      { id: finding.id, patch },
+      {
+        onSuccess: () => toast.success(message),
+        onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not save that triage change"),
+      },
+    );
+  };
+
+  /** Deletion is the one irreversible triage act, so it asks — Burp's own "Delete issue" does. */
+  const removeFinding = (finding: FindingDetail) => {
+    if (!window.confirm(`Delete "${findingName(finding)}" on ${finding.host}? A re-audit of the same endpoint will re-raise it.`)) return;
+    triage.remove.mutate(finding.id, {
+      onSuccess: () => {
+        toast.success("Issue deleted");
+        if (selectedKey?.startsWith(`${finding.id}:`)) setSelectedKey(null);
+      },
+      onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not delete that issue"),
+    });
+  };
+
+  const editComment = (finding: FindingDetail) => {
+    const next = window.prompt(`Comment on "${findingName(finding)}"`, finding.comment);
+    if (next === null || next === finding.comment) return;
+    applyTriage(finding, { comment: next.trim() }, next.trim() === "" ? "Comment cleared" : "Comment saved");
+  };
 
   const debouncedTerm = useDebounced(term, 260);
   // Same cache key the history tab uses: the advisory's Request/Response tabs need the message ids,
@@ -199,14 +270,12 @@ export function ScannerPage(): JSX.Element {
   /**
    * The issue-triage menu, on a tree leaf.
    *
-   * # What is here and what Burp has that this cannot
+   * # What is here
    *
-   * Burp's issue context menu carries Set severity, Set confidence, Report issue, Go to issue and
-   * Delete issue. Three of those five are not offered, and the reason is the same for all three:
-   * `/api/issues` is registered GET-only (internal/web/server.go:727) — there is no PATCH to move a
-   * severity or a confidence onto a finding, and no DELETE to remove one. A menu entry that opened
-   * a picker and then dropped the choice on the floor would be the exact defect this audit is
-   * about, so they are absent rather than decorative. Tracked on burpsy-react-ui-3fr.
+   * Burp's issue context menu carries Set severity, Set confidence, Add comment, False positive,
+   * Report issue, Go to issue and Delete issue. The triage five (burpsy-react-ui-pwd) now exist:
+   * PUT/DELETE /api/issues/{id} are real write paths, so the menu builds them via
+   * triageMenuGroups rather than offering entries that would drop the choice on the floor.
    *
    * What is here: Burp's "Go to issue" (both directions — the finding's exchange in HTTP history,
    * and the host filtered in history), its "Report issue" as the three report exports the command
@@ -222,6 +291,11 @@ export function ScannerPage(): JSX.Element {
     const exchangeId = leaf.occurrence?.exchange_id;
     const leafExchange = exchangeId === undefined ? null : ((history ?? []).find((ex) => ex.id === exchangeId) ?? null);
     const groups: MenuGroup[] = [
+      ...triageMenuGroups(finding, {
+        apply: (patch, message) => applyTriage(finding, patch, message),
+        editComment: () => editComment(finding),
+        remove: () => removeFinding(finding),
+      }),
       {
         id: "goto",
         actions: [
@@ -375,7 +449,7 @@ export function ScannerPage(): JSX.Element {
                                   role="treeitem"
                                   aria-level={3}
                                   aria-selected={leaf.key === selectedKey}
-                                  className={cn("tree-row", leaf.key === selectedKey && "active")}
+                                  className={cn("tree-row", leaf.key === selectedKey && "active", leaf.finding.false_positive && "tree-row-false-positive")}
                                   style={{ paddingLeft: 36 }}
                                   onClick={() => setSelectedKey(leaf.key)}
                                 >
@@ -400,6 +474,25 @@ export function ScannerPage(): JSX.Element {
                                         title={`Affects ${leaf.finding.params.length} parameters: ${leaf.finding.params.join(", ")}`}
                                       >
                                         {leaf.finding.params.length} params
+                                      </span>
+                                    ) : null}
+                                    {/*
+                                      A false-positive mark must not ride on colour alone (a struck
+                                      label at tree density disappears into the strikethrough of
+                                      long names), so the row carries the letters too. The title
+                                      spells out what the mark means.
+                                    */}
+                                    {leaf.finding.false_positive ? (
+                                      <span className="tree-row-params" title="Marked false positive by an operator">
+                                        FP
+                                      </span>
+                                    ) : null}
+                                    {leaf.finding.severity_override ? (
+                                      <span
+                                        className="tree-row-params"
+                                        title={`Severity overridden from ${leaf.finding.original_severity}`}
+                                      >
+                                        ⇩
                                       </span>
                                     ) : null}
                                     <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
@@ -438,7 +531,16 @@ export function ScannerPage(): JSX.Element {
         </div>
         <div className="detail-actions">
           <Badge tone={severityTone(selected.finding.severity)}>{selected.finding.severity}</Badge>
+          {/* The engine word rides alongside whenever an operator has overruled it: without it,
+              "Informational" and "Informational, because an operator said so" render identically,
+              and one of those is a decision worth arguing with. */}
+          {selected.finding.original_severity ? (
+            <Badge tone="neutral" title={`Engine severity, overridden by an operator`}>
+              engine: {selected.finding.original_severity}
+            </Badge>
+          ) : null}
           <Badge tone={confidenceTone(selected.finding.confidence)}>{selected.finding.confidence}</Badge>
+          {selected.finding.false_positive ? <Badge tone="warn">False positive</Badge> : null}
           {selected.occurrence ? (
             <Tooltip content="Open this exchange in HTTP history">
               <Button
@@ -488,6 +590,10 @@ export function ScannerPage(): JSX.Element {
                   : []),
               { label: "Times seen", value: selected.finding.times_seen },
               { label: "Occurrences", value: selected.finding.occurrences.length },
+              // Triage state, shown only when there is something to show: a row of "no comment"
+              // placeholders for every untouched finding trains the eye to skip the block.
+              ...(selected.finding.original_confidence ? [{ label: "Engine confidence", value: selected.finding.original_confidence }] : []),
+              ...(selected.finding.comment ? [{ label: "Operator comment", value: selected.finding.comment }] : []),
             ]}
           />
           <div>
@@ -498,6 +604,19 @@ export function ScannerPage(): JSX.Element {
             <h3>Remediation</h3>
             <p className="prose">{selected.finding.remediation ?? "no remediation recorded"}</p>
           </div>
+          {/*
+              The comment editor, in the pane as well as the context menu (burpsy-react-ui-pwd):
+              comments are written while reading the advisory, and a right-click away is a
+              round trip the writing does not survive. The block is keyed on the finding id, so
+              switching findings resets the draft instead of leaking one finding's half-written
+              note into the next pane — state that follows the selection is how the wrong issue
+              gets annotated.
+            */}
+          <TriageCommentEditor
+            key={selected.finding.id}
+            finding={selected.finding}
+            onSave={(comment) => applyTriage(selected.finding, { comment }, comment.trim() === "" ? "Comment cleared" : "Comment saved")}
+          />
           {/* The catalogue entry the check resolved to, rendered by the same component the browsable
               Issue definitions screen uses. Passing the note as well as the advisory is what keeps
               "no catalogue entry, and here is why" distinct from "nothing looked". */}

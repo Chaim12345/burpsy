@@ -2529,6 +2529,20 @@ tbody td {
   opacity: 0.55;
 }
 
+/* A false-positive finding (burpsy-react-ui-pwd) is worked, not gone: it stays in the tree so a
+   re-audit that re-raises it has somewhere to merge, and so the mark is auditable rather than
+   deleted evidence. Burp's convention is a struck label. The row also carries the letters "FP" in
+   its meta — the strikethrough is the glance signal, the text is the one that survives a screen
+   reader and a colour-blind operator alike. */
+.tree-row-false-positive .tree-row-label {
+  text-decoration: line-through;
+}
+
+.tree-row-false-positive .tree-row-label,
+.tree-row-false-positive .sev-dot {
+  opacity: 0.6;
+}
+
 /* Restored to full strength on hover and when selected: the moment an operator is actually looking
    at the row, dimming stops being a helpful filter and starts being an obstacle to reading it. */
 .tree-row-out-of-scope:hover,

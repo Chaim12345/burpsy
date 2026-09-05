@@ -282,6 +282,9 @@ func main() {
 		}
 		store.SetPersistenceSinks(persistStore.SaveMessage, persistStore.SaveExchange)
 		findingStore.SetPersistenceSink(persistStore.SaveFinding)
+		// Triage deletes must reach the mirror too: without this a finding deleted in the UI is
+		// restored on the next start, reading its surviving row back out of SQLite.
+		findingStore.SetDeleteSink(persistStore.DeleteFinding)
 	}
 
 	// The upstream proxy policy every egress path in this process shares: the proxy listener's

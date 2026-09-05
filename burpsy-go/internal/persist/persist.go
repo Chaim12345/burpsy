@@ -380,6 +380,22 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("findings", "task_id", "INTEGER"); err != nil {
 		return err
 	}
+	// Triage columns (burpsy-react-ui-pwd): the operator's severity/confidence override, the
+	// false-positive mark and a note must survive a restart exactly like the finding they modify.
+	// severity_override is NULL when the engine's own severity stands; false_positive defaults to 0
+	// so a legacy row reads as not-a-false-positive without a rewrite.
+	if err := s.addColumn("findings", "severity_override", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "confidence_override", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "false_positive", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "comment", "TEXT"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -714,14 +730,30 @@ func (s *Store) SaveFinding(f *core.Finding) {
 	if f.Target.TLS {
 		tls = 1
 	}
+	// severity_override is written as NULL whenever no override stands, so a finding whose override
+	// is cleared reads back as NULL rather than as a stale value.
+	var sevOverride interface{}
+	if f.SeverityOverride != nil {
+		sevOverride = int(*f.SeverityOverride)
+	}
+	var confOverride interface{}
+	if f.ConfidenceOverride != nil {
+		confOverride = int(*f.ConfidenceOverride)
+	}
+	fp := 0
+	if f.FalsePositive {
+		fp = 1
+	}
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO findings
 		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
-		  target_host, target_port, target_tls, target_path, params, task_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  target_host, target_port, target_tls, target_path, params, task_id,
+		  severity_override, confidence_override, false_positive, comment)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
 		f.Remediation, occ, ins, f.Timestamp, f.Param,
-		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID)
+		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID,
+		sevOverride, confOverride, fp, f.Comment)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -731,7 +763,8 @@ func (s *Store) SaveFinding(f *core.Finding) {
 func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
-		        target_host, target_port, target_tls, target_path, params, task_id
+		        target_host, target_port, target_tls, target_path, params, task_id,
+		        severity_override, confidence_override, false_positive, comment
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -746,8 +779,14 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		// zero target is exactly the right reading of that: unknown, so not eligible to merge.
 		var tHost, tPath sql.NullString
 		var tPort, tTLS, taskID sql.NullInt64
+		// Triage columns are nullable: severity_override/confidence_override are NULL while the
+		// engine's own values stand, and every row written before they existed has NULLs for all
+		// four, which must load as "no triage" rather than fail the whole restore.
+		var sevOverride, confOverride, fp sql.NullInt64
+		var comment sql.NullString
 		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param,
-			&tHost, &tPort, &tTLS, &tPath, &params, &taskID); err != nil {
+			&tHost, &tPort, &tTLS, &tPath, &params, &taskID,
+			&sevOverride, &confOverride, &fp, &comment); err != nil {
 			return nil, err
 		}
 		// NULL on a legacy row becomes 0, which is what an untracked finding already means in memory.
@@ -755,6 +794,18 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		f.Severity = core.Severity(sev)
 		f.Confidence = core.Confidence(conf)
 		f.Timestamp = uint64(ts)
+		if sevOverride.Valid {
+			over := core.Severity(sevOverride.Int64)
+			f.SeverityOverride = &over
+		}
+		if confOverride.Valid {
+			over := core.Confidence(confOverride.Int64)
+			f.ConfidenceOverride = &over
+		}
+		f.FalsePositive = fp.Int64 != 0
+		if comment.Valid {
+			f.Comment = comment.String
+		}
 		f.Target = core.FindingTarget{
 			Host: tHost.String,
 			Port: uint16(tPort.Int64),
@@ -786,6 +837,15 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// DeleteFinding drops one finding's mirror row. Wired as core.FindingStore's delete sink
+// (SetDeleteSink): the in-memory store is authoritative, but without this a finding deleted in the
+// UI walks straight back in on the next restart, restored from the row this file kept.
+func (s *Store) DeleteFinding(id uint64) {
+	if _, err := s.db.Exec(`DELETE FROM findings WHERE id = ?`, id); err != nil {
+		s.log("finding", err)
+	}
 }
 
 // ---- Scope -------------------------------------------------------------------------------------
