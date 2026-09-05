@@ -1,4 +1,4 @@
-<!-- Generated: 2026-07-28 | Updated: 2026-08-17 -->
+<!-- Generated: 2026-07-28 | Updated: 2026-09-04 -->
 
 # burpsy
 
@@ -279,3 +279,15 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Beads issue tracker (bd)
+
+Issues live in Beads (`bd`), Dolt-backed, remote-synced via `sync.remote` in `.beads/config.yaml`.
+The Dolt DB is the source of truth; `.beads/issues.jsonl` is a possibly-stale export (2026-08-27:
+146 open there vs 182 open in the DB — trust `bd`, not the JSONL).
+
+- `bd` CLI (npm `@beads/bd`) — not preinstalled; sandbox install: `npm config set prefix ~/.npm-global && npm i -g @beads/bd` (global prefix `/usr/local` is root-owned).
+- First-time DB setup in a fresh clone: `bd bootstrap --yes` (needs non-interactive git creds for the dolt refs fetch, and `chmod 700 .beads`). If `dolt clone` fails with `Error 1007: database exists`, rename `dolt_database` in `.beads/metadata.json` to a fresh name, `rm -rf .beads/embeddeddolt`, re-run bootstrap (bd v1.2.2 pre-creates the DB dir then collides with itself).
+- `bd bootstrap`/`bd init` prompt `[Y/n]` on stdin — in non-interactive shells pass `--yes` or they hang forever with no output.
+- Triage snapshot 2026-09-04: 258 total, 182 open (0 blocked, 100 ready; 13 open P1 = 5 epics + 8 tasks), 15 issues carry `decision-needed`. No duplicate titles detected. P1 claims spot-verified against code (intruder §-markers, proxy listener editor, logger bytes, intruder payload column all genuinely missing). Next up per `bd ready`: P1 intruder trio (33t, fvx, mun) under epic i4fa.
+- Closed so far, one per commit: 33t (intruder payload positions via bcheck single-parser), fvx (intruder payload column), mun (manual § markers), 5bl (logger exchange links + detail viewer). Remaining P1 tasks per `bd ready`: 77m (proxy listener editor), 6rb (WS extensions toggle), vlf (history search checkboxes), t2s (scanner config keys) — each under its P1 epic.
