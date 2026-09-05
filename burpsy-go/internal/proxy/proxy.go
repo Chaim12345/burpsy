@@ -1140,6 +1140,8 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 
 			Notes: notes,
 		})
+	} else if s.config.options.Get(OptDontLogOutOfScopeItems) {
+		s.config.options.NoteDroppedOutOfScope()
 	}
 	return keepServing
 }
@@ -1320,6 +1322,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	inScope := s.config.scope.Contains(host, port, path, false)
 
 	if !inScope {
+		if s.config.options.Get(OptDontLogOutOfScopeItems) {
+			s.config.options.NoteDroppedOutOfScope()
+		}
 		// Forward without storing
 		s.forwardOnly(clientConn, reader, requestData, host, port)
 		return

@@ -333,6 +333,35 @@ func Test_strip_accept_encoding_removes_the_header_and_counts_only_real_strips(t
 	}
 }
 
+func Test_new_options_support_invisible_proxying_and_dont_log_out_of_scope(t *testing.T) {
+	o := NewOptions()
+	if !KnownOption(OptInvisibleProxying) {
+		t.Errorf("%q is not in KnownOption", OptInvisibleProxying)
+	}
+	if !KnownOption(OptDontLogOutOfScopeItems) {
+		t.Errorf("%q is not in KnownOption", OptDontLogOutOfScopeItems)
+	}
+
+	if err := o.Set(OptInvisibleProxying, true); err != nil {
+		t.Fatalf("Set OptInvisibleProxying: %v", err)
+	}
+	if !o.Get(OptInvisibleProxying) {
+		t.Errorf("OptInvisibleProxying is not set")
+	}
+
+	if err := o.Set(OptDontLogOutOfScopeItems, true); err != nil {
+		t.Fatalf("Set OptDontLogOutOfScopeItems: %v", err)
+	}
+	if !o.Get(OptDontLogOutOfScopeItems) {
+		t.Errorf("OptDontLogOutOfScopeItems is not set")
+	}
+
+	o.NoteDroppedOutOfScope()
+	if c := o.Counters(); c.DroppedOutOfScope != 1 {
+		t.Errorf("DroppedOutOfScope = %d, want 1", c.DroppedOutOfScope)
+	}
+}
+
 func Test_an_unknown_option_key_is_refused_by_name(t *testing.T) {
 	o := NewOptions()
 	err := o.Set(OptionKey("remove_all_javescript"), true)

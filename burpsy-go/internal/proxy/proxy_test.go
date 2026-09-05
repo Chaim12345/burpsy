@@ -326,6 +326,64 @@ func generateSelfSigned(t *testing.T, dir string) (tls.Certificate, []byte) {
 	return cert, nil
 }
 
+func TestDontLogOutOfScopeItemsOption(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "out of scope ok")
+	}))
+	defer target.Close()
+
+	thost, tportStr, _ := net.SplitHostPort(strings.TrimPrefix(target.URL, "http://"))
+	tport, _ := strconv.Atoi(tportStr)
+
+	store := core.NewTrafficStore()
+	// Restricted scope that excludes the target
+	restrictedScope := core.NewScope()
+	restrictedScope.AddInclude("only-in-scope.test")
+
+	opts := NewOptions()
+	_ = opts.Set(OptDontLogOutOfScopeItems, true)
+
+	proxySrv := NewServer(NewProxyConfig(store).
+		WithScope(restrictedScope).
+		WithOptions(opts).
+		WithLogger(zap.NewNop()))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go proxySrv.handleConnection(conn)
+		}
+	}()
+
+	client := &http.Client{Transport: &http.Transport{
+		Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: ln.Addr().String()}),
+	}}
+	resp, err := client.Get(fmt.Sprintf("http://%s:%d/", thost, tport))
+	if err != nil {
+		t.Fatalf("request through proxy: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Wait briefly to confirm nothing is logged
+	time.Sleep(100 * time.Millisecond)
+
+	if len(store.Exchanges()) != 0 {
+		t.Errorf("got %d exchanges, want 0 when dont_log_out_of_scope_items is enabled", len(store.Exchanges()))
+	}
+	if c := opts.Counters(); c.DroppedOutOfScope == 0 {
+		t.Errorf("DroppedOutOfScope = %d, want >0", c.DroppedOutOfScope)
+	}
+}
+
 func TestRemovePassthroughRemovesOnlyTheExactPattern(t *testing.T) {
 	p := NewTlsPolicy()
 	p.AddPassthrough("*.bank.test")

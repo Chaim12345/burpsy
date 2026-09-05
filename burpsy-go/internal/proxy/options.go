@@ -98,6 +98,10 @@ const (
 	// so the origin cannot negotiate permessage-deflate and captured frames stay in the clear.
 	// Burp's proxy.miscellaneous.strip_sec_websocket_extensions_headers_in_incoming_requests.
 	OptStripWsExtensions OptionKey = "strip_sec_websocket_extensions"
+	// OptInvisibleProxying enables support for invisible proxying (non-proxy-aware clients).
+	OptInvisibleProxying OptionKey = "invisible_proxying"
+	// OptDontLogOutOfScopeItems prevents logging/storing out-of-scope items in proxy history.
+	OptDontLogOutOfScopeItems OptionKey = "dont_log_out_of_scope_items"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -116,6 +120,8 @@ var OptionKeys = []OptionKey{
 	OptUnpackCompressedRequests,
 	OptUnpackCompressedResponses,
 	OptStripWsExtensions,
+	OptInvisibleProxying,
+	OptDontLogOutOfScopeItems,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The
@@ -199,18 +205,10 @@ type Counters struct {
 	// ModifiedUnrecorded is the subset of Modified that scope kept out of history:
 	// the rules rewrote the bytes the client received, and no exchange exists to
 	// show it.
-	//
-	// It exists because without it Modified is unreconcilable. The rules run on all
-	// traffic through the listener — that is what a listener-level rule means, and it
-	// is the same ordering applyRequestRules already uses so an out-of-scope forward
-	// sends the bytes the recorded path would — but only in-scope exchanges are
-	// stored. So an operator reading "responses_modified: 40" could search all of
-	// history, find four modified responses, and have no way to learn whether the
-	// other thirty-six were a counter bug or a scope decision. This says which.
-	//
-	// Modified - ModifiedUnrecorded is the number findable in history, by
-	// construction.
 	ModifiedUnrecorded uint64 `json:"responses_modified_unrecorded"`
+	// DroppedOutOfScope counts exchanges that were dropped from recording because
+	// dont_log_out_of_scope_items was enabled.
+	DroppedOutOfScope uint64 `json:"dropped_out_of_scope"`
 }
 
 // Options is the live option set. Safe for concurrent use: the proxy reads it once
@@ -234,6 +232,7 @@ type Options struct {
 	acceptEncodingStripped atomic.Uint64
 	dechunked              atomic.Uint64
 	modifiedUnrecorded     atomic.Uint64
+	droppedOutOfScope      atomic.Uint64
 }
 
 // NewOptions returns an option set with every rule off.
@@ -313,7 +312,17 @@ func (o *Options) Counters() Counters {
 		AcceptEncodingStripped:     o.acceptEncodingStripped.Load(),
 		Dechunked:                  o.dechunked.Load(),
 		ModifiedUnrecorded:         o.modifiedUnrecorded.Load(),
+		DroppedOutOfScope:          o.droppedOutOfScope.Load(),
 	}
+}
+
+// NoteDroppedOutOfScope records an exchange dropped from store recording because
+// dont_log_out_of_scope_items was enabled.
+func (o *Options) NoteDroppedOutOfScope() {
+	if o == nil {
+		return
+	}
+	o.droppedOutOfScope.Add(1)
 }
 
 // NoteUnrecordedModification records that one response the rules rewrote will not appear
