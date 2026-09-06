@@ -585,6 +585,13 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 	if err := c.options.Set(OptInvisibleProxy, true); err != nil {
 		panic("proxy: " + err.Error())
 	}
+	// On, deliberately diverging from Burp's default "Do nothing": this engine has
+	// never retained out-of-scope traffic — every record site has always gated on
+	// the scope verdict — so seeding OFF would silently start writing third-party
+	// traffic to the store on upgrade. See OptDontLogOutOfScope for the trade.
+	if err := c.options.Set(OptDontLogOutOfScope, true); err != nil {
+		panic("proxy: " + err.Error())
+	}
 	return c
 }
 
@@ -1121,7 +1128,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			// see handleWebSocketUpgrade for why it is recorded before the relay
 			// starts rather than when the socket finally closes.
 			var handshake *core.Exchange
-			if inScope {
+			if inScope || !s.config.options.Get(OptDontLogOutOfScope) {
 				handshake = s.record(scanner.CapturedExchange{
 					Host:     reqHost,
 					Port:     reqPort,
@@ -1137,6 +1144,8 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					// A handshake this proxy rewrote must not look pristine.
 					Notes: wsStripNote(wsStripped),
 				})
+			} else {
+				s.config.options.NoteOutOfScopeDrop()
 			}
 
 			if _, err := tlsClient.Write(head); err != nil {
@@ -1200,7 +1209,12 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// function has always rewritten out-of-scope HTTPS responses and then skipped the
 	// record below, which left Counters.Modified including responses no history search
 	// could ever turn up. See applyResponseRulesUnrecorded.
-	if inScope {
+	// The branch is on whether the exchange will be *recorded*, not on the scope
+	// verdict alone: with dont_log_out_of_scope off, an out-of-scope rewrite is
+	// findable in history, and counting it as unrecorded would overstate what
+	// history cannot show.
+	recorded := inScope || !s.config.options.Get(OptDontLogOutOfScope)
+	if recorded {
 		responseData = s.applyResponseRules(responseData)
 	} else {
 		responseData = s.applyResponseRulesUnrecorded(responseData)
@@ -1232,7 +1246,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 		}
 	}
 
-	if inScope {
+	if recorded {
 		s.record(scanner.CapturedExchange{
 			Host:     host,
 			Port:     port,
@@ -1247,6 +1261,8 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 
 			Notes: notes,
 		})
+	} else {
+		s.config.options.NoteOutOfScopeDrop()
 	}
 	return keepServing
 }
@@ -1431,7 +1447,13 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// Check scope
 	inScope := s.config.scope.Contains(host, port, path, false)
 
-	if !inScope {
+	// dont_log_out_of_scope decides retention, live: on (the seed) keeps the
+	// engine's always-forward-never-keep behaviour for excluded hosts, off makes
+	// an excluded exchange take the recorded path exactly as if it were in scope.
+	// The bytes the origin receives do not change either way — the rules ran
+	// before this check.
+	if !inScope && s.config.options.Get(OptDontLogOutOfScope) {
+		s.config.options.NoteOutOfScopeDrop()
 		// Forward without storing
 		s.forwardOnly(clientConn, reader, requestData, host, port)
 		return

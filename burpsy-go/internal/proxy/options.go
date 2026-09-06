@@ -100,6 +100,26 @@ const (
 	// default, seeded by NewProxyConfig, because a proxy that let the extension
 	// be negotiated would record compressed frames and call them messages.
 	OptStripWsExtensions OptionKey = "strip_sec_websocket_extensions"
+	// OptDontLogOutOfScope decides whether an exchange the scope excludes is
+	// recorded at all — Burp's "don't send items to Proxy history or live tasks,
+	// if out of scope" (configPanelProxyMiscellaneousDontLogOutOfScopeItems), one
+	// third of Burp's Proxy history logging panel, whose other two choices ("Ask
+	// me what to do each time", "Do nothing") have no burpsy equivalent.
+	//
+	// Not a response rule and not in responseRules: it rewrites nothing. It is a
+	// retention decision read live at each record site — the same
+	// set-on/off-without-a-restart contract the rules have — and it deliberately
+	// does not gate what the rules do to the bytes, only whether the exchange
+	// survives them: scope decides what is *retained*, never what is *rewritten*.
+	//
+	// Seeded ON, unlike Burp's default "Do nothing", because this engine has never
+	// retained out-of-scope traffic: every record site has always gated on the
+	// scope verdict. Seeding OFF would silently start writing third-party traffic
+	// to the store on upgrade. The switch's value is the other direction — an
+	// operator who wants Burp's log-everything behaviour can now have it — and the
+	// exchanges it drops are counted (Counters.DroppedOutOfScope) so an empty
+	// history is distinguishable from a mis-set scope.
+	OptDontLogOutOfScope OptionKey = "dont_log_out_of_scope"
 	// OptInvisibleProxy decides whether an origin-form request (`GET /path`) whose
 	// authority arrives only in its Host header is forwarded to that host — Burp's
 	// "Support invisible proxying (enable only if needed)". A non-proxy-aware client
@@ -127,6 +147,7 @@ var OptionKeys = []OptionKey{
 	OptUnpackCompressedRequests,
 	OptUnpackCompressedResponses,
 	OptStripWsExtensions,
+	OptDontLogOutOfScope,
 	OptInvisibleProxy,
 }
 
@@ -220,6 +241,17 @@ type Counters struct {
 	// Modified - ModifiedUnrecorded is the number findable in history, by
 	// construction.
 	ModifiedUnrecorded uint64 `json:"responses_modified_unrecorded"`
+	// DroppedOutOfScope counts exchanges the proxy forwarded but did not record
+	// because the scope excluded them while dont_log_out_of_scope was on. It is
+	// the answer to "why is my history empty" that a silent drop cannot give: a
+	// scope typo and a quiet target look identical without it, and an operator
+	// auditing what was retained — or, sharper, what was *not* retained, which is
+	// the whole point of the switch — needs the number.
+	//
+	// It counts drops caused by the switch only. An exchange recorded because the
+	// operator turned the switch off is not a drop, and neither is traffic the
+	// blind CONNECT tunnel cannot see.
+	DroppedOutOfScope uint64 `json:"exchanges_dropped_out_of_scope"`
 }
 
 // Options is the live option set. Safe for concurrent use: the proxy reads it once
@@ -243,6 +275,7 @@ type Options struct {
 	acceptEncodingStripped atomic.Uint64
 	dechunked              atomic.Uint64
 	modifiedUnrecorded     atomic.Uint64
+	droppedOutOfScope      atomic.Uint64
 }
 
 // NewOptions returns an option set with every rule off.
@@ -321,6 +354,7 @@ func (o *Options) Counters() Counters {
 		AcceptEncodingStripped:     o.acceptEncodingStripped.Load(),
 		Dechunked:                  o.dechunked.Load(),
 		ModifiedUnrecorded:         o.modifiedUnrecorded.Load(),
+		DroppedOutOfScope:          o.droppedOutOfScope.Load(),
 	}
 }
 
@@ -337,6 +371,19 @@ func (o *Options) NoteUnrecordedModification() {
 		return
 	}
 	o.modifiedUnrecorded.Add(1)
+}
+
+// NoteOutOfScopeDrop records that one exchange was forwarded but not stored,
+// because the scope excluded it and dont_log_out_of_scope is on.
+//
+// Called by the proxy at each record site it skips for this reason, so the count
+// is the number of exchanges the switch cost the operator, wherever the record
+// decision lives. Turning the switch off stops the counter, not the traffic.
+func (o *Options) NoteOutOfScopeDrop() {
+	if o == nil {
+		return
+	}
+	o.droppedOutOfScope.Add(1)
 }
 
 // NoteRelayedHTTP2 records that one HTTP/2 response went past without the response

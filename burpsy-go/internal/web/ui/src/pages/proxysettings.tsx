@@ -148,6 +148,33 @@ export function ProxySettingsPage(): JSX.Element {
         )}
       />
      </label>
+     <label className="switch-row" htmlFor="proxy-opt-dont_log_out_of_scope">
+      <span>
+       <span>Don't log out-of-scope traffic</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Keep the history panel free of traffic the scope excludes: the request is still forwarded and the response is
+        still delivered to the browser, only the record is dropped, and each drop is counted below. On by default —
+        this store has never held out-of-scope exchanges. Turn it off to log everything the proxy sees, including the
+        excluded traffic.
+       </span>
+      </span>
+      <Switch
+       id="proxy-opt-dont_log_out_of_scope"
+       label="Don't log out-of-scope traffic"
+       checked={d.options["dont_log_out_of_scope"] === true}
+       onCheckedChange={(on) =>
+        setOptions.mutate(
+         { dont_log_out_of_scope: on },
+         {
+          onSuccess: () =>
+           toast.success(
+            `Out-of-scope logging ${on ? "suppressed" : "kept"} — applies from the next exchange`,
+           ),
+          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
+         },
+        )}
+      />
+     </label>
     </div>
     <SimpleTable headers={["Adjustment", "Count"]}>
      <tr>
@@ -161,6 +188,12 @@ export function ProxySettingsPage(): JSX.Element {
      <tr>
       <td>HTTP/2 responses relayed without rewriting</td>
       <td><Badge>{formatCount(c.relayed_http2)}</Badge></td>
+     </tr>
+     <tr>
+      <td>Out-of-scope exchanges not logged</td>
+      <td>
+       <Badge>{formatCount(c.exchanges_dropped_out_of_scope)}</Badge>
+      </td>
      </tr>
     </SimpleTable>
    </Card>

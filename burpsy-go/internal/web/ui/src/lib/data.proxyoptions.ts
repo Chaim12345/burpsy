@@ -20,6 +20,7 @@ export interface ProxyOptionsState {
     relayed_http2: number;
     accept_encoding_stripped: number;
     dechunked: number;
+    exchanges_dropped_out_of_scope: number;
   };
   keys: string[];
 }

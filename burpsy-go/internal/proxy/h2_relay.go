@@ -57,8 +57,13 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	// bytes are held here instead and both halves are captured together, through
 	// the same producer as every other exchange in this package.
 	inScope := s.config.scope.Contains(host, port, path, true)
+
+	// Retention, not rewriting: dont_log_out_of_scope off keeps an out-of-scope h2
+	// exchange just as it keeps an HTTP/1 one, and the rendered request is what the
+	// row needs either way. See OptDontLogOutOfScope.
+	recorded := inScope || !s.config.options.Get(OptDontLogOutOfScope)
 	var reqRaw []byte
-	if inScope {
+	if recorded {
 		reqRaw = burpsyhttp2.RenderRequest(
 			r.Method, path, host,
 			filterHopHeaders(r.Header),
@@ -115,7 +120,7 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	// reimplemented against http.Header and a body writer. See Options.NoteRelayedHTTP2.
 	s.config.options.NoteRelayedHTTP2()
 
-	if inScope {
+	if recorded {
 		// ResponseLen is the whole rendered message, where the hand-rolled row
 		// counted the body alone. Every HTTP/1 row in this package has always meant
 		// the whole message, so h2 was the one protocol reporting a different
@@ -149,6 +154,8 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 			Duration: time.Since(startTime),
 			Protocol: core.ProtocolHTTP2,
 		})
+	} else {
+		s.config.options.NoteOutOfScopeDrop()
 	}
 }
 

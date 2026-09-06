@@ -173,6 +173,13 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			// the fixture, and the ones that do not act on it produce identical answers.
 			reqChanged = reqChanged || invisibleProxyFixture(t, key)
 
+			// The retention fixture, for dont_log_out_of_scope: an out-of-scope request
+			// driven through a real proxy loop with a scope that excludes the origin,
+			// once with the key enabled alone, once with everything off. A retention
+			// switch rewrites no message, so no applier fixture can catch it; what it
+			// changes is whether the store holds the exchange afterwards.
+			reqChanged = reqChanged || outOfScopeRetentionFixture(t, key)
+
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+
 					"direction. Either it has no applier — in which case the API is advertising "+
@@ -289,6 +296,51 @@ func invisibleProxyFixture(t *testing.T, key OptionKey) bool {
 	withKey := answer(optionsWith(t, key))
 	allOff := answer(NewOptions())
 	return withKey != allOff
+}
+
+// outOfScopeRetentionFixture drives one out-of-scope request through a real proxy loop
+// with the key enabled alone and again with everything off, and answers whether the two
+// runs left the store holding a different number of exchanges. Shared by every key in the
+// binding test: only dont_log_out_of_scope decides whether an out-of-scope exchange is
+// kept, so only that key makes the two answers differ.
+func outOfScopeRetentionFixture(t *testing.T, key OptionKey) bool {
+	t.Helper()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "<html><body>binding-retention</body></html>")
+	}))
+	defer origin.Close()
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split origin addr: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("origin port: %v", err)
+	}
+
+	scope := core.NewScope()
+	scope.AddInclude("retention-binding.test") // anything but the loopback origin
+
+	exchangeCount := func(options *Options) int {
+		store := core.NewTrafficStore()
+		srv := NewServer(NewProxyConfig(store).
+			WithOptions(options).
+			WithScope(scope).
+			WithLogger(zap.NewNop()))
+		driveThroughProxy(t, srv, host, port)
+		// With the key off the record is asynchronous; give it the same
+		// settle window the drop side gets before declaring absence.
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if n := len(store.Exchanges()); n > 0 {
+				return n
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return 0
+	}
+
+	return exchangeCount(optionsWith(t, key)) != exchangeCount(NewOptions())
 }
 
 // Every advertised option must be settable and must read back. Snapshot is what the panel
