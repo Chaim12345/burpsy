@@ -782,6 +782,20 @@ main {
   color: var(--muted);
 }
 
+/* The per-table filter above Intruder's result tables (burpsy-react-ui-4rd). */
+.results-filter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+  margin: var(--s1) 0 var(--s2);
+}
+
+.results-filter .search-field {
+  flex: 0 1 var(--w-md, 260px);
+  min-width: 200px;
+}
+
 .search-field .input {
   border: 0;
   background: transparent;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Crosshair, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, Zap } from "lucide-react";
+import { AlertTriangle, Crosshair, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
 import {
@@ -13,6 +13,7 @@ import {
 import { usePools } from "../lib/data.pools";
 import { useMessage } from "../lib/data";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
+import { filterTableRows } from "../lib/table-filter";
 import {
   DEFAULT_PAYLOADS,
   emptyIntruderConfig,
@@ -35,11 +36,15 @@ import {
   planSetLengths,
   quoteRegex,
   resolvePayloads,
+  type Attempt,
   type AttackMode,
+  type ErrorBucket,
   type IntruderAttacksResp,
   type PayloadRuleName,
   type PayloadRuleSpec,
+  type PayloadSetReport,
   type ResolvedPayload,
+  type ResultBucket,
   type RunView,
   type SetSize,
 } from "../lib/types.tools";
@@ -66,7 +71,53 @@ import {
   Textarea,
   Tooltip,
 } from "../ui/primitives";
-import { SimpleTable } from "../ui/table";
+import { SortableTable, type Column } from "../ui/table";
+
+/**
+ * The filter field above each result table, with the honest count (burpsy-react-ui-4rd).
+ *
+ * The filter is client-side over the rows the server already sent, so "N of M" is
+ * exact rather than a page-sized sample, and a filter that hides everything says so
+ * instead of leaving an empty-looking table that reads as "no results".
+ */
+function ResultFilter({
+  label,
+  value,
+  onChange,
+  shown,
+  total,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  shown: number;
+  total: number;
+}): JSX.Element {
+  return (
+    <div className="results-filter">
+      <div className="search-field">
+        <Search size={15} />
+        <Input
+          aria-label={label}
+          title={label}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Filter rows"
+        />
+        {value ? (
+          <IconButton label={`Clear ${label.toLowerCase()}`} size="small" onClick={() => onChange("")}>
+            <X size={13} />
+          </IconButton>
+        ) : null}
+      </div>
+      {value ? (
+        <span className="cell-dim">
+          {formatCount(shown)} of {formatCount(total)} rows
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 function countPayloads(text: string): number {
   return text.split("\n").filter((line) => line.trim() !== "").length;
@@ -331,6 +382,198 @@ function AttackResult({
    */
   const { stopped, paused, reached } = attackProgress(report);
 
+  /**
+   * Sorting and filtering for the four result tables (burpsy-react-ui-4rd).
+   *
+   * Sort accessors expose the raw values (statuses as numbers, nulls as
+   * undefined with sortUndefined pinning them last), so ordering follows the
+   * data rather than the formatted text; cell renderers keep the exact markup
+   * the static tables had. The filter runs over the same accessor values, so
+   * typing "404" or "refused" finds the rows whose visible cells carry those
+   * words.
+   */
+  const [bucketFilter, setBucketFilter] = useState("");
+  const [errorFilter, setErrorFilter] = useState("");
+  const [setFilter, setSetFilter] = useState("");
+  const [attemptFilter, setAttemptFilter] = useState("");
+
+  const bucketColumns: Column<ResultBucket>[] = [
+    {
+      accessorFn: (bucket) => bucket.status ?? undefined,
+      id: "status",
+      header: "Status",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.status === null ? (
+          <Badge tone="bad">error</Badge>
+        ) : (
+          <Badge tone={statusTone(row.original.status)}>{row.original.status}</Badge>
+        ),
+    },
+    { accessorKey: "response_len", header: "Length", cell: ({ getValue }) => <span className="cell-num">{formatBytes(getValue<number>())}</span> },
+    {
+      accessorFn: (bucket) => (bucket.reflected ? "yes" : "no"),
+      id: "reflected",
+      header: "Reflected",
+      cell: ({ row }) =>
+        row.original.reflected ? <Badge tone="warn">reflected</Badge> : <span className="cell-dim">no</span>,
+    },
+    { accessorKey: "count", header: "Count", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      accessorFn: (bucket) => (bucket.grep_matches ? bucket.grep_matches : undefined),
+      id: "grep",
+      header: "Grep",
+      sortUndefined: "last",
+      cell: ({ row }) => (
+        <>
+          {row.original.grep_matches ? <Badge tone="info">{row.original.grep_matches}</Badge> : <span className="cell-dim">—</span>}
+          {row.original.grep_extract ? <code title={row.original.grep_extract}> {row.original.grep_extract}</code> : null}
+        </>
+      ),
+    },
+    {
+      id: "first_payload",
+      header: "First payload",
+      enableSorting: false,
+      cell: ({ row }) => <PayloadCell parts={payloadsAt(row.original.first_ordinal)} ordinal={row.original.first_ordinal} />,
+    },
+    {
+      id: "response",
+      header: "Response",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ResponseCell
+          id={row.original.example_response_id}
+          label={`Response to attempt ${row.original.first_ordinal}`}
+          onOpen={onOpenMessage}
+        />
+      ),
+    },
+  ];
+  const bucketRows = filterTableRows(report.buckets, bucketColumns, bucketFilter);
+
+  const errorColumns: Column<ErrorBucket>[] = [
+    { accessorKey: "error", header: "Error", cell: ({ row }) => <span title={row.original.error}>{row.original.error}</span> },
+    { accessorKey: "count", header: "Count", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      accessorFn: (bucket) => bucket.first_ordinal ?? undefined,
+      id: "first_ordinal",
+      header: "First ordinal",
+      sortUndefined: "last",
+      cell: ({ getValue }) => <span className="cell-num">{getValue<number | undefined>() ?? "—"}</span>,
+    },
+  ];
+  const errorRows = filterTableRows(report.errors, errorColumns, errorFilter);
+
+  const setColumns: Column<PayloadSetReport>[] = [
+    {
+      id: "set",
+      header: "Set",
+      accessorFn: (set) => sets.indexOf(set) + 1,
+      cell: ({ getValue }) => <span className="cell-num">{getValue<number>()}</span>,
+    },
+    { accessorKey: "kind", header: "Kind", cell: ({ row }) => <Badge>{row.original.kind}</Badge> },
+    { accessorKey: "count", header: "Used", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      accessorKey: "total",
+      header: "Described",
+      cell: ({ row }) => (
+        <span className="cell-num">
+          {formatCount(row.original.total)}
+          {row.original.total_exact ? "" : "+"}
+        </span>
+      ),
+    },
+    {
+      accessorFn: (set) => (set.truncated ? "yes" : "no"),
+      id: "truncated",
+      header: "Truncated",
+      cell: ({ row }) =>
+        row.original.truncated ? (
+          <Badge tone="warn">at {formatCount(row.original.max_count)}</Badge>
+        ) : (
+          <span className="cell-dim">no</span>
+        ),
+    },
+    { accessorKey: "skipped", header: "Skipped", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      id: "dropped",
+      header: "Dropped because",
+      enableSorting: false,
+      cell: ({ row }) =>
+        row.original.dropped.length ? (
+          row.original.dropped.map((reason) => (
+            <Badge tone="warn" key={reason.reason}>
+              {reason.reason} ×{reason.count}
+            </Badge>
+          ))
+        ) : (
+          <span className="cell-dim">—</span>
+        ),
+    },
+  ];
+  const setRows = filterTableRows(sets, setColumns, setFilter);
+
+  const attemptColumns: Column<Attempt>[] = [
+    { accessorKey: "ordinal", header: "#", cell: ({ getValue }) => <span className="cell-num">{getValue<number>()}</span> },
+    {
+      id: "payload",
+      header: "Payload",
+      // The resolved combination is what the cell shows, so it is also what
+      // sorting and filtering see — including the "set 2 payload #18" text a
+      // server-side set renders.
+      accessorFn: (attempt) => {
+        const parts = payloadsAt(attempt.ordinal);
+        return parts ? payloadLabel(parts).text : undefined;
+      },
+      cell: ({ row }) => <PayloadCell parts={payloadsAt(row.original.ordinal)} ordinal={row.original.ordinal} />,
+    },
+    {
+      accessorFn: (attempt) => attempt.status ?? undefined,
+      id: "status",
+      header: "Status",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.status === null ? (
+          <Badge tone="bad">—</Badge>
+        ) : (
+          <Badge tone={statusTone(row.original.status)}>{row.original.status}</Badge>
+        ),
+    },
+    { accessorKey: "response_len", header: "Length", cell: ({ getValue }) => <span className="cell-num">{formatBytes(getValue<number>())}</span> },
+    { accessorKey: "duration_ms", header: "Time", cell: ({ getValue }) => <span className="cell-num">{formatDuration(getValue<number>())}</span> },
+    {
+      accessorFn: (attempt) => (attempt.reflected ? "yes" : "no"),
+      id: "reflected",
+      header: "Reflected",
+      cell: ({ row }) => (row.original.reflected ? <Badge tone="warn">yes</Badge> : <span className="cell-dim">no</span>),
+    },
+    {
+      accessorFn: (attempt) => (attempt.grep_matched ? "match" : undefined),
+      id: "grep",
+      header: "Grep",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.grep_matched ? <Badge tone="info">match</Badge> : <span className="cell-dim">—</span>,
+    },
+    {
+      accessorFn: (attempt) => attempt.error ?? undefined,
+      id: "error",
+      header: "Error",
+      sortUndefined: "last",
+      cell: ({ row }) => (row.original.error ? <span title={row.original.error}>{row.original.error}</span> : <span className="cell-dim">—</span>),
+    },
+    {
+      id: "response",
+      header: "Response",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ResponseCell id={row.original.response_id} label={`Response to attempt ${row.original.ordinal}`} onOpen={onOpenMessage} />
+      ),
+    },
+  ];
+  const attemptRows = filterTableRows(report.attempts, attemptColumns, attemptFilter);
+
   const caveats = [
     stopped
       ? `Attack ${paused ? "paused" : "stopped"} after ${formatCount(reached)} of ${formatCount(
@@ -400,36 +643,25 @@ function AttackResult({
           detail="Responses grouped by status, length and reflection. Interesting rows are the ones that differ from the crowd."
         />
         {report.buckets.length ? (
-          <SimpleTable headers={["Status", "Length", "Reflected", "Count", "Grep", "First payload", "Response"]}>
-            {report.buckets.map((bucket) => (
-              <tr key={`${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}>
-                <td>
-                  {bucket.status === null ? <Badge tone="bad">error</Badge> : <Badge tone={statusTone(bucket.status)}>{bucket.status}</Badge>}
-                </td>
-                <td>
-                  <span className="cell-num">{formatBytes(bucket.response_len)}</span>
-                </td>
-                <td>{bucket.reflected ? <Badge tone="warn">reflected</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>
-                  <span className="cell-num">{formatCount(bucket.count)}</span>
-                </td>
-                <td>
-                  {bucket.grep_matches ? <Badge tone="info">{bucket.grep_matches}</Badge> : <span className="cell-dim">—</span>}
-                  {bucket.grep_extract ? <code title={bucket.grep_extract}> {bucket.grep_extract}</code> : null}
-                </td>
-                <td>
-                  <PayloadCell parts={payloadsAt(bucket.first_ordinal)} ordinal={bucket.first_ordinal} />
-                </td>
-                <td>
-                  <ResponseCell
-                    id={bucket.example_response_id}
-                    label={`Response to attempt ${bucket.first_ordinal}`}
-                    onOpen={onOpenMessage}
-                  />
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <>
+            <ResultFilter
+              label="Filter buckets"
+              value={bucketFilter}
+              onChange={setBucketFilter}
+              shown={bucketRows.length}
+              total={report.buckets.length}
+            />
+            {bucketRows.length ? (
+              <SortableTable
+                data={bucketRows}
+                columns={bucketColumns}
+                getRowId={(bucket) => `${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}
+                ariaLabel="Result buckets"
+              />
+            ) : (
+              <p className="cell-dim">No buckets match the filter — all {report.buckets.length} are hidden.</p>
+            )}
+          </>
         ) : (
           <Empty title="No buckets" detail="The attack produced no grouped responses." />
         )}
@@ -438,59 +670,49 @@ function AttackResult({
       {report.errors.length ? (
         <Card>
           <SectionHeading title="Errors" detail="Grouped by message, with the first attempt that hit each." />
-          <SimpleTable headers={["Error", "Count", "First ordinal"]}>
-            {report.errors.map((bucket) => (
-              <tr key={bucket.error} className="row-flag-bad">
-                <td title={bucket.error}>{bucket.error}</td>
-                <td>
-                  <span className="cell-num">{formatCount(bucket.count)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">{bucket.first_ordinal ?? "—"}</span>
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <ResultFilter
+            label="Filter errors"
+            value={errorFilter}
+            onChange={setErrorFilter}
+            shown={errorRows.length}
+            total={report.errors.length}
+          />
+          {errorRows.length ? (
+            <SortableTable
+              data={errorRows}
+              columns={errorColumns}
+              getRowId={(bucket) => bucket.error}
+              ariaLabel="Attack errors"
+              rowClassName={() => "row-flag-bad"}
+            />
+          ) : (
+            <p className="cell-dim">No errors match the filter — all {report.errors.length} are hidden.</p>
+          )}
         </Card>
       ) : null}
 
       <Card>
         <SectionHeading title="Payload set accounting" detail="What each set produced, and what was bounded away." />
         {sets.length ? (
-          <SimpleTable headers={["Set", "Kind", "Used", "Described", "Truncated", "Skipped", "Dropped because"]}>
-            {sets.map((set, index) => (
-              <tr key={`${set.kind}-${index}`}>
-                <td>{index + 1}</td>
-                <td>
-                  <Badge>{set.kind}</Badge>
-                </td>
-                <td>
-                  <span className="cell-num">{formatCount(set.count)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">
-                    {formatCount(set.total)}
-                    {set.total_exact ? "" : "+"}
-                  </span>
-                </td>
-                <td>{set.truncated ? <Badge tone="warn">at {formatCount(set.max_count)}</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>
-                  <span className="cell-num">{formatCount(set.skipped)}</span>
-                </td>
-                <td>
-                  {set.dropped.length ? (
-                    set.dropped.map((reason) => (
-                      <Badge tone="warn" key={reason.reason}>
-                        {reason.reason} ×{reason.count}
-                      </Badge>
-                    ))
-                  ) : (
-                    <span className="cell-dim">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <>
+            <ResultFilter
+              label="Filter payload sets"
+              value={setFilter}
+              onChange={setSetFilter}
+              shown={setRows.length}
+              total={sets.length}
+            />
+            {setRows.length ? (
+              <SortableTable
+                data={setRows}
+                columns={setColumns}
+                getRowId={(set) => `${set.kind}-${sets.indexOf(set)}`}
+                ariaLabel="Payload set accounting"
+              />
+            ) : (
+              <p className="cell-dim">No payload sets match the filter — all {sets.length} are hidden.</p>
+            )}
+          </>
         ) : (
           <Empty title="No set accounting" detail="The server reported no per-set breakdown." />
         )}
@@ -502,37 +724,24 @@ function AttackResult({
             title="Attempts"
             detail={`Per-request detail, capped by the server at ${formatCount(report.detail_limit)} rows.`}
           />
-          <SimpleTable headers={["#", "Payload", "Status", "Length", "Time", "Reflected", "Grep", "Error", "Response"]}>
-            {report.attempts.map((attempt) => (
-              <tr key={attempt.ordinal} className={attempt.error ? "row-flag-bad" : undefined}>
-                <td>
-                  <span className="cell-num">{attempt.ordinal}</span>
-                </td>
-                <td>
-                  <PayloadCell parts={payloadsAt(attempt.ordinal)} ordinal={attempt.ordinal} />
-                </td>
-                <td>
-                  {attempt.status === null ? <Badge tone="bad">—</Badge> : <Badge tone={statusTone(attempt.status)}>{attempt.status}</Badge>}
-                </td>
-                <td>
-                  <span className="cell-num">{formatBytes(attempt.response_len)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">{formatDuration(attempt.duration_ms)}</span>
-                </td>
-                <td>{attempt.reflected ? <Badge tone="warn">yes</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>{attempt.grep_matched ? <Badge tone="info">match</Badge> : <span className="cell-dim">—</span>}</td>
-                <td title={attempt.error ?? ""}>{attempt.error ?? <span className="cell-dim">—</span>}</td>
-                <td>
-                  <ResponseCell
-                    id={attempt.response_id}
-                    label={`Response to attempt ${attempt.ordinal}`}
-                    onOpen={onOpenMessage}
-                  />
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <ResultFilter
+            label="Filter attempts"
+            value={attemptFilter}
+            onChange={setAttemptFilter}
+            shown={attemptRows.length}
+            total={report.attempts.length}
+          />
+          {attemptRows.length ? (
+            <SortableTable
+              data={attemptRows}
+              columns={attemptColumns}
+              getRowId={(attempt) => String(attempt.ordinal)}
+              ariaLabel="Attempts"
+              rowClassName={(attempt) => (attempt.error ? "row-flag-bad" : undefined)}
+            />
+          ) : (
+            <p className="cell-dim">No attempts match the filter — all {report.attempts.length} are hidden.</p>
+          )}
         </Card>
       ) : null}
     </>

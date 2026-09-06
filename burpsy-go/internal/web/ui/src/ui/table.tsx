@@ -527,6 +527,102 @@ export function MenuRow({
   );
 }
 
+/**
+ * A sortable table for bounded row sets (burpsy-react-ui-4rd).
+ *
+ * VirtualTable carries selection, virtualization and context menus for the
+ * traffic tables; Intruder's result tables are report-shaped — fixed columns,
+ * every row rendered, no row semantics — and SimpleTable gave them nothing but
+ * static headers. This keeps SimpleTable's footprint (table-frame, density,
+ * plain rows) and adds click-to-sort headers over raw accessor values, which
+ * Burp's results documentation treats as the way to read an attack: "click on
+ * the column header to sort the results".
+ *
+ * Filtering is deliberately not in here: the page filters the rows it passes
+ * (lib/table-filter.ts's filterTableRows) so the count it prints next to the
+ * filter box is computed from the same rows the table renders, by construction,
+ * rather than two implementations that could drift.
+ */
+export function SortableTable<T>({
+  data,
+  columns,
+  getRowId,
+  ariaLabel,
+  initialSort = [],
+  rowClassName,
+  density: densityProp,
+}: {
+  data: T[];
+  columns: Column<T>[];
+  getRowId: (row: T) => string;
+  ariaLabel: string;
+  initialSort?: SortingState;
+  rowClassName?: (row: T) => string | undefined;
+  density?: "comfortable" | "compact";
+}): JSX.Element {
+  const storeDensity = useApp((state) => state.density);
+  const density = densityProp ?? storeDensity;
+  const [sorting, setSorting] = useState<SortingState>(initialSort);
+  const table = useReactTable({
+    data,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getRowId,
+  });
+
+  return (
+    <div className={cn("table-frame", `density-${density}`)} role="group" aria-label={ariaLabel}>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            {table.getHeaderGroups().map((group) => (
+              <tr key={group.id}>
+                {group.headers.map((header) => {
+                  const sorted = header.column.getIsSorted();
+                  const canSort = header.column.getCanSort();
+                  return (
+                    <th
+                      key={header.id}
+                      aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}
+                    >
+                      {canSort ? (
+                        <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          {sorted === "asc" ? (
+                            <ArrowUp size={11} />
+                          ) : sorted === "desc" ? (
+                            <ArrowDown size={11} />
+                          ) : null}
+                        </button>
+                      ) : (
+                        <span className="th-label">
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </span>
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {table.getRowModel().rows.map((row) => (
+              <tr key={row.id} className={rowClassName?.(row.original)}>
+                {row.getVisibleCells().map((cell) => (
+                  <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 /** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */
 export function SimpleTable({
   headers,
