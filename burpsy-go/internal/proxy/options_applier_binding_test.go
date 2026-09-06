@@ -46,11 +46,25 @@ import (
 const everyRuleMarkup = `<html><body>` +
 	`<form onsubmit="validate()" onreset="clear()">` +
 	`<input type="hidden" name="csrf" value="abc">` +
+	`<input type="text" name="q" value="search term" disabled maxlength="5">` +
+	`<select name="s" disabled><option value="1" disabled>one</option></select>` +
 	`</form>` +
 	`<object data="plugin.swf"><param name="a" value="b"></object>` +
 	`<script>tracker()</script>` +
 	`<a href="https://cdn.example.test/app.js" onclick="go()">link</a>` +
 	`</body></html>`
+
+// cookieResponse is the fixture remove_secure_flag_from_cookies acts on: a
+// Set-Cookie header carrying the Secure attribute the rule exists to remove.
+// Like every fixture here it is offered to every key; only the key that
+// rewrites a Set-Cookie head can make it change.
+func cookieResponse() []byte {
+	return []byte("HTTP/1.1 200 OK\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"Set-Cookie: session=abc123; Secure; Path=/\r\n" +
+		"Content-Length: 20\r\n\r\n" +
+		"<html></html>")
+}
 
 // requestWithEncoding is the request-direction equivalent: a request carrying the one header
 // strip_accept_encoding exists to strip.
@@ -148,6 +162,12 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			gzResp := gzippedHTMLResponse(t, everyRuleMarkup)
 			gzRespOut := o.ApplyResponse(gzResp)
 			respChanged = respChanged || string(gzRespOut) != string(gzResp)
+
+			// The Set-Cookie fixture, for the cookie-flag strip: a head rewrite, so it rides on
+			// its own response rather than on everyRuleMarkup's body.
+			cookieResp := cookieResponse()
+			cookieRespOut := o.ApplyResponse(cookieResp)
+			respChanged = respChanged || string(cookieRespOut) != string(cookieResp)
 
 			gzReq := gzippedRequest(t, everyRuleMarkup)
 			gzReqOut := o.ApplyRequest(gzReq)

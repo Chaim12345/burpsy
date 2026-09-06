@@ -45,6 +45,23 @@ const (
 	// OptUnhideHiddenFormFields rewrites `type="hidden"` to `type="text"` on
 	// `<input>` elements, so a hidden field can be edited in the browser.
 	OptUnhideHiddenFormFields OptionKey = "unhide_hidden_form_fields"
+	// OptEnableDisabledFormFields removes the `disabled` attribute from form
+	// controls — input, textarea, select, option, button and the fieldset that
+	// disables its descendants — so a greyed-out control can be used. Burp's
+	// "Enable disabled form fields" (configPanelProxyModificationRules:121).
+	//
+	// Burp renders a "Prominently highlight unhidden fields" sub-option next to
+	// unhide_hidden_form_fields; that sub-option is deliberately not implemented.
+	// It injects marker markup the origin never sent into a body burpsy also
+	// records and passively scans, which unhideHiddenFormFields already rejects
+	// for exactly that reason — the field's type in history is the record of what
+	// happened. The same decision covers highlighting.
+	OptEnableDisabledFormFields OptionKey = "enable_disabled_form_fields"
+	// OptRemoveInputFieldLengthLimits removes `maxlength` attributes from
+	// `<input>` and `<textarea>` elements, so an over-long value can be submitted.
+	// Burp's "Remove input field length limits"
+	// (configPanelProxyModificationRules:129).
+	OptRemoveInputFieldLengthLimits OptionKey = "remove_input_field_length_limits"
 	// OptRemoveObjectTags removes `<object>…</object>` elements and their content.
 	OptRemoveObjectTags OptionKey = "remove_object_tags"
 	// OptRemoveJSFormValidation removes `onsubmit` and `onreset` handler
@@ -56,6 +73,18 @@ const (
 	// OptConvertHTTPSLinks rewrites `https://` to `http://` inside href, src and
 	// action attribute values.
 	OptConvertHTTPSLinks OptionKey = "convert_https_links_to_http"
+	// OptRemoveSecureFlagFromCookies removes the `Secure` attribute from
+	// Set-Cookie response headers, so a session cookie the origin marked
+	// HTTPS-only is transmitted over plaintext HTTP and can be captured. Burp's
+	// "Remove secure flag from cookies" (configPanelProxyModificationRules:169).
+	//
+	// Not a body rule and not in responseRules: it rewrites the head, and it must
+	// reach every response — a gzip body's headers are plaintext, and a JSON
+	// endpoint can set cookies just as an HTML page can — so Content-Type and
+	// Content-Encoding, which gate the body rules, must not gate it. It runs on
+	// the same live option set and is counted by the same counters as the body
+	// rules; like them it cannot reach an HTTP/2 relayed response (NoteRelayedHTTP2).
+	OptRemoveSecureFlagFromCookies OptionKey = "remove_secure_flag_from_cookies"
 	// OptStripAcceptEncoding removes the Accept-Encoding header from requests on
 	// the way out. Burp's own wording for this option ends "(if not unpacking
 	// compressed data)", which is exactly this build's situation: it has no
@@ -139,10 +168,13 @@ const (
 // caller guess, and so a key added here appears in both without a second edit.
 var OptionKeys = []OptionKey{
 	OptUnhideHiddenFormFields,
+	OptEnableDisabledFormFields,
+	OptRemoveInputFieldLengthLimits,
 	OptRemoveObjectTags,
 	OptRemoveJSFormValidation,
 	OptRemoveAllJavaScript,
 	OptConvertHTTPSLinks,
+	OptRemoveSecureFlagFromCookies,
 	OptStripAcceptEncoding,
 	OptUnpackCompressedRequests,
 	OptUnpackCompressedResponses,
@@ -174,6 +206,11 @@ var ErrUnknownOption = errors.New("unknown proxy option")
 // arriving in this set would make every response look eligible.
 var responseRules = []OptionKey{
 	OptUnhideHiddenFormFields,
+	// The two form-control rules are placed with unhide rather than in Burp's
+	// render order: all three edit the same controls, and their order relative to
+	// each other cannot matter — each touches a different attribute.
+	OptEnableDisabledFormFields,
+	OptRemoveInputFieldLengthLimits,
 	OptRemoveObjectTags,
 	OptRemoveJSFormValidation,
 	OptRemoveAllJavaScript,
@@ -535,12 +572,11 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		}
 	}
 	unpacking := o.flags[OptUnpackCompressedResponses]
+	cookieStrip := o.flags[OptRemoveSecureFlagFromCookies]
 	o.mu.RUnlock()
-	// Unpacking counts as something to do on its own. It is not a rewriting rule — it makes the
-	// response *readable*, in history and in every consumer downstream — so a response that is
-	// decompressed and matched by no rule is still a response this changed, and returning early on
-	// `!any` would have made the switch a no-op unless another box was also ticked.
-	if !any && !unpacking {
+	// The cookie-flag strip counts as something to do on its own, exactly as
+	// unpacking does: it is a rule, only aimed at the head instead of the body.
+	if !any && !unpacking && !cookieStrip {
 		return raw
 	}
 	o.considered.Add(1)
@@ -555,15 +591,20 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		// the whole point of the switch: "the rule found nothing to rewrite" and "the rule was never
 		// allowed to look" were the two states this package was built to distinguish, and a
 		// compressed body was permanently in the second.
+		//
+		// Every early return here still offers the head to the cookie-flag strip first: a gzip
+		// body's headers are plaintext, and a Set-Cookie header is as strippable on a compressed
+		// response as on any other. The strip is the only change that can survive these skips,
+		// because it is the only one that does not depend on reading the body.
 		if !unpacking {
 			o.skippedCompressed.Add(1)
-			return raw
+			return o.headOnlyResult(raw, head, sep, body, cookieStrip)
 		}
 		unpacked, uok := o.unpack(raw, &o.unpackedResponses)
 		if !uok {
 			// unpack counted the reason. SkippedCompressed is added there too, so the panel's
 			// "Skipped: compressed" total still covers every compressed response no rule reached.
-			return raw
+			return o.headOnlyResult(raw, head, sep, body, cookieStrip)
 		}
 		// Re-split, because the head and the framing have both changed. Recursion is deliberately not
 		// used: the message now carries no Content-Encoding, so a second pass could not reach this
@@ -577,13 +618,43 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		if !any {
 			// Decompressed, and no rewriting rule to run. The decompressed message is the result: the
 			// switch's job is to make the body readable, and Modified counts it because the bytes
-			// really did change.
+			// really did change. The cookie-flag strip rides along on the decompressed head, which is
+			// the head the browser actually receives.
+			if head, changed := stripSecureCookieAttributes(head, cookieStrip); changed {
+				o.modified.Add(1)
+				return concatMessage(head, sep, body)
+			}
 			o.modified.Add(1)
 			return raw
 		}
 	}
+	// The cookie-flag strip runs after the unpack branch so it rewrites the head the browser will
+	// receive — the decompressed head, when unpacking happened — and before the body gates, which
+	// must not gate it: Content-Type and Content-Encoding say nothing about whether a Set-Cookie
+	// header is present.
+	headChanged := false
+	if cookieStrip {
+		if newHead, changed := stripSecureCookieAttributes(head, true); changed {
+			head, headChanged = newHead, true
+		}
+	}
+	if !any {
+		// Only the unpacking and cookie switches were enabled, and this response gave them
+		// nothing to do: no Content-Encoding to unpack, no Secure flag to strip. Counted
+		// unchanged rather than silent, on the same principle as every other no-op here.
+		if headChanged {
+			o.modified.Add(1)
+			return concatMessage(head, sep, body)
+		}
+		o.unchanged.Add(1)
+		return raw
+	}
 	if !isHTMLResponse(head) {
 		o.skippedNotHTML.Add(1)
+		if headChanged {
+			o.modified.Add(1)
+			return concatMessage(head, sep, body)
+		}
 		return raw
 	}
 
@@ -614,6 +685,12 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 	}
 	if enabled[OptUnhideHiddenFormFields] {
 		out = unhideHiddenFormFields(out)
+	}
+	if enabled[OptEnableDisabledFormFields] {
+		out = enableDisabledFormFields(out)
+	}
+	if enabled[OptRemoveInputFieldLengthLimits] {
+		out = removeInputFieldLengthLimits(out)
 	}
 	if enabled[OptConvertHTTPSLinks] {
 		out = convertHTTPSLinks(out)
@@ -702,6 +779,114 @@ func unhideHiddenFormFields(body []byte) []byte {
 
 func convertHTTPSLinks(body []byte) []byte {
 	return reHTTPSAttribute.ReplaceAll(body, []byte(`${1}http://`))
+}
+
+// enableDisabledFormFields and removeInputFieldLengthLimits each delete one
+// attribute from the form controls that carry it, in each of the spellings HTML
+// allows: bare (`disabled`), `disabled="disabled"`, `disabled='disabled'`, and
+// with whitespace around the `=`. RE2 has no backreferences and the value is
+// always the attribute's own name, so one pattern per attribute covers every
+// quoting style the way the hidden-type rule above covers them with three.
+//
+// The controls listed are the ones the HTML spec defines `disabled` on; a
+// `disabled` on anything else is not a form control and is left alone.
+var (
+	// The trailing `([\s/>])` plays the part a lookahead would: it guarantees the
+	// word ended — `disabled` must not match inside `disabledx` or a value's
+	// continuation — and is written back unchanged through ${3}.
+	reDisabledAttribute  = regexp.MustCompile(`(?is)(<(?:input|textarea|select|option|button|fieldset)\b[^>]*?)\s+disabled(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?([\s/>])`)
+	reMaxlengthAttribute = regexp.MustCompile(`(?is)(<(?:input|textarea)\b[^>]*?)\s+maxlength(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?([\s/>])`)
+)
+
+func enableDisabledFormFields(body []byte) []byte {
+	return reDisabledAttribute.ReplaceAll(body, []byte(`${1}${3}`))
+}
+
+func removeInputFieldLengthLimits(body []byte) []byte {
+	return reMaxlengthAttribute.ReplaceAll(body, []byte(`${1}${3}`))
+}
+
+// stripSecureCookieAttributes removes the `Secure` attribute from every
+// Set-Cookie header in a response head. It reports false, and changes nothing,
+// when no header carried one — so a head the rule did not touch is never
+// rebuilt, and the caller can return the original bytes.
+//
+// Only an attribute that is exactly `Secure` (case-insensitive) is removed: a
+// cookie *value* that merely contains the letters, or another attribute such as
+// `SiteSafe`, survives. Other headers are not examined, so a body or a
+// non-cookie header mentioning "Secure" cannot be touched by a rule aimed at
+// cookie flags.
+func stripSecureCookieAttributes(head []byte, enabled bool) ([]byte, bool) {
+	if !enabled {
+		return head, false
+	}
+	changed := false
+	lines := bytes.Split(head, []byte("\n"))
+	for i, line := range lines {
+		if i == 0 {
+			continue // the status line cannot carry a cookie
+		}
+		trimmed := bytes.TrimRight(line, "\r")
+		if len(trimmed) < len("set-cookie:") {
+			continue
+		}
+		name, value, found := bytes.Cut(trimmed, []byte(":"))
+		if !found || !strings.EqualFold(string(name), "set-cookie") {
+			continue
+		}
+		parts := strings.Split(string(value), ";")
+		kept := parts[:0]
+		stripped := false
+		for _, part := range parts {
+			if strings.EqualFold(strings.TrimSpace(part), "secure") {
+				stripped = true
+				continue
+			}
+			kept = append(kept, part)
+		}
+		if !stripped {
+			continue
+		}
+		changed = true
+		newLine := append(bytes.Clone(name), ':')
+		newLine = append(newLine, strings.Join(kept, ";")...)
+		if bytes.HasSuffix(line, []byte("\r")) {
+			newLine = append(newLine, '\r')
+		}
+		lines[i] = newLine
+	}
+	if !changed {
+		return head, false
+	}
+	return bytes.Join(lines, []byte("\n")), true
+}
+
+// headOnlyResult answers a response whose body rules could not or did not run,
+// but whose head the cookie-flag strip may have changed. When the strip changed
+// nothing the original bytes come back untouched; when it did, the new head is
+// spliced onto the untouched body and the change is counted as a modification —
+// the message the client receives is not the message the origin sent, which is
+// the definition every counter here is written around.
+//
+// The body is spliced verbatim, framing included: no header describing it
+// changed, so no framing decision is made on its behalf.
+func (o *Options) headOnlyResult(raw, head, sep, body []byte, cookieStrip bool) []byte {
+	if newHead, changed := stripSecureCookieAttributes(head, cookieStrip); changed {
+		o.modified.Add(1)
+		return concatMessage(newHead, sep, body)
+	}
+	return raw
+}
+
+// concatMessage splices a head back onto a body with the separator that divided
+// them. Used where only the head changed: rebuild would recompute
+// Content-Length and normalise framing, and a body that was not edited must not
+// be re-framed as a side effect of its head being edited.
+func concatMessage(head, sep, body []byte) []byte {
+	out := make([]byte, 0, len(head)+len(sep)+len(body))
+	out = append(out, head...)
+	out = append(out, sep...)
+	return append(out, body...)
 }
 
 // ---- message surgery -----------------------------------------------------------

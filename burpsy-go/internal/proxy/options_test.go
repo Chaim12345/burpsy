@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -94,6 +95,49 @@ func Test_each_response_rule_rewrites_the_markup_it_names(t *testing.T) {
 			in:     `<a href="https://a.test/x">a</a><img src='https://b.test/i.png'><form action=https://c.test/p>`,
 			want:   `<a href="http://a.test/x">a</a><img src='http://b.test/i.png'><form action=http://c.test/p>`,
 			absent: []string{"https://"},
+		},
+		{
+			name: "enable disabled form fields",
+			key:  OptEnableDisabledFormFields,
+			in: `<form>` +
+				`<input type="text" name="a" disabled>` +
+				`<input type="text" name="b" disabled="disabled">` +
+				`<input type="text" name="c" disabled='disabled'>` +
+				`<textarea name="d" disabled>text</textarea>` +
+				`<select name="e" disabled><option value="1" disabled>one</option></select>` +
+				`<button type="submit" disabled = "disabled">go</button>` +
+				`<fieldset disabled><input name="f"></fieldset>` +
+				`</form>` +
+				// Not form controls, and not the attribute: both must survive.
+				`<p data-x="disabled">keep</p><input name="g" xdisabled>`,
+			want: `<form>` +
+				`<input type="text" name="a">` +
+				`<input type="text" name="b">` +
+				`<input type="text" name="c">` +
+				`<textarea name="d">text</textarea>` +
+				`<select name="e"><option value="1">one</option></select>` +
+				`<button type="submit">go</button>` +
+				`<fieldset><input name="f"></fieldset>` +
+				`</form>` +
+				`<p data-x="disabled">keep</p><input name="g" xdisabled>`,
+		},
+		{
+			name: "remove input field length limits",
+			key:  OptRemoveInputFieldLengthLimits,
+			in: `<form>` +
+				`<input type="text" name="a" maxlength="5">` +
+				`<input type="text" name="b" maxlength='10'>` +
+				`<input type="text" name="c" maxlength = 15>` +
+				`<textarea name="d" maxlength="20">text</textarea>` +
+				// maxlength is defined on input and textarea only: a select's must
+				// survive, and so must a name that merely contains the word.
+				`<select name="e" maxlength="3"></select><input name="f" xmaxlength="9">`,
+			want: `<form>` +
+				`<input type="text" name="a">` +
+				`<input type="text" name="b">` +
+				`<input type="text" name="c">` +
+				`<textarea name="d">text</textarea>` +
+				`<select name="e" maxlength="3"></select><input name="f" xmaxlength="9">`,
 		},
 	}
 
@@ -263,6 +307,122 @@ func Test_a_chunked_html_body_is_rewritten_and_reframed(t *testing.T) {
 		}
 		if c := o.Counters(); c.SkippedUnframed != 1 {
 			t.Errorf("counters = %+v, want one skipped_unframed", c)
+		}
+	})
+}
+
+// remove_secure_flag_from_cookies is a head rule, and its tests are head-shaped:
+// what it must change is the Set-Cookie header, and what it must not change is
+// everything else — the body, the other headers, a cookie flag it did not name.
+func Test_remove_secure_flag_from_cookies_rewrites_the_head_and_nothing_else(t *testing.T) {
+	t.Run("the Secure attribute is removed and the rest of the cookie survives", func(t *testing.T) {
+		raw := htmlResponse(`<html></html>`)
+		raw = []byte(strings.Replace(string(raw), "Content-Type: text/html; charset=utf-8\r\n",
+			"Content-Type: text/html; charset=utf-8\r\nSet-Cookie: session=abc123; Secure; Path=/\r\n", 1))
+		o := optionsWith(t, OptRemoveSecureFlagFromCookies)
+		out := o.ApplyResponse(raw)
+
+		head := string(out[:bytes.Index(out, []byte("\r\n\r\n"))])
+		if strings.Contains(strings.ToLower(head), "secure") {
+			t.Errorf("Secure survived the strip: %q", head)
+		}
+		if !strings.Contains(head, "Set-Cookie: session=abc123; Path=/") {
+			t.Errorf("the rest of the cookie did not survive: %q", head)
+		}
+		if got := bodyOf(t, out); got != `<html></html>` {
+			t.Errorf("the body was touched by a head rule: %q", got)
+		}
+		if c := o.Counters(); c.Considered != 1 || c.Modified != 1 || c.Unchanged != 0 {
+			t.Errorf("counters = %+v, want one considered and one modified", c)
+		}
+	})
+
+	t.Run("a non-HTML body does not gate it", func(t *testing.T) {
+		body := `{"session":"abc"}`
+		raw := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+			"Set-Cookie: sid=xyz; Path=/; Secure; HttpOnly\r\n" +
+			"Content-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body)
+		o := optionsWith(t, OptRemoveSecureFlagFromCookies)
+		out := o.ApplyResponse(raw)
+
+		head := string(out[:bytes.Index(out, []byte("\r\n\r\n"))])
+		if strings.Contains(head, "Secure") {
+			t.Errorf("Secure survived on a JSON response: %q", head)
+		}
+		if c := o.Counters(); c.SkippedNotHTML != 0 || c.Modified != 1 {
+			t.Errorf("counters = %+v: a JSON endpoint can set cookies, so this is a modification, not a skip", c)
+		}
+	})
+
+	t.Run("header and attribute casing do not matter", func(t *testing.T) {
+		raw := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
+			"set-cookie: a=1; SECURE\r\n" +
+			"SET-COOKIE: b=2; secure\r\n" +
+			"Content-Length: 0\r\n\r\n")
+		o := optionsWith(t, OptRemoveSecureFlagFromCookies)
+		out := o.ApplyResponse(raw)
+		head := string(out[:bytes.Index(out, []byte("\r\n\r\n"))])
+		if strings.Contains(strings.ToLower(head), "secure") {
+			t.Errorf("a differently cased Secure survived: %q", head)
+		}
+		if !strings.Contains(head, "set-cookie: a=1") || !strings.Contains(head, "SET-COOKIE: b=2") {
+			t.Errorf("the headers were not preserved as sent: %q", head)
+		}
+	})
+
+	t.Run("only the exact attribute is removed", func(t *testing.T) {
+		raw := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
+			"Set-Cookie: a=1; SecureX; Path=/\r\n" +
+			"Set-Cookie: b=insecure-value; HttpOnly\r\n" +
+			"X-Note: Secure\r\n" +
+			"Content-Length: 0\r\n\r\n")
+		o := optionsWith(t, OptRemoveSecureFlagFromCookies)
+		out := o.ApplyResponse(raw)
+		if string(out) != string(raw) {
+			t.Errorf("a response with no exact Secure attribute was changed: %q", out)
+		}
+		if c := o.Counters(); c.Unchanged != 1 || c.Modified != 0 {
+			t.Errorf("counters = %+v, want one unchanged", c)
+		}
+	})
+
+	t.Run("a compressed response's head is still reachable", func(t *testing.T) {
+		packed := gzipBytes(t, `<html></html>`)
+		raw := append([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\n"+
+			"Set-Cookie: session=abc; Secure\r\n"+
+			"Content-Length: "+strconv.Itoa(len(packed))+"\r\n\r\n"), packed...)
+		o := optionsWith(t, OptRemoveSecureFlagFromCookies)
+		out := o.ApplyResponse(raw)
+
+		sep := bytes.Index(out, []byte("\r\n\r\n"))
+		head := string(out[:sep])
+		if strings.Contains(head, "Secure") {
+			t.Errorf("Secure survived on a compressed response: %q", head)
+		}
+		if !bytes.Equal(out[sep+4:], packed) {
+			t.Error("the gzip body was touched by a head rule")
+		}
+		// Both facts are true and both are counted: the head rule changed the
+		// message, and the body rules never got to look at the body.
+		if c := o.Counters(); c.SkippedCompressed != 1 || c.Modified != 1 {
+			t.Errorf("counters = %+v, want one skipped_compressed and one modified", c)
+		}
+	})
+
+	t.Run("it composes with a body rule on a non-HTML body", func(t *testing.T) {
+		body := `{"session":"abc"}`
+		raw := []byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+			"Set-Cookie: sid=xyz; Secure\r\n" +
+			"Content-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body)
+		o := optionsWith(t, OptRemoveSecureFlagFromCookies, OptRemoveAllJavaScript)
+		out := o.ApplyResponse(raw)
+
+		head := string(out[:bytes.Index(out, []byte("\r\n\r\n"))])
+		if strings.Contains(head, "Secure") {
+			t.Errorf("the head change did not survive the body skip: %q", head)
+		}
+		if c := o.Counters(); c.SkippedNotHTML != 1 || c.Modified != 1 {
+			t.Errorf("counters = %+v, want one skipped_not_html and one modified", c)
 		}
 	})
 }
