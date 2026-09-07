@@ -742,20 +742,28 @@ export function HistoryPage(): JSX.Element {
   // cannot silently drop the operator's selection.
   const selected = useMemo(() => rows.find((row) => row.id === selectedId) ?? null, [rows, selectedId]);
 
+  const [reqView, setReqView] = useState<"wire" | "original">("wire");
+  const [respView, setRespView] = useState<"wire" | "original">("wire");
+
   // Burp's signature bindings, on the selected row. ctrl+R overrides the browser's reload: for a
   // Burp user that combination means "send to Repeater" and nothing else. They used to be two
   // hardcoded literals here, which made the Settings hotkey table a lie and left every other row
   // table without them — see useSendShortcuts in lib/actions.ts.
   useSendShortcuts(selected);
 
-  const request = useMessage(selected?.request);
-  const response = useMessage(selected?.response ?? null);
+  const activeReqId = reqView === "original" && selected?.original_request != null ? selected.original_request : selected?.request;
+  const request = useMessage(activeReqId);
+
+  const activeRespId = respView === "original" && selected?.original_response != null ? selected.original_response : (selected?.response ?? null);
+  const response = useMessage(activeRespId);
 
   // The note field mirrors the selected row's own copy — see organizer.tsx's identical comment on
   // its own draft state — but reset only on a selection change, not on every background refetch, so
   // a background refetch cannot wipe out a note the operator is mid-typing.
   useEffect(() => {
     setNote(selected?.notes ?? "");
+    setReqView("wire");
+    setRespView("wire");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
@@ -851,6 +859,13 @@ export function HistoryPage(): JSX.Element {
         header: "TLS",
         size: 60,
         cell: (info) => (info.getValue<boolean>() ? <Badge tone="good">TLS</Badge> : <span className="cell-dim">—</span>),
+      },
+      {
+        id: "edited",
+        header: "Edited",
+        size: 68,
+        accessorFn: (row: Exchange) => Boolean(row.original_request != null || row.original_response != null),
+        cell: (info) => (info.getValue<boolean>() ? <Badge tone="warn">Edited</Badge> : <span className="cell-dim">—</span>),
       },
       {
         id: "comment",
@@ -978,24 +993,48 @@ export function HistoryPage(): JSX.Element {
         {/* The row menu, on the message itself. Burp carries the same actions in both places, and
             reading a response then sending it straight to Repeater is the gesture this pane exists
             for — reaching back up to the table row to do it is the divergence. */}
-        <HttpEditor
-          label="Request"
-          readOnly
-          value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
-          filename={`exchange-${selected.id}-request.txt`}
-          menuGroups={actions.menu(selected)}
-        />
-        <HttpEditor
-          label="Response"
-          readOnly
-          value={
-            selected.response === null
-              ? "No response was captured for this exchange."
-              : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
-          }
-          filename={`exchange-${selected.id}-response.txt`}
-          menuGroups={actions.menu(selected)}
-        />
+        <div>
+          {selected.original_request != null ? (
+            <div className="toolbar" style={{ marginBottom: 4 }}>
+              <FilterToggle pressed={reqView === "wire"} onPressedChange={() => setReqView("wire")}>
+                Wire (Edited)
+              </FilterToggle>
+              <FilterToggle pressed={reqView === "original"} onPressedChange={() => setReqView("original")}>
+                Original
+              </FilterToggle>
+            </div>
+          ) : null}
+          <HttpEditor
+            label={selected.original_request != null ? `Request (${reqView === "original" ? "Original" : "Wire"})` : "Request"}
+            readOnly
+            value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+            filename={`exchange-${selected.id}-request.txt`}
+            menuGroups={actions.menu(selected)}
+          />
+        </div>
+        <div>
+          {selected.original_response != null ? (
+            <div className="toolbar" style={{ marginBottom: 4 }}>
+              <FilterToggle pressed={respView === "wire"} onPressedChange={() => setRespView("wire")}>
+                Wire (Edited)
+              </FilterToggle>
+              <FilterToggle pressed={respView === "original"} onPressedChange={() => setRespView("original")}>
+                Original
+              </FilterToggle>
+            </div>
+          ) : null}
+          <HttpEditor
+            label={selected.original_response != null ? `Response (${respView === "original" ? "Original" : "Wire"})` : "Response"}
+            readOnly
+            value={
+              selected.response === null
+                ? "No response was captured for this exchange."
+                : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+            }
+            filename={`exchange-${selected.id}-response.txt`}
+            menuGroups={actions.menu(selected)}
+          />
+        </div>
         {inspector ? (
           <Inspector
             raw={request.data?.text ?? ""}

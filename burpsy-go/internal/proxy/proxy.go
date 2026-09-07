@@ -945,6 +945,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		}
 
 		requestData := readFullRequest(requestLine, br)
+		origRequestData := requestData
 		startTime := time.Now()
 
 		// Apply Match & Replace on the request — same position and same reasoning as the
@@ -1004,7 +1005,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					return
 				}
 				responseData := append(head, body...)
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime) {
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, origRequestData, inScope, responseData, startTime) {
 					return
 				}
 				continue
@@ -1016,16 +1017,17 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			var handshake *core.Exchange
 			if inScope {
 				handshake = s.record(scanner.CapturedExchange{
-					Host:     reqHost,
-					Port:     reqPort,
-					TLS:      true,
-					Method:   method,
-					Path:     path,
-					Request:  requestData,
-					Response: head,
-					Started:  startTime,
-					Duration: time.Since(startTime),
-					Protocol: core.ProtocolHTTP1,
+					Host:            reqHost,
+					Port:            reqPort,
+					TLS:             true,
+					Method:          method,
+					Path:            path,
+					Request:         requestData,
+					OriginalRequest: origRequestData,
+					Response:        head,
+					Started:         startTime,
+					Duration:        time.Since(startTime),
+					Protocol:        core.ProtocolHTTP1,
 
 					// A handshake this proxy rewrote must not look pristine.
 					Notes: wsStripNote(wsStripped),
@@ -1059,7 +1061,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		}
 		responseData := append(head, body...)
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, origRequestData, inScope, responseData, startTime) {
 			return
 		}
 	}
@@ -1077,7 +1079,8 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 // own copy of the exchange literal. Only the retention gate is genuinely
 // different, because a tunnel serves whatever the client asks for and scope
 // decides which of it is kept.
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, requestData []byte, inScope bool, responseData []byte, startTime time.Time) bool {
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, requestData []byte, origRequestData []byte, inScope bool, responseData []byte, startTime time.Time) bool {
+	origResponseData := responseData
 	// Apply Match & Replace on response
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
@@ -1127,21 +1130,21 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 
 	if inScope {
 		s.record(scanner.CapturedExchange{
-			Host:     host,
-			Port:     port,
-			TLS:      true,
-			Method:   method,
-			Path:     path,
-			Request:  requestData,
-			Response: responseData,
-			Started:  startTime,
-			Duration: time.Since(startTime),
-			Protocol: core.ProtocolHTTP1,
+			Host:             host,
+			Port:             port,
+			TLS:              true,
+			Method:           method,
+			Path:             path,
+			Request:          requestData,
+			OriginalRequest:  origRequestData,
+			Response:         responseData,
+			OriginalResponse: origResponseData,
+			Started:          startTime,
+			Duration:         time.Since(startTime),
+			Protocol:         core.ProtocolHTTP1,
 
 			Notes: notes,
 		})
-	} else if s.config.options.Get(OptDontLogOutOfScopeItems) {
-		s.config.options.NoteDroppedOutOfScope()
 	}
 	return keepServing
 }
@@ -1272,6 +1275,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// bytes upstream receives. The tunnelled path (handleTunnel, below) needs none of this — requests
 	// inside a CONNECT tunnel already arrive in origin-form.
 	requestData = toOriginForm(requestData, target, path)
+	origRequestData := requestData
 
 	// Apply Match & Replace on the request. Placed here for the same reason the response
 	// direction is applied at the top of completeResponse: everything the proxy does *to*
@@ -1322,7 +1326,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	inScope := s.config.scope.Contains(host, port, path, false)
 
 	if !inScope {
-		if s.config.options.Get(OptDontLogOutOfScopeItems) {
+		if s.config.options != nil && s.config.options.Get(OptDontLogOutOfScopeItems) {
 			s.config.options.NoteDroppedOutOfScope()
 		}
 		// Forward without storing
@@ -1342,7 +1346,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// after it are WebSocket frames, not a response body. Gated on the request,
 	// so every other request takes the identical path it always took.
 	if core.IsWsUpgradeRequest(requestData) {
-		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, startTime, wsStripped)
+		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, origRequestData, startTime, wsStripped)
 		return
 	}
 
@@ -1353,7 +1357,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		return
 	}
 
-	s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime)
+	s.completeResponse(clientConn, method, host, port, false, path, requestData, origRequestData, responseData, startTime)
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1378,7 +1382,8 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // does. The previous code here stored the pre-rewrite bytes and then described
 // them with the post-rewrite status and length, so the row disagreed with the
 // message it indexed whenever a response rule fired.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time) {
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, origRequestData []byte, responseData []byte, startTime time.Time) {
+	origResponseData := responseData
 	// Apply Match & Replace on response, then the blanket response modification
 	// rules — same order, and for the same reason, as handleTLSResponse.
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
@@ -1409,16 +1414,18 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	}
 
 	s.record(scanner.CapturedExchange{
-		Host:     host,
-		Port:     port,
-		TLS:      tls,
-		Method:   method,
-		Path:     path,
-		Request:  requestData,
-		Response: responseData,
-		Started:  startTime,
-		Duration: time.Since(startTime),
-		Protocol: core.ProtocolHTTP1,
+		Host:             host,
+		Port:             port,
+		TLS:              tls,
+		Method:           method,
+		Path:             path,
+		Request:          requestData,
+		OriginalRequest:  origRequestData,
+		Response:         responseData,
+		OriginalResponse: origResponseData,
+		Started:          startTime,
+		Duration:         time.Since(startTime),
+		Protocol:         core.ProtocolHTTP1,
 
 		Notes: notes,
 	})

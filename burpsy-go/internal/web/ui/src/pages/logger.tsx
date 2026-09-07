@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { FolderTree, Link2, Search, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { useExchangeActions, useSendShortcuts } from "../lib/actions";
 import { copyToClipboard, formatBytes, formatDuration, relativeTime, statusTone } from "../lib/api";
-import { useClearToolLog, useDebounced } from "../lib/data";
+import { useClearToolLog, useDebounced, useMessage } from "../lib/data";
+import { useExchange } from "../lib/data.observe";
 import { useSetToolLogCapture, useToolLogView } from "../lib/data.workbench";
 import { useApp } from "../lib/store";
 import type { ToolLogRow } from "../lib/types.workbench";
+import { HttpEditor } from "../ui/editor";
 import { DetailList } from "../ui/json";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, IconButton, Input, Modal, Select, Toolbar } from "../ui/primitives";
@@ -103,6 +106,12 @@ export function LoggerPage(): JSX.Element {
 
   // Selection is held by id so a background refresh cannot drop it.
   const selected = useMemo(() => filteredRows.find((row) => row.id === selectedId) ?? null, [filteredRows, selectedId]);
+  const exchangeQuery = useExchange(selected?.exchange_id);
+  const exchange = exchangeQuery.data ?? null;
+  useSendShortcuts(exchange);
+  const actions = useExchangeActions();
+  const request = useMessage(exchange?.request);
+  const response = useMessage(exchange?.response ?? null);
 
   // The tool list comes from the server's histogram rather than a hard-coded set,
   // so a tool that starts logging is filterable without a frontend change.
@@ -196,10 +205,10 @@ export function LoggerPage(): JSX.Element {
   );
 
   const detail = selected ? (
-    <div className="detail-panel">
+    <div className="tabs-fill history-detail">
       <div className="detail-head">
         <div className="detail-head-title">
-          <span className="eyebrow">#{selected.id}</span>
+          <span className="eyebrow">#{selected.id}{selected.exchange_id != null ? ` (ex #${selected.exchange_id})` : ""}</span>
           <strong title={rowUrl(selected)}>
             {selected.method} {rowUrl(selected)}
           </strong>
@@ -232,6 +241,28 @@ export function LoggerPage(): JSX.Element {
           },
         ]}
       />
+      {selected.exchange_id != null ? (
+        <div className="editor-grid" style={{ marginTop: 12 }}>
+          <HttpEditor
+            label="Request"
+            readOnly
+            value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+            filename={`logger-${selected.id}-request.txt`}
+            menuGroups={exchange ? actions.menu(exchange) : []}
+          />
+          <HttpEditor
+            label="Response"
+            readOnly
+            value={
+              exchange?.response === null || exchange?.response === undefined
+                ? "No response was captured for this exchange."
+                : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+            }
+            filename={`logger-${selected.id}-response.txt`}
+            menuGroups={exchange ? actions.menu(exchange) : []}
+          />
+        </div>
+      ) : null}
     </div>
   ) : (
     <Empty
@@ -351,48 +382,70 @@ export function LoggerPage(): JSX.Element {
             enableColumnVisibility
             columnVisibility={columnVisibility}
             onColumnVisibilityChange={setColumnVisibility}
-            menuGroups={(row) => [
-              {
-                id: "copy",
-                actions: [
-                  {
-                    id: "url",
-                    label: "Copy URL (as logged)",
-                    icon: Link2,
-                    onSelect: () => {
-                      void copyToClipboard(rowUrl(row));
-                      toast.success("URL copied");
+            menuGroups={(row) => {
+              if (row.exchange_id != null) {
+                // Synthesize partial exchange object for actions.menu if we don't have full object loaded
+                const exObj = {
+                  id: row.exchange_id,
+                  host: row.host,
+                  port: row.port,
+                  tls: row.port === 443,
+                  method: row.method,
+                  path: row.path,
+                  status: row.status,
+                  response_len: row.response_len ?? 0,
+                  mime: "",
+                  started_ms: row.started_ms,
+                  duration_ms: row.duration_ms,
+                  protocol: "HTTP/1.1",
+                  request: 0,
+                  response: null,
+                };
+                return actions.menu(exObj as any);
+              }
+              return [
+                {
+                  id: "copy",
+                  actions: [
+                    {
+                      id: "url",
+                      label: "Copy URL (as logged)",
+                      icon: Link2,
+                      onSelect: () => {
+                        void copyToClipboard(rowUrl(row));
+                        toast.success("URL copied");
+                      },
                     },
-                  },
-                  {
-                    id: "curl",
-                    label: "Copy as curl (request line only)",
-                    icon: Terminal,
-                    onSelect: () => {
-                      void copyToClipboard(rowCurl(row));
-                      toast.success("curl command copied — the log stores no headers or body");
+                    {
+                      id: "curl",
+                      label: "Copy as curl (request line only)",
+                      icon: Terminal,
+                      onSelect: () => {
+                        void copyToClipboard(rowCurl(row));
+                        toast.success("curl command copied — the log stores no headers or body");
+                      },
                     },
-                  },
-                ],
-              },
-              {
-                id: "history",
-                actions: [
-                  {
-                    id: "host",
-                    label: `Show ${row.host} in HTTP history`,
-                    icon: FolderTree,
-                    onSelect: () => showInHistory(`host = ${row.host}`),
-                  },
-                  {
-                    id: "path",
-                    label: `Show ${row.host} ${row.path} in HTTP history`,
-                    icon: FolderTree,
-                    onSelect: () => showInHistory(`host = ${row.host} AND path ~ ${row.path}`),
-                  },
-                ],
-              },
-            ]}
+                  ],
+                },
+                {
+                  id: "history",
+                  actions: [
+                    {
+                      id: "host",
+                      label: `Show ${row.host} in HTTP history`,
+                      icon: FolderTree,
+                      onSelect: () => showInHistory(`host = ${row.host}`),
+                    },
+                    {
+                      id: "path",
+                      label: `Show ${row.host} ${row.path} in HTTP history`,
+                      icon: FolderTree,
+                      onSelect: () => showInHistory(`host = ${row.host} AND path ~ ${row.path}`),
+                    },
+                  ],
+                },
+              ];
+            }}
             rowClassName={(row) =>
               row.error !== null || row.status === null || row.status >= 500
                 ? "row-flag-bad"

@@ -179,7 +179,7 @@ func wsStripNote(removed []string) *string {
 // instead, so a refused upgrade is handled exactly like any other response.
 // strippedExtensions carries whatever stripWsHandshake removed from the request,
 // so the exchange can say the handshake was rewritten.
-func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, startTime time.Time, strippedExtensions []string) {
+func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, origRequestData []byte, startTime time.Time, strippedExtensions []string) {
 	upstream, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return
@@ -205,7 +205,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 			return
 		}
 		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime)
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, origRequestData, responseData, startTime)
 		return
 	}
 
@@ -222,16 +222,17 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 	// stored it and never scanned it. A 101's headers are headers, and "the same
 	// path as proxied traffic" is the requirement.
 	handshake := s.record(scanner.CapturedExchange{
-		Host:     host,
-		Port:     port,
-		TLS:      false,
-		Method:   method,
-		Path:     path,
-		Request:  requestData,
-		Response: head,
-		Started:  startTime,
-		Duration: time.Since(startTime),
-		Protocol: core.ProtocolHTTP1,
+		Host:            host,
+		Port:            port,
+		TLS:             false,
+		Method:          method,
+		Path:            path,
+		Request:         requestData,
+		OriginalRequest: origRequestData,
+		Response:        head,
+		Started:         startTime,
+		Duration:        time.Since(startTime),
+		Protocol:        core.ProtocolHTTP1,
 		// A handshake this proxy rewrote must not look pristine.
 		Notes: wsStripNote(strippedExtensions),
 	})

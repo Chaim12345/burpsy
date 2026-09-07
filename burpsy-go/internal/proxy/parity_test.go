@@ -106,7 +106,9 @@ var exchangeFieldRules = map[string]fieldRule{
 	// Source is the one field that must differ: it names which surface produced the row, and that is
 	// the point of it. Everything else being equal is what makes it useful.
 	"Source": ruleMayDiffer,
-	"Notes":  ruleAbsent, // set only when the capture is not verbatim
+	"OriginalRequest":  ruleAbsent, // set only when the capture was modified
+	"OriginalResponse": ruleAbsent, // set only when the capture was modified
+	"Notes":            ruleAbsent, // set only when the capture is not verbatim
 	// Highlight, like Notes, is an operator annotation added after the fact through PATCH
 	// /api/exchange/{id} — neither the proxy nor the crawler has an opinion about it at capture time,
 	// so both legs must record it as unset.

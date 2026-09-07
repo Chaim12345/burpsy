@@ -213,8 +213,9 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 
 	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
 	// cannot disagree about the size of one send.
-	s.toolLog.Record(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status),
-		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "")
+	exID := uint64(ex.ID)
+	s.toolLog.RecordWithExchange(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status),
+		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "", &exID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(repeaterSendResp{

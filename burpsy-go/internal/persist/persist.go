@@ -340,6 +340,12 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("exchanges", "title", "TEXT"); err != nil {
 		return err
 	}
+	if err := s.addColumn("exchanges", "orig_request_msg", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("exchanges", "orig_response_msg", "INTEGER"); err != nil {
+		return err
+	}
 	// findings gained a target and a param set, both for deduplication (core.FindingStore.Add). The
 	// target is the second half of the dedup key, so without it a restored finding cannot attract new
 	// occurrences after a restart — it would start a second finding beside itself. params is the set
@@ -491,12 +497,13 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
-		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title, orig_request_msg, orig_response_msg)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
-		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title)
+		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title,
+		nullMsg(ex.OriginalRequest), nullMsg(ex.OriginalResponse))
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -594,7 +601,7 @@ func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
 func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
-		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title
+		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title, orig_request_msg, orig_response_msg
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -605,6 +612,8 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		ex := &core.Exchange{}
 		var request uint64
 		var response any
+		var origRequest any
+		var origResponse any
 		var port int
 		var tls int
 		var status any
@@ -620,8 +629,16 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		var title sql.NullString
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
-			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title); err != nil {
+			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title, &origRequest, &origResponse); err != nil {
 			return nil, err
+		}
+		if v, ok := origRequest.(int64); ok {
+			msg := core.MsgId(v)
+			ex.OriginalRequest = &msg
+		}
+		if v, ok := origResponse.(int64); ok {
+			msg := core.MsgId(v)
+			ex.OriginalResponse = &msg
 		}
 		ex.Highlight = highlight.String
 		// NullString rather than string for the same reason source uses one: a row written before the

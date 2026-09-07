@@ -288,6 +288,7 @@ export interface ToolLogRow {
   started_ms: number;
   duration_ms: number;
   error: string | null;
+  exchange_id?: number | null;
 }
 
 export interface ToolLogView {

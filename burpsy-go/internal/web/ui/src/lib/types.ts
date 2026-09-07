@@ -82,6 +82,8 @@ export interface Exchange {
   id: number;
   request: number;
   response: number | null;
+  original_request?: number | null;
+  original_response?: number | null;
   host: string;
   port: number;
   method: string;

@@ -31,6 +31,7 @@
 package scanner
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -90,6 +91,9 @@ type CapturedExchange struct {
 	// Request and Response are the exact bytes sent and received.
 	Response []byte
 	Request  []byte
+	// OriginalRequest and OriginalResponse are the pre-modification bytes (if modified by rules/intercept).
+	OriginalRequest  []byte
+	OriginalResponse []byte
 	// Started is when the request went out and Duration how long the exchange took; both are
 	// carried rather than measured here, because Record runs after the fact.
 	//
@@ -189,15 +193,29 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 	}
 	respID, err := c.Store.Put(x.Response, core.DirectionResponse)
 	if err != nil {
-		// The request is already in the message log, which is append-only and has no retraction. That
-		// is acceptable: an orphaned message row costs its bytes and is reachable by id, whereas an
-		// exchange row with no response wedges the live-audit sweep. Nothing indexes this request, so
-		// nothing will read it as a completed exchange.
 		return nil, fmt.Errorf("capture: storing the response: %w", err)
 	}
+
+	var origReqID *core.MsgId
+	if len(x.OriginalRequest) > 0 && !bytes.Equal(x.OriginalRequest, x.Request) {
+		id, err := c.Store.Put(x.OriginalRequest, core.DirectionRequest)
+		if err == nil {
+			origReqID = &id
+		}
+	}
+
+	var origRespID *core.MsgId
+	if len(x.OriginalResponse) > 0 && !bytes.Equal(x.OriginalResponse, x.Response) {
+		id, err := c.Store.Put(x.OriginalResponse, core.DirectionResponse)
+		if err == nil {
+			origRespID = &id
+		}
+	}
 	ex := &core.Exchange{
-		Request:     reqID,
-		Response:    &respID,
+		Request:          reqID,
+		Response:         &respID,
+		OriginalRequest:  origReqID,
+		OriginalResponse: origRespID,
 		Status:      storedStatus(c.Store, respID),
 		Host:        x.Host,
 		Port:        x.Port,

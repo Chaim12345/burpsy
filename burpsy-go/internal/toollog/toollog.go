@@ -25,12 +25,13 @@ const (
 	// slotted in alphabetically because the ordinal is what the durable mirror
 	// stores: inserting a variant would relabel every persisted row above it.
 	ToolCrawler
+	ToolProxy
 )
 
 // ToolAll is every tool, so a caller can build a per-tool histogram without
 // hard-coding the set — the reason a filter that pre-seeds its own list of tool
 // names silently reported zero for any tool added after it was written.
-var ToolAll = [8]Tool{
+var ToolAll = [9]Tool{
 	ToolRepeater,
 	ToolIntruder,
 	ToolScanner,
@@ -39,6 +40,7 @@ var ToolAll = [8]Tool{
 	ToolSession,
 	ToolDecoder,
 	ToolCrawler,
+	ToolProxy,
 }
 
 func (t Tool) String() string {
@@ -59,6 +61,8 @@ func (t Tool) String() string {
 		return "decoder"
 	case ToolCrawler:
 		return "crawler"
+	case ToolProxy:
+		return "proxy"
 	default:
 		return "unknown"
 	}
@@ -90,16 +94,11 @@ type Entry struct {
 	// ResponseLen is how many response bytes came back, or nil when this row has no single response to
 	// measure: a send that failed at the transport received nothing, and a row that stands for a whole
 	// run (an intruder attack, an audit) does not correspond to one response at all.
-	//
-	// A pointer because 0 and "there wasn't one" are different facts. The field did not exist until
-	// now, and the wire projection filled it with a hardcoded 0 for every row, so Logger's Length
-	// column read as "every response was empty" — the single worst reading for the pane an operator
-	// uses to reconcile what a tool sent against what came back. Never widen this back to a plain int:
-	// the zero is precisely the lie being removed.
 	ResponseLen *int
 	StartedMs   uint64
 	DurationMs  uint64
 	Note        string
+	ExchangeID  *uint64
 }
 
 // Bytes wraps a measured response length for Record's respLen argument. Callers that received no
@@ -183,6 +182,10 @@ func (l *ToolLog) WithCapacity(c int) *ToolLog {
 // 0 is unambiguous as the refusal marker because ids come from nextID, which
 // counts *stored* rows from 1: a stored row never has id 0.
 func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, path string, status int, respLen *int, durMs uint64, note string) uint64 {
+	return l.RecordWithExchange(tool, host, port, tls, method, path, status, respLen, durMs, note, nil)
+}
+
+func (l *ToolLog) RecordWithExchange(tool Tool, host string, port uint16, tls bool, method, path string, status int, respLen *int, durMs uint64, note string, exchangeID *uint64) uint64 {
 	if !l.Capturing(tool) {
 		if tool >= 0 && int(tool) < len(l.uncaptured) {
 			l.uncaptured[tool].Add(1)
@@ -190,12 +193,15 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		return 0
 	}
 	id := atomic.AddUint64(&l.nextID, 1)
-	// Copied rather than aliased: the length belongs to the caller, who is free to reuse or overwrite
-	// it once this returns, and a logged row whose value changed after it was recorded is not a log.
 	var length *int
 	if respLen != nil {
 		n := *respLen
 		length = &n
+	}
+	var exID *uint64
+	if exchangeID != nil {
+		n := *exchangeID
+		exID = &n
 	}
 	e := &Entry{
 		ID:          id,
@@ -210,6 +216,7 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		StartedMs:   uint64(time.Now().UnixMilli()),
 		DurationMs:  durMs,
 		Note:        note,
+		ExchangeID:  exID,
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -242,6 +249,7 @@ var (
 		ToolSession:   1 << 5,
 		ToolDecoder:   1 << 6,
 		ToolCrawler:   1 << 7,
+		ToolProxy:     1 << 8,
 	}
 )
 

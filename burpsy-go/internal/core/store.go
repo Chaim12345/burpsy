@@ -346,6 +346,11 @@ type Exchange struct {
 	ID          ExchangeID
 	Request     MsgId
 	Response    *MsgId
+	// OriginalRequest and OriginalResponse carry message IDs of the original (pre-rewrite/edit)
+	// messages when Match & Replace or Intercept modified the exchange.
+	// Nil if the message was not modified.
+	OriginalRequest  *MsgId
+	OriginalResponse *MsgId
 	Host        string
 	Port        uint16
 	TLS         bool

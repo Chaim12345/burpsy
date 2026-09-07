@@ -328,6 +328,7 @@ func toolLogEntryView(e *toollog.Entry) toolLogEntry {
 		StartedMs:   e.StartedMs,
 		DurationMs:  e.DurationMs,
 		Error:       strPtrIf(e.Note != "", e.Note),
+		ExchangeID:  e.ExchangeID,
 	}
 }
 

@@ -860,6 +860,7 @@ type toolLogEntry struct {
 	StartedMs  uint64  `json:"started_ms"`
 	DurationMs uint64  `json:"duration_ms"`
 	Error      *string `json:"error"`
+	ExchangeID *uint64 `json:"exchange_id,omitempty"`
 }
 
 // toolLogResp mirrors toollog.ts's LogResp.

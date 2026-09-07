@@ -636,31 +636,40 @@ export function useSendShortcuts(exchange: Exchange | null | undefined): void {
   useHotkeys(
     repeaterChord,
     (event) => {
-      if (!exchange) return;
       event.preventDefault();
+      if (!exchange) {
+        toast.info("Select a row to send it to Repeater");
+        return;
+      }
       void actions.sendToRepeater(exchange);
     },
-    { enableOnFormTags: false },
+    { enableOnFormTags: true, enableOnContentEditable: true },
     [repeaterChord, exchange, actions],
   );
   useHotkeys(
     intruderChord,
     (event) => {
-      if (!exchange) return;
       event.preventDefault();
+      if (!exchange) {
+        toast.info("Select a row to send it to Intruder");
+        return;
+      }
       actions.sendToIntruder(exchange);
     },
-    { enableOnFormTags: false },
+    { enableOnFormTags: true, enableOnContentEditable: true },
     [intruderChord, exchange, actions],
   );
   useHotkeys(
     organizerChord,
     (event) => {
-      if (!exchange) return;
       event.preventDefault();
+      if (!exchange) {
+        toast.info("Select a row to send it to Organizer");
+        return;
+      }
       void actions.addToOrganizer(exchange);
     },
-    { enableOnFormTags: false },
+    { enableOnFormTags: true, enableOnContentEditable: true },
     [organizerChord, exchange, actions],
   );
 }

@@ -33,10 +33,12 @@ import (
 // "<1 ms" for a measured zero and an em dash for null. Deliberately not done here — internal/web/ui/ is
 // owned elsewhere, and a JSON field no consumer reads is a shape change bought for nothing.
 type ExchangeView struct {
-	ID          core.ExchangeID `json:"id"`
-	Request     uint64          `json:"request"`
-	Response    *uint64         `json:"response"`
-	Host        string          `json:"host"`
+	ID               core.ExchangeID `json:"id"`
+	Request          uint64          `json:"request"`
+	Response         *uint64         `json:"response"`
+	OriginalRequest  *uint64         `json:"original_request,omitempty"`
+	OriginalResponse *uint64         `json:"original_response,omitempty"`
+	Host             string          `json:"host"`
 	Port        uint16          `json:"port"`
 	TLS         bool            `json:"tls"`
 	Method      string          `json:"method"`
@@ -140,10 +142,22 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		id := uint64(*ex.Response)
 		resp = &id
 	}
+	var origReq *uint64
+	if ex.OriginalRequest != nil {
+		id := uint64(*ex.OriginalRequest)
+		origReq = &id
+	}
+	var origResp *uint64
+	if ex.OriginalResponse != nil {
+		id := uint64(*ex.OriginalResponse)
+		origResp = &id
+	}
 	return &ExchangeView{
-		ID:          ex.ID,
-		Request:     uint64(ex.Request),
-		Response:    resp,
+		ID:               ex.ID,
+		Request:          uint64(ex.Request),
+		Response:         resp,
+		OriginalRequest:  origReq,
+		OriginalResponse: origResp,
 		Host:        ex.Host,
 		Port:        ex.Port,
 		TLS:         ex.TLS,

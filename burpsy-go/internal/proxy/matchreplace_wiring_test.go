@@ -144,4 +144,29 @@ func TestProxyRewritesRequestAndResponseWireBytesViaMatchReplace(t *testing.T) {
 	if respBytes := string(storedResp.Raw()); !strings.Contains(respBytes, "RESP-PROXY-LONGER") {
 		t.Errorf("stored response is missing the rewritten RESP-PROXY-LONGER; history disagrees with the wire:\n%s", respBytes)
 	}
+
+	// Original bytes retention check for burpsy-react-ui-c05
+	if ex.OriginalRequest == nil {
+		t.Errorf("ex.OriginalRequest is nil; original request bytes were not retained")
+	} else {
+		origReqMsg, err := store.Get(*ex.OriginalRequest)
+		if err != nil {
+			t.Fatalf("origReqMsg lookup: %v", err)
+		}
+		if !strings.Contains(string(origReqMsg.Raw()), "REQ-IN") {
+			t.Errorf("OriginalRequest does not contain REQ-IN: %s", string(origReqMsg.Raw()))
+		}
+	}
+
+	if ex.OriginalResponse == nil {
+		t.Errorf("ex.OriginalResponse is nil; original response bytes were not retained")
+	} else {
+		origRespMsg, err := store.Get(*ex.OriginalResponse)
+		if err != nil {
+			t.Fatalf("origRespMsg lookup: %v", err)
+		}
+		if !strings.Contains(string(origRespMsg.Raw()), "RESP-ORIG") {
+			t.Errorf("OriginalResponse does not contain RESP-ORIG: %s", string(origRespMsg.Raw()))
+		}
+	}
 }
