@@ -192,6 +192,26 @@ func TestIntruderAttacksListsARunningAttackAndStopEndsIt(t *testing.T) {
 		t.Errorf("attack view = %+v", got)
 	}
 
+	// The live counts move while the attack runs — the whole point of carrying them on the list.
+	// The origin answers in 40ms, so sends settle continuously; a view stuck at zero would make
+	// "is it doing anything" unanswerable.
+	var progressed intruderAttacksResp
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec := httptest.NewRecorder()
+		srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/intruder/attacks", nil))
+		if err := json.Unmarshal(rec.Body.Bytes(), &progressed); err != nil {
+			t.Fatalf("decode list: %v", err)
+		}
+		if len(progressed.Attacks) == 1 && progressed.Attacks[0].Sent+progressed.Attacks[0].Failed > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("live counts never moved: attacks = %+v", progressed.Attacks)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
 	// Pause, then stop while paused. A pause that could not be stopped would leave the driver in its
 	// wait forever.
 	if code, _ := attackAction(t, srv, task.ID, "pause"); code != http.StatusOK {

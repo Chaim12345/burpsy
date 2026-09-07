@@ -173,6 +173,9 @@ export interface IntruderAttack {
   planned: number;
   status: IntruderAttackStatus;
   stop_reason?: string;
+  /** Sends settled so far — the same totals the eventual report carries. */
+  sent: number;
+  failed: number;
 }
 
 /** The list shape; `attacks` is never null, so absent cannot be misread as "none running". */

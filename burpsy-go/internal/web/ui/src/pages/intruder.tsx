@@ -1940,6 +1940,73 @@ export function IntruderPage(): JSX.Element {
         <TabsContent value="results" className="tool-pane">
           {run.error ? <ErrorNotice error={run.error} onRetry={onRun} /> : null}
 
+          {/* The live attack window. While /run holds its response open there is no report to render,
+              but the attack is not silent: the settled-send counts move every second (the attacks
+              poll), and the controls are the same ones the header carries — Burp's results window is
+              where an operator goes to watch, so the watching view carries the controls too. The
+              per-row report still arrives only when the attack completes; pretending otherwise would
+              render rows the collector has not folded yet. */}
+          {run.isPending ? (
+            <Card>
+              <SectionHeading
+                title="Attack in progress"
+                detail={
+                  myAttack
+                    ? "Counts are live; the full report arrives when the attack ends."
+                    : "Finding this attack in the running list…"
+                }
+              />
+              {myAttack ? (
+                <div className="stack">
+                  <div className="toolbar">
+                    <Badge tone={myAttack.status === "paused" ? "warn" : "accent"}>
+                      {myAttack.status === "paused" ? "paused" : "running"}
+                    </Badge>
+                    <span className="cell-dim">
+                      {formatCount(myAttack.sent)} got responses, {formatCount(myAttack.failed)} failed — of{" "}
+                      {formatCount(myAttack.planned)} planned
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    {myAttack.status === "paused" ? (
+                      <Tooltip content="Resume the paused attack">
+                        <Button variant="outline" onClick={() => controlAttack("resume")} disabled={attackAction.isPending}>
+                          <Play size={14} />
+                          Resume
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip content="Pause the attack; it holds its place and can be resumed">
+                        <Button variant="outline" onClick={() => controlAttack("pause")} disabled={attackAction.isPending}>
+                          <Pause size={14} />
+                          Pause
+                        </Button>
+                      </Tooltip>
+                    )}
+                    <Tooltip content="Stop the attack; the report will show everything sent so far">
+                      <Button variant="outline" onClick={() => controlAttack("stop")} disabled={attackAction.isPending}>
+                        <Square size={14} />
+                        Stop
+                      </Button>
+                    </Tooltip>
+                  </div>
+                  <div className="progress-track" aria-hidden="true">
+                    <div
+                      className="progress-fill"
+                      style={{
+                        width:
+                          myAttack.planned > 0
+                            ? `${Math.min(100, ((myAttack.sent + myAttack.failed) / myAttack.planned) * 100)}%`
+                            : "0%",
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <Badge tone="info">locating attack…</Badge>
+              )}
+            </Card>
+          ) : null}
+
           {result ? (
             <AttackResult
               view={result}
