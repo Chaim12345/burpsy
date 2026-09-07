@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Crosshair, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
+import { AlertTriangle, Crosshair, Download, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { api, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { api, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import {
+  intruderExportFilenames,
+  intruderPayloadResolver,
+  intruderReportToCSV,
+  payloadLabel,
+} from "../lib/intruder-export";
 import {
   AttackActionStale,
   useIntruderAttackAction,
@@ -26,16 +32,13 @@ import {
   HASH_ALGORITHMS,
   PAYLOAD_LAYERS,
   PAYLOAD_RULES,
-  assignmentAt,
-  attackProgress,
   customIteratorSize,
   customIteratorSlots,
   dateSetSize,
   emptyRule,
   estimateRequests,
-  planSetLengths,
+  attackProgress,
   quoteRegex,
-  resolvePayloads,
   type Attempt,
   type AttackMode,
   type ErrorBucket,
@@ -216,22 +219,6 @@ function RuleRow({
 }
 
 /**
- * One resolved payload combination as a string, and whether every part of it is real payload text.
- *
- * A part the browser cannot name is rendered as its position in its set rather than omitted or
- * guessed, because "set 2 payload #18" tells the operator where to look and an invented payload
- * tells them something false.
- */
-function payloadLabel(parts: ResolvedPayload[]): { text: string; complete: boolean } {
-  if (!parts.length) return { text: "", complete: false };
-  const complete = parts.every((part) => part.text !== null);
-  const text = parts
-    .map((part) => (part.text === null ? `set ${part.set + 1} payload #${part.index + 1}` : part.text === "" ? "(empty)" : part.text))
-    .join(" | ");
-  return { text, complete };
-}
-
-/**
  * A payload cell. Three visibly different states, never collapsed into one:
  * resolved text, a position-only reference, and no answer at all.
  */
@@ -334,41 +321,13 @@ function AttackResult({
 }): JSX.Element {
   const { report, payload_sets: sets } = view;
 
-  /**
-   * Decode an attempt's ordinal into its payload combination.
-   *
-   * The server sends an `examples` entry for every ordinal it kept a row for — every bucket's
-   * first ordinal, and every attempt in the (detail-limited) attempts table — resolved server-side
-   * from the post-processing-rule payload sets (api_tools.go's payloadsAt), so a rule that
-   * transforms bytes without dropping any (add_prefix, hash, …) still names the payload that was
-   * actually sent. That covers every row this page renders today; the fallback below recomputes
-   * the ordinal from the plan — pure arithmetic on the index, which is what
-   * internal/intruder/plan.go's Fill is (burpsy-react-ui-fvx) — for an older server that predates
-   * that coverage, or an ordinal outside what Examples carries. The set lengths come from the
-   * report's own per-set counts, so the fallback arithmetic runs against the sets the engine
-   * actually used, not the sets the form currently holds.
-   */
-  const payloadsAt = useMemo(() => {
-    const setCounts = sets.map((set) => set.count);
-    const mode = snapshot?.mode ?? report.kind;
-    const points = snapshot?.points ?? 0;
-    const lengths = planSetLengths(mode, points, setCounts);
-    // A set whose server-reported count disagrees with the browser's list is a set whose indices
-    // moved — a processing rule skipped a payload — so its text is treated as unknown.
-    const known = setCounts.map((count, index) => {
-      const items = snapshot?.sets[index] ?? null;
-      return items && items.length === count ? items : null;
-    });
-    return (ordinal: number): ResolvedPayload[] | null => {
-      const fromServer = examples.get(ordinal);
-      // An empty example list is the server saying it could not place that ordinal either, so it
-      // must fall through to "unknown" rather than render as a blank payload.
-      if (fromServer?.length) return fromServer.map((text, index) => ({ set: index, index: -1, text }));
-      const slots = assignmentAt(mode, points, lengths, report.planned, ordinal);
-      if (!slots || !slots.length) return null;
-      return resolvePayloads(slots, known);
-    };
-  }, [examples, report.kind, report.planned, sets, snapshot]);
+  // Ordinal → payload combination, shared with the CSV export so the sheet and the
+  // table can never disagree about what a row's payloads were (lib/intruder-export.ts
+  // carries the full story: server examples first, plan arithmetic as the fallback).
+  const payloadsAt = useMemo(
+    () => intruderPayloadResolver({ report, sets, examples, snapshot }),
+    [examples, report.kind, report.planned, sets, snapshot],
+  );
   /**
    * A stopped attack describes a *prefix* of its payload sets, and the denominator has to say so.
    *
@@ -590,6 +549,34 @@ function AttackResult({
 
   return (
     <>
+      <div className="toolbar">
+        <Tooltip content="Download the attack's per-attempt rows as a CSV; the caveats ride at the top of the file">
+          <Button
+            variant="outline"
+            onClick={() => {
+              const file = intruderExportFilenames(report).csv;
+              downloadText(file, intruderReportToCSV(report, report.attempts, payloadsAt), "text/csv");
+              toast.success(`Exported ${formatCount(report.attempts.length)} attempts to ${file}`);
+            }}
+          >
+            <Download size={14} />
+            Export CSV
+          </Button>
+        </Tooltip>
+        <Tooltip content="Download the full report — buckets, attempts, payload sets and bounds — as JSON">
+          <Button
+            variant="outline"
+            onClick={() => {
+              const file = intruderExportFilenames(report).json;
+              downloadText(file, JSON.stringify(view, null, 2), "application/json");
+              toast.success(`Exported the report to ${file}`);
+            }}
+          >
+            <Download size={14} />
+            Export report (JSON)
+          </Button>
+        </Tooltip>
+      </div>
       <div className="metric-grid">
         <Badge tone="neutral" className="sr-only">
           report
