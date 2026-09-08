@@ -281,35 +281,47 @@ func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bo
 // So this answers only "is this host worth considering at all", deliberately permissively: a
 // path-scoped exclude removes paths, not the host. The real decision belongs to AuthoriseRaw, on
 // the bytes actually going on the wire. As with Contains, the Go port keeps its documented
-// default-allow divergence: an empty scope contains everything, so `possible` starts true and only
-// a whole-host exclude can flip it — where the Rust original is last-match-wins default-deny. The
-// asymmetry is safe because this is a pre-filter: a too-permissive answer here only means the
-// attack starts and its per-request gate reports the refusals, never that a refused request goes
-// out.
+// default-allow divergence: an empty scope contains everything. Where it differs from Contains is
+// the same place both must agree: once an operator has added any include rule, "in scope" means
+// "matches an include". A host that matches no include rule is as out of scope here as Contains
+// says it is — a whole-host exclude is not the only thing that can put a host beyond reach, and
+// letting Repeater/Intruder pre-pass such a host would let a host listed by no include rule out to
+// the wire. The asymmetry is safe because this is a pre-filter: a too-permissive answer here only
+// means the attack starts and its per-request gate reports the refusals, never that a refused
+// request goes out.
 func (s *Scope) MayContainHost(host string, port uint16, isTLS bool) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.allowAll {
 		return true
 	}
-	possible := true
+
+	// Excludes always win, mirroring Contains: a whole-host exclude takes the host out of scope
+	// regardless of any include rules. A path- or protocol-scoped exclude removes paths, not the
+	// host — this pre-filter answers a host question, so those are skipped.
 	for _, rule := range s.rules {
-		if !rule.Matches(host, port) {
-			continue
-		}
-		switch {
-		case rule.Kind == ScopeInclude:
-			// Any include that names this host/port keeps it possible, protocol arm or not.
-			possible = true
-		case rule.PathPrefix != nil || rule.Protocol != nil:
-			// A path- or protocol-scoped exclude removes some requests and leaves the rest
-			// of the host reachable — an https-only exclude says nothing about http.
-		default:
-			// Only a whole-host exclude puts the host beyond reach.
-			possible = false
+		if rule.Kind == ScopeExclude && rule.PathPrefix == nil && rule.Protocol == nil && rule.Matches(host, port) {
+			return false
 		}
 	}
-	return possible
+
+	// With no include rules at all, everything not excluded is possible (the Go port's documented
+	// default-allow divergence, matching Contains). Once any include exists, a host is possible
+	// only when some include names it — the same shape as Contains's `!hasIncludeRule`, so the two
+	// can no longer disagree about a host that matches no include rule.
+	hasIncludeRule := false
+	for _, rule := range s.rules {
+		if rule.Kind != ScopeInclude {
+			continue
+		}
+		hasIncludeRule = true
+		// Any include that names this host/port keeps it possible, path- or protocol-arm or not:
+		// a path-scoped include authorises its paths, so the host is worth considering.
+		if rule.Matches(host, port) {
+			return true
+		}
+	}
+	return !hasIncludeRule
 }
 
 // requestPath extracts the request target from a raw request line, the way burpsy-core::scope's

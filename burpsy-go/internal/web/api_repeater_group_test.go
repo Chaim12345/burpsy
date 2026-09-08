@@ -529,51 +529,64 @@ func TestRepeaterGroupRefusesAnExcludedTargetInEveryMode(t *testing.T) {
 //
 // core.Scope.MayContainHost — the host-level gate /api/repeater/send has always used, and which the two
 // separate-connection modes inherit unchanged because they *are* that send, N times — answers "could
-// any request to this host be in scope". With include rules present and none of them naming this host,
-// it answers true: only a whole-host exclude makes it false. core.Scope.Contains, and therefore
-// AuthoriseRaw, refuses the same host outright ("matches no include rule").
+// any request to this host be in scope". A path-scoped include (`include(h, "/allowed")`) makes it
+// true for the whole host, even though Contains("/blocked") is false. So a single send to a path that is
+// out of scope still goes out — that is the repeater's deliberate, documented trade of scope exactness
+// for a fast, connection-reuse-friendly host gate.
 //
-// So the shared-socket mode is strictly stricter than the two that dial per request, because
-// internal/sender/pipeline.go requires AuthoriseRaw per raw and this endpoint runs it. That asymmetry
-// is not something this endpoint invented and it is not something it can fix here: MayContainHost is
-// the gate the single send, the intruder and the proxy pre-filter all share, and tightening it is a
-// change to every one of them. It is recorded here so nobody reads the difference as a bug in the
-// group send, and so the day MayContainHost is tightened, this test is what says so.
+// The shared-socket mode is strictly stricter than the two that dial per request, because
+// internal/sender/pipeline.go requires AuthoriseRaw per raw and this endpoint runs it. A path outside
+// the scope include therefore refuses the group even though the single send would pass the host gate.
+// That asymmetry is not something this endpoint invented and it is not something it can fix here:
+// MayContainHost is the gate the single send, the intruder and the proxy pre-filter all share, and
+// tightening it is a change to every one of them. It is recorded here so nobody reads the difference as
+// a bug in the group send.
+//
+// (The no-longer-tested case — a host matching *no* include rule — used to be this asymmetry's other
+// example, but MayContainHost was tightened to agree with Contains there, so all three modes now refuse
+// such a host. What survives, and what this pins, is the path-within-an-included-host case, where the
+// per-request AuthoriseRaw is inherently stricter than any host-level gate can be.)
 func TestRepeaterGroupSharedSocketIsStricterThanTheHostLevelGateTheOtherModesInherit(t *testing.T) {
 	host, port, stats := groupTarget(t)
 
-	// An include naming some other host: this target matches no include rule.
-	strict := newTestServer()
-	includeInScope(t, strict, "elsewhere.invalid")
-	rec := postJSON(t, strict, "/api/repeater/send-group", map[string]any{
-		"mode":  "sequence_single_conn",
-		"items": []map[string]any{groupItem("tab-a", host, port, "/x")},
-	})
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("single-connection send-group = %d (%s), want 403: AuthoriseRaw refuses a host that "+
-			"matches no include rule", rec.Code, rec.Body.String())
-	}
-	if conns, _ := stats(); conns != 0 {
-		t.Fatalf("the refused single-connection group still reached the target on %d connections", conns)
-	}
-
-	// The same request in a separate-connection mode goes out, because that is what /api/repeater/send
-	// does with the same scope today. Asserted rather than assumed: this is the behaviour the two modes
-	// are required to *match*, and a group send that quietly diverged from the single send — in either
-	// direction — would be the drift this endpoint's whole shared-spec design exists to prevent.
+	// A path-scoped include names the host, so the host-level gate is open for every path: the single
+	// send passes /blocked even though that path is out of scope. The scope holds only this include —
+	// a whole-host include would sweep /blocked back in and make the comparison meaningless.
 	lenient := newTestServer()
-	includeInScope(t, lenient, "elsewhere.invalid")
-	got := sendGroup(t, lenient, "sequence_separate_conn", groupItem("tab-a", host, port, "/x"))
-	if len(got.Items) != 1 || got.Items[0].Result == nil {
-		t.Fatalf("separate-connection group = %+v, want the same outcome /api/repeater/send gives this scope", got.Items)
-	}
+	lenient.scope.Add(core.NewScopeRuleWithPath(core.ScopeInclude, host, "/allowed"))
+
+	// The single send does pass: MayContainHost genuinely opens the whole host because a path-scoped
+	// include makes the host worth considering.
 	single := postJSON(t, lenient, "/api/repeater/send", map[string]any{
 		"target":   fmt.Sprintf("%s:%d", host, port),
 		"protocol": "http",
-		"request":  "GET /x HTTP/1.1\r\nHost: " + fmt.Sprintf("%s:%d", host, port) + "\r\n\r\n",
+		"request":  "GET /blocked HTTP/1.1\r\nHost: " + fmt.Sprintf("%s:%d", host, port) + "\r\n\r\n",
 	})
 	if single.Code != http.StatusOK {
-		t.Errorf("/api/repeater/send = %d (%s), but the group send accepted the same request: the two "+
-			"must agree about scope", single.Code, single.Body.String())
+		t.Fatalf("/api/repeater/send to an out-of-scope path on an included host = %d (%s), want 200: the "+
+			"host-level gate is documented as lenient about path, so the comparison below would be a straw man",
+			single.Code, single.Body.String())
+	}
+
+	// The same request in the separate-connection mode goes out too — it *is* that send, N times.
+	got := sendGroup(t, lenient, "sequence_separate_conn", groupItem("tab-a", host, port, "/blocked"))
+	if len(got.Items) != 1 || got.Items[0].Result == nil {
+		t.Fatalf("separate-connection group = %+v, want the same outcome /api/repeater/send gives this scope", got.Items)
+	}
+
+	// But the shared-socket mode refuses: it runs AuthoriseRaw per raw, and /blocked is not within the
+	// /allowed include. Nothing reaches the wire — the single send and the separate-connection group
+	// above already dialed, so the refusal must not add a connection on top of that baseline.
+	before, _ := stats()
+	rec := postJSON(t, lenient, "/api/repeater/send-group", map[string]any{
+		"mode":  "sequence_single_conn",
+		"items": []map[string]any{groupItem("tab-a", host, port, "/blocked")},
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("single-connection send-group to an out-of-scope path = %d (%s), want 403: AuthoriseRaw "+
+			"refuses a path the host gate waves through", rec.Code, rec.Body.String())
+	}
+	if conns, _ := stats(); conns != before {
+		t.Fatalf("the refused single-connection group reached the target on %d new connections (was %d)", conns, before)
 	}
 }

@@ -59,11 +59,13 @@ type sitemapNodeView struct {
 	// `exclude(h, "/admin")` must leave the host lit, and an `include(h).with_path_prefix("/v1/")`
 	// must also leave it lit even though `h`'s root is not itself in scope.
 	//
-	// Deliberately not MayContainHost: that is a pre-filter for attacks and is documented as
-	// permissive — only a whole-host exclude flips it, so with include rules present it calls every
-	// unlisted host in scope. Correct there, because the real gate is per-request; wrong here, where
-	// it would light up every third party the proxy ever saw. This value only decides what is greyed;
-	// authorisation stays on the bytes going out.
+	// Deliberately not MayContainHost: that is a pre-filter for attacks and answers a coarser question
+	// than the sitemap asks. It refuses a host no include rule names, agreeing with Contains on the
+	// "unlisted third party" case — but a path-scoped include (`include(h, "/v1/")`) still lights the
+	// whole host to it, because "may an attack invent a path here" has to stay open for the host whose
+	// /v1/ paths are authorised. The sitemap instead asks Contains per node, so it has the precision to
+	// light /v1/ and dim the host root. This value only decides what is greyed; authorisation stays on
+	// the bytes going out.
 	InScope      bool              `json:"in_scope"`
 	LastExchange *int64            `json:"last_exchange"`
 	Recent       []core.ExchangeID `json:"recent_exchanges"`

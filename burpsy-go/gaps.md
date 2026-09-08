@@ -592,8 +592,15 @@ before dial on a closed port, in-scope send, spliced-path refusal while the host
 stays in scope, race-checked concurrent counters), and
 `internal/web/intruder_scope_test.go` (an attack whose payload rewrites the path
 out of scope sends nothing to the target and counts the refusal honestly).
-Named divergence (unchanged): the Go scope is excludes-first with default-allow,
-the Rust scope is last-match-wins with default-deny.
+Named divergences: the Go scope is excludes-first with default-allow, the Rust
+scope is last-match-wins with default-deny. Since 2026-09-08 the *host-level
+pre-filter* no longer amplifies that divergence: a host that matches no include
+rule is refused by `MayContainHost` exactly as `Contains` and Rust's
+`may_contain_host` refuse it (a path-scoped include still keeps the whole host
+possible, because the pre-filter must stay open so an attack on an authorised
+path can start). The residual difference is the empty-scope case only: Go keeps
+default-allow — an empty scope contains everything — where Rust's
+`may_contain_host` defaults false.
 
 **Decline path:** none; the engine half is ported and tested, and the web half
 (handlers + `RunReport` wire contract) is now ported with Slice F.

@@ -135,3 +135,73 @@ func TestRuleWithoutProtocolArmMatchesBothSchemes(t *testing.T) {
 		t.Error("a rule with no protocol arm must match both schemes; every rule built before the arm existed relies on this")
 	}
 }
+
+// ---- MayContainHost: the host-level pre-filter ------------------------------------------------
+
+func TestMayContainHostEmptyScopeAllowsEverything(t *testing.T) {
+	s := NewScope()
+	if !s.MayContainHost("anything.anywhere", 443, true) {
+		t.Error("with no include rules an empty scope must keep every host possible; an empty scope contains everything")
+	}
+}
+
+func TestMayContainHostIncludeMatchesHost(t *testing.T) {
+	s := NewScope()
+	s.AddInclude("shop.test")
+	if !s.MayContainHost("shop.test", 443, true) {
+		t.Error("an included host must be possible")
+	}
+}
+
+func TestMayContainHostHostMatchingNoIncludeRuleIsNotPossible(t *testing.T) {
+	s := NewScope()
+	s.AddInclude("shop.test")
+	if s.MayContainHost("cdn.other.test", 443, true) {
+		t.Error("a host matching no include rule must not be possible once any include rule exists; Contains refuses it and the host gate must agree")
+	}
+}
+
+func TestMayContainHostAgreesWithContainsOnIncludeRules(t *testing.T) {
+	s := NewScope()
+	s.AddInclude("shop.test")
+	if s.MayContainHost("cdn.other.test", 80, false) != s.Contains("cdn.other.test", 80, "/", false) {
+		t.Error("MayContainHost and Contains disagree about a host outside the include rules; Repeater/Intruder would send a host the real gate refuses")
+	}
+}
+
+func TestMayContainHostWholeHostExcludePutsHostBeyondReach(t *testing.T) {
+	s := NewScope()
+	s.AddInclude("shop.test")
+	s.AddExclude("shop.test")
+	if s.MayContainHost("shop.test", 443, true) {
+		t.Error("a whole-host exclude must take the host out of reach even though an include names it")
+	}
+}
+
+func TestMayContainHostPathScopedExcludeLeavesTheHostPossible(t *testing.T) {
+	s := NewScope()
+	s.AddInclude("shop.test")
+	s.Add(NewScopeRuleWithPath(ScopeExclude, "shop.test", "/admin"))
+	if !s.MayContainHost("shop.test", 443, true) {
+		t.Error("a path-scoped exclude removes /admin, not the host; the pre-filter must stay open so the host's other paths can be attacked")
+	}
+}
+
+func TestMayContainHostPathScopedIncludeLeavesTheHostPossible(t *testing.T) {
+	s := NewScope()
+	s.Add(NewScopeRuleWithPath(ScopeInclude, "shop.test", "/v1/"))
+	if !s.MayContainHost("shop.test", 443, true) {
+		t.Error("a path-scoped include authorises its paths, so the host is worth considering even though Contains on \"/\" is false")
+	}
+}
+
+func TestMayContainHostOnlyExcludeRuleLeavesOtherHostsPossible(t *testing.T) {
+	s := NewScope()
+	s.AddExclude("blocked.test")
+	if s.MayContainHost("blocked.test", 80, false) {
+		t.Error("a whole-host exclude must take the excluded host out of the pre-filter")
+	}
+	if !s.MayContainHost("anything.else", 80, false) {
+		t.Error("with no include rules, a host that is not excluded must stay possible even when another host is excluded")
+	}
+}

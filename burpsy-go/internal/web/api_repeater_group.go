@@ -310,13 +310,16 @@ func (s *Server) sendGroupItemOnItsOwnConnection(
 // That second point makes this mode measurably stricter than the two separate-connection modes, and
 // the difference is worth naming because it is not subtle: core.Scope.MayContainHost, which is the gate
 // /api/repeater/send has always used and which the other two modes therefore inherit unchanged, answers
-// "could any request to this host be in scope" — and with include rules present but none naming this
-// host it still answers true, because only a whole-host exclude makes it false. core.Scope.Contains,
-// which AuthoriseRaw calls, refuses that host outright. So a target that matches no include rule is
-// sent to by the separate-connection modes (exactly as the single send does today) and refused here.
-// This endpoint does not paper over that: tightening MayContainHost would change the single send, the
-// intruder and the proxy pre-filter together, which is a decision above one endpoint's pay grade.
-// TestRepeaterGroupSharedSocketIsStricterThanTheHostLevelGateTheOtherModesInherit pins both halves.
+// "could any request to this host be in scope". It refuses a host that matches no include rule outright
+// — the day this used to answer true for such a host, sending to it was the scope bug this tightening
+// fixed. What it still waves through is a *path* within an included host: a path-scoped include
+// (`include(h, "/allowed")`) makes the whole host possible to the pre-filter even though Contains, and
+// therefore AuthoriseRaw, refuse paths outside it. So the shared-socket mode, which runs AuthoriseRaw
+// per raw, refuses a request to /blocked that the single send — matching both separate-connection
+// modes — sends out. That residual asymmetry is not something this endpoint invented and it is not
+// something it can fix here: MayContainHost is the gate the single send, the intruder and the proxy
+// pre-filter all share, and tightening it further is a decision above one endpoint's pay grade.
+// TestRepeaterGroupSharedSocketIsStricterThanTheHostLevelGateTheOtherModesInherit pins it.
 //
 // SendKeepAlive rather than SendPipelined because "in sequence" is what the mode says and what it must
 // do: write one request, read its whole response, then write the next on the same connection. That

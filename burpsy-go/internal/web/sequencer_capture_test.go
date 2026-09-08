@@ -326,10 +326,9 @@ func Test_an_unknown_capture_id_is_a_404_rather_than_an_empty_capture_HONEST_02(
 // one.
 //
 // An *excluded* host, specifically. Scope.MayContainHost is documented as a deliberately permissive
-// pre-filter (default-allow, and only a whole-host exclude flips it), so an include naming some other
-// host does not make this one impossible and the pre-filter correctly lets the capture start. That is
-// the layer this test exercises; the per-send AuthoriseRaw gate on the bytes is the other one, and it
-// is the reason the capture binds an AuthorisedSender rather than sending through s.sender directly.
+// pre-filter: a whole-host exclude is what puts a host beyond its reach — the layer this test
+// exercises — while the per-send AuthoriseRaw gate on the bytes is the other one, and it is the reason
+// the capture binds an AuthorisedSender rather than sending through s.sender directly.
 func Test_a_capture_against_an_excluded_host_is_refused(t *testing.T) {
 	host, port, hits := tokenServer(t, func(int) string { return "Set-Cookie: SESSIONID=x\r\n" })
 	scope := core.NewScope()
