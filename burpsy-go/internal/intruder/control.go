@@ -3,6 +3,7 @@ package intruder
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // Pausing, resuming and stopping a running attack.
@@ -71,6 +72,12 @@ type Control struct {
 	completed bool
 	// stopReason is what the report and the dashboard note say about why the attack ended early.
 	stopReason string
+
+	// settledSends and settledFails count outcomes as the engine's collector absorbs them, so the
+	// control routes can answer "is it doing anything" while the attack runs. They are the same
+	// totals the eventual report carries, so a live view cannot disagree with it.
+	settledSends atomic.Int64
+	settledFails atomic.Int64
 }
 
 // NewControl returns a control for an attack that has not started.
@@ -154,6 +161,29 @@ func (c *Control) StopOnContext(ctx context.Context, done <-chan struct{}, why s
 		case <-done:
 		}
 	}()
+}
+
+// note records one settled send for the live progress view. Run's collector loop calls it as each
+// outcome lands, so the counts move with real results rather than with enumerated ordinals.
+func (c *Control) note(ok bool) {
+	if c == nil {
+		return
+	}
+	if ok {
+		c.settledSends.Add(1)
+	} else {
+		c.settledFails.Add(1)
+	}
+}
+
+// Progress is how much of the attack has settled so far: sent and failed, the same totals the
+// eventual report carries. A paused attack holds its counts; a stopped attack's last in-flight
+// sends still land and are counted, as they are in the report.
+func (c *Control) Progress() (sent, failed int) {
+	if c == nil {
+		return 0, 0
+	}
+	return int(c.settledSends.Load()), int(c.settledFails.Load())
 }
 
 // Status is where the attack is now.

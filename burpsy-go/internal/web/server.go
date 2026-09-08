@@ -74,7 +74,11 @@ type Server struct {
 	// sets produce. Nil is supported; the endpoint reports it rather than serving a panel
 	// that could not change anything.
 	proxyOptions *proxy.Options
-	liveAudit    *LiveAuditState
+	// proxyServer is the relay itself, for the listener surface: the console reads
+	// where it is bound and moves it at runtime (burpsy-react-ui-77m, scope (1)).
+	// Nil is supported; the endpoint reports it rather than inventing an address.
+	proxyServer *proxy.Server
+	liveAudit   *LiveAuditState
 	// auditItems is the audit queue: what the engine decided about each item it was handed, retained
 	// so /api/scanner/audit-items can serve it. Built in NewServer rather than lazily, unlike
 	// `captures`: every audit path in this package attaches it to the AuditConfig it runs under, so a
@@ -360,6 +364,14 @@ func (s *Server) WithTlsPolicy(policy *proxy.TlsPolicy) *Server {
 // would do nothing — the same honesty WithTlsPolicy's nil state holds.
 func (s *Server) WithProxyOptions(options *proxy.Options) *Server {
 	s.proxyOptions = options
+	return s
+}
+
+// WithProxyServer attaches the relay itself, so the console can inspect and re-bind its
+// listener. Nil (the default in tests) leaves /api/proxy/listener reporting that no
+// listener is attached rather than an address nothing serves.
+func (s *Server) WithProxyServer(server *proxy.Server) *Server {
+	s.proxyServer = server
 	return s
 }
 
@@ -730,6 +742,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
 	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)
 	s.mux.HandleFunc("/api/issues", s.handleIssues)
+	// The write path for the same resource: operator triage and delete, per finding. Registered as a
+	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
+	// here without ambiguity.
+	s.mux.HandleFunc("/api/issues/", s.handleIssueByID)
 	s.mux.HandleFunc("/api/findings", s.handleFindings) // legacy alias for /api/issues
 	// The issue-definition catalogue, independent of whether anything was found. Two patterns because
 	// they are two operations on two shapes: the exact path lists index rows, the subtree serves one
@@ -804,6 +820,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intercept", s.handleIntercept)
 	s.mux.HandleFunc("/api/proxy/passthrough", s.handleTlsPassthrough)
 	s.mux.HandleFunc("/api/proxy/options", s.handleProxyOptions)
+	s.mux.HandleFunc("/api/proxy/listener", s.handleProxyListener)
 
 	// Network settings — resolution, timeouts, redirects, 100-continue, open-ended responses. Not
 	// under /api/proxy/: these bind the sender every request-originating surface sends through, so a

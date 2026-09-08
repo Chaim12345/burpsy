@@ -222,8 +222,11 @@ func (s *Server) recordRepeaterExchange(
 
 	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
 	// cannot disagree about the size of one send.
+	// Linked to the exchange just written, so Logger's message viewer can resolve this row's bytes
+	// (burpsy-react-ui-5bl). &ex.ID, never a zero: the traffic store counts from zero, so exchange 0
+	// is a real row and a nil-less zero would point the viewer at the wrong message pair.
 	s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, ex.Method, ex.Path, intOrZero(status),
-		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "")
+		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "", &ex.ID)
 
 	return repeaterSendResp{
 		Status:        intOrZero(status),
@@ -255,7 +258,9 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 		// Surface the dial/parse error to the UI so Repeater is not silently empty.
 		// nil, not zero: the send never reached a response, which is a different fact from a response
 		// that arrived with no bytes in it.
-		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error())
+		// nil exchange as well as nil length: the send never reached a response, so nothing was
+		// stored and there are no bytes for Logger's viewer to resolve.
+		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
 		return repeaterSendResp{}, err
 	}
 	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
@@ -441,6 +446,7 @@ type intruderRunReq struct {
 	Target         string                    `json:"target"`
 	All            bool                      `json:"all"`
 	PointIndex     *int                      `json:"point_index"`
+	ManualPoints   *[]intruder.ManualSpan    `json:"manual_points"`
 	Payloads       *[]string                 `json:"payloads"`
 	Mode           *string                   `json:"mode"`
 	Points         *[]int                    `json:"points"`
@@ -657,20 +663,43 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	discovered := intruder.FindPoints(msg, cfg)
 	wanted, err := selectPoints(req.Points, req.PointIndex, len(discovered))
+	if err != nil && req.ManualPoints == nil {
+		// A refusal is only final when no manual markers back it up: a manual-only attack selects no
+		// discovered point, and that is the whole point of marking one by hand.
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Manual markers are byte ranges the operator marked by hand (Burp's Add §). They join the
+	// attack alongside the selected discovered points — never filtered through selectPoints,
+	// which indexes the discovered list — and they count toward the same position bounds.
+	manual, err := intruder.ManualPoints(msg.Raw(), derefManual(req.ManualPoints))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Burp's rule, and a sound one: one position makes the multi-set modes meaningless, and twenty
-	// is where a cluster bomb stops being an attack and becomes an outage.
-	if (kind == intruder.AttackKindPitchfork || kind == intruder.AttackKindClusterBomb) &&
-		(len(wanted) < 2 || len(wanted) > 20) {
-		http.Error(w, fmt.Sprintf("%s requires between 2 and 20 payload positions, got %d", kind, len(wanted)), http.StatusBadRequest)
-		return
-	}
-	selected := make([]intruder.InsertionPoint, 0, len(wanted))
+	selected := make([]intruder.InsertionPoint, 0, len(wanted)+len(manual))
 	for _, i := range wanted {
 		selected = append(selected, discovered[i])
+	}
+	// Manual-vs-discovered overlap is refused here, naming the marking, rather than left to the
+	// splice's earliest-span-wins rule, which would silently drop one of the two payloads.
+	for _, m := range manual {
+		for _, d := range selected {
+			if m.Span.Offset < d.Span.Offset+d.Span.Len && d.Span.Offset < m.Span.Offset+m.Span.Len {
+				http.Error(w, fmt.Sprintf("manual point %q overlaps discovered point %q", m.Label, d.Label), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	selected = append(selected, manual...)
+	// Burp's rule, and a sound one: one position makes the multi-set modes meaningless, and twenty
+	// is where a cluster bomb stops being an attack and becomes an outage. Manual markers count
+	// toward it: an operator who marks three byte ranges has three payload positions, whatever
+	// the discoverer found.
+	if (kind == intruder.AttackKindPitchfork || kind == intruder.AttackKindClusterBomb) &&
+		(len(selected) < 2 || len(selected) > 20) {
+		http.Error(w, fmt.Sprintf("%s requires between 2 and 20 payload positions, got %d", kind, len(selected)), http.StatusBadRequest)
+		return
 	}
 
 	// A literal list is a PayloadSource variant, so the three request shapes collapse to one type
@@ -908,6 +937,14 @@ func selectPoints(points *[]int, pointIndex *int, found int) ([]int, error) {
 	default:
 		return nil, errors.New("no insertion point selected: pass point_index or points")
 	}
+}
+
+// derefManual normalises the optional manual-points field: an absent field marks nothing.
+func derefManual(spans *[]intruder.ManualSpan) []intruder.ManualSpan {
+	if spans == nil {
+		return nil
+	}
+	return *spans
 }
 
 // intruderSources collapses the three payload request shapes into one PayloadSource list and

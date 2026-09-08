@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PointView, RunView } from "./types.tools";
+import type { ManualSpanView } from "./intruder-marks";
 
 export type Theme = "light" | "dark" | "system";
 export type Density = "comfortable" | "compact";
@@ -75,6 +76,8 @@ export interface IntruderConfig {
   allPoints: boolean;
   points: PointView[];
   selected: number[];
+  /** Hand-marked payload positions (Burp's Add §), with the text they cover. */
+  manualSpans: ManualSpanView[];
   payloadTexts: string[];
   payloadTypes: ("list" | "numbers" | "file" | "brute_force" | "dates" | "custom_iterator" | "null")[];
   payloadNumbers: { from: string; to: string; step: string }[];
@@ -130,6 +133,7 @@ export function emptyIntruderConfig(): IntruderConfig {
     allPoints: false,
     points: [],
     selected: [],
+    manualSpans: [],
     payloadTexts: [DEFAULT_PAYLOADS],
     payloadTypes: ["list"],
     payloadNumbers: [{ from: "1", to: "100", step: "1" }],

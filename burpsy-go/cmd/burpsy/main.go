@@ -282,6 +282,9 @@ func main() {
 		}
 		store.SetPersistenceSinks(persistStore.SaveMessage, persistStore.SaveExchange)
 		findingStore.SetPersistenceSink(persistStore.SaveFinding)
+		// Triage deletes must reach the mirror too: without this a finding deleted in the UI is
+		// restored on the next start, reading its surviving row back out of SQLite.
+		findingStore.SetDeleteSink(persistStore.DeleteFinding)
 	}
 
 	// The upstream proxy policy every egress path in this process shares: the proxy listener's
@@ -425,13 +428,14 @@ func main() {
 	// The proxy's live option set — Burp's response-modification switches. One set handed to both
 	// the relay and the web API, the same single-pointer rule as the TLS policy and the Match &
 	// Replace rules: a panel that described a different set than the relay applies is the drift
-	// this project keeps closing.
-	proxyOptions := proxy.NewOptions()
+	// this project keeps closing. proxyOptions aliases the config's own set (picked up below,
+	// after the builder chain) rather than a second NewOptions, because NewProxyConfig seeds
+	// engine defaults into its set — the WebSocket handshake strip starts on — and a fresh
+	// all-off set attached over it would silently have turned that default off.
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
 		WithMatchReplace(matchReplaceRules).
-		WithOptions(proxyOptions).
 		WithLogger(logger).
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
@@ -452,6 +456,7 @@ func main() {
 		// passthrough list — which is to say by giving up interception, which is the one
 		// thing the operator started this tool to do.
 		WithClientCerts(clientCerts)
+	proxyOptions := proxyConfig.Options()
 
 	// Start proxy server
 	ctx, cancel := context.WithCancel(context.Background())
@@ -586,6 +591,10 @@ func main() {
 		// The same option set the relay holds, so the Proxy settings panel's switches and the
 		// response path's rules are one state.
 		WithProxyOptions(proxyOptions).
+		// The relay itself, so the console can read where its listener is bound and move it
+		// at runtime (burpsy-react-ui-77m): a bind change that used to need a process restart
+		// is now a PUT, and the panel reports the address the accept loop actually serves.
+		WithProxyServer(proxyServer).
 		// The raw -tools map, for the surfaces that delegate a whole phase to an external binary rather
 		// than one tool per insertion point: POST /api/discovery runs ffuf. Without -tools that route
 		// refuses and names the missing tool, which is the difference between "not configured" and "this
@@ -739,13 +748,22 @@ func domEngineOptions(flagValue string) (*domexec.Options, error) {
 	}
 }
 
+// resolveScanConfig turns -scan-config into the AuditConfig every audit this process runs defaults to.
+//
+// Four answers, kept apart: an empty flag is the shipped default; "list" prints the available names and
+// exits 0, because a name containing spaces and hyphens is not guessable and an operator should not have
+// to read the source to find one; a path ending in .json (or containing a path separator) is one of
+// Burp's own configuration files, parsed with ParseBurpConfig so the engine honours its
+// insertion-point and check-class keys and reports what it cannot apply; anything else must resolve as a
+// built-in name, and a name that does not is fatal rather than a warning that starts the process under a
+// configuration the operator did not ask for.
 func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 	base := scanner.DefaultAuditConfig()
 	switch name {
 	case "":
 		return base, nil
 	case "list":
-		fmt.Println("built-in scan configurations (-scan-config NAME):")
+		fmt.Println("built-in scan configurations (-scan-config NAME, or -scan-config /path/to/burp-config.json):")
 		for _, c := range scanner.BuiltInConfigs {
 			fmt.Printf("  %s\n", c.Name)
 			for _, k := range c.Keys() {
@@ -757,17 +775,37 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 			}
 		}
 		fmt.Printf("\n%d of the %d configurations Burp ships set a key this engine implements; the rest\n"+
-			"configure crawling, insertion points, parameter relocation and JavaScript analysis, which\n"+
-			"this engine does not have, and are omitted rather than offered as knobs that do nothing.\n",
+			"configure crawling and per-issue selection, which this engine does not have, and their\n"+
+			"unapplied keys are reported rather than dropped. A Burp configuration file can be loaded\n"+
+			"directly by passing its path instead of a name.\n",
 			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount)
 		os.Exit(0)
+	}
+	if strings.HasSuffix(name, ".json") || strings.ContainsRune(name, '/') || strings.ContainsRune(name, os.PathSeparator) {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			return base, fmt.Errorf("-scan-config: reading configuration file: %w", err)
+		}
+		parsed, perr := scanner.ParseBurpConfig(data)
+		if perr != nil {
+			return base, fmt.Errorf("-scan-config: %w", perr)
+		}
+		applied, unapplied := parsed.ApplyWithReport(base)
+		if len(unapplied) > 0 {
+			fmt.Printf("scan configuration %s: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
+		}
+		return applied, nil
 	}
 	preset, ok := scanner.BuiltInConfigByName(name)
 	if !ok {
 		return base, fmt.Errorf("no built-in scan configuration is named %q; run -scan-config list to see the %d available",
 			name, len(scanner.BuiltInConfigs))
 	}
-	return preset.Apply(base), nil
+	applied, unapplied := preset.ApplyWithReport(base)
+	if len(unapplied) > 0 {
+		fmt.Printf("scan configuration %q: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
+	}
+	return applied, nil
 }
 
 // startBlindXSS binds the blind-XSS callback listener, or explains why it could not.

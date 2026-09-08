@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { api, json } from "./api";
 import { keys, useResource } from "./data";
+import type { IssueTriagePatch } from "./issue-triage";
 import type {
   AuditResult,
   InterceptListState,
@@ -106,6 +107,32 @@ export function useForwardHeld() {
 /** Same endpoint and cache key as the shared `useIssues`, typed to the full finding shape (`id`, and
  * nullable detail/remediation) that stable row selection and honest empty text need. */
 export const useIssuesDetailed = () => useResource<IssuesDetail>(keys.issues, "/api/issues");
+
+/**
+ * The triage writes (burpsy-react-ui-pwd): PUT /api/issues/{id} for severity, confidence,
+ * false-positive and comment decisions, DELETE /api/issues/{id} to remove the finding. The PUT body
+ * semantics are the backend's total-replacement contract: a present `severity` sets an override and
+ * an *empty string* clears it, so "no override" is expressible — a partial protocol would turn a
+ * cleared override into a ghost that survives restarts. Success invalidates the issues cache the
+ * same server-pushed `issues` events do, plus the dashboard, whose severity counts triage moves.
+ */
+export function useIssueTriage() {
+  const client = useQueryClient();
+  const done = () => {
+    void client.invalidateQueries({ queryKey: keys.issues });
+    void client.invalidateQueries({ queryKey: keys.dashboard });
+  };
+  return {
+    triage: useMutation<unknown, Error, { id: number; patch: IssueTriagePatch }>({
+      mutationFn: ({ id, patch }) => api<unknown>(`/api/issues/${id}`, json("PUT", patch)),
+      onSuccess: done,
+    }),
+    remove: useMutation<unknown, Error, number>({
+      mutationFn: (id) => api<unknown>(`/api/issues/${id}`, { method: "DELETE" }),
+      onSuccess: done,
+    }),
+  };
+}
 
 export const useScannerConfigs = () => useResource<ScannerConfigsResponse>(keys.scannerConfigs, "/api/scanner/configs");
 

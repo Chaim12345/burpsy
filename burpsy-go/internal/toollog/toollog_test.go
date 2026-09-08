@@ -1,6 +1,10 @@
 package toollog
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+)
 
 // Test_new_records_every_tool by default pins the capture axis's default:
 // a fresh log must capture all eight tools, because the zero value of the
@@ -23,7 +27,7 @@ func Test_record_when_capture_off_counts_uncaptured_and_stores_nothing(t *testin
 	l := New()
 	l.SetCapturing(ToolIntruder, false)
 
-	if id := l.Record(ToolIntruder, "h", 80, false, "GET", "/", 200, nil, 1, ""); id != 0 {
+	if id := l.Record(ToolIntruder, "h", 80, false, "GET", "/", 200, nil, 1, "", nil); id != 0 {
 		t.Fatalf("capture-off Record returned id %d, want 0 (nothing stored)", id)
 	}
 	if got := l.Uncaptured(ToolIntruder); got != 1 {
@@ -33,7 +37,7 @@ func Test_record_when_capture_off_counts_uncaptured_and_stores_nothing(t *testin
 		t.Fatalf("Count() = %d after capture-off record, want 0", l.Count())
 	}
 	// The counter is per-tool: a different tool's capture is unaffected.
-	if id := l.Record(ToolRepeater, "h", 80, false, "GET", "/", 200, nil, 1, ""); id != 1 {
+	if id := l.Record(ToolRepeater, "h", 80, false, "GET", "/", 200, nil, 1, "", nil); id != 1 {
 		t.Fatalf("capture-on Record returned id %d, want 1", id)
 	}
 	if got := l.Uncaptured(ToolRepeater); got != 0 {
@@ -47,7 +51,7 @@ func Test_record_when_capture_off_counts_uncaptured_and_stores_nothing(t *testin
 func Test_set_capturing_back_on_restores_recording(t *testing.T) {
 	l := New()
 	l.SetCapturing(ToolScanner, false)
-	l.Record(ToolScanner, "h", 80, false, "GET", "/", 200, nil, 1, "")
+	l.Record(ToolScanner, "h", 80, false, "GET", "/", 200, nil, 1, "", nil)
 	if l.Capturing(ToolScanner) || l.Uncaptured(ToolScanner) != 1 {
 		t.Fatalf("after disable: capturing=%v uncaptured=%d, want false/1", l.Capturing(ToolScanner), l.Uncaptured(ToolScanner))
 	}
@@ -56,7 +60,7 @@ func Test_set_capturing_back_on_restores_recording(t *testing.T) {
 	if !l.Capturing(ToolScanner) {
 		t.Fatal("SetCapturing(scanner, true) did not re-enable capture")
 	}
-	if id := l.Record(ToolScanner, "h", 80, false, "GET", "/", 200, nil, 1, ""); id != 1 {
+	if id := l.Record(ToolScanner, "h", 80, false, "GET", "/", 200, nil, 1, "", nil); id != 1 {
 		t.Fatalf("re-enabled Record returned id %d, want 1", id)
 	}
 	if got := l.Uncaptured(ToolScanner); got != 1 {
@@ -71,8 +75,8 @@ func Test_set_capturing_back_on_restores_recording(t *testing.T) {
 func Test_clear_keeps_uncaptured_and_restore_resets_it(t *testing.T) {
 	l := New()
 	l.SetCapturing(ToolSession, false)
-	l.Record(ToolSession, "h", 80, false, "GET", "/", 200, nil, 1, "")
-	l.Record(ToolSession, "h", 80, false, "GET", "/", 200, nil, 1, "")
+	l.Record(ToolSession, "h", 80, false, "GET", "/", 200, nil, 1, "", nil)
+	l.Record(ToolSession, "h", 80, false, "GET", "/", 200, nil, 1, "", nil)
 
 	l.Clear()
 	if got := l.Uncaptured(ToolSession); got != 2 {
@@ -94,7 +98,7 @@ func Test_set_all_capturing_off_then_on_restores_every_tool(t *testing.T) {
 		if l.Capturing(tool) {
 			t.Fatalf("after SetAllCapturing(false) %s still captures", tool)
 		}
-		if id := l.Record(tool, "h", 80, false, "GET", "/", 200, nil, 1, ""); id != 0 {
+		if id := l.Record(tool, "h", 80, false, "GET", "/", 200, nil, 1, "", nil); id != 0 {
 			t.Fatalf("%s recorded id %d under all-off, want 0", tool, id)
 		}
 	}
@@ -124,5 +128,35 @@ func Test_tool_from_name_round_trips(t *testing.T) {
 	}
 	if _, ok := ToolFromName("bcheck"); ok {
 		t.Fatal("ToolFromName(\"bcheck\") resolved, want false (no such tool)")
+	}
+}
+
+// A row recorded with an exchange keeps the link, a row recorded without one
+// has none, and the link is a copy: a caller reusing its pointer (a loop
+// variable, a scratch field) must not be able to reach back into the log and
+// change where a stored row points, for the same reason the response length is
+// copied rather than aliased.
+func Test_record_links_exchange_and_copies_it(t *testing.T) {
+	l := New()
+
+	id := core.ExchangeID(4)
+	if got := l.Record(ToolRepeater, "h", 80, false, "GET", "/linked", 200, nil, 1, "", &id); got == 0 {
+		t.Fatal("Record refused a capturing tool")
+	}
+	entries := l.All()
+	if entries[0].Exchange == nil || *entries[0].Exchange != 4 {
+		t.Fatalf("linked entry exchange = %v, want 4", entries[0].Exchange)
+	}
+
+	id = 99
+	if *entries[0].Exchange == 99 {
+		t.Fatal("entry aliases the caller's pointer; mutating it rewrote the logged link")
+	}
+
+	if got := l.Record(ToolScanner, "h", 80, false, "GET", "/bare", 200, nil, 1, "", nil); got == 0 {
+		t.Fatal("Record refused a capturing tool")
+	}
+	if entries := l.All(); entries[1].Exchange != nil {
+		t.Fatalf("unlinked entry exchange = %v, want nil", entries[1].Exchange)
 	}
 }

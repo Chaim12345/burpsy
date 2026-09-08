@@ -16,6 +16,12 @@ export interface IntruderRunRequest {
   all: boolean;
   mode: string;
   points: number[];
+  /**
+   * Hand-marked payload positions (Burp's Add §): raw byte ranges of the base request, spliced
+   * wire-faithfully alongside the selected discovered points. The server refuses a span outside
+   * the request or overlapping another position.
+   */
+  manual_points?: { start: number; end: number }[];
   payload_sets?: string[][];
   payload_sources?: PayloadSource[];
   payload_rules?: PayloadRuleSpec[];

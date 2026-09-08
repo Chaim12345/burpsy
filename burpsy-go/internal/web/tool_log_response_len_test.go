@@ -174,12 +174,12 @@ func Test_a_restored_tool_log_row_keeps_an_unknown_response_length_unknown_HONES
 	log := toollog.New()
 	log.SetPersistenceSink(p.SaveToolLog)
 	measured := log.Record(toollog.ToolRepeater, "answered.test", 80, false, "GET", "/answered", 200,
-		toollog.Bytes(4096), 7, "")
+		toollog.Bytes(4096), 7, "", nil)
 	// A measured zero, which is a response that arrived carrying nothing. It has to survive as a
 	// number: collapsing it into null would lose a real measurement, the mirror image of the bug.
 	empty := log.Record(toollog.ToolRepeater, "empty.test", 80, false, "GET", "/empty", 204,
-		toollog.Bytes(0), 3, "")
-	failed := log.Record(toollog.ToolRepeater, "refused.test", 80, false, "SEND", "", 0, nil, 0, "connection refused")
+		toollog.Bytes(0), 3, "", nil)
+	failed := log.Record(toollog.ToolRepeater, "refused.test", 80, false, "SEND", "", 0, nil, 0, "connection refused", nil)
 
 	restored := toollog.New()
 	if err := p.Restore(nil, nil, nil, nil, nil, nil, restored); err != nil {

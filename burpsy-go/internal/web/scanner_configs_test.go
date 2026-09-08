@@ -5,6 +5,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -202,7 +203,7 @@ func Test_running_an_audit_under_a_named_configuration_applies_its_overlay(t *te
 	}
 	// And the whole reply must equal an independently computed overlay, so no field is left unchecked.
 	want := preset.Apply(distinctiveBase())
-	if got.Config != newAuditConfigView(want) {
+	if !reflect.DeepEqual(got.Config, newAuditConfigView(want)) {
 		t.Errorf("config = %+v, want %+v", got.Config, newAuditConfigView(want))
 	}
 }
@@ -239,7 +240,7 @@ func Test_an_audit_with_no_named_configuration_runs_under_the_server_default(t *
 	if got.ConfigName != "" {
 		t.Errorf("config_name = %q, want empty: no preset was named", got.ConfigName)
 	}
-	if got.Config != newAuditConfigView(distinctiveBase()) {
+	if !reflect.DeepEqual(got.Config, newAuditConfigView(distinctiveBase())) {
 		t.Errorf("config = %+v, want the server default %+v", got.Config, newAuditConfigView(distinctiveBase()))
 	}
 	if !got.Started || got.ExchangeID != id {
@@ -288,7 +289,7 @@ func Test_the_legacy_audit_alias_also_runs_under_a_named_configuration(t *testin
 		t.Errorf("config_name = %q, want %q", got.ConfigName, name)
 	}
 	preset, _ := scanner.BuiltInConfigByName(name)
-	if got.Config != newAuditConfigView(preset.Apply(distinctiveBase())) {
+	if !reflect.DeepEqual(got.Config, newAuditConfigView(preset.Apply(distinctiveBase()))) {
 		t.Errorf("config = %+v, want the overlay", got.Config)
 	}
 }

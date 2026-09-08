@@ -12,7 +12,9 @@ package intruder
 
 import (
 	"bytes"
+	"fmt"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 )
 
@@ -30,6 +32,9 @@ const (
 	PointEntireBody
 	PointCookieValue
 	PointHeaderValue
+	PointBodyJSONValue
+	PointBodyNestedValue
+	PointManual
 )
 
 func (k PointKind) String() string {
@@ -52,16 +57,44 @@ func (k PointKind) String() string {
 		return "cookie_value"
 	case PointHeaderValue:
 		return "header_value"
+	case PointBodyJSONValue:
+		return "body_json_value"
+	case PointBodyNestedValue:
+		return "body_nested_value"
+	case PointManual:
+		return "manual"
 	default:
 		return "unknown"
 	}
 }
+
+// escapeKind decides what ApplyAll does to a payload before splicing it into a
+// point's window. Native intruder points splice raw bytes — wire-faithful, the
+// operator's payload crosses exactly as typed. Points adopted from the scanner
+// enumerator (internal/bcheck, see points_bcheck.go) live inside a container
+// whose framing must survive the splice: a JSON string value needs its payload
+// escaped, and a value nested inside base64/XML needs the whole outer wire
+// value rebuilt. escapeNone is the zero value so every point constructed
+// before this existed behaves exactly as before.
+type escapeKind uint8
+
+const (
+	escapeNone escapeKind = iota
+	escapeJSON
+	escapeNested
+)
 
 // InsertionPoint is an attack position: a span into the request plus what it is.
 type InsertionPoint struct {
 	Kind  PointKind
 	Span  core.Span
 	Label string
+
+	// escape and bc are zero/nil for every natively discovered point. bc points
+	// at the scanner-side point for body_nested_value positions, whose wire
+	// value must be rebuilt per payload (decode → splice → re-encode).
+	escape escapeKind
+	bc     *bcheck.InsertionPoint
 }
 
 // PointConfig is which position families to generate. Maps 1:1 onto Burp's
@@ -75,6 +108,42 @@ type PointConfig struct {
 	EntireBody     bool
 	Cookies        bool
 	Headers        bool
+}
+
+// ManualSpan is an operator-marked payload position: a byte range of the base
+// request, named the way Burp names it — the § pair around a selection. Spans
+// are validated (in bounds, non-overlapping) before they become points, because
+// two overlapping markers would splice two payloads into the same bytes and the
+// result would depend on the splice order.
+type ManualSpan struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// ManualPoints turns validated spans into insertion points. Every check that
+// can fail is done here rather than at the splice, so the caller's error is
+// about the operator's marking, not an engine-internal refusal.
+func ManualPoints(base []byte, spans []ManualSpan) ([]InsertionPoint, error) {
+	points := make([]InsertionPoint, 0, len(spans))
+	for i, span := range spans {
+		if span.Start < 0 || span.End > len(base) || span.Start >= span.End {
+			return nil, fmt.Errorf("manual point %d: start %d, end %d is not a byte range of the %d-byte request", i+1, span.Start, span.End, len(base))
+		}
+		for j, other := range spans {
+			if j >= i {
+				break
+			}
+			if span.Start < other.End && other.Start < span.End {
+				return nil, fmt.Errorf("manual points %d and %d overlap", j+1, i+1)
+			}
+		}
+		points = append(points, InsertionPoint{
+			Kind:  PointManual,
+			Span:  core.Span{Offset: span.Start, Len: span.End - span.Start},
+			Label: fmt.Sprintf("manual %d", i+1),
+		})
+	}
+	return points, nil
 }
 
 // DefaultPointConfig is Burp's own defaults: parameter values on; names/paths/headers off, as
@@ -207,6 +276,12 @@ func FindPoints(msg *core.StoredMessage, cfg *PointConfig) []InsertionPoint {
 			pushKVPoints(raw, body, cfg.BodyParams, cfg.ParamNames,
 				PointBodyParamValue, PointBodyParamName, &out)
 		}
+		if cfg.BodyParams {
+			// JSON fields (and base64/XML nested inside body values) come from the
+			// scanner's enumerator — see points_bcheck.go for why Intruder keeps
+			// exactly one body-container parser.
+			out = appendJSONAndNestedPoints(raw, msg, body, out)
+		}
 		if cfg.EntireBody {
 			out = append(out, InsertionPoint{
 				Kind:  PointEntireBody,
@@ -270,6 +345,14 @@ func Apply(raw []byte, point *InsertionPoint, payload []byte) []byte {
 func ApplyAll(raw []byte, places []ApplyPlace) []byte {
 	sl := make([]spliced, 0, len(places))
 	for _, pl := range places {
+		payload, ok := escapePayload(pl.Point, pl.Payload)
+		if !ok {
+			// A nested wire value failed to rebuild. Enumeration decoded the very
+			// same bytes, so this is unreachable in practice; skipping the splice
+			// keeps the guarantee below — the output is always a well-formed
+			// request — rather than splicing a payload that corrupts the container.
+			continue
+		}
 		start := pl.Point.Span.Offset
 		if start > len(raw) {
 			start = len(raw)
@@ -281,7 +364,7 @@ func ApplyAll(raw []byte, places []ApplyPlace) []byte {
 		if end < start {
 			end = start
 		}
-		sl = append(sl, spliced{start: start, end: end, payload: pl.Payload})
+		sl = append(sl, spliced{start: start, end: end, payload: payload})
 	}
 	sortSpans(sl)
 

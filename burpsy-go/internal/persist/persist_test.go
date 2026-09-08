@@ -177,7 +177,7 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 
 	tl := toollog.New()
 	tl.SetPersistenceSink(p.SaveToolLog)
-	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/", 200, toollog.Bytes(64), 5, "")
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/", 200, toollog.Bytes(64), 5, "", nil)
 
 	restoredScope := core.NewScope()
 	restoredMR := matchreplace.NewRuleSet()
@@ -221,6 +221,48 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	}
 	if restoredTL.Count() != 1 || restoredTL.All()[0].Tool != toollog.ToolRepeater {
 		t.Fatalf("tool log = %+v", restoredTL.All())
+	}
+}
+
+// A linked row must keep its exchange through both halves of the round trip, and a row with no
+// link must come back with none — not with exchange 0, which is a real exchange in a
+// position-is-the-id store and would point Logger's message viewer at the wrong bytes.
+func TestRestore_ToolLogExchangeLinkRoundTrips(t *testing.T) {
+	p := newTestStore(t)
+	tl := toollog.New()
+	tl.SetPersistenceSink(p.SaveToolLog)
+
+	linked := core.ExchangeID(7)
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/linked", 200, toollog.Bytes(64), 5, "", &linked)
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/bare", 200, toollog.Bytes(64), 5, "", nil)
+	zero := core.ExchangeID(0)
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/zero", 200, toollog.Bytes(64), 5, "", &zero)
+
+	restoredTL := toollog.New()
+	if err := p.Restore(nil, nil, nil, nil, nil, nil, restoredTL); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	entries := restoredTL.All()
+	if len(entries) != 3 {
+		t.Fatalf("restored %d tool log entries, want 3", len(entries))
+	}
+	for _, e := range entries {
+		switch e.Path {
+		case "/linked":
+			if e.Exchange == nil || *e.Exchange != 7 {
+				t.Fatalf("%s: exchange = %v, want 7", e.Path, e.Exchange)
+			}
+		case "/bare":
+			if e.Exchange != nil {
+				t.Fatalf("%s: exchange = %v, want none", e.Path, e.Exchange)
+			}
+		case "/zero":
+			if e.Exchange == nil || *e.Exchange != 0 {
+				t.Fatalf("%s: exchange = %v, want a real 0, not NULL", e.Path, e.Exchange)
+			}
+		default:
+			t.Fatalf("unexpected restored path %q", e.Path)
+		}
 	}
 }
 

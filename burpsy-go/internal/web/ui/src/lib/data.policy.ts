@@ -193,6 +193,21 @@ export function useUpdateSessionMacro() {
 }
 
 /**
+ * Move one rule within the evaluation order by a signed offset (-1 = up, +1 = down).
+ * MatchingRule runs the *first* enabled rule whose scope covers a host, so position is
+ * precedence; the server refuses a move past either end with a 400 naming the edge
+ * (ErrRuleAtEdge) rather than silently clamping, and an unknown id with a 404.
+ */
+export function useMoveSessionRule() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ id, offset }: { id: number; offset: number }) =>
+      api<{ position: number }>(`/api/session/rules/${id}/move`, json("POST", { offset })),
+    onSuccess: () => invalidate([["session"]]),
+  });
+}
+
+/**
  * Send a frame program to one authority. With no frames it is a preface-and-listen
  * probe: it reports what ALPN negotiated and what the peer sent back.
  */

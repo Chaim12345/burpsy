@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, KeyRound, Pencil, Plus, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { useDeleteSessionRule, useSaveSessionRule } from "../lib/data";
-import { useSessionCookies, useSessionLogin, useSessionRulesFull, useUpdateSessionMacro } from "../lib/data.policy";
+import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useUpdateSessionMacro } from "../lib/data.policy";
 import type {
   SessionExtractFrom,
   SessionExtractHow,
@@ -411,6 +411,7 @@ export function SessionPage(): JSX.Element {
   const cookiesQuery = useSessionCookies();
   const saveRule = useSaveSessionRule();
   const deleteRule = useDeleteSessionRule();
+  const moveRuleMut = useMoveSessionRule();
   const login = useSessionLogin();
   const promoteMacro = useUpdateSessionMacro();
 
@@ -516,6 +517,23 @@ export function SessionPage(): JSX.Element {
       onSuccess: () => toast.success(enabled ? `“${rule.name}” enabled` : `“${rule.name}” paused`),
       onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not change the rule"),
     });
+  };
+
+  /**
+   * Move a rule within the evaluation order. MatchingRule runs the first enabled rule whose
+   * scope covers a host, so list position is which login wins for an overlapping host; the
+   * server refuses a move past either end (400 naming the edge) rather than clamping, and the
+   * rules list re-reads on success so the row order here is always the evaluation order.
+   */
+  const moveRule = (rule: SessionRuleFull, offset: number) => {
+    if (rule.id === undefined) return;
+    moveRuleMut.mutate(
+      { id: rule.id, offset },
+      {
+        onSuccess: () => undefined,
+        onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not move the rule"),
+      },
+    );
   };
 
   const runLogin = () => {
@@ -677,6 +695,22 @@ export function SessionPage(): JSX.Element {
                   </td>
                   <td>
                     <div className="chip-row">
+                      <IconButton
+                        label={`Move ${rule.name || `rule ${index + 1}`} up — it is evaluated before the rule below it`}
+                        size="small"
+                        disabled={id === undefined || index === 0}
+                        onClick={() => (id === undefined ? undefined : moveRule(rule, -1))}
+                      >
+                        <ArrowUp size={13} />
+                      </IconButton>
+                      <IconButton
+                        label={`Move ${rule.name || `rule ${index + 1}`} down`}
+                        size="small"
+                        disabled={id === undefined || index === rules.length - 1}
+                        onClick={() => (id === undefined ? undefined : moveRule(rule, 1))}
+                      >
+                        <ArrowDown size={13} />
+                      </IconButton>
                       <IconButton label={`Edit ${rule.name || `rule ${index + 1}`}`} size="small" onClick={() => open(rule)}>
                         <Pencil size={13} />
                       </IconButton>

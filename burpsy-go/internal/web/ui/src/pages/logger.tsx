@@ -3,12 +3,14 @@ import { FolderTree, Link2, MessageSquare, Search, Terminal, Trash2, X } from "l
 import { toast } from "sonner";
 import { cn } from "../lib/cn";
 import { copyToClipboard, downloadText, formatBytes, formatDuration, relativeTime, statusTone, toolLogToCSV } from "../lib/api";
-import { useClearToolLog, useDebounced } from "../lib/data";
+import { useClearToolLog, useDebounced, useMessage } from "../lib/data";
+import { useExchange } from "../lib/data.observe";
 import { useSetToolLogCapture, useSetToolLogComment, useToolLogView } from "../lib/data.workbench";
 import { useApp } from "../lib/store";
 import { HIGHLIGHTS, HIGHLIGHT_TONE } from "../lib/types";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
 import type { ToolLogRow } from "../lib/types.workbench";
+import { HttpEditor } from "../ui/editor";
 import { DetailList } from "../ui/json";
 import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Toolbar } from "../ui/primitives";
@@ -33,6 +35,62 @@ function rowUrl(row: ToolLogRow): string {
  */
 function rowCurl(row: ToolLogRow): string {
  return `curl -i -X ${row.method || "GET"} ${JSON.stringify(rowUrl(row))}`;
+}
+
+/**
+ * The bytes behind a logged row, resolved on demand through the row's exchange
+ * link: /api/exchange for the id pair, /api/message for each half — the same
+ * exchange-id-then-fetch pattern wshistory and repeater use when they start
+ * from an id. The log never stores its own copy of the bytes; the traffic store
+ * holds them once and Burp's capture limit manages that, so a second copy would
+ * double the memory a capture setting accounts for.
+ *
+ * The link can dangle — a row restored from an older database against a
+ * traffic store that no longer holds that exchange — and a dangling link is
+ * shown as exactly that ("no longer in the traffic store"), not as an empty
+ * editor, which would read as "this exchange was empty".
+ */
+function LogBytesViewer({ row }: { row: ToolLogRow }): JSX.Element {
+ const exchangeId = row.exchange;
+ if (exchangeId === null) {
+  return (
+   <Empty
+    title="No message bytes for this row"
+    detail="This row has timing and error text only: the send never produced a stored exchange (a transport failure, or a row standing for a whole run such as an audit). Rows logged before bytes were linked carry no exchange either."
+   />
+  );
+ }
+
+ return <LinkedBytes exchangeId={exchangeId} rowId={row.id} />;
+}
+
+function LinkedBytes({ exchangeId, rowId }: { exchangeId: number; rowId: number }): JSX.Element {
+ const exchange = useExchange(exchangeId);
+ const request = useMessage(exchange.data?.request);
+ const response = useMessage(exchange.data?.response ?? null);
+
+ if (exchange.isFetching && !exchange.data) {
+  return <Empty title="Loading message bytes…" detail={`Resolving exchange #${exchangeId} in the traffic store.`} />;
+ }
+ if (exchange.error || !exchange.data) {
+  return (
+   <Empty
+    title="Message bytes unavailable"
+    detail={`This row points at exchange #${exchangeId}, which is no longer in the traffic store. The metadata above is everything the log still holds for it.`}
+   />
+  );
+ }
+ const requestText = request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.");
+ const responseText =
+  exchange.data.response === null
+   ? "No response was captured for this exchange."
+   : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."));
+ return (
+  <div className="editor-grid" style={{ minHeight: 240 }}>
+   <HttpEditor label="Request" readOnly value={requestText} filename={`toollog-${rowId}-request.txt`} />
+   <HttpEditor label="Response" readOnly value={responseText} filename={`toollog-${rowId}-response.txt`} />
+  </div>
+ );
 }
 
 /**
@@ -353,11 +411,16 @@ export function LoggerPage(): JSX.Element {
      Save comment
     </Button>
    </div>
+   {/* The bytes behind the row, when the send produced a stored exchange (burpsy-react-ui-5bl):
+          shown under the metadata and the annotation editor rather than instead of them, because the
+          timings and the error text are the log's own contribution and stay readable while the
+          editors load. */}
+   <LogBytesViewer row={selected} />
   </div>
  ) : (
   <Empty
    title="No row selected"
-   detail="Choose a logged request to read its timing and error text in full. Right-click a row to copy its URL or jump to the same host in HTTP history."
+   detail="Choose a logged request to read its timing, error text and — where the send produced a stored exchange — its request and response bytes. Right-click a row to copy its URL or jump to the same host in HTTP history."
   />
  );
 

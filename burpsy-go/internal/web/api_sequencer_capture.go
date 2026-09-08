@@ -488,7 +488,7 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 			// nil rather than len(sent.Raw): on a transport failure there is no response, and the zero
 			// bytes sitting in Raw are the absence of one, not a measurement of one.
 			s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", 0, nil,
-				uint64(elapsed.Milliseconds()), err.Error())
+				uint64(elapsed.Milliseconds()), err.Error(), nil)
 			capture.miss(attempt, "send failed: "+err.Error())
 			consecutive++
 			if consecutive >= maxConsecutiveMisses {
@@ -503,7 +503,7 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 			statusCode = *sent.Status
 		}
 		s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", statusCode,
-			toollog.Bytes(len(response)), uint64(elapsed.Milliseconds()), "")
+			toollog.Bytes(len(response)), uint64(elapsed.Milliseconds()), "", nil)
 
 		token, err := capture.location.extract(response)
 		if err != nil {

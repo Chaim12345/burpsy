@@ -175,8 +175,8 @@ func TestDashboardTaskWithNoKnownTotalReportsAnUnknownFraction(t *testing.T) {
 func TestDashboardEventLogCarriesTimestampsNewestFirst(t *testing.T) {
 	s := newTestServer()
 	before := uint64(time.Now().UnixMilli())
-	s.toolLog.Record(toollog.ToolRepeater, "first.test", 80, false, "GET", "/one", 200, toollog.Bytes(21), 5, "")
-	s.toolLog.Record(toollog.ToolIntruder, "second.test", 443, true, "POST", "/two", 500, nil, 9, "boom")
+	s.toolLog.Record(toollog.ToolRepeater, "first.test", 80, false, "GET", "/one", 200, toollog.Bytes(21), 5, "", nil)
+	s.toolLog.Record(toollog.ToolIntruder, "second.test", 443, true, "POST", "/two", 500, nil, 9, "boom", nil)
 
 	v := dashboardGet(t, s)
 	if len(v.Activity) != 2 {
@@ -200,7 +200,7 @@ func TestDashboardEventLogCarriesTimestampsNewestFirst(t *testing.T) {
 func TestToolLogHonoursItsLimitAndReturnsTheNewestRows(t *testing.T) {
 	s := newTestServer()
 	for i := 0; i < 25; i++ {
-		s.toolLog.Record(toollog.ToolRepeater, fmt.Sprintf("h%02d.test", i), 80, false, "GET", "/", 200, toollog.Bytes(7), 1, "")
+		s.toolLog.Record(toollog.ToolRepeater, fmt.Sprintf("h%02d.test", i), 80, false, "GET", "/", 200, toollog.Bytes(7), 1, "", nil)
 	}
 
 	rec := get(t, s, "/api/tools/log?limit=5")
@@ -235,8 +235,8 @@ func TestToolLogHonoursItsLimitAndReturnsTheNewestRows(t *testing.T) {
 // "q", which nothing looked at, so both controls silently returned the unfiltered log.
 func TestToolLogFilterAndSearchActuallyFilter(t *testing.T) {
 	s := newTestServer()
-	s.toolLog.Record(toollog.ToolRepeater, "alpha.test", 80, false, "GET", "/a", 200, toollog.Bytes(7), 1, "")
-	s.toolLog.Record(toollog.ToolIntruder, "beta.test", 80, false, "GET", "/b", 200, toollog.Bytes(9), 1, "")
+	s.toolLog.Record(toollog.ToolRepeater, "alpha.test", 80, false, "GET", "/a", 200, toollog.Bytes(7), 1, "", nil)
+	s.toolLog.Record(toollog.ToolIntruder, "beta.test", 80, false, "GET", "/b", 200, toollog.Bytes(9), 1, "", nil)
 
 	for _, tc := range []struct {
 		query string
@@ -264,7 +264,7 @@ func TestToolLogFilterAndSearchActuallyFilter(t *testing.T) {
 // ordinal is what the durable mirror persists, so the variant's position is part of the wire format.
 func TestToolLogNamesTheCrawler(t *testing.T) {
 	s := newTestServer()
-	s.toolLog.Record(toollog.ToolCrawler, "shop.test", 80, false, "GET", "/products", 200, toollog.Bytes(310), 12, "")
+	s.toolLog.Record(toollog.ToolCrawler, "shop.test", 80, false, "GET", "/products", 200, toollog.Bytes(310), 12, "", nil)
 
 	v := dashboardGet(t, s)
 	if len(v.Activity) != 1 || v.Activity[0].Tool != "crawler" {
@@ -444,7 +444,7 @@ func dashboardEvents(t *testing.T, s *Server) []eventView {
 func TestDashboardCarriesTheEventLogSeparatelyFromTheRequestLog(t *testing.T) {
 	s := newTestServer()
 	before := uint64(time.Now().UnixMilli())
-	s.toolLog.Record(toollog.ToolRepeater, "sent.test", 80, false, "GET", "/a-request", 200, toollog.Bytes(15), 3, "")
+	s.toolLog.Record(toollog.ToolRepeater, "sent.test", 80, false, "GET", "/a-request", 200, toollog.Bytes(15), 3, "", nil)
 	s.events.Record(dash.EventScopeChanged, dash.SeverityInfo, "an event, not a request")
 
 	v := dashboardGet(t, s)

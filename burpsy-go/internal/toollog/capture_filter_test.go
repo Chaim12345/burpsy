@@ -18,9 +18,9 @@ func TestStatusBucketsKeepOnlyTheirClass(t *testing.T) {
 	if err := l.SetFilter(mustFilter(t, CaptureFilter{Status: []int{2, 5}})); err != nil {
 		t.Fatalf("SetFilter: %v", err)
 	}
-	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(10), 1, "")
-	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/old", 301, Bytes(10), 1, "")
-	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/boom", 500, Bytes(10), 1, "")
+	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(10), 1, "", nil)
+	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/old", 301, Bytes(10), 1, "", nil)
+	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/boom", 500, Bytes(10), 1, "", nil)
 	if n := l.Count(); n != 2 {
 		t.Errorf("Count = %d, want 2xx and 5xx only", n)
 	}
@@ -39,8 +39,8 @@ func TestBadRegexIsRefusedWithTheOldFilterIntact(t *testing.T) {
 		t.Errorf("bad regex accepted")
 	}
 	// The refused save must not have replaced the working filter.
-	l.Record(ToolRepeater, "shop.test", 80, false, "GET", "/", 200, Bytes(1), 1, "")
-	l.Record(ToolRepeater, "other.test", 80, false, "GET", "/", 200, Bytes(1), 1, "")
+	l.Record(ToolRepeater, "shop.test", 80, false, "GET", "/", 200, Bytes(1), 1, "", nil)
+	l.Record(ToolRepeater, "other.test", 80, false, "GET", "/", 200, Bytes(1), 1, "", nil)
 	if n := l.Count(); n != 1 {
 		t.Errorf("Count = %d, want the old term filter still in force", n)
 	}
@@ -54,8 +54,8 @@ func TestSearchNegateAndCase(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("SetFilter: %v", err)
 	}
-	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/admin/panel", 200, Bytes(1), 1, "")
-	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/shop/cart", 200, Bytes(1), 1, "")
+	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/admin/panel", 200, Bytes(1), 1, "", nil)
+	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/shop/cart", 200, Bytes(1), 1, "", nil)
 	if n := l.Count(); n != 1 {
 		t.Errorf("Count = %d, want only the non-admin row", n)
 	}
@@ -67,7 +67,7 @@ func TestScopeOnlyWithoutScopeFiltersNothing(t *testing.T) {
 	if err := l.SetFilter(CaptureFilter{ScopeOnly: true}); err != nil {
 		t.Fatalf("SetFilter: %v", err)
 	}
-	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "")
+	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "", nil)
 	if n := l.Count(); n != 1 {
 		t.Errorf("Count = %d, want 1: nil scope must fail safe, not empty the log", n)
 	}
@@ -84,7 +84,7 @@ func TestScopeOnlyWithScopeDropsOutOfScope(t *testing.T) {
 	if err := l.SetFilter(CaptureFilter{ScopeOnly: true}); err != nil {
 		t.Fatalf("SetFilter: %v", err)
 	}
-	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "")
+	l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "", nil)
 	if n := l.Count(); n != 0 {
 		t.Errorf("Count = %d, want the denied row refused", n)
 	}
@@ -100,7 +100,7 @@ func TestSetCapacityRefusesNonPositiveAndTrims(t *testing.T) {
 		t.Errorf("capacity 0 accepted: a bound of nothing would read as unlimited nowhere")
 	}
 	for i := 0; i < 5; i++ {
-		l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "")
+		l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "", nil)
 	}
 	if err := l.SetCapacity(2); err != nil {
 		t.Fatalf("SetCapacity: %v", err)
@@ -113,7 +113,7 @@ func TestSetCapacityRefusesNonPositiveAndTrims(t *testing.T) {
 func TestSetCommentWritesWithoutTouchingTheNote(t *testing.T) {
 	l := New()
 	l.WithCapacity(100)
-	id := l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "producer note")
+	id := l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "producer note", nil)
 	if !l.SetComment(id, "look again") {
 		t.Fatalf("SetComment refused a live id")
 	}
@@ -134,7 +134,7 @@ func TestSetHighlightWritesReFiresTheSinkAndClears(t *testing.T) {
 	l.WithCapacity(100)
 	var sinkSaw *Entry
 	l.SetPersistenceSink(func(e *Entry) { sinkSaw = e })
-	id := l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "producer note")
+	id := l.Record(ToolRepeater, "a.test", 80, false, "GET", "/", 200, Bytes(1), 1, "producer note", nil)
 	if !l.SetHighlight(id, "red") {
 		t.Fatal("SetHighlight refused a live id")
 	}

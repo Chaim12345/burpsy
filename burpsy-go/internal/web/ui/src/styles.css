@@ -801,6 +801,20 @@ main {
   color: var(--muted);
 }
 
+/* The per-table filter above Intruder's result tables (burpsy-react-ui-4rd). */
+.results-filter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+  margin: var(--s1) 0 var(--s2);
+}
+
+.results-filter .search-field {
+  flex: 0 1 var(--w-md, 260px);
+  min-width: 200px;
+}
+
 .search-field .input {
   border: 0;
   background: transparent;
@@ -2546,6 +2560,20 @@ tbody td {
    collapsing to one. */
 .tree-row-out-of-scope {
   opacity: 0.55;
+}
+
+/* A false-positive finding (burpsy-react-ui-pwd) is worked, not gone: it stays in the tree so a
+   re-audit that re-raises it has somewhere to merge, and so the mark is auditable rather than
+   deleted evidence. Burp's convention is a struck label. The row also carries the letters "FP" in
+   its meta — the strikethrough is the glance signal, the text is the one that survives a screen
+   reader and a colour-blind operator alike. */
+.tree-row-false-positive .tree-row-label {
+  text-decoration: line-through;
+}
+
+.tree-row-false-positive .tree-row-label,
+.tree-row-false-positive .sev-dot {
+  opacity: 0.6;
 }
 
 /* Restored to full strength on hover and when selected: the moment an operator is actually looking

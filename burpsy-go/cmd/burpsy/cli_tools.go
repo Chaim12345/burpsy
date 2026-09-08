@@ -105,13 +105,13 @@ func cmdRepeater(ctx *cliContext, args []string) error {
 	resp := sent.Raw
 	if err != nil {
 		// nil, not zero: nothing came back, which is not the same as an empty response.
-		ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", 0, nil, 0, err.Error())
+		ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", 0, nil, 0, err.Error(), nil)
 		return err
 	}
 	dur := uint64(time.Since(start).Milliseconds())
 	status := parseStatus(resp)
 	// The same len(resp) the summary line below prints, so the log and the terminal agree.
-	ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", status, toollog.Bytes(len(resp)), dur, "")
+	ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", status, toollog.Bytes(len(resp)), dur, "", nil)
 	_, werr := ctx.out.Write(resp)
 	if werr != nil {
 		return werr
@@ -189,7 +189,7 @@ func cmdIntruder(ctx *cliContext, args []string) error {
 	// nil: one row for the whole attack, which sends many requests and gets many responses back, so no
 	// single response length belongs to it. The per-request lengths are in the result rows printed below.
 	ctx.toolLog.Record(toollog.ToolIntruder, host, port, *tls, "ATTACK", "/", 0, nil, 0,
-		fmt.Sprintf("%d payloads", len(payloadList)))
+		fmt.Sprintf("%d payloads", len(payloadList)), nil)
 	count := 0
 	for res := range results {
 		count++
@@ -292,7 +292,7 @@ func scanAudit(ctx *cliContext, args []string) error {
 		return fmt.Errorf("exchange %d not audited: %s", id, outcome.Error)
 	}
 	// nil: one row for the whole audit, not for a single request/response pair.
-	ctx.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, nil, 0, "audit")
+	ctx.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, nil, 0, "audit", &ex.ID)
 	for _, f := range findings {
 		nf := core.NewFinding{
 			Name:        f.Name,

@@ -50,8 +50,8 @@ func TestToolLogCaptureFilterRoundTrip(t *testing.T) {
 	if rec := postJSON(t, s, "/api/tools/log", body); rec.Code != http.StatusOK {
 		t.Fatalf("POST filter: status = %d (%s)", rec.Code, rec.Body.String())
 	}
-	s.toolLog.Record(toollog.ToolRepeater, "shop.test", 80, false, "GET", "/cart", 200, toollog.Bytes(10), 1, "")
-	s.toolLog.Record(toollog.ToolRepeater, "shop.test", 80, false, "GET", "/old", 404, toollog.Bytes(10), 1, "")
+	s.toolLog.Record(toollog.ToolRepeater, "shop.test", 80, false, "GET", "/cart", 200, toollog.Bytes(10), 1, "", nil)
+	s.toolLog.Record(toollog.ToolRepeater, "shop.test", 80, false, "GET", "/old", 404, toollog.Bytes(10), 1, "", nil)
 	rec := get(t, s, "/api/tools/log")
 	var got toolLogCaptureView
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -125,7 +125,7 @@ func TestToolLogFilterEchoStatusIsArrayOnFreshServer(t *testing.T) {
 // A comment sticks to its entry and survives the projection; unknown ids 404.
 func TestToolLogCommentRoundTrip(t *testing.T) {
 	s := newTestServer()
-	id := s.toolLog.Record(toollog.ToolRepeater, "a.test", 80, false, "GET", "/", 200, toollog.Bytes(1), 1, "")
+	id := s.toolLog.Record(toollog.ToolRepeater, "a.test", 80, false, "GET", "/", 200, toollog.Bytes(1), 1, "", nil)
 	req, _ := http.NewRequest(http.MethodPatch, "/api/tools/log/"+itoa(id), jsonBody(t, map[string]any{"comment": "look again"}))
 	rec := httptestRec(t, s, req)
 	if rec.Code != http.StatusOK {
@@ -154,7 +154,7 @@ func TestToolLogCommentRoundTrip(t *testing.T) {
 // vocabulary rather than a silently-coerced empty string.
 func TestToolLogHighlightRoundTripAndValidation(t *testing.T) {
 	s := newTestServer()
-	id := s.toolLog.Record(toollog.ToolRepeater, "a.test", 80, false, "GET", "/", 200, toollog.Bytes(1), 1, "")
+	id := s.toolLog.Record(toollog.ToolRepeater, "a.test", 80, false, "GET", "/", 200, toollog.Bytes(1), 1, "", nil)
 	req, _ := http.NewRequest(http.MethodPatch, "/api/tools/log/"+itoa(id), jsonBody(t, map[string]any{"comment": "", "highlight": "yellow"}))
 	if rec := httptestRec(t, s, req); rec.Code != http.StatusOK {
 		t.Fatalf("PATCH highlight: status = %d (%s)", rec.Code, rec.Body.String())

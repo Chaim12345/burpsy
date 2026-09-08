@@ -354,7 +354,7 @@ func (s *Server) sendGroupOnOneConnection(
 	if err != nil {
 		// SendKeepAlive's error return is reserved for a failure before any exchange could be attempted
 		// — the dial. Nothing went out, so this is the group's failure, not an item's.
-		s.toolLog.Record(toollog.ToolRepeater, first.Host, first.Port, first.TLS, "SEND-GROUP", "", 0, nil, 0, err.Error())
+		s.toolLog.Record(toollog.ToolRepeater, first.Host, first.Port, first.TLS, "SEND-GROUP", "", 0, nil, 0, err.Error(), nil)
 		return nil, "", err
 	}
 
@@ -373,7 +373,7 @@ func (s *Server) sendGroupOnOneConnection(
 			if items[i].Error == "" {
 				items[i].Error = "no response bytes arrived on the shared connection, and no reason was reported"
 			}
-			s.toolLog.Record(toollog.ToolRepeater, first.Host, first.Port, first.TLS, "SEND", "", 0, nil, 0, items[i].Error)
+			s.toolLog.Record(toollog.ToolRepeater, first.Host, first.Port, first.TLS, "SEND", "", 0, nil, 0, items[i].Error, nil)
 			continue
 		}
 		// Whatever arrived is recorded even when the read did not complete: a head without a

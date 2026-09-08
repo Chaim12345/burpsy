@@ -558,3 +558,20 @@ export function paramsOf(raw: string): ParamReport {
 
   return { rows, notes };
 }
+
+/**
+ * The line-ending glyphs Burp's \n toggle names (burpsy-react-ui-1e4): which break bytes
+ * actually separate the lines of this text, in order. CodeMirror normalises CRLF to LF the
+ * moment it parses a document, so the document can no longer tell a CRLF message from an LF
+ * one - and certifying "LF only" on a CRLF message is the one wrong answer this toggle must
+ * never give. Reading the breaks off the raw message text keeps the glyphs honest; the raw
+ * text and the rendered document agree line-for-line (every break spelling still breaks
+ * exactly one line), so the nth glyph here is the break after the nth rendered line.
+ */
+export function breakGlyphs(text: string): string[] {
+  const glyphs: string[] = [];
+  for (const match of text.matchAll(/\r\n|\r|\n/g)) {
+    glyphs.push(match[0] === "\r\n" ? "\u240d\u240a" : match[0] === "\n" ? "\u240a" : "\u240d");
+  }
+  return glyphs;
+}

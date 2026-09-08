@@ -514,6 +514,9 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 
 	for o := range results {
 		col.absorb(o)
+		// Feed the live progress view: settled sends and failures, the same totals the
+		// report will carry, so a control-route poll cannot disagree with it.
+		a.Control.note(o.err == nil)
 	}
 	// After the drain, so an attack whose last in-flight sends were still landing when the plan ran
 	// out is completed only once they are collected. complete() leaves a stopped attack stopped.

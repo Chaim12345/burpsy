@@ -84,6 +84,235 @@ type wireAttempt struct {
 // postJSONInto runs one request through the server's mux and decodes a 2xx body into out,
 // returning the status code. Distinct from the package's postJSON helper, which only returns the
 // recorder.
+
+// Manual points are the wire form of Burp's Add § (burpsy-react-ui-mun): byte ranges of the
+// base request marked by hand, attacking positions the discoverer cannot model — here a slice
+// of a query value, which the discoverer only offers as the whole value.
+func TestIntruderRunAcceptsAManualPoint(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+
+	// "pha" inside alpha: bytes of the request line, one ordinal of the whole-value point.
+	start := strings.Index(raw, "pha")
+	var out wireRunReport
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":        id,
+		"target":        "http://" + addr,
+		"mode":          "sniper",
+		"manual_points": []map[string]int{{"start": start, "end": start + 3}},
+		"payload_sets":  [][]string{{"xyz", "wxyz"}},
+		"max_requests":  100,
+		"rps":           1000,
+	}, &out)
+	if code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200", code)
+	}
+	if out.Report.Planned != 2 || out.Report.Sent != 2 {
+		t.Fatalf("planned/sent = %d/%d, want 2/2 (one manual point, one set of two)", out.Report.Planned, out.Report.Sent)
+	}
+}
+
+// A manual mark joins selected discovered points rather than replacing them, and the plan counts
+// both — sniper over two positions and a two-payload set means four requests.
+func TestIntruderRunCombinesManualAndDiscoveredPoints(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha&lang=en HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+
+	var points []wirePoint
+	postJSONInto(t, srv, "/api/intruder/points", map[string]any{"msg_id": id, "all": false}, &points)
+	qIndex := -1
+	for i := range points {
+		if points[i].Kind == "url_param_value" && points[i].Label == "q" {
+			qIndex = i
+			break
+		}
+	}
+	if qIndex < 0 {
+		t.Fatalf("no q point in %+v", points)
+	}
+
+	// The lang value "en" itself, discovered by index in the raw request.
+	start := strings.Index(raw, "lang=") + len("lang=")
+	var out wireRunReport
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":        id,
+		"target":        "http://" + addr,
+		"mode":          "sniper",
+		"points":        []int{qIndex},
+		"manual_points": []map[string]int{{"start": start, "end": start + 2}},
+		"payload_sets":  [][]string{{"one", "two"}},
+		"max_requests":  100,
+		"rps":           1000,
+	}, &out)
+	if code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200", code)
+	}
+	// Sniper: each of the two positions takes the whole set, so 2 positions x 2 payloads.
+	if out.Report.Planned != 4 {
+		t.Fatalf("planned = %d, want 4 (discovered + manual, one set of two)", out.Report.Planned)
+	}
+}
+
+func TestIntruderRunRefusesAnOverlappingManualPoint(t *testing.T) {
+	addr, _ := recordServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":        id,
+		"target":        "http://" + addr,
+		"mode":          "sniper",
+		"manual_points": []map[string]int{{"start": 5, "end": 15}, {"start": 10, "end": 20}},
+		"payload_sets":  [][]string{{"x"}},
+	}, &struct{}{})
+	if code != http.StatusBadRequest {
+		t.Fatalf("overlapping manual points = %d, want 400", code)
+	}
+	if !strings.Contains(httpBody(t, srv, map[string]any{
+		"msg_id":        id,
+		"target":        "http://" + addr,
+		"mode":          "sniper",
+		"manual_points": []map[string]int{{"start": 5, "end": 15}, {"start": 10, "end": 20}},
+		"payload_sets":  [][]string{{"x"}},
+	}), "overlap") {
+		t.Fatal("the 400 must name the overlap")
+	}
+}
+
+func TestIntruderRunRefusesAManualPointOutsideTheRequest(t *testing.T) {
+	addr, _ := recordServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	id := requestMessage(t, store, "GET /search?q=a HTTP/1.1\r\nHost: shop.test\r\n\r\n")
+
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":        id,
+		"target":        "http://" + addr,
+		"mode":          "sniper",
+		"manual_points": []map[string]int{{"start": 0, "end": 99999}},
+		"payload_sets":  [][]string{{"x"}},
+	}, &struct{}{})
+	if code != http.StatusBadRequest {
+		t.Fatalf("end beyond the request = %d, want 400", code)
+	}
+}
+
+// A manual mark on top of a selected discovered point would double-splice the same bytes.
+func TestIntruderRunRefusesAManualPointOverlappingADiscoveredOne(t *testing.T) {
+	addr, _ := recordServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+
+	var points []wirePoint
+	postJSONInto(t, srv, "/api/intruder/points", map[string]any{"msg_id": id, "all": false}, &points)
+	qIndex := -1
+	qOffset, qLen := 0, 0
+	for i := range points {
+		if points[i].Kind == "url_param_value" && points[i].Label == "q" {
+			qIndex, qOffset, qLen = points[i].Index, points[i].Offset, points[i].Len
+			break
+		}
+	}
+	if qIndex < 0 {
+		t.Fatalf("no q point in %+v", points)
+	}
+
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":        id,
+		"target":        "http://" + addr,
+		"mode":          "sniper",
+		"points":        []int{qIndex},
+		"manual_points": []map[string]int{{"start": qOffset, "end": qOffset + qLen}},
+		"payload_sets":  [][]string{{"x"}},
+	}, &struct{}{})
+	if code != http.StatusBadRequest {
+		t.Fatalf("manual over discovered = %d, want 400", code)
+	}
+}
+
+// Marking alone must be enough to launch: no discovered point has to be selected for a
+// manual-only attack to run.
+func TestIntruderRunAllowsAManualOnlyAttack(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+
+	start := strings.Index(raw, "alpha")
+	var out wireRunReport
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":        id,
+		"target":        "http://" + addr,
+		"mode":          "sniper",
+		"manual_points": []map[string]int{{"start": start, "end": start + 5}},
+		"payload_sets":  [][]string{{"bravo", "char", "longer"}},
+		"max_requests":  100,
+		"rps":           1000,
+	}, &out)
+	if code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200", code)
+	}
+	if out.Report.Planned != 3 || out.Report.Sent != 3 {
+		t.Fatalf("planned/sent = %d/%d, want 3/3", out.Report.Planned, out.Report.Sent)
+	}
+	// Every attempt row the server returns must name its payload, resolved over the
+	// post-rule sets — the examples join the results table to the payload that produced it.
+	got := make([]string, 0, len(out.Examples))
+	for _, ex := range out.Examples {
+		if len(ex.Payloads) > 0 {
+			got = append(got, ex.Payloads[0])
+		}
+	}
+	sort.Strings(got)
+	if want := []string{"bravo", "char", "longer"}; !slices.Equal(got, want) {
+		t.Fatalf("examples resolve to %v, want %v", got, want)
+	}
+}
+
+// httpBody posts a JSON body and returns the raw response body, for assertions
+// on the error text a 400 carries.
+func httpBody(t *testing.T, srv *Server, body any) string {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/intruder/run", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	return rec.Body.String()
+}
+
 func postJSONInto(t *testing.T, srv *Server, path string, body any, out any) int {
 	t.Helper()
 	var rdr io.Reader

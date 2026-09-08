@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -463,6 +464,17 @@ type issueFindingView struct {
 	Params      []string              `json:"params,omitempty"`
 	Occurrences []issueOccurrenceView `json:"occurrences"`
 	TimesSeen   int                   `json:"times_seen"`
+	// Triage state (burpsy-react-ui-pwd). Severity/Confidence are the *effective* values — the
+	// operator's override when one stands, the engine's report otherwise — so every consumer that
+	// just displays or counts by severity keeps working without learning about overrides. The
+	// original engine values ride alongside as original_severity/original_confidence, present only
+	// when an override stands, so the UI can show what was overruled.
+	SeverityOverride   *string `json:"severity_override,omitempty"`
+	OriginalSeverity   string  `json:"original_severity,omitempty"`
+	ConfidenceOverride *string `json:"confidence_override,omitempty"`
+	OriginalConfidence string  `json:"original_confidence,omitempty"`
+	FalsePositive      bool    `json:"false_positive"`
+	Comment            string  `json:"comment"`
 	// Advisory is the catalogue entry for this issue class, when one resolves. Omitted rather than
 	// emptied, so the UI can tell "no catalogue advisory" from "an advisory with blank fields".
 	Advisory *issueAdvisoryView `json:"advisory,omitempty"`
@@ -490,8 +502,8 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		ID:          f.ID,
 		CheckName:   f.Name,
 		IssueName:   nil,
-		Severity:    f.Severity.String(),
-		Confidence:  f.Confidence.String(),
+		Severity:    f.EffectiveSeverity().String(),
+		Confidence:  f.EffectiveConfidence().String(),
 		Detail:      strPtr(f.Description),
 		Remediation: strPtr(f.Remediation),
 		Param:       f.Param,
@@ -499,6 +511,18 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		TimesSeen:   len(f.Occurrences),
 		TaskID:      f.TaskID,
 	}
+	if f.SeverityOverride != nil {
+		over := f.SeverityOverride.String()
+		v.SeverityOverride = &over
+		v.OriginalSeverity = f.Severity.String()
+	}
+	if f.ConfidenceOverride != nil {
+		over := f.ConfidenceOverride.String()
+		v.ConfidenceOverride = &over
+		v.OriginalConfidence = f.Confidence.String()
+	}
+	v.FalsePositive = f.FalsePositive
+	v.Comment = f.Comment
 	if def, note := s.advisories.Resolve(f.Name); def != nil {
 		// Built by the same function GET /api/advisories/{typeIndex} uses, so the browsable catalogue
 		// and a finding's attached advisory cannot come to disagree about the shape they share.
@@ -600,7 +624,16 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		// key; dropping it would trade a wrong number for a missing one.
 		counts := map[string]int{"critical": 0, "high": 0, "medium": 0, "low": 0, "informational": 0, "info": 0}
 		unknown := map[string]int{}
+		// A finding marked a false positive sits outside the operator's working set, so it counts
+		// towards none of the severity buckets — that is the point of marking one. The number that
+		// were excluded is reported rather than dropped on the floor, so the headline can never
+		// silently disagree with the list it is drawn from.
+		falsePositives := 0
 		for _, v := range views {
+			if v.FalsePositive {
+				falsePositives++
+				continue
+			}
 			key := strings.ToLower(v.Severity)
 			if _, ok := counts[key]; ok {
 				counts[key]++
@@ -623,12 +656,133 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 			body["unrecognised_severities"] = unknown
 		}
 		body["counts"] = counts
+		// A finding marked a false positive is out of the operator's working set, so it counts
+		// towards none of the severity buckets — that is the point of marking one. It is not
+		// hidden: false_positives below says how many were excluded, so the headline can never
+		// silently disagree with the list it is drawn from. counted is the included number.
+		body["false_positives"] = falsePositives
 		// The invariant the old code broke, now stated on the wire: the buckets account for every
 		// finding in `findings`. "info" is a duplicate of "informational" and is excluded from the sum.
-		body["counted"] = len(views)
+		body["counted"] = len(views) - falsePositives
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
+}
+
+// handleIssueByID routes /api/issues/{id} to the triage and delete paths. It exists as its own
+// tiny handler so the subtree registration cannot silently swallow paths meant for another
+// feature: anything that is not exactly an id is a 404, not a fall-through.
+func (s *Server) handleIssueByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/issues/")
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
+		return
+	}
+	s.handleIssueTriage(w, r, id)
+}
+
+// handleIssueTriage serves PUT /api/issues/{id} (operator triage: severity, confidence,
+// false-positive, comment) and DELETE /api/issues/{id} (remove the finding). These are the write
+// paths the read-only /api/issues never had; the store applies every decision under one lock and
+// mirrors it to SQLite, so an override outlives both a re-audit (which merges into the same
+// finding rather than replacing it) and a restart.
+//
+// PUT is used rather than PATCH because the body is total: absent fields clear their override, so
+// "severity gone" means "engine severity stands again", never "leave it as it was". A partial
+// protocol here is how a cleared override comes back as a ghost on the next restart.
+func (s *Server) handleIssueTriage(w http.ResponseWriter, r *http.Request, idStr string) {
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodDelete:
+		if !s.findings.Delete(id) {
+			http.Error(w, "Issue not found", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case http.MethodPut, http.MethodPatch:
+		// fall through to the body below
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		// Severity/Confidence use the same lower-case vocabulary the views emit
+		// ("informational".."critical", "certain"|"firm"|"tentative"). Empty clears the override.
+		Severity      *string `json:"severity"`
+		Confidence    *string `json:"confidence"`
+		FalsePositive *bool   `json:"false_positive"`
+		Comment       *string `json:"comment"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Severity != nil && *req.Severity != "" {
+		// Validated before the store is touched: ParseSeverity maps an unrecognised word to
+		// Informational, so without this a typo would silently reclassify rather than be rejected.
+		over := core.ParseSeverity(*req.Severity)
+		if over == core.SeverityInformational && !strings.EqualFold(*req.Severity, "informational") && !strings.EqualFold(*req.Severity, "info") {
+			http.Error(w, "Invalid severity; want informational, low, medium, high or critical", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Confidence != nil && *req.Confidence != "" {
+		// Same contract as severity: ParseConfidence's fallback is Tentative, which must not be
+		// reachable by misspelling "certain".
+		over := core.ParseConfidence(*req.Confidence)
+		if over == core.ConfidenceTentative && !strings.EqualFold(*req.Confidence, "tentative") {
+			http.Error(w, "Invalid confidence; want certain, firm or tentative", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Comment != nil && len(*req.Comment) > 8192 {
+		http.Error(w, "Comment too long (max 8192 bytes)", http.StatusBadRequest)
+		return
+	}
+
+	ok := s.findings.Triage(id, func(f *core.Finding) {
+		if req.Severity != nil {
+			if *req.Severity == "" {
+				f.SeverityOverride = nil
+			} else {
+				over := core.ParseSeverity(*req.Severity)
+				f.SeverityOverride = &over
+			}
+		}
+		if req.Confidence != nil {
+			if *req.Confidence == "" {
+				f.ConfidenceOverride = nil
+			} else {
+				over := core.ParseConfidence(*req.Confidence)
+				f.ConfidenceOverride = &over
+			}
+		}
+		if req.FalsePositive != nil {
+			f.FalsePositive = *req.FalsePositive
+		}
+		if req.Comment != nil {
+			f.Comment = *req.Comment
+		}
+	})
+	if !ok {
+		http.Error(w, "Issue not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
 // handleFindings is the legacy /api/findings endpoint, kept for tools that predate /api/issues.

@@ -137,7 +137,10 @@ type wsPeer struct {
 // not stripping: the operator would read "extensions removed" on a handshake
 // that still offers them, and then trust a compressed capture.
 func (s *Server) stripWsHandshake(requestData []byte) ([]byte, []string) {
-	if !s.config.stripWsExtensions {
+	// Read live: the same option set the Proxy settings panel writes, so the
+	// next handshake obeys the operator's switch without a restart. Get is
+	// nil-safe (reads as off), matching the nil option set's all-off contract.
+	if !s.config.options.Get(OptStripWsExtensions) {
 		return requestData, nil
 	}
 	out, removed, err := core.StripWsExtensionsHeader(requestData)

@@ -34,6 +34,7 @@ import { MatchReplacePage } from "./pages/matchreplace";
 import { OrganizerPage } from "./pages/organizer";
 import { ProxySettingsPage } from "./pages/proxysettings";
 import { RepeaterPage } from "./pages/repeater";
+import { ScannerLaunchPage } from "./pages/scannerlaunch";
 import { ScannerPage } from "./pages/scanner";
 import { SequencerPage } from "./pages/sequencer";
 import { SessionPage } from "./pages/session";
@@ -88,6 +89,15 @@ export const TOOLS: NavTool[] = [
     leaves: [
       { id: "sitemap", label: "Site map", description: "Hosts, paths, and observed behaviour", page: SiteMapPage },
       { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
+      {
+        // burpsy-react-ui-1yd: Burp has a SCANNER tool; naming this page after its output ("Issues")
+        // while burying the launch controls in a modal made scanning unfindable. The Scanner leaf
+        // gathers the launch controls and the check switches; the Issues leaf stays the results view.
+        id: "scannerlaunch",
+        label: "Scanner",
+        description: "Launch an audit and choose what it runs",
+        page: ScannerLaunchPage,
+      },
       { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
       { id: "auditqueue", label: "Audit queue", description: "What the active audit did with each exchange, and why any were skipped", page: AuditQueuePage },
       {

@@ -1,7 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Crosshair, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, Zap } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Crosshair, Download, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { api, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { api, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import {
+  intruderExportFilenames,
+  intruderPayloadResolver,
+  intruderReportToCSV,
+  payloadLabel,
+} from "../lib/intruder-export";
 import {
   AttackActionStale,
   useIntruderAttackAction,
@@ -12,6 +18,8 @@ import {
 } from "../lib/data.tools";
 import { usePools } from "../lib/data.pools";
 import { useMessage } from "../lib/data";
+import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
+import { filterTableRows } from "../lib/table-filter";
 import {
   DEFAULT_PAYLOADS,
   emptyIntruderConfig,
@@ -24,21 +32,22 @@ import {
   HASH_ALGORITHMS,
   PAYLOAD_LAYERS,
   PAYLOAD_RULES,
-  assignmentAt,
-  attackProgress,
   customIteratorSize,
   customIteratorSlots,
   dateSetSize,
   emptyRule,
   estimateRequests,
-  planSetLengths,
+  attackProgress,
   quoteRegex,
-  resolvePayloads,
+  type Attempt,
   type AttackMode,
+  type ErrorBucket,
   type IntruderAttacksResp,
   type PayloadRuleName,
   type PayloadRuleSpec,
+  type PayloadSetReport,
   type ResolvedPayload,
+  type ResultBucket,
   type RunView,
   type SetSize,
 } from "../lib/types.tools";
@@ -65,7 +74,53 @@ import {
   Textarea,
   Tooltip,
 } from "../ui/primitives";
-import { SimpleTable } from "../ui/table";
+import { SortableTable, type Column } from "../ui/table";
+
+/**
+ * The filter field above each result table, with the honest count (burpsy-react-ui-4rd).
+ *
+ * The filter is client-side over the rows the server already sent, so "N of M" is
+ * exact rather than a page-sized sample, and a filter that hides everything says so
+ * instead of leaving an empty-looking table that reads as "no results".
+ */
+function ResultFilter({
+  label,
+  value,
+  onChange,
+  shown,
+  total,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  shown: number;
+  total: number;
+}): JSX.Element {
+  return (
+    <div className="results-filter">
+      <div className="search-field">
+        <Search size={15} />
+        <Input
+          aria-label={label}
+          title={label}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Filter rows"
+        />
+        {value ? (
+          <IconButton label={`Clear ${label.toLowerCase()}`} size="small" onClick={() => onChange("")}>
+            <X size={13} />
+          </IconButton>
+        ) : null}
+      </div>
+      {value ? (
+        <span className="cell-dim">
+          {formatCount(shown)} of {formatCount(total)} rows
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 function countPayloads(text: string): number {
   return text.split("\n").filter((line) => line.trim() !== "").length;
@@ -161,22 +216,6 @@ function RuleRow({
       </IconButton>
     </div>
   );
-}
-
-/**
- * One resolved payload combination as a string, and whether every part of it is real payload text.
- *
- * A part the browser cannot name is rendered as its position in its set rather than omitted or
- * guessed, because "set 2 payload #18" tells the operator where to look and an invented payload
- * tells them something false.
- */
-function payloadLabel(parts: ResolvedPayload[]): { text: string; complete: boolean } {
-  if (!parts.length) return { text: "", complete: false };
-  const complete = parts.every((part) => part.text !== null);
-  const text = parts
-    .map((part) => (part.text === null ? `set ${part.set + 1} payload #${part.index + 1}` : part.text === "" ? "(empty)" : part.text))
-    .join(" | ");
-  return { text, complete };
 }
 
 /**
@@ -282,41 +321,13 @@ function AttackResult({
 }): JSX.Element {
   const { report, payload_sets: sets } = view;
 
-  /**
-   * Decode an attempt's ordinal into its payload combination.
-   *
-   * The server sends an `examples` entry for every ordinal it kept a row for — every bucket's
-   * first ordinal, and every attempt in the (detail-limited) attempts table — resolved server-side
-   * from the post-processing-rule payload sets (api_tools.go's payloadsAt), so a rule that
-   * transforms bytes without dropping any (add_prefix, hash, …) still names the payload that was
-   * actually sent. That covers every row this page renders today; the fallback below recomputes
-   * the ordinal from the plan — pure arithmetic on the index, which is what
-   * internal/intruder/plan.go's Fill is (burpsy-react-ui-fvx) — for an older server that predates
-   * that coverage, or an ordinal outside what Examples carries. The set lengths come from the
-   * report's own per-set counts, so the fallback arithmetic runs against the sets the engine
-   * actually used, not the sets the form currently holds.
-   */
-  const payloadsAt = useMemo(() => {
-    const setCounts = sets.map((set) => set.count);
-    const mode = snapshot?.mode ?? report.kind;
-    const points = snapshot?.points ?? 0;
-    const lengths = planSetLengths(mode, points, setCounts);
-    // A set whose server-reported count disagrees with the browser's list is a set whose indices
-    // moved — a processing rule skipped a payload — so its text is treated as unknown.
-    const known = setCounts.map((count, index) => {
-      const items = snapshot?.sets[index] ?? null;
-      return items && items.length === count ? items : null;
-    });
-    return (ordinal: number): ResolvedPayload[] | null => {
-      const fromServer = examples.get(ordinal);
-      // An empty example list is the server saying it could not place that ordinal either, so it
-      // must fall through to "unknown" rather than render as a blank payload.
-      if (fromServer?.length) return fromServer.map((text, index) => ({ set: index, index: -1, text }));
-      const slots = assignmentAt(mode, points, lengths, report.planned, ordinal);
-      if (!slots || !slots.length) return null;
-      return resolvePayloads(slots, known);
-    };
-  }, [examples, report.kind, report.planned, sets, snapshot]);
+  // Ordinal → payload combination, shared with the CSV export so the sheet and the
+  // table can never disagree about what a row's payloads were (lib/intruder-export.ts
+  // carries the full story: server examples first, plan arithmetic as the fallback).
+  const payloadsAt = useMemo(
+    () => intruderPayloadResolver({ report, sets, examples, snapshot }),
+    [examples, report.kind, report.planned, sets, snapshot],
+  );
   /**
    * A stopped attack describes a *prefix* of its payload sets, and the denominator has to say so.
    *
@@ -329,6 +340,198 @@ function AttackResult({
    * The absent-field fallback lives in attackProgress, where it is pinned by test.
    */
   const { stopped, paused, reached } = attackProgress(report);
+
+  /**
+   * Sorting and filtering for the four result tables (burpsy-react-ui-4rd).
+   *
+   * Sort accessors expose the raw values (statuses as numbers, nulls as
+   * undefined with sortUndefined pinning them last), so ordering follows the
+   * data rather than the formatted text; cell renderers keep the exact markup
+   * the static tables had. The filter runs over the same accessor values, so
+   * typing "404" or "refused" finds the rows whose visible cells carry those
+   * words.
+   */
+  const [bucketFilter, setBucketFilter] = useState("");
+  const [errorFilter, setErrorFilter] = useState("");
+  const [setFilter, setSetFilter] = useState("");
+  const [attemptFilter, setAttemptFilter] = useState("");
+
+  const bucketColumns: Column<ResultBucket>[] = [
+    {
+      accessorFn: (bucket) => bucket.status ?? undefined,
+      id: "status",
+      header: "Status",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.status === null ? (
+          <Badge tone="bad">error</Badge>
+        ) : (
+          <Badge tone={statusTone(row.original.status)}>{row.original.status}</Badge>
+        ),
+    },
+    { accessorKey: "response_len", header: "Length", cell: ({ getValue }) => <span className="cell-num">{formatBytes(getValue<number>())}</span> },
+    {
+      accessorFn: (bucket) => (bucket.reflected ? "yes" : "no"),
+      id: "reflected",
+      header: "Reflected",
+      cell: ({ row }) =>
+        row.original.reflected ? <Badge tone="warn">reflected</Badge> : <span className="cell-dim">no</span>,
+    },
+    { accessorKey: "count", header: "Count", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      accessorFn: (bucket) => (bucket.grep_matches ? bucket.grep_matches : undefined),
+      id: "grep",
+      header: "Grep",
+      sortUndefined: "last",
+      cell: ({ row }) => (
+        <>
+          {row.original.grep_matches ? <Badge tone="info">{row.original.grep_matches}</Badge> : <span className="cell-dim">—</span>}
+          {row.original.grep_extract ? <code title={row.original.grep_extract}> {row.original.grep_extract}</code> : null}
+        </>
+      ),
+    },
+    {
+      id: "first_payload",
+      header: "First payload",
+      enableSorting: false,
+      cell: ({ row }) => <PayloadCell parts={payloadsAt(row.original.first_ordinal)} ordinal={row.original.first_ordinal} />,
+    },
+    {
+      id: "response",
+      header: "Response",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ResponseCell
+          id={row.original.example_response_id}
+          label={`Response to attempt ${row.original.first_ordinal}`}
+          onOpen={onOpenMessage}
+        />
+      ),
+    },
+  ];
+  const bucketRows = filterTableRows(report.buckets, bucketColumns, bucketFilter);
+
+  const errorColumns: Column<ErrorBucket>[] = [
+    { accessorKey: "error", header: "Error", cell: ({ row }) => <span title={row.original.error}>{row.original.error}</span> },
+    { accessorKey: "count", header: "Count", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      accessorFn: (bucket) => bucket.first_ordinal ?? undefined,
+      id: "first_ordinal",
+      header: "First ordinal",
+      sortUndefined: "last",
+      cell: ({ getValue }) => <span className="cell-num">{getValue<number | undefined>() ?? "—"}</span>,
+    },
+  ];
+  const errorRows = filterTableRows(report.errors, errorColumns, errorFilter);
+
+  const setColumns: Column<PayloadSetReport>[] = [
+    {
+      id: "set",
+      header: "Set",
+      accessorFn: (set) => sets.indexOf(set) + 1,
+      cell: ({ getValue }) => <span className="cell-num">{getValue<number>()}</span>,
+    },
+    { accessorKey: "kind", header: "Kind", cell: ({ row }) => <Badge>{row.original.kind}</Badge> },
+    { accessorKey: "count", header: "Used", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      accessorKey: "total",
+      header: "Described",
+      cell: ({ row }) => (
+        <span className="cell-num">
+          {formatCount(row.original.total)}
+          {row.original.total_exact ? "" : "+"}
+        </span>
+      ),
+    },
+    {
+      accessorFn: (set) => (set.truncated ? "yes" : "no"),
+      id: "truncated",
+      header: "Truncated",
+      cell: ({ row }) =>
+        row.original.truncated ? (
+          <Badge tone="warn">at {formatCount(row.original.max_count)}</Badge>
+        ) : (
+          <span className="cell-dim">no</span>
+        ),
+    },
+    { accessorKey: "skipped", header: "Skipped", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      id: "dropped",
+      header: "Dropped because",
+      enableSorting: false,
+      cell: ({ row }) =>
+        row.original.dropped.length ? (
+          row.original.dropped.map((reason) => (
+            <Badge tone="warn" key={reason.reason}>
+              {reason.reason} ×{reason.count}
+            </Badge>
+          ))
+        ) : (
+          <span className="cell-dim">—</span>
+        ),
+    },
+  ];
+  const setRows = filterTableRows(sets, setColumns, setFilter);
+
+  const attemptColumns: Column<Attempt>[] = [
+    { accessorKey: "ordinal", header: "#", cell: ({ getValue }) => <span className="cell-num">{getValue<number>()}</span> },
+    {
+      id: "payload",
+      header: "Payload",
+      // The resolved combination is what the cell shows, so it is also what
+      // sorting and filtering see — including the "set 2 payload #18" text a
+      // server-side set renders.
+      accessorFn: (attempt) => {
+        const parts = payloadsAt(attempt.ordinal);
+        return parts ? payloadLabel(parts).text : undefined;
+      },
+      cell: ({ row }) => <PayloadCell parts={payloadsAt(row.original.ordinal)} ordinal={row.original.ordinal} />,
+    },
+    {
+      accessorFn: (attempt) => attempt.status ?? undefined,
+      id: "status",
+      header: "Status",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.status === null ? (
+          <Badge tone="bad">—</Badge>
+        ) : (
+          <Badge tone={statusTone(row.original.status)}>{row.original.status}</Badge>
+        ),
+    },
+    { accessorKey: "response_len", header: "Length", cell: ({ getValue }) => <span className="cell-num">{formatBytes(getValue<number>())}</span> },
+    { accessorKey: "duration_ms", header: "Time", cell: ({ getValue }) => <span className="cell-num">{formatDuration(getValue<number>())}</span> },
+    {
+      accessorFn: (attempt) => (attempt.reflected ? "yes" : "no"),
+      id: "reflected",
+      header: "Reflected",
+      cell: ({ row }) => (row.original.reflected ? <Badge tone="warn">yes</Badge> : <span className="cell-dim">no</span>),
+    },
+    {
+      accessorFn: (attempt) => (attempt.grep_matched ? "match" : undefined),
+      id: "grep",
+      header: "Grep",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.grep_matched ? <Badge tone="info">match</Badge> : <span className="cell-dim">—</span>,
+    },
+    {
+      accessorFn: (attempt) => attempt.error ?? undefined,
+      id: "error",
+      header: "Error",
+      sortUndefined: "last",
+      cell: ({ row }) => (row.original.error ? <span title={row.original.error}>{row.original.error}</span> : <span className="cell-dim">—</span>),
+    },
+    {
+      id: "response",
+      header: "Response",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ResponseCell id={row.original.response_id} label={`Response to attempt ${row.original.ordinal}`} onOpen={onOpenMessage} />
+      ),
+    },
+  ];
+  const attemptRows = filterTableRows(report.attempts, attemptColumns, attemptFilter);
 
   const caveats = [
     stopped
@@ -346,6 +549,34 @@ function AttackResult({
 
   return (
     <>
+      <div className="toolbar">
+        <Tooltip content="Download the attack's per-attempt rows as a CSV; the caveats ride at the top of the file">
+          <Button
+            variant="outline"
+            onClick={() => {
+              const file = intruderExportFilenames(report).csv;
+              downloadText(file, intruderReportToCSV(report, report.attempts, payloadsAt), "text/csv");
+              toast.success(`Exported ${formatCount(report.attempts.length)} attempts to ${file}`);
+            }}
+          >
+            <Download size={14} />
+            Export CSV
+          </Button>
+        </Tooltip>
+        <Tooltip content="Download the full report — buckets, attempts, payload sets and bounds — as JSON">
+          <Button
+            variant="outline"
+            onClick={() => {
+              const file = intruderExportFilenames(report).json;
+              downloadText(file, JSON.stringify(view, null, 2), "application/json");
+              toast.success(`Exported the report to ${file}`);
+            }}
+          >
+            <Download size={14} />
+            Export report (JSON)
+          </Button>
+        </Tooltip>
+      </div>
       <div className="metric-grid">
         <Badge tone="neutral" className="sr-only">
           report
@@ -399,36 +630,25 @@ function AttackResult({
           detail="Responses grouped by status, length and reflection. Interesting rows are the ones that differ from the crowd."
         />
         {report.buckets.length ? (
-          <SimpleTable headers={["Status", "Length", "Reflected", "Count", "Grep", "First payload", "Response"]}>
-            {report.buckets.map((bucket) => (
-              <tr key={`${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}>
-                <td>
-                  {bucket.status === null ? <Badge tone="bad">error</Badge> : <Badge tone={statusTone(bucket.status)}>{bucket.status}</Badge>}
-                </td>
-                <td>
-                  <span className="cell-num">{formatBytes(bucket.response_len)}</span>
-                </td>
-                <td>{bucket.reflected ? <Badge tone="warn">reflected</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>
-                  <span className="cell-num">{formatCount(bucket.count)}</span>
-                </td>
-                <td>
-                  {bucket.grep_matches ? <Badge tone="info">{bucket.grep_matches}</Badge> : <span className="cell-dim">—</span>}
-                  {bucket.grep_extract ? <code title={bucket.grep_extract}> {bucket.grep_extract}</code> : null}
-                </td>
-                <td>
-                  <PayloadCell parts={payloadsAt(bucket.first_ordinal)} ordinal={bucket.first_ordinal} />
-                </td>
-                <td>
-                  <ResponseCell
-                    id={bucket.example_response_id}
-                    label={`Response to attempt ${bucket.first_ordinal}`}
-                    onOpen={onOpenMessage}
-                  />
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <>
+            <ResultFilter
+              label="Filter buckets"
+              value={bucketFilter}
+              onChange={setBucketFilter}
+              shown={bucketRows.length}
+              total={report.buckets.length}
+            />
+            {bucketRows.length ? (
+              <SortableTable
+                data={bucketRows}
+                columns={bucketColumns}
+                getRowId={(bucket) => `${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}
+                ariaLabel="Result buckets"
+              />
+            ) : (
+              <p className="cell-dim">No buckets match the filter — all {report.buckets.length} are hidden.</p>
+            )}
+          </>
         ) : (
           <Empty title="No buckets" detail="The attack produced no grouped responses." />
         )}
@@ -437,59 +657,49 @@ function AttackResult({
       {report.errors.length ? (
         <Card>
           <SectionHeading title="Errors" detail="Grouped by message, with the first attempt that hit each." />
-          <SimpleTable headers={["Error", "Count", "First ordinal"]}>
-            {report.errors.map((bucket) => (
-              <tr key={bucket.error} className="row-flag-bad">
-                <td title={bucket.error}>{bucket.error}</td>
-                <td>
-                  <span className="cell-num">{formatCount(bucket.count)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">{bucket.first_ordinal ?? "—"}</span>
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <ResultFilter
+            label="Filter errors"
+            value={errorFilter}
+            onChange={setErrorFilter}
+            shown={errorRows.length}
+            total={report.errors.length}
+          />
+          {errorRows.length ? (
+            <SortableTable
+              data={errorRows}
+              columns={errorColumns}
+              getRowId={(bucket) => bucket.error}
+              ariaLabel="Attack errors"
+              rowClassName={() => "row-flag-bad"}
+            />
+          ) : (
+            <p className="cell-dim">No errors match the filter — all {report.errors.length} are hidden.</p>
+          )}
         </Card>
       ) : null}
 
       <Card>
         <SectionHeading title="Payload set accounting" detail="What each set produced, and what was bounded away." />
         {sets.length ? (
-          <SimpleTable headers={["Set", "Kind", "Used", "Described", "Truncated", "Skipped", "Dropped because"]}>
-            {sets.map((set, index) => (
-              <tr key={`${set.kind}-${index}`}>
-                <td>{index + 1}</td>
-                <td>
-                  <Badge>{set.kind}</Badge>
-                </td>
-                <td>
-                  <span className="cell-num">{formatCount(set.count)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">
-                    {formatCount(set.total)}
-                    {set.total_exact ? "" : "+"}
-                  </span>
-                </td>
-                <td>{set.truncated ? <Badge tone="warn">at {formatCount(set.max_count)}</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>
-                  <span className="cell-num">{formatCount(set.skipped)}</span>
-                </td>
-                <td>
-                  {set.dropped.length ? (
-                    set.dropped.map((reason) => (
-                      <Badge tone="warn" key={reason.reason}>
-                        {reason.reason} ×{reason.count}
-                      </Badge>
-                    ))
-                  ) : (
-                    <span className="cell-dim">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <>
+            <ResultFilter
+              label="Filter payload sets"
+              value={setFilter}
+              onChange={setSetFilter}
+              shown={setRows.length}
+              total={sets.length}
+            />
+            {setRows.length ? (
+              <SortableTable
+                data={setRows}
+                columns={setColumns}
+                getRowId={(set) => `${set.kind}-${sets.indexOf(set)}`}
+                ariaLabel="Payload set accounting"
+              />
+            ) : (
+              <p className="cell-dim">No payload sets match the filter — all {sets.length} are hidden.</p>
+            )}
+          </>
         ) : (
           <Empty title="No set accounting" detail="The server reported no per-set breakdown." />
         )}
@@ -501,37 +711,24 @@ function AttackResult({
             title="Attempts"
             detail={`Per-request detail, capped by the server at ${formatCount(report.detail_limit)} rows.`}
           />
-          <SimpleTable headers={["#", "Payload", "Status", "Length", "Time", "Reflected", "Grep", "Error", "Response"]}>
-            {report.attempts.map((attempt) => (
-              <tr key={attempt.ordinal} className={attempt.error ? "row-flag-bad" : undefined}>
-                <td>
-                  <span className="cell-num">{attempt.ordinal}</span>
-                </td>
-                <td>
-                  <PayloadCell parts={payloadsAt(attempt.ordinal)} ordinal={attempt.ordinal} />
-                </td>
-                <td>
-                  {attempt.status === null ? <Badge tone="bad">—</Badge> : <Badge tone={statusTone(attempt.status)}>{attempt.status}</Badge>}
-                </td>
-                <td>
-                  <span className="cell-num">{formatBytes(attempt.response_len)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">{formatDuration(attempt.duration_ms)}</span>
-                </td>
-                <td>{attempt.reflected ? <Badge tone="warn">yes</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>{attempt.grep_matched ? <Badge tone="info">match</Badge> : <span className="cell-dim">—</span>}</td>
-                <td title={attempt.error ?? ""}>{attempt.error ?? <span className="cell-dim">—</span>}</td>
-                <td>
-                  <ResponseCell
-                    id={attempt.response_id}
-                    label={`Response to attempt ${attempt.ordinal}`}
-                    onOpen={onOpenMessage}
-                  />
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <ResultFilter
+            label="Filter attempts"
+            value={attemptFilter}
+            onChange={setAttemptFilter}
+            shown={attemptRows.length}
+            total={report.attempts.length}
+          />
+          {attemptRows.length ? (
+            <SortableTable
+              data={attemptRows}
+              columns={attemptColumns}
+              getRowId={(attempt) => String(attempt.ordinal)}
+              ariaLabel="Attempts"
+              rowClassName={(attempt) => (attempt.error ? "row-flag-bad" : undefined)}
+            />
+          ) : (
+            <p className="cell-dim">No attempts match the filter — all {report.attempts.length} are hidden.</p>
+          )}
         </Card>
       ) : null}
     </>
@@ -573,6 +770,7 @@ export function IntruderPage(): JSX.Element {
     allPoints,
     points,
     selected,
+    manualSpans,
     payloadTexts,
     payloadTypes,
     payloadNumbers,
@@ -597,6 +795,7 @@ export function IntruderPage(): JSX.Element {
   const setAllPoints = field("allPoints");
   const setPoints = field("points");
   const setSelected = field("selected");
+  const setManualSpans = field("manualSpans");
   const setPayloadTexts = field("payloadTexts");
   const setPayloadTypes = field("payloadTypes");
   const setPayloadNumbers = field("payloadNumbers");
@@ -716,12 +915,16 @@ export function IntruderPage(): JSX.Element {
       label: seed.label,
       points: [],
       selected: [],
+      manualSpans: [],
     }));
     setStoredRun(null);
     setIntruderSeed(null);
   }, [seed, setConfig, setIntruderSeed, setStoredRun]);
 
-  const setsNeeded = mode === "sniper" || mode === "battering_ram" ? 1 : Math.max(1, selected.length);
+  // Manual markers take a payload slot exactly like a discovered point does — Burp counts every
+  // mark on the request, however it was made.
+  const pointCount = selected.length + manualSpans.length;
+  const setsNeeded = mode === "sniper" || mode === "battering_ram" ? 1 : Math.max(1, pointCount);
 
   // Keep the payload-set count in step with the mode and the chosen positions.
   useEffect(() => {
@@ -807,7 +1010,7 @@ export function IntruderPage(): JSX.Element {
       return countPayloads(payloadTexts[i] ?? "");
     });
   }, [payloadTypes, payloadTexts, payloadNumbers, payloadFiles, payloadBrute, payloadDates, payloadCustom, payloadNulls]);
-  const estimate = useMemo(() => estimateRequests(mode, selected.length, setSizes), [mode, selected.length, setSizes]);
+  const estimate = useMemo(() => estimateRequests(mode, pointCount, setSizes), [mode, pointCount, setSizes]);
   const examples = useMemo(
     () => new Map((result?.examples ?? []).map((example) => [example.first_ordinal, example.payloads])),
     [result],
@@ -821,7 +1024,7 @@ export function IntruderPage(): JSX.Element {
   const canRun =
     canDiscover &&
     target.trim() !== "" &&
-    selected.length > 0 &&
+    pointCount > 0 &&
     setSizes.every((size) => size === null || size > 0) &&
     !run.isPending;
 
@@ -841,6 +1044,44 @@ export function IntruderPage(): JSX.Element {
     );
   };
 
+  /** A hand-marked position (Burp's Add §): wrap the editor's selection in a marker pair. */
+  const onAddManualSpan = useCallback(
+    (span: { start: number; end: number; text: string }) => {
+      // The editor shows the request with the existing "§" pairs folded in, so its offsets are
+      // display offsets; map them back to raw request bytes before storing.
+      const current = useApp.getState().intruder.manualSpans;
+      const { start, end } = selectionToRawSpan(current, span.start, span.end);
+      const result = addManualSpan(current, start, end, span.text);
+      if (!result.ok) {
+        toast.error(result.reason);
+        return;
+      }
+      setManualSpans(result.spans);
+    },
+    [setManualSpans],
+  );
+
+  // Burp's Auto §: replace the hand marks with the scanner's default set — here, the standard
+  // discovery (not "every candidate"), every found point selected.
+  const onAutoMark = () => {
+    setManualSpans([]);
+    setSelected([]);
+    discover.mutate(
+      { msg_id: Number(msgId), all: false },
+      {
+        onSuccess: (found) => {
+          setPoints(found);
+          setSelected(found.map((point) => point.index));
+          if (!found.length) toast.error("No insertion points were found in that message");
+          else toast.success(`${found.length} insertion ${found.length === 1 ? "point" : "points"} marked`);
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+      },
+    );
+  };
+
+  const onClearMarks = () => setManualSpans([]);
+
   /**
    * The payload text this browser can name, per set, at the moment of launch.
    *
@@ -851,7 +1092,7 @@ export function IntruderPage(): JSX.Element {
    */
   const payloadSnapshot = (): IntruderPayloadSnapshot => ({
     mode,
-    points: selected.length,
+    points: pointCount,
     sets: payloadTypes.map((t, i) => {
       if (t === "list") return payloadList(payloadTexts[i] ?? "");
       if (t === "null") return Array.from({ length: Number(payloadNulls[i] ?? "0") || 0 }, () => "");
@@ -880,6 +1121,9 @@ export function IntruderPage(): JSX.Element {
       all: allPoints,
       mode,
       points: selected,
+      // Manual markers go as raw byte ranges; the server splices them alongside the discovered
+      // points and refuses one that overruns the request or overlaps another position.
+      ...(manualSpans.length ? { manual_points: manualSpans.map(({ start, end }) => ({ start, end })) } : {}),
       max_requests: maxRequests,
       ...(rules.length ? { payload_rules: rules } : {}),
       // Both grep fields are RE2 patterns on the server. A literal typed in simple mode is quoted
@@ -1071,6 +1315,7 @@ export function IntruderPage(): JSX.Element {
                       setMsgId(event.target.value);
                       setPoints([]);
                       setSelected([]);
+                      setManualSpans([]);
                     }}
                     placeholder="e.g. 42"
                   />
@@ -1101,6 +1346,7 @@ export function IntruderPage(): JSX.Element {
                     setAllPoints(next);
                     setPoints([]);
                     setSelected([]);
+                    setManualSpans([]);
                   }}
                   label="Include every candidate position"
                 />
@@ -1110,9 +1356,43 @@ export function IntruderPage(): JSX.Element {
                 <Search size={14} />
                 {discover.isPending ? "Scanning…" : "Find positions"}
               </Button>
+              {/* Burp's Auto § and Clear §. Add § lives in the editor's selection menu below,
+                  because it needs a selection and the editor is the only thing that has one. */}
+              <Button variant="outline" onClick={onAutoMark} disabled={!canDiscover || discover.isPending}>
+                <Crosshair size={14} />
+                Auto §
+              </Button>
+              <Button variant="outline" onClick={onClearMarks} disabled={!manualSpans.length}>
+                <Trash2 size={14} />
+                Clear §
+              </Button>
             </div>
 
             {discover.error ? <ErrorNotice error={discover.error} onRetry={onDiscover} /> : null}
+
+            {manualSpans.length ? (
+              <div className="row-list point-list">
+                {manualSpans.map((span, i) => (
+                  <div className="point-row" key={`${span.start}-${span.end}`}>
+                    <span>
+                      <strong>manual {i + 1}</strong>
+                      <small>
+                        bytes {span.start}–{span.end} · {span.text || "(empty)"}
+                      </small>
+                    </span>
+                    {/* Manual markers are always used — there is no deselect, only removal. */}
+                    <Badge tone="accent">used</Badge>
+                    <Button
+                      variant="ghost"
+                      aria-label={`Remove manual marker ${i + 1}`}
+                      onClick={() => setManualSpans((current) => current.filter((s) => s !== span))}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {points.length ? (
               <div className="row-list point-list">
@@ -1146,7 +1426,8 @@ export function IntruderPage(): JSX.Element {
                   );
                 })}
               </div>
-            ) : canDiscover ? (
+            ) : manualSpans.length ? null
+            : canDiscover ? (
               <Empty title="No positions loaded" detail="Find positions before launching an attack." />
             ) : (
               <Empty
@@ -1163,14 +1444,19 @@ export function IntruderPage(): JSX.Element {
               <HttpEditor
                 label={`Base request · message ${msgId}`}
                 readOnly
+                // Shown with the markers folded in — the editor displays the same "§"-wrapped
+                // request Burp's Positions tab does. The editor is read-only here, so the display
+                // text cannot drift from the request the stored raw offsets were measured against.
                 value={
-                  baseMessage.data?.text ??
-                  (baseMessage.isFetching
-                    ? "Loading the base request…"
-                    : baseMessage.error
-                      ? `Could not load message ${msgId}.`
-                      : "No bytes stored for this message.")
+                  baseMessage.data?.text
+                    ? displayText(baseMessage.data.text, manualSpans)
+                    : (baseMessage.isFetching
+                      ? "Loading the base request…"
+                      : baseMessage.error
+                        ? `Could not load message ${msgId}.`
+                        : "No bytes stored for this message.")
                 }
+                payloadMarks={{ onAdd: onAddManualSpan }}
                 filename={`intruder-base-${msgId}.txt`}
               />
             </Card>
@@ -1640,6 +1926,73 @@ export function IntruderPage(): JSX.Element {
 
         <TabsContent value="results" className="tool-pane">
           {run.error ? <ErrorNotice error={run.error} onRetry={onRun} /> : null}
+
+          {/* The live attack window. While /run holds its response open there is no report to render,
+              but the attack is not silent: the settled-send counts move every second (the attacks
+              poll), and the controls are the same ones the header carries — Burp's results window is
+              where an operator goes to watch, so the watching view carries the controls too. The
+              per-row report still arrives only when the attack completes; pretending otherwise would
+              render rows the collector has not folded yet. */}
+          {run.isPending ? (
+            <Card>
+              <SectionHeading
+                title="Attack in progress"
+                detail={
+                  myAttack
+                    ? "Counts are live; the full report arrives when the attack ends."
+                    : "Finding this attack in the running list…"
+                }
+              />
+              {myAttack ? (
+                <div className="stack">
+                  <div className="toolbar">
+                    <Badge tone={myAttack.status === "paused" ? "warn" : "accent"}>
+                      {myAttack.status === "paused" ? "paused" : "running"}
+                    </Badge>
+                    <span className="cell-dim">
+                      {formatCount(myAttack.sent)} got responses, {formatCount(myAttack.failed)} failed — of{" "}
+                      {formatCount(myAttack.planned)} planned
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    {myAttack.status === "paused" ? (
+                      <Tooltip content="Resume the paused attack">
+                        <Button variant="outline" onClick={() => controlAttack("resume")} disabled={attackAction.isPending}>
+                          <Play size={14} />
+                          Resume
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip content="Pause the attack; it holds its place and can be resumed">
+                        <Button variant="outline" onClick={() => controlAttack("pause")} disabled={attackAction.isPending}>
+                          <Pause size={14} />
+                          Pause
+                        </Button>
+                      </Tooltip>
+                    )}
+                    <Tooltip content="Stop the attack; the report will show everything sent so far">
+                      <Button variant="outline" onClick={() => controlAttack("stop")} disabled={attackAction.isPending}>
+                        <Square size={14} />
+                        Stop
+                      </Button>
+                    </Tooltip>
+                  </div>
+                  <div className="progress-track" aria-hidden="true">
+                    <div
+                      className="progress-fill"
+                      style={{
+                        width:
+                          myAttack.planned > 0
+                            ? `${Math.min(100, ((myAttack.sent + myAttack.failed) / myAttack.planned) * 100)}%`
+                            : "0%",
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <Badge tone="info">locating attack…</Badge>
+              )}
+            </Card>
+          ) : null}
 
           {result ? (
             <AttackResult

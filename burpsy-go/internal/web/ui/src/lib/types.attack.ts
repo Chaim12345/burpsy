@@ -114,6 +114,20 @@ export interface FindingDetail {
   advisory?: Advisory | null;
   /** Present instead when it deliberately resolved to none, explaining why. */
   advisory_note?: string;
+  /**
+   * Operator triage (burpsy-react-ui-pwd). `severity`/`confidence` above are the *effective*
+   * values — the override when one stands, the engine's report otherwise — so every view that
+   * sorts or counts by severity keeps working unchanged. The override itself and the engine value
+   * it replaced are present only when an override stands, which is what lets the UI tell "the
+   * engine said High" from "an operator said High".
+   */
+  severity_override?: string;
+  original_severity?: string;
+  confidence_override?: string;
+  original_confidence?: string;
+  /** Always present: the wire has no omitempty on either, so a legacy row reads as unmarked. */
+  false_positive: boolean;
+  comment: string;
 }
 
 export interface IssuesDetail {

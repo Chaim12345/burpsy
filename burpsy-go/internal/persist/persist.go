@@ -315,6 +315,15 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("tool_log", "highlight", "TEXT"); err != nil {
 		return err
 	}
+	// tool_log gained exchange_id so a restored row keeps its link to the traffic-store exchange its
+	// bytes live under — Logger's message viewer resolves request/response through it. Nullable for the
+	// same reason response_len is: NULL means no linked exchange (a transport failure, a whole-run row,
+	// or anything written before this column existed), and a viewer must show that as "no bytes to
+	// show", not as exchange 0 — the stores are position-is-the-id counters from zero, so 0 is a real
+	// exchange.
+	if err := s.addColumn("tool_log", "exchange_id", "INTEGER"); err != nil {
+		return err
+	}
 	// exchanges gained highlight for the same reason notes did: an operator annotation, not traffic,
 	// so it lives beside notes rather than in its own table. NULL and "" both read back as "" (no
 	// highlight) — a legacy row written before this column existed never has an opinion either way, so
@@ -399,6 +408,22 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	// exist, and after a reload nothing related the two. NULL on a legacy row reads back as 0, which
 	// is the same "nothing tracked it" the in-memory zero already means.
 	if err := s.addColumn("findings", "task_id", "INTEGER"); err != nil {
+		return err
+	}
+	// Triage columns (burpsy-react-ui-pwd): the operator's severity/confidence override, the
+	// false-positive mark and a note must survive a restart exactly like the finding they modify.
+	// severity_override is NULL when the engine's own severity stands; false_positive defaults to 0
+	// so a legacy row reads as not-a-false-positive without a rewrite.
+	if err := s.addColumn("findings", "severity_override", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "confidence_override", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "false_positive", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "comment", "TEXT"); err != nil {
 		return err
 	}
 	return nil
@@ -735,14 +760,30 @@ func (s *Store) SaveFinding(f *core.Finding) {
 	if f.Target.TLS {
 		tls = 1
 	}
+	// severity_override is written as NULL whenever no override stands, so a finding whose override
+	// is cleared reads back as NULL rather than as a stale value.
+	var sevOverride interface{}
+	if f.SeverityOverride != nil {
+		sevOverride = int(*f.SeverityOverride)
+	}
+	var confOverride interface{}
+	if f.ConfidenceOverride != nil {
+		confOverride = int(*f.ConfidenceOverride)
+	}
+	fp := 0
+	if f.FalsePositive {
+		fp = 1
+	}
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO findings
 		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
-		  target_host, target_port, target_tls, target_path, params, task_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  target_host, target_port, target_tls, target_path, params, task_id,
+		  severity_override, confidence_override, false_positive, comment)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
 		f.Remediation, occ, ins, f.Timestamp, f.Param,
-		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID)
+		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID,
+		sevOverride, confOverride, fp, f.Comment)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -752,7 +793,8 @@ func (s *Store) SaveFinding(f *core.Finding) {
 func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
-		        target_host, target_port, target_tls, target_path, params, task_id
+		        target_host, target_port, target_tls, target_path, params, task_id,
+		        severity_override, confidence_override, false_positive, comment
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -767,8 +809,14 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		// zero target is exactly the right reading of that: unknown, so not eligible to merge.
 		var tHost, tPath sql.NullString
 		var tPort, tTLS, taskID sql.NullInt64
+		// Triage columns are nullable: severity_override/confidence_override are NULL while the
+		// engine's own values stand, and every row written before they existed has NULLs for all
+		// four, which must load as "no triage" rather than fail the whole restore.
+		var sevOverride, confOverride, fp sql.NullInt64
+		var comment sql.NullString
 		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param,
-			&tHost, &tPort, &tTLS, &tPath, &params, &taskID); err != nil {
+			&tHost, &tPort, &tTLS, &tPath, &params, &taskID,
+			&sevOverride, &confOverride, &fp, &comment); err != nil {
 			return nil, err
 		}
 		// NULL on a legacy row becomes 0, which is what an untracked finding already means in memory.
@@ -776,6 +824,18 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		f.Severity = core.Severity(sev)
 		f.Confidence = core.Confidence(conf)
 		f.Timestamp = uint64(ts)
+		if sevOverride.Valid {
+			over := core.Severity(sevOverride.Int64)
+			f.SeverityOverride = &over
+		}
+		if confOverride.Valid {
+			over := core.Confidence(confOverride.Int64)
+			f.ConfidenceOverride = &over
+		}
+		f.FalsePositive = fp.Int64 != 0
+		if comment.Valid {
+			f.Comment = comment.String
+		}
 		f.Target = core.FindingTarget{
 			Host: tHost.String,
 			Port: uint16(tPort.Int64),
@@ -807,6 +867,15 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// DeleteFinding drops one finding's mirror row. Wired as core.FindingStore's delete sink
+// (SetDeleteSink): the in-memory store is authoritative, but without this a finding deleted in the
+// UI walks straight back in on the next restart, restored from the row this file kept.
+func (s *Store) DeleteFinding(id uint64) {
+	if _, err := s.db.Exec(`DELETE FROM findings WHERE id = ?`, id); err != nil {
+		s.log("finding", err)
+	}
 }
 
 // ---- Scope -------------------------------------------------------------------------------------
@@ -1412,12 +1481,19 @@ func (s *Store) SaveToolLog(e *toollog.Entry) {
 	if e.ResponseLen != nil {
 		responseLen = int64(*e.ResponseLen)
 	}
-	if _, err := s.db.Exec(
+	// Same for the exchange link: NULL is "no linked exchange", and 0 is exchange 0, which is a real
+	// row in a position-is-the-id store.
+	var exchangeID any
+	if e.Exchange != nil {
+		exchangeID = int64(*e.Exchange)
+	}
+	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO tool_log
-		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, comment, highlight)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, comment, highlight, exchange_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, int(e.Tool), e.Host, int(e.Port), boolInt(e.TLS), e.Method, e.Path,
-		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen, e.Comment, e.Highlight); err != nil {
+		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen, e.Comment, e.Highlight, exchangeID)
+	if err != nil {
 		s.log("tool_log", err)
 	}
 }
@@ -1429,7 +1505,7 @@ func (s *Store) SaveToolLog(e *toollog.Entry) {
 // the exact claim this field was added to stop making: that the response was empty.
 func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, comment, highlight
+		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, comment, highlight, exchange_id
 		 FROM tool_log ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -1439,10 +1515,9 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	for rows.Next() {
 		e := &toollog.Entry{}
 		var tool, port, tls, status int
-		var responseLen sql.NullInt64
-		var comment sql.NullString
-		var highlight sql.NullString
-		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen, &comment, &highlight); err != nil {
+		var responseLen, exchangeID sql.NullInt64
+		var comment, highlight sql.NullString
+		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen, &comment, &highlight, &exchangeID); err != nil {
 			return nil, err
 		}
 		e.Tool = toollog.Tool(tool)
@@ -1455,6 +1530,13 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 		}
 		e.Comment = comment.String
 		e.Highlight = highlight.String
+		// NULL reads back as no link — a row that never had one, or one written by an older build. It must
+		// not become exchange 0: the traffic store counts rows from zero, so 0 is a real exchange and
+		// defaulting to it would show the viewer the wrong message pair.
+		if exchangeID.Valid {
+			id := core.ExchangeID(exchangeID.Int64)
+			e.Exchange = &id
+		}
 		out = append(out, e)
 	}
 	return out, rows.Err()

@@ -816,6 +816,12 @@ func (c *Coordinator) Cookies() []CookieJarEntry { return c.jarMgr.Jars() }
 // matching on an error string.
 var ErrNoSuchRule = errors.New("no session rule with that id")
 
+// ErrRuleAtEdge is what MoveRule returns when the requested move would take the rule past the top
+// or the bottom of the evaluation order. Named so the HTTP layer can answer it distinctly from an
+// unknown id (a 400 naming the edge, not a 404) — and so the operator is told the move did nothing
+// because they are at the edge, rather than being shown a success that moved nothing.
+var ErrRuleAtEdge = errors.New("rule is already at that edge of the evaluation order")
+
 // ErrDuplicateRuleID is what RestoreRule returns when the id a restored rule carries is already
 // held. Named so a restore path can count and report id collisions apart from rules that simply no
 // longer validate: the two say completely different things about the saved project.
@@ -935,6 +941,73 @@ func (c *Coordinator) AllRules() []*SessionRule {
 		out = append(out, c.rules[id])
 	}
 	return out
+}
+
+// MoveRule moves a rule within the evaluation order by a signed offset and reports its new
+// position. This is the write path behind POST /api/session/rules/{id}/move.
+//
+// # Why a move has to exist at all
+//
+// `order` is what MatchingRule walks, and MatchingRule returns the *first* enabled rule whose
+// MatchHost matches — so which login runs for a host covered by two rules is decided entirely
+// by position. Until now the only way to change that was delete + re-add, which mints a fresh
+// id: every reference to the old id (an operator's note, a saved /api/session/rules/{id}/run
+// URL, a log line) then names a different rule, and the rule that used to be evaluated second
+// silently starts going first. Moving keeps the id, exactly as RestoreRule keeps the id a
+// saved rule carries.
+//
+// # UpdateRule is deliberately not enough
+//
+// UpdateRule keeps a rule's position by design ("keeping its identity (ID and position in the
+// evaluation order)"), so an edit can never change precedence. This method is the only thing
+// that can, and it touches nothing but `order`.
+//
+// # A signed offset, and refusals rather than clamps
+//
+// The move is an offset (-1 = up one, +1 = down one) rather than an absolute index: a rule
+// added or removed between the operator loading the table and clicking an arrow then shifts
+// this rule relative to the same neighbours, instead of swapping it with whatever now sits at
+// the target index. ErrNoSuchRule for an id the coordinator does not hold; ErrRuleAtEdge when
+// the move would run past either end — a refused move tells the operator they are at the edge,
+// whereas a silently clamped one reports success and does nothing, the worst answer available.
+// offset 0 is a no-op read that reports the current position.
+func (c *Coordinator) MoveRule(id RuleID, offset int) (int, error) {
+	if offset == 0 {
+		return c.rulePosition(id)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pos := -1
+	for i, candidate := range c.order {
+		if candidate == id {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		return -1, ErrNoSuchRule
+	}
+	target := pos + offset
+	if target < 0 || target >= len(c.order) {
+		return pos, fmt.Errorf("%w: the move would take rule %d past the %s of the list (%d rule(s))",
+			ErrRuleAtEdge, int64(id), map[bool]string{true: "top", false: "bottom"}[target < 0], len(c.order))
+	}
+	c.order[pos] = c.order[target]
+	c.order[target] = id
+	return target, nil
+}
+
+// rulePosition reports a rule's current index in the evaluation order, or ErrNoSuchRule.
+// Split out of MoveRule so the offset-0 read does not take the write lock.
+func (c *Coordinator) rulePosition(id RuleID) (int, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for i, candidate := range c.order {
+		if candidate == id {
+			return i, nil
+		}
+	}
+	return -1, ErrNoSuchRule
 }
 
 func (c *Coordinator) Rule(id RuleID) *SessionRule {

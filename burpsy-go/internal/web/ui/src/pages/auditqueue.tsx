@@ -5,12 +5,25 @@
  * reason when nothing has been queued — so this page renders that rather than
  * deriving a friendlier summary. A row that was skipped says why in its note;
  * a queue that never ran says so instead of looking clean.
+ *
+ * Selecting a row also shows the exchange it names — Burp's audit-items view is
+ * a table over a request/response viewer (map_root.tsv, class burp.Zr_7:
+ * auditItemsTable beside auditItemsTableRequestResponseViewer), because the
+ * note column gives the engine's reason and the base bytes are what make that
+ * reason legible: a 500 on the base response, or an expired session cookie,
+ * is invisible until the request itself is on screen. The byte fetch reuses the
+ * history row → message-id → /api/message shape scanner.tsx already uses, so
+ * no second read path exists.
  */
-import { Fragment, useState } from "react";
-import { Badge, Button, Card, Empty, ErrorNotice, Metric } from "../ui/primitives";
+import { Fragment, useMemo, useState } from "react";
+import { Badge, Button, Card, Empty, ErrorNotice, Metric, Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/primitives";
+import { HttpEditor } from "../ui/editor";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
 import { useAuditItemAgain, useAuditItems } from "../lib/data.auditqueue";
+import { useHistory, useMessage } from "../lib/data";
+import { useExchangeActions } from "../lib/actions";
+import { useApp } from "../lib/store";
 import { toast } from "sonner";
 
 function stateTone(state: string): "good" | "bad" | "warn" | "info" {
@@ -26,6 +39,25 @@ export function AuditQueuePage(): JSX.Element {
   const queue = useAuditItems();
   const again = useAuditItemAgain();
   const [expanded, setExpanded] = useState<number | null>(null);
+  /** Selection is the queue row's seq: a refetch reorders nothing (seq is stable), ids survive it. */
+  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+
+  const focusExchange = useApp((state) => state.focusExchange);
+  const setRoute = useApp((state) => state.setRoute);
+  const actions = useExchangeActions();
+
+  // The same history cache key the history tab uses: the row carries the exchange id, the
+  // ExchangeView carries the message ids, and the bytes come from /api/message only when this
+  // row is selected — a 500-row queue never pulls a body until asked.
+  const { data: history } = useHistory("", 1000);
+  const items = useMemo(() => queue.data?.items ?? [], [queue.data]);
+  const selected = useMemo(() => items.find((item) => item.seq === selectedSeq) ?? null, [items, selectedSeq]);
+  const exchange = useMemo(() => {
+    if (!selected) return null;
+    return (history ?? []).find((ex) => ex.id === selected.exchange_id) ?? null;
+  }, [history, selected]);
+  const request = useMessage(exchange?.request);
+  const response = useMessage(exchange?.response ?? null);
 
   if (queue.isLoading) return <LoadingPanel label="Loading the audit queue" />;
   if (queue.error || !queue.data)
@@ -64,7 +96,11 @@ export function AuditQueuePage(): JSX.Element {
             <SimpleTable headers={["Seq", "Request", "State", "Attempts", "Note", ""]}>
               {d.items.map((item) => (
                 <Fragment key={item.seq}>
-                  <tr key={item.seq}>
+                  <tr
+                    key={item.seq}
+                    className={selectedSeq === item.seq ? "data-row clickable selected-row" : "data-row clickable"}
+                    onClick={() => setSelectedSeq(selectedSeq === item.seq ? null : item.seq)}
+                  >
                     <td className="cell-num">{item.seq}</td>
                     <td className="mono">
                       {item.method ? (
@@ -90,7 +126,8 @@ export function AuditQueuePage(): JSX.Element {
 
                           Disabled with its count when a row recorded none, rather than hidden: an
                           absent button is indistinguishable from a row that has points and a broken
-                          toggle, which is the confusion this issue was about. */}
+                          toggle, which is the confusion this issue was about. Both buttons stop
+                          propagation so clicking one does not toggle the row's viewer selection. */}
                       <Button
                         variant="quiet"
                         size="small"
@@ -101,7 +138,10 @@ export function AuditQueuePage(): JSX.Element {
                             ? `${expanded === item.seq ? "Hide" : "Show"} the ${item.insertion_points.length} insertion point(s) recorded for this item`
                             : "No insertion points were recorded for this item"
                         }
-                        onClick={() => setExpanded(expanded === item.seq ? null : item.seq)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setExpanded(expanded === item.seq ? null : item.seq);
+                        }}
                       >
                         {item.insertion_points?.length
                           ? `${expanded === item.seq ? "Hide" : "Points"} (${item.insertion_points.length})`
@@ -111,12 +151,13 @@ export function AuditQueuePage(): JSX.Element {
                         variant="outline"
                         size="small"
                         disabled={again.isPending}
-                        onClick={() =>
+                        onClick={(event) => {
+                          event.stopPropagation();
                           again.mutate(item.exchange_id, {
                             onSuccess: () => toast.success(`Re-auditing exchange #${item.exchange_id}`),
                             onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Re-audit failed"),
-                          })
-                        }
+                          });
+                        }}
                       >
                         Audit again
                       </Button>
@@ -143,6 +184,64 @@ export function AuditQueuePage(): JSX.Element {
               ))}
             </SimpleTable>
           </Card>
+
+          {selected ? (
+            <Card>
+              <SectionHeading
+                title={`Seq ${selected.seq} — exchange #${selected.exchange_id}`}
+                detail="The base request the audit decided about. Its state is the row above; the bytes are the context the state is about."
+                actions={
+                  exchange ? (
+                    <Button
+                      variant="outline"
+                      size="small"
+                      onClick={() => {
+                        focusExchange(selected.exchange_id);
+                        setRoute("history");
+                      }}
+                    >
+                      In history
+                    </Button>
+                  ) : undefined
+                }
+              />
+              {exchange === null ? (
+                <Empty
+                  title="Exchange not in the loaded history"
+                  detail={`The queue names exchange #${selected.exchange_id}, which is outside the last 1000 captured — its bytes cannot be shown from here.`}
+                />
+              ) : (
+                <Tabs defaultValue="request" className="tabs-fill">
+                  <TabsList aria-label="Audit item messages">
+                    <TabsTrigger value="request">Request</TabsTrigger>
+                    <TabsTrigger value="response">Response</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="request">
+                    <HttpEditor
+                      label="Request"
+                      readOnly
+                      value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+                      filename={`audit-${selected.seq}-request.txt`}
+                      menuGroups={actions.menu(exchange)}
+                    />
+                  </TabsContent>
+                  <TabsContent value="response">
+                    <HttpEditor
+                      label="Response"
+                      readOnly
+                      value={
+                        exchange.response === null
+                          ? "No response was captured for this exchange."
+                          : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+                      }
+                      filename={`audit-${selected.seq}-response.txt`}
+                      menuGroups={actions.menu(exchange)}
+                    />
+                  </TabsContent>
+                </Tabs>
+              )}
+            </Card>
+          ) : null}
         </>
       )}
     </div>

@@ -844,6 +844,11 @@ type toolLogEntry struct {
 	// Highlight is the operator's colour tag, "" when unset. Same vocabulary as the
 	// organizer's (core.ValidHighlights) so the three surfaces agree on what red means.
 	Highlight string `json:"highlight"`
+	// Exchange is the traffic-store exchange this row's bytes live under, or null when the row has
+	// none to show — Logger's message viewer fetches request/response through it on demand. Null,
+	// never 0: the traffic store counts rows from zero, so 0 is a real exchange and a null-less zero
+	// would show the viewer the wrong message pair.
+	Exchange *uint64 `json:"exchange"`
 }
 
 // toolLogResp mirrors toollog.ts's LogResp.

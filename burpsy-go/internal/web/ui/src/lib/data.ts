@@ -10,8 +10,10 @@ import type {
   MatchReplaceConfig,
   MatchReplaceResponse,
   MessageView,
+  OrganizerCollection,
   OrganizerEdit,
   OrganizerItem,
+  WorkflowStatus,
   Scope,
   ScannerConfig,
   SessionRule,
@@ -67,6 +69,7 @@ export const keys = {
   collaboratorInteractions: ["collaborator", "interactions"] as const,
   blindxss: ["blindxss"] as const,
   proxyOptions: ["proxy", "options"] as const,
+  proxyListener: ["proxy", "listener"] as const,
   networkSettings: ["network", "settings"] as const,
   pools: ["pools"] as const,
   schedules: ["schedules"] as const,
@@ -250,7 +253,8 @@ export const useScope = () => useResource<Scope>(keys.scope, "/api/scope");
 export const useDashboard = () => useResource<Dashboard>(keys.dashboard, "/api/dashboard");
 export const useIssues = () => useResource<Issues>(keys.issues, "/api/issues");
 export const useSitemap = () => useResource<SiteMap>(keys.sitemap, "/api/sitemap");
-export const useOrganizer = () => useResource<{ items: OrganizerItem[] }>(keys.organizer, "/api/tools/organizer");
+export const useOrganizer = () =>
+  useResource<{ items: OrganizerItem[]; collections: OrganizerCollection[] }>(keys.organizer, "/api/tools/organizer");
 export const useMatchReplace = () => useResource<MatchReplaceResponse>(keys.rules, "/api/tools/rules");
 export const useSessionRules = () => useResource<SessionRules>(keys.sessionRules, "/api/session/rules");
 export const useWsConnections = () => useResource<WsConnection[]>(keys.wsConnections, "/api/ws/connections");
@@ -342,6 +346,50 @@ export function useOrganizerMutations() {
     }),
     remove: useMutation({
       mutationFn: (id: number) => api<unknown>(`/api/tools/organizer/${id}`, { method: "DELETE" }),
+      onSuccess: done,
+    }),
+    /**
+     * PUT .../status sets the workflow status — one deliberate operator decision, kept off the
+     * title/note save above the same way the Go store keeps SetStatus apart from Update.
+     * Refusals: 400 names the five valid values, 404 is an unknown item.
+     */
+    setStatus: useMutation({
+      mutationFn: ({ id, status }: { id: number; status: WorkflowStatus }) =>
+        api<unknown>(`/api/tools/organizer/${id}/status`, json("PUT", { status })),
+      onSuccess: done,
+    }),
+    /** Create a collection. 400 when the name is taken — the server refuses, not the UI. */
+    createCollection: useMutation({
+      mutationFn: (name: string) => api<OrganizerCollection>("/api/tools/organizer/collections", json("POST", { name })),
+      onSuccess: done,
+    }),
+    /** Rename and/or set the About note on one collection. */
+    updateCollection: useMutation({
+      mutationFn: ({ id, name, note }: { id: number; name?: string; note?: string }) =>
+        api<unknown>(`/api/tools/organizer/collections/${id}`, json("PUT", { name, note })),
+      onSuccess: done,
+    }),
+    /** Delete one collection; disposition unlinks its items to the inbox (default) or deletes them. */
+    deleteCollection: useMutation({
+      mutationFn: ({ id, items }: { id: number; items?: "inbox" | "delete" }) =>
+        api<{ unlinked: number }>(`/api/tools/organizer/collections/${id}${items ? `?items=${items}` : ""}`, { method: "DELETE" }),
+      onSuccess: done,
+    }),
+    /** Duplicate a collection with every item in it, under a non-colliding "(copy)" name. */
+    duplicateCollection: useMutation({
+      mutationFn: (id: number) =>
+        api<{ collection: OrganizerCollection; items_copied: number }>(`/api/tools/organizer/collections/${id}/duplicate`, json("POST", {})),
+      onSuccess: done,
+    }),
+    /** Move (or, with copy, duplicate) items into a collection; the inbox takes the literal id "inbox". */
+    moveItems: useMutation({
+      mutationFn: ({ collection, itemIds, copy }: { collection: number | "inbox"; itemIds: number[]; copy?: boolean }) =>
+        api<{ moved: number }>(
+          collection === "inbox"
+            ? "/api/tools/organizer/collections/inbox"
+            : `/api/tools/organizer/collections/${collection}/items`,
+          json("PUT", { item_ids: itemIds, copy: copy === true }),
+        ),
       onSuccess: done,
     }),
   };

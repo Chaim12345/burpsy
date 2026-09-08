@@ -245,6 +245,38 @@ type Finding struct {
 	Params []string
 	// Target is the logical location this finding is about. See NewFinding.Target.
 	Target FindingTarget
+
+	// SeverityOverride is the operator's severity for this finding, nil while the engine's own
+	// severity stands. An override beats both the engine's report and a later merge that would
+	// raise it (see mergeLocked) — the operator looked at this finding and overruled the scanner;
+	// an automated re-observation is not a rebuttal.
+	SeverityOverride *Severity
+	// ConfidenceOverride is the operator's confidence, same contract as SeverityOverride.
+	ConfidenceOverride *Confidence
+	// FalsePositive marks a finding the operator has dismissed as not an issue. It stays in the
+	// store — deleting is a separate, destructive act — but the UI dims it and the severity
+	// counts exclude it.
+	FalsePositive bool
+	// Comment is the operator's note on this finding, empty when none was left.
+	Comment string
+}
+
+// EffectiveSeverity is the severity the finding should be reported at: the operator's override
+// when one exists, the engine's severity otherwise.
+func (f *Finding) EffectiveSeverity() Severity {
+	if f.SeverityOverride != nil {
+		return *f.SeverityOverride
+	}
+	return f.Severity
+}
+
+// EffectiveConfidence is the confidence the finding should be reported at, same rule as
+// EffectiveSeverity.
+func (f *Finding) EffectiveConfidence() Confidence {
+	if f.ConfidenceOverride != nil {
+		return *f.ConfidenceOverride
+	}
+	return f.Confidence
 }
 
 // HasParam reports whether the finding was observed at the named parameter.
@@ -281,6 +313,10 @@ type FindingStore struct {
 	// finding on every intake — the passive path adds a finding per response, and an engagement's
 	// store runs to thousands. Rebuilt wholesale by Restore, maintained by Delete and Clear.
 	byKey map[string]*Finding
+	// onDelete is an optional write-through hook (see SetDeleteSink). It runs under the store lock
+	// with the finding's id, must not call back into the store, and must not fail the in-memory
+	// delete — memory is authoritative, SQLite is durable backup.
+	onDelete func(id uint64)
 }
 
 // NewFindingStore creates a new finding store.
@@ -446,10 +482,14 @@ func (fs *FindingStore) mergeLocked(existing *Finding, incoming NewFinding) {
 			existing.Param = incoming.Param
 		}
 	}
-	if incoming.Severity > existing.Severity {
+	// An operator override outlives the engine's opinion (see Finding.SeverityOverride): the raise
+	// and the lowering below run only while no override stands. Re-raising a severity the operator
+	// already overruled would turn the override off on the next re-audit — exactly the
+	// "suppressed false positive that comes back" the triage feature must not do.
+	if existing.SeverityOverride == nil && incoming.Severity > existing.Severity {
 		existing.Severity = incoming.Severity
 	}
-	if incoming.Confidence < existing.Confidence {
+	if existing.ConfidenceOverride == nil && incoming.Confidence < existing.Confidence {
 		existing.Confidence = incoming.Confidence
 	}
 	if existing.Inserted == nil && incoming.Inserted != nil {
@@ -489,6 +529,48 @@ func (fs *FindingStore) SetPersistenceSink(onAdd func(f *Finding)) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	fs.onAdd = onAdd
+}
+
+// SetDeleteSink installs the hook called after a finding is removed, or nil to remove it. Single
+// slot, like SetPersistenceSink. The durable mirror needs this to drop the row — without it a
+// deleted finding walks back in on the next restart, reading its row out of SQLite.
+func (fs *FindingStore) SetDeleteSink(onDelete func(id uint64)) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.onDelete = onDelete
+}
+
+// Triage applies an operator decision to one finding under the write lock and mirrors the result
+// through the persistence sink. The mutation function must not call back into the store. Returns
+// false when no finding carries that id — a stale row on the operator's screen, which the API
+// surfaces as 404 rather than silently writing nothing.
+func (fs *FindingStore) Triage(id uint64, mutate func(f *Finding)) bool {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	f := fs.byIDLocked(id)
+	if f == nil {
+		return false
+	}
+	mutate(f)
+	// onAdd, not a separate update hook: the sink is a write-through mirror of a finding's current
+	// state, and SaveFinding is an INSERT OR REPLACE keyed on the id, so re-offering the triaged
+	// finding rewrites its row rather than inserting a second one.
+	if fs.onAdd != nil {
+		fs.onAdd(f)
+	}
+	fs.signalChangeLocked()
+	return true
+}
+
+// byIDLocked finds a finding by id. Linear because triage is an operator action, not an intake
+// path; the byKey index answers a different question (dedup) and does not map ids.
+func (fs *FindingStore) byIDLocked(id uint64) *Finding {
+	for _, f := range fs.findings {
+		if f.ID == id {
+			return f
+		}
+	}
+	return nil
 }
 
 // Restore replaces the store's contents with a previously persisted snapshot.
@@ -556,6 +638,9 @@ func (fs *FindingStore) Delete(id uint64) bool {
 			if key, ok := fs.dedupKeyLocked(f.Name, f.Target); ok && fs.byKey[key] == f {
 				delete(fs.byKey, key)
 			}
+			if fs.onDelete != nil {
+				fs.onDelete(id)
+			}
 			fs.signalChangeLocked()
 			return true
 		}
@@ -565,9 +650,16 @@ func (fs *FindingStore) Delete(id uint64) bool {
 }
 
 // Clear removes all findings.
+// Clear removes all findings. Each removed id goes through the delete sink so the durable mirror
+// empties with the memory — the sink is nil-able because a zero-value store is usable without one.
 func (fs *FindingStore) Clear() {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+	if fs.onDelete != nil {
+		for _, f := range fs.findings {
+			fs.onDelete(f.ID)
+		}
+	}
 	fs.findings = fs.findings[:0]
 	fs.byKey = make(map[string]*Finding)
 	fs.nextID = 0

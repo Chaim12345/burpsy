@@ -1,11 +1,21 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"go.uber.org/zap"
 )
 
 // ---- every listed option must actually be applied ---------------------------------------
@@ -36,11 +46,25 @@ import (
 const everyRuleMarkup = `<html><body>` +
 	`<form onsubmit="validate()" onreset="clear()">` +
 	`<input type="hidden" name="csrf" value="abc">` +
+	`<input type="text" name="q" value="search term" disabled maxlength="5">` +
+	`<select name="s" disabled><option value="1" disabled>one</option></select>` +
 	`</form>` +
 	`<object data="plugin.swf"><param name="a" value="b"></object>` +
 	`<script>tracker()</script>` +
 	`<a href="https://cdn.example.test/app.js" onclick="go()">link</a>` +
 	`</body></html>`
+
+// cookieResponse is the fixture remove_secure_flag_from_cookies acts on: a
+// Set-Cookie header carrying the Secure attribute the rule exists to remove.
+// Like every fixture here it is offered to every key; only the key that
+// rewrites a Set-Cookie head can make it change.
+func cookieResponse() []byte {
+	return []byte("HTTP/1.1 200 OK\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"Set-Cookie: session=abc123; Secure; Path=/\r\n" +
+		"Content-Length: 20\r\n\r\n" +
+		"<html></html>")
+}
 
 // requestWithEncoding is the request-direction equivalent: a request carrying the one header
 // strip_accept_encoding exists to strip.
@@ -63,6 +87,21 @@ func gzipBytes(t *testing.T, s string) []byte {
 		t.Fatalf("gzip close: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// wsUpgradeFixture is the handshake the WebSocket strip acts on: it carries exactly the
+// offer strip_sec_websocket_extensions exists to remove. Unlike the other fixtures this one
+// is applied through the handshake path (stripWsHandshake) rather than ApplyRequest — the
+// offer lives only on an upgrade, and stripping it on every relayed request would be the
+// wrong scope — so the binding check offers every key both appliers.
+func wsUpgradeFixture() []byte {
+	return []byte("GET /chat HTTP/1.1\r\n" +
+		"Host: example.test\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
 }
 
 // gzippedHTMLResponse and gzippedRequest are the fixtures the two unpack options act on.
@@ -124,9 +163,42 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			gzRespOut := o.ApplyResponse(gzResp)
 			respChanged = respChanged || string(gzRespOut) != string(gzResp)
 
+			// The Set-Cookie fixture, for the cookie-flag strip: a head rewrite, so it rides on
+			// its own response rather than on everyRuleMarkup's body.
+			cookieResp := cookieResponse()
+			cookieRespOut := o.ApplyResponse(cookieResp)
+			respChanged = respChanged || string(cookieRespOut) != string(cookieResp)
+
 			gzReq := gzippedRequest(t, everyRuleMarkup)
 			gzReqOut := o.ApplyRequest(gzReq)
 			reqChanged = reqChanged || string(gzReqOut) != string(gzReq)
+
+			// The handshake fixture, for the WebSocket strip. A Server is built per key
+			// with exactly that key enabled — optionsWith already produces the set — so
+			// this stays a no-second-table check: a key bound on the handshake path is
+			// caught here, and a key bound nowhere changes nothing anywhere.
+			upgrade := wsUpgradeFixture()
+			srv := NewServer(NewProxyConfig(core.NewTrafficStore()).
+				WithOptions(optionsWith(t, key)).
+				WithScope(testScope()).
+				WithLogger(zap.NewNop()))
+			handshakeOut, _ := srv.stripWsHandshake(upgrade)
+			reqChanged = reqChanged || string(handshakeOut) != string(upgrade)
+
+			// The listener-level fixture, for invisible proxying: an origin-form request
+			// whose only authority is a Host header, driven through a real ListenAndServe
+			// loop against one shared origin — once with the key enabled alone, once with
+			// everything off. Only a key that decides the Host-header fallback can make
+			// the two answers differ, and no per-key table is needed: every key is offered
+			// the fixture, and the ones that do not act on it produce identical answers.
+			reqChanged = reqChanged || invisibleProxyFixture(t, key)
+
+			// The retention fixture, for dont_log_out_of_scope: an out-of-scope request
+			// driven through a real proxy loop with a scope that excludes the origin,
+			// once with the key enabled alone, once with everything off. A retention
+			// switch rewrites no message, so no applier fixture can catch it; what it
+			// changes is whether the store holds the exchange afterwards.
+			reqChanged = reqChanged || outOfScopeRetentionFixture(t, key)
 
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+
@@ -180,6 +252,115 @@ func Test_KnownOption_agrees_with_the_advertised_list(t *testing.T) {
 			t.Errorf("KnownOption accepted %q, which is not in OptionKeys", bogus)
 		}
 	}
+}
+
+// invisibleProxyFixture drives one origin-form request through a real ListenAndServe
+// loop with the key enabled alone and again with everything off, and answers whether
+// the two runs differed. Shared by every key in the binding test: the keys that do not
+// decide the Host-header fallback return false, the one that does returns true.
+func invisibleProxyFixture(t *testing.T, key OptionKey) bool {
+	t.Helper()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "binding-invisible")
+	}))
+	defer origin.Close()
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split origin addr: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("origin port: %v", err)
+	}
+
+	answer := func(options *Options) string {
+		srv := NewServer(NewProxyConfig(core.NewTrafficStore()).
+			WithOptions(options).
+			WithScope(testScope()).
+			WithLogger(zap.NewNop()))
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			_ = srv.ListenAndServe(ctx, "127.0.0.1:0")
+		}()
+		deadline := time.Now().Add(5 * time.Second)
+		var addr string
+		for {
+			if addr = srv.ListenerAddr(); addr != "" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("fixture proxy never started listening")
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatalf("dial fixture proxy: %v", err)
+		}
+		defer conn.Close()
+		req := "GET /binding HTTP/1.1\r\n" +
+			"Host: " + host + ":" + strconv.Itoa(port) + "\r\n" +
+			"Connection: close\r\n\r\n"
+		if _, err := conn.Write([]byte(req)); err != nil {
+			t.Fatalf("write fixture request: %v", err)
+		}
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		out, err := io.ReadAll(bufio.NewReader(conn))
+		if err != nil {
+			t.Fatalf("read fixture response: %v", err)
+		}
+		return string(out)
+	}
+
+	withKey := answer(optionsWith(t, key))
+	allOff := answer(NewOptions())
+	return withKey != allOff
+}
+
+// outOfScopeRetentionFixture drives one out-of-scope request through a real proxy loop
+// with the key enabled alone and again with everything off, and answers whether the two
+// runs left the store holding a different number of exchanges. Shared by every key in the
+// binding test: only dont_log_out_of_scope decides whether an out-of-scope exchange is
+// kept, so only that key makes the two answers differ.
+func outOfScopeRetentionFixture(t *testing.T, key OptionKey) bool {
+	t.Helper()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "<html><body>binding-retention</body></html>")
+	}))
+	defer origin.Close()
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split origin addr: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("origin port: %v", err)
+	}
+
+	scope := core.NewScope()
+	scope.AddInclude("retention-binding.test") // anything but the loopback origin
+
+	exchangeCount := func(options *Options) int {
+		store := core.NewTrafficStore()
+		srv := NewServer(NewProxyConfig(store).
+			WithOptions(options).
+			WithScope(scope).
+			WithLogger(zap.NewNop()))
+		driveThroughProxy(t, srv, host, port)
+		// With the key off the record is asynchronous; give it the same
+		// settle window the drop side gets before declaring absence.
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if n := len(store.Exchanges()); n > 0 {
+				return n
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return 0
+	}
+
+	return exchangeCount(optionsWith(t, key)) != exchangeCount(NewOptions())
 }
 
 // Every advertised option must be settable and must read back. Snapshot is what the panel

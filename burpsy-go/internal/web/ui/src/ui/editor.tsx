@@ -7,7 +7,7 @@ import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Se
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
-import { byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
+import { breakGlyphs, byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
 import {
   base64Decode,
   base64Encode,
@@ -125,22 +125,6 @@ class EOLMarker extends WidgetType {
     span.textContent = this.glyph;
     return span;
   }
-}
-
-/**
- * The break bytes behind each rendered line, read off the raw message rather than the
- * CodeMirror document: CM6 normalises CRLF to LF when it parses the doc, so the document
- * itself can no longer tell a CRLF message from an LF one - and certifying "LF only" on a
- * CRLF message is the one wrong answer this toggle must never give. The raw text and the
- * document agree line-for-line (every break spelling still breaks exactly one line), so the
- * nth break in the raw text is the break after the nth rendered line.
- */
-function breakGlyphs(text: string): string[] {
-  const glyphs: string[] = [];
-  for (const match of text.matchAll(/\r\n|\r|\n/g)) {
-    glyphs.push(match[0] === "\r\n" ? "␍␊" : match[0] === "\n" ? "␊" : "␍");
-  }
-  return glyphs;
 }
 
 function buildEOLMarkers(view: EditorView, raw: string): DecorationSet {
@@ -318,6 +302,7 @@ export function HttpEditor({
   className,
   views = true,
   menuGroups,
+  payloadMarks,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -340,6 +325,15 @@ export function HttpEditor({
    * below are offered either way, because those act on the text and need nothing else.
    */
   menuGroups?: MenuGroup[];
+  /**
+   * Hand-marked payload positions (Burp's Add §, burpsy-react-ui-mun). When given, the Raw view's
+   * selection menu gains an "Add § payload marker" entry that reports the selection's character
+   * offsets in the document this editor is showing. Callers displaying a transformed document
+   * (the Intruder base request shows its marks as "§" pairs) map those offsets back themselves.
+   */
+  payloadMarks?: {
+    onAdd: (span: { start: number; end: number; text: string }) => void;
+  };
 }): JSX.Element {
   const [wrap, setWrap] = useState(true);
   // Burp's \n toggle (burpsy-react-ui-1e4): off by default, and a pure decoration - the
@@ -580,6 +574,24 @@ export function HttpEditor({
       });
     }
     if (active !== "raw") return groups;
+    if (payloadMarks) {
+      groups.push({
+        id: "payload-marks",
+        actions: [
+          {
+            id: "add-payload-mark",
+            label: "Add \u00a7 payload marker",
+            disabled: !hasSelection,
+            onSelect: () => {
+              const cm = cmViewRef.current;
+              if (!cm) return;
+              const sel = cm.state.selection.main;
+              payloadMarks.onAdd({ start: sel.from, end: sel.to, text: cm.state.sliceDoc(sel.from, sel.to) });
+            },
+          },
+        ],
+      });
+    }
     const codec = (id: string, label: string, shortcut: string, transform: (input: string) => string) => ({
       id,
       label,
@@ -619,7 +631,7 @@ export function HttpEditor({
       },
     );
     return groups;
-  }, [active, editable, hasSelection, runTransform, insertCollaboratorPayload, mint.isPending]);
+  }, [active, editable, hasSelection, runTransform, insertCollaboratorPayload, mint.isPending, payloadMarks]);
 
   const allGroups = useMemo<MenuGroup[]>(
     () => [...(menuGroups ?? []), ...selectionGroups],
