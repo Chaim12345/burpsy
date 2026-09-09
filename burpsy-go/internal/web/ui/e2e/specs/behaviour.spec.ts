@@ -359,6 +359,37 @@ test.describe("data views", () => {
   expect(consoleErrors).toEqual([]);
  });
 
+ test("an image response gets a Render view showing the actual pixels", async ({
+  page,
+  consoleErrors,
+ }) => {
+  // burpsy-react-ui-n7n. The harness origin serves a 2x2 PNG at /image.png; seeded through the
+  // proxy like any other traffic, its history row must offer Render, and the rendered <img> must
+  // carry the same pixel bytes the origin sent — asserted via the data URL, not just "an image
+  // appeared".
+  const { proxyPort, targetPort } = readHarness();
+  await proxyGet(proxyPort, `http://127.0.0.1:${targetPort}/image.png`);
+
+  await gotoRoute(page, route("history"));
+  const row = page.locator("tr.data-row", { hasText: "/image.png" });
+  await expect(row).toHaveCount(1);
+  await row.click();
+
+  // Render is offered for an image response, not only HTML.
+  const renderTab = page.getByRole("tab", { name: "Render" });
+  await expect(renderTab).toBeVisible();
+  await renderTab.click();
+
+  const img = page.locator(".render-image img");
+  await expect(img).toBeVisible();
+  const src = await img.getAttribute("src");
+  expect(src).toMatch(/^data:image\/png;base64,/);
+  // The rendered bytes decode to a real PNG header — not a mangled UTF-8 round trip.
+  const payload = Buffer.from((src ?? "").split(",")[1] ?? "", "base64");
+  expect(payload.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  expect(consoleErrors).toEqual([]);
+ });
+
  test("the status bar reports the stored bytes the API reports", async ({ page }) => {
   // Cheap, and it is the one place the shell claims a number that comes from the server rather than
   // from the store — so it is where a broken /api/stats would show up as a plausible-looking dash.

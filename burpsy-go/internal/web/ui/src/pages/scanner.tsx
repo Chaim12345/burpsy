@@ -706,6 +706,7 @@ export function ScannerPage(): JSX.Element {
          ? "No response was captured for this exchange."
          : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
        }
+       bodyBase64={response.data?.body_base64}
        filename={`finding-${selected.finding.id}-response.txt`}
        menuGroups={actions.menu(exchange)}
       />

@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
@@ -97,6 +98,14 @@ type MessageView struct {
 	// because "burpsy cannot read this" and "there was nothing to read" are the two states an
 	// unreadable pane must never merge.
 	DecodeError string `json:"decode_error,omitempty"`
+	// Body64 is the body after the head, base64-encoded — the exact octets, which `text` cannot
+	// carry for a non-UTF-8 body (JSON strings are UTF-8, so an invalid byte arrives as U+FFFD and
+	// the bytes are gone). Populated only when the body exists and is not valid UTF-8: for text
+	// bodies `text` already is the body, and encoding every body would triple the size of the
+	// common response for no reader. First consumer is the Render view's image data URL
+	// (burpsy-react-ui-n7n); a QR code that differs by one pixel from what the server sent is a
+	// different QR code.
+	Body64 string `json:"body_base64,omitempty"`
 }
 
 // StatsView mirrors the UI's Stats interface.
@@ -186,6 +195,11 @@ func messageView(msg *core.StoredMessage) *MessageView {
 		// No terminator, or a head with nothing after it. There is no body to decode, and a truncated
 		// head's Content-Encoding describes bytes that are not here.
 		return view
+	}
+	if !isUTF8(body) {
+		// text cannot carry these bytes (JSON/UTF-8 mangles them), so the exact octets ride along
+		// base64-encoded for the views that need the real thing.
+		view.Body64 = base64.StdEncoding.EncodeToString(body)
 	}
 	encoding := firstHeaderValue(head, "Content-Encoding")
 	if encoding == "" || strings.EqualFold(encoding, "identity") {

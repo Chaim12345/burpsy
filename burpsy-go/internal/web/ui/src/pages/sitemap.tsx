@@ -804,6 +804,7 @@ export function SiteMapPage(): JSX.Element {
        ? "No response was captured for this exchange."
        : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
      }
+     bodyBase64={response.data?.body_base64}
      filename={`exchange-${activeExchange.id}-response.txt`}
      menuGroups={actions.menu(activeExchange)}
     />

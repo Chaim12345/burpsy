@@ -22,13 +22,13 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createConnection, createServer } from "node:net";
 import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
+ existsSync,
+ mkdirSync,
+ mkdtempSync,
+ openSync,
+ readFileSync,
+ rmSync,
+ writeFileSync,
 } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { dirname, join } from "node:path";
@@ -37,12 +37,12 @@ import { fileURLToPath } from "node:url";
 
 /** Everything globalTeardown needs to undo what globalSetup did. */
 export interface Harness {
-  dir: string;
-  webPort: number;
-  proxyPort: number;
-  targetPort: number;
-  burpsyPid: number;
-  targetPid: number;
+ dir: string;
+ webPort: number;
+ proxyPort: number;
+ targetPort: number;
+ burpsyPid: number;
+ targetPid: number;
 }
 
 const PREFERRED = { proxy: 18280, web: 18281, target: 18299 };
@@ -58,9 +58,9 @@ const PREFERRED = { proxy: 18280, web: 18281, target: 18299 };
  * harmless because the running process holds its inode.
  */
 export function artifactsDir(): string {
-  const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "artifacts");
-  mkdirSync(dir, { recursive: true });
-  return dir;
+ const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "artifacts");
+ mkdirSync(dir, { recursive: true });
+ return dir;
 }
 
 /**
@@ -72,11 +72,11 @@ export function artifactsDir(): string {
  * there is no supported way to have two. If that ever changes, key this on the runner's pid.
  */
 export function statePath(): string {
-  return join(artifactsDir(), "run-state.json");
+ return join(artifactsDir(), "run-state.json");
 }
 
 export function readHarness(): Harness {
-  return JSON.parse(readFileSync(statePath(), "utf8")) as Harness;
+ return JSON.parse(readFileSync(statePath(), "utf8")) as Harness;
 }
 
 /**
@@ -88,17 +88,17 @@ export function readHarness(): Harness {
  * it, and pointing it elsewhere makes a green run a statement about a different tree.
  */
 function goModuleRoot(): string {
-  const override = process.env.BURPSY_E2E_GO_ROOT;
-  if (override) {
-    if (!existsSync(join(override, "go.mod"))) throw new Error(`BURPSY_E2E_GO_ROOT has no go.mod: ${override}`);
-    return override;
-  }
-  let here = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 10; i += 1) {
-    if (existsSync(join(here, "go.mod"))) return here;
-    here = dirname(here);
-  }
-  throw new Error("could not find burpsy-go/go.mod above the e2e directory");
+ const override = process.env.BURPSY_E2E_GO_ROOT;
+ if (override) {
+  if (!existsSync(join(override, "go.mod"))) throw new Error(`BURPSY_E2E_GO_ROOT has no go.mod: ${override}`);
+  return override;
+ }
+ let here = dirname(fileURLToPath(import.meta.url));
+ for (let i = 0; i < 10; i += 1) {
+  if (existsSync(join(here, "go.mod"))) return here;
+  here = dirname(here);
+ }
+ throw new Error("could not find burpsy-go/go.mod above the e2e directory");
 }
 
 /**
@@ -128,25 +128,25 @@ const claimed = new Set<number>();
  * port — a second way for two services to be told to share one number.
  */
 async function freePort(preferred: number): Promise<number> {
-  const span = 15;
-  for (let port = preferred; port < preferred + span; port += 1) {
-    if (claimed.has(port)) continue;
-    const free = await new Promise<boolean>((done) => {
-      const probe = createServer();
-      probe.once("error", () => done(false));
-      probe.once("listening", () => probe.close(() => done(true)));
-      probe.listen(port, "127.0.0.1");
-    });
-    if (free) {
-      claimed.add(port);
-      return port;
-    }
+ const span = 15;
+ for (let port = preferred; port < preferred + span; port += 1) {
+  if (claimed.has(port)) continue;
+  const free = await new Promise<boolean>((done) => {
+   const probe = createServer();
+   probe.once("error", () => done(false));
+   probe.once("listening", () => probe.close(() => done(true)));
+   probe.listen(port, "127.0.0.1");
+  });
+  if (free) {
+   claimed.add(port);
+   return port;
   }
-  throw new Error(`no free port in [${preferred}, ${preferred + span}) not already claimed by this run`);
+ }
+ throw new Error(`no free port in [${preferred}, ${preferred + span}) not already claimed by this run`);
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((done) => setTimeout(done, ms));
+ return new Promise((done) => setTimeout(done, ms));
 }
 
 /**
@@ -157,21 +157,21 @@ function sleep(ms: number): Promise<void> {
  * indication of which of the six steps produced it, which cost an afternoon once already.
  */
 function note(message: string): void {
-  process.stderr.write(`[e2e-ui] ${message}\n`);
+ process.stderr.write(`[e2e-ui] ${message}\n`);
 }
 
 /** Poll until an HTTP GET answers at all. Any status counts — we are waiting on the listener. */
 async function waitForHttp(url: string, attempts = 150): Promise<void> {
-  for (let i = 0; i < attempts; i += 1) {
-    try {
-      const response = await fetch(url);
-      await response.arrayBuffer();
-      return;
-    } catch {
-      await sleep(100);
-    }
+ for (let i = 0; i < attempts; i += 1) {
+  try {
+   const response = await fetch(url);
+   await response.arrayBuffer();
+   return;
+  } catch {
+   await sleep(100);
   }
-  throw new Error(`timed out waiting for ${url}`);
+ }
+ throw new Error(`timed out waiting for ${url}`);
 }
 
 /**
@@ -179,16 +179,16 @@ async function waitForHttp(url: string, attempts = 150): Promise<void> {
  * ordinary GET against it is not a readiness check — e2e-go.sh reaches for /dev/tcp for this reason.
  */
 async function waitForTcp(port: number, attempts = 150): Promise<void> {
-  for (let i = 0; i < attempts; i += 1) {
-    const up = await new Promise<boolean>((done) => {
-      const socket = createConnection({ host: "127.0.0.1", port });
-      socket.once("connect", () => socket.end(() => done(true)));
-      socket.once("error", () => done(false));
-    });
-    if (up) return;
-    await sleep(100);
-  }
-  throw new Error(`timed out waiting for tcp 127.0.0.1:${port}`);
+ for (let i = 0; i < attempts; i += 1) {
+  const up = await new Promise<boolean>((done) => {
+   const socket = createConnection({ host: "127.0.0.1", port });
+   socket.once("connect", () => socket.end(() => done(true)));
+   socket.once("error", () => done(false));
+  });
+  if (up) return;
+  await sleep(100);
+ }
+ throw new Error(`timed out waiting for tcp 127.0.0.1:${port}`);
 }
 
 /**
@@ -207,34 +207,34 @@ async function waitForTcp(port: number, attempts = 150): Promise<void> {
  * Remove this once the proxy either honours keep-alive or rewrites the header to `Connection: close`.
  */
 function viaProxy(proxyPort: number, url: string): Promise<void> {
-  return new Promise((done, fail) => {
-    const target = new URL(url);
-    const req = httpRequest(
-      {
-        host: "127.0.0.1",
-        port: proxyPort,
-        method: "GET",
-        path: url,
-        headers: { Host: target.host },
-        agent: false,
-      },
-      (response) => {
-        response.resume();
-        response.once("end", () => done());
-      },
-    );
-    req.once("error", fail);
-    req.end();
-  });
+ return new Promise((done, fail) => {
+  const target = new URL(url);
+  const req = httpRequest(
+   {
+    host: "127.0.0.1",
+    port: proxyPort,
+    method: "GET",
+    path: url,
+    headers: { Host: target.host },
+    agent: false,
+   },
+   (response) => {
+    response.resume();
+    response.once("end", () => done());
+   },
+  );
+  req.once("error", fail);
+  req.end();
+ });
 }
 
 async function postJson(webPort: number, path: string, body: unknown): Promise<unknown> {
-  const response = await fetch(`http://127.0.0.1:${webPort}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return response.json().catch(() => null);
+ const response = await fetch(`http://127.0.0.1:${webPort}${path}`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(body),
+ });
+ return response.json().catch(() => null);
 }
 
 /**
@@ -245,119 +245,119 @@ async function postJson(webPort: number, path: string, body: unknown): Promise<u
  * vacuous check this tree is being cleaned of.
  */
 async function seed(harness: Omit<Harness, "burpsyPid" | "targetPid">): Promise<void> {
-  const { proxyPort, webPort, targetPort } = harness;
-  const origin = `http://127.0.0.1:${targetPort}`;
+ const { proxyPort, webPort, targetPort } = harness;
+ const origin = `http://127.0.0.1:${targetPort}`;
 
-  // Proxy traffic: fills HTTP history, the site map, and the dashboard's activity counters. The paths
-  // are deliberately not in alphabetical order, so an ascending sort in the UI has to move something.
-  for (const path of ["/zebra", "/alpha?q=1", "/mango/deep/path", "/beta", "/quokka?size=8"]) {
-    try {
-      await viaProxy(proxyPort, `${origin}${path}`);
-    } catch (error) {
-      throw new Error(`seeding ${path} through the proxy failed: ${(error as Error).message}`);
-    }
+ // Proxy traffic: fills HTTP history, the site map, and the dashboard's activity counters. The paths
+ // are deliberately not in alphabetical order, so an ascending sort in the UI has to move something.
+ for (const path of ["/zebra", "/alpha?q=1", "/mango/deep/path", "/beta", "/quokka?size=8"]) {
+  try {
+   await viaProxy(proxyPort, `${origin}${path}`);
+  } catch (error) {
+   throw new Error(`seeding ${path} through the proxy failed: ${(error as Error).message}`);
   }
-  note(`seeded 5 proxied exchanges through 127.0.0.1:${proxyPort}`);
+ }
+ note(`seeded 5 proxied exchanges through 127.0.0.1:${proxyPort}`);
 
-  // A repeater send: fills the Tool log, which only ever shows requests burpsy itself made, so
-  // proxy traffic alone would leave that route on its empty state.
-  const raw = `GET /repeated?x=9 HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\nConnection: close\r\n\r\n`;
-  await postJson(webPort, "/api/repeater/send", { target: origin, protocol: "http", request: raw });
-  note("seeded one repeater send");
+ // A repeater send: fills the Tool log, which only ever shows requests burpsy itself made, so
+ // proxy traffic alone would leave that route on its empty state.
+ const raw = `GET /repeated?x=9 HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\nConnection: close\r\n\r\n`;
+ await postJson(webPort, "/api/repeater/send", { target: origin, protocol: "http", request: raw });
+ note("seeded one repeater send");
 
-  // An audit against the first exchange: fills Issues. Exchange ids are a dense counter from zero
-  // and id 0 is a real id — e2e-go.sh has a whole section on the bug where it was rejected.
-  await postJson(webPort, "/api/audit/0", {});
-  note("seeded one audit against exchange 0");
+ // An audit against the first exchange: fills Issues. Exchange ids are a dense counter from zero
+ // and id 0 is a real id — e2e-go.sh has a whole section on the bug where it was rejected.
+ await postJson(webPort, "/api/audit/0", {});
+ note("seeded one audit against exchange 0");
 
-  // The server records exchanges asynchronously; give the last of them a moment to land so the
-  // first test to open HTTP history does not race the write.
-  await sleep(600);
+ // The server records exchanges asynchronously; give the last of them a moment to land so the
+ // first test to open HTTP history does not race the write.
+ await sleep(600);
 }
 
 export async function start(): Promise<Harness> {
-  const goRoot = goModuleRoot();
-  const dir = mkdtempSync(join(tmpdir(), "burpsy-ui-e2e-"));
-  const bin = join(dir, "burpsy");
+ const goRoot = goModuleRoot();
+ const dir = mkdtempSync(join(tmpdir(), "burpsy-ui-e2e-"));
+ const bin = join(dir, "burpsy");
 
-  const build = spawnSync("go", ["build", "-o", bin, "./cmd/burpsy"], {
-    cwd: goRoot,
-    encoding: "utf8",
+ const build = spawnSync("go", ["build", "-o", bin, "./cmd/burpsy"], {
+  cwd: goRoot,
+  encoding: "utf8",
+ });
+ if (build.status !== 0) {
+  throw new Error(`go build ./cmd/burpsy failed:\n${build.stderr || build.stdout}`);
+ }
+
+ const proxyPort = await freePort(PREFERRED.proxy);
+ const webPort = await freePort(PREFERRED.web);
+ const targetPort = await freePort(PREFERRED.target);
+
+ // The origin runs as its own process rather than inside this one: Playwright's globalSetup process
+ // is not guaranteed to outlive setup, and an origin that dies mid-run looks exactly like a proxy
+ // bug from inside the browser. Its script lives in artifacts/ alongside the log, because a /tmp
+ // sweep that removes it would take out the origin's `import` at any later restart.
+ const targetScript = join(artifactsDir(), "origin.mjs");
+ writeFileSync(targetScript, ORIGIN_SOURCE);
+ // detached: true puts each child in its OWN process group, and it is load-bearing.
+ //
+ // Playwright runs globalSetup in a process of its own and tears that process's group down when it
+ // is finished with it, which sent burpsy a SIGTERM roughly a minute into the run. burpsy logged a
+ // tidy "Shutting down..." and every test from that point on failed with a flat
+ // ERR_CONNECTION_REFUSED — 40 failures whose real cause was one signal nobody meant to send.
+ // Detached, these two outlive setup, and stop() kills them explicitly by pid instead.
+ const target = spawn(process.execPath, [targetScript, String(targetPort)], {
+  stdio: "ignore",
+  detached: true,
+ });
+ target.unref();
+
+ // artifacts/, not the temp directory: this log is the only account of what the server did, and it
+ // has to outlive both the run and anything that tidies /tmp.
+ const logPath = join(artifactsDir(), "burpsy.log");
+ const log = openSync(logPath, "w");
+ const burpsy = spawn(bin, ["--proxy", `127.0.0.1:${proxyPort}`, "--web", `127.0.0.1:${webPort}`], {
+  stdio: ["ignore", log, log],
+  detached: true,
+ });
+ burpsy.unref();
+
+ const died = (child: ChildProcess, name: string) =>
+  child.once("exit", (code) => {
+   if (code !== null && code !== 0) note(`${name} exited with ${code}`);
   });
-  if (build.status !== 0) {
-    throw new Error(`go build ./cmd/burpsy failed:\n${build.stderr || build.stdout}`);
-  }
+ died(target, "origin");
+ died(burpsy, "burpsy");
 
-  const proxyPort = await freePort(PREFERRED.proxy);
-  const webPort = await freePort(PREFERRED.web);
-  const targetPort = await freePort(PREFERRED.target);
+ const harness: Harness = {
+  dir,
+  webPort,
+  proxyPort,
+  targetPort,
+  burpsyPid: burpsy.pid ?? -1,
+  targetPid: target.pid ?? -1,
+ };
 
-  // The origin runs as its own process rather than inside this one: Playwright's globalSetup process
-  // is not guaranteed to outlive setup, and an origin that dies mid-run looks exactly like a proxy
-  // bug from inside the browser. Its script lives in artifacts/ alongside the log, because a /tmp
-  // sweep that removes it would take out the origin's `import` at any later restart.
-  const targetScript = join(artifactsDir(), "origin.mjs");
-  writeFileSync(targetScript, ORIGIN_SOURCE);
-  // detached: true puts each child in its OWN process group, and it is load-bearing.
-  //
-  // Playwright runs globalSetup in a process of its own and tears that process's group down when it
-  // is finished with it, which sent burpsy a SIGTERM roughly a minute into the run. burpsy logged a
-  // tidy "Shutting down..." and every test from that point on failed with a flat
-  // ERR_CONNECTION_REFUSED — 40 failures whose real cause was one signal nobody meant to send.
-  // Detached, these two outlive setup, and stop() kills them explicitly by pid instead.
-  const target = spawn(process.execPath, [targetScript, String(targetPort)], {
-    stdio: "ignore",
-    detached: true,
-  });
-  target.unref();
+ // Written NOW, before anything that can throw. globalTeardown reads this file and nothing else, so
+ // a state file written after seeding means a seeding failure leaks a burpsy holding 182xx — and the
+ // NEXT run then finds those ports busy, silently talks to the stale process, and fails somewhere
+ // else entirely. That happened while this file was being written and cost an hour of looking in the
+ // wrong place.
+ writeFileSync(statePath(), JSON.stringify(harness, null, 2));
 
-  // artifacts/, not the temp directory: this log is the only account of what the server did, and it
-  // has to outlive both the run and anything that tidies /tmp.
-  const logPath = join(artifactsDir(), "burpsy.log");
-  const log = openSync(logPath, "w");
-  const burpsy = spawn(bin, ["--proxy", `127.0.0.1:${proxyPort}`, "--web", `127.0.0.1:${webPort}`], {
-    stdio: ["ignore", log, log],
-    detached: true,
-  });
-  burpsy.unref();
-
-  const died = (child: ChildProcess, name: string) =>
-    child.once("exit", (code) => {
-      if (code !== null && code !== 0) note(`${name} exited with ${code}`);
-    });
-  died(target, "origin");
-  died(burpsy, "burpsy");
-
-  const harness: Harness = {
-    dir,
-    webPort,
-    proxyPort,
-    targetPort,
-    burpsyPid: burpsy.pid ?? -1,
-    targetPid: target.pid ?? -1,
-  };
-
-  // Written NOW, before anything that can throw. globalTeardown reads this file and nothing else, so
-  // a state file written after seeding means a seeding failure leaks a burpsy holding 182xx — and the
-  // NEXT run then finds those ports busy, silently talks to the stale process, and fails somewhere
-  // else entirely. That happened while this file was being written and cost an hour of looking in the
-  // wrong place.
-  writeFileSync(statePath(), JSON.stringify(harness, null, 2));
-
-  note(`built ${bin}; ports proxy=${proxyPort} web=${webPort} origin=${targetPort}`);
-  try {
-    await waitForHttp(`http://127.0.0.1:${targetPort}/`);
-    await waitForHttp(`http://127.0.0.1:${webPort}/api/stats`);
-    await waitForTcp(proxyPort);
-    assertOurListeners(logPath, harness);
-    note("all three listeners up, and they are ours");
-    await seed(harness);
-  } catch (error) {
-    // The log is the only place burpsy's own account of the failure exists, and Playwright prints the
-    // exception alone. Folding it in beats "socket hang up" with no context.
-    throw new Error(`${(error as Error).message}\n--- burpsy log ---\n${tail(logPath, 25)}`);
-  }
-  return harness;
+ note(`built ${bin}; ports proxy=${proxyPort} web=${webPort} origin=${targetPort}`);
+ try {
+  await waitForHttp(`http://127.0.0.1:${targetPort}/`);
+  await waitForHttp(`http://127.0.0.1:${webPort}/api/stats`);
+  await waitForTcp(proxyPort);
+  assertOurListeners(logPath, harness);
+  note("all three listeners up, and they are ours");
+  await seed(harness);
+ } catch (error) {
+  // The log is the only place burpsy's own account of the failure exists, and Playwright prints the
+  // exception alone. Folding it in beats "socket hang up" with no context.
+  throw new Error(`${(error as Error).message}\n--- burpsy log ---\n${tail(logPath, 25)}`);
+ }
+ return harness;
 }
 
 /**
@@ -370,47 +370,47 @@ export async function start(): Promise<Harness> {
  * honest check available from here.
  */
 function assertOurListeners(logPath: string, harness: Harness): void {
-  const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
-  if (/address already in use|failed to bind/.test(log)) {
-    throw new Error(
-      `burpsy failed to bind (pid ${harness.burpsyPid}) yet stayed alive, so the probes above were ` +
-        `answered by something else on proxy=${harness.proxyPort} web=${harness.webPort}. ` +
-        `Check for a leftover burpsy: ss -ltn | grep 182`,
-    );
-  }
+ const log = existsSync(logPath) ? readFileSync(logPath, "utf8") : "";
+ if (/address already in use|failed to bind/.test(log)) {
+  throw new Error(
+   `burpsy failed to bind (pid ${harness.burpsyPid}) yet stayed alive, so the probes above were ` +
+   `answered by something else on proxy=${harness.proxyPort} web=${harness.webPort}. ` +
+   `Check for a leftover burpsy: ss -ltn | grep 182`,
+  );
+ }
 }
 
 function tail(path: string, lines: number): string {
-  if (!existsSync(path)) return "(no log)";
-  return readFileSync(path, "utf8").split("\n").slice(-lines).join("\n");
+ if (!existsSync(path)) return "(no log)";
+ return readFileSync(path, "utf8").split("\n").slice(-lines).join("\n");
 }
 
 export function stop(harness: Harness): void {
-  for (const pid of [harness.burpsyPid, harness.targetPid]) {
-    if (pid > 0) {
-      try {
-        // The process GROUP (-pid), because these are spawned detached and are therefore group
-        // leaders — killing the group also collects anything they spawned. SIGKILL rather than
-        // SIGTERM: they are throwaway processes with nothing to flush, and one that slow-walks a TERM
-        // leaves a listener on 182xx that makes the NEXT run's probes pass against the wrong process,
-        // which is the failure assertOurListeners exists to catch and is better prevented than
-        // diagnosed.
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Already gone; nothing to do. A failed kill must not mask a test failure.
-        }
-      }
+ for (const pid of [harness.burpsyPid, harness.targetPid]) {
+  if (pid > 0) {
+   try {
+    // The process GROUP (-pid), because these are spawned detached and are therefore group
+    // leaders — killing the group also collects anything they spawned. SIGKILL rather than
+    // SIGTERM: they are throwaway processes with nothing to flush, and one that slow-walks a TERM
+    // leaves a listener on 182xx that makes the NEXT run's probes pass against the wrong process,
+    // which is the failure assertOurListeners exists to catch and is better prevented than
+    // diagnosed.
+    process.kill(-pid, "SIGKILL");
+   } catch {
+    try {
+     process.kill(pid, "SIGKILL");
+    } catch {
+     // Already gone; nothing to do. A failed kill must not mask a test failure.
     }
+   }
   }
-  // The temp directory holds only the built binary, and building to a temp path is exactly what keeps
-  // an untracked executable out of the tree. burpsy's log is in artifacts/ and deliberately KEPT: a
-  // mid-run server death surfaces in the browser as a flat ERR_CONNECTION_REFUSED on whichever test
-  // came next, and without the log that is indistinguishable from a broken selector.
-  rmSync(harness.dir, { recursive: true, force: true });
-  rmSync(statePath(), { force: true });
+ }
+ // The temp directory holds only the built binary, and building to a temp path is exactly what keeps
+ // an untracked executable out of the tree. burpsy's log is in artifacts/ and deliberately KEPT: a
+ // mid-run server death surfaces in the browser as a flat ERR_CONNECTION_REFUSED on whichever test
+ // came next, and without the log that is indistinguishable from a broken selector.
+ rmSync(harness.dir, { recursive: true, force: true });
+ rmSync(statePath(), { force: true });
 }
 
 /**
@@ -421,9 +421,21 @@ export function stop(harness: Harness): void {
 const ORIGIN_SOURCE = `import http from "node:http";
 const port = Number(process.argv[2]);
 let counter = 0;
+// A 2x2 PNG (red pixels), hand-built to the spec so the harness needs no image asset on disk.
+// n7n's Render-view test renders this through the proxy: a payload the test can assert pixel
+// bytes for, not an opaque blob.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEUlEQVR4nGP8z0Dw //8DwwADAGnvABMCAAAAAElFTkSuQmCC".replace(/ /g, ""),
+  "base64",
+);
 http
   .createServer((req, res) => {
     counter += 1;
+    if ((req.url ?? "").startsWith("/image.png")) {
+      res.writeHead(200, { "Content-Type": "image/png", "Content-Length": PNG.length });
+      res.end(PNG);
+      return;
+    }
     const pad = "x".repeat((req.url ?? "/").length * 7);
     const body = \`ORIGIN-OK \${req.method} \${req.url} \${pad}\`;
     res.writeHead(200, {

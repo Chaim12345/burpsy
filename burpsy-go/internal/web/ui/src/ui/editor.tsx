@@ -9,12 +9,12 @@ import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
 import { breakGlyphs, byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
 import {
-  base64Decode,
-  base64Encode,
-  htmlDecode,
-  htmlEncodeKeyChars,
-  urlDecode,
-  urlEncodeKeyChars,
+ base64Decode,
+ base64Encode,
+ htmlDecode,
+ htmlEncodeKeyChars,
+ urlDecode,
+ urlEncodeKeyChars,
 } from "../lib/transforms";
 import { cn } from "../lib/cn";
 import { useMintPayload } from "../lib/data.collab";
@@ -33,52 +33,52 @@ const BODY_LINE = Decoration.line({ class: "cm-http-body" });
  * bounded prefix rather than stringifying a body that may be megabytes.
  */
 function headerEnd(view: EditorView): number {
-  const probe = view.state.doc.sliceString(0, Math.min(view.state.doc.length, 65536));
-  const crlf = probe.indexOf("\r\n\r\n");
-  if (crlf >= 0) return crlf + 4;
-  const lf = probe.indexOf("\n\n");
-  if (lf >= 0) return lf + 2;
-  return view.state.doc.length;
+ const probe = view.state.doc.sliceString(0, Math.min(view.state.doc.length, 65536));
+ const crlf = probe.indexOf("\r\n\r\n");
+ if (crlf >= 0) return crlf + 4;
+ const lf = probe.indexOf("\n\n");
+ if (lf >= 0) return lf + 2;
+ return view.state.doc.length;
 }
 
 function buildDecorations(view: EditorView): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
-  const boundary = headerEnd(view);
-  const doc = view.state.doc;
+ const builder = new RangeSetBuilder<Decoration>();
+ const boundary = headerEnd(view);
+ const doc = view.state.doc;
 
-  for (const { from, to } of view.visibleRanges) {
-    let position = from;
-    while (position <= to) {
-      const line = doc.lineAt(position);
-      if (line.from >= boundary) {
-        if (line.length > 0 || line.from > boundary) builder.add(line.from, line.from, BODY_LINE);
-      } else if (line.number === 1) {
-        if (line.length > 0) builder.add(line.from, line.to, START_LINE);
-      } else if (line.length > 0) {
-        const colon = line.text.indexOf(":");
-        if (colon > 0) {
-          builder.add(line.from, line.from + colon, HEADER_NAME);
-          if (line.from + colon + 1 < line.to) builder.add(line.from + colon + 1, line.to, HEADER_VALUE);
-        }
-      }
-      if (line.to >= doc.length) break;
-      position = line.to + 1;
+ for (const { from, to } of view.visibleRanges) {
+  let position = from;
+  while (position <= to) {
+   const line = doc.lineAt(position);
+   if (line.from >= boundary) {
+    if (line.length > 0 || line.from > boundary) builder.add(line.from, line.from, BODY_LINE);
+   } else if (line.number === 1) {
+    if (line.length > 0) builder.add(line.from, line.to, START_LINE);
+   } else if (line.length > 0) {
+    const colon = line.text.indexOf(":");
+    if (colon > 0) {
+     builder.add(line.from, line.from + colon, HEADER_NAME);
+     if (line.from + colon + 1 < line.to) builder.add(line.from + colon + 1, line.to, HEADER_VALUE);
     }
+   }
+   if (line.to >= doc.length) break;
+   position = line.to + 1;
   }
-  return builder.finish();
+ }
+ return builder.finish();
 }
 
 const httpHighlight = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-    constructor(view: EditorView) {
-      this.decorations = buildDecorations(view);
-    }
-    update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) this.decorations = buildDecorations(update.view);
-    }
-  },
-  { decorations: (plugin) => plugin.decorations },
+ class {
+  decorations: DecorationSet;
+  constructor(view: EditorView) {
+   this.decorations = buildDecorations(view);
+  }
+  update(update: ViewUpdate) {
+   if (update.docChanged || update.viewportChanged) this.decorations = buildDecorations(update.view);
+  }
+ },
+ { decorations: (plugin) => plugin.decorations },
 );
 
 /**
@@ -92,16 +92,16 @@ const httpHighlight = ViewPlugin.fromClass(
  * or saved - is untouched.
  */
 const nonPrintingGlyphs = highlightSpecialChars({
-  render: (code) => {
-    const span = document.createElement("span");
-    span.className = "cm-nonprinting";
-    if (code <= 0x1f) span.textContent = String.fromCodePoint(0x2400 + code);
-    else if (code === 0x7f) span.textContent = "\u2421";
-    else span.textContent = String.fromCodePoint(code);
-    span.title = `U+${code.toString(16).toUpperCase().padStart(4, "0")}`;
-    return span;
-  },
-  addSpecialChars: /[\t\x7f-\xff]/,
+ render: (code) => {
+  const span = document.createElement("span");
+  span.className = "cm-nonprinting";
+  if (code <= 0x1f) span.textContent = String.fromCodePoint(0x2400 + code);
+  else if (code === 0x7f) span.textContent = "\u2421";
+  else span.textContent = String.fromCodePoint(code);
+  span.title = `U+${code.toString(16).toUpperCase().padStart(4, "0")}`;
+  return span;
+ },
+ addSpecialChars: /[\t\x7f-\xff]/,
 });
 
 /**
@@ -113,48 +113,48 @@ const nonPrintingGlyphs = highlightSpecialChars({
  * sending are byte-identical with the toggle on or off.
  */
 class EOLMarker extends WidgetType {
-  constructor(readonly glyph: string) {
-    super();
-  }
-  override eq(other: EOLMarker): boolean {
-    return other.glyph === this.glyph;
-  }
-  override toDOM(): HTMLElement {
-    const span = document.createElement("span");
-    span.className = "cm-nonprinting cm-eol";
-    span.textContent = this.glyph;
-    return span;
-  }
+ constructor(readonly glyph: string) {
+  super();
+ }
+ override eq(other: EOLMarker): boolean {
+  return other.glyph === this.glyph;
+ }
+ override toDOM(): HTMLElement {
+  const span = document.createElement("span");
+  span.className = "cm-nonprinting cm-eol";
+  span.textContent = this.glyph;
+  return span;
+ }
 }
 
 function buildEOLMarkers(view: EditorView, raw: string): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
-  const doc = view.state.doc;
-  const glyphs = breakGlyphs(raw);
-  for (let lineNo = 1; lineNo <= doc.lines; lineNo += 1) {
-    const line = doc.line(lineNo);
-    // The final line has no break after it (a document ending in a break grows an empty
-    // final line instead), so there is nothing to name there.
-    if (line.to >= doc.length) break;
-    const glyph = glyphs[lineNo - 1];
-    if (glyph) builder.add(line.to, line.to, Decoration.widget({ widget: new EOLMarker(glyph), side: 1 }));
-  }
-  return builder.finish();
+ const builder = new RangeSetBuilder<Decoration>();
+ const doc = view.state.doc;
+ const glyphs = breakGlyphs(raw);
+ for (let lineNo = 1; lineNo <= doc.lines; lineNo += 1) {
+  const line = doc.line(lineNo);
+  // The final line has no break after it (a document ending in a break grows an empty
+  // final line instead), so there is nothing to name there.
+  if (line.to >= doc.length) break;
+  const glyph = glyphs[lineNo - 1];
+  if (glyph) builder.add(line.to, line.to, Decoration.widget({ widget: new EOLMarker(glyph), side: 1 }));
+ }
+ return builder.finish();
 }
 
 function nonPrintingEOLPlugin(rawRef: { current: string }) {
-  return ViewPlugin.fromClass(
-    class {
-      decorations: DecorationSet;
-      constructor(view: EditorView) {
-        this.decorations = buildEOLMarkers(view, rawRef.current);
-      }
-      update(update: ViewUpdate) {
-        if (update.docChanged || update.viewportChanged) this.decorations = buildEOLMarkers(update.view, rawRef.current);
-      }
-    },
-    { decorations: (plugin) => plugin.decorations },
-  );
+ return ViewPlugin.fromClass(
+  class {
+   decorations: DecorationSet;
+   constructor(view: EditorView) {
+    this.decorations = buildEOLMarkers(view, rawRef.current);
+   }
+   update(update: ViewUpdate) {
+    if (update.docChanged || update.viewportChanged) this.decorations = buildEOLMarkers(update.view, rawRef.current);
+   }
+  },
+  { decorations: (plugin) => plugin.decorations },
+ );
 }
 
 /**
@@ -162,32 +162,32 @@ function nonPrintingEOLPlugin(rawRef: { current: string }) {
  * themes; CodeMirror's generated rules resolve them at paint time.
  */
 const editorTheme = EditorView.theme({
-  "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "12px" },
-  ".cm-content": { fontFamily: "var(--font-mono)", padding: "8px 0", caretColor: "var(--accent)" },
-  ".cm-gutters": {
-    backgroundColor: "var(--editor-gutter-bg)",
-    color: "var(--editor-gutter-fg)",
-    border: "0",
-    borderRight: "1px solid var(--editor-line)",
-    fontFamily: "var(--font-mono)",
-    fontSize: "11px",
-  },
-  ".cm-activeLine": { backgroundColor: "var(--editor-active-line)" },
-  ".cm-activeLineGutter": { backgroundColor: "var(--editor-active-line)", color: "var(--editor-fg)" },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, .cm-content ::selection": {
-    backgroundColor: "var(--editor-selection)",
-  },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
-  ".cm-http-start": { color: "var(--editor-start)", fontWeight: "700" },
-  ".cm-http-header-name": { color: "var(--editor-header-name)" },
-  ".cm-http-header-value": { color: "var(--editor-header-value)" },
-  ".cm-http-body": { color: "var(--editor-body)" },
-  ".cm-panels": { backgroundColor: "var(--editor-gutter-bg)", color: "var(--editor-fg)", borderColor: "var(--editor-line)" },
-  ".cm-searchMatch": { backgroundColor: "var(--editor-match)", outline: "1px solid var(--editor-match-border)" },
-  ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "var(--editor-match-selected)" },
-  ".cm-selectionMatch": { backgroundColor: "var(--editor-match)" },
-  ".cm-scroller": { overflow: "auto", lineHeight: "1.55" },
-  ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 10px" },
+ "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "12px" },
+ ".cm-content": { fontFamily: "var(--font-mono)", padding: "8px 0", caretColor: "var(--accent)" },
+ ".cm-gutters": {
+  backgroundColor: "var(--editor-gutter-bg)",
+  color: "var(--editor-gutter-fg)",
+  border: "0",
+  borderRight: "1px solid var(--editor-line)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "11px",
+ },
+ ".cm-activeLine": { backgroundColor: "var(--editor-active-line)" },
+ ".cm-activeLineGutter": { backgroundColor: "var(--editor-active-line)", color: "var(--editor-fg)" },
+ ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, .cm-content ::selection": {
+  backgroundColor: "var(--editor-selection)",
+ },
+ ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
+ ".cm-http-start": { color: "var(--editor-start)", fontWeight: "700" },
+ ".cm-http-header-name": { color: "var(--editor-header-name)" },
+ ".cm-http-header-value": { color: "var(--editor-header-value)" },
+ ".cm-http-body": { color: "var(--editor-body)" },
+ ".cm-panels": { backgroundColor: "var(--editor-gutter-bg)", color: "var(--editor-fg)", borderColor: "var(--editor-line)" },
+ ".cm-searchMatch": { backgroundColor: "var(--editor-match)", outline: "1px solid var(--editor-match-border)" },
+ ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "var(--editor-match-selected)" },
+ ".cm-selectionMatch": { backgroundColor: "var(--editor-match)" },
+ ".cm-scroller": { overflow: "auto", lineHeight: "1.55" },
+ ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 10px" },
 }, { dark: false });
 
 /**
@@ -200,16 +200,16 @@ const editorTheme = EditorView.theme({
  * convention. Matching Burp is the point.
  */
 function transformSelection(view: EditorView, transform: (input: string) => string): boolean {
-  const changes = view.state.selection.ranges
-    .filter((range) => !range.empty)
-    .map((range) => ({
-      from: range.from,
-      to: range.to,
-      insert: transform(view.state.sliceDoc(range.from, range.to)),
-    }));
-  if (!changes.length) return false;
-  view.dispatch({ changes, scrollIntoView: true });
-  return true;
+ const changes = view.state.selection.ranges
+  .filter((range) => !range.empty)
+  .map((range) => ({
+   from: range.from,
+   to: range.to,
+   insert: transform(view.state.sliceDoc(range.from, range.to)),
+  }));
+ if (!changes.length) return false;
+ view.dispatch({ changes, scrollIntoView: true });
+ return true;
 }
 
 /**
@@ -220,32 +220,32 @@ function transformSelection(view: EditorView, transform: (input: string) => stri
  * Testing the flag here is unambiguous.
  */
 const PAIRS: Record<string, { plain: (input: string) => string; shifted: (input: string) => string }> = {
-  u: { plain: urlEncodeKeyChars, shifted: urlDecode },
-  h: { plain: htmlEncodeKeyChars, shifted: htmlDecode },
-  b: { plain: base64Encode, shifted: base64Decode },
+ u: { plain: urlEncodeKeyChars, shifted: urlDecode },
+ h: { plain: htmlEncodeKeyChars, shifted: htmlDecode },
+ b: { plain: base64Encode, shifted: base64Decode },
 };
 
 const burpEditorKeys = Prec.high(
-  EditorView.domEventHandlers({
-    keydown(event, view) {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return false;
-      const key = event.key.toLowerCase();
+ EditorView.domEventHandlers({
+  keydown(event, view) {
+   if (!(event.ctrlKey || event.metaKey) || event.altKey) return false;
+   const key = event.key.toLowerCase();
 
-      if (key === "s") {
-        event.preventDefault();
-        openSearchPanel(view);
-        return true;
-      }
+   if (key === "s") {
+    event.preventDefault();
+    openSearchPanel(view);
+    return true;
+   }
 
-      const pair = PAIRS[key];
-      if (!pair) return false;
-      // Only claim the key when there is a selection to act on, so an unselected
-      // ctrl+B still reaches whatever the browser would normally do.
-      if (view.state.selection.ranges.every((range) => range.empty)) return false;
-      event.preventDefault();
-      return transformSelection(view, event.shiftKey ? pair.shifted : pair.plain);
-    },
-  }),
+   const pair = PAIRS[key];
+   if (!pair) return false;
+   // Only claim the key when there is a selection to act on, so an unselected
+   // ctrl+B still reaches whatever the browser would normally do.
+   if (view.state.selection.ranges.every((range) => range.empty)) return false;
+   event.preventDefault();
+   return transformSelection(view, event.shiftKey ? pair.shifted : pair.plain);
+  },
+ }),
 );
 
 /**
@@ -259,13 +259,13 @@ type MessageView = "pretty" | "raw" | "hex" | "render" | "graphql" | "jwt" | "pa
 // union fails to compile here first — a tab that renders its key instead of a label is
 // exactly the kind of half-wired view this editor shipped with once already.
 const VIEW_LABELS: Record<MessageView, string> = {
-  pretty: "Pretty",
-  raw: "Raw",
-  hex: "Hex",
-  render: "Render",
-  graphql: "GraphQL",
-  jwt: "JWT",
-  params: "Params",
+ pretty: "Pretty",
+ raw: "Raw",
+ hex: "Hex",
+ render: "Render",
+ graphql: "GraphQL",
+ jwt: "JWT",
+ params: "Params",
 };
 
 /**
@@ -291,548 +291,579 @@ const VIEW_LABELS: Record<MessageView, string> = {
  * empty on all but a few teaches an operator to ignore the tab strip.
  */
 export function HttpEditor({
-  value,
-  onChange,
-  readOnly = false,
-  label,
-  actions,
-  height = "100%",
-  filename = "message.txt",
-  placeholder,
-  className,
-  views = true,
-  menuGroups,
-  payloadMarks,
+ value,
+ bodyBase64,
+ onChange,
+ readOnly = false,
+ label,
+ actions,
+ height = "100%",
+ filename = "message.txt",
+ placeholder,
+ className,
+ views = true,
+ menuGroups,
+ payloadMarks,
 }: {
-  value: string;
-  onChange?: (value: string) => void;
-  readOnly?: boolean;
-  label: string;
-  actions?: ReactNode;
-  height?: string;
-  filename?: string;
-  placeholder?: string;
-  className?: string;
-  /** Set false for non-HTTP payloads (a WebSocket frame, a token blob). */
-  views?: boolean;
-  /**
-   * The message's own cross-tool actions — normally `useExchangeActions().menu(exchange)`.
-   *
-   * Burp's message editor carries the same menu as the table row above it, reachable both by
-   * right-clicking the message and from an Actions button, and reading a response then sending
-   * it straight to Repeater is the highest-frequency gesture in the tool. Omit this for an
-   * editor with no exchange behind it (the Decoder's pane, a token blob) — the selection codecs
-   * below are offered either way, because those act on the text and need nothing else.
-   */
-  menuGroups?: MenuGroup[];
-  /**
-   * Hand-marked payload positions (Burp's Add §, burpsy-react-ui-mun). When given, the Raw view's
-   * selection menu gains an "Add § payload marker" entry that reports the selection's character
-   * offsets in the document this editor is showing. Callers displaying a transformed document
-   * (the Intruder base request shows its marks as "§" pairs) map those offsets back themselves.
-   */
-  payloadMarks?: {
-    onAdd: (span: { start: number; end: number; text: string }) => void;
-  };
+ value: string;
+ /** The body's exact octets, base64 (MessageView.body_base64). Given, the Render view's image
+  *  data URL is built from these bytes instead of from `value`'s text — whose non-UTF-8 bytes
+  *  JSON already destroyed. The other views keep reading `value`, which remains the lossy text. */
+ bodyBase64?: string;
+ onChange?: (value: string) => void;
+ readOnly?: boolean;
+ label: string;
+ actions?: ReactNode;
+ height?: string;
+ filename?: string;
+ placeholder?: string;
+ className?: string;
+ /** Set false for non-HTTP payloads (a WebSocket frame, a token blob). */
+ views?: boolean;
+ /**
+  * The message's own cross-tool actions — normally `useExchangeActions().menu(exchange)`.
+  *
+  * Burp's message editor carries the same menu as the table row above it, reachable both by
+  * right-clicking the message and from an Actions button, and reading a response then sending
+  * it straight to Repeater is the highest-frequency gesture in the tool. Omit this for an
+  * editor with no exchange behind it (the Decoder's pane, a token blob) — the selection codecs
+  * below are offered either way, because those act on the text and need nothing else.
+  */
+ menuGroups?: MenuGroup[];
+ /**
+  * Hand-marked payload positions (Burp's Add §, burpsy-react-ui-mun). When given, the Raw view's
+  * selection menu gains an "Add § payload marker" entry that reports the selection's character
+  * offsets in the document this editor is showing. Callers displaying a transformed document
+  * (the Intruder base request shows its marks as "§" pairs) map those offsets back themselves.
+  */
+ payloadMarks?: {
+  onAdd: (span: { start: number; end: number; text: string }) => void;
+ };
 }): JSX.Element {
-  const [wrap, setWrap] = useState(true);
-  // Burp's \n toggle (burpsy-react-ui-1e4): off by default, and a pure decoration - the
-  // document never changes, so toggling cannot alter the bytes that get sent.
-  const [showNonPrinting, setShowNonPrinting] = useState(false);
-  // Pretty first when it is available: the initial state cannot read canPretty (it
-  // does not exist yet on first render), so the choice is deferred to the active
-  // resolution below instead of a second source of truth in useState.
-  const [view, setView] = useState<MessageView>("raw");
-  // Whether the codec entries can act. Tracked as state rather than read off the view when the
-  // menu is built: `groups` is evaluated at render time, so a selection made after that render
-  // would leave every codec row enabled and doing nothing, or disabled and refusing to.
-  const [hasSelection, setHasSelection] = useState(false);
+ const [wrap, setWrap] = useState(true);
+ // Burp's \n toggle (burpsy-react-ui-1e4): off by default, and a pure decoration - the
+ // document never changes, so toggling cannot alter the bytes that get sent.
+ const [showNonPrinting, setShowNonPrinting] = useState(false);
+ // Pretty first when it is available: the initial state cannot read canPretty (it
+ // does not exist yet on first render), so the choice is deferred to the active
+ // resolution below instead of a second source of truth in useState.
+ const [view, setView] = useState<MessageView>("raw");
+ // Whether the codec entries can act. Tracked as state rather than read off the view when the
+ // menu is built: `groups` is evaluated at render time, so a selection made after that render
+ // would leave every codec row enabled and doing nothing, or disabled and refusing to.
+ const [hasSelection, setHasSelection] = useState(false);
 
-  const editable = !readOnly && Boolean(onChange);
-  // The search spec this editor last auto-scrolled for. Outside the useMemo because the
-  // listener closes over it; per-editor, so two editors do not fight over one marker.
-  const lastSearchSpecRef = useRef("");
-  const rawTextRef = useRef("");
-  // Paste-from-file (burpsy-react-ui-cto2): a hidden input is the only way a web page reads a
-  // file the operator picked, and it must live in the DOM to be clickable. Cleared after every
-  // change so choosing the same file twice still fires (the app's config import does the same).
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const pasteFromFile = useCallback(
-    (file: File) => {
-      const reader = new FileReader();
-      // Text decode: the editor's value IS text — a binary file pasted as text arrives with
-      // replacement characters rather than as raw bytes, and Raw shows exactly that, which is
-      // the honest outcome. Burp's own paste-from-file treats the file as text in the text tabs.
-      reader.readAsText(file);
-      reader.onload = () => {
-        const text = String(reader.result ?? "");
-        // Replace, not insert: the point is loading a request/response from disk, and a
-        // replace is what "paste the file into this message" means when the message is a draft.
-        onChange?.(text);
-      };
-      reader.onerror = () => {};
-    },
-    [onChange],
-  );
-  const extensions = useMemo<Extension[]>(() => {
-    // CodeMirror's content element renders with role="textbox" but nothing in @uiw/react-codemirror's
-    // own props reaches it — the wrapper spreads unknown props onto its outer container, not the
-    // content DOM node CM6 owns internally. contentAttributes is CM6's own mechanism for setting
-    // attributes on that exact element, so this is the only place `label` (already a required prop,
-    // used nowhere else for accessibility) actually becomes the textbox's accessible name. Found by
-    // the e2e a11y suite's first real run: every route with an HttpEditor failed "aria-label attribute
-    // does not exist" on this element, because every route has at least one.
-    const base: Extension[] = [
-      httpHighlight,
-      burpEditorKeys,
-      EditorView.contentAttributes.of({ "aria-label": label }),
-      // Keeps the codec menu entries honest about whether they have anything to act on.
-      EditorView.updateListener.of((update) => {
-        if (!update.selectionSet && !update.docChanged) return;
-        setHasSelection(update.state.selection.ranges.some((range) => !range.empty));
-      }),
-      // burpsy-react-ui-czw9: when the search panel is open and the query text changes, scroll
-      // to the first match immediately — Burp's message search steps through matches as the
-      // text changes, while CodeMirror's own panel only moves the viewport on Enter (its
-      // commit() dispatches setSearchQuery; scrolling lives in findNext/replaceNext alone).
-      // The re-find runs from position 0 rather than from the caret, so what the operator sees
-      // tracks the text they type: first match of the new term, not of the old selection.
-      EditorView.updateListener.of((update) => {
-        if (!searchPanelOpen(update.state)) return;
-        const query = getSearchQuery(update.state);
-        // React only when the query text changed (the panel's commit), not on every keystroke
-        // in the document: a doc edit while a search is open must not yank the viewport.
-        // lastSearchSpecRef lives outside the useMemo, so the closure survives re-renders.
-        if (query.search === lastSearchSpecRef.current) return;
-        lastSearchSpecRef.current = query.search;
-        if (!query.search || !query.valid) return;
-        // StringCursor only: a plain string with the query's own case sensitivity covers the
-        // message search that matters (find "token", "password", a header name). Regexp and
-        // whole-word queries keep CodeMirror's Enter-to-step behaviour rather than having this
-        // extension reimplement their matching.
-        if (query.regexp || query.wholeWord) return;
-        const cursor = new SearchCursor(
-          update.state.doc,
-          query.search,
-          0,
-          update.state.doc.length,
-          query.caseSensitive ? undefined : (s) => s.toLowerCase(),
-        );
-        cursor.next();
-        if (cursor.done) return;
-        update.view.dispatch({
-          selection: { anchor: cursor.value.from, head: cursor.value.to },
-          effects: EditorView.scrollIntoView(cursor.value.from, { y: "center" }),
-        });
-      }),
-    ];
-    if (wrap) base.push(EditorView.lineWrapping);
-    if (showNonPrinting) base.push(nonPrintingGlyphs, nonPrintingEOLPlugin(rawTextRef));
-    return base;
-  }, [wrap, showNonPrinting, label]);
-
-  const bytes = useMemo(() => new TextEncoder().encode(value).length, [value]);
-  const response = useMemo(() => isResponse(value), [value]);
-  const renderable = useMemo(() => response && /html/i.test(contentTypeOf(value)), [response, value]);
-
-  // Pretty is only offered when it would actually change something.
-  const prettied = useMemo(() => (views ? prettyMessage(value) : value), [views, value]);
-  const canPretty = views && prettied !== value;
-
-  // The typed views follow Pretty's discipline: each detector returns null unless the
-  // message really carries the thing, and the tab exists only when it does. All three
-  // are skipped outright for non-HTTP payloads, which is also what keeps them off the
-  // per-keystroke path in the decoder and the WebSocket panes.
-  const graphql = useMemo(() => (views ? detectGraphQL(value) : null), [views, value]);
-  const jwt = useMemo(() => (views ? findJwts(value) : null), [views, value]);
-  const params = useMemo(() => (views ? paramsOf(value) : null), [views, value]);
-
-  const available: MessageView[] = views
-    ? ([
-        ...(canPretty ? ["pretty"] : []),
-        "raw",
-        "hex",
-        ...(renderable ? ["render"] : []),
-        ...(graphql ? ["graphql"] : []),
-        ...(jwt && jwt.tokens.length ? ["jwt"] : []),
-        ...(params && params.rows.length ? ["params"] : []),
-      ] as MessageView[])
-    : [];
-
-  // Resolve the active view. The "raw" initial state means "the operator has not
-  // chosen yet", and for an unchosen editor a formattable body opens on Pretty —
-  // Burp's default (burpsy-react-ui-vet): a migrating operator who has to click
-  // Pretty on every JSON body has been told their preference does not matter. An
-  // explicit click, including a click back to Raw, wins for the life of this
-  // editor pane, which is also how Burp treats a pane once the operator has
-  // expressed a preference. A message whose Pretty view disappears falls back to
-  // Raw, the only view every message has.
-  const pickedRef = useRef(false);
-  const pick = useCallback((candidate: MessageView) => {
-    pickedRef.current = true;
-    setView(candidate);
-  }, []);
-  const active: MessageView = available.includes(view)
-    ? view
-    : !pickedRef.current && canPretty
-      ? "pretty"
-      : "raw";
-  const shown = active === "pretty" ? prettied : value;
-  // Refreshed every render, before any plugin constructor or update can run: the EOL plugin
-  // names breaks off the raw text (CM6 normalises CRLF away in the document), and reading it
-  // here keeps `value` out of the extensions useMemo deps - which would otherwise rebuild the
-  // whole extension set on every keystroke. This must stay outside that useMemo: its factory
-  // runs on mount, before this line exists, which is a first-render TDZ crash.
-  rawTextRef.current = shown;
-  // What the toolbar's Copy hands over. Hex still copies a dump — that is what an
-  // operator pasting into a ticket wants, and it is why message.ts's read-only
-  // hexDump did not go away when the view became editable.
-  const clipboard = active === "pretty" ? prettied : active === "hex" ? hexDump(value) : value;
-
-  // A Hex selection handed to the Raw view. The byte range is mapped to a character
-  // range on the way, because the two views index the same message differently.
-  const cmViewRef = useRef<EditorView | null>(null);
-  const [cmEpoch, setCmEpoch] = useState(0);
-  const [reveal, setReveal] = useState<{ from: number; to: number } | null>(null);
-  useEffect(() => {
-    if (!reveal || active !== "raw") return;
-    const cm = cmViewRef.current;
-    // No view yet means CodeMirror has not mounted for this switch; cmEpoch bumps on
-    // creation, which re-runs this effect rather than dropping the selection.
-    if (!cm) return;
-    const from = Math.min(reveal.from, cm.state.doc.length);
-    const to = Math.min(reveal.to, cm.state.doc.length);
-    cm.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
-    cm.focus();
-    setReveal(null);
-  }, [reveal, active, cmEpoch]);
-
-  /**
-   * Burp's "Convert selection", as menu entries rather than keystrokes alone.
-   *
-   * The chords in burpEditorKeys above are the same six transforms, and they were the only way
-   * to reach them: a codec an operator has to already know about is a codec most operators never
-   * find. These run the identical `transformSelection` path, so the menu and the keyboard cannot
-   * diverge, and each row shows its own chord so the menu also teaches them.
-   *
-   * Offered only on the Raw view, which is the only view CodeMirror owns and the only one whose
-   * bytes are the message's real bytes — converting a selection of a reformatted body would write
-   * the reformatting back into the request.
-   */
-  const runTransform = useCallback((transform: (input: string) => string) => {
-    const cm = cmViewRef.current;
-    if (cm) transformSelection(cm, transform);
-  }, []);
-
-  /**
-   * Burp's "Insert Collaborator payload" (burpsy-react-ui-0ax): mint one server-side and drop
-   * its address at the caret, replacing any selection. Offered on Raw and Pretty alike - both
-   * are the same CodeMirror document, and a Pretty insert writes back through compactMessage
-   * exactly like a typed one. The mint is server-side because the address has to be a payload
-   * the polling loop already knows; inventing a subdomain client-side would insert an address
-   * no interaction could ever come back on.
-   */
-  const mint = useMintPayload();
-  const insertCollaboratorPayload = useCallback(() => {
-    const cm = cmViewRef.current;
-    if (!cm) {
-      toast.error("Open the Raw or Pretty view to insert a payload");
-      return;
-    }
-    mint.mutate(undefined, {
-      onSuccess: (payload) => {
-        const view = cmViewRef.current;
-        if (!view) return;
-        const sel = view.state.selection.main;
-        view.dispatch({
-          changes: { from: sel.from, to: sel.to, insert: payload.address },
-          selection: { anchor: sel.from + payload.address.length },
-          scrollIntoView: true,
-        });
-        view.focus();
-        toast.success(`Inserted Collaborator payload ${payload.address}`);
-      },
-      onError: (failure: unknown) =>
-        toast.error(failure instanceof Error ? failure.message : "Minting a Collaborator payload failed"),
-    });
-  }, [mint]);
-
-  const selectionGroups = useMemo<MenuGroup[]>(() => {
-    const groups: MenuGroup[] = [];
-    if (editable && (active === "raw" || active === "pretty")) {
-      groups.push({
-        id: "collaborator",
-        actions: [
-          {
-            id: "insert-payload",
-            label: "Insert Collaborator payload",
-            icon: RadioTower,
-            disabled: mint.isPending,
-            onSelect: insertCollaboratorPayload,
-          },
-        ],
-      });
-    }
-    if (active !== "raw") return groups;
-    if (payloadMarks) {
-      groups.push({
-        id: "payload-marks",
-        actions: [
-          {
-            id: "add-payload-mark",
-            label: "Add \u00a7 payload marker",
-            disabled: !hasSelection,
-            onSelect: () => {
-              const cm = cmViewRef.current;
-              if (!cm) return;
-              const sel = cm.state.selection.main;
-              payloadMarks.onAdd({ start: sel.from, end: sel.to, text: cm.state.sliceDoc(sel.from, sel.to) });
-            },
-          },
-        ],
-      });
-    }
-    const codec = (id: string, label: string, shortcut: string, transform: (input: string) => string) => ({
-      id,
-      label,
-      shortcut,
-      disabled: !hasSelection,
-      onSelect: () => runTransform(transform),
-    });
-    groups.push(
-      {
-        id: "convert-selection",
-        title: hasSelection ? "Convert selection" : "Convert selection (select text first)",
-        actions: [
-          codec("url-encode", "URL-encode", "Ctrl+U", urlEncodeKeyChars),
-          codec("url-decode", "URL-decode", "Ctrl+Shift+U", urlDecode),
-          codec("html-encode", "HTML-encode", "Ctrl+H", htmlEncodeKeyChars),
-          codec("html-decode", "HTML-decode", "Ctrl+Shift+H", htmlDecode),
-          codec("b64-encode", "Base64-encode", "Ctrl+B", base64Encode),
-          codec("b64-decode", "Base64-decode", "Ctrl+Shift+B", base64Decode),
-        ],
-      },
-      {
-        id: "editor-find",
-        actions: [
-          {
-            id: "find",
-            label: "Find in this message",
-            icon: Search,
-            shortcut: "Ctrl+S",
-            onSelect: () => {
-              const cm = cmViewRef.current;
-              if (!cm) return;
-              openSearchPanel(cm);
-              cm.focus();
-            },
-          },
-        ],
-      },
+ const editable = !readOnly && Boolean(onChange);
+ // The search spec this editor last auto-scrolled for. Outside the useMemo because the
+ // listener closes over it; per-editor, so two editors do not fight over one marker.
+ const lastSearchSpecRef = useRef("");
+ const rawTextRef = useRef("");
+ // Paste-from-file (burpsy-react-ui-cto2): a hidden input is the only way a web page reads a
+ // file the operator picked, and it must live in the DOM to be clickable. Cleared after every
+ // change so choosing the same file twice still fires (the app's config import does the same).
+ const fileInputRef = useRef<HTMLInputElement>(null);
+ const pasteFromFile = useCallback(
+  (file: File) => {
+   const reader = new FileReader();
+   // Text decode: the editor's value IS text — a binary file pasted as text arrives with
+   // replacement characters rather than as raw bytes, and Raw shows exactly that, which is
+   // the honest outcome. Burp's own paste-from-file treats the file as text in the text tabs.
+   reader.readAsText(file);
+   reader.onload = () => {
+    const text = String(reader.result ?? "");
+    // Replace, not insert: the point is loading a request/response from disk, and a
+    // replace is what "paste the file into this message" means when the message is a draft.
+    onChange?.(text);
+   };
+   reader.onerror = () => { };
+  },
+  [onChange],
+ );
+ const extensions = useMemo<Extension[]>(() => {
+  // CodeMirror's content element renders with role="textbox" but nothing in @uiw/react-codemirror's
+  // own props reaches it — the wrapper spreads unknown props onto its outer container, not the
+  // content DOM node CM6 owns internally. contentAttributes is CM6's own mechanism for setting
+  // attributes on that exact element, so this is the only place `label` (already a required prop,
+  // used nowhere else for accessibility) actually becomes the textbox's accessible name. Found by
+  // the e2e a11y suite's first real run: every route with an HttpEditor failed "aria-label attribute
+  // does not exist" on this element, because every route has at least one.
+  const base: Extension[] = [
+   httpHighlight,
+   burpEditorKeys,
+   EditorView.contentAttributes.of({ "aria-label": label }),
+   // Keeps the codec menu entries honest about whether they have anything to act on.
+   EditorView.updateListener.of((update) => {
+    if (!update.selectionSet && !update.docChanged) return;
+    setHasSelection(update.state.selection.ranges.some((range) => !range.empty));
+   }),
+   // burpsy-react-ui-czw9: when the search panel is open and the query text changes, scroll
+   // to the first match immediately — Burp's message search steps through matches as the
+   // text changes, while CodeMirror's own panel only moves the viewport on Enter (its
+   // commit() dispatches setSearchQuery; scrolling lives in findNext/replaceNext alone).
+   // The re-find runs from position 0 rather than from the caret, so what the operator sees
+   // tracks the text they type: first match of the new term, not of the old selection.
+   EditorView.updateListener.of((update) => {
+    if (!searchPanelOpen(update.state)) return;
+    const query = getSearchQuery(update.state);
+    // React only when the query text changed (the panel's commit), not on every keystroke
+    // in the document: a doc edit while a search is open must not yank the viewport.
+    // lastSearchSpecRef lives outside the useMemo, so the closure survives re-renders.
+    if (query.search === lastSearchSpecRef.current) return;
+    lastSearchSpecRef.current = query.search;
+    if (!query.search || !query.valid) return;
+    // StringCursor only: a plain string with the query's own case sensitivity covers the
+    // message search that matters (find "token", "password", a header name). Regexp and
+    // whole-word queries keep CodeMirror's Enter-to-step behaviour rather than having this
+    // extension reimplement their matching.
+    if (query.regexp || query.wholeWord) return;
+    const cursor = new SearchCursor(
+     update.state.doc,
+     query.search,
+     0,
+     update.state.doc.length,
+     query.caseSensitive ? undefined : (s) => s.toLowerCase(),
     );
-    return groups;
-  }, [active, editable, hasSelection, runTransform, insertCollaboratorPayload, mint.isPending, payloadMarks]);
+    cursor.next();
+    if (cursor.done) return;
+    update.view.dispatch({
+     selection: { anchor: cursor.value.from, head: cursor.value.to },
+     effects: EditorView.scrollIntoView(cursor.value.from, { y: "center" }),
+    });
+   }),
+  ];
+  if (wrap) base.push(EditorView.lineWrapping);
+  if (showNonPrinting) base.push(nonPrintingGlyphs, nonPrintingEOLPlugin(rawTextRef));
+  return base;
+ }, [wrap, showNonPrinting, label]);
 
-  const allGroups = useMemo<MenuGroup[]>(
-    () => [...(menuGroups ?? []), ...selectionGroups],
-    [menuGroups, selectionGroups],
+ const bytes = useMemo(() => new TextEncoder().encode(value).length, [value]);
+ const response = useMemo(() => isResponse(value), [value]);
+ // Render covers both of Burp's renderable shapes (tools/message-editor/index.html): HTML through
+ // the sandboxed iframe, and images through a data URL over the body bytes — a CAPTCHA, a QR
+ // code, an IDOR'd avatar are ordinary findings whose evidence is the stored response itself
+ // (burpsy-react-ui-n7n). The body in `value` is decoded as Latin-1 text (one char per byte), so
+ // round-tripping through charCodeAt recovers the exact bytes without a second fetch.
+ const contentType = useMemo(() => contentTypeOf(value).toLowerCase(), [value]);
+ const renderable = useMemo(() => response && (/html/i.test(contentType) || /^image\//.test(contentType)), [response, contentType]);
+ const imageDataUrl = useMemo(() => {
+  if (!/^image\//.test(contentType)) return null;
+  if (bodyBase64) return `data:${contentType};base64,${bodyBase64}`;
+  const body = bodyOf(value);
+  const bytes = new Uint8Array(body.length);
+  for (let i = 0; i < body.length; i++) bytes[i] = body.charCodeAt(i) & 0xff;
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+   binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return `data:${contentType};base64,${btoa(binary)}`;
+ }, [contentType, value, bodyBase64]);
+
+ // Pretty is only offered when it would actually change something.
+ const prettied = useMemo(() => (views ? prettyMessage(value) : value), [views, value]);
+ const canPretty = views && prettied !== value;
+
+ // The typed views follow Pretty's discipline: each detector returns null unless the
+ // message really carries the thing, and the tab exists only when it does. All three
+ // are skipped outright for non-HTTP payloads, which is also what keeps them off the
+ // per-keystroke path in the decoder and the WebSocket panes.
+ const graphql = useMemo(() => (views ? detectGraphQL(value) : null), [views, value]);
+ const jwt = useMemo(() => (views ? findJwts(value) : null), [views, value]);
+ const params = useMemo(() => (views ? paramsOf(value) : null), [views, value]);
+
+ const available: MessageView[] = views
+  ? ([
+   ...(canPretty ? ["pretty"] : []),
+   "raw",
+   "hex",
+   ...(renderable ? ["render"] : []),
+   ...(graphql ? ["graphql"] : []),
+   ...(jwt && jwt.tokens.length ? ["jwt"] : []),
+   ...(params && params.rows.length ? ["params"] : []),
+  ] as MessageView[])
+  : [];
+
+ // Resolve the active view. The "raw" initial state means "the operator has not
+ // chosen yet", and for an unchosen editor a formattable body opens on Pretty —
+ // Burp's default (burpsy-react-ui-vet): a migrating operator who has to click
+ // Pretty on every JSON body has been told their preference does not matter. An
+ // explicit click, including a click back to Raw, wins for the life of this
+ // editor pane, which is also how Burp treats a pane once the operator has
+ // expressed a preference. A message whose Pretty view disappears falls back to
+ // Raw, the only view every message has.
+ const pickedRef = useRef(false);
+ const pick = useCallback((candidate: MessageView) => {
+  pickedRef.current = true;
+  setView(candidate);
+ }, []);
+ const active: MessageView = available.includes(view)
+  ? view
+  : !pickedRef.current && canPretty
+   ? "pretty"
+   : "raw";
+ const shown = active === "pretty" ? prettied : value;
+ // Refreshed every render, before any plugin constructor or update can run: the EOL plugin
+ // names breaks off the raw text (CM6 normalises CRLF away in the document), and reading it
+ // here keeps `value` out of the extensions useMemo deps - which would otherwise rebuild the
+ // whole extension set on every keystroke. This must stay outside that useMemo: its factory
+ // runs on mount, before this line exists, which is a first-render TDZ crash.
+ rawTextRef.current = shown;
+ // What the toolbar's Copy hands over. Hex still copies a dump — that is what an
+ // operator pasting into a ticket wants, and it is why message.ts's read-only
+ // hexDump did not go away when the view became editable.
+ const clipboard = active === "pretty" ? prettied : active === "hex" ? hexDump(value) : value;
+
+ // A Hex selection handed to the Raw view. The byte range is mapped to a character
+ // range on the way, because the two views index the same message differently.
+ const cmViewRef = useRef<EditorView | null>(null);
+ const [cmEpoch, setCmEpoch] = useState(0);
+ const [reveal, setReveal] = useState<{ from: number; to: number } | null>(null);
+ useEffect(() => {
+  if (!reveal || active !== "raw") return;
+  const cm = cmViewRef.current;
+  // No view yet means CodeMirror has not mounted for this switch; cmEpoch bumps on
+  // creation, which re-runs this effect rather than dropping the selection.
+  if (!cm) return;
+  const from = Math.min(reveal.from, cm.state.doc.length);
+  const to = Math.min(reveal.to, cm.state.doc.length);
+  cm.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
+  cm.focus();
+  setReveal(null);
+ }, [reveal, active, cmEpoch]);
+
+ /**
+  * Burp's "Convert selection", as menu entries rather than keystrokes alone.
+  *
+  * The chords in burpEditorKeys above are the same six transforms, and they were the only way
+  * to reach them: a codec an operator has to already know about is a codec most operators never
+  * find. These run the identical `transformSelection` path, so the menu and the keyboard cannot
+  * diverge, and each row shows its own chord so the menu also teaches them.
+  *
+  * Offered only on the Raw view, which is the only view CodeMirror owns and the only one whose
+  * bytes are the message's real bytes — converting a selection of a reformatted body would write
+  * the reformatting back into the request.
+  */
+ const runTransform = useCallback((transform: (input: string) => string) => {
+  const cm = cmViewRef.current;
+  if (cm) transformSelection(cm, transform);
+ }, []);
+
+ /**
+  * Burp's "Insert Collaborator payload" (burpsy-react-ui-0ax): mint one server-side and drop
+  * its address at the caret, replacing any selection. Offered on Raw and Pretty alike - both
+  * are the same CodeMirror document, and a Pretty insert writes back through compactMessage
+  * exactly like a typed one. The mint is server-side because the address has to be a payload
+  * the polling loop already knows; inventing a subdomain client-side would insert an address
+  * no interaction could ever come back on.
+  */
+ const mint = useMintPayload();
+ const insertCollaboratorPayload = useCallback(() => {
+  const cm = cmViewRef.current;
+  if (!cm) {
+   toast.error("Open the Raw or Pretty view to insert a payload");
+   return;
+  }
+  mint.mutate(undefined, {
+   onSuccess: (payload) => {
+    const view = cmViewRef.current;
+    if (!view) return;
+    const sel = view.state.selection.main;
+    view.dispatch({
+     changes: { from: sel.from, to: sel.to, insert: payload.address },
+     selection: { anchor: sel.from + payload.address.length },
+     scrollIntoView: true,
+    });
+    view.focus();
+    toast.success(`Inserted Collaborator payload ${payload.address}`);
+   },
+   onError: (failure: unknown) =>
+    toast.error(failure instanceof Error ? failure.message : "Minting a Collaborator payload failed"),
+  });
+ }, [mint]);
+
+ const selectionGroups = useMemo<MenuGroup[]>(() => {
+  const groups: MenuGroup[] = [];
+  if (editable && (active === "raw" || active === "pretty")) {
+   groups.push({
+    id: "collaborator",
+    actions: [
+     {
+      id: "insert-payload",
+      label: "Insert Collaborator payload",
+      icon: RadioTower,
+      disabled: mint.isPending,
+      onSelect: insertCollaboratorPayload,
+     },
+    ],
+   });
+  }
+  if (active !== "raw") return groups;
+  if (payloadMarks) {
+   groups.push({
+    id: "payload-marks",
+    actions: [
+     {
+      id: "add-payload-mark",
+      label: "Add \u00a7 payload marker",
+      disabled: !hasSelection,
+      onSelect: () => {
+       const cm = cmViewRef.current;
+       if (!cm) return;
+       const sel = cm.state.selection.main;
+       payloadMarks.onAdd({ start: sel.from, end: sel.to, text: cm.state.sliceDoc(sel.from, sel.to) });
+      },
+     },
+    ],
+   });
+  }
+  const codec = (id: string, label: string, shortcut: string, transform: (input: string) => string) => ({
+   id,
+   label,
+   shortcut,
+   disabled: !hasSelection,
+   onSelect: () => runTransform(transform),
+  });
+  groups.push(
+   {
+    id: "convert-selection",
+    title: hasSelection ? "Convert selection" : "Convert selection (select text first)",
+    actions: [
+     codec("url-encode", "URL-encode", "Ctrl+U", urlEncodeKeyChars),
+     codec("url-decode", "URL-decode", "Ctrl+Shift+U", urlDecode),
+     codec("html-encode", "HTML-encode", "Ctrl+H", htmlEncodeKeyChars),
+     codec("html-decode", "HTML-decode", "Ctrl+Shift+H", htmlDecode),
+     codec("b64-encode", "Base64-encode", "Ctrl+B", base64Encode),
+     codec("b64-decode", "Base64-decode", "Ctrl+Shift+B", base64Decode),
+    ],
+   },
+   {
+    id: "editor-find",
+    actions: [
+     {
+      id: "find",
+      label: "Find in this message",
+      icon: Search,
+      shortcut: "Ctrl+S",
+      onSelect: () => {
+       const cm = cmViewRef.current;
+       if (!cm) return;
+       openSearchPanel(cm);
+       cm.focus();
+      },
+     },
+    ],
+   },
   );
+  return groups;
+ }, [active, editable, hasSelection, runTransform, insertCollaboratorPayload, mint.isPending, payloadMarks]);
 
-  return (
-    <div className={cn("editor-shell", className)}>
-      <div className="editor-bar">
-        <span className="editor-label-inline">{label}</span>
-        {available.length ? (
-          <div className="editor-views" role="tablist" aria-label={`${label} view`}>
-            {available.map((candidate) => (
-              <button
-                key={candidate}
-                type="button"
-                role="tab"
-                aria-selected={candidate === active}
-                className={candidate === active ? "editor-view editor-view-active" : "editor-view"}
-                onClick={() => pick(candidate)}
-              >
-                {VIEW_LABELS[candidate]}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <span className="editor-meta">{formatBytes(bytes)}</span>
-        <div className="editor-bar-actions">
-          {actions}
-          {/* Burp's Actions button: the same menu the right-click opens, for an operator who has
+ const allGroups = useMemo<MenuGroup[]>(
+  () => [...(menuGroups ?? []), ...selectionGroups],
+  [menuGroups, selectionGroups],
+ );
+
+ return (
+  <div className={cn("editor-shell", className)}>
+   <div className="editor-bar">
+    <span className="editor-label-inline">{label}</span>
+    {available.length ? (
+     <div className="editor-views" role="tablist" aria-label={`${label} view`}>
+      {available.map((candidate) => (
+       <button
+        key={candidate}
+        type="button"
+        role="tab"
+        aria-selected={candidate === active}
+        className={candidate === active ? "editor-view editor-view-active" : "editor-view"}
+        onClick={() => pick(candidate)}
+       >
+        {VIEW_LABELS[candidate]}
+       </button>
+      ))}
+     </div>
+    ) : null}
+    <span className="editor-meta">{formatBytes(bytes)}</span>
+    <div className="editor-bar-actions">
+     {actions}
+     {/* Burp's Actions button: the same menu the right-click opens, for an operator who has
               not learned that the message pane has one. Hidden rather than disabled when there is
               nothing in it — an editor with no exchange behind it and no Raw view (a close frame,
               a rendered response) genuinely has no actions, and a dead button says otherwise. */}
-          {hasMenuActions(allGroups) ? (
-            <DropdownMenu
-              groups={allGroups}
-              trigger={
-                // A plain button, not IconButton: IconButton wraps its <button> in a Tooltip,
-                // which is a second Radix `asChild` layer, and stacking two of them on one node
-                // means two sets of merged handlers on the same element. app.tsx's menu bar uses
-                // a bare button as its trigger for the same reason. `title` carries the hover
-                // text the Tooltip would have.
-                <button
-                  type="button"
-                  className="icon-button icon-button-sm"
-                  aria-label={`Actions for ${label}`}
-                  title={`Actions for ${label}`}
-                >
-                  <MoreHorizontal size={13} />
-                </button>
-              }
-            />
-          ) : null}
-          {/* Wrapping is a CodeMirror setting, so the toggle is offered only on the two
+     {hasMenuActions(allGroups) ? (
+      <DropdownMenu
+       groups={allGroups}
+       trigger={
+        // A plain button, not IconButton: IconButton wraps its <button> in a Tooltip,
+        // which is a second Radix `asChild` layer, and stacking two of them on one node
+        // means two sets of merged handlers on the same element. app.tsx's menu bar uses
+        // a bare button as its trigger for the same reason. `title` carries the hover
+        // text the Tooltip would have.
+        <button
+         type="button"
+         className="icon-button icon-button-sm"
+         aria-label={`Actions for ${label}`}
+         title={`Actions for ${label}`}
+        >
+         <MoreHorizontal size={13} />
+        </button>
+       }
+      />
+     ) : null}
+     {/* Wrapping is a CodeMirror setting, so the toggle is offered only on the two
               views CodeMirror renders. It used to be hidden for Render alone, which left
               a dead control on Hex. */}
-          {active === "pretty" || active === "raw" ? (
-            <IconButton
-              label={wrap ? "Disable wrapping" : "Enable wrapping"}
-              size="small"
-              aria-pressed={wrap}
-              onClick={() => setWrap((current) => !current)}
-            >
-              <WrapText size={13} />
-            </IconButton>
-          ) : null}
-          {active === "pretty" || active === "raw" ? (
-            <IconButton
-              label={showNonPrinting ? "Hide non-printing characters" : "Show non-printing characters"}
-              title="Render bytes below 0x20 and 0x7F-0xFF as visible glyphs (Burp's \n)"
-              size="small"
-              aria-pressed={showNonPrinting}
-              onClick={() => setShowNonPrinting((current) => !current)}
-            >
-              <Pilcrow size={13} />
-            </IconButton>
-          ) : null}
-          {editable ? (
-            <IconButton
-              label="Paste from file"
-              size="small"
-              title="Load a message body from a file on your machine"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <ClipboardPaste size={13} />
-            </IconButton>
-          ) : null}
-          <IconButton label="Copy message" size="small" onClick={() => void copyToClipboard(clipboard)}>
-            <Copy size={13} />
-          </IconButton>
-          <IconButton label="Save to file" size="small" onClick={() => downloadText(filename, value)}>
-            <Download size={13} />
-          </IconButton>
-        </div>
-      </div>
-      {/* The right-click surface is the message body, not the whole shell: the toolbar's own
+     {active === "pretty" || active === "raw" ? (
+      <IconButton
+       label={wrap ? "Disable wrapping" : "Enable wrapping"}
+       size="small"
+       aria-pressed={wrap}
+       onClick={() => setWrap((current) => !current)}
+      >
+       <WrapText size={13} />
+      </IconButton>
+     ) : null}
+     {active === "pretty" || active === "raw" ? (
+      <IconButton
+       label={showNonPrinting ? "Hide non-printing characters" : "Show non-printing characters"}
+       title="Render bytes below 0x20 and 0x7F-0xFF as visible glyphs (Burp's \n)"
+       size="small"
+       aria-pressed={showNonPrinting}
+       onClick={() => setShowNonPrinting((current) => !current)}
+      >
+       <Pilcrow size={13} />
+      </IconButton>
+     ) : null}
+     {editable ? (
+      <IconButton
+       label="Paste from file"
+       size="small"
+       title="Load a message body from a file on your machine"
+       onClick={() => fileInputRef.current?.click()}
+      >
+       <ClipboardPaste size={13} />
+      </IconButton>
+     ) : null}
+     <IconButton label="Copy message" size="small" onClick={() => void copyToClipboard(clipboard)}>
+      <Copy size={13} />
+     </IconButton>
+     <IconButton label="Save to file" size="small" onClick={() => downloadText(filename, value)}>
+      <Download size={13} />
+     </IconButton>
+    </div>
+   </div>
+   {/* The right-click surface is the message body, not the whole shell: the toolbar's own
           controls keep the browser's menu, and the Render view keeps it too — that iframe is
           sandboxed attacker-controlled HTML, and putting a Radix trigger over it would replace
           the browser's own "open image in new tab" affordances on rendered content for no gain. */}
-      <ContextMenu groups={active === "render" ? [] : allGroups}>
-      <div className="editor-body" style={{ height }}>
-        {active === "render" ? (
-          // No scripts, no same-origin, no forms: a captured response is attacker
-          // controlled and must never run inside the console's own origin.
-          <iframe
-            className="render-frame"
-            title={`${label} rendered`}
-            sandbox=""
-            srcDoc={bodyOf(value)}
-          />
-        ) : active === "hex" ? (
-          <HexEditor
-            value={shown}
-            onChange={editable ? onChange : undefined}
-            label={label}
-            onRevealInRaw={
-              views
-                ? (selection) => {
-                    // Hex indexes bytes; Raw indexes UTF-16 code units over the same
-                    // message. The reveal maps the selected byte range to the character
-                    // range Raw will scroll to, which is what byteOffsetToCharIndex
-                    // exists for — without it a selection past a multibyte character
-                    // lands one or more characters off.
-                    setReveal({
-                      from: byteOffsetToCharIndex(value, selection.from),
-                      to: byteOffsetToCharIndex(value, selection.to),
-                    });
-                    pick("raw");
-                  }
-                : undefined
-            }
-          />
-        ) : active === "graphql" && graphql ? (
-          <GraphQLView document={graphql} />
-        ) : active === "jwt" && jwt ? (
-          <JwtView report={jwt} />
-        ) : active === "params" && params ? (
-          <ParamsView report={params} />
-        ) : (
-          <CodeMirror
-            value={shown}
-            onChange={
-              // Raw edits are the bytes; a Pretty edit is the operator editing the
-              // readable form, written back through compactMessage so the wire keeps
-              // the body compacted exactly as it was (burpsy-react-ui-dmf) — the same
-              // deal Burp offers ("In this tab, you can access all the same
-              // functionality as in the Raw tab"), and the reason the sent request
-              // never silently grows to the pretty layout. A mid-edit JSON parse
-              // failure passes the operator's text through untouched, and Raw then
-              // shows precisely what they typed.
-              active === "pretty" && editable
-                ? (next) => onChange?.(compactMessage(next))
-                : active === "raw"
-                  ? onChange
-                  : undefined
-            }
-            editable={editable && (active === "raw" || active === "pretty")}
-            readOnly={!(editable && (active === "raw" || active === "pretty"))}
-            height="100%"
-            theme={editorTheme}
-            extensions={extensions}
-            placeholder={placeholder}
-            onCreateEditor={(view) => {
-              // The reveal effect below needs the mounted view to exist; the epoch bump
-              // re-runs it when the editor mounts after the reveal was already set — the
-              // hex-selection-then-switch-tabs path hits exactly that order.
-              cmViewRef.current = view;
-              setCmEpoch((epoch) => epoch + 1);
-            }}
-            basicSetup={{
-              lineNumbers: true,
-              foldGutter: false,
-              autocompletion: false,
-              bracketMatching: false,
-              closeBrackets: false,
-              highlightActiveLine: editable && (active === "raw" || active === "pretty"),
-              highlightActiveLineGutter: editable && (active === "raw" || active === "pretty"),
-              searchKeymap: true,
-              indentOnInput: false,
-            }}
-          />
-        )}
+   <ContextMenu groups={active === "render" ? [] : allGroups}>
+    <div className="editor-body" style={{ height }}>
+     {active === "render" && imageDataUrl ? (
+      // An image response: render the stored bytes as the browser would show them. Same
+      // attacker-controlled caution as the iframe — the data URL renders pixels and runs
+      // nothing; it is an <img>, not an <object> or <embed>.
+      <div className="render-frame render-image" role="img" aria-label={`${label} rendered`}>
+       <img src={imageDataUrl} alt={`${label} rendered response body`} />
       </div>
-      </ContextMenu>
-      <input
-        ref={fileInputRef}
-        type="file"
-        className="sr-only"
-        aria-hidden="true"
-        tabIndex={-1}
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) pasteFromFile(file);
-          event.target.value = "";
-        }}
+     ) : active === "render" ? (
+      // No scripts, no same-origin, no forms: a captured response is attacker
+      // controlled and must never run inside the console's own origin.
+      <iframe
+       className="render-frame"
+       title={`${label} rendered`}
+       sandbox=""
+       srcDoc={bodyOf(value)}
       />
-      {editable && active !== "raw" && active !== "hex" && active !== "pretty" ? (
-        <div className="editor-note">
-          Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back.
-        </div>
-      ) : null}
+     ) : active === "hex" ? (
+      <HexEditor
+       value={shown}
+       onChange={editable ? onChange : undefined}
+       label={label}
+       onRevealInRaw={
+        views
+         ? (selection) => {
+          // Hex indexes bytes; Raw indexes UTF-16 code units over the same
+          // message. The reveal maps the selected byte range to the character
+          // range Raw will scroll to, which is what byteOffsetToCharIndex
+          // exists for — without it a selection past a multibyte character
+          // lands one or more characters off.
+          setReveal({
+           from: byteOffsetToCharIndex(value, selection.from),
+           to: byteOffsetToCharIndex(value, selection.to),
+          });
+          pick("raw");
+         }
+         : undefined
+       }
+      />
+     ) : active === "graphql" && graphql ? (
+      <GraphQLView document={graphql} />
+     ) : active === "jwt" && jwt ? (
+      <JwtView report={jwt} />
+     ) : active === "params" && params ? (
+      <ParamsView report={params} />
+     ) : (
+      <CodeMirror
+       value={shown}
+       onChange={
+        // Raw edits are the bytes; a Pretty edit is the operator editing the
+        // readable form, written back through compactMessage so the wire keeps
+        // the body compacted exactly as it was (burpsy-react-ui-dmf) — the same
+        // deal Burp offers ("In this tab, you can access all the same
+        // functionality as in the Raw tab"), and the reason the sent request
+        // never silently grows to the pretty layout. A mid-edit JSON parse
+        // failure passes the operator's text through untouched, and Raw then
+        // shows precisely what they typed.
+        active === "pretty" && editable
+         ? (next) => onChange?.(compactMessage(next))
+         : active === "raw"
+          ? onChange
+          : undefined
+       }
+       editable={editable && (active === "raw" || active === "pretty")}
+       readOnly={!(editable && (active === "raw" || active === "pretty"))}
+       height="100%"
+       theme={editorTheme}
+       extensions={extensions}
+       placeholder={placeholder}
+       onCreateEditor={(view) => {
+        // The reveal effect below needs the mounted view to exist; the epoch bump
+        // re-runs it when the editor mounts after the reveal was already set — the
+        // hex-selection-then-switch-tabs path hits exactly that order.
+        cmViewRef.current = view;
+        setCmEpoch((epoch) => epoch + 1);
+       }}
+       basicSetup={{
+        lineNumbers: true,
+        foldGutter: false,
+        autocompletion: false,
+        bracketMatching: false,
+        closeBrackets: false,
+        highlightActiveLine: editable && (active === "raw" || active === "pretty"),
+        highlightActiveLineGutter: editable && (active === "raw" || active === "pretty"),
+        searchKeymap: true,
+        indentOnInput: false,
+       }}
+      />
+     )}
     </div>
-  );
+   </ContextMenu>
+   <input
+    ref={fileInputRef}
+    type="file"
+    className="sr-only"
+    aria-hidden="true"
+    tabIndex={-1}
+    onChange={(event) => {
+     const file = event.target.files?.[0];
+     if (file) pasteFromFile(file);
+     event.target.value = "";
+    }}
+   />
+   {editable && active !== "raw" && active !== "hex" && active !== "pretty" ? (
+    <div className="editor-note">
+     Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back.
+    </div>
+   ) : null}
+  </div>
+ );
 }

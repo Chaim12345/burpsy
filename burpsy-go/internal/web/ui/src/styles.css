@@ -3250,6 +3250,21 @@ tbody td {
   background: #ffffff; /* token-exempt: deliberately theme-independent, see comment above */
 }
 
+/* An image response's Render view: same white, theme-independent stage as the iframe, with the
+   image centred and never upscaled past its natural size — a pixel-for-pixel CAPTCHA or QR code
+   is the evidence, and a stretched one is a different picture. */
+.render-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+.render-image img {
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: pixelated;
+}
+
 .editor-note {
   padding: var(--s1) var(--s2);
   background: var(--paper-deep);
