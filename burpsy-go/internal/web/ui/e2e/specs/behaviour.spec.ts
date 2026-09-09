@@ -287,6 +287,34 @@ test.describe("data views", () => {
   expect(consoleErrors).toEqual([]);
  });
 
+ test("right-clicking a site-map row offers node-aimed scope and scan actions", async ({
+  page,
+  consoleErrors,
+ }) => {
+  // burpsy-react-ui-dpk: the actions must work on the NODE, with no captured exchange selected
+  // first — that is the whole point. The seeded tree has everything these need.
+  await gotoRoute(page, route("sitemap"));
+  await page.locator(".tree-row-label", { hasText: "mango" }).first().click({ button: "right" });
+
+  // Node-aimed menu, not the exchange row's menu: "Actively scan this branch" without "crawl" of
+  // an exchange id in sight, and the passive variant beside it.
+  await expect(page.getByRole("menuitem", { name: "Passively scan this branch" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Actively scan this branch (crawl)" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Add 127.0.0.1 to scope" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Add-to-scope actually lands a rule: read the scope API back, not just the toast.
+  await page.locator(".tree-row-label", { hasText: "mango" }).first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Add 127.0.0.1 to scope" }).click();
+  const scope = await page.request.get("/api/scope").then((r) => r.json());
+  const patterns = JSON.stringify(scope);
+  expect(patterns).toContain("127.0.0.1");
+  // Leaving the rule behind would put every later test's traffic in scope; remove what we added.
+  await page.request.post("/api/scope", { data: { action: "clear" } });
+
+  expect(consoleErrors).toEqual([]);
+ });
+
  test("the status bar reports the stored bytes the API reports", async ({ page }) => {
   // Cheap, and it is the one place the shell claims a number that comes from the server rather than
   // from the store — so it is where a broken /api/stats would show up as a plausible-looking dash.

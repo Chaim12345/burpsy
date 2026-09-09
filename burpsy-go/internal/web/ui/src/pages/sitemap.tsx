@@ -1,8 +1,8 @@
 import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent } from "react";
-import { copyToClipboard, formatBytes, formatDuration, mimeLabel, relativeTime, statusTone } from "../lib/api";
-import { useDebounced, useHistory, useMessage } from "../lib/data";
-import { useDeleteSitemap, useSitemapDetailed } from "../lib/data.observe";
+import { api, copyToClipboard, formatBytes, formatDuration, json, mimeLabel, relativeTime, statusTone } from "../lib/api";
+import { useDebounced, useInvalidate, useHistory, useMessage } from "../lib/data";
+import { useCrawls, useDeleteSitemap, usePassiveScanBranch, useSitemapDetailed, useStartCrawl } from "../lib/data.observe";
 import { useIssuesDetailed } from "../lib/data.attack";
 import type { FindingDetail } from "../lib/types.attack";
 import { exchangeUrl, useExchangeActions, useSendShortcuts } from "../lib/actions";
@@ -20,7 +20,6 @@ import { Checkbox } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable, VirtualTable, type Column } from "../ui/table";
 import { CrawlPathsView } from "../ui/crawlpaths";
-import { useCrawls, usePassiveScanBranch } from "../lib/data.observe";
 import { cn } from "../lib/cn";
 
 interface FlatRow {
@@ -307,6 +306,10 @@ function urlsUnder(row: FlatRow, exchanges: Exchange[]): string[] {
 export function SiteMapPage(): JSX.Element {
  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
  const setRoute = useApp((state) => state.setRoute);
+ // The scope cache, invalidated when a node-aimed add-to-scope lands (dpk): the scope page and the
+ // "In scope only" toggles elsewhere must show the new rule without a manual refresh.
+ const scopeInvalidate = useInvalidate();
+ const startCrawl = useStartCrawl();
 
  const [filter, setFilter] = useState("");
  // The rest of Burp's filter bar (burpsy-react-ui-36d): MIME buckets, status classes and the
@@ -622,7 +625,79 @@ export function SiteMapPage(): JSX.Element {
         // Delete host/branch/item (burpsy-react-ui-10e), from the node object the tree already
         // holds — the server wants the fields, not the composed key. The confirm modal carries the
         // suppression-not-deletion wording, because "delete" overstates what happens to the bytes.
+        const pathPrefix = target.depth === 0 ? undefined : target.node.path;
+        // Node-aimed actions (burpsy-react-ui-dpk): each acts on the tree row itself, not on some
+        // exchange the operator had to find under it first. Passive scan sends nothing (it re-reads
+        // the store); add-to-scope and active crawl hit the server in the same shapes the
+        // exchange-level menu already uses, so both share one code path with the row menu.
         return [
+         {
+          id: "node-scope",
+          actions: [
+           {
+            id: "add-to-scope",
+            label: `Add ${target.host} to scope`,
+            icon: ShieldCheck,
+            onSelect: () => {
+             void api<unknown>("/api/scope", json("POST", { action: "include", pattern: target.host }))
+              .then(() => {
+               toast.success(`${target.host} added to scope`);
+               scopeInvalidate([["scope"], ["dashboard"]]);
+              })
+              .catch((err: unknown) => toast.error(`Could not add to scope: ${err instanceof Error ? err.message : String(err)}`));
+            },
+           },
+          ],
+         },
+         {
+          id: "node-scan",
+          actions: [
+           {
+            id: "passive-branch",
+            label: target.depth === 0 ? "Passively scan this host" : "Passively scan this branch",
+            onSelect: () => {
+             passiveScan.mutate(
+              { host: target.host, path_prefix: pathPrefix },
+              {
+               onSuccess: (result) => {
+                if (result.loaded === 0) toast.error(result.summary);
+                else if (result.findings > 0) toast.success(result.summary);
+                else toast.info(result.summary);
+               },
+               onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+              },
+             );
+            },
+           },
+           {
+            id: "active-branch",
+            label: target.depth === 0 ? "Actively scan this host (crawl)" : "Actively scan this branch (crawl)",
+            onSelect: () => {
+             const seed =
+              target.depth === 0
+               ? `${target.node.tls ? "https" : "http"}://${target.host}:${target.node.port}/`
+               : `${target.node.tls ? "https" : "http"}://${target.host}:${target.node.port}${target.node.path}`;
+             const retention =
+              target.depth === 0
+               ? `host = ${target.host}`
+               : `path ~ "${target.node.path.replace(/\/[^/]*$/, "")}/"`;
+             startCrawl.mutate(
+              // retention_query is the crawl's keep-path filter — the same DSL clause the
+              // exchange-level crawlFrom composes (actions.ts:427), so a branch crawl only
+              // keeps what is still under the branch.
+              { seeds: [seed], retention_query: retention },
+              {
+               onSuccess: () => {
+                toast.success(`Crawl started from ${scope} ${target.depth === 0 ? target.host : target.node.path}`);
+                setRoute("discover");
+               },
+               onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+              },
+             );
+            },
+           },
+          ],
+         },
          {
           id: "delete",
           actions: [
