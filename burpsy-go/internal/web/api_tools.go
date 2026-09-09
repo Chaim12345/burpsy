@@ -453,6 +453,12 @@ type intruderRunReq struct {
 	PayloadSets    *[][]string               `json:"payload_sets"`
 	PayloadSources *[]intruder.PayloadSource `json:"payload_sources"`
 	PayloadRules   *[]intruder.RuleSpec      `json:"payload_rules"`
+	// URLEncode is Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the
+	// characters percent-encoded in every generated payload as the final pass, after the
+	// rule chain. Empty (or absent) means no extra encoding — matching the off state, not
+	// an empty set that would encode nothing anyway. Spaces and control characters are
+	// always encoded additionally, because a request containing them cannot be delivered.
+	URLEncode *string `json:"url_encode_characters"`
 	MaxPayloads    *int                      `json:"max_payloads"`
 	GrepMatch      *string                   `json:"grep_match"`
 	GrepExtract    *string                   `json:"grep_extract"`
@@ -736,6 +742,12 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		}
 		ps.Kind = src.AsStr()
 		chain.Run(ps)
+		// The safety net, after the operator's chain (burpsy-react-ui-8cbc): Burp runs this
+		// final pass regardless of payload type, so an explicit encode rule and this compose
+		// rather than compete.
+		if req.URLEncode != nil {
+			intruder.URLEncodeSet(ps, *req.URLEncode)
+		}
 		resolved = append(resolved, *ps)
 	}
 

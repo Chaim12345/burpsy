@@ -746,3 +746,58 @@ func TestIntruderRunRefusesAPointOutOfRange(t *testing.T) {
 		t.Fatalf("point 42 of 1 = %d, want 400", code)
 	}
 }
+
+// The "URL-encode these characters" final pass (burpsy-react-ui-8cbc), through the wire: the
+// named characters are percent-encoded in every sent request, after the operator's rule chain,
+// and the safety net still encodes an unrepresentable space when the set names nothing.
+func TestIntruderRunAppliesURLEncodeCharacters(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	id := requestMessage(t, store, "GET /search?q=a HTTP/1.1\r\nHost: shop.test\r\n\r\n")
+
+	var points []wirePoint
+	postJSONInto(t, srv, "/api/intruder/points", map[string]any{"msg_id": id, "all": false}, &points)
+	var qIndex int = -1
+	for i := range points {
+		if points[i].Kind == "url_param_value" && points[i].Label == "q" {
+			qIndex = i
+			break
+		}
+	}
+	if qIndex < 0 {
+		t.Fatalf("no q point in %+v", points)
+	}
+
+	var out wireRunReport
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":                id,
+		"target":                "http://" + addr,
+		"mode":                  "sniper",
+		"points":                []int{qIndex},
+		"payload_sets":          [][]string{{"x y", "z"}},
+		"url_encode_characters": "=",
+	}, &out)
+	if code != http.StatusOK {
+		t.Fatalf("run: %d", code)
+	}
+	if out.Report.Sent != 2 {
+		t.Fatalf("sent = %d, want 2", out.Report.Sent)
+	}
+	// The echo shows what the wire carried: the space is gone — the named set does not
+	// include it, so the always-encode rule did it — and "x y" became "x%20y".
+	seen := false
+	for _, b := range out.Examples {
+		for _, p := range b.Payloads {
+			if strings.Contains(p, "x%20y") {
+				seen = true
+			}
+		}
+	}
+	if !seen {
+		t.Fatalf("no example carries the encoded payload; examples: %+v", out.Examples)
+	}
+}

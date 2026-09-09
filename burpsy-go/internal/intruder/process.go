@@ -1,5 +1,17 @@
 package intruder
 
+import (
+	"bytes"
+	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"regexp"
+	"strings"
+
+	"github.com/burpsy-go/burpsy/internal/tools"
+)
+
 // The payload-processing rule chain: an ordered list of transformations applied to each
 // payload, ported from burpsy-intruder::process.
 //
@@ -25,16 +37,6 @@ package intruder
 // unchanged. Passing it through would send a payload the operator did not ask for while the
 // report said the rule was applied. Reasons are grouped and counted, one line per distinct
 // reason, never one per payload.
-
-import (
-	"crypto/md5"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"regexp"
-
-	"github.com/burpsy-go/burpsy/internal/tools"
-)
 
 // MaxDropReasons bounds distinct drop reasons for the same reason result buckets are bounded:
 // a chain that drops 199 999 payloads for one reason is one row.
@@ -367,5 +369,56 @@ func noteDrop(into *[]DropReason, reason string) {
 	}
 	if len(*into) < MaxDropReasons {
 		*into = append(*into, DropReason{Reason: reason, Count: 1})
+	}
+}
+
+// URLEncodeSet applies Burp's "URL-encode these characters" final pass to one payload
+// set: every rune in the named character set is percent-encoded, everything else passes
+// through untouched (burpsy-react-ui-8cbc). Burp runs this as the last step before
+// sending, independent of the payload type — which is where the handler calls it, after
+// the operator's rule chain, so an explicit encode rule still runs first and the safety
+// net encodes what remains.
+//
+// The safe set is always encoded additionally: a space or a control character in a
+// payload would break the request line or the framing headers no matter what the
+// operator asked for, and sending a request the peer cannot parse reports a transport
+// error that reads as a finding. Burp behaves the same way.
+func URLEncodeSet(ps *PayloadSet, chars string) {
+	if chars == "" {
+		// An empty named set is the off state — but the always-encode rule still applies to
+		// any payload that carries an unrepresentable character, because the request it would
+		// produce cannot be delivered. Only a payload with nothing to encode skips the walk.
+		needsWalk := false
+		for _, item := range ps.Items {
+			for _, r := range item {
+				if r <= 0x20 || r == 0x7f {
+					needsWalk = true
+					break
+				}
+			}
+			if needsWalk {
+				break
+			}
+		}
+		if !needsWalk {
+			return
+		}
+	}
+	encode := func(b []byte) []byte {
+		var out bytes.Buffer
+		for _, r := range string(b) {
+			c := string(r)
+			if chars != "" && strings.ContainsRune(chars, r) || r <= 0x20 || r == 0x7f {
+				for _, bb := range []byte(c) {
+					fmt.Fprintf(&out, "%%%02X", bb)
+				}
+				continue
+			}
+			out.WriteString(c)
+		}
+		return out.Bytes()
+	}
+	for i, item := range ps.Items {
+		ps.Items[i] = string(encode([]byte(item)))
 	}
 }
