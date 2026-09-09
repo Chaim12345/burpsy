@@ -30,6 +30,10 @@ type ScopeRule struct {
 	// Protocol, when set ("http" or "https"), limits the rule to that scheme. Nil matches either,
 	// which is what every rule built before this field existed means.
 	Protocol *string
+	// Enabled gates this rule's participation in every scope decision: matching, Contains,
+	// Explain, and the host-level pre-filter. It defaults to true everywhere a rule is built,
+	// so a rule without an explicit flag behaves exactly as every rule always has.
+	Enabled bool
 }
 
 // NewScopeRule creates a new scope rule from a pattern.
@@ -61,6 +65,9 @@ func NewScopeRule(kind ScopeRuleKind, pattern string) *ScopeRule {
 	regexPattern += "$"
 
 	rule.Regex = regexp.MustCompile(regexPattern)
+	// Default enabled: every rule this function ever built behaved as an active rule, and so
+	// does every rule built from here on unless a caller says otherwise.
+	rule.Enabled = true
 	return rule
 }
 
@@ -79,8 +86,13 @@ func NewScopeRuleWithPath(kind ScopeRuleKind, pattern string, pathPrefix string)
 	return rule
 }
 
-// Matches checks if a host matches this rule.
+// Matches checks if a host matches this rule. A disabled rule matches nothing: it is stored,
+// shown and togglable, but takes no part in any scope decision — the one-flag equivalent of
+// removing the rule and putting it back later.
 func (r *ScopeRule) Matches(host string, port uint16) bool {
+	if !r.Enabled {
+		return false
+	}
 	if r.Port != nil && *r.Port != port {
 		return false
 	}
@@ -205,6 +217,31 @@ func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *str
 			continue
 		}
 		s.rules = append(s.rules[:i], s.rules[i+1:]...)
+		return true
+	}
+	return false
+}
+
+// SetRuleEnabled flips the enabled flag on the rule matching a kind, pattern, path prefix and
+// port exactly — the same tuple identity RemoveScoped matches on, so a toggle cannot touch a
+// same-host sibling that differs only in path or port. It reports whether a rule was found and
+// changed; false means the caller named a rule that is not there, which the endpoint turns
+// into a 404 rather than a silent success.
+//
+// Enabled does not take part in the identity: toggling twice with the same tuple flips the
+// same rule twice, which is exactly what a switch must do.
+func (s *Scope) SetRuleEnabled(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16, enabled bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, rule := range s.rules {
+		if rule.Kind != kind || rule.Pattern != pattern {
+			continue
+		}
+		if !eqStrPtr(rule.PathPrefix, pathPrefix) || !eqPortPtr(rule.Port, port) {
+			continue
+		}
+		rule.Enabled = enabled
 		return true
 	}
 	return false

@@ -174,7 +174,8 @@ CREATE TABLE IF NOT EXISTS scope_rules_v3 (
 	pattern     TEXT NOT NULL,
 	port        INTEGER,
 	path_prefix TEXT,
-	protocol    TEXT
+	protocol    TEXT,
+	enabled     INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS matchreplace_rules (
 	ord      INTEGER PRIMARY KEY,
@@ -424,6 +425,14 @@ CREATE TABLE IF NOT EXISTS tool_log (
 		return err
 	}
 	if err := s.addColumn("findings", "comment", "TEXT"); err != nil {
+		return err
+	}
+	// scope_rules_v3 gained enabled for the per-rule disable switch (burpsy-react-ui-1xb).
+	// NOT NULL with a default of 1 because ALTER TABLE cannot add a NOT NULL column without
+	// one, and 1 is the only safe value: every row written before this column existed was an
+	// active rule, and reading one back as disabled would silently shrink an engagement's
+	// scope across a restart.
+	if err := s.addColumn("scope_rules_v3", "enabled", "INTEGER NOT NULL DEFAULT 1"); err != nil {
 		return err
 	}
 	return nil
@@ -930,8 +939,8 @@ func (s *Store) SaveScope(rules []*core.ScopeRule) {
 		}
 		kind := scopeKindName(r.Kind)
 		if _, err := s.db.Exec(
-			`INSERT INTO scope_rules_v3 (ord, kind, pattern, port, path_prefix, protocol) VALUES (?, ?, ?, ?, ?, ?)`,
-			i, kind, r.Pattern, port, pathPrefix, protocol); err != nil {
+			`INSERT INTO scope_rules_v3 (ord, kind, pattern, port, path_prefix, protocol, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			i, kind, r.Pattern, port, pathPrefix, protocol, boolInt(r.Enabled)); err != nil {
 			// Returning here would leave the durable scope narrower *or* wider than the live one with no
 			// record of which rules made it, so every remaining rule is still attempted and every failure
 			// is named.
@@ -978,11 +987,11 @@ func scopeKindName(k core.ScopeRuleKind) string {
 // what stop an upgrade from failing open. Pinned by TestLoadScopeFallsBackToAnEmptyV2AndAPopulatedLegacyTable
 // and TestAV2EraDatabaseStillRestoresItsRules.
 func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
-	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix, protocol FROM scope_rules_v3 ORDER BY ord`)
+	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix, protocol, enabled FROM scope_rules_v3 ORDER BY ord`)
 	if err != nil {
 		return nil, err
 	}
-	out, err := scanScopeRows(rows, true, true)
+	out, err := scanScopeRows(rows, true, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -994,7 +1003,7 @@ func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err = scanScopeRows(v2rows, true, false)
+	out, err = scanScopeRows(v2rows, true, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1006,7 +1015,7 @@ func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanScopeRows(legacy, false, false)
+	return scanScopeRows(legacy, false, false, false)
 }
 
 // checkLegacyScopeDivergence reports a legacy scope row that this build did not write.
@@ -1084,7 +1093,7 @@ func scopeTriple(kind, pattern string, port *uint16) string {
 // rule from the pattern alone. A rule restricted to one port therefore came back matching every port on
 // that host — silently authorising traffic the operator had not authorised, for an include rule, and
 // silently excluding traffic they had allowed, for an exclude one.
-func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRule, error) {
+func scanScopeRows(rows *sql.Rows, withPath, hasProtocol, hasEnabled bool) ([]*core.ScopeRule, error) {
 	defer rows.Close()
 	var out []*core.ScopeRule
 	for rows.Next() {
@@ -1092,7 +1101,17 @@ func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRul
 		var port sql.NullInt64
 		var pathPrefix sql.NullString
 		var protocol sql.NullString
-		if err := rows.Scan(&kind, &pattern, &port, &pathPrefix, &protocol); err != nil {
+		// enabled is scanned into a raw int rather than sql.NullInt64: older generations never
+		// select it, so the caller's hasEnabled flag decides whether the column exists at all,
+		// and the column itself is NOT NULL DEFAULT 1 wherever it does.
+		var enabled int
+		var scanArgs []any
+		if hasEnabled {
+			scanArgs = []any{&kind, &pattern, &port, &pathPrefix, &protocol, &enabled}
+		} else {
+			scanArgs = []any{&kind, &pattern, &port, &pathPrefix, &protocol}
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
 			return nil, err
 		}
 		// kind is stored as a string ("include"/"exclude") for readability.
@@ -1101,6 +1120,12 @@ func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRul
 			k = core.ScopeExclude
 		}
 		r := core.NewScopeRule(k, pattern)
+		// A row from an older generation (no enabled column, or a NULL the column predates)
+		// reads back active: that is what the rule was when it was written.
+		r.Enabled = true
+		if hasEnabled && enabled == 0 {
+			r.Enabled = false
+		}
 		if port.Valid && port.Int64 > 0 && port.Int64 <= 65535 {
 			p := uint16(port.Int64)
 			r.Port = &p

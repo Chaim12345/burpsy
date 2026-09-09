@@ -228,6 +228,12 @@ export interface ScopeRuleView {
  path?: string | null;
  port?: number | null;
  protocol?: string | null;
+ /**
+  * A disabled rule is stored, shown and togglable, but takes no part in any scope decision.
+  * Always on the wire — the toggle has to read the current state, and a field present only
+  * when false would make "active" indistinguishable from "absent".
+  */
+ enabled: boolean;
 }
 
 export interface ScopeView {
@@ -238,12 +244,17 @@ export interface ScopeView {
 
 /** POST /api/scope. Port, path and protocol are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
- action: "include" | "exclude" | "remove" | "clear";
+ action: "include" | "exclude" | "remove" | "clear" | "toggle";
  kind?: "include" | "exclude";
  pattern?: string;
  path?: string;
  port?: number;
  protocol?: "http" | "https";
+ /**
+  * Required on "toggle" (the switch's target state). On "include"/"exclude" omitted means
+  * the default — a rule is created active unless a caller says otherwise.
+  */
+ enabled?: boolean;
 }
 
 /* --- protocols / diagnostics ---------------------------------------------- */

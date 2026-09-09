@@ -232,7 +232,11 @@ export function useSendFrameProgram() {
  });
 }
 
-/** POST /api/scope. One action per call — the handler has no batch arm. */
+/**
+ * POST /api/scope. One action per call — the handler has no batch arm. "toggle" is the
+ * per-rule enable/disable switch (burpsy-react-ui-1xb): the tuple names the row, `enabled`
+ * is the target state, and a 404 means the row moved on under a stale render.
+ */
 export function useUpdateScope() {
  const invalidate = useInvalidate();
  return useMutation({

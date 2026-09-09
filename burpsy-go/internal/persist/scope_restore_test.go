@@ -387,3 +387,36 @@ func TestAV2EraDatabaseStillRestoresItsRules(t *testing.T) {
 		t.Fatalf("restored %+v, want old.test with /api prefix intact", r)
 	}
 }
+
+// The disabled flag (burpsy-react-ui-1xb) survives the round trip. The dangerous direction is
+// silent widening: a disabled rule restored as active admits a host the operator took out of
+// scope by hand, across a restart, with nothing reporting it. The active direction is pinned
+// too, because both must survive, not just the surprising one.
+func TestRestoreKeepsAScopeRulesDisabledState(t *testing.T) {
+	p := newTestStore(t)
+	rule := core.NewScopeRule(core.ScopeInclude, "app.test")
+	rule.Enabled = false
+	active := core.NewScopeRule(core.ScopeInclude, "other.test")
+	p.SaveScope([]*core.ScopeRule{rule, active})
+
+	loaded, err := p.LoadScope()
+	if err != nil {
+		t.Fatalf("LoadScope: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("loaded %d rules, want 2", len(loaded))
+	}
+	if loaded[0].Enabled {
+		t.Error("a rule saved disabled came back active — a restart widened scope")
+	}
+	if !loaded[1].Enabled {
+		t.Error("a rule saved active came back disabled — a restart narrowed scope")
+	}
+	// And the flag does real work after the restore: the disabled rule matches nothing.
+	if loaded[0].Matches("app.test", 80) {
+		t.Error("a restored disabled rule still matches its own host")
+	}
+	if !loaded[1].Matches("other.test", 80) {
+		t.Error("a restored active rule stopped matching its own host")
+	}
+}

@@ -258,8 +258,8 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // ScopeRequest represents a scope modification request.
 type ScopeRequest struct {
-	Action  string `json:"action"` // "include", "exclude", "remove" or "clear"
-	Kind    string `json:"kind"`   // optional rule kind for "remove": "include" or "exclude"
+	Action  string `json:"action"` // "include", "exclude", "remove", "clear" or "toggle"
+	Kind    string `json:"kind"`   // optional rule kind for "remove" and "toggle": "include" or "exclude"
 	Pattern string `json:"pattern"`
 	// Path limits the rule to requests whose path starts with it, and Port to one port. Both optional;
 	// omitted means the rule covers the whole host, which is what every rule meant before these
@@ -271,6 +271,10 @@ type ScopeRequest struct {
 	Port *uint16 `json:"port,omitempty"`
 	// Protocol limits the rule to one scheme: "http" or "https". Empty means either.
 	Protocol string `json:"protocol,omitempty"`
+	// Enabled is required on "toggle" (the switch's target state); a nil there is a client
+	// that did not send the field, refused rather than guessed. On "include"/"exclude" a nil
+	// reads as the default (true): a rule is created active unless a caller says otherwise.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // normaliseScopePath validates an optional path prefix and returns nil for "no path".
@@ -323,7 +327,23 @@ func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule,
 		rule.Port = req.Port
 	}
 	rule.Protocol = protocol
+	if req.Enabled != nil {
+		rule.Enabled = *req.Enabled
+	}
 	return rule, nil
+}
+
+// scopeKindFromString maps the wire's kind to the engine's. Kept beside the handler so both
+// "remove" (optional kind) and "toggle" (required kind) agree on the vocabulary.
+func scopeKindFromString(kind string) (core.ScopeRuleKind, bool) {
+	switch kind {
+	case "include":
+		return core.ScopeInclude, true
+	case "exclude":
+		return core.ScopeExclude, true
+	default:
+		return core.ScopeInclude, false
+	}
 }
 
 func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
@@ -342,6 +362,9 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 type scopeRuleView struct {
 	Kind string  `json:"kind"`
 	Host *string `json:"host"`
+	// Enabled is always reported: the UI's per-row switch has to read the current state, and
+	// a field present only when false would make "active" indistinguishable from "absent".
+	Enabled bool `json:"enabled"`
 	// Path and Port are omitted for a host-wide rule. Reported so the UI can show what a rule actually
 	// covers, and so it can hand the exact tuple back on remove — two rules on one host differing only
 	// in path are the ordinary case, and removing by host alone would delete the wrong one.
@@ -360,7 +383,7 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 			kind = "Exclude"
 		}
 		pattern := rule.Pattern
-		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port, Protocol: rule.Protocol})
+		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port, Protocol: rule.Protocol, Enabled: rule.Enabled})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -417,6 +440,28 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 				s.scope.RemoveScoped(core.ScopeExclude, req.Pattern, path, req.Port)
 		}
 		if !removed {
+			http.Error(w, "No matching rule found", http.StatusNotFound)
+			return
+		}
+	case "toggle":
+		// One round trip for the switch, so a slow double-click cannot land two edits — and
+		// because the server, not the client, owns the truth: the client sends what it saw,
+		// the server refuses when the row has moved on, and the refetch shows the real state.
+		if req.Pattern == "" {
+			http.Error(w, "Pattern is required", http.StatusBadRequest)
+			return
+		}
+		path, err := normaliseScopePath(req.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		kind, ok := scopeKindFromString(req.Kind)
+		if !ok {
+			http.Error(w, "Kind must be include or exclude for toggle", http.StatusBadRequest)
+			return
+		}
+		if !s.scope.SetRuleEnabled(kind, req.Pattern, path, req.Port, req.Enabled == nil || *req.Enabled) {
 			http.Error(w, "No matching rule found", http.StatusNotFound)
 			return
 		}

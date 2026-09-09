@@ -121,3 +121,105 @@ func TestAPortScopedRuleCanBeCreatedAndOnlyCoversThatPort(t *testing.T) {
 		t.Error("port 443 should not be in scope; the rule named 8443")
 	}
 }
+
+// ---- the per-rule enable switch (burpsy-react-ui-1xb) -------------------------------------------
+
+type scopeRuleJSONWithEnabled struct {
+	scopeRuleJSON
+	Enabled bool `json:"enabled"`
+}
+
+func getScopeRulesEnabled(t *testing.T, s *Server) []scopeRuleJSONWithEnabled {
+	t.Helper()
+	rec := get(t, s, "/api/scope")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/scope: status = %d", rec.Code)
+	}
+	var body struct {
+		Rules []scopeRuleJSONWithEnabled `json:"rules"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode scope: %v", err)
+	}
+	return body.Rules
+}
+
+// The full loop the switch exists for: create, disable through the API, watch the engine stop
+// honouring the rule, re-enable, watch it come back. The wire carries `enabled` on every row
+// so the UI can render the state rather than infer it.
+func TestAScopeRuleCanBeDisabledAndReEnabledThroughTheAPI(t *testing.T) {
+	s := newTestServer()
+	if rec := postJSON(t, s, "/api/scope", map[string]any{"action": "include", "pattern": "shop.test"}); rec.Code != http.StatusOK {
+		t.Fatalf("include: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	rules := getScopeRulesEnabled(t, s)
+	if len(rules) != 1 || !rules[0].Enabled {
+		t.Fatalf("a fresh rule must report enabled=true; got %+v", rules)
+	}
+
+	// Disable it. This must reach the engine, not just the view: the whole point of the
+	// switch is that the proxy stops honouring the rule while it stays on the table.
+	if rec := postJSON(t, s, "/api/scope", map[string]any{
+		"action": "toggle", "kind": "include", "pattern": "shop.test", "enabled": false,
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("disable: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if s.scope.Contains("shop.test", 80, "/", false) {
+		t.Error("the engine still admits the host after its only include rule was disabled through the API")
+	}
+	rules = getScopeRulesEnabled(t, s)
+	if len(rules) != 1 || rules[0].Enabled {
+		t.Fatalf("the row should still exist and report enabled=false; got %+v", rules)
+	}
+
+	// Re-enable: the rule returns exactly as it was — same tuple, same engine behaviour.
+	if rec := postJSON(t, s, "/api/scope", map[string]any{
+		"action": "toggle", "kind": "include", "pattern": "shop.test", "enabled": true,
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("re-enable: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !s.scope.Contains("shop.test", 80, "/", false) {
+		t.Error("re-enabling through the API did not restore the host to scope")
+	}
+}
+
+// The exclude direction, again because it is the dangerous one: disabling an exclude widens
+// scope, so the API must actually do it — and re-enabling must restore the fence.
+func TestDisablingAnExcludeThroughTheAPILetsItsHostsBackIn(t *testing.T) {
+	s := newTestServer()
+	// The include list must admit the excluded host, or disabling the exclude has nothing to
+	// widen into — Contains' exclude-wins semantics are not overridden by the toggle.
+	postJSON(t, s, "/api/scope", map[string]any{"action": "include", "pattern": "*.shop.test"})
+	postJSON(t, s, "/api/scope", map[string]any{"action": "exclude", "pattern": "secret.shop.test"})
+
+	if rec := postJSON(t, s, "/api/scope", map[string]any{
+		"action": "toggle", "kind": "exclude", "pattern": "secret.shop.test", "enabled": false,
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("disable exclude: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !s.scope.Contains("secret.shop.test", 80, "/", false) {
+		t.Error("disabling the exclude through the API did not let the host back into scope")
+	}
+
+	if rec := postJSON(t, s, "/api/scope", map[string]any{
+		"action": "toggle", "kind": "exclude", "pattern": "secret.shop.test", "enabled": true,
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("re-enable exclude: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if s.scope.Contains("secret.shop.test", 80, "/", false) {
+		t.Error("re-enabling the exclude through the API did not restore the exclusion")
+	}
+}
+
+// A toggle aimed at a tuple nothing carries is a 404, not a success — the operator's stale
+// render must be told, not silently absorbed.
+func TestTogglingANonexistentRuleIsRefused(t *testing.T) {
+	s := newTestServer()
+	rec := postJSON(t, s, "/api/scope", map[string]any{
+		"action": "toggle", "kind": "include", "pattern": "ghost.test", "enabled": false,
+	})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 — a toggle that matched nothing must not read as success", rec.Code)
+	}
+}
