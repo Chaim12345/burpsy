@@ -83,6 +83,10 @@ type dashboardResp struct {
 	// source is a key even at zero, including "unattributed", so a pane cannot lose a source by it
 	// happening not to have appeared yet.
 	Sources map[string]int `json:"sources"`
+	// Paused is the suite-wide task gate (burpsy-react-ui-8gw): the dashboard's pause button
+	// reads the state it toggles from the same poll as everything else, so a flip is visible on
+	// the next refresh without a second endpoint.
+	Paused bool `json:"paused"`
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +121,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Messages:        messages,
 		StoredBytes:     s.store.Bytes(),
 		Sources:         s.sourceCounts(),
+		Paused:          s.tasks.Paused(),
 	})
 }
 

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { Copy, FolderTree, MoreVertical, Plus, Radar, Search, Square } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Copy, FolderTree, MoreVertical, Pause, Play, Plus, Radar, Search, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
@@ -259,6 +259,22 @@ function TaskTile({
  );
 }
 
+/** The suite-wide pause (burpsy-react-ui-8gw): Burp's "Pause all tasks" / "Resume task
+ * processing". One mutation per verb — the answer carries the running count, and the toast says
+ * that count, because "paused" on an empty dashboard is a different report than "paused 3
+ * tasks". */
+function usePauseAllTasks(paused: boolean) {
+ const queryClient = useQueryClient();
+ return useMutation<{ paused: boolean; running: number }, Error, void>({
+  mutationFn: () => api(`/api/tasks/${paused ? "resume" : "pause"}`, json("POST", {})),
+  onSuccess: (result) => {
+   toast.success(result.paused ? `Tasks paused (${result.running} running)` : "Tasks resumed");
+   void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  },
+  onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : String(failure)),
+ });
+}
+
 /**
  * Burp's left Tasks pane: a filter over the tiles, then one tile per task, newest first. The
  * selection lives in the parent so the detail pane can follow it, and so a poll that reorders
@@ -268,6 +284,7 @@ function TaskSidebar({
  tasks,
  liveFindings,
  liveEnabled,
+ pausedState,
  selectedId,
  onSelect,
  onNewScan,
@@ -276,6 +293,7 @@ function TaskSidebar({
  tasks: TaskRow[];
  liveFindings?: number;
  liveEnabled: boolean;
+ pausedState?: boolean;
  selectedId: number | null;
  onSelect: (id: number) => void;
  onNewScan: () => void;
@@ -285,12 +303,22 @@ function TaskSidebar({
  const rows = withStandingLiveTask(tasks, liveEnabled);
  const needle = filter.trim().toLowerCase();
  const shown = needle ? rows.filter((task) => `${task.kind} ${task.target}`.toLowerCase().includes(needle)) : rows;
+ // The suite-wide pause (burpsy-react-ui-8gw). The state lives on the dashboard query (paused
+ // arrives beside tasks), so the button reflects what the server last said; the mutation flips
+ // it and invalidates the same query.
+ const paused = pausedState === true;
+ const pauseAll = usePauseAllTasks(paused);
 
  return (
   <div className="task-sidebar">
+   {paused ? <div className="notice notice-warn">Task execution is paused</div> : null}
    <div className="task-sidebar-head">
     <strong>Tasks</strong>
     <div className="task-sidebar-actions">
+     <Button size="small" variant="outline" onClick={() => pauseAll.mutate()} disabled={pauseAll.isPending}>
+      {paused ? <Play size={13} /> : <Pause size={13} />}
+      {paused ? "Resume tasks" : "Pause all tasks"}
+     </Button>
      <Button size="small" onClick={onNewScan}>
       <Plus size={13} />
       New scan
@@ -613,6 +641,7 @@ export function DashboardPage(): JSX.Element {
       tasks={data?.tasks ?? []}
       liveFindings={liveFindings}
       liveEnabled={liveEnabled}
+      pausedState={data?.paused}
       selectedId={selected?.id ?? null}
       onSelect={setSelectedId}
       onNewScan={() => setScanOpen(true)}

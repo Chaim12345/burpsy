@@ -196,8 +196,9 @@ export interface Dashboard {
  events: ToolEvent[];
  exchanges: number;
  messages: number;
- stored_bytes: number;
  sources: Record<string, number>;
+ /** The suite-wide task pause (burpsy-react-ui-8gw): Burp's "Pause all tasks" gate. */
+ paused: boolean;
 }
 
 export interface Occurrence {
