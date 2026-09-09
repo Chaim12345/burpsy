@@ -510,6 +510,9 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 			}
 			capture.gatePause(false)
 		}
+		// The dashboard's suite-wide pause (burpsy-react-ui-8gw): the same between-sends
+		// placement as the capture's own pause, so one gate serves both switches.
+		s.tasks.GateCheck(ctx)
 
 		sent, err := auth.Send(ctx, request)
 		response, elapsed := sent.Raw, sent.Duration

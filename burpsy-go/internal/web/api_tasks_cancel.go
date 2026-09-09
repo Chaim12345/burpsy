@@ -94,6 +94,22 @@ func (s *Server) taskAction(w http.ResponseWriter, r *http.Request, _ string) {
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+	// The suite-wide pause (burpsy-react-ui-8gw): Burp's dashboardPauseAllTasksButton and
+	// dashboardResumeAllTasksButton. Distinct ids, not a task sub-path — the gate is registry
+	// state, so /api/tasks/pause and /api/tasks/resume answer for every running task at once.
+	// The count in the answer says whether anything was actually holding; pausing an empty
+	// dashboard is fine, but "paused 0 tasks" is the honest version of that reply.
+	switch rest {
+	case "pause", "resume":
+		var n int
+		if rest == "pause" {
+			n = s.tasks.PauseAll()
+		} else {
+			n = s.tasks.ResumeAll()
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"paused": s.tasks.Paused(), "running": n})
+		return
+	}
 	switch {
 	case strings.HasSuffix(rest, "/cancel"):
 		idStr := strings.TrimSuffix(rest, "/cancel")
