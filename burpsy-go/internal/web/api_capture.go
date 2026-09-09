@@ -15,15 +15,50 @@ import (
 	"go.uber.org/zap"
 )
 
-// handleHistory serves GET /api/history?limit=N[&q=query]. The UI expects a bare array of
+// handleHistory serves GET /api/history and DELETE /api/history (burpsy-react-ui-r6li). GET is
+// the listing the UI has always read; DELETE is Burp's "Delete items" / "Clear (tool)".
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.historyGet(w, r)
+	case http.MethodDelete:
+		s.historyDelete(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// historyDelete removes exchanges from the operator's view. With a JSON body {"ids":[..]} the
+// named exchanges go; with no body (or an empty ids array) the whole capture clears — Burp's
+// "Clear (tool)". The response reports removed and requested separately, so a caller that named
+// a row already gone (or never present) can say so rather than reading a bare 200 as success.
+// Deletion is a view-level tombstone (core.TrafficStore.DeleteExchanges): positional ids stay
+// stable, so nothing else on the wire is renumbered by a cleanup.
+func (s *Server) historyDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []core.ExchangeID `json:"ids"`
+	}
+	if r.Body != nil {
+		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+		if err := dec.Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "body must be JSON {\"ids\":[..]} or empty", http.StatusBadRequest)
+			return
+		}
+	}
+	var removed int
+	if len(req.IDs) == 0 {
+		removed = s.store.ClearExchanges()
+	} else {
+		removed = s.store.DeleteExchanges(req.IDs)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"removed": removed, "requested": len(req.IDs)})
+}
+
+// historyGet serves GET /api/history?limit=N[&q=query]. The UI expects a bare array of
 // exchanges, newest first, capped at `limit` (default 300). `q`, when present, is a burpsy-query
 // filter compiled against each exchange's host/path/method/status.
-func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func (s *Server) historyGet(w http.ResponseWriter, r *http.Request) {
 	limit := 300
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {

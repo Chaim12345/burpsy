@@ -278,38 +278,57 @@ func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bo
 // `exclude(h, "/admin")` pair makes `Contains(h, p, "/", tls)` true and a caller taking that as
 // permission for the whole host would send a payload right at /admin.
 //
-// So this answers only "is this host worth considering at all", deliberately permissively: a
-// path-scoped exclude removes paths, not the host. The real decision belongs to AuthoriseRaw, on
-// the bytes actually going on the wire. As with Contains, the Go port keeps its documented
-// default-allow divergence: an empty scope contains everything, so `possible` starts true and only
-// a whole-host exclude can flip it — where the Rust original is last-match-wins default-deny. The
-// asymmetry is safe because this is a pre-filter: a too-permissive answer here only means the
-// attack starts and its per-request gate reports the refusals, never that a refused request goes
-// out.
+// So this answers only "is this host worth considering at all", deliberately permissively about
+// *paths*: a path- or protocol-scoped exclude removes requests, not the host, and a path-scoped
+// include keeps the host because the paths an attack invents under that prefix are authorised. The
+// real per-request decision belongs to AuthoriseRaw, on the bytes actually going on the wire.
+//
+// It is NOT permissive about the include list itself (burpsy-react-ui-cj7x). It used to be:
+// `possible` started true and only a whole-host exclude could flip it, so a host matching no
+// include rule came back true. That was not a harmless pre-filter looseness — MayContainHost is the
+// only gate /api/repeater/send and /api/intruder/run apply to the target, so with
+// `include(elsewhere.invalid)` set, MayContainHost("127.0.0.1") returned true and Repeater sent
+// there while Contains and AuthoriseRaw both refused the same host. In a tool used under engagement
+// rules, traffic leaving the include list is the one failure that cannot be argued down.
+//
+// The include semantics now match Contains' exactly, which is the recorded cross-tool decision:
+// an empty include list still means "everything" (a scope nobody has narrowed does not stop work),
+// but once any include rule exists the list means "only these", and a host named by none of them is
+// refused here as it already was there.
 func (s *Scope) MayContainHost(host string, port uint16, isTLS bool) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.allowAll {
 		return true
 	}
-	possible := true
+	// A whole-host exclude puts the host beyond reach, whatever the includes say — excludes win
+	// here for the same reason they win in Contains. Path- and protocol-scoped excludes are skipped:
+	// they remove some requests and leave the rest of the host reachable, and an https-only exclude
+	// says nothing about http.
 	for _, rule := range s.rules {
-		if !rule.Matches(host, port) {
+		if rule.Kind != ScopeExclude || !rule.Matches(host, port) {
 			continue
 		}
-		switch {
-		case rule.Kind == ScopeInclude:
-			// Any include that names this host/port keeps it possible, protocol arm or not.
-			possible = true
-		case rule.PathPrefix != nil || rule.Protocol != nil:
-			// A path- or protocol-scoped exclude removes some requests and leaves the rest
-			// of the host reachable — an https-only exclude says nothing about http.
-		default:
-			// Only a whole-host exclude puts the host beyond reach.
-			possible = false
+		if rule.PathPrefix == nil && rule.Protocol == nil {
+			return false
 		}
 	}
-	return possible
+
+	// Then the include list, with Contains' semantics: no include rules at all means default-allow,
+	// but any include rule turns the list into an allow-list this host must appear on. Matched at
+	// host level (rule.Matches ignores the path), so a path-scoped include still keeps its host --
+	// the paths under that prefix are exactly what an attack is authorised to invent.
+	hasInclude := false
+	for _, rule := range s.rules {
+		if rule.Kind != ScopeInclude {
+			continue
+		}
+		hasInclude = true
+		if rule.Matches(host, port) {
+			return true
+		}
+	}
+	return !hasInclude
 }
 
 // requestPath extracts the request target from a raw request line, the way burpsy-core::scope's

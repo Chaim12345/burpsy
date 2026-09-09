@@ -524,56 +524,58 @@ func TestRepeaterGroupRefusesAnExcludedTargetInEveryMode(t *testing.T) {
 	}
 }
 
-// The one place the three modes do NOT behave alike, pinned so it is a documented contract rather than
-// a surprise a QA pass has to rediscover.
+// All three modes agree about scope, which is what this endpoint's shared-spec design exists to
+// guarantee — and which only became true when core.Scope.MayContainHost was tightened
+// (burpsy-react-ui-cj7x).
 //
-// core.Scope.MayContainHost — the host-level gate /api/repeater/send has always used, and which the two
-// separate-connection modes inherit unchanged because they *are* that send, N times — answers "could
-// any request to this host be in scope". With include rules present and none of them naming this host,
-// it answers true: only a whole-host exclude makes it false. core.Scope.Contains, and therefore
-// AuthoriseRaw, refuses the same host outright ("matches no include rule").
+// This test used to pin the opposite: an asymmetry. MayContainHost, the host-level gate
+// /api/repeater/send has always used and which the two separate-connection modes inherit because
+// they *are* that send N times, answered "true" for a host that matched no include rule — only a
+// whole-host exclude made it false. Contains and AuthoriseRaw refused the same host outright, so
+// the shared-socket mode (which runs AuthoriseRaw per raw request) refused while the other two
+// sent. The old comment here recorded that this endpoint could not fix it alone, because the gate
+// is shared with the single send, the intruder and the proxy pre-filter, and said that the day the
+// gate was tightened this test is what would say so.
 //
-// So the shared-socket mode is strictly stricter than the two that dial per request, because
-// internal/sender/pipeline.go requires AuthoriseRaw per raw and this endpoint runs it. That asymmetry
-// is not something this endpoint invented and it is not something it can fix here: MayContainHost is
-// the gate the single send, the intruder and the proxy pre-filter all share, and tightening it is a
-// change to every one of them. It is recorded here so nobody reads the difference as a bug in the
-// group send, and so the day MayContainHost is tightened, this test is what says so.
-func TestRepeaterGroupSharedSocketIsStricterThanTheHostLevelGateTheOtherModesInherit(t *testing.T) {
+// It now says so. MayContainHost applies Contains' include semantics: an empty include list still
+// means everything, but once any include rule exists the list is an allow-list, and a host on none
+// of it is refused. So every mode refuses, and the property worth pinning is the agreement.
+func TestEveryGroupSendModeRefusesAHostMatchingNoIncludeRule(t *testing.T) {
 	host, port, stats := groupTarget(t)
+	authority := fmt.Sprintf("%s:%d", host, port)
 
-	// An include naming some other host: this target matches no include rule.
-	strict := newTestServer()
-	includeInScope(t, strict, "elsewhere.invalid")
-	rec := postJSON(t, strict, "/api/repeater/send-group", map[string]any{
-		"mode":  "sequence_single_conn",
-		"items": []map[string]any{groupItem("tab-a", host, port, "/x")},
-	})
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("single-connection send-group = %d (%s), want 403: AuthoriseRaw refuses a host that "+
-			"matches no include rule", rec.Code, rec.Body.String())
-	}
-	if conns, _ := stats(); conns != 0 {
-		t.Fatalf("the refused single-connection group still reached the target on %d connections", conns)
+	for _, mode := range []string{"sequence_single_conn", "sequence_separate_conn", "parallel"} {
+		t.Run(mode, func(t *testing.T) {
+			// An include naming some other host: this target matches no include rule.
+			srv := newTestServer()
+			includeInScope(t, srv, "elsewhere.invalid")
+			before, _ := stats()
+			rec := postJSON(t, srv, "/api/repeater/send-group", map[string]any{
+				"mode":  mode,
+				"items": []map[string]any{groupItem("tab-a", host, port, "/x")},
+			})
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("send-group %s = %d (%s), want 403: the target matches no include rule, and "+
+					"traffic leaving the include list is the one refusal this tool cannot get wrong",
+					mode, rec.Code, rec.Body.String())
+			}
+			if conns, _ := stats(); conns != before {
+				t.Fatalf("the refused %s group still reached the target (%d new connections)", mode, conns-before)
+			}
+		})
 	}
 
-	// The same request in a separate-connection mode goes out, because that is what /api/repeater/send
-	// does with the same scope today. Asserted rather than assumed: this is the behaviour the two modes
-	// are required to *match*, and a group send that quietly diverged from the single send — in either
-	// direction — would be the drift this endpoint's whole shared-spec design exists to prevent.
-	lenient := newTestServer()
-	includeInScope(t, lenient, "elsewhere.invalid")
-	got := sendGroup(t, lenient, "sequence_separate_conn", groupItem("tab-a", host, port, "/x"))
-	if len(got.Items) != 1 || got.Items[0].Result == nil {
-		t.Fatalf("separate-connection group = %+v, want the same outcome /api/repeater/send gives this scope", got.Items)
-	}
-	single := postJSON(t, lenient, "/api/repeater/send", map[string]any{
-		"target":   fmt.Sprintf("%s:%d", host, port),
+	// The invariant the whole shared-spec design is for: the single send answers the same way, so a
+	// group send can never be a way around the gate the single send applies — in either direction.
+	srv := newTestServer()
+	includeInScope(t, srv, "elsewhere.invalid")
+	single := postJSON(t, srv, "/api/repeater/send", map[string]any{
+		"target":   authority,
 		"protocol": "http",
-		"request":  "GET /x HTTP/1.1\r\nHost: " + fmt.Sprintf("%s:%d", host, port) + "\r\n\r\n",
+		"request":  "GET /x HTTP/1.1\r\nHost: " + authority + "\r\n\r\n",
 	})
-	if single.Code != http.StatusOK {
-		t.Errorf("/api/repeater/send = %d (%s), but the group send accepted the same request: the two "+
-			"must agree about scope", single.Code, single.Body.String())
+	if single.Code != http.StatusForbidden {
+		t.Errorf("/api/repeater/send = %d (%s), want 403; the group send refuses this request and the "+
+			"two must agree about scope", single.Code, single.Body.String())
 	}
 }
