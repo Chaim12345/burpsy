@@ -726,8 +726,10 @@ function TaskDetail({
        title="Issue activity"
        detail="Findings as they were raised, newest first. Each opens its advisory on the Issues page."
       />
+      {/* The fourth column shows the finding id — order in a dense counter, not a timestamp
+          (FindingDetail carries no time), so the header must not say "Age". */}
       {activityFindings.length ? (
-       <SimpleTable headers={["Severity", "Issue", "Host", "Age", ""]}>
+       <SimpleTable headers={["Severity", "Issue", "Host", "ID", ""]}>
         {activityFindings.map((finding) => (
          <MenuRow
           key={finding.id}
@@ -896,6 +898,6 @@ function TaskDetail({
      </Card>
     </TabsContent>
    </Tabs>
-  </div>
+  </div >
  );
 }

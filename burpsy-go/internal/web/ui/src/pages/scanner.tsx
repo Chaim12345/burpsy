@@ -250,13 +250,19 @@ export function ScannerPage(): JSX.Element {
 
  useEffect(() => {
   if (issueFocus === null) return;
+  // Clear only once the finding is actually selectable. `groups` is empty while /api/issues is
+  // still fetching (a cold-cache deep-link from the Dashboard feed navigates before data lands),
+  // and clearing there would drop the request — the operator arrives on Issues with nothing
+  // selected and no way to know why.
   // The leaf key is `${finding.id}:...` (groupFindings) — startsWith matches the finding's first
   // leaf, which is the one to open: an advisory is per-finding, occurrences are beneath it.
+  let found = false;
   for (const host of groups) {
    for (const path of host.paths) {
     const leaf = path.leaves.find((l) => l.key.startsWith(`${issueFocus}:`));
     if (leaf) {
      setSelectedKey(leaf.key);
+     found = true;
      // Expand the host and path the leaf sits under, so the selection is visible, not folded.
      setCollapsed((current) => {
       const next = { ...current };
@@ -269,8 +275,13 @@ export function ScannerPage(): JSX.Element {
     }
    }
   }
-  focusIssue(null);
- }, [issueFocus, groups, focusIssue]);
+  if (found) focusIssue(null);
+  // Data loaded but the id is not in it (deleted, or outside the loaded set): give up once rather
+  // than leaving the flag set — but only when data EXISTS. While `issues` is undefined the fetch
+  // has not landed, so the flag survives to the next run of this effect and the deep-link still
+  // opens when the findings arrive.
+  else if (issues !== undefined) focusIssue(null);
+ }, [issueFocus, groups, focusIssue, issues]);
 
  const selected = useMemo(() => {
   for (const host of groups) {

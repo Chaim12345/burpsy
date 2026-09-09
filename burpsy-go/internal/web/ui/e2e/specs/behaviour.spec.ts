@@ -293,6 +293,8 @@ test.describe("data views", () => {
  }) => {
   // burpsy-react-ui-dpk: the actions must work on the NODE, with no captured exchange selected
   // first — that is the whole point. The seeded tree has everything these need.
+  const { proxyPort, targetPort } = readHarness();
+  const origin = `http://127.0.0.1:${targetPort}`;
   await gotoRoute(page, route("sitemap"));
   await page.locator(".tree-row-label", { hasText: "mango" }).first().click({ button: "right" });
 
@@ -311,6 +313,23 @@ test.describe("data views", () => {
   expect(patterns).toContain("127.0.0.1");
   // Leaving the rule behind would put every later test's traffic in scope; remove what we added.
   await page.request.post("/api/scope", { data: { action: "clear" } });
+
+  // The crawl path, and specifically its RETENTION clause (the dpk regression): the node path IS
+  // the branch, so the keep-filter must be `path ~ "/r10e-branch/"` — not the parent ("/" for a
+  // first-level node), which is what stripping the last segment produced. Read the started crawl's
+  // query back from the API instead of trusting the toast.
+  const branch = `/r10e-branch-${Date.now()}`;
+  await proxyGet(proxyPort, `${origin}${branch}/deep`);
+  await gotoRoute(page, route("sitemap"));
+  await page.locator(".tree-row-label", { hasText: "r10e-branch" }).first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Actively scan this branch (crawl)" }).click();
+  await expect(page.locator("main h1")).toHaveText(/Discover/);
+  const crawls = await page.request.get("/api/crawl").then((r) => r.json());
+  const started = (crawls.crawls ?? []).find((c: { seeds?: string[] }) =>
+   (c.seeds ?? []).some((s: string) => s.includes("r10e-branch")),
+  );
+  expect(started, "the crawl for this branch did not register").toBeTruthy();
+  expect(started.report.retention_query).toBe(`path ~ "${branch}/"`);
 
   expect(consoleErrors).toEqual([]);
  });
@@ -343,19 +362,42 @@ test.describe("data views", () => {
  });
 
  test("a finished dashboard task offers scan again and delete", async ({ page, consoleErrors }) => {
-  // burpsy-react-ui-r6q. The harness's seeded audit is a real finished task; its tile menu must
-  // offer the row actions, and Delete must actually remove the row (Scan again on an audit answers
-  // 409 by design — the row does not carry the exchange id — which the toast passes through, so
-  // this asserts the delete path end to end instead).
+  // burpsy-react-ui-r6q. The tile menu must offer BOTH row actions, and Delete must actually
+  // remove the row. The task deleted here is a disposable one seeded below, not the harness's
+  // shared seeded audit — later tests read that row's findings, so removing it would be a
+  // cross-test mutation disguised as coverage.
   await gotoRoute(page, route("dashboard"));
-  const auditTile = page.locator(".task-tile", { hasText: "audit" }).first();
-  await expect(auditTile).toBeVisible();
+  // A crawl task the API refuses to start without a reachable target — but /api/tasks DELETE acts
+  // on the REGISTRY row, so the honest disposable task is a real one: seed a crawl task directly.
+  // The New scan dialog would need a live origin; the harness origin IS live, so use the UI's own
+  // API with the throwaway path.
+  const { targetPort } = readHarness();
+  const started = await page.request
+   .post("/api/crawl", { data: { seeds: [`http://127.0.0.1:${targetPort}/r6q-disposable/`], max_requests: 1 } })
+   .then((r) => r.json());
+  const taskId = started.task_id as number;
+  // The crawl runs against the one-request origin; wait for it to finish so Delete is legal.
+  for (let i = 0; i < 40; i++) {
+   const task = await page.request.get(`/api/crawl?task=${taskId}`).then((r) => r.json());
+   if (task.state && task.state !== "running") break;
+   await page.waitForTimeout(250);
+  }
 
-  await auditTile.getByRole("button", { name: /^Options for task/ }).click();
+  // Match the tile by its Options button, whose accessible name carries the exact task id —
+  // hasText on the tile would match every tile through the port number in each target URL.
+  const tile = page
+   .locator(".task-tile", { has: page.getByRole("button", { name: new RegExp(`^Options for task ${taskId} `) }) })
+   .first();
+  await expect(tile).toBeVisible();
+  await tile.getByRole("button", { name: new RegExp(`^Options for task ${taskId} `) }).click();
+  // Both actions are on the menu — asserting only the one being exercised would let the other
+  // silently disappear.
+  await expect(page.getByRole("menuitem", { name: "Scan again" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Delete task" })).toBeVisible();
   await page.getByRole("menuitem", { name: "Delete task" }).click();
 
   await expect(page.getByText(/removed from the list/)).toBeVisible();
-  await expect(auditTile).toHaveCount(0);
+  await expect(tile).toHaveCount(0);
   expect(consoleErrors).toEqual([]);
  });
 

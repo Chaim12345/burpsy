@@ -680,7 +680,11 @@ export function SiteMapPage(): JSX.Element {
              const retention =
               target.depth === 0
                ? `host = ${target.host}`
-               : `path ~ "${target.node.path.replace(/\/[^/]*$/, "")}/"`;
+               // The node path IS the branch: keep it and everything beneath it. The exchange-level
+               // crawlFrom strips the last segment because there path is a FILE the crawl was launched
+               // from; here the operator aimed at the branch itself, so stripping one level would
+               // widen the keep-filter to the parent ("/mango" becoming `path ~ "/"` — the whole host).
+               : `path ~ "${target.node.path.endsWith("/") ? target.node.path : target.node.path + "/"}"`;
              startCrawl.mutate(
               // retention_query is the crawl's keep-path filter — the same DSL clause the
               // exchange-level crawlFrom composes (actions.ts:427), so a branch crawl only
