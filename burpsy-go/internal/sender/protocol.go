@@ -126,6 +126,15 @@ const (
 	// this host over HTTP/1.1 only" stays visible in the report rather than being knowable only by
 	// whoever set the flag.
 	ProtocolPreferenceHTTP1
+	// ProtocolPreferenceForceH2 requires the send to go out over h2 when the request can be
+	// carried over it at all — the opposite pin to HTTP1, for a target whose h2 behaviour
+	// differs from its h1 behaviour (burpsy-react-ui-745). "Can be carried at all" is the same
+	// bar Auto applies (planH2's construct-by-construct check): a request h2 has nowhere to put
+	// — a smuggled Transfer-Encoding, say — is sent as HTTP/1.1 with its own DowngradeReason
+	// rather than mangled onto h2, because re-encoding it would send something the operator did
+	// not write. When the request IS carriable and the target declines h2 at ALPN, the send goes
+	// out as HTTP/1.1 and is reported as a downgrade like every other "h2 did not happen".
+	ProtocolPreferenceForceH2
 )
 
 // DowngradeReason names why a send went out as HTTP/1.1 rather than HTTP/2.

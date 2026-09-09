@@ -25,8 +25,11 @@ type repeaterSendOptions struct {
 	// "in_scope", "always", or empty for the standing policy. The scope still authorises every hop —
 	// see sender.RedirectAlways for why "always" here is not Burp's "anywhere".
 	RedirectMode string `json:"redirect_mode,omitempty"`
-	// ProtocolPreference pins the transport: "auto" (the default) or "http1" to put the bytes on the
-	// wire as written. Pinning is reported as a downgrade, never silent — see ProtocolPreferenceHTTP1.
+	// ProtocolPreference pins the transport: "auto" (the default), "http1" to put the bytes on
+	// the wire as written, or "http2" to require h2 when the request is carriable (both pins are
+	// reported as downgrades when they do not happen, never silent — see ProtocolPreferenceHTTP1
+	// and ProtocolPreferenceForceH2). Still deliberately absent: an ALPN override, which no
+	// raw-byte send could honour.
 	ProtocolPreference string `json:"protocol_preference,omitempty"`
 	// ProcessCookies attaches the session coordinator's cookie jar for the target when the request
 	// carries no Cookie header of its own. A header the operator wrote always wins.
@@ -53,19 +56,27 @@ func (o repeaterSendOptions) validate() error {
 		return fmt.Errorf("redirect_mode: unknown mode %q (want never, on_site, in_scope, always, or empty for the standing policy)", o.RedirectMode)
 	}
 	switch o.ProtocolPreference {
-	case "", "auto", "http1":
+	case "", "auto", "http1", "http2":
 	default:
-		return fmt.Errorf("protocol_preference: unknown preference %q (want auto, http1, or empty for auto)", o.ProtocolPreference)
+		return fmt.Errorf("protocol_preference: unknown preference %q (want auto, http1, http2, or empty for auto)", o.ProtocolPreference)
 	}
 	return nil
 }
 
 // protocolPreference maps the wire value onto the sender's enum. Only called post-validate.
+// "http2" is the force pin (burpsy-react-ui-745): the send must ride h2 when the request can be
+// carried over it at all — the same representability bar Auto applies, so a request h2 has
+// nowhere to put still goes out as HTTP/1.1 with its construct named, and a target that declines
+// h2 at ALPN reports the downgrade instead of failing the connection.
 func (o repeaterSendOptions) protocolPreference() sender.ProtocolPreference {
-	if o.ProtocolPreference == "http1" {
+	switch o.ProtocolPreference {
+	case "http1":
 		return sender.ProtocolPreferenceHTTP1
+	case "http2":
+		return sender.ProtocolPreferenceForceH2
+	default:
+		return sender.ProtocolPreferenceAuto
 	}
-	return sender.ProtocolPreferenceAuto
 }
 
 // redirectPolicy is the policy this send follows: the override when one was given, otherwise the

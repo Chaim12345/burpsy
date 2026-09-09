@@ -997,6 +997,7 @@ function SendOptionsPanel({
             >
               <option value="">Auto (negotiate)</option>
               <option value="http1">Force HTTP/1.1</option>
+              <option value="http2">Force HTTP/2</option>
             </Select>
           )}
         </Field>

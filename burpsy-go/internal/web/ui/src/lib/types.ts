@@ -277,7 +277,7 @@ export interface InterceptState {
  */
 export interface RepeaterSendOptions {
  redirect_mode?: "" | "never" | "on_site" | "in_scope" | "always";
- protocol_preference?: "" | "auto" | "http1";
+ protocol_preference?: "" | "auto" | "http1" | "http2";
  process_cookies?: boolean;
  strip_connection?: boolean;
  normalize_line_endings?: boolean;
