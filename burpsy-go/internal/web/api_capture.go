@@ -258,7 +258,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // ScopeRequest represents a scope modification request.
 type ScopeRequest struct {
-	Action  string `json:"action"` // "include", "exclude", "remove", "clear" or "toggle"
+	Action  string `json:"action"` // "include", "exclude", "remove", "clear", "toggle" or "drop_out_of_scope"
 	Kind    string `json:"kind"`   // optional rule kind for "remove" and "toggle": "include" or "exclude"
 	Pattern string `json:"pattern"`
 	// Path limits the rule to requests whose path starts with it, and Port to one port. Both optional;
@@ -390,6 +390,9 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 		"allow_all": s.scope.AllowAll(),
 		"rules":     views,
 		"empty":     s.scope.Empty(),
+		// Burp's "Out-of-scope request handling: Drop all out-of-scope requests". Reported
+		// unconditionally, like enabled: the UI's switch has to read the state it toggles.
+		"drop_out_of_scope": s.scope.DropOutOfScope(),
 	})
 }
 
@@ -401,6 +404,20 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch req.Action {
+	case "drop_out_of_scope":
+		// One round trip for the switch, like "toggle" for a rule row. When on, every scope
+		// refusal becomes an egress refusal — the proxy stops issuing requests to hosts the
+		// scope excludes — which is the safety control 5j4i asks for. The switch itself is
+		// not persisted here; persistence rides the same save the scope rows ride (see
+		// persistScope), so the durable document is never a half-state.
+		if req.Enabled == nil {
+			http.Error(w, "Enabled is required for drop_out_of_scope", http.StatusBadRequest)
+			return
+		}
+		s.scope.SetDropOutOfScope(*req.Enabled)
+		if s.persist != nil {
+			s.persist.SaveScopeDropOutOfScope(*req.Enabled)
+		}
 	case "include", "exclude":
 		kind := core.ScopeInclude
 		if req.Action == "exclude" {

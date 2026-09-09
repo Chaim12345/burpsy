@@ -889,6 +889,25 @@ func (s *Store) DeleteFinding(id uint64) {
 
 // ---- Scope -------------------------------------------------------------------------------------
 
+// SaveScopeDropOutOfScope persists Burp's "Drop all out-of-scope requests" switch, a scope
+// setting rather than a rule — it changes egress behaviour, not membership, so it rides the
+// settings table like every other toggle rather than scope_rules_v3.
+func (s *Store) SaveScopeDropOutOfScope(on bool) {
+	if err := s.setSetting("scope.drop_out_of_scope", fmt.Sprint(on)); err != nil {
+		s.log("scope drop_out_of_scope", err)
+	}
+}
+
+// LoadScopeDropOutOfScope restores the switch. Absent reads as off, the seed both core.NewScope
+// and a fresh Burp project use; a missing row is a first run, not a corruption.
+func (s *Store) LoadScopeDropOutOfScope() bool {
+	v, err := s.getSetting("scope.drop_out_of_scope")
+	if err != nil || v == "" {
+		return false
+	}
+	return v == "true"
+}
+
 // SaveScope replaces the scope rule set (small table; delete-and-reinsert is fine).
 //
 // # Why there are two tables, and why the old one is still written
@@ -1837,6 +1856,10 @@ func (s *Store) Restore(
 		for _, r := range scopeRules {
 			scope.Add(r)
 		}
+		// Burp's "Drop all out-of-scope requests" survives the restart with the rules it
+		// governs: an egress fence that lapses because the process restarted is worse than
+		// one that was never raised, because the panel says it is up.
+		scope.SetDropOutOfScope(s.LoadScopeDropOutOfScope())
 	}
 
 	if mr != nil {

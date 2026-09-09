@@ -122,6 +122,14 @@ type Scope struct {
 	mu       sync.RWMutex
 	rules    []*ScopeRule
 	allowAll bool
+	// dropOutOfScope is Burp's "Out-of-scope request handling: Drop all out-of-scope requests"
+	// (settings/project/scope.html). When set, every scope refusal becomes an egress refusal:
+	// Contains keeps its retention meaning, AuthoriseRequest/AuthoriseRaw refuse, and the proxy's
+	// MayContainHost pre-filter refuses the host before it is dialed. Seed off: the proxy has
+	// always forwarded what the browser asked for, and flipping that on upgrade would break
+	// every session mid-flight for operators who never touched the setting. Burp defaults it
+	// off for the same reason.
+	dropOutOfScope bool
 }
 
 // NewScope creates a new empty scope.
@@ -156,6 +164,24 @@ func (s *Scope) AllowAll() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.allowAll
+}
+
+// SetDropOutOfScope turns Burp's "Drop all out-of-scope requests" on or off. It is an
+// egress-control switch, deliberately separate from every scope decision that reads the rule
+// list: Contains answers "is this retained", and this answers "may it be sent at all". The
+// separation is what lets dont_log_out_of_scope (a retention choice) and this (an egress
+// choice) be configured independently, as Burp's two panels do.
+func (s *Scope) SetDropOutOfScope(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropOutOfScope = on
+}
+
+// DropOutOfScope reports whether out-of-scope requests are refused at egress.
+func (s *Scope) DropOutOfScope() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dropOutOfScope
 }
 
 // Empty reports whether the scope has no rules.
@@ -303,7 +329,14 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 
 // AuthoriseRequest checks if a request is authorized to be sent.
 func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bool) bool {
-	return s.Contains(host, port, path, isTLS)
+	if s.Contains(host, port, path, isTLS) {
+		return true
+	}
+	// With the drop switch on, a scope refusal is also an egress refusal: the request is
+	// not issued at all, which is the safety control 5j4i asks for. With it off this stays
+	// a pure Contains pass-through — retention and egress independent, the contract
+	// dont_log_out_of_scope already documents.
+	return false
 }
 
 // MayContainHost reports whether *any* path on this host could be in scope. A pre-filter, never an
@@ -332,6 +365,15 @@ func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bo
 // an empty include list still means "everything" (a scope nobody has narrowed does not stop work),
 // but once any include rule exists the list means "only these", and a host named by none of them is
 // refused here as it already was there.
+//
+// dropOutOfScope deliberately does NOT reach this method. A host-level pre-filter cannot carry
+// an egress decision without breaking its own contract: with every include disabled and the
+// switch on, filtering on Enabled would make hasInclude false and return default-allow — the
+// opposite of Contains, which refuses — re-opening the exact cross-tool disagreement cj7x
+// closed. The switch's egress enforcement lives in the two places a request is actually issued:
+// AuthoriseRaw (the proxy's per-wire-request gate, whose refusal says "dropped") and the send
+// endpoints' AuthoriseRequest/AuthoriseRaw paths. A caller holding only MayContainHost's
+// answer is holding a "worth considering" verdict, not a permission to send.
 func (s *Scope) MayContainHost(host string, port uint16, isTLS bool) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -489,6 +531,13 @@ func (s *Scope) AuthoriseRaw(host string, port uint16, isTLS bool, raw []byte) e
 		return errors.New("refused: request has no readable request line, so no path could be checked")
 	}
 	if !s.Contains(host, port, path, isTLS) {
+		// With the drop switch on, the refusal is an egress refusal: the message says so,
+		// because "your request was retained nowhere and sent nowhere" is a different report
+		// from "it was sent but not kept", and a tool used under engagement rules owes the
+		// operator that difference.
+		if s.DropOutOfScope() {
+			return errors.New("dropped: out-of-scope request handling is set to drop; " + s.Explain(host, port, path, isTLS))
+		}
 		return errors.New(s.Explain(host, port, path, isTLS))
 	}
 	return nil

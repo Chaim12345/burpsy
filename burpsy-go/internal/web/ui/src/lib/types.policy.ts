@@ -240,11 +240,17 @@ export interface ScopeView {
  allow_all: boolean;
  rules: ScopeRuleView[];
  empty: boolean;
+ /**
+  * Burp's "Out-of-scope request handling: Drop all out-of-scope requests". On, every scope
+  * refusal becomes an egress refusal: requests to hosts the scope excludes are not issued.
+  * Always on the wire — the switch has to read the state it toggles.
+  */
+ drop_out_of_scope: boolean;
 }
 
 /** POST /api/scope. Port, path and protocol are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
- action: "include" | "exclude" | "remove" | "clear" | "toggle";
+ action: "include" | "exclude" | "remove" | "clear" | "toggle" | "drop_out_of_scope";
  kind?: "include" | "exclude";
  pattern?: string;
  path?: string;

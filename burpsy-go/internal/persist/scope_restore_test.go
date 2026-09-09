@@ -420,3 +420,22 @@ func TestRestoreKeepsAScopeRulesDisabledState(t *testing.T) {
 		t.Error("a restored active rule stopped matching its own host")
 	}
 }
+
+// The drop switch (burpsy-react-ui-5j4i) survives the round trip. Its dangerous direction is
+// silent: a fence the operator raised, lost to a restart, sends traffic the operator believes
+// is being refused — worse than a fence that never existed, because the panel says it is up.
+// The off direction is pinned too: a fresh run must not inherit a fence nobody raised.
+func TestRestoreKeepsTheDropOutOfScopeSwitch(t *testing.T) {
+	p := newTestStore(t)
+	if p.LoadScopeDropOutOfScope() {
+		t.Fatal("a fresh store must read the switch as off; the seed both core.NewScope and a new Burp project use")
+	}
+	p.SaveScopeDropOutOfScope(true)
+	if !p.LoadScopeDropOutOfScope() {
+		t.Fatal("the switch did not survive the round trip; a restart would silently lower the egress fence")
+	}
+	p.SaveScopeDropOutOfScope(false)
+	if p.LoadScopeDropOutOfScope() {
+		t.Fatal("turning the switch off did not survive; the fence would come back on its own")
+	}
+}

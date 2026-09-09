@@ -42,6 +42,11 @@ export function ScopePage(): JSX.Element {
    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Scope change failed"),
   });
 
+ const setDropOutOfScope = (on: boolean) =>
+  run({ action: "drop_out_of_scope", enabled: on }, on
+   ? "Out-of-scope requests will be dropped"
+   : "Out-of-scope requests will be forwarded");
+
  const addRule = () => {
   if (!pattern.trim()) {
    toast.error("A host pattern is required.");
@@ -224,6 +229,20 @@ export function ScopePage(): JSX.Element {
       <Plus size={14} />
       Add rule
      </Button>
+    </Toolbar>
+   </Card>
+
+   <Card>
+    <SectionHeading
+     title="Out-of-scope request handling"
+     detail="Drop all out-of-scope requests: requests to hosts the scope excludes are not issued at all — the guardrail that stops burpsy touching hosts you have no permission to test. Off, out-of-scope traffic is forwarded (and kept or dropped per the proxy's logging switch)."
+    />
+    <Toolbar>
+     <Checkbox
+      label="Drop all out-of-scope requests"
+      checked={data?.drop_out_of_scope ?? false}
+      onCheckedChange={setDropOutOfScope}
+     />
     </Toolbar>
    </Card>
 
