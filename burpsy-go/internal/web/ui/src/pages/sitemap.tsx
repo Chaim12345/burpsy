@@ -66,7 +66,7 @@ function nodeKey(node: SiteNode): string {
  * the booleans mirror Burp's request-type group. Empty sets mean "no restriction on this axis",
  * so a fresh page hides nothing — the same polarity history's bucket filters use.
  */
-interface SitemapFilter {
+export interface SitemapFilter {
  mimes: string[];
  statuses: string[];
  scopeOnly: boolean;
@@ -75,7 +75,7 @@ interface SitemapFilter {
  hideNotFound: boolean;
 }
 
-const NO_SITEMAP_FILTER: SitemapFilter = {
+export const NO_SITEMAP_FILTER: SitemapFilter = {
  mimes: [],
  statuses: [],
  scopeOnly: false,
@@ -110,7 +110,7 @@ function nodeMatchesSetAxes(node: SiteNode, f: SitemapFilter): boolean {
  * so the visibility pass and the auto-expand pass agree on what counts as a match. Boolean axes are
  * per-node (a folder is not requested and has no scope answer of its own); set axes are satisfied by
  * the node's own aggregation or by any descendant's. */
-function subtreeMatches(node: SiteNode, term: string, f: SitemapFilter): boolean {
+export function subtreeMatches(node: SiteNode, term: string, f: SitemapFilter): boolean {
  if (!nodeMatchesBooleanAxes(node, f)) return false;
  if (!nodeMatchesSetAxes(node, f) && !(node.children ?? []).some((child) => subtreeMatches(child, term, f))) return false;
  if (term && !(node.path.toLowerCase().includes(term) || node.segment.toLowerCase().includes(term))) {
@@ -852,7 +852,15 @@ export function SiteMapPage(): JSX.Element {
          Crawl paths
         </Button>
        </div>
-       <Badge>{(data?.nodes ?? 0).toLocaleString()} nodes</Badge>
+       {/* Two honest answers, not one smoothed one: under an active filter the first badge counts
+           what the tree actually shows (rows are unique node keys), and the capture total stays
+           beside it so the gap is visible instead of papered over. History's status bar draws the
+           same distinction between filtered, loaded and captured. */}
+       <Badge>
+        {narrowed
+         ? `${new Set(rows.map((r) => r.key)).size.toLocaleString()} of ${(data?.nodes ?? 0).toLocaleString()} nodes`
+         : `${(data?.nodes ?? 0).toLocaleString()} nodes`}
+       </Badge>
        <Badge>{(data?.exchanges ?? 0).toLocaleString()} exchanges</Badge>
        {data?.in_flight ? <Badge tone="info">{data.in_flight} in flight</Badge> : null}
        {/* Burp's "Passively scan this branch" (burpsy-react-ui-p09). No confirm step: the sweep
