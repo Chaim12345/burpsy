@@ -522,4 +522,3 @@ export function useSaveInterceptStartup() {
   onSuccess: () => invalidate([["intercept", "startup"]]),
  });
 }
-}

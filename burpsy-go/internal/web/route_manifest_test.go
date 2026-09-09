@@ -362,6 +362,13 @@ var manifest = map[string]route{
 		pathValidatedFirst: true,
 		summary:            "the match rules deciding which messages are held, per direction",
 	},
+	"/api/intercept/startup": {
+		// Burp's "Default Proxy interception state" (burpsy-react-ui-7vy): a preference about
+		// the NEXT server start, not a live toggle — /enable stays the switch. Writes only the
+		// operator's own preference, so riskLocal like the rest of the intercept configuration.
+		methods: []string{"GET", "POST"}, risk: riskLocal,
+		summary: "read or set the startup interception preference: on, off, or restore-last-state",
+	},
 	"/api/intruder/attacks": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "every intruder attack this process is running, with its status; sends nothing",
