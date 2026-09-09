@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, 
 import { useMemo, useState, type KeyboardEvent } from "react";
 import { copyToClipboard, formatBytes, formatDuration, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
-import { useSitemapDetailed } from "../lib/data.observe";
+import { useDeleteSitemap, useSitemapDetailed } from "../lib/data.observe";
 import { useIssuesDetailed } from "../lib/data.attack";
 import type { FindingDetail } from "../lib/types.attack";
 import { exchangeUrl, useExchangeActions, useSendShortcuts } from "../lib/actions";
@@ -14,7 +14,7 @@ import { CrawlLauncher } from "../ui/crawl";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Toolbar, Tooltip } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Modal, Toolbar, Tooltip } from "../ui/primitives";
 import { BucketMenu } from "../ui/column-visibility-menu";
 import { Checkbox } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
@@ -314,6 +314,12 @@ export function SiteMapPage(): JSX.Element {
  // node carries its subtree's methods/statuses/mimes/params, so filtering the tree costs no new
  // endpoint and no response bodies.
  const [sfilter, setSfilter] = useState<SitemapFilter>(NO_SITEMAP_FILTER);
+ // Delete host/branch/item (burpsy-react-ui-10e). One confirm modal, the shape history's clear
+ // uses; the wording says what actually happens — the branch leaves the map, the exchanges stay.
+ // host is the FlatRow's resolved rowHost — the connection's hostname — not node.segment, which
+ // for depth>0 rows is the last path component. The server keys suppression on host:port:tls, so
+ // sending the segment would silently no-op.
+ const [confirmDelete, setConfirmDelete] = useState<undefined | { node: SiteNode; host: string; kind: "host" | "branch" | "item" }>(undefined);
  /**
   * Which of Burp's two site-map views is showing.
   *
@@ -338,7 +344,23 @@ export function SiteMapPage(): JSX.Element {
  // capture, when a checked bucket emptied the tree.
  const narrowed = term !== "" || filterActive(sfilter);
 
+ const runDelete = () => {
+  if (!confirmDelete) return;
+  const { node, host, kind } = confirmDelete;
+  removeNode.mutate(
+   { host, port: node.port, tls: node.tls, path: kind === "host" ? "" : node.path, kind },
+   {
+    onSuccess: ({ kind: doneKind }) => {
+     setConfirmDelete(undefined);
+     toast.success(doneKind === "host" ? `Suppressed host ${node.segment}` : `Suppressed ${doneKind} ${node.path}`);
+    },
+    onError: (cause) => toast.error(`Could not delete: ${cause.message}`),
+   },
+  );
+ };
+
  const { data, error, isFetching, refetch } = useSitemapDetailed();
+ const removeNode = useDeleteSitemap();
  // The same cache key the HTTP history tab uses, so selecting a node costs no extra request.
  const { data: history } = useHistory("", 1000);
  const actions = useExchangeActions();
@@ -597,7 +619,29 @@ export function SiteMapPage(): JSX.Element {
        row={row}
        getMenuGroups={(target) => {
         const scope = target.depth === 0 ? "host" : "branch";
+        // Delete host/branch/item (burpsy-react-ui-10e), from the node object the tree already
+        // holds — the server wants the fields, not the composed key. The confirm modal carries the
+        // suppression-not-deletion wording, because "delete" overstates what happens to the bytes.
         return [
+         {
+          id: "delete",
+          actions: [
+           {
+            id: "delete-node",
+            label: target.depth === 0 ? "Delete host" : "Delete branch",
+            onSelect: () => setConfirmDelete({ node: target.node, host: target.host, kind: target.depth === 0 ? "host" : "branch" }),
+           },
+           ...(target.depth > 0
+            ? [
+             {
+              id: "delete-item",
+              label: "Delete this item only",
+              onSelect: () => setConfirmDelete({ node: target.node, host: target.host, kind: "item" }),
+             },
+            ]
+            : []),
+          ],
+         },
          {
           id: "copy",
           actions: [
@@ -923,6 +967,31 @@ export function SiteMapPage(): JSX.Element {
    ) : (
     <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
    )}
+   <Modal
+    open={confirmDelete !== undefined}
+    onOpenChange={(open) => {
+     if (!open) setConfirmDelete(undefined);
+    }}
+    title={
+     confirmDelete?.kind === "host"
+      ? `Delete host ${confirmDelete.node.segment} from the map?`
+      : `Delete ${confirmDelete?.kind === "item" ? "item" : "branch"} ${confirmDelete?.node.path ?? ""}?`
+    }
+    description={
+     "The node leaves the site map and stays out, including for re-captured traffic on it. This is a view-level removal: " +
+     "the captured exchanges stay — HTTP history, findings and anything saved against them are untouched. A burpsy restart " +
+     "rebuilds the map from the store, so the rows return then."
+    }
+   >
+    <div className="detail-actions">
+     <Button variant="danger" disabled={removeNode.isPending} onClick={runDelete}>
+      {removeNode.isPending ? "Deleting…" : "Delete from the map"}
+     </Button>
+     <Button variant="outline" onClick={() => setConfirmDelete(undefined)}>
+      Keep it
+     </Button>
+    </div>
+   </Modal>
   </div>
  );
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -29,9 +30,14 @@ type sitemapNodeView struct {
 	// the server that emitted it. The UI had already stopped trusting it and re-derived host+path
 	// itself, with a comment saying so; this makes the identity the UI actually uses the one the
 	// server states.
-	Key          string   `json:"key"`
-	Segment      string   `json:"segment"`
-	Path         string   `json:"path"`
+	Key     string `json:"key"`
+	Segment string `json:"segment"`
+	Path    string `json:"path"`
+	// Port and TLS repeat the host-node identity on every node, so a client acting on one row
+	// (DELETE /api/sitemap, burpsy-react-ui-10e) can name the exact (host, port, tls) tuple without
+	// parsing the composed `key` back into parts — a second grammar that can drift from the first.
+	Port         uint16   `json:"port"`
+	TLS          bool     `json:"tls"`
 	Depth        int      `json:"depth"`
 	Exchanges    int      `json:"exchanges"`
 	Requested    bool     `json:"requested"`
@@ -86,14 +92,62 @@ type sitemapTreeResp struct {
 	Tree      []sitemapNodeView `json:"tree"`
 }
 
-// handleSitemap serves GET /api/sitemap?host=&path=&depth=. The Go sitemap aggregates hosts → paths
-// → methods/statuses from captured exchanges; this folds it into the same tree the UI renders,
-// treating each path segment as a node.
+// handleSitemap serves GET /api/sitemap?host=&path=&depth= and DELETE /api/sitemap
+// (burpsy-react-ui-10e). The Go sitemap aggregates hosts → paths → methods/statuses from captured
+// exchanges; this folds it into the same tree the UI renders, treating each path segment as a node.
+//
+// DELETE is Burp's "Delete host"/"Delete branch"/"Delete item". The body names the node the way
+// the tree identifies it — {"host","port","tls","path","kind"} — rather than a pre-built key
+// string: parsing a composed key back into its parts is a second grammar that can drift from the
+// first, and the fields are what the UI already holds in the row object. kind is "item" (that one
+// path node only) or "branch" (the path and everything beneath it); path "" means the whole host.
+// Removal is a SUPPRESSION (sitemap.SiteMap.Suppress): the projection drops the branch and keeps
+// it out across rebuilds and re-captures, while the exchanges themselves stay — HTTP history rows,
+// findings and audit references keep naming them. That decision is recorded on the issue and in
+// Suppress's doc comment; deleting store bytes from a map view would have broken every other
+// tool's currency.
 func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		s.sitemapGet(w, r)
+	case http.MethodDelete:
+		s.sitemapDelete(w, r)
+	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// sitemapDelete validates the node fields the UI sent and suppresses that host, branch or item.
+// A wrong-verb answer is the mux's business; a body naming no host, or a path with no kind, is a
+// 400 saying what was wrong — not a silent success that removed nothing.
+func (s *Server) sitemapDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host string `json:"host"`
+		Port uint16 `json:"port"`
+		TLS  bool   `json:"tls"`
+		Path string `json:"path"`
+		Kind string `json:"kind"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.Host == "" {
+		http.Error(w, "body must be JSON {\"host\": \"h\", \"port\": n, \"tls\": bool, \"path\": \"\", \"kind\": \"host\"} (path \"\" = whole host) or {.., \"path\": \"/p\", \"kind\": \"item\"|\"branch\"}", http.StatusBadRequest)
 		return
 	}
+	// The literals match sitemap's suppressItem/suppressBranch values; they are spelled here rather
+	// than exported from sitemap because the wire vocabulary is this API's contract, not the map
+	// package's.
+	if req.Path != "" && req.Kind != "item" && req.Kind != "branch" {
+		http.Error(w, "kind must be \"item\" or \"branch\" when a path is given", http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		req.Kind = "host"
+	}
+	s.sitemap.Suppress(sitemap.HostKey(req.Host, req.Port, req.TLS), req.Path, req.Kind)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"suppressed": req.Host + req.Path, "kind": req.Kind})
+}
+
+func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	hostFilter := q.Get("host")
 	pathFilter := q.Get("path")
@@ -130,6 +184,8 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 			Key:           nodeKey(host.Host, host.Port, host.TLS, ""),
 			Segment:       host.Host,
 			Path:          host.Host,
+			Port:          host.Port,
+			TLS:           host.TLS,
 			Depth:         0,
 			Exchanges:     len(host.Paths),
 			Requested:     true,
@@ -253,6 +309,8 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 			Key:           nodeKey(host.Host, host.Port, host.TLS, p),
 			Segment:       pathSegment(p),
 			Path:          p,
+			Port:          host.Port,
+			TLS:           host.TLS,
 			Depth:         strings.Count(p, "/"),
 			Exchanges:     len(a.ids),
 			Requested:     a.requested,

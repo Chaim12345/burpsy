@@ -256,6 +256,37 @@ test.describe("data views", () => {
   expect(consoleErrors).toEqual([]);
  });
 
+ test("deleting a site-map branch removes its rows and keeps the sibling", async ({
+  page,
+  consoleErrors,
+ }) => {
+  // burpsy-react-ui-10e: Burp's "Delete branch". One shared server, so the branch this test
+  // suppresses is its own — the harness's five rows belong to the tests above. The sibling
+  // /r10e-other is the boundary assertion: a prefix match on raw strings would take it with /r10e.
+  const { proxyPort, targetPort } = readHarness();
+  const origin = `http://127.0.0.1:${targetPort}`;
+  await proxyGet(proxyPort, `${origin}/r10e/one`);
+  await proxyGet(proxyPort, `${origin}/r10e/one/two`);
+  await proxyGet(proxyPort, `${origin}/r10e-other`);
+
+  await gotoRoute(page, route("sitemap"));
+  await expect(page.locator(".tree-row-label", { hasText: "r10e" })).not.toHaveCount(0);
+
+  // Right-click the /r10e node itself — the tree renders one row per segment, so the branch row
+  // is the one whose label ends at r10e, not /r10e/one or /r10e-other.
+  await page.locator(".tree-row-label", { hasText: "r10e" }).first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete branch", exact: true }).click();
+
+  // The modal says what actually happens: view-level removal, exchanges stay in history.
+  await expect(page.getByText(/captured exchanges stay/)).toBeVisible();
+  await page.getByRole("button", { name: "Delete from the map" }).click();
+
+  // The tree labels are segments, not full paths — "one" and "r10e-other", per the AX tree.
+  await expect(page.locator(".tree-row-label", { hasText: "one" })).toHaveCount(0);
+  await expect(page.locator(".tree-row-label", { hasText: "r10e-other" })).toBeVisible();
+  expect(consoleErrors).toEqual([]);
+ });
+
  test("the status bar reports the stored bytes the API reports", async ({ page }) => {
   // Cheap, and it is the one place the shell claims a number that comes from the server rather than
   // from the store — so it is where a broken /api/stats would show up as a plausible-looking dash.

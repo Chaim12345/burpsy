@@ -17,24 +17,38 @@ import type { CrawlRun, SiteMapDetail, WsMessageDetail } from "./types.observe";
 // first thing ever captured, and the editor rendered "No request bytes captured" for a message
 // the server would have served — visible on the very first exchange of a fresh session.
 export const useExchange = (id: number | null | undefined) =>
-  useResource<Exchange>(keys.exchange(id ?? -1), `/api/exchange/${id ?? 0}`, typeof id === "number" && id >= 0);
+ useResource<Exchange>(keys.exchange(id ?? -1), `/api/exchange/${id ?? 0}`, typeof id === "number" && id >= 0);
 
 /** Same endpoint and cache key as the shared `useSitemap`, typed to the full node shape (id, segment)
  * that a real expand/collapse tree needs. */
 export const useSitemapDetailed = () => useResource<SiteMapDetail>(keys.sitemap, "/api/sitemap");
 
+/** DELETE /api/sitemap — Burp's "Delete host"/"Delete branch"/"Delete item"
+ * (burpsy-react-ui-10e). Suppression, not deletion: the server keeps every exchange, so history,
+ * findings and audit references stay whole; the branch leaves the map and stays out across
+ * rebuilds and re-captures. The fields are the row's own (SiteNodeDetail carries port/tls), so
+ * nothing parses the composed key back into parts. */
+export function useDeleteSitemap() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (req: { host: string; port: number; tls: boolean; path: string; kind: "host" | "branch" | "item" }) =>
+   api<{ suppressed: string; kind: string }>("/api/sitemap", json("DELETE", req)),
+  onSuccess: () => invalidate([keys.sitemap]),
+ });
+}
+
 /** Same endpoint and cache key as the shared `useWsMessage`, typed to the full frame shape (opcode,
  * dropped, truncated) needed to render text/hex/close payloads distinctly. */
 export const useWsMessageDetailed = (id: number | null | undefined) =>
-  useResource<WsMessageDetail>(keys.wsMessage(id ?? -1), `/api/ws/message/${id ?? 0}`, typeof id === "number" && id >= 0);
+ useResource<WsMessageDetail>(keys.wsMessage(id ?? -1), `/api/ws/message/${id ?? 0}`, typeof id === "number" && id >= 0);
 
 /** Retained crawl reports, newest first. Polls while any crawl is running: a crawl is asynchronous by
  * design (it outlives the request that started it), so the list is the only way its progress and its
  * final coverage report reach the page. */
 export const useCrawls = () => {
-  const q = useResource<{ crawls: CrawlRun[] }>(keys.crawls, "/api/crawl");
-  const running = (q.data?.crawls ?? []).some((c) => c.state === "running");
-  return { ...q, running };
+ const q = useResource<{ crawls: CrawlRun[] }>(keys.crawls, "/api/crawl");
+ const running = (q.data?.crawls ?? []).some((c) => c.state === "running");
+ return { ...q, running };
 };
 
 /**
@@ -48,19 +62,19 @@ export const useCrawls = () => {
  * NOT a clean branch, and a surface must not render the two alike.
  */
 export interface PassiveBranchResult {
-  host: string;
-  path_prefix?: string;
-  port?: number;
-  matched: number;
-  scanned: number;
-  /** In the branch, refused by the CURRENT scope — they may have been captured under a wider one. */
-  skipped_out_of_scope: number;
-  /** No response to scan. A request in flight is neither a failure nor a clean result. */
-  skipped_no_response: number;
-  findings: number;
-  loaded: number;
-  /** The server's own one-line statement of the counts and their caveats. Shown verbatim. */
-  summary: string;
+ host: string;
+ path_prefix?: string;
+ port?: number;
+ matched: number;
+ scanned: number;
+ /** In the branch, refused by the CURRENT scope — they may have been captured under a wider one. */
+ skipped_out_of_scope: number;
+ /** No response to scan. A request in flight is neither a failure nor a clean result. */
+ skipped_no_response: number;
+ findings: number;
+ loaded: number;
+ /** The server's own one-line statement of the counts and their caveats. Shown verbatim. */
+ summary: string;
 }
 
 /**
@@ -70,30 +84,30 @@ export interface PassiveBranchResult {
  * confirmation step of the kind an audit does.
  */
 export function usePassiveScanBranch() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (body: { host: string; path_prefix?: string; port?: number }) =>
-      api<PassiveBranchResult>("/api/scanner/passive-branch", json("POST", body)),
-    // Findings and the dashboard both move; the site map does not, because no traffic was captured.
-    onSuccess: () => invalidate([["issues"], ["dashboard"], ["scanner"]]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (body: { host: string; path_prefix?: string; port?: number }) =>
+   api<PassiveBranchResult>("/api/scanner/passive-branch", json("POST", body)),
+  // Findings and the dashboard both move; the site map does not, because no traffic was captured.
+  onSuccess: () => invalidate([["issues"], ["dashboard"], ["scanner"]]),
+ });
 }
 
 /** Start a crawl. Resolves as soon as the server has accepted it and registered the task — not when
  * the crawl finishes — so the caller gets a task id to follow rather than a blocked promise. */
 export function useStartCrawl() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (body: {
-      seeds: string[];
-      max_requests?: number;
-      max_depth?: number;
-      max_duration_secs?: number;
-      requests_per_second?: number;
-      submit_forms?: boolean;
-      query?: string;
-      retention_query?: string;
-    }) => api<{ task_id: number; seeds: string[]; state: string }>("/api/crawl", json("POST", body)),
-    onSuccess: () => invalidate([keys.crawls, keys.dashboard, keys.sitemap]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (body: {
+   seeds: string[];
+   max_requests?: number;
+   max_depth?: number;
+   max_duration_secs?: number;
+   requests_per_second?: number;
+   submit_forms?: boolean;
+   query?: string;
+   retention_query?: string;
+  }) => api<{ task_id: number; seeds: string[]; state: string }>("/api/crawl", json("POST", body)),
+  onSuccess: () => invalidate([keys.crawls, keys.dashboard, keys.sitemap]),
+ });
 }

@@ -57,9 +57,28 @@ type HostNode struct {
 type SiteMap struct {
 	mu    sync.RWMutex
 	hosts map[string]*HostNode // key = host:port:tls
+	// suppressed holds the host keys and host-prefixed path keys the operator removed
+	// (burpsy-react-ui-10e). Removal is a SUPPRESSION, not a deletion: the map is a projection of
+	// the exchange store, and deleting the underlying exchanges would renumber nothing but break
+	// HTTP history rows, findings and audit references that name them. The suppression is the
+	// recorded decision — the map stops showing what the operator removed, the store keeps every
+	// byte — and Add consults it before folding, so a re-capture of a suppressed host stays out.
+	//
+	// Key shapes mirror hostKey/host+path identity, with the verb Burp distinguishes:
+	//   "h:p:t"                    — whole host ("Delete host")
+	//   "h:p:t|item|<path>"        — one path node exactly ("Delete item")
+	//   "h:p:t|branch|<path>"      — the path and every descendant ("Delete branch")
+	// Item and branch are different sentences an operator can mean, so they are stored apart and
+	// answered differently: an item delete of /api must leave /api/data visible (it is a different
+	// row), while a branch delete of /api must take /api/data with it even though nothing ever
+	// requested /api itself — the folder was synthesised, its children live at their own path keys,
+	// and only a prefix rule reaches them.
+	suppressed map[string]struct{}
 }
 
-func New() *SiteMap { return &SiteMap{hosts: make(map[string]*HostNode)} }
+func New() *SiteMap {
+	return &SiteMap{hosts: make(map[string]*HostNode), suppressed: make(map[string]struct{})}
+}
 
 // Sync rebuilds the sitemap from the traffic store's current exchanges.
 //
@@ -114,6 +133,12 @@ func (sm *SiteMap) Add(ex *core.Exchange) {
 
 func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 	key := hostKey(ex.Host, ex.Port, ex.TLS)
+	// A suppressed host or branch stays suppressed for re-captures too: Add runs before this on the
+	// live path, but Sync's rebuild walks every stored exchange through here, so the check lives at
+	// the fold rather than only at the observer.
+	if sm.suppressedByLocked(key, ex.Path) {
+		return
+	}
 	hn := sm.hosts[key]
 	if hn == nil {
 		hn = &HostNode{
@@ -150,6 +175,97 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 		pn.Mimes[ex.Mime] = struct{}{}
 	}
 	insertIDAt(pn, at, ex.ID)
+}
+
+const (
+	// suppressItem and suppressBranch are the two path-level verbs stored in the suppression set.
+	// Values are opaque; they exist so the map keys read the same in logs as in code.
+	suppressItem   = "item"
+	suppressBranch = "branch"
+)
+
+// suppressedByLocked reports whether this host or this path under it is suppressed. A whole-host
+// entry answers for every path; an item entry answers its exact path; a branch entry answers the
+// path and anything beneath it (prefix on segment boundaries, so /api/ does not swallow /apiary).
+// Callers hold sm.mu.
+func (sm *SiteMap) suppressedByLocked(hostKey string, path string) bool {
+	if _, ok := sm.suppressed[hostKey]; ok {
+		return true
+	}
+	if path == "" {
+		return false
+	}
+	clean := path
+	if i := strings.IndexByte(clean, '?'); i >= 0 {
+		clean = clean[:i]
+	}
+	if _, ok := sm.suppressed[hostKey+"|"+suppressItem+"|"+clean]; ok {
+		return true
+	}
+	prefix := hostKey + "|" + suppressBranch + "|"
+	if _, ok := sm.suppressed[prefix+clean]; ok {
+		return true
+	}
+	// Branches also cover anything under the deleted path. Walk ancestors rather than every key:
+	// the capture path is short, and a host key prefix already answered the whole-host case.
+	for cut := clean; ; {
+		i := strings.LastIndexByte(cut, '/')
+		if i <= 0 {
+			return false
+		}
+		cut = cut[:i]
+		if _, ok := sm.suppressed[prefix+cut]; ok {
+			return true
+		}
+	}
+}
+
+// Suppress removes a host, a branch or a single item from the map's view
+// (burpsy-react-ui-10e): Burp's "Delete host"/"Delete branch"/"Delete item". hostKey is
+// HostKey(host, port, tls); path "" suppresses the whole host; kind picks item (exact path only)
+// or branch (path and every descendant). The dropped nodes leave the tree immediately and stay out
+// across Sync rebuilds and re-captures; the exchanges themselves are untouched, which is the
+// recorded decision on the issue — history, findings and audit rows keep their references. There
+// is deliberately no undo: re-capturing traffic re-populates the map, and a suppressed entry that
+// keeps blocking honest traffic is an operator-visible decision they can revisit by restarting
+// with a fresh capture. An Unsuppress would also need a "list what is suppressed" surface to be
+// usable, which is a bigger feature than this issue.
+func (sm *SiteMap) Suppress(hostKey string, path string, kind string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.suppressed == nil {
+		sm.suppressed = make(map[string]struct{})
+	}
+	if path == "" {
+		sm.suppressed[hostKey] = struct{}{}
+		// Dropping the host drops its whole subtree from the in-memory tree now; suppressing each
+		// path individually is not needed — the host key answers for all of them.
+		delete(sm.hosts, hostKey)
+		return
+	}
+	sm.suppressed[hostKey+"|"+kind+"|"+path] = struct{}{}
+	if hn, ok := sm.hosts[hostKey]; ok {
+		if kind == suppressBranch {
+			// Prefix removal for the live tree: every path at or under the branch goes now, not on
+			// the next fold. The stored suppression set is what keeps them out afterwards.
+			for p := range hn.Paths {
+				if p == path || strings.HasPrefix(p, path+"/") {
+					delete(hn.Paths, p)
+				}
+			}
+		} else {
+			delete(hn.Paths, path)
+		}
+		// A host with nothing left shows an empty branch forever; drop it too.
+		if len(hn.Paths) == 0 {
+			delete(sm.hosts, hostKey)
+		}
+	}
+}
+
+// HostKey exposes the host-key shape the suppression set and the web layer agree on.
+func HostKey(host string, port uint16, tls bool) string {
+	return hostKey(host, port, tls)
 }
 
 // idSlot returns where id belongs in an ascending slice, and whether it is

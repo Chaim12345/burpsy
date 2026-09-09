@@ -29,6 +29,10 @@ export interface SiteNodeDetail {
  key: string;
  segment: string;
  path: string;
+ /** The host-node identity repeated per node, so a row can name its exact connection tuple
+   *  without parsing `key` (DELETE /api/sitemap, burpsy-react-ui-10e). */
+ port: number;
+ tls: boolean;
  exchanges: number;
  subtree_exchanges: number;
  methods: string[];

@@ -598,8 +598,16 @@ var manifest = map[string]route{
 		summary: "one session rule by id: PUT replaces it (including macro promotion), DELETE removes it",
 	},
 	"/api/sitemap": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the site map as a real tree, with per-subtree exchange counts",
+		// DELETE is riskDestructive, not riskLocal, and the line between them is evidence: the
+		// suppression never touches the stored exchanges (that is the recorded decision on
+		// burpsy-react-ui-10e — history, findings and audit references keep naming them), but it
+		// removes a branch from the view an operator reasons and reports from, and a branch that
+		// stops being visible stops being worked. The same shape as DELETE /api/history. GET is
+		// riskRead unchanged.
+		methods: []string{"GET", "DELETE"}, risk: riskDestructive,
+		summary: "GET: the site map as a real tree, with per-subtree exchange counts. DELETE: " +
+			"suppress a host, branch or single node from the map — a view-level removal that keeps the " +
+			"underlying exchanges and stays out across rebuilds and re-captures",
 	},
 	"/api/stats": {
 		methods: []string{"GET"}, risk: riskRead,
@@ -1020,7 +1028,12 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// /api/issues/ joins because its DELETE discards a finding — engagement evidence, per the class
 	// definition. The PUT on the same subtree is only a triage note on evidence that survives it; it
 	// rides along rather than splitting one pattern across two classes.
-	equal("destructive", destructive, []string{"/api/backup", "/api/issues/", "/api/tools/log"})
+	// /api/sitemap joins because its DELETE removes a branch from the view the operator reasons and
+	// reports from (burpsy-react-ui-10e). The stored exchanges survive — the recorded decision — so
+	// it is the mildest member here; it sits in the class because making a worked branch invisible
+	// is closer to "discard evidence" than to "write burpsy's own state", and because an unattended
+	// caller trimming the map would hide what the operator is being shown.
+	equal("destructive", destructive, []string{"/api/backup", "/api/issues/", "/api/sitemap", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.
