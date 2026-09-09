@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
@@ -22,24 +23,100 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	format := strings.TrimPrefix(r.URL.Path, "/api/report/")
 	format = strings.TrimSuffix(format, "/")
+
+	// The report honours a filter (burpsy-react-ui-8r6): severity as a comma list, host as a
+	// substring, and false positives excluded on request — the axes the Issues page already
+	// filters by, so "the High and Critical findings on this host" is the query string rather
+	// than a manual pass over the whole-store export. An unknown severity value is refused
+	// rather than ignored: a filter parameter that silently does not filter would produce a
+	// report claiming to be the filtered set while carrying everything.
+	query := r.URL.Query()
+	var filter reportFilter
+	if raw := query.Get("severity"); raw != "" {
+		// ParseSeverity coerces an unknown value to informational rather than failing, which is
+		// right for captured data and wrong for a filter: a typo would silently produce a report
+		// of only-informational findings while claiming to be the filtered set. Matched here,
+		// case-insensitively, against the values the engine can actually hold.
+		valid := map[string]core.Severity{
+			"critical": core.SeverityCritical, "high": core.SeverityHigh, "medium": core.SeverityMedium,
+			"low": core.SeverityLow, "informational": core.SeverityInformational,
+		}
+		for _, name := range strings.Split(raw, ",") {
+			sev, ok := valid[strings.ToLower(strings.TrimSpace(name))]
+			if !ok {
+				http.Error(w, "unknown severity "+strconv.Quote(name)+"; the accepted values are critical, high, medium, low, informational", http.StatusBadRequest)
+				return
+			}
+			filter.severities = append(filter.severities, sev)
+		}
+	}
+	filter.host = strings.TrimSpace(query.Get("host"))
+	filter.hideFalsePositives = query.Get("exclude_false_positives") == "true"
+
 	switch format {
 	case "json":
-		s.reportJSON(w)
+		s.reportJSON(w, filter)
 	case "sarif":
-		s.reportSARIF(w)
+		s.reportSARIF(w, filter)
 	case "html":
-		s.reportHTML(w)
+		s.reportHTML(w, filter)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
+// reportFilter is the subset the export carries, decoded from the query string. Zero value
+// means no constraint — the whole store, exactly what the unparameterised URL always meant.
+type reportFilter struct {
+	severities         []core.Severity
+	host               string
+	hideFalsePositives bool
+}
+
+// applies says whether one finding survives the filter. Every axis is a keep-if-match; an
+// empty axis never constrains.
+func (f reportFilter) applies(finding *core.Finding, hosts []string) bool {
+	if len(f.severities) > 0 {
+		kept := false
+		for _, sev := range f.severities {
+			if finding.Severity == sev {
+				kept = true
+				break
+			}
+		}
+		if !kept {
+			return false
+		}
+	}
+	if f.host != "" {
+		kept := false
+		for _, h := range hosts {
+			if strings.Contains(strings.ToLower(h), strings.ToLower(f.host)) {
+				kept = true
+				break
+			}
+		}
+		if !kept {
+			return false
+		}
+	}
+	if f.hideFalsePositives && finding.FalsePositive {
+		return false
+	}
+	return true
+}
+
 // reportRows turns the finding store into report rows, resolving each finding's hosts from the
-// store's exchanges (left empty rather than guessed when the store cannot resolve them).
-func (s *Server) reportRows() []report.Row {
+// store's exchanges (left empty rather than guessed when the store cannot resolve them). The
+// filter decides which findings are carried; zero value carries everything.
+func (s *Server) reportRows(filter reportFilter) []report.Row {
 	findings := s.findings.All()
 	rows := make([]report.Row, 0, len(findings))
 	for _, f := range findings {
+		hosts := s.findingHosts(f)
+		if !filter.applies(f, hosts) {
+			continue
+		}
 		row := report.Row{
 			ID:          f.ID,
 			Name:        f.Name,
@@ -47,7 +124,7 @@ func (s *Server) reportRows() []report.Row {
 			Confidence:  f.Confidence.String(),
 			Description: f.Description,
 			Remediation: f.Remediation,
-			Hosts:       s.findingHosts(f),
+			Hosts:       hosts,
 			Occurrences: len(f.Occurrences),
 			Params:      f.Params,
 			Evidence:    s.findingEvidence(f),
@@ -136,8 +213,8 @@ func (s *Server) findingHosts(f *core.Finding) []string {
 	return hosts
 }
 
-func (s *Server) reportJSON(w http.ResponseWriter) {
-	doc, err := report.JSON(s.reportRows())
+func (s *Server) reportJSON(w http.ResponseWriter, filter reportFilter) {
+	doc, err := report.JSON(s.reportRows(filter))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -147,8 +224,8 @@ func (s *Server) reportJSON(w http.ResponseWriter) {
 	w.Write(doc)
 }
 
-func (s *Server) reportSARIF(w http.ResponseWriter) {
-	doc, err := report.SARIF(s.reportRows())
+func (s *Server) reportSARIF(w http.ResponseWriter, filter reportFilter) {
+	doc, err := report.SARIF(s.reportRows(filter))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -158,8 +235,8 @@ func (s *Server) reportSARIF(w http.ResponseWriter) {
 	w.Write(doc)
 }
 
-func (s *Server) reportHTML(w http.ResponseWriter) {
+func (s *Server) reportHTML(w http.ResponseWriter, filter reportFilter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="burpsy-report.html"`)
-	w.Write(report.HTML(s.reportRows()))
+	w.Write(report.HTML(s.reportRows(filter)))
 }
