@@ -161,6 +161,25 @@ const (
 	// upgrade in exchange for nothing. The switch exists so the behaviour can be
 	// tightened, and the divergence from Burp's default is deliberate and stated.
 	OptInvisibleProxy OptionKey = "invisible_proxy"
+	// OptStripProxyHeaders removes the Proxy-* header family from incoming
+	// requests before they are forwarded — Burp's
+	// "strip Proxy-* headers in incoming requests"
+	// (configPanelProxyMiscellaneous). These headers are instructions to a proxy
+	// from the client; forwarded to an origin they are smuggling surface, and
+	// Burp strips them for exactly that reason. Seeded ON, unlike Burp's
+	// default-off, because this engine has never forwarded one — flipping the
+	// default would change behaviour on upgrade for nothing. The switch exists
+	// to be able to send them, which is occasionally what a test of an origin's
+	// own Proxy-header handling needs.
+	OptStripProxyHeaders OptionKey = "strip_proxy_headers"
+	// OptSetConnectionClose rewrites the request's Connection header to close
+	// and sets it on the response — Burp's "Set "Connection: close" on
+	// requests and on responses" (configPanelProxyMiscellaneous). Off by
+	// default: the relay already honours the client's own Connection header,
+	// and forcing close on everything trades keep-alive throughput for a
+	// determinism most sessions do not need. When on, both directions close
+	// after one exchange.
+	OptSetConnectionClose OptionKey = "set_connection_close"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -181,6 +200,8 @@ var OptionKeys = []OptionKey{
 	OptStripWsExtensions,
 	OptDontLogOutOfScope,
 	OptInvisibleProxy,
+	OptStripProxyHeaders,
+	OptSetConnectionClose,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The
@@ -989,6 +1010,112 @@ func removeHeader(raw []byte, name string) ([]byte, bool) {
 	out.Write(sep)
 	out.Write(body)
 	return out.Bytes(), true
+}
+
+// stripProxyHeaderFamily deletes every header whose name begins with "Proxy-" from a
+// request — Burp's "strip Proxy-* headers in incoming requests". The prefix match is
+// the point: the family (Proxy-Connection, Proxy-Authorization, …) is defined by the
+// prefix, not by a closed list.
+func stripProxyHeaderFamily(raw []byte) ([]byte, bool) {
+	head, body, sep, ok := splitMessage(raw)
+	if !ok {
+		return raw, false
+	}
+	crlf := bytes.Contains(head, []byte("\r\n"))
+	normalised := bytes.ReplaceAll(head, []byte("\r\n"), []byte("\n"))
+	lines := bytes.Split(normalised, []byte("\n"))
+
+	kept := make([][]byte, 0, len(lines))
+	removed := false
+	for i, line := range lines {
+		if i > 0 && strings.HasPrefix(strings.ToLower(string(line)), "proxy-") {
+			removed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !removed {
+		return raw, false
+	}
+	eol := []byte("\n")
+	if crlf {
+		eol = []byte("\r\n")
+	}
+	var out bytes.Buffer
+	out.Grow(len(raw))
+	for i, line := range kept {
+		if i > 0 {
+			out.Write(eol)
+		}
+		out.Write(line)
+	}
+	out.Write(sep)
+	out.Write(body)
+	return out.Bytes(), true
+}
+
+// forceConnectionClose rewrites the request's Connection header to "close" (adding one
+// when absent) — Burp's "Set Connection: close on requests and on responses". The
+// response half is the relay's job: it closes after one exchange when this option is on.
+func forceConnectionClose(raw []byte) []byte {
+	head, body, sep, ok := splitMessage(raw)
+	if !ok {
+		return raw
+	}
+	crlf := bytes.Contains(head, []byte("\r\n"))
+	normalised := bytes.ReplaceAll(head, []byte("\r\n"), []byte("\n"))
+	lines := bytes.Split(normalised, []byte("\n"))
+
+	found := false
+	for i, line := range lines {
+		if i > 0 && strings.HasPrefix(strings.ToLower(string(line)), "connection:") {
+			if strings.EqualFold(strings.TrimSpace(string(line[len("connection:"):])), "close") {
+				return raw
+			}
+			lines[i] = []byte("Connection: close")
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, []byte("Connection: close"))
+	}
+	eol := []byte("\n")
+	if crlf {
+		eol = []byte("\r\n")
+	}
+	var out bytes.Buffer
+	out.Grow(len(raw) + 24)
+	for i, line := range lines {
+		if i > 0 {
+			out.Write(eol)
+		}
+		out.Write(line)
+	}
+	out.Write(sep)
+	out.Write(body)
+	return out.Bytes()
+}
+
+// ApplyRequestEgress runs the two Miscellaneous knobs that shape an outgoing request:
+// strip Proxy-* headers (Burp's configPanelProxyMiscellaneous strip) and set
+// Connection: close. Called by the relay after Match & Replace and intercept — on the
+// bytes that will actually go on the wire, so what the operator edits and what history
+// records stay one set.
+func (o *Options) ApplyRequestEgress(raw []byte) []byte {
+	if o == nil {
+		return raw
+	}
+	out := raw
+	if o.Get(OptStripProxyHeaders) {
+		if stripped, changed := stripProxyHeaderFamily(out); changed {
+			out = stripped
+		}
+	}
+	if o.Get(OptSetConnectionClose) {
+		out = forceConnectionClose(out)
+	}
+	return out
 }
 
 // rebuild reassembles a message around a new body, fixing Content-Length and — when

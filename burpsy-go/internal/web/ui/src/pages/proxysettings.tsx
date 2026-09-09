@@ -192,27 +192,74 @@ export function ProxySettingsPage(): JSX.Element {
         )}
       />
      </label>
+     <label className="switch-row" htmlFor="proxy-opt-strip_proxy_headers">
+      <span>
+       <span>Strip Proxy-* headers from requests</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Remove every Proxy-Connection / Proxy-Authorization / … header before the request is forwarded — the family
+        talks to proxies, not to origins, and Burp strips it for the same reason. On by default; turn it off to send
+        them, which is occasionally what testing an origin's own Proxy-header handling needs. Applies from the next
+        request.
+       </span>
+      </span>
+      <Switch
+       id="proxy-opt-strip_proxy_headers"
+       label="Strip Proxy-* headers from requests"
+       checked={d.options["strip_proxy_headers"] === true}
+       onCheckedChange={(on) =>
+        setOptions.mutate(
+         { strip_proxy_headers: on },
+         {
+          onSuccess: () => toast.success(`Proxy-* stripping ${on ? "on" : "off"} — applies from the next request`),
+          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
+         },
+        )}
+      />
+     </label>
+     <label className="switch-row" htmlFor="proxy-opt-set_connection_close">
+      <span>
+       <span>Set &quot;Connection: close&quot; on requests and responses</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Rewrite the request's Connection header to close and set it on the response, so both directions end after one
+        exchange. Off by default — the relay already honours whatever the client asked for; forcing close trades
+        keep-alive throughput for determinism. Applies from the next request.
+       </span>
+      </span>
+      <Switch
+       id="proxy-opt-set_connection_close"
+       label="Set Connection: close on requests and responses"
+       checked={d.options["set_connection_close"] === true}
+       onCheckedChange={(on) =>
+        setOptions.mutate(
+         { set_connection_close: on },
+         {
+          onSuccess: () => toast.success(`Connection: close ${on ? "forced" : "left to the client"} — applies from the next request`),
+          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
+         },
+        )}
+      />
+     </label>
+     <SimpleTable headers={["Adjustment", "Count"]}>
+      <tr>
+       <td>Accept-Encoding stripped from requests</td>
+       <td><Badge>{formatCount(c.accept_encoding_stripped)}</Badge></td>
+      </tr>
+      <tr>
+       <td>Responses dechunked before rule matching</td>
+       <td><Badge>{formatCount(c.dechunked)}</Badge></td>
+      </tr>
+      <tr>
+       <td>HTTP/2 responses relayed without rewriting</td>
+       <td><Badge>{formatCount(c.relayed_http2)}</Badge></td>
+      </tr>
+      <tr>
+       <td>Out-of-scope exchanges not logged</td>
+       <td>
+        <Badge>{formatCount(c.exchanges_dropped_out_of_scope)}</Badge>
+       </td>
+      </tr>
+     </SimpleTable>
     </div>
-    <SimpleTable headers={["Adjustment", "Count"]}>
-     <tr>
-      <td>Accept-Encoding stripped from requests</td>
-      <td><Badge>{formatCount(c.accept_encoding_stripped)}</Badge></td>
-     </tr>
-     <tr>
-      <td>Responses dechunked before rule matching</td>
-      <td><Badge>{formatCount(c.dechunked)}</Badge></td>
-     </tr>
-     <tr>
-      <td>HTTP/2 responses relayed without rewriting</td>
-      <td><Badge>{formatCount(c.relayed_http2)}</Badge></td>
-     </tr>
-     <tr>
-      <td>Out-of-scope exchanges not logged</td>
-      <td>
-       <Badge>{formatCount(c.exchanges_dropped_out_of_scope)}</Badge>
-      </td>
-     </tr>
-    </SimpleTable>
    </Card>
 
    <ProxyListenerSection />

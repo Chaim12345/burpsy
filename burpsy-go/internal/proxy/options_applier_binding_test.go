@@ -200,6 +200,12 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			// changes is whether the store holds the exchange afterwards.
 			reqChanged = reqChanged || outOfScopeRetentionFixture(t, key)
 
+			// The egress fixture, for the two Miscellaneous request knobs (6s2): both act
+			// through ApplyRequestEgress on the bytes the relay forwards, so an option
+			// bound only there changes a Proxy-* carrying, keep-alive request and nothing
+			// else in this file's fixtures.
+			reqChanged = reqChanged || requestEgressFixture(t, key)
+
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+
 					"direction. Either it has no applier — in which case the API is advertising "+
@@ -387,4 +393,26 @@ func Test_every_listed_option_round_trips_through_Set_and_Snapshot(t *testing.T)
 			t.Errorf("Snapshot reports %q as off after Set(true)", key)
 		}
 	}
+}
+
+// requestEgressFixture drives a request carrying Proxy-* headers with an implied keep-alive
+// through ApplyRequestEgress once with the key enabled alone, once with everything off.
+// strip_proxy_headers and set_connection_close are bound on this path — the relay calls it
+// after M&R and intercept, on the bytes that actually go on the wire — and no other key
+// changes what it produces, so the no-second-table property holds.
+func requestEgressFixture(t *testing.T, key OptionKey) bool {
+	t.Helper()
+	run := func(on bool) string {
+		o := NewOptions()
+		if on {
+			if err := o.Set(key, true); err != nil {
+				t.Fatalf("Set %q: %v", key, err)
+			}
+		}
+		return string(o.ApplyRequestEgress([]byte("GET /egress HTTP/1.1\r\n" +
+			"Host: example.test\r\n" +
+			"Proxy-Connection: keep-alive\r\n" +
+			"Proxy-Authorization: Basic Zm9vOmJhcg==\r\n\r\n")))
+	}
+	return run(true) != run(false)
 }

@@ -592,6 +592,11 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 	if err := c.options.Set(OptDontLogOutOfScope, true); err != nil {
 		panic("proxy: " + err.Error())
 	}
+	// Proxy-* headers have always been stripped on the way upstream (the option's
+	// comment says why), so the seed matches the behaviour the engine has always had.
+	if err := c.options.Set(OptStripProxyHeaders, true); err != nil {
+		panic("proxy: " + err.Error())
+	}
 	return c
 }
 
@@ -1068,6 +1073,8 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
 			requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
 		}
+		// Same Miscellaneous request knobs as the plaintext path (5q8u/6s2).
+		requestData = s.config.options.ApplyRequestEgress(requestData)
 
 		// Intercept: hold the decrypted request before it is forwarded upstream.
 		if s.config.intercept != nil {
@@ -1235,6 +1242,15 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 				responseData = raw
 			}
 		}
+	}
+
+	// Burp's "Set Connection: close on requests and on responses" (6s2): the response
+	// half. The header says close and the loop below stops — the request half was set in
+	// the relay, so both peers see the same decision and neither waits on a socket the
+	// other is closing.
+	if s.config.options.Get(OptSetConnectionClose) {
+		responseData = forceConnectionClose(responseData)
+		keepServing = false
 	}
 
 	// Return the response to the client. A write that fails ends the connection
@@ -1413,6 +1429,11 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
 		requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
 	}
+	// The two Miscellaneous request knobs (strip Proxy-* headers, Connection: close) run
+	// after M&R and after intercept: the operator's rules and edits see the client's real
+	// bytes, and what goes upstream is what burpsy decided to send — the same invariant
+	// this site's other egress edits follow.
+	requestData = s.config.options.ApplyRequestEgress(requestData)
 
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
@@ -1557,6 +1578,13 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	}
 	if highlight == "" {
 		highlight = heldHighlight
+	}
+
+	// The response half of Connection: close (6s2) — the request half was already set in
+	// the relay. This path serves one request per connection by shape, so only the header
+	// needs to agree with what the relay does.
+	if s.config.options.Get(OptSetConnectionClose) {
+		responseData = forceConnectionClose(responseData)
 	}
 
 	// Send to client
