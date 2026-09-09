@@ -120,9 +120,20 @@ func (s *Server) handleWSConnections(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(views)
 }
 
-// handleWSHistory serves GET /api/ws/history[?offset=N&limit=N[&exchange=N]] -> HistoryResp.
+// handleWSHistory serves GET /api/ws/history[?offset=N&limit=N[&exchange=N][&direction=…]
+// [&opcode=…][&payload=…]] -> HistoryResp.
 // Newest-first page. `total` is the whole index's size, not the page's, so the UI can page without
 // asking separately; filtering by connection narrows the rows but not the total.
+//
+// # Why direction/opcode/payload filter on the server while the UI filter box feels client-side
+//
+// A frame's payload bytes are not on the row — by design, so listing a socket that has carried a
+// hundred thousand messages touches no payload bytes (see the WsMessage comment in core). A
+// client-side payload filter would run over rows that do not carry the payload, so it could only
+// match against whatever the UI happened to have fetched — the selected frame — and would hide
+// everything else for a reason the data cannot support. Filtering here reads each candidate's
+// payload exactly once through the same WsPayload handle the detail view uses, and the rows the
+// operator sees are the rows that actually matched.
 func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -169,10 +180,50 @@ func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 		messages = s.store.WsMessages(offset, limit)
 	}
 
+	// The frame filter (burpsy-react-ui-5k4). direction and opcode are exact matches over the
+	// row's own fields; payload is a case-insensitive substring over the stored bytes, the same
+	// comparison the detail view renders as text. An unknown direction/opcode value is refused
+	// rather than ignored: a filter parameter that silently does not filter would answer with
+	// every frame while the operator believes they are looking at a narrowed list — the same
+	// refusal rule the `exchange` parameter above already follows.
+	dirFilter := r.URL.Query().Get("direction")
+	if dirFilter != "" && dirFilter != "client_to_server" && dirFilter != "server_to_client" {
+		http.Error(w, fmt.Sprintf("direction must be client_to_server or server_to_client, got %q", dirFilter), http.StatusBadRequest)
+		return
+	}
+	opcodeFilter := r.URL.Query().Get("opcode")
+	if opcodeFilter != "" && opcodeFilter != "text" && opcodeFilter != "binary" && opcodeFilter != "ping" && opcodeFilter != "pong" && opcodeFilter != "close" {
+		http.Error(w, fmt.Sprintf("opcode must be one of text, binary, ping, pong, close, got %q", opcodeFilter), http.StatusBadRequest)
+		return
+	}
+	payloadFilter := strings.ToLower(r.URL.Query().Get("payload"))
+
 	rows := make([]wsRowView, 0, len(messages))
 	for _, m := range messages {
+		if dirFilter != "" {
+			want := dirFilter == "client_to_server"
+			if m.FromClient != want {
+				continue
+			}
+		}
+		if opcodeFilter != "" && m.Opcode.Name() != opcodeFilter {
+			continue
+		}
+		if payloadFilter != "" {
+			payload, err := s.store.WsPayload(m.Payload)
+			if err != nil {
+				// A payload that cannot be read cannot be shown to have matched. The row is
+				// skipped rather than passed: passing it would claim the substring matched bytes
+				// nobody read.
+				continue
+			}
+			if !strings.Contains(strings.ToLower(string(payload)), payloadFilter) {
+				continue
+			}
+		}
 		rows = append(rows, wsRowFromMessage(m))
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(wsHistoryResp{Total: s.store.WsCount(), Rows: rows})
 }

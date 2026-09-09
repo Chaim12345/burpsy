@@ -52,7 +52,10 @@ export const keys = {
  crawls: ["crawls"] as const,
  discovery: ["discovery"] as const,
  wsConnections: ["ws", "connections"] as const,
- wsHistory: (exchange: number) => ["ws", "history", exchange] as const,
+ /** The trailing filter axes keep one cache entry per distinct view (burpsy-react-ui-5k4):
+  * a page fetched under one payload substring must not be served for another. */
+ wsHistory: (exchange: number, direction: string, opcode: string, payload: string) =>
+  ["ws", "history", exchange, direction, opcode, payload] as const,
  wsMessage: (id: number) => ["ws", "message", id] as const,
  toolLog: (filter: string, search: string) => ["toollog", filter, search] as const,
  organizer: ["organizer"] as const,
@@ -269,10 +272,18 @@ export const useHistory = (q: string, limit = 500) =>
 export const useMessage = (id: number | null | undefined) =>
  useResource<MessageView>(keys.message(id ?? -1), `/api/message/${id ?? 0}`, typeof id === "number" && id >= 0);
 
-export const useWsHistory = (exchange: number | null | undefined, limit = 500) =>
+/** The frame-list filter (burpsy-react-ui-5k4): server-side on /api/ws/history, because a frame's
+ * payload bytes are not on the row. `filter` with an empty payload box reads as no payload
+ * constraint, so direction/opcode can narrow without the substring axis; the query key carries all
+ * three so a change to any re-fetches rather than reusing the page another filter produced. */
+export const useWsHistory = (
+ exchange: number | null | undefined,
+ filter?: { direction?: string; opcode?: string; payload?: string },
+ limit = 500,
+) =>
  useResource<WsHistory>(
-  keys.wsHistory(exchange ?? -1),
-  `/api/ws/history${query({ exchange: exchange ?? 0, limit })}`,
+  keys.wsHistory(exchange ?? -1, filter?.direction ?? "", filter?.opcode ?? "", filter?.payload ?? ""),
+  `/api/ws/history${query({ exchange: exchange ?? 0, limit, direction: filter?.direction, opcode: filter?.opcode, payload: filter?.payload })}`,
   typeof exchange === "number",
  );
 
