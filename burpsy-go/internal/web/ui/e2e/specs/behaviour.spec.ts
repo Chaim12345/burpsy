@@ -315,6 +315,33 @@ test.describe("data views", () => {
   expect(consoleErrors).toEqual([]);
  });
 
+ test("the dashboard's Issue activity feed lists findings and opens the advisory", async ({
+  page,
+  consoleErrors,
+ }) => {
+  // burpsy-react-ui-i18. The harness seeds one audit against exchange 0, so the feed has a real
+  // finding to show — and "Open" must land on the Issues page with that finding selected, which is
+  // the way-in the tiles never gave.
+  await gotoRoute(page, route("dashboard"));
+
+  await page.getByRole("tab", { name: "Issue activity" }).click();
+  const rows = page.locator("tr.data-row, tbody tr");
+  await expect(rows.first()).toBeVisible();
+
+  // Newest first, and the row names severity, issue and host — the three facts the feed exists
+  // to carry.
+  const firstRow = rows.first();
+  await expect(firstRow.getByText(/High|Medium|Low|Informational|Critical/).first()).toBeVisible();
+  await expect(firstRow.locator("td").nth(2)).not.toBeEmpty();
+
+  // The way in: clicking Open lands on Issues with the advisory visible.
+  await firstRow.getByRole("button", { name: "Open" }).click();
+  await expect(page.locator("main h1")).toHaveText(/Issues/);
+  await expect(page.getByText("Advisory").first()).toBeVisible();
+
+  expect(consoleErrors).toEqual([]);
+ });
+
  test("the status bar reports the stored bytes the API reports", async ({ page }) => {
   // Cheap, and it is the one place the shell claims a number that comes from the server rather than
   // from the store — so it is where a broken /api/stats would show up as a plausible-looking dash.
