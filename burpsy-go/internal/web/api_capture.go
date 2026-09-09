@@ -882,6 +882,110 @@ func (s *Server) handleIssueTriage(w http.ResponseWriter, r *http.Request, idStr
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
+// ---- Record an issue (burpsy-react-ui-4qqz) -----------------------------------------------------
+
+// manualIssueReq is the body POST /api/issues/record takes: the operator's description of an
+// issue they found by hand, attached to one exchange they name.
+type manualIssueReq struct {
+	Name        string `json:"name"`
+	Severity    string `json:"severity"`
+	Confidence  string `json:"confidence"`
+	Description string `json:"description"`
+	Remediation string `json:"remediation"`
+	// ExchangeID is a pointer so "absent" is distinguishable from exchange 0: the stores are
+	// dense counters from zero, and the first exchange ever captured IS exchange 0 — a flat
+	// uint64 would reject the very first pair with the required-field error.
+	ExchangeID *uint64 `json:"exchange_id"`
+	// Comment rides the finding's operator-note field rather than being folded into the
+	// description: the description is what the operator says about the *vulnerability*, the
+	// comment is what they say about *this record* — how they found it, what to re-check.
+	Comment string `json:"comment"`
+}
+
+// handleIssueRecord serves POST /api/issues/record — Burp's "Record an issue" context-menu
+// action. A finding created this way is a first-class finding: it rides the same store, the
+// same triage endpoints, the same persistence as a scanner-produced one, because the operator
+// authored it with more certainty about the vulnerability than any scanner has.
+//
+// The exchange is mandatory and must exist. An issue pointing at nothing cannot be jumped to
+// from the UI and cannot be verified later, which is the failure mode this feature exists to
+// avoid: Burp attaches the selected request/response pair, and so does this.
+//
+// Dedup is deliberately bypassed by naming the issue uniquely per record (the caller's name is
+// used as-is; two records with the same name on one host merge into one finding with two
+// occurrences, which is the ordinary semantics — "add to a previously created issue", which is
+// Burp's other documented mode for this action).
+func (s *Server) handleIssueRecord(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req manualIssueReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "Name is required: name the issue the way it should read in the report", http.StatusBadRequest)
+		return
+	}
+	if req.ExchangeID == nil {
+		http.Error(w, "exchange_id is required: an issue must point at the request/response pair it describes", http.StatusBadRequest)
+		return
+	}
+	exchange, err := s.store.GetExchange(core.ExchangeID(*req.ExchangeID))
+	if err != nil || exchange == nil {
+		http.Error(w, fmt.Sprintf("no exchange %d: the pair this issue describes was not found", *req.ExchangeID), http.StatusNotFound)
+		return
+	}
+
+	host, port := exchange.Host, exchange.Port
+	if host == "" {
+		http.Error(w, "the exchange carries no host, so no issue target can be derived from it", http.StatusBadRequest)
+		return
+	}
+	// Severity defaults to Low (Burp's "Medium" default for hand-recorded issues differs by
+	// installation; Low is the conservative choice here because a hand-recorded issue the
+	// operator forgot to grade should not inflate a High count), confidence to Certain — the
+	// operator saw it themselves, which is stronger evidence than any scanner produces.
+	severity := core.ParseSeverity(req.Severity)
+	if strings.TrimSpace(req.Severity) == "" {
+		severity = core.SeverityLow
+	}
+	confidence := core.ParseConfidence(req.Confidence)
+	if strings.TrimSpace(req.Confidence) == "" {
+		confidence = core.ConfidenceCertain
+	}
+
+	description := strings.TrimSpace(req.Description)
+	if description == "" {
+		description = "Manually recorded by the operator from exchange #" + strconv.FormatUint(*req.ExchangeID, 10) + "."
+	}
+
+	id := s.findings.Add(core.NewFinding{
+		Name:        strings.TrimSpace(req.Name),
+		Severity:    severity,
+		Confidence:  confidence,
+		Description: description,
+		Remediation: strings.TrimSpace(req.Remediation),
+		Occurrences: []core.Occurrence{{
+			ExchangeID: core.ExchangeID(*req.ExchangeID),
+			Request:    exchange.Request,
+			Response:   exchange.Response,
+		}},
+		Target: core.FindingTarget{Host: host, Port: port, TLS: exchange.TLS},
+	})
+	// Comment lives on Finding (it is operator state, not engine state), so it rides the same
+	// Triage path the edit-comment UI action uses — one write path for operator-authored text.
+	if comment := strings.TrimSpace(req.Comment); comment != "" {
+		s.findings.Triage(id, func(f *core.Finding) { f.Comment = comment })
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"id": id, "recorded": true})
+}
+
 // handleFindings is the legacy /api/findings endpoint, kept for tools that predate /api/issues.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

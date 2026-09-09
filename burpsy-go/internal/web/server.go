@@ -752,6 +752,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
 	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)
 	s.mux.HandleFunc("/api/issues", s.handleIssues)
+	// Record an issue (burpsy-react-ui-4qqz): the operator's hand-recorded finding, attached to
+	// one exchange. ServeMux resolves the subtree /api/issues/{id} longest-prefix, so 'record'
+	// would be swallowed by the id path if it matched an id shape — it does not (it is not
+	// numeric), but registering it explicitly keeps handleIssueByID's numeric-only guard honest.
+	s.mux.HandleFunc("/api/issues/record", s.handleIssueRecord)
 	// The write path for the same resource: operator triage and delete, per finding. Registered as a
 	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
 	// here without ambiguity.

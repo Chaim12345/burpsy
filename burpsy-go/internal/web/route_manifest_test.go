@@ -384,6 +384,13 @@ var manifest = map[string]route{
 		methods: []string{"PUT", "PATCH", "DELETE"}, risk: riskDestructive, subPath: "0",
 		summary: "operator triage of one finding — severity/confidence override, false-positive, comment — or delete it",
 	},
+	"/api/issues/record": {
+		// POST creates the operator's hand-recorded finding and attaches it to one exchange. It
+		// writes engagement evidence (like the triage PUT beside it) but discards nothing, so
+		// riskLocal is the honest class; the subtree's riskDestructive is about DELETE, not this.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "record an issue by hand against one exchange (Burp's 'Record an issue')",
+	},
 	"/api/message/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
