@@ -187,6 +187,9 @@ export function ScannerPage(): JSX.Element {
  const [severities, setSeverities] = useState<Set<string>>(new Set());
  const [confidences, setConfidences] = useState<Set<string>>(new Set());
  const [hideFalsePositives, setHideFalsePositives] = useState(false);
+ // A host substring for the report export only (burpsy-react-ui-8r6): "the findings on this
+ // host" without reshaping the tree.
+ const [hostReportFilter, setHostReportFilter] = useState("");
  const [term, setTerm] = useState("");
  const [selectedKey, setSelectedKey] = useState<string | null>(null);
  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -304,6 +307,21 @@ export function ScannerPage(): JSX.Element {
   for (const f of rows) counts.set(f.severity, (counts.get(f.severity) ?? 0) + 1);
   return SEVERITIES.filter((s) => counts.has(s)).map((s) => ({ severity: s, count: counts.get(s) ?? 0 }));
  }, [rows]);
+
+ // The export query (burpsy-react-ui-8r6): the file carries what the tree shows — severity,
+ // false-positive exclusion, plus an optional host substring that is an export-only axis.
+ // The count in the links' tooltip says what the file will contain, because a download that
+ // silently carries 200 rows when the tree shows 3 is exactly the mismatch this fixes.
+ // Confidence filtering stays view-only and is stated as such: the API does not take it, and
+ // a link that pretended otherwise would export rows the tree hides.
+ const reportQuery = useMemo(() => {
+  const params = new URLSearchParams();
+  if (severities.size > 0) params.set("severity", [...severities].join(","));
+  if (hostReportFilter.trim()) params.set("host", hostReportFilter.trim());
+  if (hideFalsePositives) params.set("exclude_false_positives", "true");
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+ }, [severities, hostReportFilter, hideFalsePositives]);
 
  const exchange = useMemo(() => {
   const id = selected?.occurrence?.exchange_id;
@@ -756,8 +774,20 @@ export function ScannerPage(): JSX.Element {
         <SlidersHorizontal size={13} />
         Scanner controls
        </Button>
+       <Input
+        aria-label="Report host filter"
+        value={hostReportFilter}
+        onChange={(event) => setHostReportFilter(event.target.value)}
+        placeholder="report host filter…"
+        style={{ maxWidth: "var(--w-sm)" }}
+       />
        {REPORT_FORMATS.map((f) => (
-        <LinkButton key={f.format} href={`/api/report/${f.format}`} download>
+        <LinkButton
+         key={f.format}
+         href={`/api/report/${f.format}${reportQuery}`}
+         download
+         title={`Exports ${rows.length.toLocaleString()} finding(s) — the tree's current filter${hostReportFilter.trim() ? ` on hosts matching “${hostReportFilter.trim()}”` : ""}`}
+        >
          <Download size={13} />
          {f.label}
         </LinkButton>
