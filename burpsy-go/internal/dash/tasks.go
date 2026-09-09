@@ -232,7 +232,7 @@ type Registry struct {
 	// suite-wide — one switch that every task honours — and a per-task flag would need every
 	// task author to consult it, which is exactly the discipline a shared gate enforces for
 	// free. Seeded false: nothing pauses until the operator asks.
-	paused atomic.Bool
+	paused   atomic.Bool
 	mu       sync.RWMutex
 	tasks    []*Task
 	capacity int
