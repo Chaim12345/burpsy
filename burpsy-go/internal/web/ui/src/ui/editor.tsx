@@ -20,7 +20,7 @@ import { cn } from "../lib/cn";
 import { useMintPayload } from "../lib/data.collab";
 import { HexEditor } from "./hex-editor";
 import { ContextMenu, DropdownMenu, hasMenuActions, type MenuGroup } from "./menu";
-import { IconButton } from "./primitives";
+import { Button, IconButton, Modal } from "./primitives";
 import { GraphQLView, JwtView, ParamsView } from "./typed-views";
 
 const START_LINE = Decoration.mark({ class: "cm-http-start" });
@@ -352,6 +352,11 @@ export function HttpEditor({
  // menu is built: `groups` is evaluated at render time, so a selection made after that render
  // would leave every codec row enabled and doing nothing, or disabled and refusing to.
  const [hasSelection, setHasSelection] = useState(false);
+ // Burp's Convert-selection on a read-only message (burpsy-react-ui-l7xj): "If the message is not
+ // editable, then the result of the conversion is shown in a dialog." The result, not a toast — a
+ // toast is read once and gone, while a converted payload is exactly what an operator wants to
+ // copy, which a dialog with a copy affordance serves. Cleared on close.
+ const [conversionResult, setConversionResult] = useState<undefined | { label: string; output: string }>(undefined);
 
  const editable = !readOnly && Boolean(onChange);
  // The search spec this editor last auto-scrolled for. Outside the useMemo because the
@@ -548,6 +553,17 @@ export function HttpEditor({
   if (cm) transformSelection(cm, transform);
  }, []);
 
+ /** The read-only twin: same six transforms, result into the dialog instead of the document —
+  * a dispatch into a read-only CodeMirror view is dropped by the editor, so the old code path
+  * here was a menu row that visibly did nothing. */
+ const showTransform = useCallback((label: string, transform: (input: string) => string) => {
+  const cm = cmViewRef.current;
+  if (!cm) return;
+  const sel = cm.state.selection.main;
+  if (sel.empty) return;
+  setConversionResult({ label, output: transform(cm.state.sliceDoc(sel.from, sel.to)) });
+ }, []);
+
  /**
   * Burp's "Insert Collaborator payload" (burpsy-react-ui-0ax): mint one server-side and drop
   * its address at the caret, replacing any selection. Offered on Raw and Pretty alike - both
@@ -621,7 +637,9 @@ export function HttpEditor({
    label,
    shortcut,
    disabled: !hasSelection,
-   onSelect: () => runTransform(transform),
+   // Editable: in-place, Burp's editable half of the contract. Read-only: the dialog half —
+   // same transform, shown instead of written.
+   onSelect: () => (editable ? runTransform(transform) : showTransform(label, transform)),
   });
   groups.push(
    {
@@ -655,7 +673,7 @@ export function HttpEditor({
    },
   );
   return groups;
- }, [active, editable, hasSelection, runTransform, insertCollaboratorPayload, mint.isPending, payloadMarks]);
+ }, [active, editable, hasSelection, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks]);
 
  const allGroups = useMemo<MenuGroup[]>(
   () => [...(menuGroups ?? []), ...selectionGroups],
@@ -859,6 +877,30 @@ export function HttpEditor({
      event.target.value = "";
     }}
    />
+   <Modal
+    open={conversionResult !== undefined}
+    onOpenChange={(open) => {
+     if (!open) setConversionResult(undefined);
+    }}
+    title={conversionResult ? `Conversion result — ${conversionResult.label}` : ""}
+    description="The message is read-only, so the conversion is shown here instead of written in place."
+   >
+    <pre className="conversion-result">{conversionResult?.output}</pre>
+    <div className="detail-actions">
+     <Button
+      variant="outline"
+      onClick={() => {
+       if (conversionResult) void copyToClipboard(conversionResult.output);
+       setConversionResult(undefined);
+      }}
+     >
+      Copy and close
+     </Button>
+     <Button variant="primary" onClick={() => setConversionResult(undefined)}>
+      Close
+     </Button>
+    </div>
+   </Modal>
    {editable && active !== "raw" && active !== "hex" && active !== "pretty" ? (
     <div className="editor-note">
      Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back.

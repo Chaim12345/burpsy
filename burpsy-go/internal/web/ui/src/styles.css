@@ -3265,6 +3265,19 @@ tbody td {
   image-rendering: pixelated;
 }
 
+/* The read-only Convert-selection dialog's output: pre so whitespace and newlines in a
+   URL/HTML/base64 conversion are visible — a converted payload's shape IS information. */
+.conversion-result {
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: var(--s2);
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  font-size: var(--fs-xs);
+}
+
 .editor-note {
   padding: var(--s1) var(--s2);
   background: var(--paper-deep);

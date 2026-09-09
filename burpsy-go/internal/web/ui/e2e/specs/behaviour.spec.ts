@@ -432,6 +432,62 @@ test.describe("data views", () => {
   expect(consoleErrors).toEqual([]);
  });
 
+ test("converting a selection on a read-only message shows a dialog, not a silent nothing", async ({
+  page,
+  consoleErrors,
+ }) => {
+  // burpsy-react-ui-l7xj. History's detail editor is read-only: the codec menu is still offered,
+  // and Burp's contract is "the result is shown in a dialog". Before this, the menu item ran a
+  // dispatch that a read-only CodeMirror silently dropped — a row that did nothing.
+  await gotoRoute(page, route("history"));
+  await page.locator("tr.data-row", { hasText: "/mango/deep/path" }).click();
+
+  const raw = page.getByRole("textbox", { name: "Request" });
+  await expect(raw).toBeVisible();
+  // The codec menu is reachable through the pane's Actions button, not the raw canvas.
+  // Select a word with the mouse: a non-editable CodeMirror view ignores keyboard selection
+  // movement, and a double-click selects a word in any view. "deep" (the path segment) is a
+  // stable word, and base64("deep") is a known string the dialog must show — a transform that
+  // ran on the real selection, not on empty or on the wrong pane.
+  // "deep" is mid-word inside the path text node, so getByText(exact) cannot see it;
+  // find the line containing it and double-click at the offset where the word starts. A
+  // double-click selects a word in any CodeMirror view, editable or not.
+  const line = raw.locator(".cm-line", { hasText: "deep" }).first();
+  await line.scrollIntoViewIfNeeded();
+  // Measure the exact pixel offset of "deep" inside the line via a DOM Range — a fixed fraction
+  // of the line width selects whatever character happens to live there (the first attempt
+  // double-clicked the line number "1" and base64-encoded that).
+  const target = await line.evaluate((el) => {
+   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+   let node: Text | null;
+   while ((node = walker.nextNode() as Text | null)) {
+    const at = node.data.indexOf("deep");
+    if (at >= 0) {
+     const range = document.createRange();
+     range.setStart(node, at);
+     range.setEnd(node, at + 4);
+     const rect = range.getBoundingClientRect();
+     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+   }
+   return null;
+  });
+  if (!target) throw new Error("the word 'deep' was not found in the request line");
+  await page.mouse.dblclick(target.x, target.y);
+  await page.getByRole("button", { name: "Actions for Request" }).click();
+  await page.getByText("Convert selection", { exact: false }).first().click();
+  await page.getByRole("menuitem", { name: "Base64-encode" }).click();
+
+  const dialog = page.locator(".modal, [role='dialog']").filter({ hasText: "Conversion result" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".conversion-result")).toHaveText("ZGVlcA==");
+  // The Modal primitive also renders its own icon close button (aria-label "Close"), so match
+  // the labelled one exactly.
+  await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
+  await expect(dialog).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
+ });
+
  test("the status bar reports the stored bytes the API reports", async ({ page }) => {
   // Cheap, and it is the one place the shell claims a number that comes from the server rather than
   // from the store — so it is where a broken /api/stats would show up as a plausible-looking dash.
