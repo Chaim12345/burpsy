@@ -327,6 +327,13 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
 		summary: "resolve one held message: forward, drop, or forward edited bytes",
 	},
+	"/api/intercept/annotate/": {
+		// POST {comment, highlight} onto one held message (burpsy-react-ui-5q8u). Writes only the
+		// operator's own annotation on the queue — no traffic is sent, resolved or changed, so the
+		// risk is the same class as the queue view itself.
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "annotate one held message: set or clear its operator comment and highlight",
+	},
 	"/api/intercept/drop-all": {
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "drop every held message in one round trip; answers the count actually dropped",

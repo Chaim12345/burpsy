@@ -27,6 +27,9 @@ export interface HeldMessageDetail {
   held_ms: number;
   len: number;
   raw: string;
+  /** The operator's annotation on the hold (burpsy-react-ui-5q8u); empty = none. */
+  comment?: string;
+  highlight?: string;
   /**
    * WebSocket frame type — "text", "binary", or a control opcode. Absent for HTTP, which has no
    * equivalent, so this is optional rather than an empty string: "not applicable" and "unknown" are

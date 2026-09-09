@@ -350,6 +350,16 @@ type Held struct {
 	// Opcode mirrors Message.Opcode: the WebSocket frame type, empty for HTTP.
 	Opcode string
 
+	// Comment and Highlight are the operator's annotation on the held message
+	// (burpsy-react-ui-5q8u). They live on the hold, not on any exchange — a held
+	// message has no exchange yet — and they ride forward: when the hold resolves
+	// into a recorded exchange, the proxy carries them to Record so the annotation
+	// appears in HTTP history against the bytes the operator was looking at, which
+	// is exactly Burp's "annotations that you make also appear against the item in
+	// the HTTP history".
+	Comment   string
+	Highlight string
+
 	done     chan struct{}
 	mu       sync.Mutex
 	resolved bool
@@ -732,6 +742,28 @@ func (e *Engine) Hold(m *Message) *Held {
 	}
 	e.held[h.ID] = h
 	return h
+}
+
+// SetAnnotation writes the operator's comment and highlight onto one held message.
+// Empty highlight clears it — "" is the picker's no-colour value, the same
+// vocabulary every other annotated surface uses. Unknown ids error rather than
+// passing, so a stale queue render cannot believe it annotated a message that
+// was already resolved.
+func (e *Engine) SetAnnotation(id uint64, comment, highlight string) error {
+	e.mu <- struct{}{}
+	h := e.held[id]
+	if h == nil {
+		<-e.mu
+		return fmt.Errorf("no held message %d", id)
+	}
+	h.Comment = comment
+	h.Highlight = highlight
+	<-e.mu
+	// signalChange after the lock is released: it takes the same mutex-channel itself, and
+	// calling it with the slot held deadlocks the caller against its own acquire (the same
+	// rule OnChange documents — the signal is never delivered with the lock held).
+	e.signalChange()
+	return nil
 }
 
 // Held returns a snapshot of the queue for the API, newest last.

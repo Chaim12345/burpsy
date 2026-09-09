@@ -1416,7 +1416,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
-	// connection without reaching upstream.
+	// connection without reaching upstream. heldNote/heldHighlight carry the
+	// operator's annotation from the hold to the recorded exchange (5q8u).
+	var heldNote, heldHighlight string
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
 			intercept.DirectionRequest, host, port, false, method, path, requestData,
@@ -1427,6 +1429,15 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 				return
 			}
 			requestData = raw
+			// The operator's annotation rides the hold to the recorded exchange: this is
+			// Burp's "annotations that you make also appear against the item in the HTTP
+			// history". Forwarded-but-unrecorded traffic (dont_log_out_of_scope) simply
+			// drops it with the exchange, as everything else about an unrecorded
+			// exchange does.
+			if held.Comment != "" || held.Highlight != "" {
+				heldNote = held.Comment
+				heldHighlight = held.Highlight
+			}
 		}
 	}
 
@@ -1482,7 +1493,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		return
 	}
 
-	s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime)
+	s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime, heldNote, heldHighlight)
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1507,7 +1518,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // does. The previous code here stored the pre-rewrite bytes and then described
 // them with the post-rewrite status and length, so the row disagreed with the
 // message it indexed whenever a response rule fired.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time) {
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time, heldNote, heldHighlight string) {
 	// Apply Match & Replace on response, then the blanket response modification
 	// rules — same order, and for the same reason, as handleTLSResponse.
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
@@ -1517,6 +1528,7 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 
 	// Intercept: hold the response for the operator before it reaches the client.
 	var notes *string
+	var highlight string
 	dropped := false
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
@@ -1529,7 +1541,22 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 			} else {
 				responseData = raw
 			}
+			// The response hold's own annotation, or the request hold's when this
+			// response was not itself held: either way the operator marked this
+			// exchange, and the mark belongs on the row in history (5q8u).
+			if held.Comment != "" || held.Highlight != "" {
+				if held.Comment != "" {
+					notes = &held.Comment
+				}
+				highlight = held.Highlight
+			}
 		}
+	}
+	if notes == nil && heldNote != "" {
+		notes = &heldNote
+	}
+	if highlight == "" {
+		highlight = heldHighlight
 	}
 
 	// Send to client
@@ -1549,7 +1576,8 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		Duration: time.Since(startTime),
 		Protocol: core.ProtocolHTTP1,
 
-		Notes: notes,
+		Notes:     notes,
+		Highlight: highlight,
 	})
 }
 

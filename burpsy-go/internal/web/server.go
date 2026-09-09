@@ -857,6 +857,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intercept/forward-all", s.handleInterceptForwardAll)
 	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)
+	// The held queue's annotate write: /api/intercept/annotate/{id}, its own exact-subtree
+	// handler. "annotate" is not an id shape, so it cannot collide with the held queue's
+	// /api/intercept/{id} resolution paths below.
+	s.mux.HandleFunc("/api/intercept/annotate/", s.handleInterceptAnnotate)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
 
 	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).

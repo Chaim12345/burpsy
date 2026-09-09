@@ -63,6 +63,19 @@ export function useInterceptDetailed(pollMs = 1_500): UseQueryResult<InterceptSt
  });
 }
 
+/** Annotate one held message (burpsy-react-ui-5q8u): POST {comment, highlight} to
+ * /api/intercept/annotate/{id} — "annotate" in the first segment cannot be an id, so it
+ * cannot collide with the queue's /{id}/forward|drop paths. Empty highlight clears; the
+ * queue re-renders from the poll it already runs. */
+export function useAnnotateHeld() {
+ const client = useQueryClient();
+ return useMutation<unknown, Error, { id: number; comment: string; highlight: string }>({
+  mutationFn: ({ id, comment, highlight }) =>
+   api(`/api/intercept/annotate/${id}`, json("POST", { comment, highlight })),
+  onSuccess: () => void client.invalidateQueries({ queryKey: keys.intercept }),
+ });
+}
+
 export const useInterceptRules = (dir: InterceptDirection) =>
  useResource<InterceptListState>(attackKeys.interceptRules(dir), `/api/intercept/rules/${dir}`);
 

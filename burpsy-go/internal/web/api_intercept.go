@@ -56,6 +56,10 @@ type heldView struct {
 	// HTTP. Sent because a held frame's payload alone does not say how to read it:
 	// an operator shown binary bytes with no marking will edit them as text.
 	Opcode string `json:"opcode,omitempty"`
+	// The operator's annotation on this hold (burpsy-react-ui-5q8u). Report on every
+	// row — a switch has to read the state it toggles.
+	Comment   string `json:"comment"`
+	Highlight string `json:"highlight"`
 }
 
 type interceptStatusResp struct {
@@ -105,6 +109,8 @@ func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
 			Len:       len(h.Raw),
 			Raw:       string(h.Raw),
 			Opcode:    h.Opcode,
+			Comment:   h.Comment,
+			Highlight: h.Highlight,
 		})
 	}
 
@@ -330,6 +336,41 @@ func listView(dir intercept.Direction, l intercept.List, enabled bool) intercept
 		Count:         len(l.Rules),
 		Rules:         rulesToSpecs(l.Rules),
 	}
+}
+
+// handleInterceptAnnotate serves POST /api/intercept/{id}/annotate — the operator's
+// comment and highlight on a held message (burpsy-react-ui-5q8u). Empty highlight clears,
+// matching the shared annotation vocabulary; unknown ids 404 because a stale queue render
+// must be told the message resolved, not told "done".
+func (s *Server) handleInterceptAnnotate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// The route is /api/intercept/annotate/{id}; the held queue's own sub-paths
+	// (/api/intercept/{id}/forward|drop) keep their shape, and "annotate" as the first
+	// segment cannot be an id, so the two surfaces cannot collide.
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/intercept/annotate/")
+	idStr = strings.Trim(idStr, "/")
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid held message id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Comment   string `json:"comment"`
+		Highlight string `json:"highlight"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := s.intercept.SetAnnotation(id, req.Comment, req.Highlight); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handleInterceptHeld serves POST /api/intercept/{id}/forward and /api/intercept/{id}/drop.
