@@ -504,3 +504,22 @@ export function useInterceptControls() {
   }),
  };
 }
+
+/** Burp's "Default Proxy interception state" (burpsy-react-ui-7vy): what the intercept
+ * switch reads when a server starts — on, off, or restored-from-last-session. A preference
+ * about the NEXT start, distinct from /api/intercept/enable, the live switch. */
+export function useInterceptStartup(): UseQueryResult<{ mode: string }> {
+ return useQuery({
+  queryKey: ["intercept", "startup"],
+  queryFn: ({ signal }) => api<{ mode: string }>("/api/intercept/startup", { signal }),
+ });
+}
+
+export function useSaveInterceptStartup() {
+ const invalidate = useInvalidate();
+ return useMutation<{ mode: string }, Error, string>({
+  mutationFn: (mode) => api<{ mode: string }>("/api/intercept/startup", json("POST", { mode })),
+  onSuccess: () => invalidate([["intercept", "startup"]]),
+ });
+}
+}
