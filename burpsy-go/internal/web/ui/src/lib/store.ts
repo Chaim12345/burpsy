@@ -17,6 +17,19 @@ export type Density = "comfortable" | "compact";
 export type EditorFont = "12px" | "13px" | "14px" | "16px" | "18px";
 export type UiScale = "100%" | "110%" | "125%" | "150%";
 
+/**
+ * Per-operator triage state for Collaborator interactions (burpsy-react-ui-8o6): which
+ * interaction ids have been opened (read), and the comment/highlight pairs written on
+ * them. Held in this browser alongside the rest of the workspace state — like the
+ * Inspector dock, it is a view over the operator's review progress, not part of the
+ * interaction data the channel collects. Interaction ids are the log's positional ids,
+ * stable within a channel's lifetime.
+ */
+export interface CollaboratorAnnotation {
+  comment: string;
+  highlight: string;
+}
+
 /** Which side of the editor pair the Inspector docks to — Burp's inspectorSettingsDock{Left,Right}. */
 export type InspectorDock = "left" | "right";
 /**
@@ -211,6 +224,8 @@ interface AppState {
  theme: Theme;
  density: Density;
  /** Message-editor font size (burpsy-react-ui-7bd); drives the editor theme via --editor-font-size. */
+ collaboratorRead: number[];
+ collaboratorAnnotations: Record<number, CollaboratorAnnotation>;
  editorFont: EditorFont;
  /** UI text scale (burpsy-react-ui-7bd); sets --ui-scale on <html>. */
  uiScale: UiScale;
@@ -247,6 +262,8 @@ interface AppState {
  setRoute: (route: string) => void;
  setTheme: (theme: Theme) => void;
  setDensity: (density: Density) => void;
+ markCollaboratorRead: (id: number) => void;
+ setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
  setEditorFont: (font: EditorFont) => void;
  setUiScale: (scale: UiScale) => void;
  setPaletteOpen: (open: boolean) => void;
@@ -295,6 +312,8 @@ export function persistedWorkspace(state: AppState) {
  return {
   theme: state.theme,
   density: state.density,
+  collaboratorRead: state.collaboratorRead,
+  collaboratorAnnotations: state.collaboratorAnnotations,
   editorFont: state.editorFont,
   uiScale: state.uiScale,
   // Where the Inspector sits and how much of it is open are layout choices an
@@ -324,6 +343,8 @@ export const useApp = create<AppState>()(
    route: "dashboard",
    theme: "dark",
    density: "compact",
+   collaboratorRead: [],
+   collaboratorAnnotations: {},
    editorFont: "12px",
    uiScale: "100%",
    paletteOpen: false,
@@ -347,6 +368,10 @@ export const useApp = create<AppState>()(
    setRoute: (route) => set({ route, paletteOpen: false }),
    setTheme: (theme) => set({ theme }),
    setDensity: (density) => set({ density }),
+   markCollaboratorRead: (id) =>
+    set((state) => (state.collaboratorRead.includes(id) ? state : { collaboratorRead: [...state.collaboratorRead, id] })),
+   setCollaboratorAnnotation: (id, annotation) =>
+    set((state) => ({ collaboratorAnnotations: { ...state.collaboratorAnnotations, [id]: annotation } })),
    setEditorFont: (editorFont) => set({ editorFont }),
    setUiScale: (uiScale) => set({ uiScale }),
    setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
