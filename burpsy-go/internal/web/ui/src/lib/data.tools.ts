@@ -25,6 +25,13 @@ export interface IntruderRunRequest {
   payload_sets?: string[][];
   payload_sources?: PayloadSource[];
   payload_rules?: PayloadRuleSpec[];
+  /**
+   * Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the characters
+   * percent-encoded in every generated payload as the final pass, after the rule
+   * chain. Omitted means none — spaces and control characters are always encoded
+   * additionally server-side, since a request containing them cannot be delivered.
+   */
+  url_encode_characters?: string;
   /** Regular expressions, compiled by RE2 on the server — never literal strings. */
   grep_match?: string;
   grep_extract?: string;

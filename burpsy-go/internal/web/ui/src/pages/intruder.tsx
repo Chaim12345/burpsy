@@ -805,6 +805,10 @@ export function IntruderPage(): JSX.Element {
   const setPayloadCustom = field("payloadCustom");
   const setPayloadNulls = field("payloadNulls");
   const setRules = field("rules");
+  // Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the final-pass encoding
+  // set, applied after the rules above regardless of payload type. Default is Burp's own
+  // default character list, so the safety net is on unless the operator empties it.
+  const [urlEncodeChars, setURLEncodeChars] = useState("=&+%;?/ #:");
   const setGrepMatch = field("grepMatch");
   const setGrepMatchMode = field("grepMatchMode");
   const setGrepExtract = field("grepExtract");
@@ -1126,6 +1130,9 @@ export function IntruderPage(): JSX.Element {
       ...(manualSpans.length ? { manual_points: manualSpans.map(({ start, end }) => ({ start, end })) } : {}),
       max_requests: maxRequests,
       ...(rules.length ? { payload_rules: rules } : {}),
+      // The final-pass encoding set (burpsy-react-ui-8cbc). Empty means none; the
+      // default list is Burp's own.
+      ...(urlEncodeChars !== "" ? { url_encode_characters: urlEncodeChars } : {}),
       // Both grep fields are RE2 patterns on the server. A literal typed in simple mode is quoted
       // here so it matches itself; regex mode sends what was typed (burpsy-react-ui-tpy).
       ...(grepMatch.trim()
@@ -1740,6 +1747,26 @@ export function IntruderPage(): JSX.Element {
             ) : (
               <p className="field-hint">No processing rules. Payloads are sent exactly as written.</p>
             )}
+            {/* Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): a final pass over
+                every generated payload, after the rules regardless of payload type — the
+                safety net that keeps a payload from breaking the request it travels in.
+                Spaces and control characters are always encoded additionally server-side,
+                because a request containing them cannot be delivered. */}
+            <div className="card-pad" style={{ borderTop: "1px solid var(--line)" }}>
+              <Field
+                label="URL-encode these characters"
+                hint="Percent-encoded in every payload as the final step before sending. Clear the box to disable."
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={urlEncodeChars}
+                    onChange={(event) => setURLEncodeChars(event.target.value)}
+                    placeholder="=&+%;?/ #:"
+                  />
+                )}
+              </Field>
+            </div>
           </Card>
         </TabsContent>
 

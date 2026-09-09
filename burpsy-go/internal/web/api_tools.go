@@ -458,16 +458,16 @@ type intruderRunReq struct {
 	// rule chain. Empty (or absent) means no extra encoding — matching the off state, not
 	// an empty set that would encode nothing anyway. Spaces and control characters are
 	// always encoded additionally, because a request containing them cannot be delivered.
-	URLEncode *string `json:"url_encode_characters"`
-	MaxPayloads    *int                      `json:"max_payloads"`
-	GrepMatch      *string                   `json:"grep_match"`
-	GrepExtract    *string                   `json:"grep_extract"`
-	Pool           *string                   `json:"pool"`
-	AutoThrottle   *intruder.AutoThrottle    `json:"auto_throttle"`
-	RPS            *float64                  `json:"rps"`
-	MaxInFlight    *int                      `json:"max_in_flight"`
-	MaxRequests    *int                      `json:"max_requests"`
-	TimeoutMS      *uint64                   `json:"timeout_ms"`
+	URLEncode    *string                `json:"url_encode_characters"`
+	MaxPayloads  *int                   `json:"max_payloads"`
+	GrepMatch    *string                `json:"grep_match"`
+	GrepExtract  *string                `json:"grep_extract"`
+	Pool         *string                `json:"pool"`
+	AutoThrottle *intruder.AutoThrottle `json:"auto_throttle"`
+	RPS          *float64               `json:"rps"`
+	MaxInFlight  *int                   `json:"max_in_flight"`
+	MaxRequests  *int                   `json:"max_requests"`
+	TimeoutMS    *uint64                `json:"timeout_ms"`
 }
 
 // intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
