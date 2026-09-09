@@ -1356,6 +1356,40 @@ tbody td {
   min-width: 0;
 }
 
+/* The editor-area layout switcher (burpsy-react-ui-446): the two new
+   arrangements Burp's message-editor icons offer. Vertical is the base rule
+   above; horizontal puts the pair side by side, and combined collapses to one
+   pane — the combined Tabs render is the grid's single child, so the track
+   list just goes to one column. */
+.editor-grid-horizontal,
+.editor-grid-inspected.editor-grid-horizontal {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.editor-grid-horizontal > .editor-combined,
+.editor-grid-combined > .editor-combined,
+.editor-grid-inspected.editor-grid-combined {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.editor-combined {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.layout-switch {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.layout-switch button[aria-pressed="true"] {
+  background: var(--accent-soft, rgba(255, 102, 51, 0.14));
+  color: var(--accent);
+}
+
 /* ===========================================================================
    menus, dialogs, palette
    =========================================================================== */

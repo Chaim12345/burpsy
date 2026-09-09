@@ -13,8 +13,8 @@ import { HIGHLIGHTS, type Exchange } from "../lib/types";
 import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
-import { PageHeader, RefreshButton, SplitPane } from "../ui/layout";
-import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Toolbar, Tooltip } from "../ui/primitives";
+import { MessageLayoutSwitch, PageHeader, RefreshButton, SplitPane, useMessageLayout } from "../ui/layout";
+import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toolbar, Tooltip } from "../ui/primitives";
 import { BucketMenu } from "../ui/column-visibility-menu";
 import { ReferencePanelView } from "../ui/reference";
 import { VirtualTable, type Column, type VisibilityState } from "../ui/table";
@@ -419,6 +419,10 @@ export function HistoryPage(): JSX.Element {
  const [helpOpen, setHelpOpen] = useState(false);
  const [limit, setLimit] = useState(500);
  const [inspector, setInspector] = useState(true);
+ // The editor-area layout (burpsy-react-ui-446): Burp's horizontal / vertical / combined,
+ // persisted per surface. History's pre-switcher arrangement was stacked, so that is the
+ // fallback a first visitor gets.
+ const [messageLayout, setMessageLayout] = useMessageLayout("history", "vertical");
  const [scopeOnly, setScopeOnly] = useState(false);
  const [hideNoResponse, setHideNoResponse] = useState(false);
  // Burp's remaining row-type filters (proxyHttpShowOnly*Checkbox). Each is "show only", so all
@@ -938,30 +942,73 @@ export function HistoryPage(): JSX.Element {
       }
      }}
     />
+    <MessageLayoutSwitch value={messageLayout} onChange={setMessageLayout} />
    </div>
-   <div className={inspector ? "editor-grid-inspected" : "editor-grid"}>
+   <div
+    className={[
+     inspector ? "editor-grid-inspected" : "editor-grid",
+     messageLayout === "horizontal" ? "editor-grid-horizontal" : "",
+     messageLayout === "combined" ? "editor-grid-combined" : "",
+    ]
+     .filter(Boolean)
+     .join(" ")}
+   >
     {/* The row menu, on the message itself. Burp carries the same actions in both places, and
             reading a response then sending it straight to Repeater is the gesture this pane exists
             for — reaching back up to the table row to do it is the divergence. */}
-    <HttpEditor
-     label="Request"
-     readOnly
-     value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
-     filename={`exchange-${selected.id}-request.txt`}
-     menuGroups={actions.menu(selected)}
-    />
-    <HttpEditor
-     label="Response"
-     readOnly
-     value={
-      selected.response === null
-       ? "No response was captured for this exchange."
-       : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
-     }
-     bodyBase64={response.data?.body_base64}
-     filename={`exchange-${selected.id}-response.txt`}
-     menuGroups={actions.menu(selected)}
-    />
+    {messageLayout === "combined" ? (
+     <Tabs defaultValue="request" className="editor-combined">
+      <TabsList>
+       <TabsTrigger value="request">Request</TabsTrigger>
+       <TabsTrigger value="response">Response</TabsTrigger>
+      </TabsList>
+      <TabsContent value="request" className="tabs-fill">
+       <HttpEditor
+        label="Request"
+        readOnly
+        value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+        filename={`exchange-${selected.id}-request.txt`}
+        menuGroups={actions.menu(selected)}
+       />
+      </TabsContent>
+      <TabsContent value="response" className="tabs-fill">
+       <HttpEditor
+        label="Response"
+        readOnly
+        value={
+         selected.response === null
+          ? "No response was captured for this exchange."
+          : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+        }
+        bodyBase64={response.data?.body_base64}
+        filename={`exchange-${selected.id}-response.txt`}
+        menuGroups={actions.menu(selected)}
+       />
+      </TabsContent>
+     </Tabs>
+    ) : (
+     <>
+      <HttpEditor
+       label="Request"
+       readOnly
+       value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+       filename={`exchange-${selected.id}-request.txt`}
+       menuGroups={actions.menu(selected)}
+      />
+      <HttpEditor
+       label="Response"
+       readOnly
+       value={
+        selected.response === null
+         ? "No response was captured for this exchange."
+         : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+       }
+       bodyBase64={response.data?.body_base64}
+       filename={`exchange-${selected.id}-response.txt`}
+       menuGroups={actions.menu(selected)}
+      />
+     </>
+    )}
     {inspector ? (
      <Inspector
       raw={request.data?.text ?? ""}
