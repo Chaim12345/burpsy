@@ -34,9 +34,14 @@ import (
 
 // PathNode represents one URL path on a host, with the exchanges that touched it.
 type PathNode struct {
-	Path        string
-	Methods     map[string]int // method → count
-	Statuses    map[int]int    // status → count
+	Path     string
+	Methods  map[string]int // method → count
+	Statuses map[int]int    // status → count
+	// Mimes is the distinct media-type words (core.Exchange.Mime, already stripped of parameters
+	// and lowercased — see MimeEssence) recorded at this path. Keyed for dedup; order comes from the
+	// serialiser, not from insertion. Populated only for nodes with responses, so a folder
+	// synthesised to hold children aggregates its subtree on the way back up (foldPaths' assemble).
+	Mimes       map[string]struct{}
 	ExchangeIDs []core.ExchangeID
 }
 
@@ -125,6 +130,7 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 			Path:     ex.Path,
 			Methods:  make(map[string]int),
 			Statuses: make(map[int]int),
+			Mimes:    make(map[string]struct{}),
 		}
 		hn.Paths[ex.Path] = pn
 	}
@@ -139,6 +145,9 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 	pn.Methods[ex.Method]++
 	if ex.Status != nil {
 		pn.Statuses[int(*ex.Status)]++
+	}
+	if ex.Mime != "" {
+		pn.Mimes[ex.Mime] = struct{}{}
 	}
 	insertIDAt(pn, at, ex.ID)
 }
@@ -242,6 +251,7 @@ func (pn *PathNode) clone() *PathNode {
 		Path:        pn.Path,
 		Methods:     make(map[string]int, len(pn.Methods)),
 		Statuses:    make(map[int]int, len(pn.Statuses)),
+		Mimes:       make(map[string]struct{}, len(pn.Mimes)),
 		ExchangeIDs: make([]core.ExchangeID, len(pn.ExchangeIDs)),
 	}
 	for m, n := range pn.Methods {
@@ -249,6 +259,9 @@ func (pn *PathNode) clone() *PathNode {
 	}
 	for s, n := range pn.Statuses {
 		out.Statuses[s] = n
+	}
+	for m := range pn.Mimes {
+		out.Mimes[m] = struct{}{}
 	}
 	copy(out.ExchangeIDs, pn.ExchangeIDs)
 	return out

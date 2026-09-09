@@ -39,7 +39,11 @@ type sitemapNodeView struct {
 	ChildCount   int      `json:"child_count"`
 	Methods      []string `json:"methods"`
 	Statuses     []int    `json:"statuses"`
-	Params       []string `json:"params"`
+	// Mimes is the distinct media-type words (mimeLabel's vocabulary: "html", "json", "css", …)
+	// seen in the subtree, so the UI's MIME filter bucket works without reading a single response
+	// body — the same index-row rule the rest of the wire shape follows.
+	Mimes  []string `json:"mimes"`
+	Params []string `json:"params"`
 	// Issues is the findings recorded at this exact path; SubtreeIssues includes everything beneath
 	// it, and WorstSeverity is the worst of those. Burp marks a collapsed branch with what is inside
 	// it, which is the whole point of a tree over a flat list: it says where to look before it is
@@ -110,10 +114,14 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 		children := s.foldPaths(host, pathFilter, &nodeCount, issues)
 		lastEx := lastExchangeID(exchanges, host.Host)
 		hostIssues, hostWorst := 0, -1
+		hostMimes := map[string]struct{}{}
 		for _, c := range children {
 			hostIssues += c.SubtreeIssues
 			if r := severityRankOf(c.WorstSeverity); r > hostWorst {
 				hostWorst = r
+			}
+			for _, m := range c.Mimes {
+				hostMimes[m] = struct{}{}
 			}
 		}
 		tree = append(tree, sitemapNodeView{
@@ -127,6 +135,7 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 			ChildCount:    len(children),
 			Methods:       []string{},
 			Statuses:      []int{},
+			Mimes:         sortedSetKeys(hostMimes),
 			LastExchange:  lastEx,
 			Recent:        []core.ExchangeID{},
 			SubtreeIssues: hostIssues,
@@ -171,6 +180,7 @@ type pathAgg struct {
 	requested bool
 	methods   map[string]int
 	statuses  map[int]int
+	mimes     map[string]struct{}
 	ids       []core.ExchangeID
 	params    map[string]struct{}
 }
@@ -183,7 +193,7 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 	ensure := func(p string) *pathAgg {
 		a := aggs[p]
 		if a == nil {
-			a = &pathAgg{methods: map[string]int{}, statuses: map[int]int{}, params: map[string]struct{}{}}
+			a = &pathAgg{methods: map[string]int{}, statuses: map[int]int{}, mimes: map[string]struct{}{}, params: map[string]struct{}{}}
 			aggs[p] = a
 		}
 		return a
@@ -203,6 +213,9 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 		}
 		for st, n := range pn.Statuses {
 			a.statuses[st] += n
+		}
+		for m := range pn.Mimes {
+			a.mimes[m] = struct{}{}
 		}
 		a.ids = append(a.ids, pn.ExchangeIDs...)
 		for _, name := range queryParamNames(rawQuery) {
@@ -243,6 +256,7 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 			Requested:     a.requested,
 			Methods:       sortedStringKeys(a.methods),
 			Statuses:      statusInts(a.statuses),
+			Mimes:         sortedSetKeys(a.mimes),
 			Params:        sortedSetKeys(a.params),
 			LastExchange:  lastExchangeForPath(host.Host, a.ids),
 			Recent:        lastN(a.ids, 20),
@@ -267,6 +281,12 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 		total := v.Exchanges
 		issueTotal := v.Issues
 		worst := severityRankOf(v.WorstSeverity)
+		// Mimes union up the tree like the counts do, so a folder's MIME filter bucket sees what its
+		// descendants serve. views[p].Mimes is the node's own set; the copy here is the union.
+		mimes := make(map[string]struct{}, len(v.Mimes))
+		for _, m := range v.Mimes {
+			mimes[m] = struct{}{}
+		}
 		for _, c := range childOf[p] {
 			cv := assemble(c)
 			total += cv.SubtreeCount
@@ -274,12 +294,16 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 			if r := severityRankOf(cv.WorstSeverity); r > worst {
 				worst = r
 			}
+			for _, m := range cv.Mimes {
+				mimes[m] = struct{}{}
+			}
 			v.Children = append(v.Children, cv)
 		}
 		v.ChildCount = len(v.Children)
 		v.SubtreeCount = total
 		v.SubtreeIssues = issueTotal
 		v.WorstSeverity = severityName(worst)
+		v.Mimes = sortedSetKeys(mimes)
 		return v
 	}
 	out := make([]sitemapNodeView, 0, len(roots))

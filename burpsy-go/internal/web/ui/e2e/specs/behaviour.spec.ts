@@ -227,6 +227,35 @@ test.describe("data views", () => {
   expect(consoleErrors).toEqual([]);
  });
 
+ test("the site map filter bar narrows the tree on status class and request type", async ({
+  page,
+  consoleErrors,
+ }) => {
+  // burpsy-react-ui-36d. The harness seeds five proxied exchanges that all answered 200, so the
+  // status buckets are honest in both directions: every node matches "2xx", and "4xx" — a class
+  // nothing in the capture belongs to — must empty the tree, not leave it untouched. A filter that
+  // cannot produce an empty result is indistinguishable from one that does nothing.
+  await gotoRoute(page, route("sitemap"));
+  const labels = page.locator(".tree-row-label");
+  await expect(labels.first()).toBeVisible();
+
+  await page.getByRole("button", { name: /^Status/ }).click();
+  await page.getByRole("checkbox", { name: "2xx success" }).check();
+  await page.keyboard.press("Escape");
+  await expect(labels.first()).toBeVisible();
+
+  await page.getByRole("button", { name: /^Status/ }).click();
+  await page.getByRole("checkbox", { name: "2xx success" }).uncheck();
+  await page.getByRole("checkbox", { name: "4xx client error" }).check();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("No path matches this filter")).toBeVisible();
+
+  // The reset returns the whole tree, not just the last axis touched.
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(labels.first()).toBeVisible();
+  expect(consoleErrors).toEqual([]);
+ });
+
  test("the status bar reports the stored bytes the API reports", async ({ page }) => {
   // Cheap, and it is the one place the shell claims a number that comes from the server rather than
   // from the store — so it is where a broken /api/stats would show up as a plausible-looking dash.
