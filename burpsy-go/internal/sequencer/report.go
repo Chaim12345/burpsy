@@ -144,14 +144,81 @@ type SequencerReport struct {
 	// rather than supplied.
 	EncodingDetected bool              `json:"encoding_detected"`
 	Characters       CharacterAnalysis `json:"characters"`
-	Bits             BitStats          `json:"bits"`
-	Fips             FipsReport        `json:"fips"`
-	Grade            Grade             `json:"grade"`
+	// ExtraStats carries the character-uniformity and duplicate-detection
+	// statistics the CLI has always reported from the same package but the web
+	// report never reached (burpsy-react-ui-3sq). They ride a sub-object rather
+	// than flattening into the report so an operator reading the JSON sees the
+	// two surfaces named as one group, and each field is labelled for what it
+	// measures — chi-square is "larger = less uniform", not a p-value.
+	ExtraStats ExtraAnalysis `json:"extra_stats"`
+	Bits       BitStats      `json:"bits"`
+	Fips       FipsReport    `json:"fips"`
+	Grade      Grade         `json:"grade"`
 	// Verdict is one sentence an operator can act on, with the numbers in it.
 	Verdict string `json:"verdict"`
 	// Warnings is everything that limits how far the verdict can be trusted.
 	// Never empty when it should not be.
 	Warnings []string `json:"warnings"`
+}
+
+// ExtraAnalysis is the uniformity and duplicate group of the report: the
+// statistics the CLI has always computed over the same sample (Analysis in
+// sequencer.go) that the web report never carried (burpsy-react-ui-3sq).
+//
+// # What each number is, and what it is not
+//
+// ChiSquare is the raw chi-square statistic for character uniformity pooled
+// across every character of every token: larger means the alphabet is used
+// less uniformly. It is NOT a p-value and carries no degrees-of-freedom
+// verdict — reading it as one would be inventing a test this package does
+// not run.
+//
+// SerialCorrelation correlates successive character codes within the
+// flattened stream, -1..1, random data near 0. It is NOT Burp's
+// correlation test, which looks for relationships between values at
+// different bit positions across tokens; the label says so, because the
+// two must not be conflated (the issue records the caveat explicitly).
+//
+// RepeatedTokens is the count of distinct tokens that appear more than
+// once, and RepeatedList names them: an exact duplicate in a session-token
+// sample is a finding on its own, and this is the number that says so.
+type ExtraAnalysis struct {
+	ChiSquare float64 `json:"chi_square"`
+	// SerialCorrelationLabel exists so the JSON can never be read as Burp's
+	// bit-position correlation test without the caveat travelling with it.
+	SerialCorrelation      float64  `json:"serial_correlation"`
+	SerialCorrelationLabel string   `json:"serial_correlation_label"`
+	MonteCarloPi           float64  `json:"monte_carlo_pi"`
+	MonteCarloDeviation    float64  `json:"monte_carlo_deviation"`
+	RepeatedTokens         int      `json:"repeated_tokens"`
+	RepeatedList           []string `json:"repeated_list,omitempty"`
+}
+
+// extraFor computes the group from the raw tokens, sharing the engine's own
+// functions so the two front-ends cannot disagree about what the numbers are.
+func extraFor(tokens []string) ExtraAnalysis {
+	cs := AnalyseCharacters(tokens)
+	var codes []int
+	for _, tok := range tokens {
+		for _, c := range tok {
+			codes = append(codes, int(c))
+		}
+	}
+	var piValues []float64
+	for _, c := range codes {
+		piValues = append(piValues, float64(c)/256.0)
+	}
+	pi, dev := MonteCarloPi(piValues)
+	pats := DetectPatterns(tokens)
+	return ExtraAnalysis{
+		ChiSquare:              ChiSquare(cs),
+		SerialCorrelation:      SerialCorrelation(codes),
+		SerialCorrelationLabel: "serial correlation of successive character codes within the stream — not Burp's bit-position correlation test",
+		MonteCarloPi:           pi,
+		MonteCarloDeviation:    dev,
+		RepeatedTokens:         pats.Repeated,
+		RepeatedList:           pats.RepeatedList,
+	}
 }
 
 // AnalyseReport analyses a token sample, detecting the encoding.
@@ -217,6 +284,7 @@ func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
 		Encoding:         enc,
 		EncodingDetected: detected,
 		Characters:       characters,
+		ExtraStats:       extraFor(tokens),
 		Bits:             bits,
 		Fips:             fips,
 		Grade:            grade,

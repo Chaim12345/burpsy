@@ -199,6 +199,16 @@ export interface SequencerAnalysis {
  encoding: "raw" | "hex" | "base64";
  encoding_detected: boolean;
  characters: CharacterAnalysis;
+ /** The CLI's uniformity/duplicate group, now on the web report too (burpsy-react-ui-3sq). */
+ extra_stats: {
+  chi_square: number;
+  serial_correlation: number;
+  serial_correlation_label: string;
+  monte_carlo_pi: number;
+  monte_carlo_deviation: number;
+  repeated_tokens: number;
+  repeated_list?: string[];
+ };
  bits: BitStats;
  fips: FipsReport;
  grade: "insufficient" | "pass" | "fail";
@@ -269,37 +279,37 @@ export interface StopCaptureResult {
  * `id` and `response_len` even though the handler sends both.
  */
 export interface ToolLogRow {
-  id: number;
-  tool: string;
-  host: string;
-  port: number;
-  method: string;
-  path: string;
-  status: number | null;
-  /**
-   * How many response bytes came back, or null when no response was received —
-   * a send that failed at the transport, or a row standing for a whole run
-   * rather than one exchange. Nullable for the same reason `status` is, and it
-   * has to be rendered as "no response", never as 0: the server used to send a
-   * hardcoded 0 on every row, which made the Length column read as though every
-   * response had been empty.
-   */
-  response_len: number | null;
-  started_ms: number;
-  duration_ms: number;
-  error: string | null;
-  /**
-   * The traffic-store exchange this row's request/response bytes live under, or null when the row
-   * has none to show: a send that failed at the transport received nothing to store, and a row
-   * standing for a whole run (an audit) is not one exchange. Rows recorded before the link existed
-   * are null too — they stay metadata-only rather than pretending. The detail pane resolves bytes
-   * through this id on demand; the log never stores a second copy.
-   */
-  exchange: number | null;
-  /** The operator's annotation, "" when unset. Distinct from error (the producer's note). */
-  comment: string;
-  /** The operator's colour tag, "" when unset. Same vocabulary as Organizer's and history's. */
-  highlight: string;
+ id: number;
+ tool: string;
+ host: string;
+ port: number;
+ method: string;
+ path: string;
+ status: number | null;
+ /**
+  * How many response bytes came back, or null when no response was received —
+  * a send that failed at the transport, or a row standing for a whole run
+  * rather than one exchange. Nullable for the same reason `status` is, and it
+  * has to be rendered as "no response", never as 0: the server used to send a
+  * hardcoded 0 on every row, which made the Length column read as though every
+  * response had been empty.
+  */
+ response_len: number | null;
+ started_ms: number;
+ duration_ms: number;
+ error: string | null;
+ /**
+  * The traffic-store exchange this row's request/response bytes live under, or null when the row
+  * has none to show: a send that failed at the transport received nothing to store, and a row
+  * standing for a whole run (an audit) is not one exchange. Rows recorded before the link existed
+  * are null too — they stay metadata-only rather than pretending. The detail pane resolves bytes
+  * through this id on demand; the log never stores a second copy.
+  */
+ exchange: number | null;
+ /** The operator's annotation, "" when unset. Distinct from error (the producer's note). */
+ comment: string;
+ /** The operator's colour tag, "" when unset. Same vocabulary as Organizer's and history's. */
+ highlight: string;
 }
 
 export interface ToolLogView {
