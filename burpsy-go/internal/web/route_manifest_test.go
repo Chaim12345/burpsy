@@ -593,9 +593,15 @@ var manifest = map[string]route{
 		summary: "session handling rules: which hosts get re-authenticated, and how",
 	},
 	"/api/session/rules/": {
-		// PUT and DELETE only. The collection route below is where GET and POST live.
-		methods: []string{"PUT", "DELETE"}, risk: riskCredential, subPath: "1",
-		summary: "one session rule by id: PUT replaces it (including macro promotion), DELETE removes it",
+		// riskCredential stays for the whole subtree even though /test only sends: the macro steps
+		// carry the rule's login credentials and the run replays them at the target, and the 405
+		// test drives verbs the manifest lists — POST here is the Test-macro dry-run plus the
+		// /run and /move actions that already lived under it.
+		methods: []string{"PUT", "DELETE", "POST"}, risk: riskCredential, subPath: "1",
+		summary: "one session rule by id: PUT replaces it (including macro promotion), DELETE removes it; " +
+			"POST {id}/run replays the macro through the sender, POST {id}/test is Burp's Test macro — a " +
+			"dry-run reporting each step's sent form, response, set cookies and extraction outcomes " +
+			"(no login-run memory is written), POST {id}/move reorders the rule",
 	},
 	"/api/sitemap": {
 		// DELETE is riskDestructive, not riskLocal, and the line between them is evidence: the

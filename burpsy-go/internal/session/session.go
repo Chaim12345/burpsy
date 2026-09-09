@@ -1180,6 +1180,127 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 	return sent, results, state
 }
 
+// MacroStepReport is one step's record in a dry-run: what was sent (post-interpolation),
+// what came back (nil when the step was skipped for scope or failed to send), and what each
+// of the step's extractions lifted. It is the Test-macro wire row (burpsy-react-ui-7zdm):
+// Burp's Test macro "displays all requests and responses, the values of any cookies received,
+// and the details of any parameters that Burp attempted to derive values for" — the detail
+// runMacroOnce returns internally but RunMacro's three parallel slices cannot express.
+type MacroStepReport struct {
+	// Index is the step's position in the rule (0-based), stable even when a step is skipped.
+	Index int `json:"index"`
+	// Sent is the step as it went out: {{name}} markers already replaced by extracted values.
+	Sent MacroStep `json:"sent"`
+	// SentCookie is the Cookie header the jar attached, "" when none was attached or the step
+	// carried its own. A dry-run shows what would leave, so the cookie threading is visible.
+	SentCookie string `json:"sent_cookie,omitempty"`
+	// Skipped states why no response exists: "" when one does, "out of scope" or the send
+	// error otherwise. Skipped and Response are mutually exclusive by construction.
+	Skipped string `json:"skipped,omitempty"`
+	// Response is what came back; nil with a non-empty Skipped. SentCookie on the report is the
+	// request-side cookie; Response.SetCookies lists what the response set back.
+	Response *StepResult `json:"response,omitempty"`
+	// SetCookies is every Set-Cookie header the response carried, in wire order — the jar
+	// absorbs them in this order too.
+	SetCookies []string `json:"set_cookies,omitempty"`
+	// Extractions is this step's extraction results: one row per configured extraction on this
+	// step, resolved or not. A dry-run that hides a failed extraction hides the exact thing an
+	// operator tests a macro to find.
+	Extractions []MacroExtractionReport `json:"extractions,omitempty"`
+}
+
+// MacroExtractionReport is one extraction's outcome in a dry-run. Value is "" unless Resolved;
+// Detail carries the why when it is not.
+type MacroExtractionReport struct {
+	Name    string `json:"name"`
+	Outcome string `json:"outcome"` // ExtractOutcome.String()
+	Value   string `json:"value,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+// MacroRunReport is a Test-macro dry-run's whole answer: per-step reports plus the overall
+// validity state, computed the same way RunMacro computes it.
+type MacroRunReport struct {
+	Steps  []MacroStepReport `json:"steps"`
+	Status ValidityState     `json:"status"`
+}
+
+// RunMacroDetailed is RunMacro's dry-run twin: identical stepping, cookie threading,
+// interpolation, scope gating and extraction logic — literally the same loop shape — but every
+// step's full story is reported instead of collapsed into three parallel slices. It is what the
+// Test-macro UI calls (burpsy-react-ui-7zdm); RunMacro stays as-is because its three-slice shape
+// is what the login engine consumes.
+//
+// Both paths share one risk, answered here by construction: a dry-run must not diverge from the
+// real run, or the operator tests one macro and runs another. Any behavioural change to
+// RunMacro's loop must be mirrored here, and vice versa — the two tests that pin the same
+// scenario against both entry points are the tripwire.
+func (c *Coordinator) RunMacroDetailed(rule *SessionRule, runner MacroStepRunner) MacroRunReport {
+	report := MacroRunReport{Status: Indeterminate}
+	if rule == nil || len(rule.Steps) == 0 {
+		return report
+	}
+
+	extracted := make(map[string]string)
+	var last *StepResult
+
+	for stepIndex, step := range rule.Steps {
+		row := MacroStepReport{Index: stepIndex, Sent: interpolateStep(step, extracted)}
+
+		if !rule.MatchHost(hostOf(row.Sent.URL)) {
+			row.Skipped = "out of scope"
+			report.Steps = append(report.Steps, row)
+			continue
+		}
+		host, port, tls := authorityOf(row.Sent.URL)
+		if cookie := c.CookieHeader(host, port, tls); cookie != "" {
+			if _, exists := row.Sent.Headers["Cookie"]; !exists {
+				if row.Sent.Headers == nil {
+					row.Sent.Headers = make(map[string]string)
+				}
+				row.Sent.Headers["Cookie"] = cookie
+			}
+		}
+		row.SentCookie = row.Sent.Headers["Cookie"]
+
+		res, err := runner(row.Sent)
+		if err != nil {
+			row.Skipped = err.Error()
+			report.Steps = append(report.Steps, row)
+			continue
+		}
+		row.Response = res
+		last = res
+		for k, v := range res.Headers {
+			if strings.EqualFold(k, "Set-Cookie") {
+				row.SetCookies = append(row.SetCookies, v)
+				c.jarMgr.AbsorbSetCookie(host, port, tls, v)
+				c.absorb.attach(SourceMacro)
+				c.absorb.responses.Add(1)
+				c.absorb.cookies.Add(1)
+			}
+		}
+		if res.Status >= 200 && res.Status < 400 {
+			for _, ex := range rule.extractionsFor(stepIndex) {
+				out := ex.RunResult(res.Headers, res.Body)
+				c.logExtraction(rule, stepIndex, ex, out)
+				rowRow := MacroExtractionReport{Name: ex.Name, Outcome: out.Outcome.String(), Detail: out.Detail}
+				if out.Outcome.Resolved() && out.Value != "" {
+					rowRow.Value = out.Value
+					extracted[ex.Name] = out.Value
+				}
+				row.Extractions = append(row.Extractions, rowRow)
+			}
+		}
+		report.Steps = append(report.Steps, row)
+	}
+
+	if last != nil && rule.Validity != nil {
+		report.Status = rule.Validity.Evaluate(last.Status, last.Headers, last.Body)
+	}
+	return report
+}
+
 // interpolateStep replaces {{name}} markers with previously extracted values.
 func interpolateStep(step MacroStep, extracted map[string]string) MacroStep {
 	replace := func(s string) string {

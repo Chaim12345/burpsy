@@ -2,33 +2,34 @@ import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tan
 import { api, json } from "./api";
 import { keys, useResource } from "./data";
 import type {
-  EventHubStats,
-  FrameProgramRequest,
-  FrameProgramResponse,
-  MatchReplaceTestRequest,
-  MatchReplaceTestResponse,
-  PassthroughView,
-  ProtocolReport,
-  ScopeUpdate,
-  ScopeView,
-  SessionCookiesResponse,
-  SessionLoginResponse,
-  SessionMacroStep,
-  SessionRulesResponse,
+ EventHubStats,
+ FrameProgramRequest,
+ FrameProgramResponse,
+ MatchReplaceTestRequest,
+ MatchReplaceTestResponse,
+ PassthroughView,
+ ProtocolReport,
+ ScopeUpdate,
+ ScopeView,
+ SessionCookiesResponse,
+ SessionLoginResponse,
+ SessionMacroStep,
+ SessionRulesResponse,
+ SessionTestResponse,
 } from "./types.policy";
 
 /** Keys not already declared in data.ts. Prefix-compatible with the event-stream invalidation map. */
 export const policyKeys = {
-  eventStats: ["events", "stats"] as const,
-  caCert: ["ca-cert"] as const,
-  caStatus: ["ca-status"] as const,
-  passthrough: ["tls-passthrough"] as const,
+ eventStats: ["events", "stats"] as const,
+ caCert: ["ca-cert"] as const,
+ caStatus: ["ca-status"] as const,
+ passthrough: ["tls-passthrough"] as const,
 };
 
 export interface CaCertState {
-  available: boolean;
-  /** The server's own reason when there is no certificate to import. */
-  detail: string;
+ available: boolean;
+ /** The server's own reason when there is no certificate to import. */
+ detail: string;
 }
 
 /* --- reads --------------------------------------------------------------- */
@@ -42,20 +43,20 @@ export const useScopeView = (): UseQueryResult<ScopeView> => useResource<ScopeVi
 
 /** The full session rule shape: steps, extractions, validity, scope, max_attempts. */
 export const useSessionRulesFull = (): UseQueryResult<SessionRulesResponse> =>
-  useResource<SessionRulesResponse>(keys.sessionRules, "/api/session/rules");
+ useResource<SessionRulesResponse>(keys.sessionRules, "/api/session/rules");
 
 export const useSessionCookies = (): UseQueryResult<SessionCookiesResponse> =>
-  useResource<SessionCookiesResponse>(keys.sessionCookies, "/api/session/cookies");
+ useResource<SessionCookiesResponse>(keys.sessionCookies, "/api/session/cookies");
 
 export const useProtocols = (): UseQueryResult<ProtocolReport> =>
-  useResource<ProtocolReport>(keys.protocols, "/api/protocols");
+ useResource<ProtocolReport>(keys.protocols, "/api/protocols");
 
 export const useEventHubStats = (): UseQueryResult<EventHubStats> =>
-  useResource<EventHubStats>(policyKeys.eventStats, "/api/events/stats");
+ useResource<EventHubStats>(policyKeys.eventStats, "/api/events/stats");
 
 /** The live TLS passthrough list. Edits through the mutations below take effect immediately. */
 export const usePassthrough = (): UseQueryResult<PassthroughView> =>
-  useResource<PassthroughView>(policyKeys.passthrough, "/api/proxy/passthrough");
+ useResource<PassthroughView>(policyKeys.passthrough, "/api/proxy/passthrough");
 
 /**
  * Whether there is a CA to import. /ca.crt is not JSON and answers 404 when TLS
@@ -63,34 +64,34 @@ export const usePassthrough = (): UseQueryResult<PassthroughView> =>
  * probed with HEAD and the failure text is kept.
  */
 export function useCaCert(): UseQueryResult<CaCertState> {
-  return useQuery({
-    queryKey: policyKeys.caCert,
-    queryFn: async ({ signal }): Promise<CaCertState> => {
-      const response = await fetch("/ca.crt", { method: "HEAD", signal });
-      if (response.ok) return { available: true, detail: "" };
-      return {
-        available: false,
-        detail:
-          response.status === 404
-            ? "TLS interception is not enabled, so there is no CA to trust. Start burpsy with -intercept-tls."
-            : `The proxy answered ${response.status} for /ca.crt.`,
-      };
-    },
-  });
+ return useQuery({
+  queryKey: policyKeys.caCert,
+  queryFn: async ({ signal }): Promise<CaCertState> => {
+   const response = await fetch("/ca.crt", { method: "HEAD", signal });
+   if (response.ok) return { available: true, detail: "" };
+   return {
+    available: false,
+    detail:
+     response.status === 404
+      ? "TLS interception is not enabled, so there is no CA to trust. Start burpsy with -intercept-tls."
+      : `The proxy answered ${response.status} for /ca.crt.`,
+   };
+  },
+ });
 }
 
 /** Which CA is signing intercepted TLS right now. Subject and expiry only — never the key. */
 export interface CaStatus {
-  configured: boolean;
-  subject?: string;
-  not_after?: string;
-  persisted: boolean;
-  persist_error?: string;
-  hint?: string;
+ configured: boolean;
+ subject?: string;
+ not_after?: string;
+ persisted: boolean;
+ persist_error?: string;
+ hint?: string;
 }
 
 export const useCaStatus = (): UseQueryResult<CaStatus> =>
-  useResource<CaStatus>(policyKeys.caStatus, "/api/proxy/ca");
+ useResource<CaStatus>(policyKeys.caStatus, "/api/proxy/ca");
 
 /**
  * Import the operator's own CA — Burp's `configPanelCustomCACertificates`.
@@ -108,27 +109,27 @@ export const useCaStatus = (): UseQueryResult<CaStatus> =>
  * certificate, and an operator installing the old one would be trusting a CA that signs nothing.
  */
 export function useImportCaCert() {
-  const client = useQueryClient();
-  return useMutation<CaStatus, Error, { cert_pem: string; key_pem: string }>({
-    mutationFn: (body) => api<CaStatus>("/api/proxy/ca/import", json("POST", body)),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: policyKeys.caStatus });
-      void client.invalidateQueries({ queryKey: policyKeys.caCert });
-    },
-  });
+ const client = useQueryClient();
+ return useMutation<CaStatus, Error, { cert_pem: string; key_pem: string }>({
+  mutationFn: (body) => api<CaStatus>("/api/proxy/ca/import", json("POST", body)),
+  onSuccess: () => {
+   void client.invalidateQueries({ queryKey: policyKeys.caStatus });
+   void client.invalidateQueries({ queryKey: policyKeys.caCert });
+  },
+ });
 }
 
 /** What a project backup reports. Mirrors internal/web/api_backup.go's backupResult. */
 export interface BackupResult {
-  path: string;
-  bytes: number;
-  pruned: number;
-  kept: number;
-  /**
-   * A partial success — most often that the snapshot landed beside the live database, where a disk
-   * failure loses both. Surfaced rather than swallowed: a backup with a caveat is not a clean backup.
-   */
-  warning?: string;
+ path: string;
+ bytes: number;
+ pruned: number;
+ kept: number;
+ /**
+  * A partial success — most often that the snapshot landed beside the live database, where a disk
+  * failure loses both. Surfaced rather than swallowed: a backup with a caveat is not a clean backup.
+  */
+ warning?: string;
 }
 
 /**
@@ -144,18 +145,18 @@ export interface BackupResult {
  * keep everything.
  */
 export function useBackupNow() {
-  return useMutation<BackupResult, Error, { dir?: string; retention?: number }>({
-    mutationFn: (body) => api<BackupResult>("/api/backup", json("POST", body)),
-  });
+ return useMutation<BackupResult, Error, { dir?: string; retention?: number }>({
+  mutationFn: (body) => api<BackupResult>("/api/backup", json("POST", body)),
+ });
 }
 
 /* --- writes -------------------------------------------------------------- */
 
 function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
-  const client = useQueryClient();
-  return (prefixes) => {
-    for (const prefix of prefixes) void client.invalidateQueries({ queryKey: prefix });
-  };
+ const client = useQueryClient();
+ return (prefixes) => {
+  for (const prefix of prefixes) void client.invalidateQueries({ queryKey: prefix });
+ };
 }
 
 /**
@@ -163,20 +164,20 @@ function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
  * into a throwaway rule set, so a half-typed rule can never reach live traffic.
  */
 export function useTestMatchReplace() {
-  return useMutation({
-    mutationFn: (request: MatchReplaceTestRequest) =>
-      api<MatchReplaceTestResponse>("/api/tools/rules/test", json("POST", request)),
-  });
+ return useMutation({
+  mutationFn: (request: MatchReplaceTestRequest) =>
+   api<MatchReplaceTestResponse>("/api/tools/rules/test", json("POST", request)),
+ });
 }
 
 /** POST /api/session/login with a probe step; the reply names one of eight outcomes. */
 export function useSessionLogin() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (probe: SessionMacroStep) =>
-      api<SessionLoginResponse>("/api/session/login", json("POST", { probe })),
-    onSuccess: () => invalidate([["session"]]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (probe: SessionMacroStep) =>
+   api<SessionLoginResponse>("/api/session/login", json("POST", { probe })),
+  onSuccess: () => invalidate([["session"]]),
+ });
 }
 
 /**
@@ -184,12 +185,12 @@ export function useSessionLogin() {
  * Answers 409 when nothing was observed, so it is only offered after a `recovered` run.
  */
 export function useUpdateSessionMacro() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (id: number) =>
-      api<{ steps: SessionMacroStep[] }>(`/api/session/rules/${id}/update-macro`, json("POST", {})),
-    onSuccess: () => invalidate([["session"]]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (id: number) =>
+   api<{ steps: SessionMacroStep[] }>(`/api/session/rules/${id}/update-macro`, json("POST", {})),
+  onSuccess: () => invalidate([["session"]]),
+ });
 }
 
 /**
@@ -199,12 +200,25 @@ export function useUpdateSessionMacro() {
  * (ErrRuleAtEdge) rather than silently clamping, and an unknown id with a 404.
  */
 export function useMoveSessionRule() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: ({ id, offset }: { id: number; offset: number }) =>
-      api<{ position: number }>(`/api/session/rules/${id}/move`, json("POST", { offset })),
-    onSuccess: () => invalidate([["session"]]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: ({ id, offset }: { id: number; offset: number }) =>
+   api<{ position: number }>(`/api/session/rules/${id}/move`, json("POST", { offset })),
+  onSuccess: () => invalidate([["session"]]),
+ });
+}
+
+/**
+ * POST /api/session/rules/{id}/test — Burp's "Test macro" (burpsy-react-ui-7zdm): a dry-run of the
+ * rule's steps. Deliberately no cache invalidation: the dry-run is read-only by contract (it writes
+ * nothing to the login-run memory), and the cookie jar DOES move — which the report shows per step,
+ * so re-rendering the page from a shifted jar mid-read would misstate what the run did.
+ */
+export function useTestSessionRule() {
+ return useMutation({
+  mutationFn: (id: number) =>
+   api<SessionTestResponse>(`/api/session/rules/${id}/test`, json("POST", {})),
+ });
 }
 
 /**
@@ -212,28 +226,28 @@ export function useMoveSessionRule() {
  * probe: it reports what ALPN negotiated and what the peer sent back.
  */
 export function useSendFrameProgram() {
-  return useMutation({
-    mutationFn: (request: FrameProgramRequest) =>
-      api<FrameProgramResponse>("/api/http2/program", json("POST", request)),
-  });
+ return useMutation({
+  mutationFn: (request: FrameProgramRequest) =>
+   api<FrameProgramResponse>("/api/http2/program", json("POST", request)),
+ });
 }
 
 /** POST /api/scope. One action per call — the handler has no batch arm. */
 export function useUpdateScope() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (update: ScopeUpdate) => api<unknown>("/api/scope", json("POST", update)),
-    onSuccess: () => invalidate([keys.scope]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (update: ScopeUpdate) => api<unknown>("/api/scope", json("POST", update)),
+  onSuccess: () => invalidate([keys.scope]),
+ });
 }
 
 /** POST /api/proxy/passthrough — append one host pattern; the reply is the confirmed list. */
 export function useAddPassthrough() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (pattern: string) => api<PassthroughView>("/api/proxy/passthrough", json("POST", { pattern })),
-    onSuccess: () => invalidate([policyKeys.passthrough]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (pattern: string) => api<PassthroughView>("/api/proxy/passthrough", json("POST", { pattern })),
+  onSuccess: () => invalidate([policyKeys.passthrough]),
+ });
 }
 
 /**
@@ -242,10 +256,10 @@ export function useAddPassthrough() {
  * remove surfaces as an error toast instead of silently "succeeding".
  */
 export function useRemovePassthrough() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (pattern: string) =>
-      api<PassthroughView>(`/api/proxy/passthrough?pattern=${encodeURIComponent(pattern)}`, json("DELETE")),
-    onSuccess: () => invalidate([policyKeys.passthrough]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (pattern: string) =>
+   api<PassthroughView>(`/api/proxy/passthrough?pattern=${encodeURIComponent(pattern)}`, json("DELETE")),
+  onSuccess: () => invalidate([policyKeys.passthrough]),
+ });
 }

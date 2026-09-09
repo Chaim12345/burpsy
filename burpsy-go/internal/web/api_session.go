@@ -504,6 +504,10 @@ func (s *Server) handleSessionRuleDetail(w http.ResponseWriter, r *http.Request)
 		s.sessionRuleRunMacro(w, r, idStr[:len(idStr)-len("/run")])
 		return
 	}
+	if strings.HasSuffix(idStr, "/test") {
+		s.sessionRuleTestMacro(w, r, idStr[:len(idStr)-len("/test")])
+		return
+	}
 	if strings.HasSuffix(idStr, "/move") {
 		s.sessionRuleMove(w, r, idStr[:len(idStr)-len("/move")])
 		return
@@ -972,6 +976,76 @@ func (s *Server) sessionRuleRunMacro(w http.ResponseWriter, r *http.Request, idS
 	resp := sessionRunResp{Outcome: outcome, Steps: steps, Rule: rule.Name, RuleID: &id}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// sessionRuleTestMacro serves POST /api/session/rules/{id}/test — Burp's "Test macro"
+// (burpsy-react-ui-7zdm): a dry-run of the rule's steps, reporting each step's sent form (with the
+// jar's Cookie threading visible), its response, the cookies the response set, and every
+// extraction's outcome. Deliberately NOT the /run path: RunMacro also feeds the login-run memory
+// so "update macro" can promote what ran, and a dry-run must not pollute that — an operator
+// testing a macro is not logging in.
+func (s *Server) sessionRuleTestMacro(w http.ResponseWriter, r *http.Request, idStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid rule id", http.StatusBadRequest)
+		return
+	}
+	rule := s.sessionCoordinator.Rule(session.RuleID(id))
+	if rule == nil {
+		http.Error(w, "Rule not found", http.StatusNotFound)
+		return
+	}
+	report := s.sessionCoordinator.RunMacroDetailed(rule, s.macroRunner(r.Context()))
+	status := "indeterminate"
+	switch report.Status {
+	case session.Valid:
+		status = "valid"
+	case session.Invalid:
+		status = "invalid"
+	}
+	// The report's Response is session.StepResult, which has no json tags — raw, it would wire
+	// "Status"/"Headers"/"Body" (and base64 body bytes), and TypeScript's case-sensitive reads
+	// would see undefined everywhere. Project to an explicit lowercase DTO; the body rides as
+	// text because a macro response is a login exchange the operator reads, not binary evidence.
+	w.Header().Set("Content-Type", "application/json")
+	steps := make([]sessionTestStepView, 0, len(report.Steps))
+	for _, s0 := range report.Steps {
+		view := sessionTestStepView{
+			Index: s0.Index, Sent: s0.Sent, SentCookie: s0.SentCookie,
+			Skipped: s0.Skipped, SetCookies: s0.SetCookies, Extractions: s0.Extractions,
+		}
+		if s0.Response != nil {
+			view.Response = &sessionTestResponseView{
+				Status:  s0.Response.Status,
+				Headers: s0.Response.Headers,
+				Body:    string(s0.Response.Body),
+			}
+		}
+		steps = append(steps, view)
+	}
+	json.NewEncoder(w).Encode(map[string]any{"rule": rule.Name, "rule_id": id, "status": status, "steps": steps})
+}
+
+// sessionTestStepView is the lowercase wire shape of session.MacroStepReport for /test; see the
+// handler for why the projection exists.
+type sessionTestStepView struct {
+	Index       int                             `json:"index"`
+	Sent        session.MacroStep               `json:"sent"`
+	SentCookie  string                          `json:"sent_cookie,omitempty"`
+	Skipped     string                          `json:"skipped,omitempty"`
+	Response    *sessionTestResponseView        `json:"response,omitempty"`
+	SetCookies  []string                        `json:"set_cookies,omitempty"`
+	Extractions []session.MacroExtractionReport `json:"extractions,omitempty"`
+}
+
+type sessionTestResponseView struct {
+	Status  int               `json:"status"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
 }
 
 func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {

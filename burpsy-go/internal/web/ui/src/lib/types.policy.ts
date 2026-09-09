@@ -14,15 +14,15 @@
  * and no parameters, so the payload is the only addressable unit.
  */
 export type MatchReplaceTarget =
-  | "request_first_line"
-  | "request_header"
-  | "request_body"
-  | "request_param_name"
-  | "request_param_value"
-  | "response_header"
-  | "response_body"
-  | "websocket_to_server"
-  | "websocket_to_client";
+ | "request_first_line"
+ | "request_header"
+ | "request_body"
+ | "request_param_name"
+ | "request_param_value"
+ | "response_header"
+ | "response_body"
+ | "websocket_to_server"
+ | "websocket_to_client";
 
 /** matchReplaceCategoryName(): the server knows exactly these two. */
 export type MatchReplaceCategory = "literal" | "regex";
@@ -31,22 +31,22 @@ export type MatchReplaceDirection = "request" | "response" | "websocket";
 
 /** What /api/tools/rules/test answers with; `output` is the server's bytesView shape. */
 export interface BytesView {
-  text: string;
-  len: number;
-  utf8: boolean;
-  truncated: boolean;
+ text: string;
+ len: number;
+ utf8: boolean;
+ truncated: boolean;
 }
 
 export interface MatchReplaceTestRequest {
-  input: string;
-  direction: MatchReplaceDirection;
-  /** Compiled and applied inline; the persisted rule set is never touched. */
-  draft_rules: MatchReplaceRuleSpec[];
+ input: string;
+ direction: MatchReplaceDirection;
+ /** Compiled and applied inline; the persisted rule set is never touched. */
+ draft_rules: MatchReplaceRuleSpec[];
 }
 
 export interface MatchReplaceTestResponse {
-  changed: boolean;
-  output: BytesView;
+ changed: boolean;
+ output: BytesView;
 }
 
 /**
@@ -55,14 +55,14 @@ export interface MatchReplaceTestResponse {
  * until the next save — surfaced read-only rather than silently round-tripped.
  */
 export interface MatchReplaceRuleSpec {
-  rule_type: MatchReplaceTarget;
-  enabled: boolean;
-  string_match: string;
-  string_replace: string;
-  category: MatchReplaceCategory;
-  comment: string;
-  scope?: unknown;
-  query?: string;
+ rule_type: MatchReplaceTarget;
+ enabled: boolean;
+ string_match: string;
+ string_replace: string;
+ category: MatchReplaceCategory;
+ comment: string;
+ scope?: unknown;
+ query?: string;
 }
 
 /* --- session -------------------------------------------------------------- */
@@ -74,18 +74,18 @@ export type SessionExtractFrom = "body" | { header: string };
 export type SessionExtractHow = { regex: { pattern: string; group?: number } } | { json_path: string } | "whole";
 
 export interface SessionExtraction {
-  name: string;
-  from?: SessionExtractFrom;
-  how: SessionExtractHow;
+ name: string;
+ from?: SessionExtractFrom;
+ how: SessionExtractHow;
 }
 
 export interface SessionMacroStep {
-  method: string;
-  url: string;
-  /** [name, value] pairs; the server sorts them, so a re-read is stable. */
-  headers: [string, string][];
-  body: string;
-  extract?: SessionExtraction[];
+ method: string;
+ url: string;
+ /** [name, value] pairs; the server sorts them, so a re-read is stable. */
+ headers: [string, string][];
+ body: string;
+ extract?: SessionExtraction[];
 }
 
 /**
@@ -94,69 +94,69 @@ export interface SessionMacroStep {
  * ones verbatim rather than dropping what it cannot draw.
  */
 export interface SessionValidity {
-  status_is?: number;
-  body_contains?: string;
-  body_not_contains?: string;
-  header_present?: string;
-  header_absent?: string;
-  all?: SessionValidity[];
-  any?: SessionValidity[];
-  not?: SessionValidity;
+ status_is?: number;
+ body_contains?: string;
+ body_not_contains?: string;
+ header_present?: string;
+ header_absent?: string;
+ all?: SessionValidity[];
+ any?: SessionValidity[];
+ not?: SessionValidity;
 }
 
 /** The scope document a session rule carries. Only `host` is read server-side. */
 export interface SessionScopeRule {
-  kind: "Include" | "Exclude";
-  host: string | null;
+ kind: "Include" | "Exclude";
+ host: string | null;
 }
 
 export interface SessionScope {
-  allow_all: boolean;
-  rules: SessionScopeRule[];
+ allow_all: boolean;
+ rules: SessionScopeRule[];
 }
 
 export interface SessionRuleFull {
-  id?: number;
-  name: string;
-  enabled: boolean;
-  /** Omitted means "applies everywhere"; a stated but empty scope is refused. */
-  scope?: SessionScope;
-  steps: SessionMacroStep[];
-  validity: SessionValidity;
-  max_attempts?: number;
+ id?: number;
+ name: string;
+ enabled: boolean;
+ /** Omitted means "applies everywhere"; a stated but empty scope is refused. */
+ scope?: SessionScope;
+ steps: SessionMacroStep[];
+ validity: SessionValidity;
+ max_attempts?: number;
 }
 
 export interface SessionRulesResponse {
-  wired: boolean;
-  rules: SessionRuleFull[];
-  hint?: string;
+ wired: boolean;
+ rules: SessionRuleFull[];
+ hint?: string;
 }
 
 export interface SessionCookiePair {
-  name: string;
-  value: string;
+ name: string;
+ value: string;
 }
 
 export interface SessionHostCookies {
-  /** The full authority ("example.com:443"). A jar is keyed by host, port and TLS, so two jars can
-   *  share a hostname — showing the bare name would render them as duplicate rows. */
-  host: string;
-  port: number;
-  /** Whether this jar's authority is the TLS one. Two jars for the same host:port differ only here. */
-  tls: boolean;
-  cookies: SessionCookiePair[];
+ /** The full authority ("example.com:443"). A jar is keyed by host, port and TLS, so two jars can
+  *  share a hostname — showing the bare name would render them as duplicate rows. */
+ host: string;
+ port: number;
+ /** Whether this jar's authority is the TLS one. Two jars for the same host:port differ only here. */
+ tls: boolean;
+ cookies: SessionCookiePair[];
 }
 
 export interface SessionCookiesResponse {
-  wired: boolean;
-  cookies?: SessionHostCookies[];
-  hint?: string;
+ wired: boolean;
+ cookies?: SessionHostCookies[];
+ hint?: string;
 }
 
 export interface SessionLoginResponseView {
-  status: number;
-  headers?: Record<string, string>;
-  body: string;
+ status: number;
+ headers?: Record<string, string>;
+ body: string;
 }
 
 /**
@@ -165,28 +165,55 @@ export interface SessionLoginResponseView {
  * and the operator has to be able to tell them apart.
  */
 export type SessionLoginOutcome =
-  | "no_rule_applies"
-  | "already_valid"
-  | "recovered"
-  | "still_invalid_after_relogin"
-  | "gave_up"
-  | "macro_failed"
-  | "retry_failed"
-  | "probe_failed";
+ | "no_rule_applies"
+ | "already_valid"
+ | "recovered"
+ | "still_invalid_after_relogin"
+ | "gave_up"
+ | "macro_failed"
+ | "retry_failed"
+ | "probe_failed";
 
 export interface SessionLoginResponse {
-  outcome?: SessionLoginOutcome;
-  rule?: string;
-  rule_id?: number;
-  url?: string;
-  rules?: number;
-  hint?: string;
-  login_attempts?: number;
-  attempt?: number;
-  step_index?: number;
-  validity?: "valid" | "invalid" | "indeterminate";
-  response?: SessionLoginResponseView;
-  error?: string;
+ outcome?: SessionLoginOutcome;
+ rule?: string;
+ rule_id?: number;
+ url?: string;
+ rules?: number;
+ hint?: string;
+ login_attempts?: number;
+ attempt?: number;
+ step_index?: number;
+ validity?: "valid" | "invalid" | "indeterminate";
+ response?: SessionLoginResponseView;
+ error?: string;
+}
+
+/** One step of a Test-macro dry-run (burpsy-react-ui-7zdm): what was sent (with the jar's cookie
+ *  threading visible), what came back, what cookies the response set, and each extraction's
+ *  outcome. Skipped carries why when no response exists (out of scope, send failure). */
+export interface SessionTestExtraction {
+ name: string;
+ outcome: string;
+ value?: string;
+ detail?: string;
+}
+
+export interface SessionTestStep {
+ index: number;
+ sent: SessionMacroStep & { headers?: Record<string, string> };
+ sent_cookie?: string;
+ skipped?: string;
+ response?: { status: number; headers?: Record<string, string>; body?: string };
+ set_cookies?: string[];
+ extractions?: SessionTestExtraction[];
+}
+
+export interface SessionTestResponse {
+ rule: string;
+ rule_id: number;
+ status: "valid" | "invalid" | "indeterminate";
+ steps: SessionTestStep[];
 }
 
 /* --- scope ---------------------------------------------------------------- */
@@ -196,93 +223,93 @@ export interface SessionLoginResponse {
  * and path arms — so removal can target one rule without touching a same-host sibling.
  */
 export interface ScopeRuleView {
-  kind: "Include" | "Exclude";
-  host: string | null;
-  path?: string | null;
-  port?: number | null;
-  protocol?: string | null;
+ kind: "Include" | "Exclude";
+ host: string | null;
+ path?: string | null;
+ port?: number | null;
+ protocol?: string | null;
 }
 
 export interface ScopeView {
-  allow_all: boolean;
-  rules: ScopeRuleView[];
-  empty: boolean;
+ allow_all: boolean;
+ rules: ScopeRuleView[];
+ empty: boolean;
 }
 
 /** POST /api/scope. Port, path and protocol are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
-  action: "include" | "exclude" | "remove" | "clear";
-  kind?: "include" | "exclude";
-  pattern?: string;
-  path?: string;
-  port?: number;
-  protocol?: "http" | "https";
+ action: "include" | "exclude" | "remove" | "clear";
+ kind?: "include" | "exclude";
+ pattern?: string;
+ path?: string;
+ port?: number;
+ protocol?: "http" | "https";
 }
 
 /* --- protocols / diagnostics ---------------------------------------------- */
 
 export interface ProtocolAuthority {
-  authority: string;
-  state: string;
-  negotiated?: string;
+ authority: string;
+ state: string;
+ negotiated?: string;
 }
 
 /** /api/protocols reports on this tool's own sends, not on proxied traffic. */
 export interface ProtocolReport {
-  enabled: boolean;
-  hint?: string;
-  summary?: string;
-  sent_as_http2?: number;
-  sent_as_http1?: number;
-  downgrades?: Record<string, number>;
-  rewrites?: number;
-  discovery_handshakes?: number;
-  cache_hits?: number;
-  authorities?: ProtocolAuthority[];
+ enabled: boolean;
+ hint?: string;
+ summary?: string;
+ sent_as_http2?: number;
+ sent_as_http1?: number;
+ downgrades?: Record<string, number>;
+ rewrites?: number;
+ discovery_handshakes?: number;
+ cache_hits?: number;
+ authorities?: ProtocolAuthority[];
 }
 
 /** POST /api/http2/program. `frames` may be empty, which makes it a preface-and-listen probe. */
 export interface FrameProgramRequest {
-  host: string;
-  port: number;
-  tls: boolean;
-  preface: boolean;
-  read_for_ms: number;
-  frames: { type: number; flags: number; stream: number; payload_base64?: string; declared_len?: number }[];
+ host: string;
+ port: number;
+ tls: boolean;
+ preface: boolean;
+ read_for_ms: number;
+ frames: { type: number; flags: number; stream: number; payload_base64?: string; declared_len?: number }[];
 }
 
 export interface FrameView {
-  type: string;
-  flags: number;
-  stream: number;
-  len: number;
+ type: string;
+ flags: number;
+ stream: number;
+ len: number;
 }
 
 export interface FrameProgramResponse {
-  verdict: string;
-  refusals: string[];
-  violations: string[];
-  negotiated: string;
-  read_ended: boolean;
-  sent: { octets: number; base64: string };
-  reply: { octets: number; base64: string; frames: FrameView[] };
-  duration_ms: number;
-  error?: string;
+ verdict: string;
+ refusals: string[];
+ violations: string[];
+ negotiated: string;
+ read_ended: boolean;
+ sent: { octets: number; base64: string };
+ reply: { octets: number; base64: string; frames: FrameView[] };
+ duration_ms: number;
+ error?: string;
 }
 
 export interface EventHubStats {
-  subscribers: number;
-  window_ms: number;
-  frames: number;
-  changes: number;
-  merges: number;
-  fanout_running: boolean;
-  pending: Record<string, number>;
+ subscribers: number;
+ window_ms: number;
+ frames: number;
+ changes: number;
+ merges: number;
+ fanout_running: boolean;
+ pending: Record<string, number>;
 }
 
 /** GET/POST/DELETE /api/proxy/passthrough — the live TLS passthrough host-pattern list. */
 export interface PassthroughView {
-  patterns: string[];
+ patterns: string[];
 }
 
 /* --- upstream proxy servers and SOCKS (Unit 9) ---------------------------- */
@@ -293,35 +320,35 @@ export interface PassthroughView {
  * password back, so there is nothing here to accidentally put on screen.
  */
 export interface NetworkProxyRule {
-  pattern: string;
-  proxy: string;
-  kind: string;
-  has_credentials: boolean;
-  /** A rule that exempts its pattern from a broader default. */
-  direct: boolean;
+ pattern: string;
+ proxy: string;
+ kind: string;
+ has_credentials: boolean;
+ /** A rule that exempts its pattern from a broader default. */
+ direct: boolean;
 }
 
 export interface NetworkProxyView {
-  /** False means no policy object is wired, so an edit would be consulted by nothing. */
-  wired: boolean;
-  rules: NetworkProxyRule[];
-  default: string;
-  default_kind: string;
-  default_has_credentials: boolean;
-  /** Distinguishes "nothing configured" from "rules that all resolve to direct". */
-  empty: boolean;
-  /** Egress surfaces holding this policy: "sender", "proxy", "web". */
-  attached: string[];
-  /** Whether edits survive a restart (false with no -db). */
-  persisted: boolean;
-  credentials_supported: boolean;
-  /** Accepted URL schemes, named by the server's own parser. */
-  schemes: string[];
+ /** False means no policy object is wired, so an edit would be consulted by nothing. */
+ wired: boolean;
+ rules: NetworkProxyRule[];
+ default: string;
+ default_kind: string;
+ default_has_credentials: boolean;
+ /** Distinguishes "nothing configured" from "rules that all resolve to direct". */
+ empty: boolean;
+ /** Egress surfaces holding this policy: "sender", "proxy", "web". */
+ attached: string[];
+ /** Whether edits survive a restart (false with no -db). */
+ persisted: boolean;
+ credentials_supported: boolean;
+ /** Accepted URL schemes, named by the server's own parser. */
+ schemes: string[];
 }
 
 /** POST body. `default` omitted leaves the default alone; "" or "direct" clears it. */
 export interface NetworkProxyUpdate {
-  pattern?: string;
-  proxy?: string;
-  default?: string;
+ pattern?: string;
+ proxy?: string;
+ default?: string;
 }
