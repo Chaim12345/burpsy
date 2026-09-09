@@ -975,6 +975,10 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 	}
 	h2, block := planH2(raw)
 	if block != nil {
+		// Force-h2 cannot change what h2 can carry: the construct that blocks Auto blocks this
+		// too. The plan is not marked wantH2, so the dial offers http/1.1 and the bytes go out
+		// verbatim with the reason naming the construct — the honest answer to "use h2" when h2
+		// has nowhere to put the request.
 		plan.block = block
 		return plan, nil
 	}

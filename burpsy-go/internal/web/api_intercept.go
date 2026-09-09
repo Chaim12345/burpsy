@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -141,8 +142,57 @@ func (s *Server) handleInterceptEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.intercept.SetEnabled(req.Enabled)
+	// Recorded for the "restore" startup mode (burpsy-react-ui-7vy): what the switch read when
+	// the session ended is what restore brings back. Best-effort — an unavailable mirror costs
+	// restart fidelity, not this toggle.
+	if s.persist != nil {
+		s.persist.SaveInterceptLive(req.Enabled)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"enabled": req.Enabled})
+}
+
+// handleInterceptStartup serves GET/POST /api/intercept/startup — Burp's "Default Proxy
+// interception state" (configPanelProxyInterception): whether interception is on, off, or
+// restored-from-last-session when a server starts. GET answers the current mode; POST writes
+// it and echoes the whole state, the convention the passthrough and proxy-options endpoints
+// share, so a client never renders a state it has not seen confirmed.
+//
+// The choice is a preference about the NEXT start, not a live toggle — /api/intercept/enable
+// remains the switch — and it is persisted immediately: a mode that needed a separate save
+// step would silently apply only when the operator remembered it.
+func (s *Server) handleInterceptStartup(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		if s.persist == nil {
+			http.Error(w, "No persistence is attached to this server, so there is no startup preference to read (it would not survive a restart)", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"mode": s.persist.LoadInterceptStartup()})
+	case http.MethodPost:
+		if s.persist == nil {
+			http.Error(w, "No persistence is attached to this server, so a startup preference would not survive a restart", http.StatusServiceUnavailable)
+			return
+		}
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		switch req.Mode {
+		case "on", "off", "restore":
+		default:
+			http.Error(w, fmt.Sprintf("Unknown mode %q; the valid modes are on, off and restore", req.Mode), http.StatusBadRequest)
+			return
+		}
+		s.persist.SaveInterceptStartup(req.Mode)
+		writeJSON(w, http.StatusOK, map[string]string{"mode": req.Mode})
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleInterceptInScopeOnly serves POST /api/intercept/in-scope-only — Burp's "Only intercept

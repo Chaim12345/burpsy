@@ -451,6 +451,18 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		if err := p.Restore(nil, nil, nil, s.matchReplace, s.sessionCoordinator, s.organizer, s.toolLog); err != nil {
 			s.logger.Warn("failed to restore web-owned state", zap.Error(err))
 		}
+		// Burp's "Default Proxy interception state" (burpsy-react-ui-7vy): what the intercept
+		// switch reads at start. "restore" reuses the last live state; the default is off, the
+		// seed every existing session used — a preference nobody wrote must not turn
+		// interception on by surprise.
+		if s.intercept != nil {
+			switch p.LoadInterceptStartup() {
+			case "on":
+				s.intercept.SetEnabled(true)
+			case "restore":
+				s.intercept.SetEnabled(p.LoadInterceptLive())
+			}
+		}
 		s.toolLog.SetPersistenceSink(p.SaveToolLog)
 		s.restorePools(p)
 	}
@@ -861,6 +873,11 @@ func (s *Server) setupRoutes() {
 	// handler. "annotate" is not an id shape, so it cannot collide with the held queue's
 	// /api/intercept/{id} resolution paths below.
 	s.mux.HandleFunc("/api/intercept/annotate/", s.handleInterceptAnnotate)
+	// The startup preference (burpsy-react-ui-7vy): what the intercept switch reads at server
+	// start. GET answers it; POST writes it. Its own route rather than a field on /enable for
+	// the same reason in-scope-only has one — an endpoint named "enable" that also carried a
+	// startup preference would let a caller set one and silently send the other.
+	s.mux.HandleFunc("/api/intercept/startup", s.handleInterceptStartup)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
 
 	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).

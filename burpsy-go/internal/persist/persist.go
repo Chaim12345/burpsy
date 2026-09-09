@@ -1162,6 +1162,52 @@ func scanScopeRows(rows *sql.Rows, withPath, hasProtocol, hasEnabled bool) ([]*c
 	return out, rows.Err()
 }
 
+// ---- Interception startup state -----------------------------------------------------------------
+
+// SaveInterceptStartup persists Burp's "Default Proxy interception state"
+// (user_options.misc.enable_proxy_interception_at_startup and friends): what the
+// intercept switch should read when a server starts. Three modes, Burp's three:
+// "on", "off", and "restore" — the last reuses the last live state, which is
+// recorded here on every toggle so a restart can honour it.
+func (s *Store) SaveInterceptStartup(mode string) {
+	if err := s.setSetting("intercept.startup_mode", mode); err != nil {
+		s.log("intercept startup mode", err)
+	}
+}
+
+// LoadInterceptStartup reads the mode. Absent reads as "off", the seed both the
+// engine and every existing session used — a preference nobody wrote must not
+// turn interception on by surprise.
+func (s *Store) LoadInterceptStartup() string {
+	v, err := s.getSetting("intercept.startup_mode")
+	if err != nil || v == "" {
+		return "off"
+	}
+	switch v {
+	case "on", "off", "restore":
+		return v
+	}
+	return "off"
+}
+
+// SaveInterceptLive records the intercept switch's current state, for the
+// "restore" startup mode. Written by the enable endpoint alongside the live
+// toggle, best-effort like every other persistence sink.
+func (s *Store) SaveInterceptLive(on bool) {
+	if err := s.setSetting("intercept.live", fmt.Sprint(on)); err != nil {
+		s.log("intercept live state", err)
+	}
+}
+
+// LoadInterceptLive reads the last live state. Absent reads as off.
+func (s *Store) LoadInterceptLive() bool {
+	v, err := s.getSetting("intercept.live")
+	if err != nil || v == "" {
+		return false
+	}
+	return v == "true"
+}
+
 // ---- Match & Replace ---------------------------------------------------------------------------
 
 // SaveMatchRules replaces the match & replace rule set and content-length flag.
