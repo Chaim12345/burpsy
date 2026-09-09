@@ -547,6 +547,9 @@ func (s *Server) persistUpstreamProxy() {
 func (s *Server) persistOrganizer() {
 	if s.persist != nil {
 		s.persist.SaveOrganizer(s.organizer.List())
+		// Mirrored alongside the items on purpose: an item names its collection by id, so saving one
+		// table without the other would restore items into a group no longer defined.
+		s.persist.SaveOrganizerCollections(s.organizer.Collections())
 	}
 }
 
@@ -717,6 +720,13 @@ func (s *Server) WithMatchReplace(mr *matchreplace.RuleSet) *Server {
 // WithToolLog sets the tool log.
 func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 	s.toolLog = tl
+	// The capture filter's ScopeOnly axis is answered by the engagement scope, so the log needs a
+	// reference to it. Without this the switch was accepted and stored and then filtered nothing
+	// (burpsy-react-ui-72k9). Guarded: tests build servers with a nil scope, and a nil scope must
+	// leave the switch inert rather than panic the constructor.
+	if s.scope != nil {
+		tl.SetScope(s.scope)
+	}
 	s.followLive()
 	return s
 }
@@ -878,7 +888,17 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/tools/encode", s.handleToolsEncode)
 	s.mux.HandleFunc("/api/tools/hash", s.handleToolsHash)
 	s.mux.HandleFunc("/api/tools/compare", s.handleToolsCompare)
+	// PATCH /api/tools/log/{id} — the log comment/highlight write path. Registered as a subtree
+	// because "/api/tools/log" above takes the exact match; without this line toolLogSetComment was
+	// defined, declared in the manifest and reachable by nothing (burpsy-react-ui-5da).
+	s.mux.HandleFunc("/api/tools/log/", s.toolLogSetComment)
 	s.mux.HandleFunc("/api/tools/organizer", s.handleOrganizer)
+	// Collections before the item subtree: ServeMux prefers the longer pattern, so /collections and
+	// /collections/{id}/... reach handleOrganizerCollections while /{id} still reaches the item
+	// handler. Registering only the item subtree is what made every collections call answer
+	// "Invalid item id" (burpsy-react-ui-dcr).
+	s.mux.HandleFunc("/api/tools/organizer/collections", s.handleOrganizerCollections)
+	s.mux.HandleFunc("/api/tools/organizer/collections/", s.handleOrganizerCollections)
 	s.mux.HandleFunc("/api/tools/organizer/", s.handleOrganizerItem)
 
 	// WebSocket capture surface. The parenthetical here used to read "empty while the Go proxy has no

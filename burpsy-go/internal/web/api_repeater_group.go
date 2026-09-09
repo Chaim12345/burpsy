@@ -307,19 +307,19 @@ func (s *Server) sendGroupItemOnItsOwnConnection(
 //     with another is the one case where the path in the bytes is not necessarily the path the socket's
 //     authority implies.
 //
-// That second point makes this mode measurably stricter than the two separate-connection modes, and
-// the difference is worth naming because it is not subtle: core.Scope.MayContainHost, which is the gate
-// /api/repeater/send has always used and which the other two modes therefore inherit unchanged, answers
-// "could any request to this host be in scope". It refuses a host that matches no include rule outright
-// — the day this used to answer true for such a host, sending to it was the scope bug this tightening
-// fixed. What it still waves through is a *path* within an included host: a path-scoped include
-// (`include(h, "/allowed")`) makes the whole host possible to the pre-filter even though Contains, and
-// therefore AuthoriseRaw, refuse paths outside it. So the shared-socket mode, which runs AuthoriseRaw
-// per raw, refuses a request to /blocked that the single send — matching both separate-connection
-// modes — sends out. That residual asymmetry is not something this endpoint invented and it is not
-// something it can fix here: MayContainHost is the gate the single send, the intruder and the proxy
-// pre-filter all share, and tightening it further is a decision above one endpoint's pay grade.
-// TestRepeaterGroupSharedSocketIsStricterThanTheHostLevelGateTheOtherModesInherit pins it.
+// That second point used to make this mode measurably stricter than the two separate-connection
+// modes: core.Scope.MayContainHost, the gate /api/repeater/send uses and which the other two modes
+// inherit unchanged, answered "true" for a host that matched no include rule, because only a
+// whole-host exclude made it false — while AuthoriseRaw, which this mode runs per raw request,
+// refused the same host. A target outside the include list was therefore sent to by the
+// separate-connection modes and refused here.
+//
+// That asymmetry is gone (burpsy-react-ui-cj7x): MayContainHost now applies Contains' include
+// semantics, so an empty include list still means everything but a non-empty one is an allow-list.
+// All three modes and the single send now refuse such a host identically, which is what
+// TestEveryGroupSendModeRefusesAHostMatchingNoIncludeRule pins. This mode remains stricter in the
+// one way that is intrinsic to it — it checks the path in the bytes, not just the authority — which
+// is the first point above and is unaffected by the gate change.
 //
 // SendKeepAlive rather than SendPipelined because "in sequence" is what the mode says and what it must
 // do: write one request, read its whole response, then write the next on the same connection. That

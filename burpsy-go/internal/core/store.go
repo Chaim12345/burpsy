@@ -497,7 +497,13 @@ type TrafficStore struct {
 	// API did — it looked an exchange up by its request *message* id, and reported findings against
 	// whichever unrelated exchange happened to share that number. This index makes the correct
 	// lookup available so callers holding a message id never have to guess.
-	byRequest   map[MsgId]*Exchange
+	byRequest map[MsgId]*Exchange
+	// deleted holds the exchange ids the operator removed (burpsy-react-ui-r6li). Exchange ids
+	// are positional — Restore's contract — so a deletion cannot splice the slice without
+	// renumbering every later row mid-engagement; the slot stays and the flag decides visibility.
+	// A map rather than a bool on Exchange: the flag is store state, not wire shape, and keeping
+	// it off the struct means no projection can leak it by accident.
+	deleted     map[ExchangeID]bool
 	bytes       int64
 	nextID      uint64
 	captureDir  string
@@ -541,6 +547,7 @@ func NewTrafficStore() *TrafficStore {
 		wsMessages: make([]*WsMessage, 0),
 		wsPayloads: make([][]byte, 0),
 		locations:  make([]Location, 0),
+		deleted:    make(map[ExchangeID]bool),
 	}
 }
 
@@ -810,8 +817,46 @@ func (ts *TrafficStore) GetExchange(id ExchangeID) (*Exchange, error) {
 	if uint64(id) >= uint64(len(ts.exchanges)) {
 		return nil, fmt.Errorf("exchange not found: %d", id)
 	}
+	if ts.deleted[id] {
+		return nil, fmt.Errorf("exchange not found: %d", id)
+	}
 
 	return ts.exchanges[id], nil
+}
+
+// DeleteExchanges marks the given exchange ids deleted (burpsy-react-ui-r6li): Burp's
+// "Delete items". Positional ids stay stable — see the deleted field — so a deletion never
+// renumbers live traffic. Already-deleted and out-of-range ids are skipped rather than
+// succeeding quietly; the return is the number that actually left the view, so the API can
+// answer "3 deleted, 1 not found" honestly.
+func (ts *TrafficStore) DeleteExchanges(ids []ExchangeID) int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	removed := 0
+	for _, id := range ids {
+		if uint64(id) >= uint64(len(ts.exchanges)) || ts.deleted[id] {
+			continue
+		}
+		ts.deleted[id] = true
+		removed++
+	}
+	return removed
+}
+
+// ClearExchanges marks every exchange deleted (burpsy-react-ui-r6li): Burp's "Clear (tool)".
+// Returns how many rows left the view. Messages are untouched — the underlying bytes stay in a
+// persisted store, and every id elsewhere keeps meaning what it meant.
+func (ts *TrafficStore) ClearExchanges() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	removed := 0
+	for _, ex := range ts.exchanges {
+		if !ts.deleted[ex.ID] {
+			ts.deleted[ex.ID] = true
+			removed++
+		}
+	}
+	return removed
 }
 
 // ValidHighlights is the wire vocabulary for Exchange.Highlight: exactly the UI's HIGHLIGHTS list
@@ -843,6 +888,9 @@ func (ts *TrafficStore) UpdateExchangeAnnotation(id ExchangeID, notes *string, n
 	if uint64(id) >= uint64(len(ts.exchanges)) {
 		return nil, fmt.Errorf("exchange not found: %d", id)
 	}
+	if ts.deleted[id] {
+		return nil, fmt.Errorf("exchange not found: %d", id)
+	}
 	ex := ts.exchanges[id]
 	if notesSet {
 		ex.Notes = notes
@@ -866,7 +914,7 @@ func (ts *TrafficStore) ExchangeByRequest(id MsgId) (*Exchange, error) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	if ex, ok := ts.byRequest[id]; ok {
+	if ex, ok := ts.byRequest[id]; ok && !ts.deleted[ex.ID] {
 		return ex, nil
 	}
 	return nil, fmt.Errorf("no exchange has request message %d", id)
@@ -899,7 +947,7 @@ func (ts *TrafficStore) PriorExchange(host string, port uint16, tls bool, path s
 		if ExchangeID(i) >= before {
 			continue
 		}
-		if ex.Host != host || ex.Port != port || ex.TLS != tls {
+		if ex.Host != host || ex.Port != port || ex.TLS != tls || ts.deleted[ex.ID] {
 			continue
 		}
 		// The path carries the query string, so an exact match is one endpoint: "/a" and "/a?x=1"
@@ -916,13 +964,19 @@ func (ts *TrafficStore) PriorExchange(host string, port uint16, tls bool, path s
 	return best, true
 }
 
-// Exchanges returns all exchanges (for history listing).
+// Exchanges returns all exchanges visible to the operator (for history listing): rows the
+// operator deleted (burpsy-react-ui-r6li) are not listed. The slice copy skips them rather
+// than splicing the underlying storage — positional ids stay stable.
 func (ts *TrafficStore) Exchanges() []*Exchange {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	result := make([]*Exchange, len(ts.exchanges))
-	copy(result, ts.exchanges)
+	result := make([]*Exchange, 0, len(ts.exchanges))
+	for _, ex := range ts.exchanges {
+		if !ts.deleted[ex.ID] {
+			result = append(result, ex)
+		}
+	}
 	return result
 }
 
@@ -930,7 +984,16 @@ func (ts *TrafficStore) Exchanges() []*Exchange {
 func (ts *TrafficStore) Count() (messages, exchanges int) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	return len(ts.messages), len(ts.exchanges)
+	// The exchange count answers "how much is in the capture" — a row the operator deleted is
+	// not in the capture as far as they are concerned, so it is not counted (r6li). Messages
+	// keep their raw count: message ids still resolve and the bytes still exist.
+	exchanges = 0
+	for _, ex := range ts.exchanges {
+		if !ts.deleted[ex.ID] {
+			exchanges++
+		}
+	}
+	return len(ts.messages), exchanges
 }
 
 // Bytes returns the total stored bytes.

@@ -306,8 +306,12 @@ var manifest = map[string]route{
 			"defaults and the list of surfaces that consult them",
 	},
 	"/api/history": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "proxy history, filtered by the typed query DSL",
+		// DELETE is Burp's "Delete items"/"Clear (tool)" (r6li): a tombstone on the operator's
+		// view, not on the stored bytes — positional ids stay stable, so the read route's contract
+		// is untouched.
+		methods: []string{"GET", "DELETE"}, risk: riskRead,
+		summary: "proxy history, filtered by the typed query DSL; DELETE removes rows from the " +
+			"operator's view (ids body) or clears the capture (no body)",
 	},
 	"/api/http2/program": {
 		methods: []string{"POST"}, risk: riskEgress,

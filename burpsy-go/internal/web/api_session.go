@@ -504,6 +504,10 @@ func (s *Server) handleSessionRuleDetail(w http.ResponseWriter, r *http.Request)
 		s.sessionRuleRunMacro(w, r, idStr[:len(idStr)-len("/run")])
 		return
 	}
+	if strings.HasSuffix(idStr, "/move") {
+		s.sessionRuleMove(w, r, idStr[:len(idStr)-len("/move")])
+		return
+	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid rule id", http.StatusBadRequest)
@@ -1046,4 +1050,53 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+// sessionRuleMove serves POST /api/session/rules/{id}/move — rule precedence.
+//
+// Precedence is not cosmetic here: MatchingRule runs the first enabled rule whose scope covers a
+// host, walking the coordinator's order slice, so when two rules both cover a host their order
+// decides which login actually runs. PUT deliberately keeps a rule's position (an edit must not
+// silently re-prioritise it), which is why changing the order needs its own endpoint.
+//
+// The three refusals are kept apart, the way MoveRule keeps its two sentinels apart: an unknown id
+// is 404, a move that would run off either end is 400 naming the edge, and a wrong verb is 405 with
+// an Allow header. Collapsing the edge case into a generic 400 would tell an operator "bad request"
+// about a request that was well-formed and simply had nowhere to go.
+func (s *Server) sessionRuleMove(w http.ResponseWriter, r *http.Request, idStr string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid rule id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Offset int `json:"offset"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	position, err := s.sessionCoordinator.MoveRule(session.RuleID(id), body.Offset)
+	switch {
+	case errors.Is(err, session.ErrNoSuchRule):
+		http.Error(w, "Rule not found", http.StatusNotFound)
+		return
+	case errors.Is(err, session.ErrRuleAtEdge):
+		// The sentinel's own text names the edge and the list length, so it is passed through
+		// rather than restated.
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// The order is part of what a restart must restore: a rule that wins today has to win after a
+	// restart, or precedence silently resets to creation order.
+	s.persistSessionRules()
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "position": position})
 }
