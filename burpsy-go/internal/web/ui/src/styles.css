@@ -27,6 +27,26 @@
    The composite/alpha values below have no Penpot token equivalent (rgba
    opacity, or a pure alias of another semantic token) and are hand-authored
    here rather than generated — see semantic.css's header comment. */
+/* The UI text scale (burpsy-react-ui-7bd): multiplies every fluid text token, so
+   Appearance's scale control resizes the chrome without touching the message editor,
+   which reads its own --editor-font-size. calc() over the clamp keeps the fluid
+   behaviour at each end. */
+:root {
+  --ui-scale: 100%;
+  /* Remapped fluid type tokens (burpsy-react-ui-7bd): the generated --fs-* values
+     scaled by --ui-scale, so Appearance's text-size control resizes the chrome
+     without touching the message editor, which reads its own --editor-font-size.
+     calc() over the clamps keeps the fluid behaviour at each end; declared after the
+     token imports so these win by source order. calc over a clamp is valid CSS. */
+  --fs-xs: calc(clamp(11px, 0.6vw, 13px) * var(--ui-scale));
+  --fs-sm: calc(clamp(12px, 0.68vw, 14px) * var(--ui-scale));
+  --fs-md: calc(clamp(13px, 0.76vw, 15px) * var(--ui-scale));
+  --fs-lg: calc(clamp(14px, 0.85vw, 16px) * var(--ui-scale));
+  --fs-xl: calc(clamp(15px, 0.95vw, 18px) * var(--ui-scale));
+  --fs-2xl: calc(clamp(19px, 1.5vw, 26px) * var(--ui-scale));
+  --fs-3xl: calc(clamp(21px, 1.7vw, 30px) * var(--ui-scale));
+}
+
 :root,
 [data-theme="light"] {
   color-scheme: light;

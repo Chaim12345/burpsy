@@ -7,6 +7,16 @@ import type { ManualSpanView } from "./intruder-marks";
 export type Theme = "light" | "dark" | "system";
 export type Density = "comfortable" | "compact";
 
+/**
+ * The two independent text scales (burpsy-react-ui-7bd), mirroring Burp's separate
+ * UI-hierarchy and Code/Monospace sizes: `uiScale` multiplies every text token, and
+ * `editorFont` sizes the message editor alone. Percent strings because both feed CSS
+ * custom properties; "100%" and the editor's historical 12px are the defaults, so a
+ * visitor who never opens Appearance sees exactly what the hardcoded build showed.
+ */
+export type EditorFont = "12px" | "13px" | "14px" | "16px" | "18px";
+export type UiScale = "100%" | "110%" | "125%" | "150%";
+
 /** Which side of the editor pair the Inspector docks to — Burp's inspectorSettingsDock{Left,Right}. */
 export type InspectorDock = "left" | "right";
 /**
@@ -200,6 +210,10 @@ interface AppState {
  route: string;
  theme: Theme;
  density: Density;
+ /** Message-editor font size (burpsy-react-ui-7bd); drives the editor theme via --editor-font-size. */
+ editorFont: EditorFont;
+ /** UI text scale (burpsy-react-ui-7bd); sets --ui-scale on <html>. */
+ uiScale: UiScale;
  paletteOpen: boolean;
  shortcutsOpen: boolean;
  inspectorDock: InspectorDock;
@@ -233,6 +247,8 @@ interface AppState {
  setRoute: (route: string) => void;
  setTheme: (theme: Theme) => void;
  setDensity: (density: Density) => void;
+ setEditorFont: (font: EditorFont) => void;
+ setUiScale: (scale: UiScale) => void;
  setPaletteOpen: (open: boolean) => void;
  setShortcutsOpen: (open: boolean) => void;
  setInspectorDock: (dock: InspectorDock) => void;
@@ -279,6 +295,8 @@ export function persistedWorkspace(state: AppState) {
  return {
   theme: state.theme,
   density: state.density,
+  editorFont: state.editorFont,
+  uiScale: state.uiScale,
   // Where the Inspector sits and how much of it is open are layout choices an
   // operator makes once. Persisted here rather than under a `burpsy.*` key of
   // their own so there is exactly one place per-browser UI state lives.
@@ -306,6 +324,8 @@ export const useApp = create<AppState>()(
    route: "dashboard",
    theme: "dark",
    density: "compact",
+   editorFont: "12px",
+   uiScale: "100%",
    paletteOpen: false,
    shortcutsOpen: false,
    inspectorDock: "right",
@@ -327,6 +347,8 @@ export const useApp = create<AppState>()(
    setRoute: (route) => set({ route, paletteOpen: false }),
    setTheme: (theme) => set({ theme }),
    setDensity: (density) => set({ density }),
+   setEditorFont: (editorFont) => set({ editorFont }),
+   setUiScale: (uiScale) => set({ uiScale }),
    setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
    setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
    setInspectorDock: (inspectorDock) => set({ inspectorDock }),

@@ -26,7 +26,7 @@ import {
 } from "../lib/data.network";
 import { useBackupNow, useCaCert, useCaStatus, useImportCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useUninterestingHeaders, useSetUninterestingHeaders } from "../lib/data.workbench";
-import { useApp, type Density, type Theme } from "../lib/store";
+import { useApp, type Density, type EditorFont, type Theme, type UiScale } from "../lib/store";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
 import type { FrameProgramResponse } from "../lib/types.policy";
@@ -45,6 +45,21 @@ const THEMES: { value: Theme; label: string }[] = [
 const DENSITIES: { value: Density; label: string }[] = [
  { value: "comfortable", label: "Comfortable" },
  { value: "compact", label: "Compact" },
+];
+
+const UI_SCALES: { value: UiScale; label: string }[] = [
+ { value: "100%", label: "100% (default)" },
+ { value: "110%", label: "110%" },
+ { value: "125%", label: "125%" },
+ { value: "150%", label: "150%" },
+];
+
+const EDITOR_FONTS: { value: EditorFont; label: string }[] = [
+ { value: "12px", label: "12px (default)" },
+ { value: "13px", label: "13px" },
+ { value: "14px", label: "14px" },
+ { value: "16px", label: "16px" },
+ { value: "18px", label: "18px" },
 ];
 
 export function ScopeSection(): JSX.Element {
@@ -1190,6 +1205,10 @@ function AppearanceSection(): JSX.Element {
  const setTheme = useApp((state) => state.setTheme);
  const density = useApp((state) => state.density);
  const setDensity = useApp((state) => state.setDensity);
+ const editorFont = useApp((state) => state.editorFont);
+ const setEditorFont = useApp((state) => state.setEditorFont);
+ const uiScale = useApp((state) => state.uiScale);
+ const setUiScale = useApp((state) => state.setUiScale);
 
  return (
   <Card>
@@ -1210,6 +1229,32 @@ function AppearanceSection(): JSX.Element {
      {(id) => (
       <Select id={id} value={density} onChange={(event) => setDensity(event.target.value as Density)}>
        {DENSITIES.map((option) => (
+        <option key={option.value} value={option.value}>
+         {option.label}
+        </option>
+       ))}
+      </Select>
+     )}
+    </Field>
+    {/* The two text scales (burpsy-react-ui-7bd), Burp's separate knobs: the UI scale
+        multiplies every chrome text token; the editor font sizes the message editor
+        alone. Separate, because browser zoom scales everything together and the
+        editor's HTTP bytes are what an operator stares at for hours. */}
+    <Field label="UI text size" hint="Scales the interface text; the message editor is separate.">
+     {(id) => (
+      <Select id={id} value={uiScale} onChange={(event) => setUiScale(event.target.value as UiScale)}>
+       {UI_SCALES.map((option) => (
+        <option key={option.value} value={option.value}>
+         {option.label}
+        </option>
+       ))}
+      </Select>
+     )}
+    </Field>
+    <Field label="Editor font size" hint="Sizes the HTTP message editors only.">
+     {(id) => (
+      <Select id={id} value={editorFont} onChange={(event) => setEditorFont(event.target.value as EditorFont)}>
+       {EDITOR_FONTS.map((option) => (
         <option key={option.value} value={option.value}>
          {option.label}
         </option>

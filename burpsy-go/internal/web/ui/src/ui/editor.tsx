@@ -162,7 +162,7 @@ function nonPrintingEOLPlugin(rawRef: { current: string }) {
  * themes; CodeMirror's generated rules resolve them at paint time.
  */
 const editorTheme = EditorView.theme({
- "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "12px" },
+ "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "var(--editor-font-size, 12px)" },
  ".cm-content": { fontFamily: "var(--font-mono)", padding: "8px 0", caretColor: "var(--accent)" },
  ".cm-gutters": {
   backgroundColor: "var(--editor-gutter-bg)",
@@ -170,7 +170,7 @@ const editorTheme = EditorView.theme({
   border: "0",
   borderRight: "1px solid var(--editor-line)",
   fontFamily: "var(--font-mono)",
-  fontSize: "11px",
+  fontSize: "calc(var(--editor-font-size, 12px) - 1px)",
  },
  ".cm-activeLine": { backgroundColor: "var(--editor-active-line)" },
  ".cm-activeLineGutter": { backgroundColor: "var(--editor-active-line)", color: "var(--editor-fg)" },

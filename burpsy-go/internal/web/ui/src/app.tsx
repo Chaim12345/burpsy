@@ -68,6 +68,8 @@ function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (op
 
 function useThemeEffect(): void {
   const theme = useApp((state) => state.theme);
+  const uiScale = useApp((state) => state.uiScale);
+  const editorFont = useApp((state) => state.editorFont);
   useEffect(() => {
     const apply = () => document.documentElement.setAttribute("data-theme", resolveTheme(theme));
     apply();
@@ -76,6 +78,14 @@ function useThemeEffect(): void {
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
   }, [theme]);
+  // The two text scales (burpsy-react-ui-7bd) ride the same attribute pattern as the
+  // theme: one place on <html>, everything downstream reads the custom property.
+  useEffect(() => {
+    document.documentElement.style.setProperty("--ui-scale", uiScale);
+  }, [uiScale]);
+  useEffect(() => {
+    document.documentElement.style.setProperty("--editor-font-size", editorFont);
+  }, [editorFont]);
 }
 
 /**
