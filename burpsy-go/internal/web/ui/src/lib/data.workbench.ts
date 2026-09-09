@@ -132,6 +132,16 @@ export function useStopSequencerCapture() {
  });
 }
 
+/** Pause or resume the newest live capture (burpsy-react-ui-5kx). The server operates on the
+ * capture in front of the operator — the newest running one — like Burp's own pause button. */
+export function usePauseSequencerCapture(paused: boolean) {
+ const client = useQueryClient();
+ return useMutation<{ captured: SequencerCapture[]; note: string }, Error, void>({
+  mutationFn: () => api(`/api/sequencer/capture/${paused ? "pause" : "resume"}`, json("POST", {})),
+  onSuccess: () => void client.invalidateQueries({ queryKey: ["sequencer", "capture"] }),
+ });
+}
+
 /* --- decoder pipeline ----------------------------------------------------- */
 
 let stepSequence = 0;

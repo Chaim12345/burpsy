@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
-import { CircleStop, Play, Radio } from "lucide-react";
+import { CircleStop, Copy, Download, Pause, Play, Radio } from "lucide-react";
 import { toast } from "sonner";
+import { copyToClipboard, downloadText } from "../lib/api";
 import {
  SEQUENCER_ENCODINGS,
+ usePauseSequencerCapture,
  useSequencerAnalyse,
  useSequencerAnalyseTokens,
  useSequencerCapture,
@@ -419,6 +421,34 @@ export function SequencerPage(): JSX.Element {
    },
   );
 
+ // Pause/resume the live capture (burpsy-react-ui-5kx). The gate is between sends server-side,
+ // so the sample is never half-recorded; the capture keeps polling and shows the pause state.
+ const pauseCapture = usePauseSequencerCapture(!(capture.data?.paused ?? false));
+ const togglePause = () =>
+  pauseCapture.mutate(undefined, {
+   onSuccess: (result) => toast.message(result.note),
+   onError: (cause) => toast.error(`Could not ${capture.data?.paused ? "resume" : "pause"}: ${cause.message}`),
+  });
+
+ // Copy and save the sample (Burp's Copy tokens / Save tokens): the tokens are the capture's
+ // output, and handing them to Intruder or a later analysis is the point of keeping them.
+ const copyCaptured = () => {
+  if (captured.length === 0) {
+   toast.error("No tokens captured yet");
+   return;
+  }
+  void copyToClipboard(captured.join("\n"));
+  toast.success(`Copied ${captured.length.toLocaleString()} token(s)`);
+ };
+ const saveCaptured = () => {
+  if (captured.length === 0) {
+   toast.error("No tokens captured yet");
+   return;
+  }
+  downloadText(`sequencer-tokens-${capture.data?.id ?? "sample"}.txt`, captured.join("\n") + "\n");
+  toast.success(`Saved ${captured.length.toLocaleString()} token(s)`);
+ };
+
  return (
   <div className="page">
    <PageHeader
@@ -554,6 +584,13 @@ export function SequencerPage(): JSX.Element {
          {startCapture.isPending ? "Starting…" : "Start capture"}
         </Button>
         <Button
+         onClick={togglePause}
+         disabled={!capture.data?.capturing || pauseCapture.isPending}
+        >
+         {(capture.data?.paused ?? false) ? <Play size={14} /> : <Pause size={14} />}
+         {(capture.data?.paused ?? false) ? "Resume" : "Pause"}
+        </Button>
+        <Button
          variant="danger"
          disabled={stopCapture.isPending || !capture.data?.capturing}
          onClick={() =>
@@ -570,6 +607,14 @@ export function SequencerPage(): JSX.Element {
         >
          <CircleStop size={14} />
          Stop capture
+        </Button>
+        <Button onClick={copyCaptured} disabled={captured.length === 0}>
+         <Copy size={14} />
+         Copy tokens
+        </Button>
+        <Button onClick={saveCaptured} disabled={captured.length === 0}>
+         <Download size={14} />
+         Save tokens
         </Button>
        </Toolbar>
       </div>

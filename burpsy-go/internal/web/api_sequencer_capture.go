@@ -205,12 +205,21 @@ type sequencerCapture struct {
 	tokens    *sequencer.TokenList
 	// misses is bounded: a capture of 5000 requests against a misspelled cookie name would otherwise
 	// accumulate 5000 identical strings. The count is exact; the examples are a sample, and say so.
-	misses     []captureMiss
-	missCount  int
-	running    bool
-	startedMs  int64
-	endedMs    int64
-	stopReason string
+	misses    []captureMiss
+	missCount int
+	running   bool
+	// pauseRequested is what the API writes; pausedAtGate is what the loop reports once it has
+	// actually stopped between sends. The split is the honest part of the feature: a pause lands
+	// between sends, so the one send already on the wire when the request arrives still records —
+	// and until the loop reaches the gate, the capture is NOT paused, whatever the request said.
+	// Reporting the request flag would let the view claim a state the loop is not in, and a
+	// sample that grows "while paused" is exactly the lie this project does not ship.
+	// (burpsy-react-ui-5kx)
+	pauseRequested bool
+	pausedAtGate   bool
+	startedMs      int64
+	endedMs        int64
+	stopReason     string
 }
 
 // maxRecordedMisses bounds the miss examples kept per capture. The count is never truncated.
@@ -222,11 +231,14 @@ const maxRecordedMisses = 20
 // against `Total` is what turns "40 tokens" into "40 of the 200 asked for". `Running` distinguishes a
 // capture still filling from one that finished. `StopReason` names why a short capture is short.
 type captureView struct {
-	ID        uint64   `json:"id"`
-	TaskID    uint64   `json:"task_id"`
-	Target    string   `json:"target"`
-	Location  string   `json:"location"`
-	Capturing bool     `json:"capturing"`
+	ID        uint64 `json:"id"`
+	TaskID    uint64 `json:"task_id"`
+	Target    string `json:"target"`
+	Location  string `json:"location"`
+	Capturing bool   `json:"capturing"`
+	// Paused is only meaningful while Capturing is true: a finished capture is not paused,
+	// whatever the field's historical value, and the UI must not offer Resume on one.
+	Paused    bool     `json:"paused"`
 	Requested int      `json:"requested"`
 	Attempts  int      `json:"attempts"`
 	Total     int      `json:"total"`
@@ -252,6 +264,7 @@ func (c *sequencerCapture) view() captureView {
 		Target:          c.target,
 		Location:        c.location.Describe(),
 		Capturing:       c.running,
+		Paused:          c.running && c.pausedAtGate,
 		Requested:       c.requested,
 		Attempts:        c.attempts,
 		Total:           len(tokens),
@@ -479,6 +492,25 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 		default:
 		}
 
+		// A paused capture waits here — checking both the gate and cancellation each tick, so a
+		// stop issued while paused is honoured within 50ms rather than after the operator gets
+		// bored. The pause gates between sends, never inside one: the response in flight is
+		// always recorded whole.
+		if capture.isPaused() {
+			capture.gatePause(true)
+			for capture.isPaused() {
+				select {
+				case <-ctx.Done():
+					capture.finish("stopped by the operator while paused after " + strconv.Itoa(capture.attempt()) + " of " +
+						strconv.Itoa(capture.requested) + " requests")
+					task.Stop(capture.breakdown(), capture.reason())
+					return
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+			capture.gatePause(false)
+		}
+
 		sent, err := auth.Send(ctx, request)
 		response, elapsed := sent.Raw, sent.Duration
 		attempt := capture.recordAttempt()
@@ -557,6 +589,35 @@ func (c *sequencerCapture) miss(attempt int, reason string) {
 	}
 }
 
+// setPaused flips the pause gate. Reports whether the capture was in a state where the request
+// could apply: pausing a finished capture is a 409, not a silent success, because the UI offering
+// Resume on a dead capture is worse than the error.
+func (c *sequencerCapture) setPaused(paused bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.running {
+		return false
+	}
+	c.pauseRequested = paused
+	return true
+}
+
+// isPaused reports whether the loop should hold at the gate: the request flag, read under the
+// same mutex everything else uses.
+func (c *sequencerCapture) isPaused() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pauseRequested
+}
+
+// gatePause records that the loop has reached the gate and is holding (or has resumed and is
+// going again). Called by the loop, so the wire's paused flag tracks the loop, not the handler.
+func (c *sequencerCapture) gatePause(held bool) {
+	c.mu.Lock()
+	c.pausedAtGate = held
+	c.mu.Unlock()
+}
+
 func (c *sequencerCapture) finish(reason string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -601,7 +662,8 @@ func (s *Server) handleSequencerCapture(w http.ResponseWriter, r *http.Request) 
 	// is POST; reading a token list does not, so it is GET. Unguarded, `GET .../stop` answered
 	// {"stopped":true} — a state change reported for a request that could not have caused one.
 	switch {
-	case path == "stop" && r.Method != http.MethodPost, path != "stop" && r.Method != http.MethodGet:
+	case (path == "stop" || path == "pause" || path == "resume") && r.Method != http.MethodPost,
+		path != "stop" && path != "pause" && path != "resume" && r.Method != http.MethodGet:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -609,6 +671,31 @@ func (s *Server) handleSequencerCapture(w http.ResponseWriter, r *http.Request) 
 
 	if path == "stop" {
 		s.stopCaptures(w)
+		return
+	}
+	if path == "pause" || path == "resume" {
+		// The most recent live capture is the one the UI is looking at; pausing by explicit id
+		// would need a picker this page does not have, and Burp's pause button operates on the
+		// capture in front of the operator too.
+		live := s.captureSet().running()
+		if len(live) == 0 {
+			http.Error(w, "no capture is running, so nothing to "+path, http.StatusConflict)
+			return
+		}
+		target := live[len(live)-1]
+		want := path == "pause"
+		if !target.setPaused(want) {
+			http.Error(w, "the capture finished before the request landed", http.StatusConflict)
+			return
+		}
+		views := make([]captureView, 0, len(live))
+		for _, c := range live {
+			views = append(views, c.view())
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"captured": views,
+			"note":     "capture " + strconv.FormatUint(target.id, 10) + " " + path + "d",
+		})
 		return
 	}
 	if path == "" {

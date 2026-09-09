@@ -248,6 +248,8 @@ export interface SequencerCapture {
  /** The token location, as one line — "cookie SESSIONID", "body /csrf=([a-f0-9]+)/". */
  location: string;
  capturing: boolean;
+ /** Only meaningful while capturing: a finished capture is not paused, whatever the wire says. */
+ paused: boolean;
  requested: number;
  /** Requests sent, as distinct from tokens collected. */
  attempts: number;
