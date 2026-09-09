@@ -106,6 +106,64 @@ function mimeOptions(items: OrganizerItem[]): string[] {
  return [...seen].sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * The text a search term runs over: the row's own title and note, plus the resolved exchange's
+ * host, path and method — the fields an operator names when describing what they saved. An
+ * unresolved row contributes only its note and title, because that is all it has.
+ */
+function rowText(item: OrganizerItem): string {
+ const parts = [item.title, item.note, item.host ?? "", item.path ?? "", item.method ?? ""];
+ return parts.join("\n");
+}
+
+/**
+ * The file extension of the saved response's path, lowercased, empty when there is no path or no
+ * extension. The extension is the last dot-segment of the path; a trailing dot or a dotless final
+ * segment yields "" so it cannot match a real extension filter.
+ */
+function rowExtension(item: OrganizerItem): string {
+ const path = item.path ?? "";
+ const slash = path.lastIndexOf("/");
+ const last = slash >= 0 ? path.slice(slash + 1) : path;
+ const dot = last.lastIndexOf(".");
+ if (dot <= 0) return "";
+ const ext = last.slice(dot + 1).toLowerCase();
+ return /^[a-z0-9]{1,10}$/.test(ext) ? ext : "";
+}
+
+function matchesTerm(item: OrganizerItem, raw: string, regex: boolean, caseSensitive: boolean, negative: boolean): boolean {
+ if (raw.trim() === "") return true;
+ const haystack = rowText(item);
+ // An uncompileable regex matches nothing rather than everything: a broken filter that silently
+ // passes would read as "no rows matched" on the negative side and hide the breakage.
+ const hit = regex
+  ? safeRegexTest(raw, caseSensitive, haystack)
+  : caseSensitive
+    ? haystack.includes(raw)
+    : haystack.toLowerCase().includes(raw.toLowerCase());
+ return negative ? !hit : hit;
+}
+
+function safeRegexTest(pattern: string, caseSensitive: boolean, haystack: string): boolean {
+ try {
+  return new RegExp(pattern, caseSensitive ? "" : "i").test(haystack);
+ } catch {
+  return false;
+ }
+}
+
+/** The distinct file extensions present on resolved rows, sorted. The option list only ever
+ * offers what the rows carry, so a filter value that nothing matches cannot be selected. */
+function extensionOptions(items: OrganizerItem[]): string[] {
+ const seen = new Set<string>();
+ for (const item of items) {
+  if (!item.resolved) continue;
+  const ext = rowExtension(item);
+  if (ext !== "") seen.add(ext);
+ }
+ return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
 function matchesMime(item: OrganizerItem, want: string): boolean {
  if (want === "all") return true;
  if (!item.has_response) return false;
@@ -131,10 +189,25 @@ export function OrganizerPage(): JSX.Element {
  const [mimeFilter, setMimeFilter] = useState("all");
  /** The user-applied workflow status to filter on — Burp's "Filter by status", a different axis from the HTTP status class above. */
  const [workflowFilter, setWorkflowFilter] = useState<WorkflowStatus | "all">("all");
+ // Burp's remaining filter axes (burpsy-react-ui-6a2l): a search term over the row's own text,
+ // with regex / case-sensitive / negative modes; the response's file extension; and the
+ // annotation axes (has a note / has a highlight).
+ const [term, setTerm] = useState("");
+ const [debouncedTerm, setDebouncedTerm] = useState("");
+ const [termRegex, setTermRegex] = useState(false);
+ const [termCase, setTermCase] = useState(false);
+ const [termNegative, setTermNegative] = useState(false);
+ const [extensionFilter, setExtensionFilter] = useState("all");
+ const [annotatedOnly, setAnnotatedOnly] = useState(false);
 
  const items = useMemo(() => data?.items ?? [], [data]);
  const collections = useMemo(() => data?.collections ?? [], [data]);
  const mimes = useMemo(() => mimeOptions(items), [items]);
+
+ useEffect(() => {
+  const timer = setTimeout(() => setDebouncedTerm(term), 250);
+  return () => clearTimeout(timer);
+ }, [term]);
 
  /**
   * The collection being viewed: "all" is the whole organizer, 0 the inbox, an id one group. This
@@ -148,7 +221,14 @@ export function OrganizerPage(): JSX.Element {
  const [confirmDeleteCollection, setConfirmDeleteCollection] = useState<OrganizerCollection | null>(null);
  const [newCollectionName, setNewCollectionName] = useState("");
 
- const filtering = inScopeOnly || statusClass !== "all" || mimeFilter !== "all" || workflowFilter !== "all";
+ const filtering =
+  inScopeOnly ||
+  statusClass !== "all" ||
+  mimeFilter !== "all" ||
+  workflowFilter !== "all" ||
+  debouncedTerm.trim() !== "" ||
+  extensionFilter !== "all" ||
+  annotatedOnly;
 
  /**
   * The filtered rows, plus how many were kept only because they could not be judged.
@@ -177,10 +257,16 @@ export function OrganizerPage(): JSX.Element {
    // An item with no status on the wire predates the field; it reads as "new" (the same fallback
    // the Go load path applies), so the filter matches it against "new" rather than hiding it.
    if (workflowFilter !== "all" && (item.workflow_status ?? "new") !== workflowFilter) continue;
+   if (!matchesTerm(item, debouncedTerm, termRegex, termCase, termNegative)) continue;
+   if (extensionFilter !== "all" && rowExtension(item) !== extensionFilter) continue;
+   // "none" is the highlight picker's no-colour value, not an annotation — a row carrying it
+   // has no highlight, whatever the string's length says.
+   const annotated = item.note.trim() !== "" || ((item.highlight ?? "").trim() !== "" && item.highlight !== "none");
+   if (annotatedOnly && !annotated) continue;
    kept.push(item);
   }
   return { visible: kept, unjudged: exempt };
- }, [items, filtering, inScopeOnly, statusClass, mimeFilter, workflowFilter, collectionView]);
+ }, [items, filtering, inScopeOnly, statusClass, mimeFilter, workflowFilter, collectionView, debouncedTerm, termRegex, termCase, termNegative, extensionFilter, annotatedOnly]);
 
  // A MIME option can disappear when the rows behind it are removed, which would leave the filter
  // pinned to a value nothing can match — an empty table with no visible reason. Fall back to "all".
@@ -614,6 +700,25 @@ export function OrganizerPage(): JSX.Element {
        </Select>
       )}
      </Field>
+     <Field label="Search term" hint={termRegex ? "Regular expression over title, note, host, path and method" : "Text over title, note, host, path and method"}>
+      {(id) => <Input id={id} value={term} onChange={(event) => setTerm(event.target.value)} placeholder="search saved exchanges…" style={{ maxWidth: "var(--w-md)" }} />}
+     </Field>
+     <Checkbox label="Regex" checked={termRegex} onCheckedChange={setTermRegex} />
+     <Checkbox label="Case sensitive" checked={termCase} onCheckedChange={setTermCase} />
+     <Checkbox label="Negative" checked={termNegative} onCheckedChange={setTermNegative} />
+     <Field label="Extension">
+      {(id) => (
+       <Select id={id} value={extensionFilter} onChange={(event) => setExtensionFilter(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+        <option value="all">Any</option>
+        {extensionOptions(items).map((ext) => (
+         <option key={ext} value={ext}>
+          .{ext}
+         </option>
+        ))}
+       </Select>
+      )}
+     </Field>
+     <Checkbox label="Annotated only" checked={annotatedOnly} onCheckedChange={setAnnotatedOnly} />
      {filtering ? (
       <>
        <Button
@@ -624,6 +729,12 @@ export function OrganizerPage(): JSX.Element {
          setStatusClass("all");
          setMimeFilter("all");
          setWorkflowFilter("all");
+         setTerm("");
+         setTermRegex(false);
+         setTermCase(false);
+         setTermNegative(false);
+         setExtensionFilter("all");
+         setAnnotatedOnly(false);
         }}
        >
         <RotateCcw size={13} />
