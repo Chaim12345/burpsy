@@ -120,6 +120,12 @@ type CapturedExchange struct {
 	// a WebSocket handshake the proxy rewrote before forwarding, and a response the operator
 	// dropped so the client received nothing.
 	Notes *string
+	// Highlight is the operator's colour tag on this capture, "" when unset — the
+	// operator's intercept annotation riding to history (burpsy-react-ui-5q8u). Same
+	// carry-here rule as Notes: the store's observers run inside AddExchange, so a
+	// highlight attached afterwards is one none of them ever record. Same vocabulary
+	// as core.ValidHighlights.
+	Highlight string
 }
 
 // ErrNoResponse is returned by Record when there are no response bytes to capture.
@@ -214,9 +220,10 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// and filter have anything to work with at all.
 		Mime: core.MimeEssence(x.Response),
 		// Same seam as Mime: the bytes are here, so the derived columns are decided here.
-		Cookies: core.CookieNames(x.Response),
-		Title:   core.ResponseTitle(x.Response),
-		Notes:   x.Notes,
+		Cookies:   core.CookieNames(x.Response),
+		Title:     core.ResponseTitle(x.Response),
+		Notes:     x.Notes,
+		Highlight: x.Highlight,
 		// The per-exchange source wins when it is set, so a surface with a default can still record one
 		// exchange as something else; otherwise the handle's default applies. Neither is substituted for
 		// the other when both are unset — unattributed is a real answer, see above.

@@ -274,6 +274,14 @@ export function OrganizerPage(): JSX.Element {
   if (mimeFilter !== "all" && !mimes.includes(mimeFilter)) setMimeFilter("all");
  }, [mimes, mimeFilter]);
 
+ // The extension select has the same failure shape — its options derive from the current rows —
+ // so it gets the same fallback. Without it, deleting the last .rss row leaves the filter on
+ // .rss forever, showing an empty list that no visible control explains.
+ const extensions = useMemo(() => extensionOptions(items), [items]);
+ useEffect(() => {
+  if (extensionFilter !== "all" && !extensions.includes(extensionFilter)) setExtensionFilter("all");
+ }, [extensions, extensionFilter]);
+
  const selected = useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId]);
  const dirty = draft !== null && JSON.stringify(draft) !== baseline;
 
