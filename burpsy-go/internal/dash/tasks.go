@@ -556,6 +556,30 @@ func (r *Registry) CancelKind(kind Kind) int {
 	return len(cancels)
 }
 
+// Delete removes one task from the list, and reports whether it did (burpsy-react-ui-r6q): Burp's
+// "Delete task". A RUNNING task is refused, not deleted — a list entry that vanishes while its work
+// keeps going is a lie about what is happening now, which is the one thing this registry exists to
+// tell the truth about. Cancel the run first, then the row can go. An unknown id answers false so
+// the API can say "not found" rather than "deleted".
+func (r *Registry) Delete(id uint64) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, t := range r.tasks {
+		if t.ID != id {
+			continue
+		}
+		if t.Running() {
+			return false
+		}
+		r.tasks = append(r.tasks[:i], r.tasks[i+1:]...)
+		return true
+	}
+	return false
+}
+
 // RunningOfKind returns the ids of running tasks of this kind, newest last. Lets a route report which
 // run it is talking about instead of asserting that one exists.
 func (r *Registry) RunningOfKind(kind Kind) []uint64 {

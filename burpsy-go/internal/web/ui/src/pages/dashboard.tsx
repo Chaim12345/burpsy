@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Copy, FolderTree, Plus, Radar, Search, Square } from "lucide-react";
+import { Copy, FolderTree, MoreVertical, Plus, Radar, Search, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
@@ -12,8 +12,9 @@ import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/ty
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Switch, Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/primitives";
 import { DetailList } from "../ui/json";
+import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
-import type { MenuGroup } from "../ui/menu";
+import { useDeleteTask, useScanTaskAgain } from "../lib/data.attack";
 
 function taskTone(state: string): "good" | "bad" | "warn" | "info" {
  const value = state.toLowerCase();
@@ -152,6 +153,38 @@ function TaskTile({
 }): JSX.Element {
  const cancel = useCancelTask();
  const setLive = useSetScannerLive();
+ const again = useScanTaskAgain();
+ const remove = useDeleteTask();
+ // The task row's options menu (burpsy-react-ui-r6q): Burp's taskListEntryOptionsMenu, minus the
+ // pieces that are their own tracked issues (pause/resume is 8gw; settings live on the detail
+ // pane). Scan again re-runs a crawl at its target; Delete removes a finished row — the server
+ // refuses a running one with 409, and the toast passes that reason through.
+ const menu: MenuGroup[] = task.id === -1 ? [] : [
+  {
+   id: "task-options",
+   actions: [
+    {
+     id: "scan-again",
+     label: "Scan again",
+     onSelect: () =>
+      again.mutate(task.id, {
+       onSuccess: () => toast.success(`Scan started again on ${task.target}`),
+       onError: (cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)),
+      }),
+    },
+    {
+     id: "delete-task",
+     label: "Delete task",
+     danger: true,
+     onSelect: () =>
+      remove.mutate(task.id, {
+       onSuccess: () => toast.success(`Task ${task.id} removed from the list`),
+       onError: (cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)),
+      }),
+    },
+   ],
+  },
+ ];
  // The tile is a div, not a button: it owns an IconButton and a Switch, and a button wrapping
  // either is invalid HTML, fails the axe nested-interactive rule, and selects the tile when the
  // operator only meant to flip the switch. Only the title selects.
@@ -172,6 +205,16 @@ function TaskTile({
      >
       <Square size={12} />
      </IconButton>
+    ) : null}
+    {menu.length > 0 ? (
+     <DropdownMenu
+      groups={menu}
+      trigger={
+       <IconButton label={`Options for task ${task.id} on ${task.target}`} size="small">
+        <MoreVertical size={12} />
+       </IconButton>
+      }
+     />
     ) : null}
    </div>
    <div className="task-tile-state">

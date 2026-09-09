@@ -342,6 +342,23 @@ test.describe("data views", () => {
   expect(consoleErrors).toEqual([]);
  });
 
+ test("a finished dashboard task offers scan again and delete", async ({ page, consoleErrors }) => {
+  // burpsy-react-ui-r6q. The harness's seeded audit is a real finished task; its tile menu must
+  // offer the row actions, and Delete must actually remove the row (Scan again on an audit answers
+  // 409 by design — the row does not carry the exchange id — which the toast passes through, so
+  // this asserts the delete path end to end instead).
+  await gotoRoute(page, route("dashboard"));
+  const auditTile = page.locator(".task-tile", { hasText: "audit" }).first();
+  await expect(auditTile).toBeVisible();
+
+  await auditTile.getByRole("button", { name: /^Options for task/ }).click();
+  await page.getByRole("menuitem", { name: "Delete task" }).click();
+
+  await expect(page.getByText(/removed from the list/)).toBeVisible();
+  await expect(auditTile).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
+ });
+
  test("the status bar reports the stored bytes the API reports", async ({ page }) => {
   // Cheap, and it is the one place the shell claims a number that comes from the server rather than
   // from the store — so it is where a broken /api/stats would show up as a plausible-looking dash.

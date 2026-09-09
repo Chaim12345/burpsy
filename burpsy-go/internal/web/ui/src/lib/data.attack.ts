@@ -7,16 +7,16 @@
  */
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { api, json } from "./api";
-import { keys, useResource } from "./data";
+import { keys, useInvalidate, useResource } from "./data";
 import type { IssueTriagePatch } from "./issue-triage";
 import type {
-  AuditResult,
-  InterceptListState,
-  InterceptStateDetail,
-  IssuesDetail,
-  LiveAuditState,
-  ScannerConfigsResponse,
-  ScannerCoverage,
+ AuditResult,
+ InterceptListState,
+ InterceptStateDetail,
+ IssuesDetail,
+ LiveAuditState,
+ ScannerConfigsResponse,
+ ScannerCoverage,
 } from "./types.attack";
 
 /**
@@ -31,10 +31,10 @@ import type {
  * nothing — the single decorative control the parity audit went looking for.
  */
 export type InterceptDirection =
-  | "requests"
-  | "responses"
-  | "websocket_to_server"
-  | "websocket_to_client";
+ | "requests"
+ | "responses"
+ | "websocket_to_server"
+ | "websocket_to_client";
 
 /**
  * Keys for the attack-area resources. The intercept-rules key keeps the "intercept" prefix the event
@@ -42,7 +42,7 @@ export type InterceptDirection =
  * refreshes these views.
  */
 export const attackKeys = {
-  interceptRules: (dir: InterceptDirection) => ["intercept", "rules", dir] as const,
+ interceptRules: (dir: InterceptDirection) => ["intercept", "rules", dir] as const,
 };
 
 /* --- intercept ------------------------------------------------------------ */
@@ -55,16 +55,16 @@ export const attackKeys = {
  * row to appear, so this is the one surface where "as it happens" and "within a beat" differ.
  */
 export function useInterceptDetailed(pollMs = 1_500): UseQueryResult<InterceptStateDetail> {
-  return useQuery({
-    queryKey: keys.intercept,
-    queryFn: ({ signal }) => api<InterceptStateDetail>("/api/intercept", { signal }),
-    refetchInterval: pollMs,
-    staleTime: 0,
-  });
+ return useQuery({
+  queryKey: keys.intercept,
+  queryFn: ({ signal }) => api<InterceptStateDetail>("/api/intercept", { signal }),
+  refetchInterval: pollMs,
+  staleTime: 0,
+ });
 }
 
 export const useInterceptRules = (dir: InterceptDirection) =>
-  useResource<InterceptListState>(attackKeys.interceptRules(dir), `/api/intercept/rules/${dir}`);
+ useResource<InterceptListState>(attackKeys.interceptRules(dir), `/api/intercept/rules/${dir}`);
 
 /**
  * Save one direction's rule list. The server compiles every pattern and refuses the whole list on a
@@ -72,14 +72,14 @@ export const useInterceptRules = (dir: InterceptDirection) =>
  * untouched rather than half-applying rows — a bad pattern is something to fix, not to retype.
  */
 export function useSaveInterceptRules(dir: InterceptDirection) {
-  const client = useQueryClient();
-  return useMutation<InterceptListState, Error, Pick<InterceptListState, "active" | "rules">>({
-    mutationFn: (state) => api<InterceptListState>(`/api/intercept/rules/${dir}`, json("PUT", state)),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: attackKeys.interceptRules(dir) });
-      void client.invalidateQueries({ queryKey: keys.intercept });
-    },
-  });
+ const client = useQueryClient();
+ return useMutation<InterceptListState, Error, Pick<InterceptListState, "active" | "rules">>({
+  mutationFn: (state) => api<InterceptListState>(`/api/intercept/rules/${dir}`, json("PUT", state)),
+  onSuccess: () => {
+   void client.invalidateQueries({ queryKey: attackKeys.interceptRules(dir) });
+   void client.invalidateQueries({ queryKey: keys.intercept });
+  },
+ });
 }
 
 /**
@@ -91,15 +91,15 @@ export function useSaveInterceptRules(dir: InterceptDirection) {
  * flag is a parameter here rather than a decision made for them.
  */
 export function useForwardHeld() {
-  const client = useQueryClient();
-  return useMutation<unknown, Error, { id: number; raw: string; fixContentLength: boolean; holdResponse?: boolean }>({
-    mutationFn: ({ id, raw, fixContentLength, holdResponse }) =>
-      api<unknown>(
-        `/api/intercept/${id}/forward`,
-        json("POST", { raw, fix_content_length: fixContentLength, hold_response: holdResponse ?? false }),
-      ),
-    onSuccess: () => void client.invalidateQueries({ queryKey: keys.intercept }),
-  });
+ const client = useQueryClient();
+ return useMutation<unknown, Error, { id: number; raw: string; fixContentLength: boolean; holdResponse?: boolean }>({
+  mutationFn: ({ id, raw, fixContentLength, holdResponse }) =>
+   api<unknown>(
+    `/api/intercept/${id}/forward`,
+    json("POST", { raw, fix_content_length: fixContentLength, hold_response: holdResponse ?? false }),
+   ),
+  onSuccess: () => void client.invalidateQueries({ queryKey: keys.intercept }),
+ });
 }
 
 /* --- scanner -------------------------------------------------------------- */
@@ -117,21 +117,44 @@ export const useIssuesDetailed = () => useResource<IssuesDetail>(keys.issues, "/
  * same server-pushed `issues` events do, plus the dashboard, whose severity counts triage moves.
  */
 export function useIssueTriage() {
-  const client = useQueryClient();
-  const done = () => {
-    void client.invalidateQueries({ queryKey: keys.issues });
-    void client.invalidateQueries({ queryKey: keys.dashboard });
-  };
-  return {
-    triage: useMutation<unknown, Error, { id: number; patch: IssueTriagePatch }>({
-      mutationFn: ({ id, patch }) => api<unknown>(`/api/issues/${id}`, json("PUT", patch)),
-      onSuccess: done,
-    }),
-    remove: useMutation<unknown, Error, number>({
-      mutationFn: (id) => api<unknown>(`/api/issues/${id}`, { method: "DELETE" }),
-      onSuccess: done,
-    }),
-  };
+ const client = useQueryClient();
+ const done = () => {
+  void client.invalidateQueries({ queryKey: keys.issues });
+  void client.invalidateQueries({ queryKey: keys.dashboard });
+ };
+ return {
+  triage: useMutation<unknown, Error, { id: number; patch: IssueTriagePatch }>({
+   mutationFn: ({ id, patch }) => api<unknown>(`/api/issues/${id}`, json("PUT", patch)),
+   onSuccess: done,
+  }),
+  remove: useMutation<unknown, Error, number>({
+   mutationFn: (id) => api<unknown>(`/api/issues/${id}`, { method: "DELETE" }),
+   onSuccess: done,
+  }),
+ };
+}
+
+/** POST /api/tasks/{id}/again — Burp's "Scan again" on a dashboard task row
+ * (burpsy-react-ui-r6q). Only crawl tasks re-run: the re-run goes through the same start path the
+ * New scan dialog uses, and the server answers 409 naming the refusal for any other kind, which
+ * the toast passes through rather than flattening into a generic failure. */
+export function useScanTaskAgain() {
+ const invalidate = useInvalidate();
+ return useMutation<unknown, Error, number>({
+  mutationFn: (id) => api<unknown>(`/api/tasks/${id}/again`, { method: "POST" }),
+  onSuccess: () => invalidate([keys.dashboard, keys.crawls]),
+ });
+}
+
+/** DELETE /api/tasks/{id} — remove a finished task's row from the list. The row is burpsy's own
+ * state about past work, so no confirmation: the findings, exchanges and coverage the row pointed
+ * at live elsewhere and survive it. A running task answers 409 and the toast says to cancel first. */
+export function useDeleteTask() {
+ const invalidate = useInvalidate();
+ return useMutation<unknown, Error, number>({
+  mutationFn: (id) => api<unknown>(`/api/tasks/${id}`, { method: "DELETE" }),
+  onSuccess: () => invalidate([keys.dashboard]),
+ });
 }
 
 export const useScannerConfigs = () => useResource<ScannerConfigsResponse>(keys.scannerConfigs, "/api/scanner/configs");
@@ -141,12 +164,12 @@ export const useScannerCoverage = () => useResource<ScannerCoverage>(keys.scanne
 /** Polls like Intercept: the sweep's swept/behind counters move as traffic is captured, and an
  * operator watching progress should see it advance between event-stream bursts. */
 export function useScannerLive(pollMs = 2_000): UseQueryResult<LiveAuditState> {
-  return useQuery({
-    queryKey: keys.scannerLive,
-    queryFn: ({ signal }) => api<LiveAuditState>("/api/scanner/live", { signal }),
-    refetchInterval: pollMs,
-    staleTime: 0,
-  });
+ return useQuery({
+  queryKey: keys.scannerLive,
+  queryFn: ({ signal }) => api<LiveAuditState>("/api/scanner/live", { signal }),
+  refetchInterval: pollMs,
+  staleTime: 0,
+ });
 }
 
 /**
@@ -156,11 +179,11 @@ export function useScannerLive(pollMs = 2_000): UseQueryResult<LiveAuditState> {
  * collapsing the two would silently widen every toggle back to the whole engagement scope.
  */
 export function useSetScannerLive() {
-  const client = useQueryClient();
-  return useMutation<LiveAuditState, Error, { enabled: boolean; query?: string }>({
-    mutationFn: (body) => api<LiveAuditState>("/api/scanner/live", json("POST", body)),
-    onSuccess: () => void client.invalidateQueries({ queryKey: keys.scannerLive }),
-  });
+ const client = useQueryClient();
+ return useMutation<LiveAuditState, Error, { enabled: boolean; query?: string }>({
+  mutationFn: (body) => api<LiveAuditState>("/api/scanner/live", json("POST", body)),
+  onSuccess: () => void client.invalidateQueries({ queryKey: keys.scannerLive }),
+ });
 }
 
 /**
@@ -171,13 +194,13 @@ export function useSetScannerLive() {
  * should be handed as if it were current state.
  */
 export function useRunAudit() {
-  const client = useQueryClient();
-  return useMutation<AuditResult, Error, { exchangeId: number; config?: string }>({
-    mutationFn: ({ exchangeId, config }) =>
-      api<AuditResult>(`/api/audit/${exchangeId}`, json("POST", config ? { config } : {})),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: keys.issues });
-      void client.invalidateQueries({ queryKey: keys.dashboard });
-    },
-  });
+ const client = useQueryClient();
+ return useMutation<AuditResult, Error, { exchangeId: number; config?: string }>({
+  mutationFn: ({ exchangeId, config }) =>
+   api<AuditResult>(`/api/audit/${exchangeId}`, json("POST", config ? { config } : {})),
+  onSuccess: () => {
+   void client.invalidateQueries({ queryKey: keys.issues });
+   void client.invalidateQueries({ queryKey: keys.dashboard });
+  },
+ });
 }

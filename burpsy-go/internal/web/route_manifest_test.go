@@ -614,8 +614,17 @@ var manifest = map[string]route{
 		summary: "proxy counters, tool counts, and the DOM engine's admission state",
 	},
 	"/api/tasks/": {
-		methods: []string{"POST"}, risk: riskLocal, subPath: "{id}/cancel",
-		summary: "POST {id}/cancel: ask a running task to stop; an unknown or finished id answers 404",
+		// DELETE is riskLocal, not riskDestructive, and the line matters: it removes a ROW from the
+		// task list, not any evidence the row pointed at. The crawl's findings, the exchanges it
+		// captured and its coverage report all live elsewhere and survive it — the list entry is
+		// burpsy's own state about past work, which is riskLocal's definition. POST {id}/again is
+		// riskLocal too by its route: it starts a crawl, but /api/crawl — the same act from the New
+		// scan dialog — is classified by what the crawl does after the start, which the confirmation
+		// gate already covers at its own route.
+		methods: []string{"POST", "DELETE"}, risk: riskLocal, subPath: "1",
+		summary: "POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
+			"POST {id}/again re-runs a crawl task at its target (only crawl kind re-runs; 409 otherwise); " +
+			"DELETE {id} removes a finished task's row (a running task answers 409 — cancel first)",
 	},
 	"/api/tools/compare": {
 		methods: []string{"POST"}, risk: riskRead,
