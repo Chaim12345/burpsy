@@ -66,6 +66,7 @@ type wireRunReport struct {
 		Attempts     []struct {
 			Ordinal int `json:"ordinal"`
 		} `json:"attempts"`
+		AutoPaused int `json:"auto_paused"`
 	} `json:"report"`
 	Examples    []wireBucketExample  `json:"examples"`
 	PayloadSets []wirePayloadSetView `json:"payload_sets"`
@@ -799,5 +800,75 @@ func TestIntruderRunAppliesURLEncodeCharacters(t *testing.T) {
 	}
 	if !seen {
 		t.Fatalf("no example carries the encoded payload; examples: %+v", out.Examples)
+	}
+}
+
+// Auto-pause through the wire (burpsy-react-ui-8f2): an expression list plus mode reaches the
+// attack, the predicate halts the send stream, and the report carries auto_paused — the
+// account of who pressed the button.
+func TestIntruderRunAutoPausesOnTheExpression(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	id := requestMessage(t, store, "GET /search?q=a HTTP/1.1\r\nHost: shop.test\r\n\r\n")
+
+	var points []wirePoint
+	postJSONInto(t, srv, "/api/intruder/points", map[string]any{"msg_id": id, "all": false}, &points)
+	var qIndex int = -1
+	for i := range points {
+		if points[i].Kind == "url_param_value" && points[i].Label == "q" {
+			qIndex = i
+			break
+		}
+	}
+	if qIndex < 0 {
+		t.Fatalf("no q point in %+v", points)
+	}
+
+	// The echo target reflects the payload, so payload "LOCKME" makes every response after
+	// it carry the expression: with an appears-mode list naming it, the attack must pause —
+	// the report's auto_paused says so, and the resumed attack's counts show the hold
+	// happened (fewer enumerated than planned is the bound here; the assertion that matters
+	// is the non-zero fired count through the wire shape).
+	var out wireRunReport
+	code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":       id,
+		"target":       "http://" + addr,
+		"mode":         "sniper",
+		"points":       []int{qIndex},
+		"payload_sets": [][]string{{"LOCKME"}},
+		"auto_pause":   map[string]any{"expressions": []string{"LOCKME"}, "simple": true},
+	}, &out)
+	if code != http.StatusOK {
+		t.Fatalf("run: %d", code)
+	}
+	if out.Report.AutoPaused == 0 {
+		t.Fatalf("auto_paused = 0 through the wire; the predicate did not reach the attack")
+	}
+}
+
+// An uncompilable regex expression is refused at the run endpoint, not swallowed: an
+// auto-pause that never fires is a control that lies by omission.
+func TestIntruderRunRefusesAnUncompilableAutoPause(t *testing.T) {
+	addr, _ := recordServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	id := requestMessage(t, store, "GET /search?q=a HTTP/1.1\r\nHost: shop.test\r\n\r\n")
+
+	rec := postJSON(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id":       id,
+		"target":       "http://" + addr,
+		"mode":         "sniper",
+		"points":       []int{0},
+		"payload_sets": [][]string{{"x"}},
+		"auto_pause":   map[string]any{"expressions": []string{"([bad"}, "simple": false},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("uncompilable auto-pause answered %d, want 400", rec.Code)
 	}
 }

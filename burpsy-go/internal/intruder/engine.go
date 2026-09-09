@@ -43,6 +43,7 @@ import (
 	"regexp"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -84,6 +85,100 @@ type Grep struct {
 
 // IsEmpty reports whether neither pattern was configured.
 func (g *Grep) IsEmpty() bool { return g.MatchRe == nil && g.ExtractRe == nil }
+
+// AutoPause is Burp's auto-pause (configure-attack/settings.html): pause the attack when a
+// chosen expression appears in — or goes missing from — a response. It is a predicate over
+// the same bytes Grep.run reads, evaluated in the same place, and its action is the Control
+// the attack already carries: nothing about pausing is new, only the trigger.
+//
+// # Appears vs missing
+//
+// Appears pauses when ANY expression matches — Burp's two list modes are "pause if an
+// expression in the list appears" and "pause if an expression in the list is missing", and
+// the missing mode is the complement over the same list: pause when NO expression matches.
+// One predicate each way over one list; two independent knobs would be two ways to describe
+// the same four states, three of them contradictory.
+//
+// # When it fires
+//
+// On the FIRST qualifying response — the lockout page or the success indicator is the event,
+// and the requests after it are the damage. Burp re-arms on resume so an operator can step
+// past a hit; ReArm does that here, and the report records how many times it fired (an
+// attack paused three times reads differently from one paused once, even with the same
+// final counts).
+type AutoPause struct {
+	// Expressions are the patterns tested against every response. Compile them once —
+	// running uncompiled strings through regexp.MustCompile per response is exactly the
+	// per-send work this package refuses to do (see the process.go placement note).
+	MatchRe []*regexp.Regexp
+	// Missing inverts the predicate: pause when NO expression in the list matches.
+	Missing bool
+	// CaseSensitive disables the case-folding that simple-string matching would otherwise
+	// use. For compiled regexes the flag is embedded by the caller ( (?i) or not), because
+	// Go's regexp has no per-call case option — so this field is honest only for the
+	// string path, and the constructor is where the distinction lives.
+	CaseSensitive bool
+}
+
+// NewAutoPause compiles the expression list. simple=true treats every entry as a literal
+// string (quoted with regexp.QuoteMeta), case-folded unless caseSensitive; simple=false
+// treats each entry as a regex compiled as-is — case-sensitivity then belongs to the
+// pattern itself, the way Go's regexp works, and the flag is ignored rather than guessed
+// at. Entries that do not compile are an error: an auto-pause that never fires because one
+// of its expressions failed to compile is a control that lies by omission.
+func NewAutoPause(expressions []string, simple, missing, caseSensitive bool) (*AutoPause, error) {
+	if len(expressions) == 0 {
+		return nil, nil // configured off; nil is the "not configured" the attack checks
+	}
+	ap := &AutoPause{Missing: missing, CaseSensitive: caseSensitive}
+	for _, expr := range expressions {
+		pattern := expr
+		if simple {
+			pattern = regexp.QuoteMeta(expr)
+			if !caseSensitive {
+				pattern = "(?i)" + pattern
+			}
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("auto-pause expression %q does not compile: %w", expr, err)
+		}
+		ap.MatchRe = append(ap.MatchRe, re)
+	}
+	return ap, nil
+}
+
+// triggered evaluates one response. true means the pause condition is met: any expression
+// matched (appears mode) or none did (missing mode). Not configured is never triggered.
+func (ap *AutoPause) triggered(raw []byte) bool {
+	if ap == nil || len(ap.MatchRe) == 0 {
+		return false
+	}
+	any := false
+	for _, re := range ap.MatchRe {
+		if re.Match(raw) {
+			any = true
+			break
+		}
+	}
+	if ap.Missing {
+		return !any
+	}
+	return any
+}
+
+// ReArm clears the pause trigger so the attack can run again — Burp re-arms on resume, and
+// pausing on the same response forever would make resume a no-op for an attack that stopped
+// on a page that stays in every further response (a lockout banner does exactly that).
+func (ap *AutoPause) ReArm() {
+	if ap == nil {
+		return
+	}
+	// The predicate itself carries no latch — triggered() is stateless over the list — so
+	// re-arming is not a state reset but the attack's own resume: Control.Resume is the
+	// re-arm, and this method exists to keep the name Burp uses in the flow. The fired
+	// count lives on the Attack (atomic) so the report can read it after ReArm.
+}
 
 // run applies both patterns over one response.
 func (g *Grep) run(raw []byte) (*bool, *string) {
@@ -153,6 +248,12 @@ type Attack struct {
 	// Grep holds the operator's regexes tested against each response. Empty by default and free
 	// when empty.
 	Grep Grep
+	// AutoPause is Burp's auto-pause predicate, evaluated on every response in the same
+	// place Grep runs. Nil is unconfigured: the attack runs to its bound. See AutoPause.
+	AutoPause *AutoPause
+	// autoPaused counts trigger events. Atomic: doSend's send goroutines write it while the
+	// collector reads it for the report.
+	autoPaused atomic.Int64
 	// Control is the pause/resume/stop handle, consulted by the driver loop before each plan
 	// position. Nil is the uncontrolled attack: it runs to completion, which is what every caller
 	// got before Control existed. See internal/intruder/control.go.
@@ -197,6 +298,22 @@ func (a *Attack) WithGuard(g Guard) *Attack {
 func (a *Attack) WithGrep(g Grep) *Attack {
 	a.Grep = g
 	return a
+}
+
+// WithAutoPause attaches the auto-pause predicate. Nil is unconfigured.
+func (a *Attack) WithAutoPause(ap *AutoPause) *Attack {
+	a.AutoPause = ap
+	return a
+}
+
+// AutoPauseFired reports the trigger count for the report. Atomic because the driver goroutine
+// fires the pause while the collector reads the count — the same split-brain the sent/failed
+// counters already navigate.
+func (a *Attack) AutoPauseFired() int {
+	if a == nil {
+		return 0
+	}
+	return int(a.autoPaused.Load())
 }
 
 // WithControl attaches the pause/resume/stop handle. Without one the attack cannot be halted, which
@@ -273,6 +390,11 @@ type AttackReport struct {
 	GrepMatched         int            `json:"grep_matched"`
 	Pool                *string        `json:"pool"`
 	AutoThrottleEngaged int            `json:"auto_throttle_engaged"`
+	// AutoPaused is how many times the auto-pause condition fired (burpsy-react-ui-8f2).
+	// Zero with a stopped status and an auto-pause configured means the operator stopped it
+	// themselves; non-zero says the predicate did it — the report's own account of who
+	// pressed the button.
+	AutoPaused int `json:"auto_paused"`
 }
 
 // bucketKey is the distinct-behaviour triple. hasStatus distinguishes "no response" from a
@@ -439,7 +561,8 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		Errors: c.errors, Attempts: c.attempts,
 		DetailLimit: c.detailLimit, GrepMatched: c.grepMatched,
 		Pool: pool, AutoThrottleEngaged: limiter.AutoThrottleEngaged(),
-		Status: reportStatus(a.Control), StopReason: a.Control.StopReason(),
+		AutoPaused: a.AutoPauseFired(),
+		Status:     reportStatus(a.Control), StopReason: a.Control.StopReason(),
 		Enumerated: enumerated,
 	}
 }
@@ -541,6 +664,18 @@ func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [
 		}
 	}
 	grepMatched, grepExtract := a.Grep.run(sent.Raw)
+	// Auto-pause, evaluated on the same bytes grep just read (burpsy-react-ui-8f2). The
+	// response already went out — the target has it — so this is not a guard, it is a halt
+	// AFTER an observation: the current attempt is collected whole, and the driver's next
+	// gate() call holds the rest. A triggered pause re-arms immediately, so a resume runs
+	// rather than re-pausing on the same page; the fired count is what the report carries.
+	if a.AutoPause.triggered(sent.Raw) {
+		a.Control.Pause()
+		// ReArm clears the predicate's matched state for the next resume — but the fired
+		// count must survive it, so it lives on the attack, not the predicate.
+		a.autoPaused.Add(1)
+		a.AutoPause.ReArm()
+	}
 	return &hit{
 		status: sent.Status, length: len(sent.Raw), durationMS: sent.Duration.Milliseconds(),
 		reflected: reflected, grepMatched: grepMatched, grepExtract: grepExtract,

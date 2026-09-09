@@ -441,6 +441,15 @@ func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 
 // intruderRunReq mirrors the Rust RunReq. Pointers distinguish "absent" from "zero", which the
 // request semantics depend on (a named empty mode list is a 400, an absent one is sniper).
+// autoPauseReq is the wire form of Burp's auto-pause settings: the expression list, the
+// appears/missing mode, simple-string vs regex matching, and case sensitivity.
+type autoPauseReq struct {
+	Expressions   []string `json:"expressions"`
+	Missing       bool     `json:"missing"`
+	Simple        bool     `json:"simple"`
+	CaseSensitive bool     `json:"case_sensitive"`
+}
+
 type intruderRunReq struct {
 	MsgID          uint64                    `json:"msg_id"`
 	Target         string                    `json:"target"`
@@ -453,6 +462,11 @@ type intruderRunReq struct {
 	PayloadSets    *[][]string               `json:"payload_sets"`
 	PayloadSources *[]intruder.PayloadSource `json:"payload_sources"`
 	PayloadRules   *[]intruder.RuleSpec      `json:"payload_rules"`
+	// AutoPause is Burp's auto-pause (burpsy-react-ui-8f2): pause the attack when any listed
+	// expression appears in a response (or, with missing=true, when none does). Nil is
+	// unconfigured. Simple strings are case-folded unless case_sensitive; regex entries
+	// carry their own case flags, the way Go's regexp works.
+	AutoPause *autoPauseReq `json:"auto_pause"`
 	// URLEncode is Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the
 	// characters percent-encoded in every generated payload as the final pass, after the
 	// rule chain. Empty (or absent) means no extra encoding — matching the off state, not
@@ -829,6 +843,18 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		WithLimits(limits).
 		WithGrep(grep).
 		WithControl(control)
+	// Auto-pause (burpsy-react-ui-8f2): compiled once, refused here if an expression does
+	// not compile — an auto-pause that silently never fires is a control that lies by
+	// omission, the same rule the grep patterns follow.
+	if req.AutoPause != nil && len(req.AutoPause.Expressions) > 0 {
+		ap, err := intruder.NewAutoPause(req.AutoPause.Expressions, req.AutoPause.Simple,
+			req.AutoPause.Missing, req.AutoPause.CaseSensitive)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		attack.WithAutoPause(ap)
+	}
 	// On the dashboard for the duration of the attack (DASH-01). The total is the plan's length —
 	// what will actually be sent — not the combination count, which is what the plan's bound already
 	// refused; the refusal shows up as the gated bucket on the result instead.
