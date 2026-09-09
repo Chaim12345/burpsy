@@ -770,6 +770,21 @@ main {
   min-width: var(--w-sm);
 }
 
+/* Burp's "Show only" checkbox groups in the Issues filter bar (burpsy-react-ui-4d5c).
+   A labelled run of checkboxes reads as one control; without the baseline alignment the
+   labels sit at different heights than the toolbar's selects did. */
+.filter-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.filter-group-label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim, var(--text));
+  white-space: nowrap;
+}
+
 /* burpsy-react-ui-72k9: the Logger's capture-filter panel. Same toolbar shape as the
    capture axis it extends, but boxed and visibly separated: it is the destructive axis'
    settings surface, not another display-filter row. */

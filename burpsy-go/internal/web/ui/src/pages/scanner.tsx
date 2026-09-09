@@ -17,11 +17,11 @@ import { LoadingPanel, PageHeader, RefreshButton, SplitPane } from "../ui/layout
 import {
  Badge,
  Button,
+ Checkbox,
  Empty,
  ErrorNotice,
  Input,
  LinkButton,
- Select,
  Tabs,
  TabsContent,
  TabsList,
@@ -184,8 +184,9 @@ export function ScannerPage(): JSX.Element {
  const actions = useExchangeActions();
  const triage = useIssueTriage();
 
- const [severity, setSeverity] = useState("all");
- const [confidence, setConfidence] = useState("all");
+ const [severities, setSeverities] = useState<Set<string>>(new Set());
+ const [confidences, setConfidences] = useState<Set<string>>(new Set());
+ const [hideFalsePositives, setHideFalsePositives] = useState(false);
  const [term, setTerm] = useState("");
  const [selectedKey, setSelectedKey] = useState<string | null>(null);
  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -237,14 +238,19 @@ export function ScannerPage(): JSX.Element {
   const all = issues?.findings ?? [];
   const needle = debouncedTerm.trim().toLowerCase();
   return all
-   .filter((f) => severity === "all" || f.severity === severity)
-   .filter((f) => confidence === "all" || f.confidence === confidence)
+   // Burp's "Show only" checkboxes (burpsy-react-ui-4d5c): an empty set shows everything, a
+   // non-empty one is an allow-list, so High+Medium can be shown while Low+Info are not.
+   // False positives are opt-out like Burp's hide-false-positive — they stay listed by
+   // default because the operator marked them deliberately.
+   .filter((f) => severities.size === 0 || severities.has(f.severity))
+   .filter((f) => confidences.size === 0 || confidences.has(f.confidence))
+   .filter((f) => !hideFalsePositives || !f.false_positive)
    .filter((f) => {
     if (!needle) return true;
     const haystack = `${f.check_name ?? ""} ${f.issue_name ?? ""} ${f.host} ${f.detail ?? ""}`.toLowerCase();
     return haystack.includes(needle);
    });
- }, [issues, severity, confidence, debouncedTerm]);
+ }, [issues, severities, confidences, hideFalsePositives, debouncedTerm]);
 
  const groups = useMemo(() => groupFindings(rows), [rows]);
 
@@ -426,7 +432,7 @@ export function ScannerPage(): JSX.Element {
     <LoadingPanel />
    ) : groups.length === 0 ? (
     <Empty
-     title={term || severity !== "all" || confidence !== "all" ? "No finding matches this filter" : "No findings yet"}
+     title={term || severities.size > 0 || confidences.size > 0 || hideFalsePositives ? "No finding matches this filter" : "No findings yet"}
      detail={issues?.hint ?? "Captured and audited traffic has not produced findings."}
     />
    ) : (
@@ -761,22 +767,47 @@ export function ScannerPage(): JSX.Element {
      }
     />
     <Toolbar style={{ marginTop: 8 }}>
-     <Select aria-label="Severity filter" title="Severity filter" value={severity} onChange={(event) => setSeverity(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
-      <option value="all">All severities</option>
+     {/* Burp's Issues filter bar (burpsy-react-ui-4d5c): "Show only" checkboxes that
+                combine, so High+Medium can be shown while Low+Info are not, plus
+                hide-false-positive. An empty set means no constraint, which keeps the bar
+                honest: nothing ticked shows everything, not nothing. */}
+     <span className="filter-group" role="group" aria-label="Show only severity">
+      <span className="filter-group-label">Show only</span>
       {SEVERITIES.map((s) => (
-       <option key={s} value={s}>
-        {s}
-       </option>
+       <Checkbox
+        key={s}
+        label={s}
+        checked={severities.has(s)}
+        onCheckedChange={(on) =>
+         setSeverities((current) => {
+          const next = new Set(current);
+          if (on) next.add(s);
+          else next.delete(s);
+          return next;
+         })
+        }
+       />
       ))}
-     </Select>
-     <Select aria-label="Confidence filter" title="Confidence filter" value={confidence} onChange={(event) => setConfidence(event.target.value)} style={{ maxWidth: "var(--w-sm)" }}>
-      <option value="all">All confidence</option>
+     </span>
+     <span className="filter-group" role="group" aria-label="Show only confidence">
+      <span className="filter-group-label">Confidence</span>
       {CONFIDENCES.map((c) => (
-       <option key={c} value={c}>
-        {c}
-       </option>
+       <Checkbox
+        key={c}
+        label={c}
+        checked={confidences.has(c)}
+        onCheckedChange={(on) =>
+         setConfidences((current) => {
+          const next = new Set(current);
+          if (on) next.add(c);
+          else next.delete(c);
+          return next;
+         })
+        }
+       />
       ))}
-     </Select>
+     </span>
+     <Checkbox label="Hide false positives" checked={hideFalsePositives} onCheckedChange={setHideFalsePositives} />
      <Badge>{rows.length.toLocaleString()} finding(s)</Badge>
     </Toolbar>
     {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
