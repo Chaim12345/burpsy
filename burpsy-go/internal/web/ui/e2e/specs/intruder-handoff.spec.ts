@@ -12,29 +12,76 @@
 // *spliced* request, carrying a payload the attack generated. A menu that opened and did nothing,
 // or that handed over the unspliced base request, would pass a render check and fail this.
 
+import { request as httpRequest } from "node:http";
 import { expect, gotoRoute, pinTheme, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
+import { readHarness } from "../harness/server";
 
 const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
+
+/** POST JSON to burpsy's own web API and return the parsed reply. */
+function postJson<T>(webPort: number, path: string, body: unknown): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const request = httpRequest(
+      {
+        host: "127.0.0.1",
+        port: webPort,
+        method: "POST",
+        path,
+        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) },
+      },
+      (response) => {
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          text += chunk;
+        });
+        response.once("end", () => {
+          if ((response.statusCode ?? 0) >= 400) {
+            reject(new Error(`POST ${path} -> ${response.statusCode}: ${text}`));
+            return;
+          }
+          resolve(JSON.parse(text) as T);
+        });
+      },
+    );
+    request.once("error", reject);
+    request.end(payload);
+  });
+}
 
 /** The five default payloads the page ships with; the first is what a sniper attack sends first. */
 const FIRST_PAYLOAD = "admin";
 
 /**
- * Get from a cold app to an Intruder attack with results, entirely through the UI.
+ * Get from a cold app to an Intruder attack with results.
  *
- * Driven rather than seeded on purpose: the handoff under test reads message ids the *server* stored
- * during the attack, so an attack faked into the store would prove nothing about them.
+ * The base request is minted through the API rather than picked out of the seeded proxy history,
+ * and that is not a shortcut — it is what makes this deterministic. HTTP history is shared mutable
+ * state that every earlier spec in the suite can filter, annotate or delete, so a row located by
+ * its path passes in isolation and vanishes in a full run. This mints its own request and types
+ * the id the server assigned it into the field an operator types it into.
+ *
+ * Everything after the id is driven through the UI, because the handoff under test reads ids the
+ * *server* stored during the attack — an attack faked into the store would prove nothing about them.
  */
 async function runAnAttack(page: import("@playwright/test").Page): Promise<void> {
-  // The seeded exchange with a query parameter, so "Find positions" has a parameter to find.
-  await gotoRoute(page, route("history"));
-  const seeded = page.locator(".data-row", { hasText: "/alpha" }).first();
-  await expect(seeded).toBeVisible();
-  await seeded.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Send to Intruder" }).click();
+  const { webPort, targetPort } = readHarness();
+  const origin = `http://127.0.0.1:${targetPort}`;
+  // A query parameter, so "Find positions" has a parameter to find, and a path unique to this
+  // helper so a failure is traceable to it rather than to a seeded row someone else moved.
+  const raw = `GET /handoff?q=alpha HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\nConnection: close\r\n\r\n`;
+  const sent = await postJson<{ request_msg_id: number }>(webPort, "/api/repeater/send", {
+    target: origin,
+    protocol: "http",
+    request: raw,
+  });
 
-  await expect(page.getByRole("heading", { level: 1, name: "Intruder" })).toBeVisible();
+  await gotoRoute(page, route("intruder"));
+  await page.getByLabel("Stored message id").fill(String(sent.request_msg_id));
+  await page.getByLabel("Target authority").fill(origin);
+
   await page.getByRole("button", { name: "Find positions" }).click();
   // Discovery lists positions; attacking one is a separate choice, and pointCount counts the
   // chosen ones — which is why the launch button is still disabled until this is ticked.
