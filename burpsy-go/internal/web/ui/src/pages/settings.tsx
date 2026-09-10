@@ -455,7 +455,7 @@ function InterceptStartupPreference(): JSX.Element {
  );
 }
 
-function TlsPassthroughSection(): JSX.Element {
+export function TlsPassthroughSection(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = usePassthrough();
  const add = useAddPassthrough();
  const remove = useRemovePassthrough();
@@ -1906,7 +1906,6 @@ export function SettingsPage(): JSX.Element {
     description="Protocol reporting, network credentials, appearance, the CA certificate, and the console's own diagnostics. Scope lives under Target."
    />
    <ProxySettingsSection />
-   <TlsPassthroughSection />
    <ResourcePoolsSection />
    <ScheduledTasksSection />
    <ProtocolSection />

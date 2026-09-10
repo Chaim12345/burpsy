@@ -17,6 +17,7 @@ import { SimpleTable } from "../ui/table";
 import { formatCount } from "../lib/api";
 import { useProxyOptions, useSetProxyOptions } from "../lib/data.proxyoptions";
 import { useProxyListener, useRebindProxyListener } from "../lib/data.proxylistener";
+import { TlsPassthroughSection } from "./settings";
 
 // One row of the panel: key, label, what it does. Order matches proxy.OptionKeys.
 const SWITCHES: { key: string; label: string; detail: string }[] = [
@@ -116,6 +117,8 @@ export function ProxySettingsPage(): JSX.Element {
      ))}
     </div>
    </Card>
+
+   <TlsPassthroughSection />
 
    <Card>
     <SectionHeading title="Outcome counters" detail="What the rules did across every response considered since this process started." />
