@@ -343,6 +343,10 @@ export function SequencerPage(): JSX.Element {
  const [captureRequest, setCaptureRequest] = useState("");
  const [captureCount, setCaptureCount] = useState("100");
  const [captureDelay, setCaptureDelay] = useState("0");
+ // Burp's "Number of threads" (burpsy-react-ui-9t1). Empty means sequential — the historical
+ // capture, and still the honest default, because concurrency changes what the capture
+ // measures: per-request pacing becomes a bound shared across the pool.
+ const [captureThreads, setCaptureThreads] = useState("");
  const [locationKind, setLocationKind] = useState<TokenLocationKind>("cookie");
  const [locationName, setLocationName] = useState("");
  const [locationPattern, setLocationPattern] = useState("");
@@ -391,6 +395,7 @@ export function SequencerPage(): JSX.Element {
   }
   const count = Number.parseInt(captureCount, 10);
   const delay = Number.parseInt(captureDelay, 10);
+  const threads = Number.parseInt(captureThreads, 10);
   startCapture.mutate(
    {
     target,
@@ -398,6 +403,7 @@ export function SequencerPage(): JSX.Element {
     location,
     ...(Number.isFinite(count) && count > 0 ? { count } : {}),
     ...(Number.isFinite(delay) && delay > 0 ? { delay_ms: delay } : {}),
+    ...(Number.isFinite(threads) && threads > 1 ? { threads } : {}),
    },
    {
     onSuccess: (started) => {
@@ -579,14 +585,26 @@ export function SequencerPage(): JSX.Element {
           />
          )}
         </Field>
+        <Field
+         label="Threads"
+         hint="Concurrent requests. Empty = sequential; concurrency makes the delay a bound shared across the pool."
+         style={{ maxWidth: "var(--w-xs)" }}
+        >
+         {(id) => (
+          <Input
+           id={id}
+           value={captureThreads}
+           inputMode="numeric"
+           onChange={(event) => setCaptureThreads(event.target.value)}
+           placeholder="1"
+          />
+         )}
+        </Field>
         <Button onClick={startCaptureRun} disabled={startCapture.isPending}>
          <Radio size={14} />
          {startCapture.isPending ? "Starting…" : "Start capture"}
         </Button>
-        <Button
-         onClick={togglePause}
-         disabled={!capture.data?.capturing || pauseCapture.isPending}
-        >
+        <Button onClick={togglePause} disabled={!capture.data?.capturing || pauseCapture.isPending}>
          {(capture.data?.paused ?? false) ? <Play size={14} /> : <Pause size={14} />}
          {(capture.data?.paused ?? false) ? "Resume" : "Pause"}
         </Button>
@@ -665,14 +683,16 @@ export function SequencerPage(): JSX.Element {
 
    {error ? <ErrorNotice error={error} onRetry={source === "paste" ? runPaste : runCaptured} /> : null}
 
-   {report ? (
-    <Report report={report} />
-   ) : (
-    <Empty
-     title="No analysis yet"
-     detail="Paste a representative sample of session ids or CSRF tokens — a hundred is the conventional floor — then analyse it."
-    />
-   )}
-  </div>
+   {
+    report ? (
+     <Report report={report} />
+    ) : (
+     <Empty
+      title="No analysis yet"
+      detail="Paste a representative sample of session ids or CSRF tokens — a hundred is the conventional floor — then analyse it."
+     />
+    )
+   }
+  </div >
  );
 }
