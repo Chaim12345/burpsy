@@ -195,7 +195,7 @@ func (c *Coordinator) runWithRetries(id RuleID, rule *SessionRule, runner MacroS
 		if failure != nil {
 			return LoginOutcome{Kind: LoginMacroFailed, Attempt: attempt, Failure: failure}
 		}
-		if rule.Validity == nil || rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body) == Valid {
+		if rule.Validity == nil || rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL) == Valid {
 			// Only a successful run is promoted; a failed run must never overwrite a working macro.
 			c.recordObserved(id, sent)
 			return LoginOutcome{Kind: LoginSucceeded, Attempts: attempt}
@@ -325,7 +325,7 @@ func (c *Coordinator) HandleRecovery(original MacroStep, response *StepResult, r
 	if rule == nil {
 		return RecoveryOutcome{Kind: RecoveryNoRuleApplies, URL: original.URL}
 	}
-	if response != nil && rule.Validity != nil && rule.Validity.Evaluate(response.Status, response.Headers, response.Body) == Valid {
+	if response != nil && rule.Validity != nil && rule.Validity.Evaluate(response.Status, response.Headers, response.Body, response.FinalURL) == Valid {
 		return RecoveryOutcome{Kind: RecoveryAlreadyValid}
 	}
 	return c.recover(id, rule, original, runner)
@@ -375,13 +375,13 @@ func (c *Coordinator) recover(id RuleID, rule *SessionRule, original MacroStep, 
 		if err != nil {
 			return RecoveryOutcome{Kind: RecoveryRetryFailed, LoginAttempts: outcome.Attempts, Error: err.Error()}
 		}
-		if rule.Validity == nil || rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body) == Valid {
+		if rule.Validity == nil || rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL) == Valid {
 			return RecoveryOutcome{Kind: RecoveryRecovered, LoginAttempts: outcome.Attempts, Response: resp}
 		}
 		return RecoveryOutcome{
 			Kind:          RecoveryStillInvalidAfterRelogin,
 			LoginAttempts: outcome.Attempts,
-			Validity:      rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body),
+			Validity:      rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL),
 			Response:      resp,
 		}
 	case LoginGaveUp:
