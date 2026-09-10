@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -176,10 +177,13 @@ func mustJSON(v interface{}) []byte {
 // sessionRuleDto mirrors the UI's RuleDto. scope is the shared ScopeInfo body (allow_all/rules);
 // validity is the free-form validity JSON the UI edits as text.
 type sessionRuleDto struct {
-	ID          *int64           `json:"id,omitempty"`
-	Name        string           `json:"name"`
-	Enabled     bool             `json:"enabled"`
-	Scope       json.RawMessage  `json:"scope,omitempty"`
+	ID      *int64          `json:"id,omitempty"`
+	Name    string          `json:"name"`
+	Enabled bool            `json:"enabled"`
+	Scope   json.RawMessage `json:"scope,omitempty"`
+	// ScopeParams is Burp's parameter scope (burpsy-react-ui-9hip): when set, the rule applies
+	// only to requests carrying every named parameter. Nil is the unrestricted rule.
+	ScopeParams []string         `json:"scope_params,omitempty"`
 	Steps       []sessionStepDto `json:"steps"`
 	Validity    json.RawMessage  `json:"validity"`
 	MaxAttempts *int             `json:"max_attempts,omitempty"`
@@ -309,6 +313,11 @@ func ruleToDto(r *session.SessionRule) sessionRuleDto {
 			dto.Scope = b
 		}
 	}
+	// Parameter scope rides its own field: it constrains by request content, not by origin,
+	// so folding it into the hosts-shaped scope would be a type lie.
+	if len(r.ScopeParams) > 0 {
+		dto.ScopeParams = r.ScopeParams
+	}
 	// Extractions are stored in one flat list naming the step each one reads (session.Extraction.Step)
 	// and are served back attached to that step, because that is the shape the UI edits them in — a
 	// row under the step whose response they scrape. Emitting them was missing entirely, so a rule
@@ -384,6 +393,7 @@ func dtoToRule(dto sessionRuleDto) (*session.SessionRule, error) {
 	}
 	rule := session.NewSessionRule(dto.Name, scopeHosts, nil)
 	rule.Enabled = dto.Enabled
+	rule.ScopeParams = dto.ScopeParams
 	rule.Validity = validity
 	// Omitted means the default, which NewSessionRule already applied. Overwriting it with 1 — as
 	// this did — turned the UI's "default" placeholder into "one attempt only", so a login that
@@ -622,8 +632,12 @@ func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	step := stepDtoToMacroStep(probe)
 
-	// (1) Nothing is sent until a rule is known to own this target.
-	rule := s.sessionCoordinator.MatchingRule(host)
+	// (1) Nothing is sent until a rule is known to own this target — including parameter
+	// scope (burpsy-react-ui-9hip): the probe's own parameters are what a parameter-restricted
+	// rule is judged against, which is the exact point of the feature ("update this parameter
+	// across all requests" — a rule scoped to csrf_token must not claim a request that carries
+	// no csrf_token).
+	rule := s.sessionCoordinator.MatchingRuleFor(host, probeParamNames(probe))
 	if rule == nil {
 		count := len(s.sessionCoordinator.AllRules())
 		writeJSON(w, http.StatusOK, sessionLoginResp{
@@ -714,6 +728,23 @@ func loginOutcomeResponse(o session.RecoveryOutcome) (int, sessionLoginResp) {
 		Outcome: "unmapped_outcome",
 		Error:   fmt.Sprintf("recovery outcome kind %d has no wire mapping", int(o.Kind)),
 	}
+}
+
+// probeParamNames lists the parameter names a login probe carries: its URL query, plus its
+// body when the content type is form-urlencoded — the two places Burp's parameter scope reads.
+// Headers/cookies are not parameters in Burp's sense here, and a JSON body has no parameter
+// names without a schema to name them.
+func probeParamNames(step sessionStepDto) []string {
+	var names []string
+	if u, err := url.Parse(step.URL); err == nil {
+		names = append(names, queryParamNames(u.RawQuery)...)
+	}
+	if strings.Contains(strings.ToLower(step.Body), "=") {
+		// A body with = pairs is treated as form-urlencoded for scope purposes; anything
+		// else (JSON, XML) has no parameter names this layer can read.
+		names = append(names, queryParamNames(step.Body)...)
+	}
+	return names
 }
 
 func responseView(r *session.StepResult) *sessionLoginResponseView {

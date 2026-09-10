@@ -121,6 +121,11 @@ export interface SessionRuleFull {
  enabled: boolean;
  /** Omitted means "applies everywhere"; a stated but empty scope is refused. */
  scope?: SessionScope;
+ /**
+  * Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
+  * parameter exists. Omitted = unrestricted, like the host scope.
+  */
+ scope_params?: string[];
  steps: SessionMacroStep[];
  validity: SessionValidity;
  max_attempts?: number;

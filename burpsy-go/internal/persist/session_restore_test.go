@@ -176,3 +176,47 @@ func TestRestoreRoundTripsAJSONPathExtraction(t *testing.T) {
 		t.Fatalf("the restored extraction produced %+v; want the token, so the path was re-parsed on load", res)
 	}
 }
+
+// The parameter scope (burpsy-react-ui-9hip) survives the round trip. The dangerous direction
+// is the legacy read: a rule written before the column existed must come back UNRESTRICTED —
+// reading a legacy rule as parameter-restricted would silently stop every existing login
+// macro from matching after the upgrade.
+func TestRestoreKeepsAParameterScopedRuleAndLeavesLegacyRulesUnrestricted(t *testing.T) {
+	p := newTestStore(t)
+	scoped := savedRule(7, "csrf refresh", "https://app.test/refresh")
+	scoped.ScopeParams = []string{"csrf_token", "session_id"}
+	p.SaveSessionRules([]*session.SessionRule{savedRule(8, "plain login", "https://app.test/login"), scoped})
+
+	sess := session.NewCoordinator(zap.NewNop())
+	if err := p.Restore(nil, nil, nil, nil, sess, nil, nil); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	byID := map[session.RuleID]*session.SessionRule{}
+	for _, r := range sess.AllRules() {
+		byID[r.ID] = r
+	}
+	got := byID[7]
+	if got == nil {
+		t.Fatal("the scoped rule did not come back")
+	}
+	if len(got.ScopeParams) != 2 || got.ScopeParams[0] != "csrf_token" || got.ScopeParams[1] != "session_id" {
+		t.Fatalf("restored ScopeParams = %v, want [csrf_token session_id]", got.ScopeParams)
+	}
+	if !got.MatchParams([]string{"csrf_token", "session_id"}) {
+		t.Error("the restored scope does not match a request carrying both parameters")
+	}
+	if got.MatchParams([]string{"csrf_token"}) {
+		t.Error("the restored scope matched a request missing session_id; the list must survive as a conjunction")
+	}
+
+	legacy := byID[8]
+	if legacy == nil {
+		t.Fatal("the legacy rule did not come back")
+	}
+	if len(legacy.ScopeParams) != 0 {
+		t.Fatalf("a legacy rule came back with ScopeParams=%v; a rule written before the column existed is unrestricted", legacy.ScopeParams)
+	}
+	if !legacy.MatchParams(nil) {
+		t.Error("the legacy rule no longer matches a parameter-less request; the empty default must read as unrestricted")
+	}
+}

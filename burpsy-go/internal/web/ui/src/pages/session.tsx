@@ -49,6 +49,9 @@ interface RuleDraft {
  enabled: boolean;
  /** Only host patterns are read server-side; an empty list means "applies everywhere". */
  hosts: string[];
+ /** Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
+  * parameter exists. Empty = everywhere. */
+ params: string[];
  validity: SessionValidity;
  /** Kept as text so "" can mean "the server's default" rather than one attempt. */
  maxAttempts: string;
@@ -112,6 +115,7 @@ function ruleIn(rule: SessionRuleFull): RuleDraft {
   name: rule.name,
   enabled: rule.enabled,
   hosts: (rule.scope?.rules ?? []).map((entry) => entry.host ?? "").filter(Boolean),
+  params: rule.scope_params ?? [],
   validity: rule.validity ?? {},
   maxAttempts: rule.max_attempts === undefined ? "" : String(rule.max_attempts),
   steps: (rule.steps ?? []).map((step) => ({
@@ -145,6 +149,12 @@ function ruleOut(draft: RuleDraft): SessionRuleFull {
  if (draft.hosts.length) {
   out.scope = { allow_all: false, rules: draft.hosts.map((host) => ({ kind: "Include" as const, host })) };
  }
+ // Parameter scope is omitted when empty, like the host scope: absent means "applies
+ // everywhere", so an operator who never opened the field never changes a rule's meaning.
+ if (draft.params.length) {
+  const names = draft.params.map((name) => name.trim()).filter(Boolean);
+  if (names.length) out.scope_params = names;
+ }
  const attempts = Number(draft.maxAttempts.trim());
  if (draft.maxAttempts.trim() !== "" && Number.isInteger(attempts) && attempts > 0) out.max_attempts = attempts;
  return out;
@@ -155,6 +165,7 @@ function emptyRule(): RuleDraft {
   name: "",
   enabled: true,
   hosts: [],
+  params: [],
   validity: { status_is: 200 },
   maxAttempts: "",
   steps: [{ method: "POST", url: "", headers: [], body: "", extract: [] }],
@@ -163,8 +174,13 @@ function emptyRule(): RuleDraft {
 
 function scopeSummary(rule: SessionRuleFull): string {
  const hosts = (rule.scope?.rules ?? []).map((entry) => entry.host ?? "").filter(Boolean);
- if (!rule.scope || rule.scope.allow_all || hosts.length === 0) return "every host";
- return hosts.join(", ");
+ let hostPart = "every host";
+ if (rule.scope && !rule.scope.allow_all && hosts.length > 0) hostPart = hosts.join(", ");
+ // A parameter scope is a further restriction; say what it needs so the row reads whole.
+ if (rule.scope_params?.length) {
+  return `${hostPart} carrying ${rule.scope_params.join(" + ")}`;
+ }
+ return hostPart;
 }
 
 function hasNestedValidity(validity: SessionValidity): boolean {
@@ -425,6 +441,7 @@ export function SessionPage(): JSX.Element {
  const [baseline, setBaseline] = useState("");
  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
  const [newHost, setNewHost] = useState("");
+ const [newParam, setNewParam] = useState("");
 
  const [probe, setProbe] = useState<StepDraft>({ method: "GET", url: "", headers: [], body: "", extract: [] });
  const [loginResult, setLoginResult] = useState<SessionLoginResponse | null>(null);
@@ -878,6 +895,60 @@ export function SessionPage(): JSX.Element {
         >
          <Plus size={13} />
          Add host
+        </Button>
+       </div>
+      </div>
+
+      <div className="stack-tight">
+       <span className="eyebrow">Only requests carrying these parameters</span>
+       <small className="field-hint">
+        Optional. The rule applies only where every named parameter exists — Burp's parameter
+        scope, for the canonical "update the CSRF token wherever it appears" rule. No names, no
+        restriction: the rule follows its hosts alone.
+       </small>
+       {editing.params.map((param, index) => (
+        <div className="kv-row" key={index}>
+         <Input
+          aria-label={`Scope parameter ${index + 1}`}
+          title={`Scope parameter ${index + 1}`}
+          value={param}
+          placeholder="csrf_token"
+          disabled={!wired}
+          onChange={(event) =>
+           setEditing({ ...editing, params: editing.params.map((value, i) => (i === index ? event.target.value : value)) })
+          }
+         />
+         <span className="cell-dim">parameter name</span>
+         <IconButton
+          label={`Remove scope parameter ${index + 1}`}
+          size="small"
+          disabled={!wired}
+          onClick={() => setEditing({ ...editing, params: editing.params.filter((_, i) => i !== index) })}
+         >
+          <X size={13} />
+         </IconButton>
+        </div>
+       ))}
+       <div className="inline-add">
+        <Input
+         aria-label="New scope parameter"
+         title="New scope parameter"
+         value={newParam}
+         placeholder="csrf_token"
+         disabled={!wired}
+         onChange={(event) => setNewParam(event.target.value)}
+        />
+        <Button
+         variant="outline"
+         size="small"
+         disabled={!wired || !newParam.trim()}
+         onClick={() => {
+          setEditing({ ...editing, params: [...editing.params, newParam.trim()] });
+          setNewParam("");
+         }}
+        >
+         <Plus size={13} />
+         Add parameter
         </Button>
        </div>
       </div>

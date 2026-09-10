@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS session_rules (
 	name         TEXT NOT NULL,
 	enabled      INTEGER NOT NULL,
 	scope_hosts  TEXT NOT NULL,
+	scope_params TEXT NOT NULL DEFAULT '',
 	macro        TEXT NOT NULL,
 	validity     TEXT,
 	max_attempts INTEGER NOT NULL,
@@ -281,6 +282,15 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	// silently promote a different rule to first. A legacy row has ord NULL and is ordered by id, which
 	// is the order such a row was written in.
 	if err := s.addColumn("session_rules", "ord", "INTEGER"); err != nil {
+		return err
+	}
+	// session_rules gained scope_params for Burp's parameter scope (burpsy-react-ui-9hip):
+	// a rule that updates a named parameter across requests — the canonical CSRF-token rule —
+	// must apply only where that parameter exists. Empty is the unrestricted rule every row
+	// written before this column carried, which is the only safe default: reading a legacy
+	// rule as parameter-restricted would silently stop every existing login macro from
+	// matching.
+	if err := s.addColumn("session_rules", "scope_params", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// exchanges gained duration_us so that "fast" and "never measured" stop being the same row.
@@ -1386,6 +1396,10 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		if err != nil {
 			hosts = nil
 		}
+		params, err := json.Marshal(r.ScopeParams)
+		if err != nil {
+			params = nil
+		}
 		macro, err := json.Marshal(r.Steps)
 		if err != nil {
 			macro = nil
@@ -1400,9 +1414,9 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		}
 		if _, err := s.db.Exec(
 			`INSERT OR REPLACE INTO session_rules
-			 (id, name, enabled, scope_hosts, macro, validity, max_attempts, extractions, ord)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, macro, validity, r.MaxAttempts, exts, i); err != nil {
+			 (id, name, enabled, scope_hosts, scope_params, macro, validity, max_attempts, extractions, ord)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, params, macro, validity, r.MaxAttempts, exts, i); err != nil {
 			s.log("session rule", err)
 			return
 		}
@@ -1418,7 +1432,7 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 // order column existed: such a row was written in id order, so id is the honest fallback for it.
 func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, enabled, scope_hosts, macro, validity, max_attempts, extractions
+		`SELECT id, name, enabled, scope_hosts, scope_params, macro, validity, max_attempts, extractions
 		 FROM session_rules ORDER BY COALESCE(ord, id), id`)
 	if err != nil {
 		return nil, err
@@ -1429,9 +1443,9 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 		r := &session.SessionRule{}
 		var id int64
 		var enabled int
-		var hosts, macro, validity, exts []byte
+		var hosts, params, macro, validity, exts []byte
 		var maxAttempts int
-		if err := rows.Scan(&id, &r.Name, &enabled, &hosts, &macro, &validity, &maxAttempts, &exts); err != nil {
+		if err := rows.Scan(&id, &r.Name, &enabled, &hosts, &params, &macro, &validity, &maxAttempts, &exts); err != nil {
 			return nil, err
 		}
 		r.ID = session.RuleID(id)
@@ -1439,6 +1453,13 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 		r.MaxAttempts = maxAttempts
 		if len(hosts) > 0 {
 			if err := json.Unmarshal(hosts, &r.ScopeHosts); err != nil {
+				return nil, err
+			}
+		}
+		// A NULL from a legacy-generation row (or the DEFAULT '' as []byte("")?) reads as
+		// unrestricted: empty params is the meaning every pre-9hip rule carries.
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &r.ScopeParams); err != nil {
 				return nil, err
 			}
 		}

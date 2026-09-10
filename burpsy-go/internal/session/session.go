@@ -691,10 +691,16 @@ type RuleID int64
 const DefaultMaxAttempts = 3
 
 type SessionRule struct {
-	ID          RuleID        `json:"id"`
-	Name        string        `json:"name"`
-	Enabled     bool          `json:"enabled"`
-	ScopeHosts  []string      `json:"scope_hosts"`
+	ID         RuleID   `json:"id"`
+	Name       string   `json:"name"`
+	Enabled    bool     `json:"enabled"`
+	ScopeHosts []string `json:"scope_hosts"`
+	// ScopeParams is Burp's parameter scope (session-handling-rules.html): when set, the rule
+	// applies only to requests carrying every named parameter — "update a certain parameter
+	// across all requests, such as a CSRF token". Nil/empty is the unrestricted rule, exactly
+	// what every rule built before this field existed means, so MatchParams reads an empty
+	// list as "always applies" the same way MatchHost reads empty hosts.
+	ScopeParams []string      `json:"scope_params,omitempty"`
 	Steps       []MacroStep   `json:"macro"`
 	Validity    *ValidityRule `json:"validity"`
 	MaxAttempts int           `json:"max_attempts"`
@@ -727,6 +733,30 @@ func (r *SessionRule) MatchHost(host string) bool {
 		}
 	}
 	return false
+}
+
+// MatchParams says whether this rule's parameter scope covers a request whose parsed parameters
+// are named in `present`. Every name in ScopeParams must be carried by the request; an empty
+// scope applies everywhere, for the same reason MatchHost's empty list does — a rule built
+// without the restriction cannot be allowed to silently stop matching.
+//
+// The comparison is case-insensitive: HTTP parameter names have no case-sensitivity contract,
+// and Burp treats csrf_token and CSRF_Token as the same parameter here. A name that arrives
+// with different casing is the same parameter the operator named.
+func (r *SessionRule) MatchParams(present []string) bool {
+	if r == nil || len(r.ScopeParams) == 0 {
+		return true
+	}
+	have := make(map[string]bool, len(present))
+	for _, p := range present {
+		have[strings.ToLower(p)] = true
+	}
+	for _, want := range r.ScopeParams {
+		if !have[strings.ToLower(want)] {
+			return false
+		}
+	}
+	return true
 }
 
 // extractionsFor returns the extractions that read step `index`'s response.
@@ -1016,16 +1046,30 @@ func (c *Coordinator) Rule(id RuleID) *SessionRule {
 	return c.rules[id]
 }
 
-func (c *Coordinator) MatchingRule(host string) *SessionRule {
+// MatchingRule returns the first enabled rule whose scopes cover this request: host by name,
+// and — when the caller can supply them — parameter scope by the names the request carries.
+// The parameter axis is optional (`params` nil means "unknown"): a caller that has not parsed
+// the request cannot evaluate a parameter restriction, and refusing the rule on evidence it
+// does not have would make every parameter-scoped rule unreachable from that caller. Callers
+// that DO hold the request's parameters pass them; that is where Burp's "update this parameter
+// across all requests" restriction does its work.
+func (c *Coordinator) MatchingRuleFor(host string, params []string) *SessionRule {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, id := range c.order {
 		r := c.rules[id]
-		if r.Enabled && r.MatchHost(host) {
+		if r.Enabled && r.MatchHost(host) && r.MatchParams(params) {
 			return r
 		}
 	}
 	return nil
+}
+
+// MatchingRule is MatchingRuleFor with no parameter information: the host axis only, which is
+// every caller's behaviour before parameter scope existed. Kept as its own name so the
+// call sites that could pass parameters but do not are visible in a grep.
+func (c *Coordinator) MatchingRule(host string) *SessionRule {
+	return c.MatchingRuleFor(host, nil)
 }
 
 // HandleResponse absorbs this response's cookies and evaluates the matching rule's validity check.
