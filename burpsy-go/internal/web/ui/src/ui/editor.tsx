@@ -11,11 +11,27 @@ import { breakGlyphs, byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf }
 import {
  base64Decode,
  base64Encode,
+ base64UrlDecode,
+ base64UrlEncode,
+ constructString,
  htmlDecode,
+ htmlEncodeAllCharsDecimal,
+ htmlEncodeAllCharsHex,
  htmlEncodeKeyChars,
  urlDecode,
+ urlEncodeAllChars,
+ urlEncodeAllCharsUnicode,
  urlEncodeKeyChars,
+ type ConstructDialect,
 } from "../lib/transforms";
+
+const CONSTRUCT_DIALECTS: Record<ConstructDialect, string> = {
+ js_double: "JavaScript (double-quoted)",
+ js_single: "JavaScript (single-quoted)",
+ sql_mssql: "SQL for Microsoft SQL Server",
+ sql_oracle: "SQL for Oracle",
+ sql_mysql: "SQL for MySQL",
+};
 import { cn } from "../lib/cn";
 import { useMintPayload } from "../lib/data.collab";
 import { HexEditor } from "./hex-editor";
@@ -647,12 +663,27 @@ export function HttpEditor({
     title: hasSelection ? "Convert selection" : "Convert selection (select text first)",
     actions: [
      codec("url-encode", "URL-encode", "Ctrl+U", urlEncodeKeyChars),
+     codec("url-encode-all", "URL-encode all characters", "", urlEncodeAllChars),
+     codec("url-encode-unicode", "URL-encode all characters (Unicode %uXXXX)", "", urlEncodeAllCharsUnicode),
      codec("url-decode", "URL-decode", "Ctrl+Shift+U", urlDecode),
      codec("html-encode", "HTML-encode", "Ctrl+H", htmlEncodeKeyChars),
+     codec("html-encode-decimal", "HTML-encode all characters (numeric)", "", htmlEncodeAllCharsDecimal),
+     codec("html-encode-hex", "HTML-encode all characters (hex)", "", htmlEncodeAllCharsHex),
      codec("html-decode", "HTML-decode", "Ctrl+Shift+H", htmlDecode),
      codec("b64-encode", "Base64-encode", "Ctrl+B", base64Encode),
      codec("b64-decode", "Base64-decode", "Ctrl+Shift+B", base64Decode),
+     codec("b64url-encode", "Base64-URL-encode", "", base64UrlEncode),
+     codec("b64url-decode", "Base64-URL-decode", "", base64UrlDecode),
     ],
+   },
+   {
+    id: "construct-string",
+    title: "Construct string",
+    actions: (
+     Object.entries(CONSTRUCT_DIALECTS) as [ConstructDialect, string][]
+    ).map(([dialect, label]) =>
+     codec(`construct-${dialect}`, label, "", (input: string) => constructString(input, dialect)),
+    ),
    },
    {
     id: "editor-find",
