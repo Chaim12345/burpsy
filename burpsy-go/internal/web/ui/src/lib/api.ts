@@ -288,6 +288,72 @@ export function templateRequest(host: string, path = "/"): string {
  return [`GET ${path} HTTP/1.1`, `Host: ${host}`, "Accept: */*", "", ""].join("\r\n");
 }
 
+/**
+ * Build a request from a typed or pasted host/URL — Burp's "Paste host / URL as
+ * request" (burpsy-react-ui-ce8). Accepts "shop.test", "shop.test:8080",
+ * "http://shop.test/shop", and ws(s):// which becomes an upgrade handshake. A
+ * bare host defaults to https:443 — the same convention the rest of the UI uses
+ * — and a path is preserved.
+ *
+ * `protocol` carries the transport decision and `target` is always http:// or
+ * https://, never ws://: the server parses `target` with targetParts, which
+ * knows only those two schemes. Returns null when the fragment cannot name an
+ * origin, or names a scheme this transport cannot carry.
+ */
+export function requestFromUrl(input: string): { target: string; protocol: string; request: string } | null {
+ const raw = input.trim();
+ if (!raw) return null;
+ let protocol = "https";
+ let rest = raw;
+ // Strip scheme (http://, https://, ws(s):// map to http(s) transport below).
+ const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(raw)?.[1]?.toLowerCase();
+ let websocket = false;
+ if (scheme) {
+  // Only the four schemes this transport can actually carry. Anything else — ftp:, file:,
+  // chrome-extension: — is refused here rather than turned into a tab, because the target string
+  // is parsed server-side by targetParts, which accepts http, https or no scheme and answers 400
+  // on everything else. Building the tab anyway would put the failure three clicks later, on Send,
+  // with a message about a scheme the operator never typed into the target field.
+  if (scheme !== "http" && scheme !== "https" && scheme !== "ws" && scheme !== "wss") return null;
+  websocket = scheme === "ws" || scheme === "wss";
+  protocol = scheme === "http" || scheme === "ws" ? "http" : "https";
+  rest = raw.slice(scheme.length + 3);
+ }
+ // Split authority and path.
+ const slash = rest.indexOf("/");
+ const hostPort = slash >= 0 ? rest.slice(0, slash) : rest;
+ const path = slash >= 0 ? rest.slice(slash) : "/";
+ const pathPart = path && !path.startsWith("/") ? `/${path}` : (path || "/");
+ // Split host and port.
+ const colonIdx = hostPort.lastIndexOf(":");
+ let host = hostPort;
+ let port = "";
+ if (colonIdx > 0 && /^\d+$/.test(hostPort.slice(colonIdx + 1))) {
+  host = hostPort.slice(0, colonIdx);
+  port = hostPort.slice(colonIdx + 1);
+ }
+ if (!host || /\s/.test(host)) return null;
+ if (websocket) {
+  // A WebSocket upgrade is the honest rendering of a ws(s) URL: the key is filler
+  // (RFC 6455 wants 16 base64 bytes; the server must answer a handshake, not echo it),
+  // and the operator is expected to edit it — the point of sending to Repeater.
+  const hostHeader = port ? hostPort : host;
+  const req = [
+   `GET ${pathPart} HTTP/1.1`,
+   `Host: ${hostHeader}`,
+   "Upgrade: websocket",
+   "Connection: Upgrade",
+   "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+   "Sec-WebSocket-Version: 13",
+   "",
+   "",
+  ].join("\r\n");
+  return { target: `${protocol}://${hostPort}`, protocol, request: req };
+ }
+ const hostHeader = port ? hostPort : host;
+ return { target: `${protocol}://${hostPort}`, protocol, request: templateRequest(hostHeader, pathPart) };
+}
+
 /** Pull the authority out of a raw request's Host header so Repeater can prefill a target. */
 export function authorityFromRaw(raw: string, fallbackProtocol = "https"): string {
  const match = /^host:[ \t]*(.+)$/im.exec(raw);

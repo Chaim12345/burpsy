@@ -2,6 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   Activity,
+  ClipboardPaste,
   Command,
   Database,
   FileDown,
@@ -23,7 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
-import { api, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, templateRequest } from "./lib/api";
+import { api, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
 import { queryClient, useConnection, useEventStream, useScope, useStats } from "./lib/data";
 import { useCaCert } from "./lib/data.policy";
 import { onDesktopEvent } from "./lib/runtime";
@@ -491,6 +492,35 @@ function App(): JSX.Element {
                   request: templateRequest("example.com"),
                 });
                 navigate("repeater");
+              },
+            },
+            {
+              id: "paste-url",
+              label: "Paste host / URL as request",
+              icon: ClipboardPaste,
+              onSelect: () => {
+                // window.prompt rather than a modal, for the reason lib/actions.ts's addComment
+                // records: this menu is built by a plain factory on every open, so a modal would
+                // need state threaded through the menubar to reach it.
+                //
+                // The clipboard is not read directly. navigator.clipboard.readText needs a
+                // permission the operator has to grant, and a menu item that silently does
+                // nothing on refusal is worse than one that shows them what it is about to use.
+                const pasted = window.prompt("Paste host or URL", "");
+                if (pasted === null) return;
+                const built = requestFromUrl(pasted);
+                if (!built) {
+                  toast.error(`Not a host or URL burpsy can send to: ${pasted.trim() || "(empty)"}`);
+                  return;
+                }
+                openRepeaterTab({
+                  name: pasted.trim().slice(0, 42),
+                  target: built.target,
+                  protocol: built.protocol,
+                  request: built.request,
+                });
+                navigate("repeater");
+                toast.success(`New Repeater tab for ${built.target}`);
               },
             },
             { id: "go", label: "Go to Repeater", shortcut: "alt+5", icon: Repeat2, onSelect: () => navigate("repeater") },
