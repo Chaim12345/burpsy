@@ -52,7 +52,7 @@ export function exchangeAuthority(exchange: Pick<Exchange, "tls" | "host" | "por
  return `${schemeOf(exchange)}://${exchange.host}:${exchange.port}`;
 }
 
-async function fetchRaw(messageId: number): Promise<string> {
+export async function fetchRaw(messageId: number): Promise<string> {
  const message = await api<MessageView>(`/api/message/${messageId}`);
  return message.text ?? "";
 }

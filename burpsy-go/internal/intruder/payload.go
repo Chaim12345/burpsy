@@ -397,7 +397,12 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		Truncated:  trunc,
 		MaxCount:   cap,
 		Skipped:    0,
-		Dropped:    nil,
+		// Empty, not nil. types.tools.ts declares PayloadSetReport.dropped as `DropReason[]`, and a
+		// nil slice marshals to JSON `null` — which is what made the payload-sets table read
+		// `null.length` and take the whole Results tab down with the ErrorBoundary
+		// (burpsy-react-ui-9pxd). This is the one place a PayloadSet is constructed, so it is the
+		// one place the wire form can be guaranteed.
+		Dropped: []DropReason{},
 	}, nil
 }
 

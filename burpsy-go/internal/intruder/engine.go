@@ -237,6 +237,15 @@ type Attack struct {
 	// MaxBuckets is how many distinct result buckets to keep before giving up on further
 	// distinctions.
 	MaxBuckets int
+	// RecordRequest decides whether the exact outbound bytes for a detail-row attempt are handed
+	// to RequestFn before the send. It is nil-safe so every existing caller keeps its no-storage
+	// behaviour; the web caller enables it for the bounded attempt table, not for every attack.
+	RecordRequest bool
+	// RequestFn stores one exact outbound request and returns its message id. The engine calls
+	// it only when RecordRequest is set and the attempt is below DetailLimit, so recording
+	// stays tied to the rows an operator can act on rather than multiplying the 100k-request
+	// memory profile the report is designed to avoid.
+	RequestFn func(raw []byte) uint64
 	// Guard refuses a spliced request before it goes out. Err(reason) means do not send.
 	//
 	// The engine has no concept of engagement scope and should not grow one — but it is the only
@@ -325,11 +334,15 @@ func (a *Attack) WithControl(c *Control) *Attack {
 
 // ResultBucket is a set of responses that behaved the same, counted once.
 type ResultBucket struct {
-	Status            *int    `json:"status"`
-	ResponseLen       int     `json:"response_len"`
-	Reflected         bool    `json:"reflected"`
-	Count             int     `json:"count"`
-	FirstOrdinal      int     `json:"first_ordinal"`
+	Status       *int `json:"status"`
+	ResponseLen  int  `json:"response_len"`
+	Reflected    bool `json:"reflected"`
+	Count        int  `json:"count"`
+	FirstOrdinal int  `json:"first_ordinal"`
+	// ExampleRequestID and ExampleResponseID name the one stored exchange kept for this bucket —
+	// the bytes of FirstOrdinal's send and the response it produced. One per bucket, not one per
+	// request: a 100k-request attack that lands in four buckets stores four exchanges.
+	ExampleRequestID  *uint64 `json:"example_request_id"`
 	ExampleResponseID *uint64 `json:"example_response_id"`
 	GrepMatches       int     `json:"grep_matches"`
 	GrepExtract       *string `json:"grep_extract"`
@@ -344,12 +357,22 @@ type ErrorBucket struct {
 
 // Attempt is one request's outcome. It carries no bytes: ordinal regenerates the payloads through
 // the plan.
+//
+// RequestID names the exact outbound bytes for this attempt when the caller stored them. It is nil
+// for guard refusals, send failures, detail rows past DetailLimit and callers that did not opt into
+// recording.
+//
+// ResponseID is set only on the attempt that opened its bucket — the exemplar the engine stored.
+// A later attempt in the same bucket is deliberately nil rather than pointed at that exemplar:
+// bucketing matches on status, length and reflection, which is not a claim that two bodies are
+// equal, and handing a row someone else's response would make the results table lie.
 type Attempt struct {
 	Ordinal     int     `json:"ordinal"`
 	Status      *int    `json:"status"`
 	ResponseLen int     `json:"response_len"`
 	DurationMS  int64   `json:"duration_ms"`
 	Reflected   bool    `json:"reflected"`
+	RequestID   *uint64 `json:"request_id"`
 	ResponseID  *uint64 `json:"response_id"`
 	Error       *string `json:"error"`
 	GrepMatched *bool   `json:"grep_matched"`
@@ -406,7 +429,9 @@ type bucketKey struct {
 	reflected bool
 }
 
-// hit is one successful response, fully described except for its payloads.
+// hit is one successful response, fully described except for its payloads. It carries the exact
+// request bytes only while they are needed to attach their stored id to this attempt's report row;
+// the collector does not retain them after absorb returns.
 type hit struct {
 	status      *int
 	length      int
@@ -415,6 +440,7 @@ type hit struct {
 	grepMatched *bool
 	grepExtract *string
 	raw         []byte
+	request     []byte
 }
 
 // outcome is one attempt's result as the collector sees it. Guard refusals and send failures
@@ -428,18 +454,20 @@ type outcome struct {
 // collector reduces a stream of outcomes into the report. Buckets are keyed by behaviour, not
 // accumulated: the count lives here and the exemplar is stored once, through the recorder.
 type collector struct {
-	record      RecordFn
-	index       map[bucketKey]int
-	buckets     []ResultBucket
-	errorIndex  map[string]int
-	errors      []ErrorBucket
-	attempts    []Attempt
-	detailLimit int
-	maxBuckets  int
-	sent        int
-	failed      int
-	unbucketed  int
-	grepMatched int
+	record       RecordFn
+	request      func([]byte) uint64
+	recordDetail bool
+	index        map[bucketKey]int
+	buckets      []ResultBucket
+	errorIndex   map[string]int
+	errors       []ErrorBucket
+	attempts     []Attempt
+	detailLimit  int
+	maxBuckets   int
+	sent         int
+	failed       int
+	unbucketed   int
+	grepMatched  int
 }
 
 func newCollector(a *Attack, record RecordFn) *collector {
@@ -447,10 +475,24 @@ func newCollector(a *Attack, record RecordFn) *collector {
 	if mb < 1 {
 		mb = 1
 	}
+	// The three row slices start empty rather than nil, and that is a wire-format decision, not a
+	// preallocation. A nil slice marshals to JSON `null`, and types.tools.ts declares these as
+	// `ResultBucket[]` / `ErrorBucket[]` / `Attempt[]` — not nullable — so a report from a clean
+	// attack was handing the browser a `null` where it had promised an array. `report.errors.length`
+	// in AttackResult threw on it, which meant the Results tab rendered the ErrorBoundary for every
+	// attack whose sends all succeeded (burpsy-react-ui-9pxd). Nothing in Go noticed, because a nil
+	// slice and an empty one range and len identically.
 	return &collector{
-		record: record, index: map[bucketKey]int{},
-		errorIndex:  map[string]int{},
-		detailLimit: a.DetailLimit, maxBuckets: mb,
+		record:       record,
+		request:      a.RequestFn,
+		recordDetail: a.RecordRequest && a.RequestFn != nil,
+		index:        map[bucketKey]int{},
+		buckets:      []ResultBucket{},
+		errorIndex:   map[string]int{},
+		errors:       []ErrorBucket{},
+		attempts:     []Attempt{},
+		detailLimit:  a.DetailLimit,
+		maxBuckets:   mb,
 	}
 }
 
@@ -473,13 +515,26 @@ func (c *collector) absorb(o outcome) {
 		c.grepMatched++
 	}
 	key := bucketKey{status: derefInt(h.status), hasStatus: h.status != nil, length: h.length, reflected: h.reflected}
+	_, seen := c.index[key]
+	newBucket := !seen && len(c.buckets) < c.maxBuckets
+	detailRow := o.ordinal < c.detailLimit
+	// One store per outcome, shared by the bucket exemplar and the detail row. Both want the same
+	// bytes, and storing them twice would put two ids on the same send — the operator would open
+	// the bucket's request and the attempt's request and be shown two copies with no way to tell
+	// they are one request.
+	var requestID *uint64
+	if c.recordDetail && (newBucket || detailRow) {
+		id := c.request(h.request)
+		requestID = &id
+	}
 	var responseID *uint64
-	if i, ok := c.index[key]; ok {
+	if seen {
+		i := c.index[key]
 		c.buckets[i].Count++
 		if h.grepMatched != nil && *h.grepMatched {
 			c.buckets[i].GrepMatches++
 		}
-	} else if len(c.buckets) < c.maxBuckets {
+	} else if newBucket {
 		if c.record != nil {
 			id := c.record(h.raw)
 			responseID = &id
@@ -491,16 +546,16 @@ func (c *collector) absorb(o outcome) {
 		}
 		c.buckets = append(c.buckets, ResultBucket{
 			Status: h.status, ResponseLen: h.length, Reflected: h.reflected, Count: 1,
-			FirstOrdinal: o.ordinal, ExampleResponseID: responseID,
+			FirstOrdinal: o.ordinal, ExampleRequestID: requestID, ExampleResponseID: responseID,
 			GrepMatches: gm, GrepExtract: h.grepExtract,
 		})
 	} else {
 		c.unbucketed++
 	}
-	if o.ordinal < c.detailLimit {
+	if detailRow {
 		c.attempts = append(c.attempts, Attempt{
 			Ordinal: o.ordinal, Status: h.status, ResponseLen: h.length, DurationMS: h.durationMS,
-			Reflected: h.reflected, ResponseID: responseID,
+			Reflected: h.reflected, RequestID: requestID, ResponseID: responseID,
 			GrepMatched: h.grepMatched, GrepExtract: h.grepExtract,
 		})
 	}
@@ -568,9 +623,11 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 }
 
 // Run executes an attack. send carries the requests; record stores one exemplar per distinct
-// bucket. Returns the summary — the report is honest about every phase: planned is what the plan
-// enumerated, sent is what produced a response, failed is what errored or was refused, and the
-// truncated flags say where the limits cut.
+// bucket. When the attack opts into bounded request recording, RequestFn stores the exact
+// outbound bytes for each detail-row attempt and the attempt names them. Returns the summary —
+// the report is honest about every phase: planned is what the plan enumerated, sent is what
+// produced a response, failed is what errored or was refused, and the truncated flags say where
+// the limits cut.
 func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	started := time.Now()
 	limiter := NewRateLimiter(&a.Limits)
@@ -629,6 +686,9 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 					}
 				}()
 				h, err := doSend(a, limiter, send, raw, payloads)
+				if h != nil {
+					h.request = raw
+				}
 				results <- outcome{ordinal: ordinal, hit: h, err: err}
 			}(i, req, payloads, permit)
 		}

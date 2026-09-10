@@ -2,6 +2,7 @@ package intruder
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -650,5 +651,210 @@ func TestDetailRowsAreCappedButBucketCountsAreNot(t *testing.T) {
 	}
 	if total != 200 {
 		t.Fatalf("counts are not bounded: %d", total)
+	}
+}
+
+// A result row that cannot name its request is a dead end: it can be read but not sent anywhere
+// (burpsy-react-ui-79u). RequestFn is how the caller stores the exact spliced bytes, and the two
+// bounds on it are the point — recording follows the rows an operator can act on, not the 100k
+// sends the report exists to summarise.
+func TestRecordedRequestsAreTheSplicedBytesAndAreBoundedByTheDetailLimit(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := numItems(40, "p%d")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{40}, 1_000)
+	var seen [][]byte
+	var mu sync.Mutex
+
+	// Requests are handed out ids from a counter and kept, so the test can assert the id an
+	// attempt names resolves back to that attempt's own bytes.
+	var storeMu sync.Mutex
+	stored := map[uint64][]byte{}
+	var next uint64
+
+	a := NewAttack(base, sel, []PayloadSet{payloads}, plan).WithLimits(Unthrottled(8))
+	a.DetailLimit = 5
+	a.RecordRequest = true
+	a.RequestFn = func(raw []byte) uint64 {
+		storeMu.Lock()
+		defer storeMu.Unlock()
+		next++
+		stored[next] = append([]byte(nil), raw...)
+		return next
+	}
+	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+
+	if r.Sent != 40 {
+		t.Fatalf("sent = %d, want 40", r.Sent)
+	}
+	if len(r.Attempts) != 5 {
+		t.Fatalf("detail rows = %d, want 5", len(r.Attempts))
+	}
+	// Every detail row names a request, and the bytes behind that name are the ones the payload
+	// for that ordinal produced. Anything else and "Send to Repeater" resends someone else's
+	// request while claiming to resend this row's.
+	for _, x := range r.Attempts {
+		if x.RequestID == nil {
+			t.Fatalf("attempt %d has no request id, so it cannot be sent anywhere", x.Ordinal)
+		}
+		storeMu.Lock()
+		raw, ok := stored[*x.RequestID]
+		storeMu.Unlock()
+		if !ok {
+			t.Fatalf("attempt %d names request %d, which was never stored", x.Ordinal, *x.RequestID)
+		}
+		want := fmt.Sprintf("p%d", x.Ordinal)
+		if !bytes.Contains(raw, []byte("a="+want)) {
+			t.Fatalf("attempt %d's stored request is not its own splice: %q", x.Ordinal, raw)
+		}
+	}
+	// One bucket here, every response being identical. Its exemplar is FirstOrdinal's send, and
+	// FirstOrdinal is whichever outcome landed first under 8-way concurrency — not necessarily 0,
+	// and not necessarily inside the detail window. Either way the bytes behind the exemplar id
+	// must be that ordinal's own splice.
+	if len(r.Buckets) != 1 {
+		t.Fatalf("buckets = %d, want 1", len(r.Buckets))
+	}
+	b := r.Buckets[0]
+	if b.ExampleRequestID == nil {
+		t.Fatal("the bucket exemplar has no request, so a bucket row is still a dead end")
+	}
+	storeMu.Lock()
+	exemplar, ok := stored[*b.ExampleRequestID]
+	total := len(stored)
+	storeMu.Unlock()
+	if !ok {
+		t.Fatalf("the bucket names request %d, which was never stored", *b.ExampleRequestID)
+	}
+	if want := fmt.Sprintf("a=p%d", b.FirstOrdinal); !bytes.Contains(exemplar, []byte(want)) {
+		t.Fatalf("the bucket exemplar is not ordinal %d's splice: %q", b.FirstOrdinal, exemplar)
+	}
+	// When the bucket opened inside the detail window, that ordinal's row and the bucket name the
+	// same id — one store, two references. Two ids for one send would show the operator the same
+	// request twice with no way to tell.
+	if b.FirstOrdinal < a.DetailLimit {
+		row := r.Attempts[b.FirstOrdinal]
+		if row.Ordinal != b.FirstOrdinal {
+			t.Fatalf("detail rows are meant to be in plan order: row %d at index %d", row.Ordinal, b.FirstOrdinal)
+		}
+		if *row.RequestID != *b.ExampleRequestID {
+			t.Fatalf("bucket exemplar %d and its own detail row %d stored the same send twice",
+				*b.ExampleRequestID, *row.RequestID)
+		}
+		if total != a.DetailLimit {
+			t.Fatalf("stored %d requests for %d detail rows sharing the exemplar", total, a.DetailLimit)
+		}
+	} else if total != a.DetailLimit+1 {
+		// The opener sits past the detail window, so it is the one send stored that no row names.
+		t.Fatalf("stored %d requests: %d detail rows plus the out-of-window exemplar", total, a.DetailLimit)
+	}
+}
+
+// The default is to store nothing. Every caller that predates the results context menu — the MCP
+// surface, the CLI, the tests above — must keep its no-storage memory profile.
+func TestRequestsAreNotRecordedUnlessTheCallerOptsIn(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := numItems(3, "p%d")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{3}, 100)
+	var seen [][]byte
+	var mu sync.Mutex
+
+	calls := 0
+	a := NewAttack(base, sel, []PayloadSet{payloads}, plan).WithLimits(Unthrottled(1))
+	// A RequestFn without RecordRequest is not an opt-in: the flag is what says "store these".
+	a.RequestFn = func([]byte) uint64 {
+		calls++
+		return 1
+	}
+	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+
+	if calls != 0 {
+		t.Fatalf("RequestFn was called %d times without RecordRequest set", calls)
+	}
+	for _, x := range r.Attempts {
+		if x.RequestID != nil {
+			t.Fatalf("attempt %d names request %d that was never stored", x.Ordinal, *x.RequestID)
+		}
+	}
+	for _, b := range r.Buckets {
+		if b.ExampleRequestID != nil {
+			t.Fatalf("bucket at ordinal %d names request %d that was never stored", b.FirstOrdinal, *b.ExampleRequestID)
+		}
+	}
+}
+
+// The report's row slices must reach the browser as arrays, even when empty (burpsy-react-ui-9pxd).
+//
+// This is asserted on the marshalled JSON rather than on the struct because Go cannot tell the two
+// apart: a nil slice and an empty slice have the same len, range the same way, and every existing
+// test in this file passes against either. The difference only appears on the wire, where nil
+// becomes `null` — and types.tools.ts declares these fields as non-nullable arrays, so a clean
+// attack was handing the Results tab a `null` it then called `.length` on.
+func TestAZeroFailureReportMarshalsItsRowsAsArraysNotNull(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := numItems(3, "p%d")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{3}, 100)
+	var seen [][]byte
+	var mu sync.Mutex
+
+	a := NewAttack(base, sel, []PayloadSet{payloads}, plan).WithLimits(Unthrottled(2))
+	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+
+	if r.Failed != 0 {
+		t.Fatalf("this fixture is meant to have nothing fail: %d", r.Failed)
+	}
+	if len(r.Errors) != 0 {
+		t.Fatalf("and therefore no error groups: %d", len(r.Errors))
+	}
+
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, field := range []string{"buckets", "errors", "attempts"} {
+		raw, ok := wire[field]
+		if !ok {
+			t.Fatalf("the report dropped %q entirely", field)
+		}
+		if string(raw) == "null" {
+			t.Fatalf("%q went out as null; the browser declares it an array and reads .length on it", field)
+		}
+		if len(raw) == 0 || raw[0] != '[' {
+			t.Fatalf("%q is not a JSON array: %s", field, raw)
+		}
+	}
+}
+
+// The same guarantee for an attack that sent nothing at all, where buckets and attempts are the
+// empty ones. A guard that refuses every request is the reachable way to get there.
+func TestAReportWithNoSendsAtAllStillMarshalsArrays(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := numItems(3, "p%d")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{3}, 100)
+
+	a := NewAttack(base, sel, []PayloadSet{payloads}, plan).
+		WithLimits(Unthrottled(1)).
+		WithGuard(func([]byte) error { return fmt.Errorf("out of scope") })
+	r := Run(a, func([]byte) (Sent, error) {
+		t.Fatal("a refused request must never reach the sender")
+		return Sent{}, nil
+	}, nil)
+
+	if r.Sent != 0 || len(r.Buckets) != 0 || len(r.Attempts) == 0 {
+		t.Fatalf("fixture: sent=%d buckets=%d attempts=%d", r.Sent, len(r.Buckets), len(r.Attempts))
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(`"buckets":null`)) {
+		t.Fatalf("buckets went out as null: %s", encoded)
 	}
 }

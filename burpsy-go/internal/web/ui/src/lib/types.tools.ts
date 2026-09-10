@@ -82,6 +82,13 @@ export interface ResultBucket {
   reflected: boolean;
   count: number;
   first_ordinal: number;
+  /**
+   * The one stored exchange kept for this bucket — `first_ordinal`'s request and the response it
+   * produced. `null` when the server did not store it: an older server sends no
+   * `example_request_id` at all, and the results menu gates its handoffs on these rather than
+   * offering an action that would resolve nothing.
+   */
+  example_request_id: number | null;
   example_response_id: number | null;
   grep_matches: number;
   grep_extract: string | null;
@@ -99,6 +106,12 @@ export interface Attempt {
   response_len: number;
   duration_ms: number;
   reflected: boolean;
+  /** The exact bytes this attempt sent, once the server stored them. `null` for a send that
+   *  failed or was refused, and for every row on an older server. */
+  request_id: number | null;
+  /** Set only on the attempt that opened its bucket — the exemplar the engine stored. A later
+   *  attempt in the same bucket is `null`, because status/length/reflection matching is not a
+   *  claim that two response bodies are equal. */
   response_id: number | null;
   error: string | null;
   grep_matched: boolean | null;

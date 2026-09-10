@@ -542,6 +542,12 @@ export function MenuRow({
  * (lib/table-filter.ts's filterTableRows) so the count it prints next to the
  * filter box is computed from the same rows the table renders, by construction,
  * rather than two implementations that could drift.
+ *
+ * `menuGroups` is the same right-click contract VirtualTable carries, and it is
+ * here for the same reason it is there: a row an operator can read but cannot
+ * act on is a dead end. Intruder's results were exactly that until
+ * burpsy-react-ui-79u. Omit it and the rows render as plain `<tr>`s, which is
+ * what every other caller still gets.
  */
 export function SortableTable<T>({
   data,
@@ -550,6 +556,7 @@ export function SortableTable<T>({
   ariaLabel,
   initialSort = [],
   rowClassName,
+  menuGroups,
   density: densityProp,
 }: {
   data: T[];
@@ -558,6 +565,7 @@ export function SortableTable<T>({
   ariaLabel: string;
   initialSort?: SortingState;
   rowClassName?: (row: T) => string | undefined;
+  menuGroups?: (row: T) => MenuGroup[];
   density?: "comfortable" | "compact";
 }): JSX.Element {
   const storeDensity = useApp((state) => state.density);
@@ -610,17 +618,46 @@ export function SortableTable<T>({
           </thead>
           <tbody>
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className={rowClassName?.(row.original)}>
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                ))}
-              </tr>
+              <SortableRow
+                key={row.id}
+                row={row}
+                className={rowClassName?.(row.original)}
+                menuGroups={menuGroups}
+              />
             ))}
           </tbody>
         </table>
       </div>
     </div>
   );
+}
+
+/**
+ * One `SortableTable` row, optionally wrapped in its right-click menu.
+ *
+ * This is a component and not an inline `.map()` body for the reason `MenuRow` above spells out:
+ * wrapping the `<tr>` inside the callback moves the key onto a child of the mapped element and
+ * leaves the list keyless. `SortableRow` *is* the mapped element, so the key lands on it either
+ * way, and the `<tr>` stays the direct child of `<tbody>`.
+ */
+function SortableRow<T>({
+  row,
+  className,
+  menuGroups,
+}: {
+  row: Row<T>;
+  className?: string;
+  menuGroups?: (row: T) => MenuGroup[];
+}): JSX.Element {
+  const element = (
+    <tr className={className}>
+      {row.getVisibleCells().map((cell) => (
+        <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+      ))}
+    </tr>
+  );
+  if (!menuGroups) return element;
+  return <ContextMenu groups={menuGroups(row.original)}>{element}</ContextMenu>;
 }
 
 /** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */

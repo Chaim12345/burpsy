@@ -26,8 +26,8 @@ function report(overrides: Partial<AttackReport> = {}): AttackReport {
     unbucketed: 0,
     errors: [],
     attempts: [
-      { ordinal: 0, status: 200, response_len: 10, duration_ms: 5, reflected: false, response_id: 7, error: null, grep_matched: null, grep_extract: null },
-      { ordinal: 1, status: 403, response_len: 20, duration_ms: 6, reflected: true, response_id: null, error: null, grep_matched: true, grep_extract: "tok" },
+      { ordinal: 0, status: 200, response_len: 10, duration_ms: 5, reflected: false, request_id: null, response_id: 7, error: null, grep_matched: null, grep_extract: null },
+      { ordinal: 1, status: 403, response_len: 20, duration_ms: 6, reflected: true, request_id: null, response_id: null, error: null, grep_matched: true, grep_extract: "tok" },
     ],
     detail_limit: 500,
     grep_matched: 0,

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Crosshair, Download, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, Combine, Copy, Crosshair, Download, FileSearch, Pause, Play, Plus, Repeat2, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { api, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { api, copyToClipboard, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { fetchRaw } from "../lib/actions";
 import {
   intruderExportFilenames,
   intruderPayloadResolver,
@@ -75,6 +76,7 @@ import {
   Tooltip,
 } from "../ui/primitives";
 import { SortableTable, type Column } from "../ui/table";
+import type { MenuGroup } from "../ui/menu";
 
 /**
  * The filter field above each result table, with the honest count (burpsy-react-ui-4rd).
@@ -304,6 +306,154 @@ function ResponseCell({
 }
 
 /**
+ * What a results row can hand to another tool.
+ *
+ * A row is described by the message ids the server stored for it, not by the row type: a bucket
+ * and an attempt differ in what they count, and not at all in what "send this request to Repeater"
+ * means. Either id is `null` when nothing was stored — a send that failed, a detail row past the
+ * engine's DetailLimit, or a server older than the recording itself — and the menu greys the
+ * matching action rather than offering one that would resolve nothing.
+ */
+interface ResultHandoff {
+  requestId: number | null;
+  responseId: number | null;
+  /** How the row names itself in a Repeater tab title and in the toasts. */
+  label: string;
+}
+
+/**
+ * Repeater's protocol has to come from the target the attack actually used.
+ *
+ * `openRepeaterTab` defaults `protocol` to "https", so an http attack's request would arrive in
+ * Repeater as https and fail the handshake against a server that never offered TLS — the same bug
+ * `schemeOf` in lib/actions.ts exists to prevent for captured exchanges. The intruder target is
+ * URL-shaped ("http://host:port", from exchangeAuthority), with the bare-authority form handled
+ * the way targetParts does it server-side.
+ */
+function targetScheme(target: string): "http" | "https" {
+  const t = target.trim();
+  const scheme = t.indexOf("://");
+  if (scheme >= 0) return t.slice(0, scheme).toLowerCase() === "https" ? "https" : "http";
+  return /:443$/.test(t) ? "https" : "http";
+}
+
+/**
+ * The cross-tool actions an Intruder result supports (burpsy-react-ui-79u).
+ *
+ * Until this existed a result was a dead end: the Results tab could show a response and nothing
+ * else, so the way to retest an interesting row was to read the payload off the table and rebuild
+ * the request by hand in Repeater. Burp's results rows carry the suite context menu, and
+ * `configure-attack/settings.html` names "Send requests or responses to other Burp tools" as one
+ * of the three reasons its store-requests setting exists.
+ *
+ * This is deliberately not `useExchangeActions`: that menu is keyed on an `Exchange`, and an
+ * attack ordinal is not one. Fabricating an exchange id to reuse the menu would put the rest of
+ * its actions — Add to scope, Record an issue, annotate — behind an id that names nothing.
+ */
+function useResultMenu(target: string): (row: ResultHandoff) => MenuGroup[] {
+  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
+  const setComparerSlot = useApp((state) => state.setComparerSlot);
+  const setRoute = useApp((state) => state.setRoute);
+
+  return useCallback(
+    (row: ResultHandoff): MenuGroup[] => {
+      // One loader for every action: the bytes are fetched on select, not on right-click, so
+      // opening a menu over a table of 500 rows costs nothing.
+      const withBytes = (id: number | null, what: string, use: (raw: string) => void) => () => {
+        if (id === null) return;
+        void (async () => {
+          try {
+            use(await fetchRaw(id));
+          } catch (error) {
+            toast.error(`Could not load ${what} bytes: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        })();
+      };
+      const noRequest = row.requestId === null;
+      const noResponse = row.responseId === null;
+      const compare = (id: number | null, what: string, slot: "a" | "b") =>
+        withBytes(id, what, (raw) => {
+          setComparerSlot(slot, raw);
+          setRoute("comparer");
+          toast.success(`${row.label} ${what} loaded into slot ${slot.toUpperCase()}`);
+        });
+      return [
+        {
+          id: "tools",
+          actions: [
+            {
+              id: "repeater",
+              label: "Send to Repeater",
+              icon: Repeat2,
+              disabled: noRequest,
+              onSelect: withBytes(row.requestId, "request", (raw) => {
+                openRepeaterTab({
+                  name: row.label.slice(0, 42),
+                  target,
+                  protocol: targetScheme(target),
+                  request: raw,
+                });
+                setRoute("repeater");
+                toast.success(`${row.label} sent to Repeater`);
+              }),
+            },
+          ],
+        },
+        {
+          id: "comparer",
+          title: "Send to Comparer",
+          actions: [
+            {
+              id: "compare-request-a",
+              label: "Request to slot A",
+              icon: Combine,
+              disabled: noRequest,
+              onSelect: compare(row.requestId, "request", "a"),
+            },
+            {
+              id: "compare-request-b",
+              label: "Request to slot B",
+              icon: ArrowRightLeft,
+              disabled: noRequest,
+              onSelect: compare(row.requestId, "request", "b"),
+            },
+            {
+              id: "compare-response-a",
+              label: "Response to slot A",
+              icon: Combine,
+              disabled: noResponse,
+              onSelect: compare(row.responseId, "response", "a"),
+            },
+            {
+              id: "compare-response-b",
+              label: "Response to slot B",
+              icon: ArrowRightLeft,
+              disabled: noResponse,
+              onSelect: compare(row.responseId, "response", "b"),
+            },
+          ],
+        },
+        {
+          id: "clipboard",
+          actions: [
+            {
+              id: "copy-request",
+              label: "Copy request",
+              icon: Copy,
+              disabled: noRequest,
+              onSelect: withBytes(row.requestId, "request", (raw) => {
+                void copyToClipboard(raw).then(() => toast.success(`${row.label} request copied`));
+              }),
+            },
+          ],
+        },
+      ];
+    },
+    [openRepeaterTab, setComparerSlot, setRoute, target],
+  );
+}
+
+/**
  * The attack report, presented as accounting rather than a payload dump: every
  * bound the engine applied (capped, truncated, skipped, unbucketed) is shown, so
  * a small result set is never mistaken for a complete one.
@@ -313,11 +463,18 @@ function AttackResult({
   examples,
   snapshot,
   onOpenMessage,
+  bucketMenu,
+  attemptMenu,
 }: {
   view: RunView;
   examples: Map<number, string[]>;
   snapshot: IntruderPayloadSnapshot | null;
   onOpenMessage: (id: number, label: string) => void;
+  // Two typed builders rather than one over a `ResultBucket | Attempt` union: the two row shapes
+  // name their stored bytes under different field names, and a union would push that branch into
+  // this component, which has no reason to know either.
+  bucketMenu?: (bucket: ResultBucket) => MenuGroup[];
+  attemptMenu?: (attempt: Attempt) => MenuGroup[];
 }): JSX.Element {
   const { report, payload_sets: sets } = view;
 
@@ -644,6 +801,7 @@ function AttackResult({
                 columns={bucketColumns}
                 getRowId={(bucket) => `${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}
                 ariaLabel="Result buckets"
+                menuGroups={bucketMenu}
               />
             ) : (
               <p className="cell-dim">No buckets match the filter — all {report.buckets.length} are hidden.</p>
@@ -725,6 +883,7 @@ function AttackResult({
               getRowId={(attempt) => String(attempt.ordinal)}
               ariaLabel="Attempts"
               rowClassName={(attempt) => (attempt.error ? "row-flag-bad" : undefined)}
+              menuGroups={attemptMenu}
             />
           ) : (
             <p className="cell-dim">No attempts match the filter — all {report.attempts.length} are hidden.</p>
@@ -843,6 +1002,29 @@ export function IntruderPage(): JSX.Element {
   const [myTaskId, setMyTaskId] = useState<number | null>(null);
   const attacks = useIntruderAttacks(run.isPending);
   const attackAction = useIntruderAttackAction();
+
+  // Results handoff (burpsy-react-ui-79u). A bucket's stored exchange is its exemplar's, so both
+  // row types are labelled by the ordinal whose bytes they actually carry — a bucket row that said
+  // "bucket 200/1024" while resending ordinal 7's request would be naming the wrong thing.
+  const resultMenu = useResultMenu(target);
+  const bucketMenu = useCallback(
+    (bucket: ResultBucket) =>
+      resultMenu({
+        requestId: bucket.example_request_id,
+        responseId: bucket.example_response_id,
+        label: `Intruder attempt ${bucket.first_ordinal}`,
+      }),
+    [resultMenu],
+  );
+  const attemptMenu = useCallback(
+    (attempt: Attempt) =>
+      resultMenu({
+        requestId: attempt.request_id,
+        responseId: attempt.response_id,
+        label: `Intruder attempt ${attempt.ordinal}`,
+      }),
+    [resultMenu],
+  );
 
   // The attacks list reports `target` as bare host:port (the server's targetParts collapses the URL
   // to that; api_types.go), so the page's URL-shaped target has to be reduced the same way before it
@@ -2027,6 +2209,8 @@ export function IntruderPage(): JSX.Element {
               examples={examples}
               snapshot={snapshot}
               onOpenMessage={(id, messageLabel) => setOpenMessage({ id, label: messageLabel })}
+              bucketMenu={bucketMenu}
+              attemptMenu={attemptMenu}
             />
           ) : null}
 

@@ -833,6 +833,8 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		}
 		return intruder.Sent{Raw: res.Raw, Duration: res.Duration, Status: res.Status}, nil
 	}
+	// The response recorder remains the engine's one-per-bucket exemplar rule. The exact-request
+	// recorder is attached to the attack after construction below, for the bounded attempt rows.
 	record := func(raw []byte) uint64 {
 		id, _ := s.store.Put(raw, core.DirectionResponse)
 		return uint64(id)
@@ -854,6 +856,14 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		attack.WithAutoPause(ap)
+	}
+	attack.RecordRequest = true
+	attack.RequestFn = func(raw []byte) uint64 {
+		id, err := s.store.Put(raw, core.DirectionRequest)
+		if err != nil {
+			return 0
+		}
+		return uint64(id)
 	}
 	// On the dashboard for the duration of the attack (DASH-01). The total is the plan's length —
 	// what will actually be sent — not the combination count, which is what the plan's bound already
@@ -1034,12 +1044,15 @@ func buildGrep(matchRe, extractRe *string) (intruder.Grep, error) {
 
 // payloadsAt recovers the payload combination behind a plan ordinal. This is why results can hold
 // an ordinal and nothing else: the plan is a pure function of the index.
+// Never nil: BucketExample.Payloads goes out as `payloads` and types.tools.ts declares it
+// `string[]`, so an ordinal the plan cannot place must be an empty array rather than a `null` the
+// browser was told could not happen (burpsy-react-ui-9pxd).
 func payloadsAt(plan *intruder.AttackPlan, sets []intruder.PayloadSet, ordinal int) []string {
+	out := []string{}
 	var asg intruder.Assignment
 	if !plan.Fill(ordinal, &asg) {
-		return nil
+		return out
 	}
-	var out []string
 	for _, slot := range asg.Slots {
 		if slot.Set < 0 || slot.Set >= len(sets) {
 			continue
