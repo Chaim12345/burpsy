@@ -16,7 +16,7 @@ import type {
 import { HttpEditor } from "../ui/editor";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { DetailList } from "../ui/json";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Switch, Textarea } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Switch, Textarea } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 /* --- editor shapes --------------------------------------------------------
@@ -1063,6 +1063,39 @@ export function SessionPage(): JSX.Element {
          </span>
         </div>
        ) : null}
+       <div className="inline-add">
+        <Checkbox
+         label="Regular expression"
+         checked={editing.validity.regex === true}
+         disabled={!wired}
+         onCheckedChange={(on) => setEditing({ ...editing, validity: { ...editing.validity, regex: on || undefined } })}
+        />
+        <Checkbox
+         label="Case sensitive"
+         checked={editing.validity.case_sensitive === true}
+         disabled={!wired}
+         onCheckedChange={(on) => setEditing({ ...editing, validity: { ...editing.validity, case_sensitive: on || undefined } })}
+        />
+       </div>
+       <Field
+        label="Redirect target URL contains"
+        hint="Optional. Matched against where a redirect at the last step lands — resolved, not followed. Blank means the redirect target is not checked."
+       >
+        {(id) => (
+         <Input
+          id={id}
+          value={editing.validity.url_contains ?? ""}
+          placeholder="/dashboard"
+          disabled={!wired}
+          onChange={(event) =>
+           setEditing({
+            ...editing,
+            validity: { ...editing.validity, url_contains: event.target.value || undefined },
+           })
+          }
+         />
+        )}
+       </Field>
       </div>
 
       <SectionHeading

@@ -25,14 +25,29 @@ const (
 )
 
 type ValidityRule struct {
-	StatusIs        *int            `json:"status_is,omitempty"`
-	BodyContains    string          `json:"body_contains,omitempty"`
-	BodyNotContains string          `json:"body_not_contains,omitempty"`
-	HeaderPresent   string          `json:"header_present,omitempty"`
-	HeaderAbsent    string          `json:"header_absent,omitempty"`
-	All             []*ValidityRule `json:"all,omitempty"`
-	Any             []*ValidityRule `json:"any,omitempty"`
-	Not             *ValidityRule   `json:"not,omitempty"`
+	StatusIs        *int   `json:"status_is,omitempty"`
+	BodyContains    string `json:"body_contains,omitempty"`
+	BodyNotContains string `json:"body_not_contains,omitempty"`
+	HeaderPresent   string `json:"header_present,omitempty"`
+	HeaderAbsent    string `json:"header_absent,omitempty"`
+	// Regex flips BodyContains/BodyNotContains from literal substring to regular-expression
+	// matching, and CaseSensitive disables the case-folding a literal (and a regex, unless
+	// the pattern itself carries (?i)) would otherwise get — Burp's validity search offers
+	// exactly these two dials (burpsy-react-ui-9prk). The flags apply to both body clauses:
+	// an operator stating one body condition has stated their matching intent for the check.
+	Regex         bool `json:"regex,omitempty"`
+	CaseSensitive bool `json:"case_sensitive,omitempty"`
+	// URLContains matches the redirection target's absolute URL — Burp's "the URL of any
+	// redirection target" (session-handling-rules.html). The macro runner reports where a
+	// redirect chain landed (StepResult.FinalURL); matching is literal unless Regex says
+	// otherwise, under the same CaseSensitive dial. Absent FinalURL ("no redirect
+	// happened") is an unmeasured clause — Indeterminate, like a status nobody measured —
+	// not a failed one, because a response that did not redirect is not evidence about a
+	// redirect target.
+	URLContains string          `json:"url_contains,omitempty"`
+	All         []*ValidityRule `json:"all,omitempty"`
+	Any         []*ValidityRule `json:"any,omitempty"`
+	Not         *ValidityRule   `json:"not,omitempty"`
 }
 
 // Evaluate decides whether a response shows a still-valid session.
@@ -62,14 +77,7 @@ type ValidityRule struct {
 // plainly intended.
 //
 // Conjunction is not a guess about that intent: `All{}` in this same file already defines
-// the tri-state composition, and this reuses it verbatim. A rule stating one clause behaves
-// exactly as before, so nothing that works today changes. A rule stating several now means
-// what it says.
-//
-// Precedence follows `All{}`: a definite Invalid wins over an Indeterminate, because a clause
-// that positively disproves the session is more informative than one that could not be
-// decided. A rule stating nothing at all is still Indeterminate — silence is not consent.
-func (vr *ValidityRule) Evaluate(status int, hdrs map[string]string, body []byte) ValidityState {
+func (vr *ValidityRule) Evaluate(status int, hdrs map[string]string, body []byte, finalURL string) ValidityState {
 	if vr == nil {
 		return Indeterminate
 	}
@@ -101,10 +109,10 @@ func (vr *ValidityRule) Evaluate(status int, hdrs map[string]string, body []byte
 		}
 	}
 	if vr.BodyContains != "" {
-		note(boolState(bytes.Contains(body, []byte(vr.BodyContains))))
+		note(boolState(bodyMatches(vr, body, vr.BodyContains, false)))
 	}
 	if vr.BodyNotContains != "" {
-		note(boolState(!bytes.Contains(body, []byte(vr.BodyNotContains))))
+		note(boolState(!bodyMatches(vr, body, vr.BodyNotContains, false)))
 	}
 	if vr.HeaderPresent != "" {
 		note(boolState(hasHeader(hdrs, vr.HeaderPresent)))
@@ -112,20 +120,71 @@ func (vr *ValidityRule) Evaluate(status int, hdrs map[string]string, body []byte
 	if vr.HeaderAbsent != "" {
 		note(boolState(!hasHeader(hdrs, vr.HeaderAbsent)))
 	}
+	if vr.URLContains != "" {
+		// A response that did not redirect has no target to test: an unmeasured clause, not a
+		// failed one — the same treatment a missing status gets above. Burp reads the redirect
+		// target only when there is one.
+		switch {
+		case finalURL == "":
+			note(Indeterminate)
+		default:
+			note(boolState(bodyMatches(vr, []byte(finalURL), vr.URLContains, false)))
+		}
+	}
 	if vr.All != nil {
-		note(evaluateAll(vr.All, status, hdrs, body))
+		note(evaluateAll(vr.All, status, hdrs, body, finalURL))
 	}
 	if vr.Any != nil {
-		note(evaluateAny(vr.Any, status, hdrs, body))
+		note(evaluateAny(vr.Any, status, hdrs, body, finalURL))
 	}
 	if vr.Not != nil {
-		note(negate(vr.Not.Evaluate(status, hdrs, body)))
+		note(negate(vr.Not.Evaluate(status, hdrs, body, finalURL)))
 	}
 
 	if stated == 0 {
 		return Indeterminate
 	}
 	return verdict
+}
+
+// bodyMatches runs one body-or-URL condition under the rule's matching dials: a literal
+// substring, case-folded unless CaseSensitive, or a compiled regex when Regex is set. `invert`
+// is reserved (both call sites already negate in Go) and exists so the signature says what the
+// caller asks rather than relying on reading the ! at the call.
+//
+// A regex that does not compile reports no match rather than panicking: a validity rule is
+// configuration, and configuration that crashes the login check would take a whole scan's
+// re-authentication with it. Compile-per-call is deliberate — Evaluate runs a handful of times
+// per login attempt, not per response on the wire, and caching compiled patterns on the rule
+// would need an invalidation story every JSON round-trip would have to honour.
+func bodyMatches(vr *ValidityRule, raw []byte, pattern string, invert bool) bool {
+	_ = invert
+	if vr == nil || pattern == "" {
+		return false
+	}
+	if vr.Regex {
+		expr := pattern
+		if !vr.CaseSensitive && !hasInlineFlag(expr) {
+			expr = "(?i)" + expr
+		}
+		re, err := regexp.Compile(expr)
+		if err != nil {
+			return false
+		}
+		return re.Match(raw)
+	}
+	if vr.CaseSensitive {
+		return bytes.Contains(raw, []byte(pattern))
+	}
+	return bytes.Contains(bytes.ToLower(raw), bytes.ToLower([]byte(pattern)))
+}
+
+// hasInlineFlag reports whether the expression already opens with Go's inline flags group, so
+// the case-folding prefix is not stacked on a pattern that states its own — "(?i)token" plus
+// another "(?i)" is harmless, but "(?s)" plus "(?i)" would silently change what the operator
+// wrote.
+func hasInlineFlag(expr string) bool {
+	return strings.HasPrefix(expr, "(?")
 }
 
 func boolState(ok bool) ValidityState {
@@ -146,10 +205,10 @@ func hasHeader(hdrs map[string]string, name string) bool {
 
 // evaluateAll is the original All{} semantics, extracted unchanged so the top-level
 // conjunction above and an explicit All{} block cannot drift apart.
-func evaluateAll(subs []*ValidityRule, status int, hdrs map[string]string, body []byte) ValidityState {
+func evaluateAll(subs []*ValidityRule, status int, hdrs map[string]string, body []byte, finalURL string) ValidityState {
 	allV := true
 	for _, s := range subs {
-		switch s.Evaluate(status, hdrs, body) {
+		switch s.Evaluate(status, hdrs, body, finalURL) {
 		case Invalid:
 			return Invalid
 		case Indeterminate:
@@ -162,10 +221,10 @@ func evaluateAll(subs []*ValidityRule, status int, hdrs map[string]string, body 
 	return Indeterminate
 }
 
-func evaluateAny(subs []*ValidityRule, status int, hdrs map[string]string, body []byte) ValidityState {
+func evaluateAny(subs []*ValidityRule, status int, hdrs map[string]string, body []byte, finalURL string) ValidityState {
 	best := Invalid
 	for _, s := range subs {
-		switch s.Evaluate(status, hdrs, body) {
+		switch s.Evaluate(status, hdrs, body, finalURL) {
 		case Valid:
 			return Valid
 		case Indeterminate:
@@ -173,6 +232,40 @@ func evaluateAny(subs []*ValidityRule, status int, hdrs map[string]string, body 
 		}
 	}
 	return best
+}
+
+// ValidateValidityPatterns checks every regex a validity tree states, recursively — All, Any,
+// Not all carry their own leaves. Returns the first uncompilable pattern named, or nil.
+//
+// Why not trust Evaluate's no-match-on-error path: a validity regex that never compiles
+// reports no match forever, which reads as "session invalid" or "session valid" depending on
+// which clause it sits in — a rule that lies by omission, silently re-logging-in or never
+// re-logging-in. Refusing it at the door puts the error where the operator is typing.
+func ValidateValidityPatterns(v *ValidityRule) error {
+	if v == nil {
+		return nil
+	}
+	if v.Regex {
+		for _, pattern := range []string{v.BodyContains, v.BodyNotContains, v.URLContains} {
+			if pattern == "" {
+				continue
+			}
+			if _, err := regexp.Compile(pattern); err != nil {
+				return fmt.Errorf("validity regex %q does not compile: %w", pattern, err)
+			}
+		}
+	}
+	for _, sub := range v.All {
+		if err := ValidateValidityPatterns(sub); err != nil {
+			return err
+		}
+	}
+	for _, sub := range v.Any {
+		if err := ValidateValidityPatterns(sub); err != nil {
+			return err
+		}
+	}
+	return ValidateValidityPatterns(v.Not)
 }
 
 func negate(s ValidityState) ValidityState {
@@ -1088,21 +1181,31 @@ func (c *Coordinator) HandleResponse(host string, port uint16, tls bool, status 
 	}
 	rule := c.MatchingRule(host)
 	if rule != nil && rule.Validity != nil {
-		state := rule.Validity.Evaluate(status, hdrs, body)
+		// Live proxy traffic: no redirect chain is followed here, so the redirect-target clause is unmeasured.
+		state := rule.Validity.Evaluate(status, hdrs, body, "")
 		if state == Invalid {
 			c.logger.Debug("session invalid", zap.String("rule", rule.Name), zap.String("host", host))
 		}
 	}
 }
 
+// StepResult is what a macro step produced. Headers are the response headers
+// (Set-Cookie is absorbed; extraction reads them and the body).
+//
+// FinalURL is where a redirect chain that began at this response landed — the last hop's
+// absolute URL — or "" when the response did not redirect. The macro runner fills it by
+// resolving the Location the way the sender's redirect follower does — reading a target, not
+// sending to one — so the validity check can match the redirection target the way Burp's
+// validity search does (burpsy-react-ui-9prk) without a follow that no operator asked for.
+type StepResult struct {
+	Status   int
+	Headers  map[string]string
+	Body     []byte
+	FinalURL string
+}
+
 // logExtraction records what one extraction produced, so an extraction that lifted nothing is
 // visible without reading the wire.
-//
-// Both macro runners drop a value that did not resolve, which is right — a stale or empty token must
-// not be threaded into the next step — but dropping it silently is how a login turns into "the button
-// did nothing". A resolved value is logged at debug and never logged *itself*: it is a session token
-// by construction, and putting one in a log file is a credential leak with a long tail. Everything
-// else is a warning naming the rule, the step, the extraction and the reason.
 func (c *Coordinator) logExtraction(rule *SessionRule, stepIndex int, ex *Extraction, out ExtractResult) {
 	if c.logger == nil || ex == nil {
 		return
@@ -1131,14 +1234,6 @@ func (c *Coordinator) CookieHeader(host string, port uint16, tls bool) string {
 }
 
 // ---- Macro execution ---------------------------------------------------------------------------
-
-// StepResult is what a macro step produced. Headers are the response headers
-// (Set-Cookie is absorbed; extraction reads them and the body).
-type StepResult struct {
-	Status  int
-	Headers map[string]string
-	Body    []byte
-}
 
 // MacroStepRunner sends one macro step and returns its response. It is the
 // trait seam that keeps this package free of the sender: the web layer supplies
@@ -1219,7 +1314,7 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 	}
 	state := Indeterminate
 	if last != nil && rule.Validity != nil {
-		state = rule.Validity.Evaluate(last.Status, last.Headers, last.Body)
+		state = rule.Validity.Evaluate(last.Status, last.Headers, last.Body, last.FinalURL)
 	}
 	return sent, results, state
 }
@@ -1340,7 +1435,7 @@ func (c *Coordinator) RunMacroDetailed(rule *SessionRule, runner MacroStepRunner
 	}
 
 	if last != nil && rule.Validity != nil {
-		report.Status = rule.Validity.Evaluate(last.Status, last.Headers, last.Body)
+		report.Status = rule.Validity.Evaluate(last.Status, last.Headers, last.Body, last.FinalURL)
 	}
 	return report
 }

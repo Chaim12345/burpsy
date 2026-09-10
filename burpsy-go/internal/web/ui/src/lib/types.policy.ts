@@ -99,6 +99,12 @@ export interface SessionValidity {
  body_not_contains?: string;
  header_present?: string;
  header_absent?: string;
+ /** When set, body_contains / body_not_contains / url_contains are regexes, not literals. */
+ regex?: boolean;
+ /** Disables the case-folding a literal (and a flagless regex) would otherwise get. */
+ case_sensitive?: boolean;
+ /** The URL of any redirection target: matched where the last step's redirect lands. */
+ url_contains?: string;
  all?: SessionValidity[];
  any?: SessionValidity[];
  not?: SessionValidity;

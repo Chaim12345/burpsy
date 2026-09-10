@@ -452,6 +452,12 @@ func dtoToRule(dto sessionRuleDto) (*session.SessionRule, error) {
 	if err := session.ValidateRuleStatedScope(rule, scopeStated); err != nil {
 		return nil, err
 	}
+	// A validity rule with Regex set states its patterns as regexes: compiling them HERE is
+	// what turns "an uncompilable validity regex silently never fires" — a control that lies
+	// by omission, the same rule the auto-pause follows — into a 400 naming the pattern.
+	if err := session.ValidateValidityPatterns(rule.Validity); err != nil {
+		return nil, err
+	}
 	return rule, nil
 }
 
@@ -864,8 +870,40 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 		// which nil would not be.
 		s.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode,
 			toollog.Bytes(len(resp.Body)), uint64(resp.Duration.Milliseconds()), "", nil)
-		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil
+		// FinalURL: where a redirect at this step points — the absolute resolution of the
+		// Location header against the step's own URL, exactly the arithmetic the sender's
+		// redirect follower uses. Resolved here, NOT followed: reading the target is what the
+		// validity check needs (burpsy-react-ui-9prk); sending to it is a hop, and a hop is a
+		// decision the operator or the redirect policy makes, never a side effect of a login
+		// check.
+		finalURL := ""
+		if location, isRedirect := redirectTargetOf(resp.StatusCode, hdrs); isRedirect && location != "" {
+			if base, perr := url.Parse(step.URL); perr == nil {
+				if ref, rerr := url.Parse(location); rerr == nil {
+					finalURL = base.ResolveReference(ref).String()
+				}
+			}
+		}
+		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body, FinalURL: finalURL}, nil
 	}
+}
+
+// redirectTargetOf mirrors sender.redirectLocation's status list: the five redirects that
+// carry a target. Kept local rather than exported from sender because the answer here is a
+// string to compare, not a chain to follow — exporting the reader would invite a caller to
+// treat "resolved" as "sent".
+func redirectTargetOf(status int, hdrs map[string]string) (string, bool) {
+	switch status {
+	case 301, 302, 303, 307, 308:
+	default:
+		return "", false
+	}
+	for name, value := range hdrs {
+		if strings.EqualFold(name, "Location") {
+			return strings.TrimSpace(value), true
+		}
+	}
+	return "", true
 }
 
 func (s *Server) sessionRuleUpdateMacro(w http.ResponseWriter, r *http.Request, idStr string) {
