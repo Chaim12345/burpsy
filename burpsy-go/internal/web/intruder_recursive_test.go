@@ -273,3 +273,58 @@ func Test_intruder_grep_match_list_counts_and_refuses_both_forms(t *testing.T) {
 		t.Fatalf("the refusal should name the conflict, got: %s", strings.TrimSpace(rec2.Body.String()))
 	}
 }
+
+// Error handling over the wire (n39): the request names retries and the origin fails once then
+// answers; the report carries retries_used and the attempt row carries the eventual answer.
+// Burp's bounds travel with it: a negative count and an out-of-range pause are refused.
+func Test_intruder_error_handling_retries_over_the_wire(t *testing.T) {
+	var calls int32
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			// Simulate a network failure at the transport: close without responding.
+			panic(http.ErrAbortHandler)
+		}
+		fmt.Fprintf(w, "recovered")
+	}))
+	defer origin.Close()
+	host, port := hostPort(t, origin)
+
+	s := newTestServer()
+	s.scope.AddInclude(host)
+	raw := fmt.Sprintf("GET /?q=x HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port)
+	id := putMessage(t, s, []byte(raw), core.DirectionRequest)
+
+	runBody := func(extra string) string {
+		return fmt.Sprintf(`{
+			"msg_id": %d, "target": "%s:%d", "mode": "sniper", "points": [0],
+			"payloads": ["a"], "retry_delay_ms": 0, %s
+		}`, id, host, port, extra)
+	}
+
+	rec := postJSONRaw(t, s, "/api/intruder/run", runBody(`"retries": 2`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run = %d: %s", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+	var view struct {
+		Report struct {
+			Sent        int `json:"sent"`
+			Failed      int `json:"failed"`
+			RetriesUsed int `json:"retries_used"`
+		} `json:"report"`
+	}
+	if err := decodeInto(rec, &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.Report.Failed != 0 || view.Report.RetriesUsed < 1 {
+		t.Fatalf("the aborted first send should have been retried to success: failed=%d retries=%d",
+			view.Report.Failed, view.Report.RetriesUsed)
+	}
+
+	// Bounds: negative retries and a pause past Burp's 600000 ceiling are refused.
+	if rec := postJSONRaw(t, s, "/api/intruder/run", runBody(`"retries": -1`)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("negative retries should be refused, got %d", rec.Code)
+	}
+	if rec := postJSONRaw(t, s, "/api/intruder/run", runBody(`"retry_delay_ms": 600001`)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("retry_delay_ms past 600000 should be refused, got %d", rec.Code)
+	}
+}

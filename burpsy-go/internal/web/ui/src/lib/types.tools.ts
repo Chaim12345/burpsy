@@ -178,6 +178,9 @@ export interface AttackReport {
   /** The Grep - Match expressions as typed (irt), in list order — the results-table headers for
    *  the per-expression count columns. Present only when a list ran. */
   grep_match_labels?: string[];
+  /** How many retry sends the attack made (n39) — Burp's error-handling count. Zero unless the
+   *  attack configured retries. */
+  retries_used: number;
   pool: string | null;
   auto_throttle_engaged: number;
 }

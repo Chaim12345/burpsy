@@ -820,6 +820,9 @@ function AttackResult({
     report.unbucketed ? `${formatCount(report.unbucketed)} results outside the shown buckets` : null,
     report.attempts.length < report.sent ? `Per-attempt detail limited to ${formatCount(report.detail_limit)} rows` : null,
     report.auto_throttle_engaged ? `Auto-throttle engaged ${report.auto_throttle_engaged}×` : null,
+    // n39: the error-handling count is a caveat, not a footnote — an attack that retried its
+    // way to a full result set says so, the way Burp's own results mark retried requests.
+    report.retries_used ? `${formatCount(report.retries_used)} retried request${report.retries_used === 1 ? "" : "s"} (network failures sent again per the error-handling settings)` : null,
   ].filter((value): value is string => value !== null);
 
   return (
@@ -1074,6 +1077,8 @@ export function IntruderPage(): JSX.Element {
     maxRequests,
     maxInFlight,
     rps,
+    retries,
+    retryDelayMS,
   } = config;
 
   const setMsgId = field("msgId");
@@ -1134,6 +1139,8 @@ export function IntruderPage(): JSX.Element {
   const setMaxRequests = field("maxRequests");
   const setMaxInFlight = field("maxInFlight");
   const setRps = field("rps");
+  const setRetries = field("retries");
+  const setRetryDelayMS = field("retryDelayMS");
 
   const result = storedRun?.view ?? null;
   const legacyResult = storedRun?.legacy ?? null;
@@ -1512,6 +1519,10 @@ export function IntruderPage(): JSX.Element {
       ...(usePool
         ? { pool: poolName.trim() }
         : { max_in_flight: maxInFlight, ...(rps.trim() ? { rps: Number(rps) } : {}) }),
+      // Error handling (n39): empty means the server's default — Burp's own 3 retries with a
+      // 2000ms pause. A field that names a number sends it; 0 disables retries.
+      ...(retries.trim() !== "" ? { retries: Number(retries) } : {}),
+      ...(retryDelayMS.trim() !== "" ? { retry_delay_ms: Number(retryDelayMS) } : {}),
       // Burp's "Follow redirections" (tirx). Omitted, not sent as "", when the operator left it on
       // the standing policy — an absent field and an empty string must not become two different
       // wire shapes for "I did not choose", the same discipline url_encode_characters above holds.
@@ -2433,6 +2444,46 @@ export function IntruderPage(): JSX.Element {
                     value={poolName ? "" : rps}
                     onChange={(event) => setRps(event.target.value)}
                     placeholder={poolName ? "from the pool" : "unlimited"}
+                  />
+                )}
+              </Field>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Error handling"
+              detail="What happens when the target hiccups. Burp's defaults apply when these are blank."
+            />
+            <div className="form-grid">
+              <Field
+                label="Retries on network failure"
+                hint="How many times a failed request is sent again before its error counts. Blank = 3 (Burp's default); 0 disables. A retried request is still one attempt — the report counts retries separately."
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    value={retries}
+                    onChange={(event) => setRetries(event.target.value)}
+                    placeholder="3"
+                  />
+                )}
+              </Field>
+              <Field
+                label="Pause before retry (ms)"
+                hint="How long to wait between retries. Blank = 2000ms (Burp's default). Bounded at 600000, Burp's own validation."
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    max={600000}
+                    value={retryDelayMS}
+                    onChange={(event) => setRetryDelayMS(event.target.value)}
+                    placeholder="2000"
                   />
                 )}
               </Field>

@@ -125,6 +125,10 @@ export interface IntruderConfig {
  maxRequests: number;
  maxInFlight: number;
  rps: string;
+ /** Burp's "Number of retries on network failure" (n39). Empty = the server's default (Burp's 3). */
+ retries: string;
+ /** Burp's "Pause before retry" in ms (n39). Empty = the server's default (Burp's 2000). */
+ retryDelayMS: string;
 }
 
 /**
@@ -183,6 +187,8 @@ export function emptyIntruderConfig(): IntruderConfig {
   maxRequests: 1000,
   maxInFlight: 8,
   rps: "",
+  retries: "",
+  retryDelayMS: "",
  };
 }
 

@@ -412,6 +412,20 @@ type Attack struct {
 	// chain driver: the plan is not consulted, because the payloads are response-derived and
 	// therefore unknown at plan time. See RecursiveGrep.
 	Recursive *RecursiveGrep
+	// Retries is Burp's "Number of retries on network failure" (n39): how many times a failed
+	// send is retried before its error becomes the attempt's outcome. Zero disables; the web
+	// layer defaults it to Burp's own 3 (Zrur: requireNonNullElse(numretries, "3")). A retry
+	// is a network-failure answer, not a new attempt — the request the target already failed
+	// to answer is sent again, and the report counts retries separately (Retries field on
+	// AttackReport) so a hole-filling retry is never hidden inside sent/failed.
+	Retries int
+	// RetryDelay is Burp's "Pause before retry" (n39): how long to wait between retries.
+	// Burp's default is 2000ms (Zrur: "2000" beside pausebeforeretry) and its validation bound
+	// is 0..600000 (Zb33: "Pause before retry must be between 0 and 600000").
+	RetryDelay time.Duration
+	// retriesUsed counts retry sends across the attack. Atomic: the drivers' send paths write
+	// it while the collector reads the total for the report.
+	retriesUsed atomic.Int64
 	// autoPaused counts trigger events. Atomic: doSend's send goroutines write it while the
 	// collector reads it for the report.
 	autoPaused atomic.Int64
@@ -471,6 +485,59 @@ func (a *Attack) WithAutoPause(ap *AutoPause) *Attack {
 func (a *Attack) WithRecursive(rg *RecursiveGrep) *Attack {
 	a.Recursive = rg
 	return a
+}
+
+// WithRetries attaches Burp's error-handling knobs (n39): retries per failed send, and the
+// pause between them. retries < 0 or delay < 0 are clamped to zero here rather than refused —
+// the web layer validates the operator's numbers against Burp's own bounds; the engine just
+// refuses to sleep a negative time.
+func (a *Attack) WithRetries(retries int, delay time.Duration) *Attack {
+	if retries < 0 {
+		retries = 0
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	a.Retries = retries
+	a.RetryDelay = delay
+	return a
+}
+
+// RetriesUsed reports how many retry sends the attack made, for the report. The count is the
+// honest half of the feature: an attack that retried its way to success reads differently from
+// one that never stumbled, and a summary that hides retries would make a flaky target look
+// clean.
+func (a *Attack) RetriesUsed() int {
+	if a == nil {
+		return 0
+	}
+	return int(a.retriesUsed.Load())
+}
+
+// retryWait sleeps the pause before a retry, in slices that notice a stop — checked after
+// EVERY slice, not once at the end, because the stop lands mid-sleep and the whole point of
+// slicing is to cut the wait short: a plain time.Sleep(delay) would hold a stopped attack's
+// send goroutine for the whole pause, and a 600-second sleep per dead connection is how an
+// operator learns the stop button lied. Returns false when the control was stopped mid-wait.
+func (a *Attack) retryWait(ctx context.Context) bool {
+	remaining := a.RetryDelay
+	const slice = 25 * time.Millisecond
+	for remaining > 0 {
+		step := slice
+		if remaining < step {
+			step = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(step):
+		}
+		remaining -= step
+		if !a.Control.gate() {
+			return false
+		}
+	}
+	return true
 }
 
 // AutoPauseFired reports the trigger count for the report. Atomic because the driver goroutine
@@ -613,6 +680,10 @@ type AttackReport struct {
 	// list order — the results-table headers for the per-expression count columns. Present
 	// only when a list ran; nil otherwise, so the browser can tell "no list" from "empty list".
 	GrepMatchLabels []string `json:"grep_match_labels,omitempty"`
+	// RetriesUsed is how many retry sends the attack made (n39) — Burp's error-handling count,
+	// surfaced because an attack that retried its way to a full result set is a different fact
+	// about the target than one that never stumbled. Zero unless the attack configured retries.
+	RetriesUsed int `json:"retries_used"`
 }
 
 // bucketKey is the distinct-behaviour triple. hasStatus distinguishes "no response" from a
@@ -857,6 +928,7 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		// distinguishable, matching the Attempt counts' always-array contract where absence
 		// would shift columns.
 		GrepMatchLabels: a.Grep.MatchList.labelsOrEmpty(),
+		RetriesUsed:     a.RetriesUsed(),
 	}
 }
 
@@ -868,6 +940,11 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 // the limits cut.
 func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	started := time.Now()
+	// The retry pause (n39) waits in slices that notice a stop — through Control, which is the
+	// cancellation surface every web-launched attack already wires (StopOnContext). A bare
+	// Background here is what the driver's SuiteGate call already uses; Control is what makes
+	// it stoppable.
+	ctx := context.Background()
 	limiter := NewRateLimiter(&a.Limits)
 	col := newCollector(a, record)
 
@@ -941,7 +1018,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt}
 					}
 				}()
-				h, err := doSend(a, limiter, send, raw, payloads)
+				h, err := doSend(a, limiter, send, raw, payloads, ctx)
 				if h != nil {
 					h.request = raw
 				}
@@ -976,6 +1053,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 // indistinguishable from any other attack's — the operator's pause and stop work mid-chain.
 func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) *AttackReport {
 	started := time.Now()
+	ctx := context.Background()
 	// The initial payload is the first set's first item: Resolve put it there (payload.go), so
 	// the wire contract's "payload_sets" and the chain agree on where the chain starts.
 	if len(a.Sets) == 0 || len(a.setBytes) == 0 || len(a.setBytes[0]) == 0 {
@@ -1023,7 +1101,7 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 			}
 		}
 		sentAt := time.Now()
-		h, err := doSend(a, limiter, send, req, payloads)
+		h, err := doSend(a, limiter, send, req, payloads, ctx)
 		// Released immediately after the send, matching the plan loop's defer-permit in its
 		// goroutine (which releases the moment doSend returns): the serial driver holds one
 		// permit across exactly one request, and holding it across the extraction would
@@ -1062,9 +1140,26 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 	return col.finish(a, limiter, time.Since(started), chained)
 }
 
-// doSend runs one request: send, observe the limiter, ask the reflection and grep questions.
-func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [][]byte) (*hit, error) {
+// doSend runs one request: send (retrying network failures per Burp's error-handling settings,
+// n39), observe the limiter, ask the reflection and grep questions.
+//
+// The retry lives here and nowhere else because this is the one function every request passes
+// through — the plan loop's goroutines and the recursive chain's serial driver both land here —
+// so a retry cannot be forgotten on one path and double-counted on another. A retried request
+// is still ONE attempt: the Attempt row and the buckets describe what the target finally
+// answered, and the retry count rides the report separately.
+//
+// A send error whose context is already done is not a failure to retry — it is the attack (or
+// the operator) giving up — so ctx.Err() short-circuits before the loop.
+func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [][]byte, ctx context.Context) (*hit, error) {
 	sent, err := send(raw)
+	for attempt := 0; err != nil && attempt < a.Retries && ctx.Err() == nil; attempt++ {
+		if !a.retryWait(ctx) {
+			break // stopped mid-pause: the give-up wins over the retry
+		}
+		a.retriesUsed.Add(1)
+		sent, err = send(raw)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -496,13 +496,22 @@ type intruderRunReq struct {
 	// GrepMatchCaseSensitive turns off the case-folding a simple-string match applies.
 	GrepMatchCaseSensitive *bool `json:"grep_match_case_sensitive"`
 	// GrepMatchExcludeHeaders searches the response body only — Burp's "Exclude HTTP headers".
-	GrepMatchExcludeHeaders *bool                  `json:"grep_match_exclude_headers"`
-	Pool                    *string                `json:"pool"`
-	AutoThrottle            *intruder.AutoThrottle `json:"auto_throttle"`
-	RPS                     *float64               `json:"rps"`
-	MaxInFlight             *int                   `json:"max_in_flight"`
-	MaxRequests             *int                   `json:"max_requests"`
-	TimeoutMS               *uint64                `json:"timeout_ms"`
+	GrepMatchExcludeHeaders *bool `json:"grep_match_exclude_headers"`
+	// Retries is Burp's "Number of retries on network failure" (n39). Nil means Burp's own
+	// default of 3 — Zrur: requireNonNullElse(numretries, "3") — because the operator who
+	// never thought about error handling is exactly the person Burp's default protects, and a
+	// zero-default would make the flaky-target case the loud one. Explicit 0 disables.
+	Retries *int `json:"retries"`
+	// RetryDelayMS is Burp's "Pause before retry" in milliseconds. Nil means Burp's 2000
+	// (Zrur: "2000" beside pausebeforeretry); the accepted range is Burp's own validation
+	// bound (Zb33): 0..600000.
+	RetryDelayMS *int                   `json:"retry_delay_ms"`
+	Pool         *string                `json:"pool"`
+	AutoThrottle *intruder.AutoThrottle `json:"auto_throttle"`
+	RPS          *float64               `json:"rps"`
+	MaxInFlight  *int                   `json:"max_in_flight"`
+	MaxRequests  *int                   `json:"max_requests"`
+	TimeoutMS    *uint64                `json:"timeout_ms"`
 	// FollowRedirects is Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/
 	// settings.html: Never / On-site only / In-scope only / Always). Nil or empty is the standing
 	// network policy — the same fallback repeaterSendOptions.RedirectMode uses for Repeater's own
@@ -1019,6 +1028,28 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		limits.MaxInFlight = 1
 		limits.Burst = 1
 	}
+	// Error handling (n39): Burp's defaults — 3 retries, 2000ms pause — applied when the
+	// request does not name its own, because "intermittent network failures are common when
+	// testing" (Burp's own settings prose) and the operator who omitted the field is the
+	// person those defaults exist for. The pause bound is Burp's own: 0..600000ms (Zb33:
+	// "Pause before retry must be between 0 and 600000").
+	retries := 3
+	if req.Retries != nil {
+		retries = *req.Retries
+	}
+	if retries < 0 {
+		http.Error(w, fmt.Sprintf("retries must be 0 (disable) or more, got %d", retries), http.StatusBadRequest)
+		return
+	}
+	retryDelay := 2000 * time.Millisecond
+	if req.RetryDelayMS != nil {
+		if *req.RetryDelayMS < 0 || *req.RetryDelayMS > 600_000 {
+			http.Error(w, fmt.Sprintf("retry_delay_ms must be between 0 and 600000, got %d", *req.RetryDelayMS), http.StatusBadRequest)
+			return
+		}
+		retryDelay = time.Duration(*req.RetryDelayMS) * time.Millisecond
+	}
+	attack.WithRetries(retries, retryDelay)
 	// Auto-pause (burpsy-react-ui-8f2): compiled once, refused here if an expression does
 	// not compile — an auto-pause that silently never fires is a control that lies by
 	// omission, the same rule the grep patterns follow.

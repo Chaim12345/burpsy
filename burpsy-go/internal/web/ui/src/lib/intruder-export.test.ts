@@ -43,6 +43,7 @@ function report(overrides: Partial<AttackReport> = {}): AttackReport {
     grep_matched: 0,
     pool: null,
     auto_throttle_engaged: 0,
+    retries_used: 0,
     ...overrides,
   };
 }
