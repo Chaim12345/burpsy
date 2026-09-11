@@ -71,6 +71,15 @@ type ExchangeView struct {
 	Cookies []string `json:"cookies"`
 	// Title is the response's HTML <title> text, "" when it has none. See core.Exchange.
 	Title string `json:"title"`
+	// ServerIP is the destination server's resolved IP, "" when the producer had no socket to read
+	// it from. Present unconditionally rather than omitempty: "" is a real answer meaning "nobody
+	// recorded this", and an absent key would make the column unable to tell that from a row an
+	// older server sent (burpsy-react-ui-mr4p).
+	ServerIP string `json:"server_ip"`
+	// ListenerPort is the proxy listener port the request arrived on, 0 for every exchange that did
+	// not come from a listener — Repeater, Intruder, the crawler, the scanner. Same reasoning as
+	// ServerIP for being unconditional (burpsy-react-ui-he81).
+	ListenerPort uint16 `json:"listener_port"`
 }
 
 // MessageView is the wire shape for a stored message: id, byte length, and a lossy UTF-8 text
@@ -173,6 +182,10 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		ParentID:   ex.ParentID,
 		Cookies:    ex.Cookies,
 		Title:      ex.Title,
+		ServerIP:   ex.ServerIP,
+		// uint16 on the wire so the column cannot render a negative or out-of-range port; the
+		// engine's own field is the same width for the same reason.
+		ListenerPort: ex.ListenerPort,
 	}
 }
 

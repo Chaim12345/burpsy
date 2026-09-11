@@ -126,6 +126,12 @@ type CapturedExchange struct {
 	// highlight attached afterwards is one none of them ever record. Same vocabulary
 	// as core.ValidHighlights.
 	Highlight string
+	// ServerIP is the destination server's resolved IP for this exchange, and ListenerPort the
+	// proxy listener port the request arrived on. Both empty/zero for a producer that has neither
+	// in hand — see core.Exchange's fields of the same names for what each means and why they are
+	// recorded here rather than derived at list time (burpsy-react-ui-mr4p, burpsy-react-ui-he81).
+	ServerIP     string
+	ListenerPort uint16
 }
 
 // ErrNoResponse is returned by Record when there are no response bytes to capture.
@@ -229,6 +235,10 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// the other when both are unset — unattributed is a real answer, see above.
 		Source: sourceOf(x.Source, c.Source),
 		TaskID: taskOf(x.TaskID, c.TaskID),
+		// Carried, never derived. Both describe sockets that are closed by the time a row is
+		// listed, so this seam is the only place either answer exists.
+		ServerIP:     x.ServerIP,
+		ListenerPort: x.ListenerPort,
 	}
 	c.Store.AddExchange(ex)
 	c.ScanExchange(ex)

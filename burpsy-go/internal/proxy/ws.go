@@ -204,7 +204,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 			return
 		}
 		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime, "", "")
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime, "", "", serverIPOf(upstream))
 		return
 	}
 
@@ -231,6 +231,10 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 		Started:  startTime,
 		Duration: time.Since(startTime),
 		Protocol: core.ProtocolHTTP1,
+
+		ServerIP:     serverIPOf(upstream),
+		ListenerPort: listenerPortOf(clientConn),
+
 		// A handshake this proxy rewrote must not look pristine.
 		Notes: wsStripNote(strippedExtensions),
 	})

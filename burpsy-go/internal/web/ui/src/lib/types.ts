@@ -123,6 +123,20 @@ export interface Exchange {
  cookies: string[] | null;
  /** The response's HTML title text, "" when it has none. Always on the wire. */
  title: string;
+ /**
+  * The destination server's resolved IP, Burp's history "IP" column. `""` when nothing recorded
+  * one — a producer with no socket in hand, or a row from an older server.
+  *
+  * Recorded at capture, never re-resolved: the socket is closed by the time a row is listed, and
+  * asking DNS again would answer where the name points now. For a round-robin or a failover that
+  * is a different address, presented as a fact about this exchange.
+  */
+ server_ip: string;
+ /**
+  * The proxy listener port the request arrived on, Burp's "Listener port" column. `0` for every
+  * exchange that did not come from a listener — Repeater, Intruder, the crawler, the scanner.
+  */
+ listener_port: number;
 }
 
 export interface MessageView {

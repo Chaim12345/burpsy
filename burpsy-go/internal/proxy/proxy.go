@@ -1146,7 +1146,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					return
 				}
 				responseData := append(head, body...)
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime) {
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime, serverIPOf(upstream)) {
 					return
 				}
 				continue
@@ -1168,6 +1168,9 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					Started:  startTime,
 					Duration: time.Since(startTime),
 					Protocol: core.ProtocolHTTP1,
+
+					ServerIP:     serverIPOf(upstream),
+					ListenerPort: listenerPortOf(clientConn),
 
 					// A handshake this proxy rewrote must not look pristine.
 					Notes: wsStripNote(wsStripped),
@@ -1203,7 +1206,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		}
 		responseData := append(head, body...)
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime, serverIPOf(upstream)) {
 			return
 		}
 	}
@@ -1221,7 +1224,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 // own copy of the exchange literal. Only the retention gate is genuinely
 // different, because a tunnel serves whatever the client asks for and scope
 // decides which of it is kept.
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, requestData []byte, inScope bool, responseData []byte, startTime time.Time) bool {
+// serverIP is threaded in rather than read here: this function holds the client side of the
+// decrypted channel and not the upstream socket, and the destination address is a property of that
+// socket. Passing it keeps the answer the one the exchange actually used (burpsy-react-ui-mr4p).
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, requestData []byte, inScope bool, responseData []byte, startTime time.Time, serverIP string) bool {
 	// Apply Match & Replace on response
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
@@ -1295,6 +1301,9 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 			Started:  startTime,
 			Duration: time.Since(startTime),
 			Protocol: core.ProtocolHTTP1,
+
+			ServerIP:     serverIP,
+			ListenerPort: listenerPortOf(clientConn),
 
 			Notes: notes,
 		})
@@ -1547,13 +1556,13 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	}
 
 	// Forward to upstream
-	responseData, err := s.forwardRequest(requestData, host, port)
+	responseData, serverIP, err := s.forwardRequest(requestData, host, port)
 	if err != nil {
 		s.config.logger.Error("forward failed", zap.Error(err))
 		return
 	}
 
-	s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime, heldNote, heldHighlight)
+	s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime, heldNote, heldHighlight, serverIP)
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1578,7 +1587,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // does. The previous code here stored the pre-rewrite bytes and then described
 // them with the post-rewrite status and length, so the row disagreed with the
 // message it indexed whenever a response rule fired.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time, heldNote, heldHighlight string) {
+// serverIP is threaded in for the reason handleTLSResponse's is: the upstream socket is owned and
+// closed by the forwarder, so this is the last point the address is still knowable.
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time, heldNote, heldHighlight, serverIP string) {
 	// Apply Match & Replace on response, then the blanket response modification
 	// rules — same order, and for the same reason, as handleTLSResponse.
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
@@ -1642,6 +1653,9 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		Started:  startTime,
 		Duration: time.Since(startTime),
 		Protocol: core.ProtocolHTTP1,
+
+		ServerIP:     serverIP,
+		ListenerPort: listenerPortOf(clientConn),
 
 		Notes:     notes,
 		Highlight: highlight,
@@ -1900,6 +1914,54 @@ func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	return buf.Bytes()
 }
 
+// serverIPOf is the destination's resolved IP as this socket actually reached it, for history's IP
+// column (burpsy-react-ui-mr4p). Empty for a nil conn or an address with no host part.
+//
+// Read off the live socket rather than resolved by name, and that is the point: the row is a record
+// of one exchange, and re-resolving the host later answers where the name points now. A round-robin
+// DNS name or a failover would make that a different address, presented as a fact about a request
+// that went somewhere else.
+func serverIPOf(conn net.Conn) string {
+	if conn == nil {
+		return ""
+	}
+	addr := conn.RemoteAddr()
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
+// listenerPortOf is the proxy listener port the client connected to, for history's Listener port
+// column (burpsy-react-ui-he81). Zero for a nil conn or an unparseable address.
+//
+// Taken from the CLIENT connection's local address, which is the listener's own port by
+// construction — asking the Server for its configured bind would answer with whatever it is bound
+// to now, and a rebind (burpsy-react-ui-77m) makes that a different port from the one this request
+// arrived on.
+func listenerPortOf(conn net.Conn) uint16 {
+	if conn == nil {
+		return 0
+	}
+	addr := conn.LocalAddr()
+	if addr == nil {
+		return 0
+	}
+	_, portStr, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 0 || port > 65535 {
+		return 0
+	}
+	return uint16(port)
+}
+
 // scopeDropResponse is what a client gets when "Drop all out-of-scope requests" refuses its
 // request. 403 rather than a closed connection, and the deciding rule in the body rather than an
 // empty one: this refusal comes from a setting the operator may have enabled hours ago, and the
@@ -1977,18 +2039,23 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 	}
 }
 
-func (s *Server) forwardRequest(requestData []byte, host string, port uint16) ([]byte, error) {
+// The resolved destination IP comes back with the response because this function owns the socket
+// and closes it before returning: by the time the caller records the exchange there is nothing left
+// to ask (burpsy-react-ui-mr4p). Empty on any path that never dialled.
+func (s *Server) forwardRequest(requestData []byte, host string, port uint16) ([]byte, string, error) {
 	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer upstreamConn.Close()
+	serverIP := serverIPOf(upstreamConn)
 
 	if _, err := upstreamConn.Write(requestData); err != nil {
-		return nil, err
+		return nil, serverIP, err
 	}
 
-	return readHTTPResponse(upstreamConn)
+	resp, err := readHTTPResponse(upstreamConn)
+	return resp, serverIP, err
 }
 
 // readHTTPResponse reads one complete HTTP response from conn, respecting

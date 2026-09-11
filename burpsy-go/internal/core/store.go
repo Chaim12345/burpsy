@@ -416,6 +416,23 @@ type Exchange struct {
 	// Title is the response's HTML <title> text, or "" when it has none. Computed once at
 	// capture by ResponseTitle: a list-time parse would read bodies to render a column.
 	Title string
+	// ServerIP is the destination server's resolved IP, Burp's history "IP" column
+	// (burpsy-react-ui-mr4p). Empty when the producer did not resolve one — a capture site with no
+	// upstream socket in hand, or an exchange this process never dialled.
+	//
+	// Recorded at capture for the same reason Mime and Title are: listing history must never do
+	// work per row. Here the reason is stronger than a file read — the address is a property of a
+	// socket that is closed by the time anyone lists the row, and re-resolving the name later
+	// would answer a different question (where does this host point NOW) and present it as a fact
+	// about the exchange.
+	ServerIP string
+	// ListenerPort is the proxy listener port the request arrived on, Burp's history "Listener
+	// port" column (burpsy-react-ui-he81). Zero when the producer was not a listener — every
+	// exchange from Repeater, Intruder, the crawler or the scanner.
+	//
+	// It exists because a rebindable listener and several configured listeners are both reachable
+	// now, and with neither recorded there was no way to tell which one captured a row.
+	ListenerPort uint16
 }
 
 // Source names the surface an exchange came from.

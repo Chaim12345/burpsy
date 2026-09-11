@@ -34,12 +34,16 @@ func (s *Server) relayH2(clientTLS, upstreamTLS net.Conn, host string, port uint
 	server := &http2.Server{}
 	server.ServeConn(clientTLS, &http2.ServeConnOpts{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			s.relayH2Stream(w, r, upstreamH2, host, port, authority)
+			s.relayH2Stream(w, r, upstreamH2, host, port, authority, serverIPOf(upstreamTLS), listenerPortOf(clientTLS))
 		}),
 	})
 }
 
-func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream *http2.ClientConn, host string, port uint16, authority string) {
+// serverIP and listenerPort are threaded in because this function's upstream handle is an h2
+// client connection rather than a net.Conn: relayH2 holds both sockets, so the two socket facts are
+// derived there once per connection instead of per stream
+// (burpsy-react-ui-mr4p, burpsy-react-ui-he81).
+func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream *http2.ClientConn, host string, port uint16, authority, serverIP string, listenerPort uint16) {
 	startTime := time.Now()
 	path := r.URL.RequestURI()
 	if path == "" {
@@ -153,6 +157,9 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 			Started:  startTime,
 			Duration: time.Since(startTime),
 			Protocol: core.ProtocolHTTP2,
+
+			ServerIP:     serverIP,
+			ListenerPort: listenerPort,
 		})
 	} else {
 		s.config.options.NoteOutOfScopeDrop()

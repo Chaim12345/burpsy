@@ -848,6 +848,32 @@ export function HistoryPage(): JSX.Element {
     },
    },
    {
+    // Burp's IP column (burpsy-react-ui-mr4p): the destination server's address as the socket
+    // actually reached it. Dimmed rather than blank when absent, because "" is a real answer —
+    // this row came from a producer with no socket, or from a server that did not record it.
+    id: "server_ip",
+    header: "IP",
+    size: 130,
+    accessorFn: (row: Exchange) => row.server_ip ?? "",
+    cell: (info) => {
+     const ip = info.getValue<string>();
+     return ip === "" ? <span className="cell-dim">—</span> : <span>{ip}</span>;
+    },
+   },
+   {
+    // Burp's Listener port column (burpsy-react-ui-he81): which listener captured this row.
+    // Zero is not a port — it means this exchange did not come from a listener at all (Repeater,
+    // Intruder, a crawl) — so it renders as absent rather than as "0".
+    id: "listener_port",
+    header: "Listener port",
+    size: 110,
+    accessorFn: (row: Exchange) => row.listener_port ?? 0,
+    cell: (info) => {
+     const port = info.getValue<number>();
+     return port === 0 ? <span className="cell-dim">—</span> : <span className="cell-num">{port}</span>;
+    },
+   },
+   {
     // Burp's Title column (burpsy-react-ui-tk6z): the page title for HTML responses.
     id: "title",
     header: "Title",
