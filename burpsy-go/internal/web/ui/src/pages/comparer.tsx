@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, ChevronLeft, ChevronRight, Download, GitCompare } from "lucide-react";
+import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes } from "../lib/api";
 import { useCompare, useLoadMessage } from "../lib/data.workbench";
@@ -112,6 +112,159 @@ function Pane({
   );
 }
 
+const HEX_COLS = 16;
+
+/**
+ * Cap on the hex dump per side, mirroring Decoder's MAX_HEX_BYTES/hexDump (pages/decoder.tsx):
+ * a hex row costs roughly five times its bytes in markup, so an inflated response that renders
+ * fine as text would stall the tab as hex. Not shared code — the two pages don't share a hex
+ * module — but the same value and the same reasoning, since the trade-off is identical.
+ */
+export const MAX_HEX_BYTES = 8192;
+
+/** A run of consecutive same-kind/same-hunk bytes within one hex row — the hex view's analogue
+ *  of a Segment, sized down to what fits in 16 columns. */
+export interface HexGroup {
+  key: string;
+  kind: string;
+  hunk: number | null;
+  uninteresting?: boolean;
+  hex: string;
+  ascii: string;
+}
+
+export interface HexRow {
+  offset: number;
+  groups: HexGroup[];
+  /** Missing columns on a short final row, so the ascii column still lines up under it. */
+  padCells: number;
+}
+
+/**
+ * One side's byte-tagged hex grid, built straight from the diff ops and the side's own encoded
+ * bytes — not from the GAP_CHAR-padded Segment strings buildSegments produces for the text pane.
+ * GAP_CHAR is itself a real character that can appear in the data (see buildSegments' comment),
+ * so reusing the padded text here would draw a padding glyph indistinguishable from an actual
+ * byte in the one view whose job is to tell that difference apart. The trade-off: unlike the
+ * text pane, the two sides are not padded to the same row count, so a hunk can land at different
+ * row offsets in A and B. Hunk numbering matches buildSegments' exactly (one increment per
+ * non-equal op, same op order), so highlighting a hunk and jumping to it via data-hunk still
+ * lines the two panes up on the region that matters, even when the rows around it do not match.
+ */
+export function buildHexRows(ops: CompareOp[], sideBytes: Uint8Array, side: "a" | "b"): { rows: HexRow[]; shown: number; total: number } {
+  const drawn = ops.slice(0, MAX_SEGMENTS);
+  let hunks = 0;
+  let shown = 0;
+  let total = 0;
+  const rows: HexRow[] = [];
+  let row: { kind: string; hunk: number | null; uninteresting?: boolean; hex: string[]; ascii: string[] }[] = [];
+  let rowLen = 0;
+  let offset = 0;
+
+  const flushRow = () => {
+    rows.push({
+      offset,
+      groups: row.map((g, index) => ({
+        key: `${offset}-${index}`,
+        kind: g.kind,
+        hunk: g.hunk,
+        uninteresting: g.uninteresting,
+        hex: g.hex.join(" "),
+        ascii: g.ascii.join(""),
+      })),
+      padCells: HEX_COLS - rowLen,
+    });
+    offset += HEX_COLS;
+    row = [];
+    rowLen = 0;
+  };
+
+  for (const op of drawn) {
+    const hunk = op.kind === "equal" ? null : hunks++;
+    const opOffset = side === "a" ? op.a_offset : op.b_offset;
+    const opLen = side === "a" ? op.a_len : op.b_len;
+    total += opLen;
+    for (let i = 0; i < opLen; i++) {
+      if (shown >= MAX_HEX_BYTES) continue;
+      const byte = sideBytes[opOffset + i]!;
+      const hexByte = byte.toString(16).padStart(2, "0");
+      const asciiByte = byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : ".";
+      const last = row[row.length - 1];
+      if (last && last.kind === op.kind && last.hunk === hunk && last.uninteresting === op.uninteresting) {
+        last.hex.push(hexByte);
+        last.ascii.push(asciiByte);
+      } else {
+        row.push({ kind: op.kind, hunk, uninteresting: op.uninteresting, hex: [hexByte], ascii: [asciiByte] });
+      }
+      shown++;
+      rowLen++;
+      if (rowLen === HEX_COLS) flushRow();
+    }
+  }
+  if (rowLen > 0) flushRow();
+  return { rows, shown, total };
+}
+
+function hexGroupClass(group: HexGroup, currentHunk: number): string {
+  return `diff-${group.kind}${group.hunk === currentHunk ? " diff-hunk-current" : ""}${group.uninteresting ? " diff-uninteresting" : ""}`;
+}
+
+function HexPane({
+  label,
+  hexView,
+  currentHunk,
+}: {
+  label: string;
+  hexView: { rows: HexRow[]; shown: number; total: number };
+  currentHunk: number;
+}): JSX.Element {
+  return (
+    <div className="diff-pane">
+      <div className="editor-bar">
+        <span className="editor-label-inline">{label}</span>
+      </div>
+      <div className="diff-pane-body">
+        {hexView.rows.length === 0 ? (
+          <div>(0 bytes)</div>
+        ) : (
+          hexView.rows.map((row) => (
+            <div key={row.offset}>
+              <span className="cell-dim">{row.offset.toString(16).padStart(8, "0")}</span>
+              {"  "}
+              {row.groups.map((group) =>
+                group.kind === "equal" ? (
+                  <span key={group.key}>{group.hex} </span>
+                ) : (
+                  <span key={group.key} data-hunk={group.hunk} className={hexGroupClass(group, currentHunk)}>
+                    {group.hex}{" "}
+                  </span>
+                ),
+              )}
+              {"   ".repeat(row.padCells)}
+              {"  |"}
+              {row.groups.map((group) =>
+                group.kind === "equal" ? (
+                  <span key={`${group.key}-a`}>{group.ascii}</span>
+                ) : (
+                  <span key={`${group.key}-a`} className={hexGroupClass(group, currentHunk)}>
+                    {group.ascii}
+                  </span>
+                ),
+              )}
+              <span>|</span>
+            </div>
+          ))
+        )}
+        {hexView.total > hexView.shown ? (
+          <div className="cell-dim">
+            … {hexView.total - hexView.shown} more byte(s) not dumped; switch back to text for the whole output
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function ComparerPage(): JSX.Element {
   const slots = useApp((state) => state.comparerSlots);
   const setComparerSlot = useApp((state) => state.setComparerSlot);
@@ -128,6 +281,7 @@ export function ComparerPage(): JSX.Element {
    * make the whole setting look inert on the surface it exists to serve.
    */
   const [side, setSide] = useState<"response" | "request">("response");
+  const [view, setView] = useState<"text" | "hex">("text");
   const paneRef = useRef<HTMLDivElement>(null);
 
   const compare = useCompare();
@@ -152,6 +306,17 @@ export function ComparerPage(): JSX.Element {
     () => (result ? buildSegments(result.ops, a, b) : { segments: [], hunks: 0, omitted: 0 }),
     [result, a, b],
   );
+
+  // Encoded once per side rather than per op the way byteSlice does, since the hex view walks
+  // every op's byte range instead of just the ones a text render touches.
+  const aBytes = useMemo(() => new TextEncoder().encode(a), [a]);
+  const bBytes = useMemo(() => new TextEncoder().encode(b), [b]);
+  const emptyHexView = useMemo(() => ({ rows: [], shown: 0, total: 0 }), []);
+  // Deferred until the operator actually asks for hex: building it costs a pass over every op's
+  // real bytes, which the memory-lean ethos this console holds to says not to pay for a mode
+  // nobody is looking at.
+  const aHex = useMemo(() => (view === "hex" && result ? buildHexRows(result.ops, aBytes, "a") : emptyHexView), [view, result, aBytes, emptyHexView]);
+  const bHex = useMemo(() => (view === "hex" && result ? buildHexRows(result.ops, bBytes, "b") : emptyHexView), [view, result, bBytes, emptyHexView]);
 
   // Replaces are in neither of the server's deleted/inserted totals, so they are
   // counted here instead of being left out of the summary.
@@ -253,6 +418,14 @@ export function ComparerPage(): JSX.Element {
         actions={
           <>
             <Badge>byte-level</Badge>
+            <Button variant={view === "text" ? "primary" : "outline"} size="small" aria-pressed={view === "text"} onClick={() => setView("text")}>
+              <Braces size={13} />
+              Text
+            </Button>
+            <Button variant={view === "hex" ? "primary" : "outline"} size="small" aria-pressed={view === "hex"} onClick={() => setView("hex")}>
+              <Hash size={13} />
+              Hex
+            </Button>
             <Button variant="outline" onClick={swap} disabled={!a && !b}>
               <ArrowLeftRight size={14} />
               Swap
@@ -378,8 +551,17 @@ export function ComparerPage(): JSX.Element {
               <Empty title="No differences" detail="Every byte matches, so there is no diff to draw." />
             ) : (
               <div className="diff-panes" ref={paneRef}>
-                <Pane label="A" side="a" segments={segments} currentHunk={currentHunk} />
-                <Pane label="B" side="b" segments={segments} currentHunk={currentHunk} />
+                {view === "text" ? (
+                  <>
+                    <Pane label="A" side="a" segments={segments} currentHunk={currentHunk} />
+                    <Pane label="B" side="b" segments={segments} currentHunk={currentHunk} />
+                  </>
+                ) : (
+                  <>
+                    <HexPane label="A" hexView={aHex} currentHunk={currentHunk} />
+                    <HexPane label="B" hexView={bHex} currentHunk={currentHunk} />
+                  </>
+                )}
               </div>
             )}
           </Card>
