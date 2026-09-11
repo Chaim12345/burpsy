@@ -11,6 +11,7 @@
  * Both build from data the page already holds — no server round trip — so an
  * export always matches what the operator is looking at.
  */
+import { csvCell } from "./api";
 import {
   assignmentAt,
   planSetLengths,
@@ -85,11 +86,6 @@ export function intruderPayloadResolver(args: {
     if (!slots || !slots.length) return null;
     return resolvePayloads(slots, known);
   };
-}
-
-/** One CSV cell: always quoted, quotes doubled — the historyToCSV convention, so a payload carrying commas, quotes or newlines round-trips through any spreadsheet. */
-function csvCell(value: string | number | null): string {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 /**

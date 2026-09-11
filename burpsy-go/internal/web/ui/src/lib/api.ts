@@ -184,7 +184,7 @@ function csvQueryCount(path: string): number {
  * from the target could carry "=cmd|...'!A0". The guard quotes the leading character so the
  * cell reads as text. History's export gains this retroactively through the shared cell writer.
  */
-function csvCell(value: string | number | null | undefined): string {
+export function csvCell(value: string | number | null | undefined): string {
  const text = value === null || value === undefined ? "" : String(value);
  const guarded = /^[+\-=@]/.test(text) ? `'${text}` : text;
  return `"${guarded.replace(/"/g, '""')}"`;

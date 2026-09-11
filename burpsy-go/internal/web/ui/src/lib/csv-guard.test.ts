@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { historyToCSV, organizerToCSV, toolLogToCSV } from "./api";
+import { intruderReportToCSV } from "./intruder-export";
+import type { AttackReport, Attempt } from "./types.tools";
 
 /**
  * The Excel formula guard is the acceptance criterion burpsy-react-ui-656 names: a value
@@ -74,5 +76,45 @@ describe("organizerToCSV", () => {
   expect(lines[1]).toContain('"Token endpoint"');
   expect(lines[1]).toContain("\"'+retry\"");
   expect(lines[1]).toContain('"42"');
+ });
+});
+
+describe("intruderReportToCSV", () => {
+ // A payload list is more attacker-influenced than a captured host or path: it is routinely
+ // sourced from external fuzzing corpora, so a formula-leading entry like =1+1 or
+ // =cmd|'/c calc'!A0 reaches the exported sheet without an operator ever typing it. This must
+ // route through the same csvCell as the other three exporters, not a local copy that can drift.
+ const report: AttackReport = {
+  kind: "sniper",
+  combinations: 1,
+  combinations_exact: true,
+  max_requests: 0,
+  truncated: false,
+  planned: 1,
+  sent: 1,
+  failed: 0,
+  elapsed_ms: 1,
+  buckets: [],
+  buckets_truncated: false,
+  unbucketed: 0,
+  errors: [],
+  attempts: [],
+  detail_limit: 500,
+  grep_matched: 0,
+  pool: null,
+  auto_throttle_engaged: 0,
+ };
+ const attempts: Attempt[] = [
+  { ordinal: 0, status: 200, response_len: 5, duration_ms: 1, reflected: false, request_id: null, response_id: null, error: null, grep_matched: null, grep_extract: null },
+ ];
+
+ test("a payload beginning with = is guarded so Excel reads text, not a formula", () => {
+  const csv = intruderReportToCSV(report, attempts, () => [{ set: 0, index: 0, text: "=cmd|'/c calc'!A0" }]);
+  expect(csv).toContain("\"'=cmd|'/c calc'!A0\"");
+ });
+
+ test("a payload beginning with @ is guarded the same way", () => {
+  const csv = intruderReportToCSV(report, attempts, () => [{ set: 0, index: 0, text: "@sum(1,1)" }]);
+  expect(csv).toContain("\"'@sum(1,1)\"");
  });
 });
