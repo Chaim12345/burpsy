@@ -40,9 +40,12 @@ import {
   estimateRequests,
   attackProgress,
   quoteRegex,
+  parseCharSubstitutions,
+  FOLLOW_REDIRECTS_MODES,
   type Attempt,
   type AttackMode,
   type ErrorBucket,
+  type FollowRedirectsMode,
   type IntruderAttacksResp,
   type PayloadRuleName,
   type PayloadRuleSpec,
@@ -130,6 +133,17 @@ function countPayloads(text: string): number {
 
 function payloadList(text: string): string[] {
   return text.split("\n").filter((line) => line.trim() !== "");
+}
+
+/**
+ * Renders an attempt's `time_of_day` (an RFC 3339 string) the way the rest of this app renders a
+ * wall-clock moment (collaborator.tsx, extensions.tsx: `toLocaleTimeString()`), never
+ * "Invalid Date" for a value this browser cannot parse — an older server that omitted the field
+ * would otherwise render the literal string `Invalid Date` in every row.
+ */
+function formatTimeOfDay(iso: string): string {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? "—" : at.toLocaleTimeString();
 }
 
 /** Editor for one payload processing rule; the visible fields depend on the rule. */
@@ -476,7 +490,7 @@ function AttackResult({
   bucketMenu?: (bucket: ResultBucket) => MenuGroup[];
   attemptMenu?: (attempt: Attempt) => MenuGroup[];
 }): JSX.Element {
-  const { report, payload_sets: sets } = view;
+  const { report, payload_sets: sets, redirects_followed: redirectsFollowed } = view;
 
   // Ordinal → payload combination, shared with the CSV export so the sheet and the
   // table can never disagree about what a row's payloads were (lib/intruder-export.ts
@@ -512,6 +526,17 @@ function AttackResult({
   const [errorFilter, setErrorFilter] = useState("");
   const [setFilter, setSetFilter] = useState("");
   const [attemptFilter, setAttemptFilter] = useState("");
+
+  /**
+   * Burp's Comment column ("any user-applied comment", viewing-results.html) — an annotation the
+   * operator types against one result row. There is no server-side row for it to live on: a report
+   * is generated once per run and never persisted (api_tools.go builds and returns it inline), so a
+   * comment is a browser-only fact, keyed by ordinal like the payload resolver above. Reset whenever
+   * a new report arrives — `view` is a fresh object every run, and a comment surviving onto a
+   * different attack's ordinal 3 would annotate the wrong request.
+   */
+  const [comments, setComments] = useState<Map<number, string>>(new Map());
+  useEffect(() => setComments(new Map()), [view]);
 
   const bucketColumns: Column<ResultBucket>[] = [
     {
@@ -656,6 +681,17 @@ function AttackResult({
           <Badge tone={statusTone(row.original.status)}>{row.original.status}</Badge>
         ),
     },
+    {
+      // Burp's "Time of day - the time of day the request was made" (viewing-results.html),
+      // distinct from the "Time" column above, which is a duration. attempt.time_of_day is
+      // RFC 3339 (Go's default time.Time encoding); an unparseable value reads as "—" rather than
+      // "Invalid Date" — the same defensive parse formatTimeOfDay does for every row.
+      accessorFn: (attempt) => Date.parse(attempt.time_of_day) || undefined,
+      id: "time_of_day",
+      header: "Time of day",
+      sortUndefined: "last",
+      cell: ({ row }) => <span className="cell-num">{formatTimeOfDay(row.original.time_of_day)}</span>,
+    },
     { accessorKey: "response_len", header: "Length", cell: ({ getValue }) => <span className="cell-num">{formatBytes(getValue<number>())}</span> },
     { accessorKey: "duration_ms", header: "Time", cell: ({ getValue }) => <span className="cell-num">{formatDuration(getValue<number>())}</span> },
     {
@@ -680,11 +716,57 @@ function AttackResult({
       cell: ({ row }) => (row.original.error ? <span title={row.original.error}>{row.original.error}</span> : <span className="cell-dim">—</span>),
     },
     {
+      // Burp lists Timeout as its own column, distinct from Error, so a target that stalls on
+      // every Nth payload is visible as a pattern rather than buried inside error-message text.
+      accessorFn: (attempt) => (attempt.timeout ? "yes" : "no"),
+      id: "timeout",
+      header: "Timeout",
+      cell: ({ row }) => (row.original.timeout ? <Badge tone="bad">timeout</Badge> : <span className="cell-dim">no</span>),
+    },
+    {
+      // Burp: "Cookies - any cookies received in the response". Names only — see Attempt.cookies'
+      // own doc for why values never surface here.
+      accessorFn: (attempt) => (attempt.cookies.length ? attempt.cookies.join(", ") : undefined),
+      id: "cookies",
+      header: "Cookies",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.cookies.length ? (
+          <span title={row.original.cookies.join(", ")}>{row.original.cookies.join(", ")}</span>
+        ) : (
+          <span className="cell-dim">—</span>
+        ),
+    },
+    {
       id: "response",
       header: "Response",
       enableSorting: false,
       cell: ({ row }) => (
         <ResponseCell id={row.original.response_id} label={`Response to attempt ${row.original.ordinal}`} onOpen={onOpenMessage} />
+      ),
+    },
+    {
+      // Burp: "Comment - any user-applied comment". Browser-only (see the `comments` state's own
+      // doc above) — typing here never leaves this tab, and it rides into the CSV export below so
+      // an annotation an operator made survives past the session that made it.
+      accessorFn: (attempt) => comments.get(attempt.ordinal) ?? "",
+      id: "comment",
+      header: "Comment",
+      cell: ({ row }) => (
+        <Input
+          aria-label={`Comment on attempt ${row.original.ordinal}`}
+          placeholder="Add a comment"
+          value={comments.get(row.original.ordinal) ?? ""}
+          onChange={(event) => {
+            const next = event.target.value;
+            setComments((prev) => {
+              const copy = new Map(prev);
+              if (next === "") copy.delete(row.original.ordinal);
+              else copy.set(row.original.ordinal, next);
+              return copy;
+            });
+          }}
+        />
       ),
     },
   ];
@@ -712,7 +794,7 @@ function AttackResult({
             variant="outline"
             onClick={() => {
               const file = intruderExportFilenames(report).csv;
-              downloadText(file, intruderReportToCSV(report, report.attempts, payloadsAt), "text/csv");
+              downloadText(file, intruderReportToCSV(report, report.attempts, payloadsAt, new Date(), comments), "text/csv");
               toast.success(`Exported ${formatCount(report.attempts.length)} attempts to ${file}`);
             }}
           >
@@ -765,6 +847,13 @@ function AttackResult({
           <strong>{formatDuration(report.elapsed_ms)}</strong>
           <small>{report.grep_matched ? `${formatCount(report.grep_matched)} grep matches` : "mode " + report.kind}</small>
         </div>
+        {redirectsFollowed ? (
+          <div className="card metric">
+            <span>Redirects followed</span>
+            <strong>{formatCount(redirectsFollowed)}</strong>
+            <small>additional requests this attack sent chasing a 3xx</small>
+          </div>
+        ) : null}
       </div>
 
       {caveats.length ? (
@@ -968,6 +1057,31 @@ export function IntruderPage(): JSX.Element {
   // set, applied after the rules above regardless of payload type. Default is Burp's own
   // default character list, so the safety net is on unless the operator empties it.
   const [urlEncodeChars, setURLEncodeChars] = useState("=&+%;?/ #:");
+  // Burp's "Follow redirections" (tirx). "" is not sent at all — the standing network policy
+  // decides, exactly as an attack that never mentions it always has — so this control cannot
+  // silently turn following on for an operator who only opened this tab to look at Grep.
+  const [redirectMode, setRedirectMode] = useState<FollowRedirectsMode | "">("");
+
+  /**
+   * The 8 generator payload types added for 2g13 (char_substitution, case_modification,
+   * illegal_unicode, character_blocks, bit_flipper, username, ecb_shuffler) plus copy_other's
+   * one field, keyed by set index rather than one `useState` array per type. The existing
+   * payload types above each carry their own typed, persisted array (payloadNumbers,
+   * payloadBrute, …) in the IntruderConfig store; these 9 share one generic bucket instead —
+   * a deliberately smaller first pass than duplicating that per-type machinery nine more
+   * times. Values are read with a fallback (`advField`/`advBool`), so an index that was never
+   * touched behaves exactly like one initialised to the type's defaults, and nothing needs a
+   * resize effect the way the array-backed types do (an index past what the mode currently
+   * renders is simply never read).
+   */
+  const [advancedFields, setAdvancedFields] = useState<Record<number, Record<string, string>>>({});
+  const [advancedFlags, setAdvancedFlags] = useState<Record<number, Record<string, boolean>>>({});
+  const advField = (index: number, key: string, fallback = "") => advancedFields[index]?.[key] ?? fallback;
+  const setAdvField = (index: number, key: string, value: string) =>
+    setAdvancedFields((cur) => ({ ...cur, [index]: { ...cur[index], [key]: value } }));
+  const advBool = (index: number, key: string, fallback: boolean) => advancedFlags[index]?.[key] ?? fallback;
+  const setAdvBool = (index: number, key: string, value: boolean) =>
+    setAdvancedFlags((cur) => ({ ...cur, [index]: { ...cur[index], [key]: value } }));
   const setGrepMatch = field("grepMatch");
   const setGrepMatchMode = field("grepMatchMode");
   const setGrepExtract = field("grepExtract");
@@ -1193,6 +1307,23 @@ export function IntruderPage(): JSX.Element {
       }
       if (t === "custom_iterator") return customIteratorSize(payloadCustom[i]?.positions ?? "");
       if (t === "null") return Number(payloadNulls[i] ?? "0") || 0;
+      // The 9 types added for 2g13: the true count depends on server-side generator logic
+      // (2^k substitutable positions, a factorial permutation count, …) this page does not
+      // reimplement — unknown is the honest answer, the same one `file` already gives, not a
+      // guessed number standing in for one (burpsy-react-ui-1ww is exactly the bug that
+      // guessing here caused once already).
+      if (
+        t === "char_substitution" ||
+        t === "case_modification" ||
+        t === "illegal_unicode" ||
+        t === "character_blocks" ||
+        t === "bit_flipper" ||
+        t === "username" ||
+        t === "ecb_shuffler" ||
+        t === "copy_other"
+      ) {
+        return null;
+      }
       return countPayloads(payloadTexts[i] ?? "");
     });
   }, [payloadTypes, payloadTexts, payloadNumbers, payloadFiles, payloadBrute, payloadDates, payloadCustom, payloadNulls]);
@@ -1326,6 +1457,10 @@ export function IntruderPage(): JSX.Element {
       ...(usePool
         ? { pool: poolName.trim() }
         : { max_in_flight: maxInFlight, ...(rps.trim() ? { rps: Number(rps) } : {}) }),
+      // Burp's "Follow redirections" (tirx). Omitted, not sent as "", when the operator left it on
+      // the standing policy — an absent field and an empty string must not become two different
+      // wire shapes for "I did not choose", the same discipline url_encode_characters above holds.
+      ...(redirectMode !== "" ? { follow_redirects: redirectMode } : {}),
     };
     if (useSources) {
       body.payload_sources = payloadTypes.map((t, i) => {
@@ -1350,6 +1485,61 @@ export function IntruderPage(): JSX.Element {
         }
         if (t === "null") {
           return { type: "null", count: Number(payloadNulls[i] ?? "0") || 0 };
+        }
+        if (t === "char_substitution") {
+          return {
+            type: "char_substitution",
+            words: payloadList(advField(i, "words")),
+            subs: parseCharSubstitutions(advField(i, "subs")),
+            max_per_word: Number(advField(i, "max_per_word")) || 0,
+          };
+        }
+        if (t === "case_modification") {
+          return {
+            type: "case_modification",
+            words: payloadList(advField(i, "words")),
+            lower: advBool(i, "lower", true),
+            upper: advBool(i, "upper", true),
+            capitalize: advBool(i, "capitalize", true),
+          };
+        }
+        if (t === "illegal_unicode") {
+          const forms: ("overlong2" | "overlong3" | "overlong4")[] = [];
+          if (advBool(i, "overlong2", true)) forms.push("overlong2");
+          if (advBool(i, "overlong3", false)) forms.push("overlong3");
+          if (advBool(i, "overlong4", false)) forms.push("overlong4");
+          return {
+            type: "illegal_unicode",
+            chars: advField(i, "chars", "/"),
+            forms,
+            percent_encode: advBool(i, "percent_encode", true),
+          };
+        }
+        if (t === "character_blocks") {
+          return {
+            type: "character_blocks",
+            chars: advField(i, "chars", "A"),
+            min_len: Number(advField(i, "min_len", "1")) || 1,
+            max_len: Number(advField(i, "max_len", "100")) || 1,
+            step: Number(advField(i, "step", "1")) || 1,
+          };
+        }
+        if (t === "bit_flipper") {
+          return { type: "bit_flipper", base: advField(i, "base") };
+        }
+        if (t === "username") {
+          return { type: "username", names: payloadList(advField(i, "names")) };
+        }
+        if (t === "ecb_shuffler") {
+          return {
+            type: "ecb_shuffler",
+            sample: advField(i, "sample"),
+            encoding: advField(i, "encoding", "base64") as "base64" | "hex",
+            block_size: Number(advField(i, "block_size", "16")) || 16,
+          };
+        }
+        if (t === "copy_other") {
+          return { type: "copy_other", position: Number(advField(i, "position", "0")) || 0 };
         }
         return { type: "list", items: payloadList(payloadTexts[i] ?? "") };
       });
@@ -1692,6 +1882,14 @@ export function IntruderPage(): JSX.Element {
                             <option value="dates">Dates</option>
                             <option value="custom_iterator">Custom iterator</option>
                             <option value="null">Null payloads</option>
+                            <option value="char_substitution">Character substitution</option>
+                            <option value="case_modification">Case modification</option>
+                            <option value="illegal_unicode">Illegal Unicode</option>
+                            <option value="character_blocks">Character blocks (frobber)</option>
+                            <option value="bit_flipper">Bit flipper</option>
+                            <option value="username">Username generator</option>
+                            <option value="ecb_shuffler">ECB block shuffler</option>
+                            <option value="copy_other">Copy other payload</option>
                           </Select>
                         )}
                       </Field>
@@ -1891,6 +2089,92 @@ export function IntruderPage(): JSX.Element {
                             }
                           />
                         )}
+                      </Field>
+                    ) : t === "char_substitution" ? (
+                      <div className="stack">
+                        <Field label="Words (one per line)">
+                          {(id) => (
+                            <Textarea id={id} value={advField(index, "words")} onChange={(e) => setAdvField(index, "words", e.target.value)} placeholder="password&#10;admin" />
+                          )}
+                        </Field>
+                        <Field label="Substitutions (one per line, char=replacement)" hint="e.g. e=3 to substitute every 'e' with '3' in some combinations">
+                          {(id) => (
+                            <Textarea id={id} value={advField(index, "subs")} onChange={(e) => setAdvField(index, "subs", e.target.value)} placeholder="e=3&#10;a=4&#10;o=0" />
+                          )}
+                        </Field>
+                        <Field label="Max combinations per word" hint="0 = unbounded (still capped by max payloads overall)">
+                          {(id) => <Input id={id} type="number" min={0} value={advField(index, "max_per_word")} onChange={(e) => setAdvField(index, "max_per_word", e.target.value)} placeholder="0" />}
+                        </Field>
+                      </div>
+                    ) : t === "case_modification" ? (
+                      <div className="stack">
+                        <Field label="Words (one per line)">
+                          {(id) => <Textarea id={id} value={advField(index, "words")} onChange={(e) => setAdvField(index, "words", e.target.value)} placeholder="admin&#10;root" />}
+                        </Field>
+                        <div className="row-list">
+                          <Checkbox checked={advBool(index, "lower", true)} onCheckedChange={(v) => setAdvBool(index, "lower", v)} label="lower case" />
+                          <Checkbox checked={advBool(index, "upper", true)} onCheckedChange={(v) => setAdvBool(index, "upper", v)} label="UPPER CASE" />
+                          <Checkbox checked={advBool(index, "capitalize", true)} onCheckedChange={(v) => setAdvBool(index, "capitalize", v)} label="Capitalize" />
+                        </div>
+                      </div>
+                    ) : t === "illegal_unicode" ? (
+                      <div className="stack">
+                        <Field label="Characters (each must be ASCII)">
+                          {(id) => <Input id={id} value={advField(index, "chars", "/")} onChange={(e) => setAdvField(index, "chars", e.target.value)} placeholder="/" />}
+                        </Field>
+                        <div className="row-list">
+                          <Checkbox checked={advBool(index, "overlong2", true)} onCheckedChange={(v) => setAdvBool(index, "overlong2", v)} label="overlong 2-byte" />
+                          <Checkbox checked={advBool(index, "overlong3", false)} onCheckedChange={(v) => setAdvBool(index, "overlong3", v)} label="overlong 3-byte" />
+                          <Checkbox checked={advBool(index, "overlong4", false)} onCheckedChange={(v) => setAdvBool(index, "overlong4", v)} label="overlong 4-byte" />
+                          <Checkbox checked={advBool(index, "percent_encode", true)} onCheckedChange={(v) => setAdvBool(index, "percent_encode", v)} label="%-encode (for a URL/query context)" />
+                        </div>
+                      </div>
+                    ) : t === "character_blocks" ? (
+                      <div className="form-grid">
+                        <Field label="Characters (cycled to fill each block)">
+                          {(id) => <Input id={id} value={advField(index, "chars", "A")} onChange={(e) => setAdvField(index, "chars", e.target.value)} placeholder="A" />}
+                        </Field>
+                        <Field label="Min length">
+                          {(id) => <Input id={id} type="number" min={0} value={advField(index, "min_len", "1")} onChange={(e) => setAdvField(index, "min_len", e.target.value)} />}
+                        </Field>
+                        <Field label="Max length">
+                          {(id) => <Input id={id} type="number" min={0} value={advField(index, "max_len", "100")} onChange={(e) => setAdvField(index, "max_len", e.target.value)} />}
+                        </Field>
+                        <Field label="Step">
+                          {(id) => <Input id={id} type="number" value={advField(index, "step", "1")} onChange={(e) => setAdvField(index, "step", e.target.value)} />}
+                        </Field>
+                      </div>
+                    ) : t === "bit_flipper" ? (
+                      <Field label="Base value" hint="One payload per bit of this value, with that bit inverted.">
+                        {(id) => <Input id={id} value={advField(index, "base")} onChange={(e) => setAdvField(index, "base", e.target.value)} placeholder="e.g. a sample cookie or token value" />}
+                      </Field>
+                    ) : t === "username" ? (
+                      <Field label="Full names (one per line, e.g. 'John Smith')" hint="Generates first, last, first.last, firstlast, flast and firstl for each name.">
+                        {(id) => <Textarea id={id} value={advField(index, "names")} onChange={(e) => setAdvField(index, "names", e.target.value)} placeholder="John Smith&#10;Ada Lovelace" />}
+                      </Field>
+                    ) : t === "ecb_shuffler" ? (
+                      <div className="form-grid">
+                        <Field label="Sample value (already encoded)" hint="A captured encrypted value, e.g. a session cookie">
+                          {(id) => <Input id={id} value={advField(index, "sample")} onChange={(e) => setAdvField(index, "sample", e.target.value)} placeholder="base64 or hex" />}
+                        </Field>
+                        <Field label="Encoding">
+                          {(id) => (
+                            <Select id={id} value={advField(index, "encoding", "base64")} onChange={(e) => setAdvField(index, "encoding", e.target.value)}>
+                              <option value="base64">Base64</option>
+                              <option value="hex">Hex</option>
+                            </Select>
+                          )}
+                        </Field>
+                        <Field label="Block size (bytes)" hint="16 for AES, 8 for DES/3DES/Blowfish">
+                          {(id) => <Input id={id} type="number" min={1} value={advField(index, "block_size", "16")} onChange={(e) => setAdvField(index, "block_size", e.target.value)} />}
+                        </Field>
+                      </div>
+                    ) : t === "copy_other" ? (
+                      <Field
+                        label="Position to copy (0-based)"
+                        hint="Pitchfork only — every position advances in lockstep there, which is what makes this position's payload match the named one on every request. Refused in cluster bomb, where that guarantee does not hold (see the server's own error)."
+                      >
+                        {(id) => <Input id={id} type="number" min={0} value={advField(index, "position", "0")} onChange={(e) => setAdvField(index, "position", e.target.value)} />}
                       </Field>
                     ) : null}
                   </Card>
@@ -2127,6 +2411,30 @@ export function IntruderPage(): JSX.Element {
                     onChange={(event) => setGrepExtract(event.target.value)}
                     placeholder="token=([^&\s;]+)"
                   />
+                )}
+              </Field>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Redirections"
+              detail="Burp's tools/intruder/configure-attack/settings.html: whether an attack chases a 3xx to the page that actually carries the result."
+            />
+            <div className="form-grid">
+              <Field
+                label="Follow redirections"
+                hint="Every hop is re-authorised against scope on its own rendered bytes, the same gate the request itself went through — a payload can steer a hop somewhere nobody named."
+              >
+                {(id) => (
+                  <Select id={id} value={redirectMode} onChange={(event) => setRedirectMode(event.target.value as FollowRedirectsMode | "")}>
+                    <option value="">Standing network policy (Never, unless changed in Network settings)</option>
+                    {FOLLOW_REDIRECTS_MODES.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </Select>
                 )}
               </Field>
             </div>

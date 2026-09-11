@@ -116,6 +116,18 @@ export interface Attempt {
   error: string | null;
   grep_matched: boolean | null;
   grep_extract: string | null;
+  /** When this attempt was dispatched — or, for a guard refusal, when it was refused. Burp's
+   *  results table carries it as its own column ("the time of day the request was made"). An
+   *  RFC 3339 string (Go's `time.Time` default encoding), never absent. */
+  time_of_day: string;
+  /** Names Set-Cookie carried in this attempt's response — Burp: "any cookies received in the
+   *  response". Names only, never values (a session token belongs in the stored response, not
+   *  a summary row). `[]`, never absent, even for a row with no response at all. */
+  cookies: string[];
+  /** True when `error` above is specifically the per-request deadline expiring, distinct from
+   *  any other failure (connection refused, TLS failure, a guard refusal). Burp lists Timeout
+   *  as its own column rather than folding it into Error. */
+  timeout: boolean;
 }
 
 /** How an attack ended. "paused" only appears on a report built from a still-live attack. */
@@ -167,7 +179,24 @@ export interface RunView {
   report: AttackReport;
   examples: BucketExample[];
   payload_sets: PayloadSetReport[];
+  /**
+   * How many additional requests this attack sent chasing a 3xx (tirx), summed across every
+   * attempt. Zero whenever `follow_redirects` was never sent (the default is not to follow) or
+   * every hop was refused by policy or scope. Optional because an older server never sent it —
+   * absent reads as 0, which is what every such server's behaviour actually was.
+   */
+  redirects_followed?: number;
 }
+
+/** Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/settings.html). */
+export type FollowRedirectsMode = "never" | "on_site" | "in_scope" | "always";
+
+export const FOLLOW_REDIRECTS_MODES: { value: FollowRedirectsMode; label: string }[] = [
+  { value: "never", label: "Never" },
+  { value: "on_site", label: "On-site only" },
+  { value: "in_scope", label: "In-scope only" },
+  { value: "always", label: "Always" },
+];
 
 /**
  * A running attack as the control routes see it (GET /api/intruder/attacks).
@@ -196,7 +225,22 @@ export interface IntruderAttacksResp {
   attacks: IntruderAttack[];
 }
 
-export type PayloadSourceType = "list" | "numbers" | "file" | "brute_force" | "custom_iterator" | "dates" | "null";
+export type PayloadSourceType =
+  | "list"
+  | "numbers"
+  | "file"
+  | "brute_force"
+  | "custom_iterator"
+  | "dates"
+  | "null"
+  | "char_substitution"
+  | "case_modification"
+  | "illegal_unicode"
+  | "character_blocks"
+  | "bit_flipper"
+  | "username"
+  | "ecb_shuffler"
+  | "copy_other";
 
 export interface PayloadSourceList { type: "list"; items: string[] }
 export interface PayloadSourceNumbers { type: "numbers"; from: number; to: number; step: number; order?: "sequential" | "random"; count?: number; base?: "decimal" | "hex"; pad_to?: number }
@@ -205,7 +249,42 @@ export interface PayloadSourceBruteForce { type: "brute_force"; charset: string;
 export interface PayloadSourceCustomIterator { type: "custom_iterator"; positions: string[][]; separator: string }
 export interface PayloadSourceDates { type: "dates"; from: string; to: string; step: number; format: string }
 export interface PayloadSourceNull { type: "null"; count: number }
-export type PayloadSource = PayloadSourceList | PayloadSourceNumbers | PayloadSourceFile | PayloadSourceBruteForce | PayloadSourceCustomIterator | PayloadSourceDates | PayloadSourceNull;
+/** Burp's Character substitution (2g13): base words, plus per-character substitutes. */
+export interface PayloadSourceCharSubstitution { type: "char_substitution"; words: string[]; subs: Record<string, string>; max_per_word?: number }
+/** Burp's Case modification (2g13): case variants of a word list. */
+export interface PayloadSourceCaseModification { type: "case_modification"; words: string[]; lower?: boolean; upper?: boolean; capitalize?: boolean }
+/** Burp's Illegal Unicode (2g13): overlong UTF-8 encodings of ASCII characters. */
+export interface PayloadSourceIllegalUnicode { type: "illegal_unicode"; chars: string; forms: ("overlong2" | "overlong3" | "overlong4")[]; percent_encode?: boolean }
+/** Burp's Character blocks / Character frobber (2g13): one payload per length, Chars cycled to fill it. */
+export interface PayloadSourceCharacterBlocks { type: "character_blocks"; chars: string; min_len: number; max_len: number; step: number }
+/** Burp's Bit flipper (2g13): one payload per bit of Base, that bit inverted. */
+export interface PayloadSourceBitFlipper { type: "bit_flipper"; base: string }
+/** Burp's Username generator (2g13): candidate usernames from a "First Last" list. */
+export interface PayloadSourceUsername { type: "username"; names: string[]; formats?: string[] }
+/** Burp's ECB block shuffler (2g13): permutations of a sample's cipher-block order. */
+export interface PayloadSourceECBShuffler { type: "ecb_shuffler"; sample: string; encoding: "base64" | "hex"; block_size: number }
+/**
+ * Burp's Copy other payload (2g13): this position's payload is whatever `position` received
+ * for the same request. Pitchfork only — see internal/intruder/payload.go's CopyOtherSource
+ * doc and api_tools.go's handleIntruderRun for why cluster bomb cannot honour this exactly.
+ */
+export interface PayloadSourceCopyOther { type: "copy_other"; position: number }
+export type PayloadSource =
+  | PayloadSourceList
+  | PayloadSourceNumbers
+  | PayloadSourceFile
+  | PayloadSourceBruteForce
+  | PayloadSourceCustomIterator
+  | PayloadSourceDates
+  | PayloadSourceNull
+  | PayloadSourceCharSubstitution
+  | PayloadSourceCaseModification
+  | PayloadSourceIllegalUnicode
+  | PayloadSourceCharacterBlocks
+  | PayloadSourceBitFlipper
+  | PayloadSourceUsername
+  | PayloadSourceECBShuffler
+  | PayloadSourceCopyOther;
 
 /**
  * What a report's counts actually describe.
@@ -434,4 +513,25 @@ export function resolvePayloads(slots: PayloadSlot[], knownSets: (string[] | nul
     const text = items && slot.payload >= 0 && slot.payload < items.length ? items[slot.payload]! : null;
     return { set: slot.set, index: slot.payload, text };
   });
+}
+
+/**
+ * Parses the Character substitution panel's "char=replacement" textarea (2g13) into the
+ * `subs` map internal/intruder.CharSubstitution wants — one substitution per line. A line
+ * with no `=`, or an empty character before it, is skipped rather than refused: the operator
+ * is still typing, and a blank trailing line is the ordinary state of a textarea, not an error.
+ * The replacement half is allowed to be empty (a substitution to nothing), which is why the
+ * split is on the first `=` only — `indexOf`, not a regex split that would also break on a
+ * literal `=` inside the replacement.
+ */
+export function parseCharSubstitutions(text: string): Record<string, string> {
+  const subs: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const ch = line.slice(0, eq).trim();
+    const rep = line.slice(eq + 1).trim();
+    if (ch) subs[ch] = rep;
+  }
+  return subs;
 }

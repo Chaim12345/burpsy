@@ -48,6 +48,13 @@ export interface IntruderRunRequest {
   pool?: string;
   max_in_flight?: number;
   rps?: number;
+  /**
+   * Burp's Intruder "Follow redirections" (tirx): "never" | "on_site" | "in_scope" | "always",
+   * or omitted for the standing network-settings policy (never, by default). Each hop is
+   * re-authorised through the same scope gate the first request went through — see
+   * internal/web/api_tools.go's intruderRedirectPolicy.
+   */
+  follow_redirects?: string;
 }
 
 /**

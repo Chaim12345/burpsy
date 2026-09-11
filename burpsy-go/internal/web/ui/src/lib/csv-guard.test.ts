@@ -105,7 +105,11 @@ describe("intruderReportToCSV", () => {
   auto_throttle_engaged: 0,
  };
  const attempts: Attempt[] = [
-  { ordinal: 0, status: 200, response_len: 5, duration_ms: 1, reflected: false, request_id: null, response_id: null, error: null, grep_matched: null, grep_extract: null },
+  {
+   ordinal: 0, status: 200, response_len: 5, duration_ms: 1, reflected: false, request_id: null,
+   response_id: null, error: null, grep_matched: null, grep_extract: null,
+   time_of_day: "2026-01-01T00:00:00.000Z", cookies: [], timeout: false,
+  },
  ];
 
  test("a payload beginning with = is guarded so Excel reads text, not a formula", () => {

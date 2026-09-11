@@ -96,12 +96,18 @@ export function intruderPayloadResolver(args: {
  * capped attack look complete when they are missing, so they are always written —
  * `false` included — and the detail_limit line says outright that rows beyond it
  * were not kept once the attempts table reached that bound.
+ *
+ * `comments` is the Results tab's browser-only annotations (burpsy-react-ui-c7w6), keyed by
+ * ordinal exactly like `payloadAt` — it rides in last, and defaults to empty, so every existing
+ * caller (and every fixture in this file's own tests) that never heard of comments keeps
+ * producing the same sheet it always did.
  */
 export function intruderReportToCSV(
   report: AttackReport,
   attempts: Attempt[],
   payloadAt: (ordinal: number) => ResolvedPayload[] | null,
   now = new Date(),
+  comments: Map<number, string> = new Map(),
 ): string {
   const stopped = report.status === "stopped" && report.stop_reason ? ` — ${report.stop_reason}` : "";
   const capped = attempts.length >= report.detail_limit;
@@ -120,13 +126,17 @@ export function intruderReportToCSV(
     "Ordinal",
     "Payload",
     "Status",
+    "Time of day",
     "Length",
     "Duration (ms)",
     "Reflected",
     "Grep matched",
     "Grep extract",
     "Error",
+    "Timeout",
+    "Cookies",
     "Response ID",
+    "Comment",
   ];
   const rows = attempts.map((attempt) => {
     const parts = payloadAt(attempt.ordinal);
@@ -134,13 +144,17 @@ export function intruderReportToCSV(
       attempt.ordinal,
       parts ? payloadLabelText(parts) : "",
       attempt.status ?? "",
+      attempt.time_of_day,
       attempt.response_len,
       attempt.duration_ms,
       attempt.reflected ? "yes" : "no",
       attempt.grep_matched === null || attempt.grep_matched === undefined ? "" : attempt.grep_matched ? "yes" : "no",
       attempt.grep_extract ?? "",
       attempt.error ?? "",
+      attempt.timeout ? "yes" : "no",
+      attempt.cookies.join("; "),
       attempt.response_id ?? "",
+      comments.get(attempt.ordinal) ?? "",
     ];
   });
   return [...caveats, headers.map(csvCell).join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\n");

@@ -105,6 +105,9 @@ describe("tableRowMatches over the attempt rows it will filter", () => {
   error: "dial tcp: connection refused",
   grep_matched: false,
   grep_extract: null,
+  time_of_day: "2026-01-01T00:00:00.000Z",
+  cookies: [],
+  timeout: false,
  };
 
  test("an error row is findable by its message", () => {

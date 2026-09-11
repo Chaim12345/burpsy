@@ -26,8 +26,16 @@ function report(overrides: Partial<AttackReport> = {}): AttackReport {
     unbucketed: 0,
     errors: [],
     attempts: [
-      { ordinal: 0, status: 200, response_len: 10, duration_ms: 5, reflected: false, request_id: null, response_id: 7, error: null, grep_matched: null, grep_extract: null },
-      { ordinal: 1, status: 403, response_len: 20, duration_ms: 6, reflected: true, request_id: null, response_id: null, error: null, grep_matched: true, grep_extract: "tok" },
+      {
+        ordinal: 0, status: 200, response_len: 10, duration_ms: 5, reflected: false, request_id: null,
+        response_id: 7, error: null, grep_matched: null, grep_extract: null,
+        time_of_day: "2026-09-07T12:00:00.000Z", cookies: [], timeout: false,
+      },
+      {
+        ordinal: 1, status: 403, response_len: 20, duration_ms: 6, reflected: true, request_id: null,
+        response_id: null, error: null, grep_matched: true, grep_extract: "tok",
+        time_of_day: "2026-09-07T12:00:01.000Z", cookies: ["sessid", "csrf"], timeout: false,
+      },
     ],
     detail_limit: 500,
     grep_matched: 0,
@@ -70,9 +78,11 @@ describe("intruderReportToCSV", () => {
     expect(lines[4]).toBe("# truncated: false (max_requests: 0)");
     expect(lines[5]).toBe("# buckets_truncated: false; unbucketed: 0");
     expect(lines[6]).toBe("# detail_limit: 500");
-    expect(lines[7]).toContain('"Ordinal","Payload","Status","Length","Duration (ms)","Reflected","Grep matched","Grep extract","Error","Response ID"');
-    expect(lines[8]).toBe('"0","admin | set 2 payload #4","200","10","5","no","","","","7"');
-    expect(lines[9]).toBe('"1","admin | set 2 payload #4","403","20","6","yes","yes","tok","",""');
+    expect(lines[7]).toContain(
+      '"Ordinal","Payload","Status","Time of day","Length","Duration (ms)","Reflected","Grep matched","Grep extract","Error","Timeout","Cookies","Response ID","Comment"',
+    );
+    expect(lines[8]).toBe('"0","admin | set 2 payload #4","200","2026-09-07T12:00:00.000Z","10","5","no","","","","no","","7",""');
+    expect(lines[9]).toBe('"1","admin | set 2 payload #4","403","2026-09-07T12:00:01.000Z","20","6","yes","yes","tok","","no","sessid; csrf","",""');
     expect(lines).toHaveLength(10);
   });
 
@@ -104,12 +114,27 @@ describe("intruderReportToCSV", () => {
     const csv = intruderReportToCSV(report(), report().attempts, () => row);
     // The payload's newline stays inside the quoted cell — a real CSV parser reads this
     // as one row, so assert on the row text rather than on a split line.
-    expect(csv).toContain('"0","a,b""c\nd","200","10","5","no","","","","7"');
+    expect(csv).toContain('"0","a,b""c\nd","200","2026-09-07T12:00:00.000Z","10","5","no","","","","no","","7",""');
   });
 
   it("leaves the payload cell empty when the ordinal cannot be placed at all", () => {
     const csv = intruderReportToCSV(report(), report().attempts, resolveNothing);
-    expect(csv.split("\n")[8]).toBe('"0","","200","10","5","no","","","","7"');
+    expect(csv.split("\n")[8]).toBe('"0","","200","2026-09-07T12:00:00.000Z","10","5","no","","","","no","","7",""');
+  });
+
+  it("carries a browser-only comment keyed by ordinal, and leaves an uncommented row blank", () => {
+    // The control this proves is wired: intruder.tsx's per-row comment input writes into exactly
+    // this map, and this is the only place that map's contents ever reach a durable artifact — an
+    // export nobody can prove reads the operator's typing is a control wired to nothing.
+    const csv = intruderReportToCSV(report(), report().attempts, resolveNothing, new Date("2026-09-07T12:00:00Z"), new Map([[1, "looks like an IDOR"]]));
+    const lines = csv.split("\n");
+    expect(lines[8]).toBe('"0","","200","2026-09-07T12:00:00.000Z","10","5","no","","","","no","","7",""');
+    expect(lines[9]).toBe('"1","","403","2026-09-07T12:00:01.000Z","20","6","yes","yes","tok","","no","sessid; csrf","","looks like an IDOR"');
+  });
+
+  it("guards a comment beginning with = so Excel reads text, not a formula", () => {
+    const csv = intruderReportToCSV(report(), report().attempts, resolveNothing, new Date(), new Map([[0, "=cmd|'/c calc'!A0"]]));
+    expect(csv).toContain("\"'=cmd|'/c calc'!A0\"");
   });
 });
 
