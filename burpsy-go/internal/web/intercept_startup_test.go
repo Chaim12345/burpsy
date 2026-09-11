@@ -70,6 +70,35 @@ func TestInterceptStartupModeRoundTrips(t *testing.T) {
 	}
 }
 
+// Without a persistence store — the default launch, which carries no -db — there is no saved
+// preference to read, but "off" is still the true answer: a burpsy with nowhere to persist
+// starts every run with interception off. The GET must say so rather than refuse, because the
+// refusal made the Settings panel log a failed request on every visit and then render "off"
+// as if the server had confirmed it (burpsy-react-ui-92o5). The POST refusal stays: writing a
+// preference that cannot survive a restart genuinely cannot be honoured.
+func TestStartupModeReadOnAServerWithoutPersistenceAnswersTheDefault(t *testing.T) {
+	s := newTestServer() // deliberately no WithPersist
+
+	rec := get(t, s, "/api/intercept/startup")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET startup without persist = %d (%s), want 200 mode off", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Mode != "off" {
+		t.Errorf("mode = %q, want off: a server with no store cannot start interception on, so off is the fact", body.Mode)
+	}
+
+	// The write still refuses: a preference that would not survive a restart is not a preference.
+	if rec := postJSON(t, s, "/api/intercept/startup", map[string]any{"mode": "on"}); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("POST startup without persist = %d, want 503", rec.Code)
+	}
+}
+
 // The restore path end to end: toggle the live switch on, restart against the same database,
 // and the switch comes back on — because the enable endpoint recorded the live state.
 func TestRestoreStartupBringsBackTheLastLiveState(t *testing.T) {

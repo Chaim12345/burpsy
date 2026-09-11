@@ -165,7 +165,13 @@ func (s *Server) handleInterceptStartup(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodGet:
 		if s.persist == nil {
-			http.Error(w, "No persistence is attached to this server, so there is no startup preference to read (it would not survive a restart)", http.StatusServiceUnavailable)
+			// "off" is not a guess: without a persistence store burpsy starts every run with
+			// interception off, so off IS the current startup mode. Answering it keeps the read
+			// truthful. The 503 that stood here instead made the Settings panel log a failed
+			// request on every visit to a default (no -db) server (burpsy-react-ui-92o5) and
+			// misdescribe the state as if the server had confirmed it — a refusal is the right
+			// answer to a WRITE, which the POST branch below keeps, not to a read.
+			writeJSON(w, http.StatusOK, map[string]string{"mode": "off"})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"mode": s.persist.LoadInterceptStartup()})
