@@ -20,6 +20,7 @@ import { Checkbox } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable, VirtualTable, type Column } from "../ui/table";
 import { CrawlPathsView } from "../ui/crawlpaths";
+import { EngagementView } from "./engagement";
 import { cn } from "../lib/cn";
 
 interface FlatRow {
@@ -330,7 +331,7 @@ export function SiteMapPage(): JSX.Element {
   * and a remembered "crawl paths" would greet them with an empty panel on a session where nothing
   * has crawled yet — which reads as a broken site map rather than as a remembered preference.
   */
- const [view, setView] = useState<"urls" | "paths">("urls");
+ const [view, setView] = useState<"urls" | "paths" | "engagement">("urls");
  const crawls = useCrawls();
  const passiveScan = usePassiveScanBranch();
  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -975,6 +976,17 @@ export function SiteMapPage(): JSX.Element {
         >
          Crawl paths
         </Button>
+        {/* Burp's Engagement tools (burpsy-react-ui-1s07): its three site-map searches live
+            in this console as the map's third view, searched server-side over the stored
+            responses rather than fetched one response at a time to the browser. */}
+        <Button
+         variant={view === "engagement" ? "outline" : "quiet"}
+         size="small"
+         aria-pressed={view === "engagement"}
+         onClick={() => setView("engagement")}
+        >
+         Engagement tools
+        </Button>
        </div>
        {/* Two honest answers, not one smoothed one: under an active filter the first badge counts
            what the tree actually shows (rows are unique node keys), and the capture total stays
@@ -1044,6 +1056,8 @@ export function SiteMapPage(): JSX.Element {
    </div>
    {view === "paths" ? (
     <CrawlPathsView runs={crawls.data?.crawls ?? []} />
+   ) : view === "engagement" ? (
+    <EngagementView />
    ) : (
     <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
    )}

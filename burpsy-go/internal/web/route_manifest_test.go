@@ -259,6 +259,10 @@ var manifest = map[string]route{
 		summary: "GET: the ffuf allowlist state and the retained discovery runs. POST: sweep a host's " +
 			"path space with a wordlist (Burp's \"Discover content\")",
 	},
+	"/api/engagement/": {
+		methods: []string{"GET"}, risk: riskRead, subPath: "1",
+		summary: "Burp's site-map engagement searches: comments, scripts, references to a URL",
+	},
 	"/api/events": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "SSE change stream; the UI refetches on a frame rather than polling",

@@ -782,6 +782,10 @@ func (s *Server) setupRoutes() {
 	// definition in full. ServeMux picks the longest match regardless of registration order.
 	s.mux.HandleFunc("/api/advisories", s.handleAdvisories)
 	s.mux.HandleFunc("/api/advisories/", s.handleAdvisoryDetail)
+	// Engagement tools over the site map (burpsy-react-ui-1s07): Find comments, Find scripts
+	// and Find references, Burp's three site-map searches, computed over stored responses.
+	// One subtree pattern because the kind IS the path's last segment.
+	s.mux.HandleFunc("/api/engagement/", s.handleEngagement)
 
 	// Tools
 	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)
