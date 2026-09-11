@@ -187,3 +187,89 @@ func putMessage(t *testing.T, s *Server, raw []byte, dir core.Direction) uint64 
 func decodeInto(rec *httptest.ResponseRecorder, out any) error {
 	return json.NewDecoder(strings.NewReader(rec.Body.String())).Decode(out)
 }
+
+// The Grep - Match list over the wire (irt): the response body carries two expressions' worth
+// of hits and the report must name the labels and the per-attempt counts. The both-forms trap
+// (single grep_match AND a list) is refused — the operator would have typed two expression
+// sets and had one silently dropped.
+func Test_intruder_grep_match_list_counts_and_refuses_both_forms(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "error error exception quiet")
+	}))
+	defer origin.Close()
+	host, port := hostPort(t, origin)
+
+	s := newTestServer()
+	s.scope.AddInclude(host)
+	raw := fmt.Sprintf("GET /?q=x HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port)
+	id := putMessage(t, s, []byte(raw), core.DirectionRequest)
+
+	rec := postJSONRaw(t, s, "/api/intruder/run", fmt.Sprintf(`{
+		"msg_id": %d,
+		"target": "%s:%d",
+		"mode": "sniper",
+		"points": [0],
+		"payloads": ["a", "b"],
+		"grep_match_list": ["error", "exception", "missing"],
+		"grep_match_simple": true
+	}`, id, host, port))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run = %d: %s", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+	var view struct {
+		Report struct {
+			GrepMatchLabels []string `json:"grep_match_labels"`
+			Attempts        []struct {
+				GrepMatchCounts []int `json:"grep_match_counts"`
+			} `json:"attempts"`
+			Buckets []struct {
+				GrepMatchTotals []int `json:"grep_match_totals"`
+			} `json:"buckets"`
+		} `json:"report"`
+	}
+	if err := decodeInto(rec, &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	r := view.Report
+	if len(r.GrepMatchLabels) != 3 || r.GrepMatchLabels[0] != "error" {
+		t.Fatalf("labels should carry the expressions as typed, got %v", r.GrepMatchLabels)
+	}
+	if len(r.Attempts) != 2 || len(r.Attempts[0].GrepMatchCounts) != 3 {
+		t.Fatalf("two attempts with three count slots each, got %d attempts, counts %v",
+			len(r.Attempts), r.Attempts[0].GrepMatchCounts)
+	}
+	if r.Attempts[0].GrepMatchCounts[0] != 2 || r.Attempts[0].GrepMatchCounts[1] != 1 || r.Attempts[0].GrepMatchCounts[2] != 0 {
+		t.Fatalf("counts should read [2 1 0] for 'error error exception quiet', got %v",
+			r.Attempts[0].GrepMatchCounts)
+	}
+	// Payload "a" reflects in the first response and "b" does not in the second, so the two
+	// attempts land in two buckets — each bucket's totals are one response's worth, and their
+	// slot-wise sum across buckets is the attack's [4 2 0].
+	totalErr := 0
+	for _, b := range r.Buckets {
+		if len(b.GrepMatchTotals) == 3 {
+			totalErr += b.GrepMatchTotals[0]
+		}
+	}
+	if totalErr != 4 {
+		t.Fatalf("the buckets together should account for 4 'error' occurrences (2 per response), got %d", totalErr)
+	}
+
+	// Both forms at once: refused by name.
+	rec2 := postJSONRaw(t, s, "/api/intruder/run", fmt.Sprintf(`{
+		"msg_id": %d,
+		"target": "%s:%d",
+		"mode": "sniper",
+		"points": [0],
+		"payloads": ["a"],
+		"grep_match": "x",
+		"grep_match_list": ["error"]
+	}`, id, host, port))
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("grep_match + grep_match_list should be refused with 400, got %d: %s",
+			rec2.Code, strings.TrimSpace(rec2.Body.String()))
+	}
+	if !strings.Contains(rec2.Body.String(), "same feature") {
+		t.Fatalf("the refusal should name the conflict, got: %s", strings.TrimSpace(rec2.Body.String()))
+	}
+}

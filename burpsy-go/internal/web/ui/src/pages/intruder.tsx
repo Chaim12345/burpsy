@@ -560,6 +560,23 @@ function AttackResult({
         row.original.reflected ? <Badge tone="warn">reflected</Badge> : <span className="cell-dim">no</span>,
     },
     { accessorKey: "count", header: "Count", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    // Per-expression totals for the bucket table (irt): the slot-wise sum over every response
+    // the bucket holds, so a bucket can be sorted by how often a given error string appeared.
+    ...(view.report.grep_match_labels ?? []).map((label, li) => ({
+      accessorFn: (bucket: ResultBucket) => {
+        const totals = bucket.grep_match_totals ?? [];
+        const v = totals[li];
+        return v !== undefined && v > 0 ? v : undefined;
+      },
+      id: `bucket_grep_item_${li}`,
+      header: label.length > 18 ? label.slice(0, 17) + "…" : label,
+      sortUndefined: "last" as const,
+      cell: ({ row }: { row: { original: ResultBucket } }) => {
+        const totals = row.original.grep_match_totals ?? [];
+        const v = totals[li];
+        return v !== undefined && v > 0 ? <Badge tone="info">{v}</Badge> : <span className="cell-dim">0</span>;
+      },
+    })),
     {
       accessorFn: (bucket) => (bucket.grep_matches ? bucket.grep_matches : undefined),
       id: "grep",
@@ -708,6 +725,25 @@ function AttackResult({
       cell: ({ row }) =>
         row.original.grep_matched ? <Badge tone="info">match</Badge> : <span className="cell-dim">—</span>,
     },
+    // One column per expression (irt): "Burp adds a results column for each expression in the
+    // list. This records the number of times the expression is found in the response." Sorting
+    // on the header sorts by that expression's count, which is how the table is read. Labels
+    // come from the report — the expressions as the operator typed them.
+    ...(view.report.grep_match_labels ?? []).map((label, li) => ({
+      accessorFn: (attempt: Attempt) => {
+        const counts = attempt.grep_match_counts ?? [];
+        const v = counts[li];
+        return v !== undefined && v > 0 ? v : undefined;
+      },
+      id: `grep_item_${li}`,
+      header: label.length > 18 ? label.slice(0, 17) + "…" : label,
+      sortUndefined: "last" as const,
+      cell: ({ row }: { row: { original: Attempt } }) => {
+        const counts = row.original.grep_match_counts ?? [];
+        const v = counts[li];
+        return v !== undefined && v > 0 ? <Badge tone="info">{v}</Badge> : <span className="cell-dim">0</span>;
+      },
+    })),
     {
       accessorFn: (attempt) => attempt.error ?? undefined,
       id: "error",
@@ -1031,6 +1067,9 @@ export function IntruderPage(): JSX.Element {
     grepMatch,
     grepMatchMode,
     grepExtract,
+    grepMatchList,
+    grepMatchCaseSensitive,
+    grepMatchExcludeHeaders,
     poolName,
     maxRequests,
     maxInFlight,
@@ -1085,6 +1124,12 @@ export function IntruderPage(): JSX.Element {
   const setGrepMatch = field("grepMatch");
   const setGrepMatchMode = field("grepMatchMode");
   const setGrepExtract = field("grepExtract");
+  // Grep - Match as a LIST (irt): one expression per line, with Burp's Match type / Case
+  // sensitive / Exclude HTTP headers flags. The legacy single-string field is kept and still
+  // wins when the list is empty, so an operator's stored config never silently stops matching.
+  const setGrepMatchList = field("grepMatchList");
+  const setGrepMatchCaseSensitive = field("grepMatchCaseSensitive");
+  const setGrepMatchExcludeHeaders = field("grepMatchExcludeHeaders");
   const setPoolName = field("poolName");
   const setMaxRequests = field("maxRequests");
   const setMaxInFlight = field("maxInFlight");
@@ -1448,7 +1493,17 @@ export function IntruderPage(): JSX.Element {
       ...(urlEncodeChars !== "" ? { url_encode_characters: urlEncodeChars } : {}),
       // Both grep fields are RE2 patterns on the server. A literal typed in simple mode is quoted
       // here so it matches itself; regex mode sends what was typed (burpsy-react-ui-tpy).
-      ...(grepMatch.trim()
+      // Grep - Match: the list form when the operator typed expressions, else the legacy single
+      // string. The two shapes are the same feature at two sizes and the server refuses both at
+      // once, so exactly one of these two branches can ever fire (irt).
+      ...(grepMatchList.some((e) => e.trim())
+        ? {
+            grep_match_list: grepMatchList.map((e) => e.trim()).filter(Boolean),
+            grep_match_simple: grepMatchMode === "simple",
+            ...(grepMatchMode === "simple" && grepMatchCaseSensitive ? { grep_match_case_sensitive: true } : {}),
+            ...(grepMatchExcludeHeaders ? { grep_match_exclude_headers: true } : {}),
+          }
+        : grepMatch.trim()
         ? { grep_match: grepMatchMode === "simple" ? quoteRegex(grepMatch.trim()) : grepMatch.trim() }
         : {}),
       ...(grepExtract.trim() ? { grep_extract: grepExtract.trim() } : {}),
@@ -2416,9 +2471,36 @@ export function IntruderPage(): JSX.Element {
                 )}
               </Field>
               <Field
-                label="Grep match"
+                label="Grep match — expressions (one per line)"
+                hint="One results column per expression, counting every occurrence in each response (irt). Leave empty to use the single expression below. Empty lines are skipped."
+              >
+                {(id) => (
+                  <Textarea
+                    id={id}
+                    value={grepMatchList.join("\n")}
+                    onChange={(event) => setGrepMatchList(event.target.value.split("\n"))}
+                    placeholder={"error\nexception\ninvalid\nSQL syntax"}
+                  />
+                )}
+              </Field>
+              <div className="row-list">
+                <Checkbox
+                  checked={grepMatchCaseSensitive}
+                  onCheckedChange={(v) => setGrepMatchCaseSensitive(v)}
+                  label="Case sensitive match (simple-string mode only)"
+                />
+                <Checkbox
+                  checked={grepMatchExcludeHeaders}
+                  onCheckedChange={(v) => setGrepMatchExcludeHeaders(v)}
+                  label="Exclude HTTP headers"
+                />
+              </div>
+              <Field
+                label="Grep match (single expression)"
                 hint={
-                  grepMatchMode === "simple"
+                  grepMatchList.some((e) => e.trim())
+                    ? "Ignored while the expression list above has entries — the list is the same feature at a larger size, and the server refuses both at once."
+                    : grepMatchMode === "simple"
                     ? "Counts responses containing this exact text. Regex characters in it are escaped for you."
                     : "Counts responses matching this regular expression (RE2). Alternate with |."
                 }

@@ -46,6 +46,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,7 +80,7 @@ type RecordFn func(raw []byte) uint64
 // Guard decides whether a spliced request may be sent. See Attack.Guard.
 type Guard func(raw []byte) error
 
-// Grep is grep-match and grep-extract: two optional regexes, applied to every response.
+// Grep is grep-match and grep-extract, applied to every response.
 type Grep struct {
 	// MatchRe answers "does the response match?" as a boolean per attempt.
 	MatchRe *regexp.Regexp
@@ -87,10 +88,103 @@ type Grep struct {
 	// the pattern has no groups — which is what an operator who wrote a pattern with no
 	// parentheses means.
 	ExtractRe *regexp.Regexp
+	// MatchList is Burp's full Grep - Match form (irt): a LIST of expressions, each counting
+	// its occurrences in the response — "Burp adds a results column for each expression in the
+	// list. This records the number of times the expression is found in the response."
+	// Recovered from the decompiled original: Zru_ holds the panel (matchgrep.dogrep's
+	// Simple string/Regex radio, matchgrep.casesensitive, matchgrep.excludeheaders) and the
+	// matchgrep.item0..N persisted list of default error strings. Nil when unconfigured.
+	MatchList *MatchList
 }
 
-// IsEmpty reports whether neither pattern was configured.
-func (g *Grep) IsEmpty() bool { return g.MatchRe == nil && g.ExtractRe == nil }
+// MatchList is the compiled Grep - Match expression list (irt).
+type MatchList struct {
+	// Items are the compiled expressions, in list order — the order the results columns go in.
+	Items []*regexp.Regexp
+	// Labels are the expressions as the operator typed them, for the results-table headers.
+	Labels []string
+	// ExcludeHeaders trims the search to the response body: Burp's "Exclude HTTP headers"
+	// checkbox. The header/body split is the first \r\n\r\n in the message; a response with
+	// no split is searched whole, because there is no header block to exclude.
+	ExcludeHeaders bool
+	// maxMatchesPerItem bounds one expression's count on one response, so a pathological
+	// response (an attacker-supplied body that repeats the token a million times) cannot turn
+	// per-response counting into a per-response allocation. The cap is far above every count a
+	// real response produces, and the count is capped, not the search.
+	maxMatchesPerItem int
+}
+
+// NewMatchList compiles the expression list. simple=true treats every entry as a literal string
+// (quoted), case-folded unless caseSensitive — Burp's Match type radio and Case sensitive match
+// checkbox; simple=false compiles each entry as a regex, where case is the pattern's own
+// business. Patterns that do not compile are refused with the item's index and text, not
+// dropped: a column that silently counts nothing is a lie.
+func NewMatchList(items []string, simple, caseSensitive, excludeHeaders bool) (*MatchList, error) {
+	ml := &MatchList{
+		ExcludeHeaders:    excludeHeaders,
+		maxMatchesPerItem: 10_000,
+	}
+	for i, expr := range items {
+		if strings.TrimSpace(expr) == "" {
+			continue // an empty line in the list is no expression, matching Burp's **empty** row
+		}
+		pattern := expr
+		if simple {
+			pattern = regexp.QuoteMeta(expr)
+			if !caseSensitive {
+				pattern = "(?i)" + pattern
+			}
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("grep match item %d (%q) does not compile: %w", i+1, expr, err)
+		}
+		ml.Items = append(ml.Items, re)
+		ml.Labels = append(ml.Labels, expr)
+	}
+	return ml, nil
+}
+
+// labelsOrEmpty is the operator's expressions as typed, for the report's column headers. Nil
+// when no list — the report distinguishes "no list" (omitempty drops the field) from a list
+// whose items all failed... which cannot happen, because NewMatchList refuses items that do not
+// compile and skips empties.
+func (ml *MatchList) labelsOrEmpty() []string {
+	if ml == nil {
+		return nil
+	}
+	return ml.Labels
+}
+
+// counts applies every expression to one response. Always one count per item, never nil: the
+// wire rows carry a parallel array and a missing slot would shift every column after it.
+//
+// The nil check is FIRST, before any field access — a nil receiver's field dereference panics,
+// and every ordinary attack (no list configured) holds a nil MatchList. Caught by the full
+// suite: every attack's sends were "failing" through the plan loop's recover, which is exactly
+// the kind of bug a package-scoped build+vet misses because it compiles fine.
+func (ml *MatchList) counts(raw []byte) []int {
+	if ml == nil || len(ml.Items) == 0 {
+		return []int{}
+	}
+	out := make([]int, len(ml.Items))
+	if ml.ExcludeHeaders {
+		// The first double CRLF is the header/body boundary. Everything from there on is body.
+		if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+			raw = raw[i+4:]
+		}
+	}
+	for i, re := range ml.Items {
+		if re == nil {
+			continue
+		}
+		out[i] = len(re.FindAllIndex(raw, ml.maxMatchesPerItem))
+	}
+	return out
+}
+
+// IsEmpty reports whether no grep was configured at all.
+func (g *Grep) IsEmpty() bool { return g.MatchRe == nil && g.ExtractRe == nil && g.MatchList == nil }
 
 // AutoPause is Burp's auto-pause (configure-attack/settings.html): pause the attack when a
 // chosen expression appears in — or goes missing from — a response. It is a predicate over
@@ -410,6 +504,10 @@ type ResultBucket struct {
 	ExampleResponseID *uint64 `json:"example_response_id"`
 	GrepMatches       int     `json:"grep_matches"`
 	GrepExtract       *string `json:"grep_extract"`
+	// GrepMatchTotals is the match list's occurrence count summed over this bucket's
+	// responses (irt): one slot per expression, in list order — the same shape an attempt row
+	// carries, summed. Empty when no list was configured.
+	GrepMatchTotals []int `json:"grep_match_totals"`
 }
 
 // ErrorBucket is a set of sends that never produced a response, grouped by message.
@@ -441,6 +539,10 @@ type Attempt struct {
 	Error       *string `json:"error"`
 	GrepMatched *bool   `json:"grep_matched"`
 	GrepExtract *string `json:"grep_extract"`
+	// GrepMatchCounts is the Grep - Match list's per-expression occurrence count for this
+	// response (irt), parallel to the attack's expression list. Empty (not nil) when no list
+	// was configured, so the wire shape never varies (the nil-slice note on newCollector).
+	GrepMatchCounts []int `json:"grep_match_counts"`
 	// TimeOfDay is when this attempt was dispatched — or, for a guard refusal, when it was refused.
 	// Burp's results table carries it as its own column ("the time of day the request was made";
 	// viewing-results.html), and an attack that runs for an hour needs it to line up a row with
@@ -507,6 +609,10 @@ type AttackReport struct {
 	// driver records them as it goes and the wire view reads this instead of payloadsAt.
 	// Empty (not nil) for every plan-driven attack, so the wire shape never varies.
 	ChainPayloads []string `json:"chain_payloads"`
+	// GrepMatchLabels are the Grep - Match expressions as the operator typed them (irt), in
+	// list order — the results-table headers for the per-expression count columns. Present
+	// only when a list ran; nil otherwise, so the browser can tell "no list" from "empty list".
+	GrepMatchLabels []string `json:"grep_match_labels,omitempty"`
 }
 
 // bucketKey is the distinct-behaviour triple. hasStatus distinguishes "no response" from a
@@ -528,8 +634,11 @@ type hit struct {
 	reflected   bool
 	grepMatched *bool
 	grepExtract *string
-	raw         []byte
-	request     []byte
+	// grepCounts is the match list's per-expression occurrence count (irt), one slot per
+	// item, in list order. Nil when no list was configured.
+	grepCounts []int
+	raw        []byte
+	request    []byte
 	// cookies are the Set-Cookie names this response carried, computed once here (doSend) so the
 	// collector never needs the raw bytes to answer Attempt.Cookies. Always non-nil.
 	cookies []string
@@ -611,9 +720,11 @@ func (c *collector) absorb(o outcome) {
 			c.attempts = append(c.attempts, Attempt{
 				// Cookies is []string{}, not nil: a failed send never reached a response, but the
 				// field's wire contract (types.tools.ts declares Attempt.cookies non-nullable) does
-				// not get an exception for that — see the nil-slice note on newCollector.
+				// not get an exception for that — see the nil-slice note on newCollector. The
+				// match-count array holds to the same contract: [] for a send that never produced
+				// a response, not null (irt).
 				Ordinal: o.ordinal, Error: &e, TimeOfDay: o.sentAt, Timeout: isTimeout(o.err),
-				Cookies: []string{},
+				Cookies: []string{}, GrepMatchCounts: []int{},
 			})
 		}
 		c.noteError(o.ordinal, o.err.Error())
@@ -644,6 +755,13 @@ func (c *collector) absorb(o outcome) {
 		if h.grepMatched != nil && *h.grepMatched {
 			c.buckets[i].GrepMatches++
 		}
+		// Slot-wise sum: the bucket's totals describe every response it holds, so the list's
+		// per-expression columns can sort the bucket table the way Burp's do.
+		for j, v := range h.grepCounts {
+			if j < len(c.buckets[i].GrepMatchTotals) {
+				c.buckets[i].GrepMatchTotals[j] += v
+			}
+		}
 	} else if newBucket {
 		if c.record != nil {
 			id := c.record(h.raw)
@@ -658,6 +776,7 @@ func (c *collector) absorb(o outcome) {
 			Status: h.status, ResponseLen: h.length, Reflected: h.reflected, Count: 1,
 			FirstOrdinal: o.ordinal, ExampleRequestID: requestID, ExampleResponseID: responseID,
 			GrepMatches: gm, GrepExtract: h.grepExtract,
+			GrepMatchTotals: emptyCounts(h.grepCounts),
 		})
 	} else {
 		c.unbucketed++
@@ -667,7 +786,8 @@ func (c *collector) absorb(o outcome) {
 			Ordinal: o.ordinal, Status: h.status, ResponseLen: h.length, DurationMS: h.durationMS,
 			Reflected: h.reflected, RequestID: requestID, ResponseID: responseID,
 			GrepMatched: h.grepMatched, GrepExtract: h.grepExtract,
-			TimeOfDay: o.sentAt, Cookies: h.cookies,
+			GrepMatchCounts: emptyCounts(h.grepCounts),
+			TimeOfDay:       o.sentAt, Cookies: h.cookies,
 		})
 	}
 }
@@ -733,6 +853,10 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		// Empty for every plan-driven attack (nil chain), set for the recursive driver — see
 		// AttackReport.ChainPayloads.
 		ChainPayloads: c.chainOrEmpty(),
+		// Labels only when a list ran; the omitempty tag keeps "no list" and "empty list"
+		// distinguishable, matching the Attempt counts' always-array contract where absence
+		// would shift columns.
+		GrepMatchLabels: a.Grep.MatchList.labelsOrEmpty(),
 	}
 }
 
@@ -953,6 +1077,7 @@ func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [
 		}
 	}
 	grepMatched, grepExtract := a.Grep.run(sent.Raw)
+	grepCounts := a.Grep.MatchList.counts(sent.Raw)
 	// Auto-pause, evaluated on the same bytes grep just read (burpsy-react-ui-8f2). The
 	// response already went out — the target has it — so this is not a guard, it is a halt
 	// AFTER an observation: the current attempt is collected whole, and the driver's next
@@ -976,7 +1101,7 @@ func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [
 	return &hit{
 		status: sent.Status, length: len(sent.Raw), durationMS: sent.Duration.Milliseconds(),
 		reflected: reflected, grepMatched: grepMatched, grepExtract: grepExtract,
-		raw: sent.Raw, cookies: cookies,
+		grepCounts: grepCounts, raw: sent.Raw, cookies: cookies,
 	}, nil
 }
 
@@ -1009,6 +1134,16 @@ func containsBytes(hay, needle []byte) bool {
 		return false
 	}
 	return bytes.Contains(hay, needle)
+}
+
+// emptyCounts is the never-nil wire guard for the per-expression count arrays: no list
+// configured means [] on the wire, not null (the same contract newCollector's nil-slice note
+// holds the row slices to).
+func emptyCounts(counts []int) []int {
+	if counts == nil {
+		return []int{}
+	}
+	return counts
 }
 
 func derefInt(p *int) int {

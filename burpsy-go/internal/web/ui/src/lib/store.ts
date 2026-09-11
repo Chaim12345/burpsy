@@ -113,6 +113,13 @@ export interface IntruderConfig {
  grepMatch: string;
  grepMatchMode: GrepMatchMode;
  grepExtract: string;
+ /** Grep - Match as a list (irt): one expression per line. Empty means the legacy single
+  *  grepMatch field decides, so a stored config never silently stops matching. */
+ grepMatchList: string[];
+ /** Burp's "Case sensitive match" — simple-string entries stop being case-folded. */
+ grepMatchCaseSensitive: boolean;
+ /** Burp's "Exclude HTTP headers" — the list searches the response body only. */
+ grepMatchExcludeHeaders: boolean;
  /** Empty means the inline limits below apply; a name binds the attack to a saved pool. */
  poolName: string;
  maxRequests: number;
@@ -169,6 +176,9 @@ export function emptyIntruderConfig(): IntruderConfig {
   grepMatch: "",
   grepMatchMode: "simple",
   grepExtract: "",
+  grepMatchList: [],
+  grepMatchCaseSensitive: false,
+  grepMatchExcludeHeaders: false,
   poolName: "",
   maxRequests: 1000,
   maxInFlight: 8,

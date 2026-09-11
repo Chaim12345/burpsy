@@ -108,6 +108,7 @@ describe("intruderReportToCSV", () => {
   {
    ordinal: 0, status: 200, response_len: 5, duration_ms: 1, reflected: false, request_id: null,
    response_id: null, error: null, grep_matched: null, grep_extract: null,
+        grep_match_counts: [],
    time_of_day: "2026-01-01T00:00:00.000Z", cookies: [], timeout: false,
   },
  ];

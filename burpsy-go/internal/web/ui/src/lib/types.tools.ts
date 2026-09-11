@@ -92,6 +92,9 @@ export interface ResultBucket {
   example_response_id: number | null;
   grep_matches: number;
   grep_extract: string | null;
+  /** Per-expression occurrence totals summed over this bucket's responses (irt), parallel to the
+   *  expression list. Empty when no list was configured. */
+  grep_match_totals: number[];
 }
 
 export interface ErrorBucket {
@@ -116,6 +119,12 @@ export interface Attempt {
   error: string | null;
   grep_matched: boolean | null;
   grep_extract: string | null;
+  /** Per-expression occurrence count from the Grep - Match list (irt), parallel to the attack's
+   *  expression list. Empty when no list was configured. */
+  grep_match_counts: number[];
+  /** The expressions as the operator typed them, in list order — the column headers. Present on
+   *  the report when a list ran; never null. */
+  grep_match_labels?: string[];
   /** When this attempt was dispatched — or, for a guard refusal, when it was refused. Burp's
    *  results table carries it as its own column ("the time of day the request was made"). An
    *  RFC 3339 string (Go's `time.Time` default encoding), never absent. */
@@ -166,6 +175,9 @@ export interface AttackReport {
   attempts: Attempt[];
   detail_limit: number;
   grep_matched: number;
+  /** The Grep - Match expressions as typed (irt), in list order — the results-table headers for
+   *  the per-expression count columns. Present only when a list ran. */
+  grep_match_labels?: string[];
   pool: string | null;
   auto_throttle_engaged: number;
 }

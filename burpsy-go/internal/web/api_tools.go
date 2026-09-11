@@ -480,16 +480,29 @@ type intruderRunReq struct {
 	// rule chain. Empty (or absent) means no extra encoding — matching the off state, not
 	// an empty set that would encode nothing anyway. Spaces and control characters are
 	// always encoded additionally, because a request containing them cannot be delivered.
-	URLEncode    *string                `json:"url_encode_characters"`
-	MaxPayloads  *int                   `json:"max_payloads"`
-	GrepMatch    *string                `json:"grep_match"`
-	GrepExtract  *string                `json:"grep_extract"`
-	Pool         *string                `json:"pool"`
-	AutoThrottle *intruder.AutoThrottle `json:"auto_throttle"`
-	RPS          *float64               `json:"rps"`
-	MaxInFlight  *int                   `json:"max_in_flight"`
-	MaxRequests  *int                   `json:"max_requests"`
-	TimeoutMS    *uint64                `json:"timeout_ms"`
+	URLEncode   *string `json:"url_encode_characters"`
+	MaxPayloads *int    `json:"max_payloads"`
+	GrepMatch   *string `json:"grep_match"`
+	GrepExtract *string `json:"grep_extract"`
+	// GrepMatchList is Burp's full Grep - Match form (irt): a LIST of expressions, one results
+	// column per expression counting occurrences. The single-string grep_match above is kept
+	// unchanged — the bundled UI and the wire contract both send it, and both shapes mean the
+	// same thing when the list holds one item.
+	GrepMatchList *[]string `json:"grep_match_list"`
+	// GrepMatchSimple is Burp's Match type radio: simple strings (quoted, case-folded) vs
+	// regexes compiled as-is. Nil and true mean simple, which is how the single grep_match has
+	// always behaved (quoteRegex on the UI side, tpy).
+	GrepMatchSimple *bool `json:"grep_match_simple"`
+	// GrepMatchCaseSensitive turns off the case-folding a simple-string match applies.
+	GrepMatchCaseSensitive *bool `json:"grep_match_case_sensitive"`
+	// GrepMatchExcludeHeaders searches the response body only — Burp's "Exclude HTTP headers".
+	GrepMatchExcludeHeaders *bool                  `json:"grep_match_exclude_headers"`
+	Pool                    *string                `json:"pool"`
+	AutoThrottle            *intruder.AutoThrottle `json:"auto_throttle"`
+	RPS                     *float64               `json:"rps"`
+	MaxInFlight             *int                   `json:"max_in_flight"`
+	MaxRequests             *int                   `json:"max_requests"`
+	TimeoutMS               *uint64                `json:"timeout_ms"`
 	// FollowRedirects is Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/
 	// settings.html: Never / On-site only / In-scope only / Always). Nil or empty is the standing
 	// network policy — the same fallback repeaterSendOptions.RedirectMode uses for Repeater's own
@@ -604,6 +617,9 @@ type AttemptView struct {
 	Error       *string `json:"error"`
 	GrepMatched *bool   `json:"grep_matched"`
 	GrepExtract *string `json:"grep_extract"`
+	// GrepMatchCounts is the expression list's per-item occurrence count (irt). Empty when no
+	// list was configured.
+	GrepMatchCounts []int `json:"grep_match_counts"`
 }
 
 // BucketExample resolves one ordinal — a bucket's first ordinal, or any other attempt ordinal the
@@ -846,7 +862,8 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		resolved = append(resolved, *ps)
 	}
 
-	grep, err := buildGrep(req.GrepMatch, req.GrepExtract)
+	grep, err := buildGrep(req.GrepMatch, req.GrepExtract, req.GrepMatchList,
+		req.GrepMatchSimple, req.GrepMatchCaseSensitive, req.GrepMatchExcludeHeaders)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1080,13 +1097,14 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 				payload = pl[0]
 			}
 			rows = append(rows, AttemptView{
-				Payload:     payload,
-				Status:      a.Status,
-				Len:         a.ResponseLen,
-				DurationMS:  uint64(a.DurationMS),
-				Error:       a.Error,
-				GrepMatched: a.GrepMatched,
-				GrepExtract: a.GrepExtract,
+				Payload:         payload,
+				Status:          a.Status,
+				Len:             a.ResponseLen,
+				DurationMS:      uint64(a.DurationMS),
+				Error:           a.Error,
+				GrepMatched:     a.GrepMatched,
+				GrepExtract:     a.GrepExtract,
+				GrepMatchCounts: a.GrepMatchCounts,
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1204,7 +1222,13 @@ func intruderSources(sources *[]intruder.PayloadSource, sets *[][]string, payloa
 // buildGrep compiles the operator's grep patterns, if any. Go's regexp is RE2, which bounds
 // matching memory by construction (lazy DFA), so the Rust GREP_SIZE_LIMIT has no knob to turn:
 // the safety property it guarded holds without one.
-func buildGrep(matchRe, extractRe *string) (intruder.Grep, error) {
+//
+// matchList is the irt form: a list of expressions plus Burp's three flags (Match type, Case
+// sensitive, Exclude HTTP headers). The single grep_match and the list are the same feature at
+// two sizes, so sending both is refused — the operator would have typed two expression sets and
+// had one silently dropped, the exact silent-compete trap the recursive_grep two-form refusal
+// already refuses.
+func buildGrep(matchRe, extractRe *string, matchList *[]string, simple, caseSensitive, excludeHeaders *bool) (intruder.Grep, error) {
 	var g intruder.Grep
 	var err error
 	if matchRe != nil && *matchRe != "" {
@@ -1217,6 +1241,31 @@ func buildGrep(matchRe, extractRe *string) (intruder.Grep, error) {
 		g.ExtractRe, err = regexp.Compile(*extractRe)
 		if err != nil {
 			return g, fmt.Errorf("bad grep_extract pattern: %v", err)
+		}
+	}
+	if matchList != nil {
+		hasSingle := matchRe != nil && *matchRe != ""
+		if hasSingle {
+			return g, fmt.Errorf("grep_match and grep_match_list are the same feature at two sizes; send one — a request carrying both would silently drop one of the two expression sets")
+		}
+		// Nil simple means simple: the single-string grep_match has always behaved as a literal
+		// (quoteRegex folds the decision into the pattern client-side), so the list's default
+		// keeps that behaviour rather than inventing a regex-by-default break.
+		isSimple := simple == nil || *simple
+		caseSensitive := caseSensitive != nil && *caseSensitive
+		exclude := excludeHeaders != nil && *excludeHeaders
+		nonEmpty := make([]string, 0, len(*matchList))
+		for _, e := range *matchList {
+			if strings.TrimSpace(e) != "" {
+				nonEmpty = append(nonEmpty, e)
+			}
+		}
+		if len(nonEmpty) == 0 {
+			return g, fmt.Errorf("grep_match_list carries no expression; send at least one, or omit the list")
+		}
+		g.MatchList, err = intruder.NewMatchList(nonEmpty, isSimple, caseSensitive, exclude)
+		if err != nil {
+			return g, err
 		}
 	}
 	return g, nil

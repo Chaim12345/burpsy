@@ -56,6 +56,7 @@ describe("tableRowMatches matches any flattened value, literally", () => {
   example_request_id: null, example_response_id: 90,
   grep_matches: 2,
   grep_extract: "token=[abc]",
+  grep_match_totals: [],
  };
 
  test("case-insensitive substring", () => {
@@ -105,6 +106,7 @@ describe("tableRowMatches over the attempt rows it will filter", () => {
   error: "dial tcp: connection refused",
   grep_matched: false,
   grep_extract: null,
+  grep_match_counts: [],
   time_of_day: "2026-01-01T00:00:00.000Z",
   cookies: [],
   timeout: false,
@@ -135,6 +137,7 @@ describe("filterTableRows keeps the count and the table in agreement", () => {
    example_request_id: null, example_response_id: 1,
    grep_matches: 0,
    grep_extract: null,
+   grep_match_totals: [],
   },
   {
    status: 404,
@@ -145,6 +148,7 @@ describe("filterTableRows keeps the count and the table in agreement", () => {
    example_request_id: null, example_response_id: null,
    grep_matches: 2,
    grep_extract: "token=[x]",
+   grep_match_totals: [],
   },
   {
    status: null,
@@ -155,6 +159,7 @@ describe("filterTableRows keeps the count and the table in agreement", () => {
    example_request_id: null, example_response_id: null,
    grep_matches: 0,
    grep_extract: null,
+   grep_match_totals: [],
   },
  ];
 

@@ -29,11 +29,13 @@ function report(overrides: Partial<AttackReport> = {}): AttackReport {
       {
         ordinal: 0, status: 200, response_len: 10, duration_ms: 5, reflected: false, request_id: null,
         response_id: 7, error: null, grep_matched: null, grep_extract: null,
+        grep_match_counts: [],
         time_of_day: "2026-09-07T12:00:00.000Z", cookies: [], timeout: false,
       },
       {
         ordinal: 1, status: 403, response_len: 20, duration_ms: 6, reflected: true, request_id: null,
         response_id: null, error: null, grep_matched: true, grep_extract: "tok",
+        grep_match_counts: [],
         time_of_day: "2026-09-07T12:00:01.000Z", cookies: ["sessid", "csrf"], timeout: false,
       },
     ],
