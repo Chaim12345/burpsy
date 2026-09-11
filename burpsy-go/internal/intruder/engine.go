@@ -426,6 +426,15 @@ type Attack struct {
 	// retriesUsed counts retry sends across the attack. Atomic: the drivers' send paths write
 	// it while the collector reads the total for the report.
 	retriesUsed atomic.Int64
+	// Baseline is Burp's "Make unmodified baseline request" (v34): issue the template request
+	// with every payload position at its base value, in addition to the configured attack
+	// requests — "The request shows as item 0 in the results table. This is useful to provide
+	// a base response against which to compare the attack responses" (settings.html, Attack
+	// results). The decompiled original renders that row's position as -1 with the label
+	// "Baseline request (no payloads)" (Zrpq), so the ordinal shift is one and the sentinel is
+	// the position field's -1 — the same shape here: ordinal 0 is the baseline, plan ordinal i
+	// becomes result ordinal i+1.
+	Baseline bool
 	// autoPaused counts trigger events. Atomic: doSend's send goroutines write it while the
 	// collector reads it for the report.
 	autoPaused atomic.Int64
@@ -484,6 +493,12 @@ func (a *Attack) WithAutoPause(ap *AutoPause) *Attack {
 // WithRecursive attaches the recursive-grep driver. Nil is an ordinary attack.
 func (a *Attack) WithRecursive(rg *RecursiveGrep) *Attack {
 	a.Recursive = rg
+	return a
+}
+
+// WithBaseline attaches Burp's "Make unmodified baseline request" (v34).
+func (a *Attack) WithBaseline(b bool) *Attack {
+	a.Baseline = b
 	return a
 }
 
@@ -684,6 +699,11 @@ type AttackReport struct {
 	// surfaced because an attack that retried its way to a full result set is a different fact
 	// about the target than one that never stumbled. Zero unless the attack configured retries.
 	RetriesUsed int `json:"retries_used"`
+	// Baseline is true when the attack issued the unmodified template request as item 0 (v34):
+	// every ordinal in Attempts/Buckets is one higher than the plan's arithmetic, and ordinal
+	// 0's row is "Baseline request (no payloads)" — the base response the attack responses hang
+	// against. The wire view reads this to shift payloadsAt's plan arithmetic.
+	Baseline bool `json:"baseline"`
 }
 
 // bucketKey is the distinct-behaviour triple. hasStatus distinguishes "no response" from a
@@ -929,6 +949,7 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		// would shift columns.
 		GrepMatchLabels: a.Grep.MatchList.labelsOrEmpty(),
 		RetriesUsed:     a.RetriesUsed(),
+		Baseline:        a.Baseline,
 	}
 }
 
@@ -964,6 +985,50 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 		defer close(results)
 		var wg sync.WaitGroup
 		var asg Assignment
+		// The baseline (v34) is ordinal 0 and every plan ordinal shifts by one: Burp shows it
+		// as item 0 ("Baseline request (no payloads)", position -1 in Zrpq), and the results
+		// table's whole point is that the attack responses hang after something to compare
+		// against. Sent through the same doSend, so its response is bucketed, grepped, and
+		// recorded exactly like an attack row — a baseline the pipeline treated specially
+		// would not be comparable with the rows it exists to be compared against.
+		if a.Baseline {
+			if a.Control.gate() {
+				if a.SuiteGate != nil {
+					a.SuiteGate(context.Background())
+				}
+				permit := limiter.Acquire()
+				if a.Guard != nil {
+					if err := a.Guard(a.Base); err != nil {
+						permit.Release()
+						results <- outcome{ordinal: 0, err: err, sentAt: time.Now()}
+					} else {
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+							defer permit.Release()
+							sentAt := time.Now()
+							h, err := doSend(a, limiter, send, a.Base, nil, ctx)
+							if h != nil {
+								h.request = a.Base
+							}
+							results <- outcome{ordinal: 0, hit: h, err: err, sentAt: sentAt}
+						}()
+					}
+				} else {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						defer permit.Release()
+						sentAt := time.Now()
+						h, err := doSend(a, limiter, send, a.Base, nil, ctx)
+						if h != nil {
+							h.request = a.Base
+						}
+						results <- outcome{ordinal: 0, hit: h, err: err, sentAt: sentAt}
+					}()
+				}
+			}
+		}
 		for i := 0; i < a.Plan.Len(); i++ {
 			// Before the plan is read and before a permit is taken: a paused attack must hold no
 			// permit (it would throttle nothing and block a resume's first send) and must not have
@@ -1000,7 +1065,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			if a.Guard != nil {
 				if err := a.Guard(req); err != nil {
 					permit.Release()
-					results <- outcome{ordinal: i, err: err, sentAt: time.Now()}
+					results <- outcome{ordinal: baselineShift(a) + i, err: err, sentAt: time.Now()}
 					continue
 				}
 			}
@@ -1023,7 +1088,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 					h.request = raw
 				}
 				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt}
-			}(i, req, payloads, permit)
+			}(baselineShift(a)+i, req, payloads, permit)
 		}
 		wg.Wait()
 	}()
@@ -1138,6 +1203,16 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 	a.Control.complete()
 	col.chain = chainPayloads
 	return col.finish(a, limiter, time.Since(started), chained)
+}
+
+// baselineShift is the ordinal offset the baseline request (v34) introduces: 1 when the attack
+// sends one, 0 otherwise. A function of the attack, not a captured variable, so the plan loop
+// and the wire view (payloadsAt's ordinal) agree on the shift without sharing state.
+func baselineShift(a *Attack) int {
+	if a.Baseline {
+		return 1
+	}
+	return 0
 }
 
 // doSend runs one request: send (retrying network failures per Burp's error-handling settings,

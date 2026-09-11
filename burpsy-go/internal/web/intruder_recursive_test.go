@@ -328,3 +328,69 @@ func Test_intruder_error_handling_retries_over_the_wire(t *testing.T) {
 		t.Fatalf("retry_delay_ms past 600000 should be refused, got %d", rec.Code)
 	}
 }
+
+// The baseline over the wire (v34): the report names it, the attack requests' ordinals shift
+// by one, and payloadsAt's plan arithmetic is compensated — a payloadsAt called with the
+// shifted ordinal would label the baseline row with the first payload.
+func Test_intruder_baseline_request_is_item_0_with_shifted_ordinals(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "answer for %s", r.URL.RawQuery)
+	}))
+	defer origin.Close()
+	host, port := hostPort(t, origin)
+
+	s := newTestServer()
+	s.scope.AddInclude(host)
+	raw := fmt.Sprintf("GET /?q=x HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port)
+	id := putMessage(t, s, []byte(raw), core.DirectionRequest)
+
+	rec := postJSONRaw(t, s, "/api/intruder/run", fmt.Sprintf(`{
+		"msg_id": %d, "target": "%s:%d", "mode": "sniper", "points": [0],
+		"payloads": ["one", "two"], "baseline": true
+	}`, id, host, port))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run = %d: %s", rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
+	var view struct {
+		Report struct {
+			Baseline bool `json:"baseline"`
+			Sent     int  `json:"sent"`
+			Attempts []struct {
+				Ordinal int    `json:"ordinal"`
+				Payload string `json:"payload"`
+			} `json:"attempts"`
+		} `json:"report"`
+		Examples []struct {
+			FirstOrdinal int      `json:"first_ordinal"`
+			Payloads     []string `json:"payloads"`
+		} `json:"examples"`
+	}
+	if err := decodeInto(rec, &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	r := view.Report
+	if !r.Baseline || r.Sent != 3 {
+		t.Fatalf("baseline + two attack requests = 3 sends, got baseline=%v sent=%d", r.Baseline, r.Sent)
+	}
+	if len(r.Attempts) != 3 {
+		t.Fatalf("three rows, got %d", len(r.Attempts))
+	}
+	if r.Attempts[0].Ordinal != 0 {
+		t.Fatalf("item 0 is the baseline, got ordinal=%d", r.Attempts[0].Ordinal)
+	}
+	// The examples table carries the payloads: ordinal 0 none (baseline), 1 and 2 one/two —
+	// the payloadsAt shift is what keeps those labels honest.
+	byOrdinal := map[int]string{}
+	for _, ex := range view.Examples {
+		if len(ex.Payloads) > 0 {
+			byOrdinal[ex.FirstOrdinal] = ex.Payloads[0]
+		}
+	}
+	if byOrdinal[0] != "" {
+		t.Fatalf("the baseline example names no payload, got %q", byOrdinal[0])
+	}
+	if byOrdinal[1] != "one" || byOrdinal[2] != "two" {
+		t.Fatalf("ordinals 1,2 should carry one,two — the shift keeps payload labels honest, got %q,%q",
+			byOrdinal[1], byOrdinal[2])
+	}
+}

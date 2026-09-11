@@ -2,6 +2,7 @@ package intruder
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,5 +109,67 @@ func Test_the_pause_before_retry_is_waited_and_stoppable(t *testing.T) {
 	}
 	if report.Status != StatusStopped {
 		t.Fatalf("the report should say stopped, got %q", report.Status)
+	}
+}
+
+// Burp's "Make unmodified baseline request" (v34): the template with all positions at their
+// base values, issued as item 0 before every attack request — "useful to provide a base
+// response against which to compare the attack responses" (settings.html). The decompiled
+// original renders that row as "Baseline request (no payloads)" at position -1 (Zrpq).
+func Test_the_baseline_request_is_item_0_and_the_plan_shifts_by_one(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{2}, 10)
+	atk := NewAttack(base, pts[:1], sets([]string{"x", "y"}), plan).
+		WithLimits(Unthrottled(1)).
+		WithBaseline(true)
+
+	var order []string
+	send := func(raw []byte) (Sent, error) {
+		status := 200
+		// The request line names what was spliced: the baseline goes out unmodified, the two
+		// attack requests carry their payloads.
+		order = append(order, strings.Split(string(raw), "\r\n")[0])
+		return Sent{Raw: []byte("HTTP/1.1 200 OK\r\n\r\nfor " + strings.Split(string(raw), "\r\n")[0]), Status: &status}, nil
+	}
+
+	report := Run(atk, send, nil)
+
+	if len(order) != 3 {
+		t.Fatalf("baseline + 2 attack requests = 3 sends, got %d: %v", len(order), order)
+	}
+	if !strings.Contains(order[0], "?a=1 ") {
+		t.Fatalf("item 0 must be the UNMODIFIED template, got %q", order[0])
+	}
+	if !strings.Contains(order[1], "a=x") || !strings.Contains(order[2], "a=y") {
+		t.Fatalf("the attack requests follow the baseline with their payloads, got %v", order)
+	}
+	// The baseline row is ordinal 0; the plan's ordinals shifted by one.
+	if report.Attempts[0].Ordinal != 0 || report.Attempts[1].Ordinal != 1 || report.Attempts[2].Ordinal != 2 {
+		t.Fatalf("ordinals should be 0,1,2 with the baseline at 0, got %d,%d,%d",
+			report.Attempts[0].Ordinal, report.Attempts[1].Ordinal, report.Attempts[2].Ordinal)
+	}
+	if !report.Baseline {
+		t.Fatal("the report must say a baseline ran, or the wire view cannot shift payloadsAt")
+	}
+}
+
+// Without the flag nothing changes: the plan's ordinals start at 0 exactly as they always did.
+func Test_an_attack_without_the_baseline_keeps_its_ordinals(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{1}, 10)
+	atk := NewAttack(base, pts[:1], sets([]string{"x"}), plan).
+		WithLimits(Unthrottled(1))
+
+	send := func(raw []byte) (Sent, error) {
+		status := 200
+		return Sent{Raw: []byte("HTTP/1.1 200 OK\r\n\r\nok"), Status: &status}, nil
+	}
+
+	report := Run(atk, send, nil)
+	if report.Baseline {
+		t.Fatal("no baseline was asked for; the report must not claim one")
+	}
+	if len(report.Attempts) != 1 || report.Attempts[0].Ordinal != 0 {
+		t.Fatalf("the single attack request stays ordinal 0, got %+v", report.Attempts)
 	}
 }

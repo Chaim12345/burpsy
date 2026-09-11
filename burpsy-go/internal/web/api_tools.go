@@ -502,6 +502,10 @@ type intruderRunReq struct {
 	// never thought about error handling is exactly the person Burp's default protects, and a
 	// zero-default would make the flaky-target case the loud one. Explicit 0 disables.
 	Retries *int `json:"retries"`
+	// Baseline is Burp's "Make unmodified baseline request" (v34): issue the template with all
+	// positions at their base values as item 0, so every attack response has a base response to
+	// compare against. False unless asked.
+	Baseline *bool `json:"baseline"`
 	// RetryDelayMS is Burp's "Pause before retry" in milliseconds. Nil means Burp's 2000
 	// (Zrur: "2000" beside pausebeforeretry); the accepted range is Burp's own validation
 	// bound (Zb33): 0..600000.
@@ -1050,6 +1054,9 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		retryDelay = time.Duration(*req.RetryDelayMS) * time.Millisecond
 	}
 	attack.WithRetries(retries, retryDelay)
+	if req.Baseline != nil {
+		attack.WithBaseline(*req.Baseline)
+	}
 	// Auto-pause (burpsy-react-ui-8f2): compiled once, refused here if an expression does
 	// not compile — an auto-pause that silently never fires is a control that lies by
 	// omission, the same rule the grep patterns follow.
@@ -1124,7 +1131,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 				if a.Ordinal < len(report.ChainPayloads) {
 					payload = report.ChainPayloads[a.Ordinal]
 				}
-			} else if pl := payloadsAt(plan, resolved, a.Ordinal); len(pl) > 0 {
+			} else if pl := payloadsAt(plan, resolved, payloadOrdinal(report, a.Ordinal)); len(pl) > 0 {
 				payload = pl[0]
 			}
 			rows = append(rows, AttemptView{
@@ -1155,13 +1162,19 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// For the recursive chain (ztuu), the plan cannot name the payloads — the driver recorded
 	// them per ordinal (report.ChainPayloads), and every example reads that record instead.
 	examplePayloads := func(ordinal int) []string {
+		if report.Baseline && ordinal == 0 {
+			// Item 0 is the baseline request (v34): no payloads at all. Falling through to plan
+			// arithmetic would label the baseline row with the FIRST attack payload — exactly
+			// the mislabel the ordinal shift exists to prevent.
+			return []string{}
+		}
 		if len(report.ChainPayloads) > 0 {
 			if ordinal < len(report.ChainPayloads) {
 				return []string{report.ChainPayloads[ordinal]}
 			}
 			return []string{}
 		}
-		return payloadsAt(plan, resolved, ordinal)
+		return payloadsAt(plan, resolved, payloadOrdinal(report, ordinal))
 	}
 	for _, b := range report.Buckets {
 		examples = append(examples, BucketExample{
@@ -1300,6 +1313,15 @@ func buildGrep(matchRe, extractRe *string, matchList *[]string, simple, caseSens
 		}
 	}
 	return g, nil
+}
+
+// payloadOrdinal maps a report ordinal to the plan ordinal payloadsAt needs: with Burp's
+// baseline request enabled (v34) the baseline is item 0 and the plan's ordinals shift by one.
+func payloadOrdinal(report *intruder.AttackReport, ordinal int) int {
+	if report.Baseline && ordinal > 0 {
+		return ordinal - 1
+	}
+	return ordinal
 }
 
 // payloadsAt recovers the payload combination behind a plan ordinal. This is why results can hold

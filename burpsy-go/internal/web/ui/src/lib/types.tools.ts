@@ -181,6 +181,9 @@ export interface AttackReport {
   /** How many retry sends the attack made (n39) — Burp's error-handling count. Zero unless the
    *  attack configured retries. */
   retries_used: number;
+  /** True when the attack issued the unmodified template request as item 0 (v34) — "Baseline
+   *  request (no payloads)". Every ordinal shifts by one; ordinal 0 carries no payloads. */
+  baseline: boolean;
   pool: string | null;
   auto_throttle_engaged: number;
 }

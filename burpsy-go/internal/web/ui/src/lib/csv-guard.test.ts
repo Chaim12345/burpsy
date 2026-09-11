@@ -104,6 +104,7 @@ describe("intruderReportToCSV", () => {
   pool: null,
   auto_throttle_engaged: 0,
   retries_used: 0,
+  baseline: false,
  };
  const attempts: Attempt[] = [
   {

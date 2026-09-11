@@ -129,6 +129,8 @@ export interface IntruderConfig {
  retries: string;
  /** Burp's "Pause before retry" in ms (n39). Empty = the server's default (Burp's 2000). */
  retryDelayMS: string;
+ /** Burp's "Make unmodified baseline request" (v34): the template as item 0. */
+ baseline: boolean;
 }
 
 /**
@@ -189,6 +191,7 @@ export function emptyIntruderConfig(): IntruderConfig {
   rps: "",
   retries: "",
   retryDelayMS: "",
+  baseline: false,
  };
 }
 

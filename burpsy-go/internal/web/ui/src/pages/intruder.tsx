@@ -823,6 +823,7 @@ function AttackResult({
     // n39: the error-handling count is a caveat, not a footnote — an attack that retried its
     // way to a full result set says so, the way Burp's own results mark retried requests.
     report.retries_used ? `${formatCount(report.retries_used)} retried request${report.retries_used === 1 ? "" : "s"} (network failures sent again per the error-handling settings)` : null,
+    report.baseline ? "Item 0 is the unmodified baseline request (no payloads) — every other row is one ordinal higher than the payload set's arithmetic." : null,
   ].filter((value): value is string => value !== null);
 
   return (
@@ -1079,6 +1080,7 @@ export function IntruderPage(): JSX.Element {
     rps,
     retries,
     retryDelayMS,
+    baseline,
   } = config;
 
   const setMsgId = field("msgId");
@@ -1141,6 +1143,7 @@ export function IntruderPage(): JSX.Element {
   const setRps = field("rps");
   const setRetries = field("retries");
   const setRetryDelayMS = field("retryDelayMS");
+  const setBaseline = field("baseline");
 
   const result = storedRun?.view ?? null;
   const legacyResult = storedRun?.legacy ?? null;
@@ -1523,6 +1526,9 @@ export function IntruderPage(): JSX.Element {
       // 2000ms pause. A field that names a number sends it; 0 disables retries.
       ...(retries.trim() !== "" ? { retries: Number(retries) } : {}),
       ...(retryDelayMS.trim() !== "" ? { retry_delay_ms: Number(retryDelayMS) } : {}),
+      // Burp's "Make unmodified baseline request" (v34): sent only when asked, so the wire
+      // shape for "off" stays what every existing client already posts.
+      ...(baseline ? { baseline: true } : {}),
       // Burp's "Follow redirections" (tirx). Omitted, not sent as "", when the operator left it on
       // the standing policy — an absent field and an empty string must not become two different
       // wire shapes for "I did not choose", the same discipline url_encode_characters above holds.
@@ -2487,6 +2493,14 @@ export function IntruderPage(): JSX.Element {
                   />
                 )}
               </Field>
+              <Checkbox
+                checked={baseline}
+                onCheckedChange={(v) => setBaseline(v)}
+                label="Make unmodified baseline request"
+              />
+              <p className="cell-dim">
+                Issues the template with every position at its base value as item 0 — "Baseline request (no payloads)" — so the attack responses hang against a base response to compare with. Every result ordinal shifts by one.
+              </p>
             </div>
             {poolName ? (
               <p className="field-hint">
