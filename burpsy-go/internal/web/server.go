@@ -330,7 +330,10 @@ func (s *Server) WithExtensions(host *extension.Host) *Server {
 // api_scanner_audit.go's auditContext.
 func (s *Server) WithScanner(scan *scanner.ActiveScanner) *Server {
 	if scan != nil {
-		scan = scan.WithPace(pool.ContextPacer{})
+		// Pace and the suite-wide pause together: both are things the server owns and the engine
+		// cannot know about (burpsy-react-ui-cijs). GateCheck is nil-receiver safe, so a server
+		// with no task registry attaches a gate that never holds.
+		scan = scan.WithPace(pool.ContextPacer{}).WithSuiteGate(s.tasks.GateCheck)
 	}
 	s.scanner = scan
 	return s

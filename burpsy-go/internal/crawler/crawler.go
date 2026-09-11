@@ -456,6 +456,11 @@ type frontierItem struct {
 type Crawler struct {
 	cfg    Config
 	limits Limits
+	// suiteGate blocks while the dashboard's suite-wide pause is set. A plain func rather than a
+	// *dash.Registry so this package keeps not importing the dashboard: the crawl engine has no
+	// business knowing what a task row is, and the caller that owns both can hand the two together.
+	// Nil means unpaced, which is what every caller outside the web layer is.
+	suiteGate func(context.Context)
 	// query is the parsed crawl-scope query (DSL-03), nil when the operator gave none. Parsed once in
 	// New, so a malformed query is a construction error and never a per-URL surprise.
 	query *query.Expr
@@ -773,6 +778,13 @@ func supportedScheme(scheme string) bool {
 // and everything that can stop the crawl is a recorded stop, so there is no failure left that a
 // single error value would describe better than the report does. Configuration errors were already
 // returned by New.
+// WithSuiteGate attaches the dashboard's suite-wide pause. The crawl calls it between fetches;
+// nil, the default, is a crawl nothing can pause but its own context.
+func (c *Crawler) WithSuiteGate(gate func(context.Context)) *Crawler {
+	c.suiteGate = gate
+	return c
+}
+
 func (c *Crawler) Run(ctx context.Context) Report {
 	started := time.Now()
 	rep := Report{
@@ -808,6 +820,13 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		if err := ctx.Err(); err != nil {
 			lim.record(StopCancelled)
 			break
+		}
+		// The dashboard's "Pause all tasks", between fetches (burpsy-react-ui-cijs). Held here
+		// rather than inside a fetch so the request in flight always completes and is recorded
+		// whole — the same placement the sequencer's capture loop uses. Cancellation stays senior:
+		// GateCheck answers ctx.Done, and the ctx.Err above runs on the next turn of the loop.
+		if c.suiteGate != nil {
+			c.suiteGate(ctx)
 		}
 		if rep.Fetched >= c.limits.MaxRequests {
 			lim.record(StopRequestBudget)

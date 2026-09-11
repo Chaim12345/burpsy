@@ -285,6 +285,9 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	// The dashboard's Pause all tasks reaches the crawl loop (burpsy-react-ui-cijs). GateCheck is
+	// nil-receiver safe, so a process with no task registry attaches a gate that never holds.
+	c.WithSuiteGate(s.tasks.GateCheck)
 
 	task := s.tasks.Start(dash.KindCrawl, strings.Join(seeds, ", "), uint64(limits.MaxRequests))
 	s.crawls.start(task.ID(), seeds)

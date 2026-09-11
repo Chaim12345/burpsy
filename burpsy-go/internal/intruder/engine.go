@@ -38,6 +38,7 @@ package intruder
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"regexp"
@@ -246,6 +247,12 @@ type Attack struct {
 	// stays tied to the rows an operator can act on rather than multiplying the 100k-request
 	// memory profile the report is designed to avoid.
 	RequestFn func(raw []byte) uint64
+	// SuiteGate blocks while the dashboard's suite-wide pause is set, checked between enumerations
+	// alongside the attack's own Control. Two pauses rather than one because they answer different
+	// questions — "hold this attack" and "hold everything" — and an operator who pressed the second
+	// must not have to find the first. Nil is every caller that is not the web layer
+	// (burpsy-react-ui-cijs).
+	SuiteGate func(context.Context)
 	// Guard refuses a spliced request before it goes out. Err(reason) means do not send.
 	//
 	// The engine has no concept of engagement scope and should not grow one — but it is the only
@@ -649,6 +656,11 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			// received is a report about a target that was never asked.
 			if !a.Control.gate() {
 				break
+			}
+			// Same placement as the attack's own pause, and for the same reason: a hold here has
+			// not spliced a request it is not going to send, and holds no rate-limiter permit.
+			if a.SuiteGate != nil {
+				a.SuiteGate(context.Background())
 			}
 			if !a.Plan.Fill(i, &asg) {
 				break

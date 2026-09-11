@@ -161,7 +161,11 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 		// an out-of-scope exchange before it plans any work. The corpus's active checks ride along
 		// when a passive scanner (loaded via --bchecks) is attached — the same source main.go wires
 		// explicitly, so an unwired server and a wired one cannot disagree about which checks run.
-		active := scanner.NewActiveScanner(s.store, s.logger).WithScope(s.scope).WithPace(pool.ContextPacer{})
+		active := scanner.NewActiveScanner(s.store, s.logger).
+			WithScope(s.scope).
+			WithPace(pool.ContextPacer{}).
+			// The dashboard's Pause all tasks reaches the audit loop (burpsy-react-ui-cijs).
+			WithSuiteGate(s.tasks.GateCheck)
 		if s.passiveScanner != nil {
 			active = active.WithCorpusChecks(s.passiveScanner.ActiveChecks())
 		}

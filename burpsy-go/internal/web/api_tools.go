@@ -857,6 +857,11 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		}
 		attack.WithAutoPause(ap)
 	}
+	// The dashboard's Pause all tasks reaches the attack driver, alongside the attack's own
+	// pause/resume controls (burpsy-react-ui-cijs). Two gates because they answer different
+	// questions, and an operator who pressed "pause everything" should not have to find this
+	// attack's own button as well.
+	attack.SuiteGate = s.tasks.GateCheck
 	attack.RecordRequest = true
 	attack.RequestFn = func(raw []byte) uint64 {
 		id, err := s.store.Put(raw, core.DirectionRequest)

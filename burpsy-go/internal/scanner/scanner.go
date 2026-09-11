@@ -34,6 +34,11 @@ type ActiveScanner struct {
 	// auditCfg is the budget/breaker configuration, when an operator set one explicitly. Nil defers
 	// to AuditConfig, which derives it from ScanConfig.
 	auditCfg *AuditConfig
+	// suiteGate blocks while the dashboard's suite-wide pause is set, checked between checks. A
+	// plain func rather than a *dash.Registry: this package does import dash for the breakdown
+	// types, but an audit engine that reached into the task registry to ask whether to keep working
+	// would be the wrong direction of dependency. Nil is unpaced (burpsy-react-ui-cijs).
+	suiteGate func(context.Context)
 	// pace bounds how fast and how concurrently probes leave this scanner: a named resource pool's
 	// limits, attached to every AuthorisedSender probeGate hands out. Nil means unpaced, which is
 	// exactly what every audit did before pools existed.

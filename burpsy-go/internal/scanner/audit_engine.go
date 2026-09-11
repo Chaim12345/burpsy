@@ -742,6 +742,13 @@ func (s *ActiveScanner) WithAuditConfig(cfg AuditConfig) *ActiveScanner {
 	return s
 }
 
+// WithSuiteGate attaches the dashboard's suite-wide pause. The audit calls it between checks; nil,
+// the default, is an audit nothing can pause but its own context.
+func (s *ActiveScanner) WithSuiteGate(gate func(context.Context)) *ActiveScanner {
+	s.suiteGate = gate
+	return s
+}
+
 // WithScope gives the scanner the engagement scope.
 //
 // Optional, and nil means "no scope was supplied" rather than "nothing is in scope": ActiveScanner
@@ -1046,6 +1053,12 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			if run.overRequestBudget(meter.snapshot().sent) {
 				stop, stopped = DispositionRequestBudgetSpent, true
 				break
+			}
+			// The dashboard's "Pause all tasks", between checks (burpsy-react-ui-cijs). Below the
+			// hard stops on purpose: a time budget that has already expired must not be waited out
+			// while paused, and the loop must not resume into an audit that should have stopped.
+			if s.suiteGate != nil {
+				s.suiteGate(ctx)
 			}
 
 			check := steps[pos].check
