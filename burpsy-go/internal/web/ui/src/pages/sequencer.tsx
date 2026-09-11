@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleStop, Copy, Download, Pause, Play, Radio } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, downloadText } from "../lib/api";
@@ -24,6 +24,7 @@ import { PageHeader, SectionHeading } from "../ui/layout";
 import {
  Badge,
  Button,
+ Checkbox,
  Card,
  Empty,
  ErrorNotice,
@@ -431,6 +432,33 @@ export function SequencerPage(): JSX.Element {
    },
   );
 
+ // Burp's Auto-analyze (burpsy-react-ui-qpl): the battery re-runs periodically while a live
+ // capture is running, so the verdict converges as the sample grows instead of only after
+ // the operator stops and clicks. Period 30s, and only when the sample has actually grown
+ // since the last run — re-running the battery over an unchanged sample burns the server's
+ // CPU to produce the same verdict. The toast stays silent for auto-runs: a success every
+ // 30 seconds is a notification nobody needs, and failures still surface.
+ const [autoAnalyse, setAutoAnalyse] = useState(false);
+ const lastAnalysedCount = useRef(0);
+ useEffect(() => {
+  if (!autoAnalyse || !(capture.data?.capturing ?? false)) return;
+  const timer = window.setInterval(() => {
+   if (captured.length === 0 || captured.length === lastAnalysedCount.current) return;
+   if (analyseTokens.isPending) return;
+   lastAnalysedCount.current = captured.length;
+   analyseTokens.mutate(
+    { tokens: captured, encoding },
+    {
+     onSuccess: (result) => toast.message(`Auto-analysis over ${result.tokens.toLocaleString()} token(s)`),
+     onError: (cause) => toast.error(`Auto-analysis failed: ${cause.message}`),
+    },
+   );
+  }, 30_000);
+  return () => window.clearInterval(timer);
+  // analyseTokens identity changes with its internals; the interval only needs the trigger.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [autoAnalyse, capture.data?.capturing, captured.length, encoding]);
+
  // Pause/resume the live capture (burpsy-react-ui-5kx). The gate is between sends server-side,
  // so the sample is never half-recorded; the capture keeps polling and shows the pause state.
  const pauseCapture = usePauseSequencerCapture(!(capture.data?.paused ?? false));
@@ -631,6 +659,9 @@ export function SequencerPage(): JSX.Element {
           />
          )}
         </Field>
+        <span title="Re-run the randomness battery every 30 seconds while the capture runs, when the sample has grown — the verdict converges live.">
+         <Checkbox label="Auto-analyse" checked={autoAnalyse} onCheckedChange={setAutoAnalyse} />
+        </span>
         <Button onClick={startCaptureRun} disabled={startCapture.isPending}>
          <Radio size={14} />
          {startCapture.isPending ? "Starting…" : "Start capture"}
