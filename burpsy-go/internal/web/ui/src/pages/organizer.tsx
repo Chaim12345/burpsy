@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Copy, ExternalLink, FolderInput, FolderPlus, Highlighter, ListTodo, Pencil, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, downloadText, organizerToCSV } from "../lib/api";
-import { useOrganizer, useOrganizerMutations } from "../lib/data";
+import { useMessage, useOrganizer, useOrganizerMutations } from "../lib/data";
 import { useApp } from "../lib/store";
 import {
  HIGHLIGHTS,
@@ -16,7 +16,8 @@ import {
  type WorkflowStatus,
 } from "../lib/types";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
+import { HttpEditor } from "../ui/editor";
 import { MenuRow, SimpleTable } from "../ui/table";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
 import type { MenuGroup } from "../ui/menu";
@@ -284,6 +285,14 @@ export function OrganizerPage(): JSX.Element {
 
  const selected = useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId]);
  const dirty = draft !== null && JSON.stringify(draft) !== baseline;
+
+ // The read-only request/response pane (burpsy-react-ui-i3l): resolved from the traffic store by
+ // the same message-store ids History reads through useMessage, rather than a snapshot taken at
+ // save time — see the design-choice note beside the detail card below. Both hooks no-op (disabled
+ // query, no request) when the row is unresolved or the id is absent, which useMessage already
+ // handles for a missing exchange id.
+ const savedRequest = useMessage(selected?.request);
+ const savedResponse = useMessage(selected?.response);
 
  // Adopt the server's copy only while the note has no unsaved edits, so a refetch
  // triggered by another pane cannot throw away what the operator is typing.
@@ -1051,6 +1060,59 @@ export function OrganizerPage(): JSX.Element {
         </>
        }
       />
+
+      {/*
+       * Read-only request/response (burpsy-react-ui-i3l): Burp's own docs describe this as the
+       * point of Organizer — "Messages appear in the Organizer inbox as read-only copies of the
+       * original request and response" — and burpsy had nothing here at all; the only way to read
+       * a saved item's bytes was to leave the page for HTTP history and come back.
+       *
+       * # The design choice this makes, and what it costs
+       *
+       * Burp copies the bytes into the item at save time, so a saved message outlives the tab it
+       * came from. This resolves them on demand from the traffic store instead, through the same
+       * message-store ids and useMessage hook History already uses — the smaller change, given
+       * organizer.Item only ever stored `Exchange int`, and it inherits the eviction handling this
+       * page already had rather than adding a second one. The cost is real: once the exchange is
+       * evicted these bytes are gone with it, same as every other resolved field on this row. If
+       * Organizer is meant to survive that the way Burp's does, the fix is a byte snapshot taken at
+       * save time — a bigger change, deliberately not made here.
+       */}
+      {!selected.resolved ? (
+       <div className="notice notice-warn">
+        This exchange is no longer in the traffic store, so its request and response cannot be
+        shown — only the note below survives it.
+       </div>
+      ) : (
+       <Tabs defaultValue="request" className="editor-combined">
+        <TabsList>
+         <TabsTrigger value="request">Request</TabsTrigger>
+         <TabsTrigger value="response">Response</TabsTrigger>
+        </TabsList>
+        <TabsContent value="request" className="tabs-fill">
+         <HttpEditor
+          label="Request"
+          readOnly
+          value={savedRequest.data?.text ?? (savedRequest.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+          filename={`organizer-${selected.id}-request.txt`}
+         />
+        </TabsContent>
+        <TabsContent value="response" className="tabs-fill">
+         <HttpEditor
+          label="Response"
+          readOnly
+          value={
+           !selected.has_response
+            ? "No response was captured for this exchange."
+            : (savedResponse.data?.text ?? (savedResponse.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+          }
+          bodyBase64={savedResponse.data?.body_base64}
+          filename={`organizer-${selected.id}-response.txt`}
+         />
+        </TabsContent>
+       </Tabs>
+      )}
+
       <div className="stack">
        <div className="form-grid">
         <Field label="Title" hint="What this exchange is, in a few words.">

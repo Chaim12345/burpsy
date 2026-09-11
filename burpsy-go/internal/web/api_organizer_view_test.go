@@ -124,6 +124,60 @@ func TestOrganizerRowCarriesTheFieldsItsFiltersNeed(t *testing.T) {
 	}
 }
 
+// The organizer page (burpsy-react-ui-i3l) reads a saved item's bytes through these two ids, feeding
+// them to the same GET /api/message/{id} History already uses. If either id is missing or wrong the
+// page has no way to show what was saved — it would either render nothing or, worse, another
+// exchange's message.
+func TestOrganizerRowCarriesRequestAndResponseMessageIds(t *testing.T) {
+	s := organizerTestServer(t)
+	reqID, err := s.store.Put([]byte("GET /admin HTTP/1.1\r\nHost: app.test\r\n\r\n"), core.DirectionRequest)
+	if err != nil {
+		t.Fatalf("put request: %v", err)
+	}
+	respID, err := s.store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"), core.DirectionResponse)
+	if err != nil {
+		t.Fatalf("put response: %v", err)
+	}
+	ex := &core.Exchange{Host: "app.test", Port: 443, TLS: true, Method: "GET", Path: "/admin", Request: reqID, Response: &respID}
+	s.store.AddExchange(ex)
+	s.organizer.Add(int(ex.ID))
+
+	row := organizerRows(t, s)[0]
+	if got, want := row["request"], float64(reqID); got != want {
+		t.Errorf("request = %v, want %v (the message store id, not the exchange id)", got, want)
+	}
+	if got, want := row["response"], float64(respID); got != want {
+		t.Errorf("response = %v, want %v", got, want)
+	}
+}
+
+// Message id 0 is the first message ever captured in a fresh store, and a bare `uint64` field with
+// `omitempty` would drop it — the exact bug internal/web/api_types.go's ExchangeView.Request avoids
+// by carrying no `omitempty` at all. organizerItemView.Request is a *uint64 for the same reason
+// (unlike ExchangeView it also needs to express "no exchange to read the id from" for an unresolved
+// row), and this pins that a real zero id still reaches the wire.
+func TestOrganizerRowRequestZeroIsNotDroppedAsIfAbsent(t *testing.T) {
+	s := organizerTestServer(t)
+	exchange := captureRequestOnly(t, s, "app.test", "/first") // the store's very first message: id 0
+	s.organizer.Add(exchange)
+
+	rec := httptest.NewRecorder()
+	s.handleOrganizer(rec, httptest.NewRequest(http.MethodGet, "/api/tools/organizer", nil))
+	if !strings.Contains(rec.Body.String(), `"request":0`) {
+		t.Fatalf("body = %q, want an explicit \"request\":0 rather than the field dropped", rec.Body.String())
+	}
+
+	row := organizerRows(t, s)[0]
+	if got, present := row["request"]; !present || got != float64(0) {
+		t.Errorf("request = %v (present=%v), want 0", got, present)
+	}
+	// No response was captured, so this must be the field the console reads to decide that,
+	// distinct from a request id of 0.
+	if _, present := row["response"]; present {
+		t.Errorf("response present on a request-only exchange: %v", row["response"])
+	}
+}
+
 // The row that cannot be judged. This is the whole reason `resolved` exists.
 func TestAnOrganizerItemWhoseExchangeIsGoneIsShownAndMarkedUnresolved(t *testing.T) {
 	s := organizerTestServer(t)
@@ -143,8 +197,11 @@ func TestAnOrganizerItemWhoseExchangeIsGoneIsShownAndMarkedUnresolved(t *testing
 		t.Errorf("resolved = %v, want false", row["resolved"])
 	}
 	// The three fields a filter would use must be ABSENT, not zero. A status of 0, an empty MIME and
-	// in_scope=false are all answers, and this row has none to give.
-	for _, field := range []string{"status", "mime", "in_scope", "host"} {
+	// in_scope=false are all answers, and this row has none to give. request/response join the list
+	// for i3l: there is no message store id to read when there is no exchange to read it from, and a
+	// present-but-zero id here would send the page fetching /api/message/0, which belongs to
+	// whatever real message happens to sit at that position.
+	for _, field := range []string{"status", "mime", "in_scope", "host", "request", "response"} {
 		if value, present := row[field]; present {
 			t.Errorf("%s = %v on an unresolved row; it must be absent rather than a default, because "+
 				"a default is indistinguishable from a real answer", field, value)

@@ -63,6 +63,19 @@ type organizerItemView struct {
 	// Mime is the response media type with parameters stripped, as the store recorded it.
 	Mime string `json:"mime,omitempty"`
 
+	// Request and Response are message-store ids, in exchangeView's own wire shape (`request`/
+	// `response` as numbers, Response nil rather than 0 when there is none) — so the page can feed
+	// them straight to the same GET /api/message/{id} and useMessage hook History already uses,
+	// instead of teaching Organizer a second way to fetch message bytes (burpsy-react-ui-i3l).
+	//
+	// This is the "resolve on demand" half of that bead's design choice, not "snapshot at save
+	// time": an organizer.Item only ever stored `Exchange int`, and reading through that reference
+	// is the smaller change and inherits the eviction handling this view already has (Resolved
+	// false, every field below it absent). The cost is real and stated on the bead: an evicted
+	// exchange's bytes are gone with it, same as every other field here.
+	Request  *uint64 `json:"request,omitempty"`
+	Response *uint64 `json:"response,omitempty"`
+
 	// InScope is nil exactly when Resolved is false. A bool with no third state would make an
 	// unresolvable row look out of scope, which is a claim about the engagement rather than an
 	// admission that the exchange is gone.
@@ -100,6 +113,17 @@ func (s *Server) organizerView() []organizerItemView {
 		if exchange.Status != nil {
 			status := *exchange.Status
 			view.Status = &status
+		}
+
+		// A pointer, not a bare uint64: message id 0 is the first message ever captured and must
+		// serialise as `"request":0`, not be dropped by omitempty the way a bare zero value would be
+		// — the exact bug the package comment above (byRequest, ExchangeID 0) already guards against
+		// elsewhere in this codebase.
+		request := uint64(exchange.Request)
+		view.Request = &request
+		if exchange.Response != nil {
+			response := uint64(*exchange.Response)
+			view.Response = &response
 		}
 
 		// Asked here rather than in the browser: the scope is server state, and a console deciding

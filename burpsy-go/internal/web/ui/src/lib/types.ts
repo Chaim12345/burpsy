@@ -613,6 +613,17 @@ export interface OrganizerItem extends OrganizerEdit {
  mime?: string;
  /** Absent exactly when `resolved` is false — see the note above on why this is not a plain bool. */
  in_scope?: boolean;
+
+ /**
+  * Message-store ids for the saved exchange's request and response — the same shape History's
+  * `Exchange.request`/`.response` already use, so the page reads them with the existing
+  * `useMessage` hook rather than a second fetch path (burpsy-react-ui-i3l). Both absent exactly
+  * when `resolved` is false: there is no message store id to read when the exchange is gone.
+  * `response` is additionally absent when the exchange has no response yet (`has_response` false),
+  * matching `Exchange.response`'s own null-means-none convention.
+  */
+ request?: number;
+ response?: number;
 }
 
 export interface TrafficRule {
