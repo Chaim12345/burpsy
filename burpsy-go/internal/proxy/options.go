@@ -815,9 +815,29 @@ var (
 	// The trailing `([\s/>])` plays the part a lookahead would: it guarantees the
 	// word ended — `disabled` must not match inside `disabledx` or a value's
 	// continuation — and is written back unchanged through ${3}.
-	reDisabledAttribute  = regexp.MustCompile(`(?is)(<(?:input|textarea|select|option|button|fieldset)\b[^>]*?)\s+disabled(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?([\s/>])`)
-	reMaxlengthAttribute = regexp.MustCompile(`(?is)(<(?:input|textarea)\b[^>]*?)\s+maxlength(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?([\s/>])`)
+	//
+	// The prefix is `tagPrefix`, not `[^>]*?`, and that is the whole correctness of these two
+	// rules. `[^>]*?` can stop anywhere, including in the middle of a quoted attribute VALUE, so
+	// these deleted the word `disabled` out of ordinary prose:
+	//
+	//	<input type="text" title="temporarily disabled sorry">
+	//	-> <input type="text" title="temporarily sorry">
+	//
+	// — silently corrupting a page the operator was reading, in a rule they had enabled for an
+	// unrelated reason (burpsy-react-ui-q1cm). Burp's implementation is parser-based and does not
+	// touch text.
+	//
+	// RE2 has no lookbehind and no backreferences, so "not inside a quoted value" cannot be
+	// asserted directly. tagPrefix gets there structurally instead: it consumes either a character
+	// that is not a quote or `>`, or an ENTIRE quoted run. It therefore cannot stop part-way
+	// through a value — it either takes the whole thing or stops before it opens.
+	reDisabledAttribute  = regexp.MustCompile(`(?is)(<(?:input|textarea|select|option|button|fieldset)\b` + tagPrefix + `)\s+disabled(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?([\s/>])`)
+	reMaxlengthAttribute = regexp.MustCompile(`(?is)(<(?:input|textarea)\b` + tagPrefix + `)\s+maxlength(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?([\s/>])`)
 )
+
+// tagPrefix matches the attributes between a tag name and the attribute a rule is looking for,
+// treating a quoted value as one indivisible unit. See reDisabledAttribute for why that matters.
+const tagPrefix = `(?:[^>"']|"[^"]*"|'[^']*')*?`
 
 func enableDisabledFormFields(body []byte) []byte {
 	return reDisabledAttribute.ReplaceAll(body, []byte(`${1}${3}`))
