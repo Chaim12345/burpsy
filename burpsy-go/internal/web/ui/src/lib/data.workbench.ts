@@ -46,10 +46,27 @@ export const workbenchKeys = {
  * shipped and no operator could reach it (burpsy-react-ui-37b). Burp's own Operations list names
  * GZIP, and a compressed response is one of the commonest things to paste into a decoder.
  *
+ * octal and binary (burpsy-react-ui-ku62) were the same shape of gap: Burp lists both as codecs
+ * ("URL. HTML. Base64. ASCII hex. Hex. Octal. Binary. GZIP.") and `internal/tools/codec.go` had no
+ * LayerOctal/LayerBinary at all until this bead — this is the pair's first landing, not a rewire of
+ * an existing implementation, so there is no separate "was it wired" history to record here.
+ *
  * Keep this in step with AllLayers() in codec.go. `internal/web/toolkit_codec_honesty_test.go`
  * already asserts against this array, which is why it lives here rather than in the page.
  */
-export const DECODE_LAYERS = ["url", "html", "base64", "base64url", "hex", "gzip", "deflate", "jwt", "ascii"] as const;
+export const DECODE_LAYERS = [
+ "url",
+ "html",
+ "base64",
+ "base64url",
+ "hex",
+ "octal",
+ "binary",
+ "gzip",
+ "deflate",
+ "jwt",
+ "ascii",
+] as const;
 
 /**
  * Encodings `handleToolsEncode` implements, via the same codec table. Anything
@@ -61,9 +78,22 @@ export const DECODE_LAYERS = ["url", "html", "base64", "base64url", "hex", "gzip
  *
  * gzip and deflate are genuinely encodable — codec.go's Encode has `case LayerGzip` and
  * `case LayerDeflate` — unlike LayerJWT, which is decode-only by construction and is therefore
- * absent here on purpose.
+ * absent here on purpose. octal and binary (burpsy-react-ui-ku62) are genuinely encodable too —
+ * `case LayerOctal` and `case LayerBinary` both return a value, never notReversible.
  */
-export const ENCODE_ENCODINGS = ["url", "html", "base64", "base64url", "hex", "gzip", "deflate", "ascii", "rot13"] as const;
+export const ENCODE_ENCODINGS = [
+ "url",
+ "html",
+ "base64",
+ "base64url",
+ "hex",
+ "octal",
+ "binary",
+ "gzip",
+ "deflate",
+ "ascii",
+ "rot13",
+] as const;
 
 /** Weakest first. These four are the whole accepted set; anything else is a 400. */
 export const HASH_ALGORITHMS = ["md5", "sha1", "sha256", "sha512"] as const;

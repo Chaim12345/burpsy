@@ -43,9 +43,15 @@ const (
 	LayerDeflate
 	// LayerJWT splits a JWT into pretty-printed header and payload. One-way: see Encode.
 	LayerJWT
+	// LayerOctal is each byte as 3-digit zero-padded octal, space-separated (Burp Decoder's
+	// "Octal"). See OctalEncode.
+	LayerOctal
+	// LayerBinary is each byte as 8-digit zero-padded binary, space-separated (Burp Decoder's
+	// "Binary"). See BinaryEncode.
+	LayerBinary
 )
 
-var layerNames = [...]string{"url", "html", "base64", "base64url", "hex", "gzip", "deflate", "jwt"}
+var layerNames = [...]string{"url", "html", "base64", "base64url", "hex", "gzip", "deflate", "jwt", "octal", "binary"}
 
 // String is the canonical wire name of the layer.
 func (l Layer) String() string {
@@ -74,6 +80,10 @@ func ParseLayer(s string) (Layer, bool) {
 		return LayerDeflate, true
 	case "jwt":
 		return LayerJWT, true
+	case "octal":
+		return LayerOctal, true
+	case "binary":
+		return LayerBinary, true
 	default:
 		return 0, false
 	}
@@ -81,7 +91,10 @@ func ParseLayer(s string) (Layer, bool) {
 
 // AllLayers returns every layer, in the order the UI should list them.
 func AllLayers() []Layer {
-	return []Layer{LayerURL, LayerHTML, LayerBase64, LayerBase64URL, LayerHex, LayerGzip, LayerDeflate, LayerJWT}
+	return []Layer{
+		LayerURL, LayerHTML, LayerBase64, LayerBase64URL, LayerHex, LayerOctal, LayerBinary,
+		LayerGzip, LayerDeflate, LayerJWT,
+	}
 }
 
 // MaxInflate refuses to inflate more than this from one input. A 46-byte gzip stream
@@ -162,6 +175,18 @@ func Decode(l Layer, input []byte) ([]byte, bool, error) {
 			return nil, false, err
 		}
 		return v, false, nil
+	case LayerOctal:
+		v, err := OctalDecode(input)
+		if err != nil {
+			return nil, false, err
+		}
+		return v, false, nil
+	case LayerBinary:
+		v, err := BinaryDecode(input)
+		if err != nil {
+			return nil, false, err
+		}
+		return v, false, nil
 	default:
 		return nil, false, malformed("unknown layer")
 	}
@@ -204,6 +229,10 @@ func Encode(l Layer, input []byte) ([]byte, error) {
 		return buf.Bytes(), nil
 	case LayerJWT:
 		return nil, notReversible(LayerJWT)
+	case LayerOctal:
+		return OctalEncode(input), nil
+	case LayerBinary:
+		return BinaryEncode(input), nil
 	default:
 		return nil, malformed("unknown layer")
 	}
@@ -561,6 +590,84 @@ func HexEncode(input []byte) []byte {
 		out[2*i+1] = hexLower[b&0x0f]
 	}
 	return out
+}
+
+// ---- octal --------------------------------------------------------------------------------------
+
+// OctalEncode renders each byte as 3-digit zero-padded octal (a byte is always 000-377),
+// space-separated. This is the format Burp's Decoder emits for "Octal" and the one hexdump -b and
+// Wireshark's octal byte export already use; fixed width rather than the shortest representation
+// so OctalDecode can tell "10" (one byte, value 8) from a token some other tool left unpadded, and
+// so a run of bytes reads as a column the way HexEncode's fixed two digits do.
+func OctalEncode(input []byte) []byte {
+	out := make([]byte, 0, len(input)*4)
+	for i, b := range input {
+		if i > 0 {
+			out = append(out, ' ')
+		}
+		out = append(out, byte('0'+(b>>6)&7), byte('0'+(b>>3)&7), byte('0'+b&7))
+	}
+	return out
+}
+
+// OctalDecode reverses OctalEncode. Whitespace-separated tokens, each 1-3 octal digits — padding
+// on the way in is accepted but not required, matching HexDecode's tolerance of loosely-formatted
+// pastes — and each no greater than 377 (255 decimal), because a byte cannot hold more. A token
+// that fails either check is refused rather than skipped: silently dropping a bad token would
+// leave a decode that looks clean but has quietly eaten a byte, which is the exact failure
+// HexDecode's stray-character check exists to catch on the other codec.
+func OctalDecode(input []byte) ([]byte, error) {
+	fields := strings.Fields(string(input))
+	out := make([]byte, 0, len(fields))
+	for _, f := range fields {
+		n, err := strconv.ParseUint(f, 8, 16)
+		if err != nil || n > 255 {
+			return nil, &DecodeError{msg: fmt.Sprintf("not an octal byte (0-377): %q", f)}
+		}
+		out = append(out, byte(n))
+	}
+	return out, nil
+}
+
+// ---- binary -------------------------------------------------------------------------------------
+
+// BinaryEncode renders each byte as 8 zero-padded binary digits, space-separated — Burp
+// Decoder's "Binary" format.
+func BinaryEncode(input []byte) []byte {
+	out := make([]byte, 0, len(input)*9)
+	for i, b := range input {
+		if i > 0 {
+			out = append(out, ' ')
+		}
+		for bit := 7; bit >= 0; bit-- {
+			if b&(1<<uint(bit)) != 0 {
+				out = append(out, '1')
+			} else {
+				out = append(out, '0')
+			}
+		}
+	}
+	return out
+}
+
+// BinaryDecode reverses BinaryEncode. Each whitespace-separated token is 1-8 binary digits — again
+// tolerant of missing zero-padding, strict about anything else — matching OctalDecode's refusal
+// semantics for the same reason: a byte is 8 bits, and a token that is not a plausible byte must
+// stop the decode rather than silently drop.
+func BinaryDecode(input []byte) ([]byte, error) {
+	fields := strings.Fields(string(input))
+	out := make([]byte, 0, len(fields))
+	for _, f := range fields {
+		if len(f) == 0 || len(f) > 8 {
+			return nil, &DecodeError{msg: fmt.Sprintf("not a binary byte (1-8 bits): %q", f)}
+		}
+		n, err := strconv.ParseUint(f, 2, 16)
+		if err != nil {
+			return nil, &DecodeError{msg: fmt.Sprintf("not a binary byte: %q", f)}
+		}
+		out = append(out, byte(n))
+	}
+	return out, nil
 }
 
 // ---- JWT --------------------------------------------------------------------------------------

@@ -105,6 +105,53 @@ func TestHexIgnoresSeparatorsButRefusesAStrayCharacter(t *testing.T) {
 	}
 }
 
+// TestOctalEncodesThreeDigitsPerByteAndDecodeTakesUnpaddedTokensToo pins the wire format
+// (burpsy-react-ui-ku62): no primary source spells out Burp's exact octal spacing, so this fixes
+// the choice this port makes — 3-digit zero-padded, space-separated, matching hexdump -b — and
+// guards it against silent drift.
+func TestOctalEncodesThreeDigitsPerByteAndDecodeTakesUnpaddedTokensToo(t *testing.T) {
+	if got := s(OctalEncode([]byte("Hi"))); got != "110 151" {
+		t.Fatalf("got %q, want %q", got, "110 151")
+	}
+	if got, err := OctalDecode([]byte("110 151")); err != nil || s(got) != "Hi" {
+		t.Fatalf("OctalDecode(%q) = %q, %v; want %q, nil", "110 151", got, err, "Hi")
+	}
+	// Unpadded input must still decode: an operator pasting octal from elsewhere should not have
+	// to zero-pad it back to three digits first. "40" is space (040 octal = 32 decimal) and "5" is
+	// ENQ (005 octal = 5 decimal) — both shorter than the 3-digit form OctalEncode itself writes.
+	if got, err := OctalDecode([]byte("40 5")); err != nil || s(got) != " \x05" {
+		t.Fatalf("OctalDecode(%q) = %q, %v; want %q, nil", "40 5", got, err, " \x05")
+	}
+	if _, err := OctalDecode([]byte("400")); err == nil {
+		t.Fatal("400 octal is 256, which does not fit a byte — must be refused")
+	}
+	if _, err := OctalDecode([]byte("18")); err == nil {
+		t.Fatal("8 is not an octal digit — must be refused, not silently truncated")
+	}
+}
+
+// TestBinaryEncodesEightDigitsPerByteAndDecodeTakesUnpaddedTokensToo is Octal's counterpart for
+// LayerBinary.
+func TestBinaryEncodesEightDigitsPerByteAndDecodeTakesUnpaddedTokensToo(t *testing.T) {
+	if got := s(BinaryEncode([]byte("Hi"))); got != "01001000 01101001" {
+		t.Fatalf("got %q, want %q", got, "01001000 01101001")
+	}
+	if got, err := BinaryDecode([]byte("01001000 01101001")); err != nil || s(got) != "Hi" {
+		t.Fatalf("BinaryDecode(%q) = %q, %v; want %q, nil", "01001000 01101001", got, err, "Hi")
+	}
+	// Unpadded input must still decode, same rationale as Octal's: "100000" is space (0x20) with
+	// its two leading zeros dropped, and "101" is ENQ (0x05) written with none of its five.
+	if got, err := BinaryDecode([]byte("100000 101")); err != nil || s(got) != " \x05" {
+		t.Fatalf("BinaryDecode(%q) = %q, %v; want %q, nil", "100000 101", got, err, " \x05")
+	}
+	if _, err := BinaryDecode([]byte("101010101")); err == nil {
+		t.Fatal("9 bits do not fit a byte — must be refused")
+	}
+	if _, err := BinaryDecode([]byte("0102")); err == nil {
+		t.Fatal("2 is not a binary digit — must be refused")
+	}
+}
+
 // rawDeflate produces a raw deflate stream (no zlib wrapper), the framing some servers
 // emit under `Content-Encoding: deflate`.
 func rawDeflate(t *testing.T, body []byte) []byte {
