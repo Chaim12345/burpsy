@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -482,6 +483,15 @@ type intruderRunReq struct {
 	MaxInFlight  *int                   `json:"max_in_flight"`
 	MaxRequests  *int                   `json:"max_requests"`
 	TimeoutMS    *uint64                `json:"timeout_ms"`
+	// FollowRedirects is Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/
+	// settings.html: Never / On-site only / In-scope only / Always). Nil or empty is the standing
+	// network policy — the same fallback repeaterSendOptions.RedirectMode uses for Repeater's own
+	// per-send override — so an attack that never mentions it behaves exactly as one always did
+	// (RedirectNever by default). "process cookies in redirections" is deliberately not offered
+	// here, for the same reason repeater_options.go's doc comment gives: hops are built by
+	// sender.FollowRedirectsAfterPolicy, which does not replay cookies, and a checkbox for a
+	// feature that does not exist would lie.
+	FollowRedirects *string `json:"follow_redirects"`
 }
 
 // intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
@@ -558,6 +568,26 @@ func intruderLimitStatus(err error) int {
 	return http.StatusBadRequest
 }
 
+// intruderRedirectPolicy resolves one attack's "Follow redirections" setting to the sender's
+// redirect policy: the request's override when it named one, otherwise the network settings'
+// standing policy — repeaterSendOptions.redirectPolicy's rule, reused rather than reinvented so
+// the two tools cannot drift on what "the standing policy" means. The hop budget always comes
+// from the standing settings: MaxHops is an anti-loop bound, not a policy choice an attack gets
+// to relax, because the same chain-following code a single Repeater send uses now runs once per
+// attempt, and a bigger budget here is a bigger budget for every one of a 200,000-request attack.
+func intruderRedirectPolicy(mode *string, standing sender.RedirectSettings) (sender.RedirectSettings, error) {
+	if mode == nil || *mode == "" {
+		return standing, nil
+	}
+	switch sender.RedirectMode(*mode) {
+	case sender.RedirectNever, sender.RedirectOnSite, sender.RedirectInScope, sender.RedirectAlways:
+		return sender.RedirectSettings{Mode: sender.RedirectMode(*mode), MaxHops: standing.MaxHops}, nil
+	default:
+		return sender.RedirectSettings{}, fmt.Errorf(
+			"follow_redirects: unknown mode %q (want never, on_site, in_scope, always, or empty for the standing policy)", *mode)
+	}
+}
+
 // AttemptView is the legacy one-position form's row.
 type AttemptView struct {
 	Payload     string  `json:"payload"`
@@ -590,6 +620,11 @@ type RunView struct {
 	// "the jar was empty" and "the jar was never consulted" are not the same JSON — the reading that
 	// makes a whole unauthenticated attack look like a finding about the endpoint.
 	SessionCookies intruderSessionCookies `json:"session_cookies"`
+	// RedirectsFollowed is how many additional requests this attack sent chasing a 3xx, summed
+	// across every attempt (tirx). Zero whenever follow_redirects names RedirectNever (the default)
+	// or every hop was refused by policy or scope — the same "prove the setting did something"
+	// discipline AutoThrottleEngaged already holds the rate limiter to.
+	RedirectsFollowed int `json:"redirects_followed"`
 }
 
 // intruderSessionCookies reports the jar's contribution to one attack, by cookie name.
@@ -797,6 +832,14 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		timeout = time.Duration(*req.TimeoutMS) * time.Millisecond
 	}
 
+	// Burp's "Follow redirections" (tirx): resolved once, before the send closure, so a bad mode
+	// is refused before any request goes out rather than discovered on the first 30x.
+	redirectPolicy, rerr := intruderRedirectPolicy(req.FollowRedirects, s.sender.Network().Redirects)
+	if rerr != nil {
+		http.Error(w, rerr.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// One authorising sender for the whole attack. The scope decision still happens once per
 	// spliced request — which is what matters, because a payload landing in a path position
 	// rewrites the request line, so the request that goes out may address something a host-level
@@ -817,7 +860,13 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	jarHeader := s.cookieHeaderFor(host, port, tls)
 	exemptCookies := exemptCookieNames(selected)
 
+	// redirectsFollowed counts every hop this attack actually sent, across every attempt — the
+	// report's own proof that the setting did something, the same discipline AutoThrottleEngaged
+	// already holds to. Atomic because every attempt's send runs on its own goroutine (engine.go's
+	// driver loop), all writing through this one closure.
+	var redirectsFollowed atomic.Int64
 	send := func(raw []byte) (intruder.Sent, error) {
+		sendStarted := time.Now()
 		sctx := ctx
 		var cancel context.CancelFunc
 		if timeout > 0 {
@@ -831,7 +880,32 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return intruder.Sent{}, err
 		}
-		return intruder.Sent{Raw: res.Raw, Duration: res.Duration, Status: res.Status}, nil
+		respRaw, status := res.Raw, res.Status
+		if redirectPolicy.Mode != sender.RedirectNever {
+			// Every hop re-authorised on its own rendered bytes through the same AuthorisedSender the
+			// first send used — the intruder.go file header's whole point: "if an attack ever needs to
+			// follow a redirect it must do so per hop, re-authorising the new authority through the
+			// scope chokepoint, because a 30x is exactly how a target steers an attack somewhere nobody
+			// authorised." A chain FollowRedirectsAfterPolicy could not evaluate, or that the policy or
+			// scope refused past the first hop, leaves respRaw as the 30x itself — result.Final is
+			// always that response in that case, never a fabrication (see FollowRedirectsAfterPolicy's
+			// own doc), which is exactly what an operator who asked to follow and got refused should see.
+			if result, ferr := auth.FollowRedirectsAfterPolicy(sctx, raw, res.Raw, redirectPolicy); ferr == nil && result.Final != nil {
+				// Final.Raw is always set on this entry point (FollowRedirectsAfterPolicy builds Final
+				// from responseFromRaw or a followed hop's own wire bytes, never the typed transport
+				// path that has none — see FollowResult.Final's own doc), so this is the response the
+				// engine's grep, reflection and bucketing will actually see.
+				respRaw = result.Final.Raw
+				status = &result.Final.StatusCode
+				if result.Sent > 1 {
+					redirectsFollowed.Add(int64(result.Sent - 1))
+				}
+			}
+		}
+		// Timed across the whole closure, not just the first hop's res.Duration: once redirects are
+		// being followed, "how long this attempt took" means the whole chain, the same way Burp's own
+		// timing describes what an operator waited for, not the first response of several.
+		return intruder.Sent{Raw: respRaw, Duration: time.Since(sendStarted), Status: status}, nil
 	}
 	// The response recorder remains the engine's one-per-bucket exemplar rule. The exact-request
 	// recorder is attached to the attack after construction below, for the bounded attempt rows.
@@ -958,10 +1032,11 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(RunView{
-		Report:         *report,
-		Examples:       examples,
-		PayloadSets:    resolved,
-		SessionCookies: intruderSessionCookieView(jarHeader, exemptCookies),
+		Report:            *report,
+		Examples:          examples,
+		PayloadSets:       resolved,
+		SessionCookies:    intruderSessionCookieView(jarHeader, exemptCookies),
+		RedirectsFollowed: int(redirectsFollowed.Load()),
 	})
 }
 
