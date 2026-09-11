@@ -745,12 +745,27 @@ func probeParamNames(step sessionStepDto) []string {
 	if u, err := url.Parse(step.URL); err == nil {
 		names = append(names, queryParamNames(u.RawQuery)...)
 	}
-	if strings.Contains(strings.ToLower(step.Body), "=") {
-		// A body with = pairs is treated as form-urlencoded for scope purposes; anything
-		// else (JSON, XML) has no parameter names this layer can read.
+	// Form-urlencoded, decided by the step's own Content-Type rather than by looking for "=" in
+	// the body. A JSON body such as {"redirect_uri":"...?csrf_token=abc&state=xyz"} carries "="
+	// and would otherwise yield spurious parameter names from the query inside its string values,
+	// and a param-scoped session rule would then match requests it should not. The step carries
+	// its headers, so the answer is in hand; a step with no Content-Type gets no body parameters,
+	// which is the same treatment Burp's parameter scope gives an unlabelled body.
+	if contentTypeOfStep(step) == "application/x-www-form-urlencoded" {
 		names = append(names, queryParamNames(step.Body)...)
 	}
 	return names
+}
+
+// contentTypeOfStep reads the Content-Type header off a step's own header list, lower-cased,
+// or "" when there is none.
+func contentTypeOfStep(step sessionStepDto) string {
+	for _, h := range step.Headers {
+		if strings.EqualFold(h[0], "Content-Type") {
+			return strings.ToLower(strings.TrimSpace(h[1]))
+		}
+	}
+	return ""
 }
 
 func responseView(r *session.StepResult) *sessionLoginResponseView {

@@ -572,10 +572,16 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 						uint64(elapsed.Milliseconds()), err.Error(), nil)
 					capture.miss(attempt, "send failed: "+err.Error())
 					if capture.noteMiss(&consecutive) {
+						// This worker made the give-up decision, so it stops claiming work now: continuing
+						// would send on, since the reason may sit in the channel until another worker's
+						// select reaches it — and that overshoot was scheduling-dependent, not bounded
+						// (burpsy-react-ui-zqrm, finding 3). The reason is handed on through the channel;
+						// the worker that receives it (or the closer, below) does the one finish+Stop.
 						select {
 						case giveUp <- fmt.Sprintf("gave up after %d consecutive failures; last: %s", maxConsecutiveMisses, err.Error()):
 						default:
 						}
+						return
 					}
 					continue
 				}
@@ -590,11 +596,13 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 				if err != nil {
 					capture.miss(attempt, err.Error())
 					if capture.noteMiss(&consecutive) {
+						// Same give-up discipline as the send-failure branch: post the reason, stop here.
 						select {
 						case giveUp <- fmt.Sprintf("gave up after %d consecutive responses with no token at %s: %s",
 							maxConsecutiveMisses, capture.location.Describe(), err.Error()):
 						default:
 						}
+						return
 					}
 					continue
 				}
@@ -621,6 +629,18 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 	// — a cancelled capture is not a completed one, and the dashboard must not read it as
 	// such). The old sequential loop called task.Stop inline on cancellation; with a pool,
 	// several workers see ctx.Done at once, so the closer owns the classification.
+	// A give-up reason may still be buffered: the tripper posts and returns without finishing,
+	// so the closer — not a racing worker's select — owns the finish+Stop. Drained before the
+	// cancellation branch, so an operator stop and a give-up landing together report the give-up:
+	// it says what the capture actually died of, and the miss streak that tripped it predates the
+	// operator's button.
+	select {
+	case reason := <-giveUp:
+		capture.finish(reason)
+		task.Stop(capture.breakdown(), capture.reason())
+		return
+	default:
+	}
 	if ctx.Err() != nil {
 		capture.finish("stopped by the operator after " + strconv.Itoa(capture.attempt()) + " of " +
 			strconv.Itoa(capture.requested) + " requests")

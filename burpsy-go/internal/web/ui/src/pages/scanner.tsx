@@ -312,8 +312,19 @@ export function ScannerPage(): JSX.Element {
  // false-positive exclusion, plus an optional host substring that is an export-only axis.
  // The count in the links' tooltip says what the file will contain, because a download that
  // silently carries 200 rows when the tree shows 3 is exactly the mismatch this fixes.
- // Confidence filtering stays view-only and is stated as such: the API does not take it, and
- // a link that pretended otherwise would export rows the tree hides.
+ // Confidence filtering and the search term stay view-only — the API does not take them —
+ // and when either is active the tooltip says so rather than claiming "the tree's current
+ // filter" over a file that holds more rows than the tree shows (burpsy-react-ui-zqrm,
+ // finding 2: the count and the file must not diverge silently).
+ const viewOnlyActive = confidences.size > 0 || debouncedTerm.trim() !== "";
+ const exportScope = viewOnlyActive
+  ? `the export carries the severity, false-positive and host axes only — the ${[
+   confidences.size > 0 ? "confidence filter" : null,
+   debouncedTerm.trim() ? "search term" : null,
+  ]
+   .filter(Boolean)
+   .join(" and ")} applies to the view, not the file`
+  : "the tree's current filter";
  const reportQuery = useMemo(() => {
   const params = new URLSearchParams();
   if (severities.size > 0) params.set("severity", [...severities].join(","));
@@ -786,7 +797,7 @@ export function ScannerPage(): JSX.Element {
          key={f.format}
          href={`/api/report/${f.format}${reportQuery}`}
          download
-         title={`Exports ${rows.length.toLocaleString()} finding(s) — the tree's current filter${hostReportFilter.trim() ? ` on hosts matching “${hostReportFilter.trim()}”` : ""}`}
+         title={`Exports ${rows.length.toLocaleString()} finding(s) — ${exportScope}${hostReportFilter.trim() ? ` on hosts matching “${hostReportFilter.trim()}”` : ""}`}
         >
          <Download size={13} />
          {f.label}
