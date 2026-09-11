@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { useDeleteSessionRule, useSaveSessionRule } from "../lib/data";
-import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useUpdateSessionMacro } from "../lib/data.policy";
+import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useUpdateSessionMacro, useCookieJarWrite } from "../lib/data.policy";
 import type {
  SessionExtractFrom,
  SessionExtractHow,
@@ -426,6 +426,24 @@ function StepCard({
 export function SessionPage(): JSX.Element {
  const rulesQuery = useSessionRulesFull();
  const cookiesQuery = useSessionCookies();
+ // The jar's write surface (dkb): edit, remove per cookie, clear per authority. Every action
+ // goes through one mutation so the table cannot show a state the write side disagrees with.
+ const jarWrite = useCookieJarWrite();
+ const [editingCookie, setEditingCookie] = useState<{ host: string; port: number; tls: boolean; name: string; value: string } | null>(null);
+
+ const applyCookieWrite = (vars: { action: "set" | "remove" | "clear"; host: string; port: number; tls: boolean; name?: string; value?: string }, label: string) =>
+  jarWrite.mutate(vars, {
+   onSuccess: (out) => {
+    if (out.action === "remove" && out.removed === false) {
+     toast.warning(`${label}: the cookie was not in the jar`);
+    } else if (out.action === "clear" && out.cleared === false) {
+     toast.warning(`${label}: the authority had no jar`);
+    } else {
+     toast.success(label);
+    }
+   },
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Cookie jar write failed"),
+  });
  const saveRule = useSaveSessionRule();
  const deleteRule = useDeleteSessionRule();
  const moveRuleMut = useMoveSessionRule();
@@ -1225,7 +1243,38 @@ export function SessionPage(): JSX.Element {
     <SectionHeading
      title="Cookie jar"
      detail="The jar shared by the session coordinator and this tool's own senders."
-     actions={<RefreshButton onClick={() => void cookiesQuery.refetch()} loading={cookiesQuery.isFetching} label="Refresh jar" />}
+     actions={
+      <>
+       <RefreshButton onClick={() => void cookiesQuery.refetch()} loading={cookiesQuery.isFetching} label="Refresh jar" />
+       {/* Empty the jar altogether (dkb) — per authority of the first visible row group is not
+           the Burp shape; Burp empties THE jar. burpsy's jar is per-authority by design, so the
+           control clears every authority the read side currently lists. */}
+       {cookieRows.length > 0 ? (
+        <Button
+         variant="outline"
+         size="small"
+         disabled={jarWrite.isPending}
+         onClick={() => {
+          const authorities = [...new Set(cookieRows.map((row) => row.host))];
+          for (const authority of authorities) {
+           const scheme = authority.includes(":443") ? "https" : "http";
+           applyCookieWrite(
+            {
+             action: "clear",
+             host: authority.split(":").slice(0, -1).join(":") || authority,
+             port: Number(authority.split(":").pop()) || (scheme === "https" ? 443 : 80),
+             tls: scheme === "https",
+            },
+            `Emptied ${authority}`,
+           );
+          }
+         }}
+        >
+         Empty jar
+        </Button>
+       ) : null}
+      </>
+     }
     />
     {cookiesQuery.error ? (
      <ErrorNotice error={cookiesQuery.error} onRetry={() => void cookiesQuery.refetch()} />
@@ -1242,7 +1291,7 @@ export function SessionPage(): JSX.Element {
       }
      />
     ) : (
-     <SimpleTable headers={["Authority", "Name", "Value"]}>
+     <SimpleTable headers={["Authority", "Name", "Value", ""]}>
       {cookieRows.map((row, index) => (
        <tr key={`${row.scheme}-${row.host}-${row.name}-${index}`}>
         <td>
@@ -1255,11 +1304,91 @@ export function SessionPage(): JSX.Element {
         <td>
          <span className="cell-dim">{row.value}</span>
         </td>
+        <td>
+         <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+          <IconButton
+           label={`Edit cookie ${row.name}`}
+           size="small"
+           onClick={() =>
+            setEditingCookie({
+             host: row.host,
+             // The table's authority string is "host:port"; the write takes the tuple.
+             port: Number(row.host.split(":").pop()) || (row.scheme === "https" ? 443 : 80),
+             tls: row.scheme === "https",
+             name: row.name,
+             value: row.value,
+            })
+           }
+          >
+           <Pencil size={13} />
+          </IconButton>
+          <IconButton
+           label={`Remove cookie ${row.name}`}
+           size="small"
+           onClick={() =>
+            applyCookieWrite(
+             {
+              action: "remove",
+              host: row.host.split(":").slice(0, -1).join(":") || row.host,
+              port: Number(row.host.split(":").pop()) || (row.scheme === "https" ? 443 : 80),
+              tls: row.scheme === "https",
+              name: row.name,
+             },
+             `Removed ${row.name}`,
+            )
+           }
+          >
+           <Trash2 size={13} />
+          </IconButton>
+         </div>
+        </td>
        </tr>
       ))}
      </SimpleTable>
     )}
    </Card>
+
+   {/* Edit one cookie (dkb): the write takes the tuple and replaces the value; the read side
+       refetches through the hook's invalidation, so the table cannot drift from the jar. */}
+   <Modal
+    open={editingCookie !== null}
+    onOpenChange={(nextOpen) => {
+     if (!nextOpen) setEditingCookie(null);
+    }}
+    title={`Edit cookie ${editingCookie?.name ?? ""}`}
+    description={`On ${editingCookie?.host ?? ""}. The value replaces what the jar sends with every matching request.`}
+   >
+    {editingCookie ? (
+     <div className="stack">
+      <Field label="Value">
+       {(id) => (
+        <Input
+         id={id}
+         value={editingCookie.value}
+         onChange={(e) => setEditingCookie({ ...editingCookie, value: e.target.value })}
+        />
+       )}
+      </Field>
+      <div className="page-actions">
+       <Button variant="outline" onClick={() => setEditingCookie(null)}>
+        Cancel
+       </Button>
+       <Button
+        disabled={jarWrite.isPending}
+        onClick={() => {
+         applyCookieWrite(
+          { action: "set", host: editingCookie.host.split(":").slice(0, -1).join(":") || editingCookie.host, port: editingCookie.port, tls: editingCookie.tls, name: editingCookie.name, value: editingCookie.value },
+          `Updated ${editingCookie.name}`,
+         );
+         setEditingCookie(null);
+        }}
+       >
+        Save
+       </Button>
+      </div>
+     </div>
+    ) : null}
+   </Modal>
 
    <Modal
     open={confirmDelete !== null}

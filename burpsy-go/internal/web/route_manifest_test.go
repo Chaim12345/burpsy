@@ -629,8 +629,11 @@ var manifest = map[string]route{
 		summary: "GET {id}: one capture's accumulated tokens. POST stop: cancel a running capture",
 	},
 	"/api/session/cookies": {
-		methods: []string{"GET"}, risk: riskCredential,
-		summary: "the coordinator's cookie jar, per authority (see HONEST-03)",
+		// POST is the jar's write surface (dkb): set, remove, clear — Burp's cookie jar dialog
+		// verbs. riskCredential because the jar is exactly the credential store it reads.
+		methods: []string{"GET", "POST"}, risk: riskCredential,
+		summary: "the coordinator's cookie jar, per authority, with set/remove/clear writes " +
+			"(see HONEST-03)",
 	},
 	"/api/session/login": {
 		methods: []string{"POST"}, risk: riskCredential,

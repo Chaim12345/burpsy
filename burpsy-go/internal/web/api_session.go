@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -1134,7 +1135,7 @@ type sessionTestResponseView struct {
 
 func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		s.handleSessionCookiesMutate(w, r)
 		return
 	}
 	// This used to answer `{"wired": true, "cookies": []}` unconditionally, explaining that the jar
@@ -1208,6 +1209,68 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleSessionCookiesMutate is the cookie jar's write surface (dkb): Burp's cookie jar dialog
+// — "you can edit cookies manually, remove cookies from the jar, or empty the jar altogether".
+// One route, three actions, because they are three verbs over the same resource and a fourth
+// wire shape for each would be three more manifest rows to keep honest.
+//
+// The authority comes from the request body (host/port/tls) rather than the URL, matching the
+// read side's flat list: an operator edits what the table showed them, and the table's rows
+// carry exactly these three fields. Every action refuses when no coordinator is attached — the
+// read side reports wired=false for that case, and a write that succeeds against a jar nobody
+// reads would be the same lie the GET endpoint's old constant-true was.
+//
+// Edit and remove are per-cookie (name required); clear empties one authority's jar. All three
+// report what changed, because a silence that reads as success is how a stale cookie survives
+// an operator's attempt to kill it.
+func (s *Server) handleSessionCookiesMutate(w http.ResponseWriter, r *http.Request) {
+	if s.sessionCoordinator == nil {
+		http.Error(w, "the cookie jar is not attached to this process: no session coordinator is running, so there is nothing to edit", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed: POST {action: set | remove | clear, host, port, tls, name, value}", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Action string `json:"action"`
+		Host   string `json:"host"`
+		Port   uint16 `json:"port"`
+		TLS    bool   `json:"tls"`
+		Name   string `json:"name"`
+		Value  string `json:"value"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(w, "body must be JSON", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Host) == "" {
+		http.Error(w, "host is required: the jar is per-authority", http.StatusBadRequest)
+		return
+	}
+	switch req.Action {
+	case "set":
+		if strings.TrimSpace(req.Name) == "" {
+			http.Error(w, "name is required to set a cookie", http.StatusBadRequest)
+			return
+		}
+		s.sessionCoordinator.SetCookie(req.Host, req.Port, req.TLS, req.Name, req.Value)
+		writeJSON(w, http.StatusOK, map[string]any{"action": "set", "host": req.Host, "name": req.Name, "ok": true})
+	case "remove":
+		if strings.TrimSpace(req.Name) == "" {
+			http.Error(w, "name is required to remove a cookie", http.StatusBadRequest)
+			return
+		}
+		ok := s.sessionCoordinator.RemoveCookie(req.Host, req.Port, req.TLS, req.Name)
+		writeJSON(w, http.StatusOK, map[string]any{"action": "remove", "host": req.Host, "name": req.Name, "removed": ok})
+	case "clear":
+		ok := s.sessionCoordinator.ClearJar(req.Host, req.Port, req.TLS)
+		writeJSON(w, http.StatusOK, map[string]any{"action": "clear", "host": req.Host, "cleared": ok})
+	default:
+		http.Error(w, fmt.Sprintf("unknown action %q: want set, remove or clear", req.Action), http.StatusBadRequest)
+	}
 }
 
 // sessionRuleMove serves POST /api/session/rules/{id}/move — rule precedence.

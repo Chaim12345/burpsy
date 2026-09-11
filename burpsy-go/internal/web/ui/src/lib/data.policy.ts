@@ -48,6 +48,26 @@ export const useSessionRulesFull = (): UseQueryResult<SessionRulesResponse> =>
 export const useSessionCookies = (): UseQueryResult<SessionCookiesResponse> =>
  useResource<SessionCookiesResponse>(keys.sessionCookies, "/api/session/cookies");
 
+/** One cookie-jar write (dkb): Burp's "edit cookies manually, remove cookies from the jar, or
+ *  empty the jar altogether". The response reports what changed, so the caller can toast the
+ *  difference between "done" and "it was not there". */
+export interface CookieJarWriteResult {
+ action: "set" | "remove" | "clear";
+ host?: string;
+ name?: string;
+ ok?: boolean;
+ removed?: boolean;
+ cleared?: boolean;
+}
+
+export function useCookieJarWrite() {
+ const client = useQueryClient();
+ return useMutation<CookieJarWriteResult, Error, { action: "set" | "remove" | "clear"; host: string; port: number; tls: boolean; name?: string; value?: string }>({
+  mutationFn: (vars) => api<CookieJarWriteResult>("/api/session/cookies", json("POST", vars)),
+  onSuccess: () => void client.invalidateQueries({ queryKey: keys.sessionCookies }),
+ });
+}
+
 export const useProtocols = (): UseQueryResult<ProtocolReport> =>
  useResource<ProtocolReport>(keys.protocols, "/api/protocols");
 

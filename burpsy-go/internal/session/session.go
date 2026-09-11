@@ -728,6 +728,33 @@ func (j *cookieJar) cookieHeader() string {
 // yet, and a jar that stored them would imply a scoping and expiry policy it does not enforce.
 // Cookies therefore persist for the life of the process, which is wrong in the same direction Burp's
 // own session-handling cookie jar is wrong, and is stated here rather than implied.
+// set writes one cookie, replacing any previous value for the name. Same lock discipline as
+// absorb: the jar's own mutex, because a concurrent response absorb and an operator edit race
+// on the same map.
+func (j *cookieJar) set(name, value string) {
+	j.Lock()
+	j.m[name] = value
+	j.Unlock()
+}
+
+// remove deletes one cookie and reports whether it was there.
+func (j *cookieJar) remove(name string) bool {
+	j.Lock()
+	defer j.Unlock()
+	_, ok := j.m[name]
+	if ok {
+		delete(j.m, name)
+	}
+	return ok
+}
+
+// clear empties the jar's map, keeping the jar itself for the authority.
+func (j *cookieJar) clear() {
+	j.Lock()
+	j.m = make(map[string]string)
+	j.Unlock()
+}
+
 func (j *cookieJar) absorb(val string) {
 	first, _, _ := strings.Cut(val, ";")
 	name, value, ok := strings.Cut(first, "=")
@@ -775,6 +802,56 @@ func (cjm *CookieJarManager) AbsorbSetCookie(host string, port uint16, tls bool,
 	}
 	cjm.mu.Unlock()
 	jar.absorb(val)
+}
+
+// SetCookie writes one cookie into the authority's jar, creating the jar when it does not
+// exist — the same creation rule AbsorbSetCookie applies. This is the operator's hand behind
+// the jar (dkb): Burp's cookie jar dialog says "you can edit cookies manually", and the
+// writer-side value here is exactly what AbsorbSetCookie would have stored from a response's
+// Set-Cookie: name -> value, attributes deliberately dropped (the same disclosed
+// simplification — see the attribute note on the jar).
+func (cjm *CookieJarManager) SetCookie(host string, port uint16, tls bool, name, value string) {
+	key := fmt.Sprintf("%s:%d_%v", host, port, tls)
+	cjm.mu.Lock()
+	jar := cjm.jars[key]
+	if jar == nil {
+		jar = newCookieJar(host, port, tls)
+		cjm.jars[key] = jar
+	}
+	cjm.mu.Unlock()
+	jar.set(name, value)
+}
+
+// RemoveCookie deletes one cookie by name from the authority's jar and reports whether it was
+// there. Deleting a jar's last cookie does NOT delete the jar: an empty jar is a fact about an
+// authority the operator has visited (and the GET view skips empty jars anyway), while a
+// missing jar would make "remove" on a stale authority look like a silent success.
+func (cjm *CookieJarManager) RemoveCookie(host string, port uint16, tls bool, name string) bool {
+	key := fmt.Sprintf("%s:%d_%v", host, port, tls)
+	cjm.mu.RLock()
+	jar := cjm.jars[key]
+	cjm.mu.RUnlock()
+	if jar == nil {
+		return false
+	}
+	return jar.remove(name)
+}
+
+// ClearJar empties one authority's jar and reports whether it existed. It is the jar's
+// contents that the operator empties — "empty the jar altogether" (Burp's cookie jar dialog)
+// — not the authority's record; the next response's Set-Cookie re-creates whatever it likes
+// either way.
+func (cjm *CookieJarManager) ClearJar(host string, port uint16, tls bool) bool {
+	key := fmt.Sprintf("%s:%d_%v", host, port, tls)
+	cjm.mu.Lock()
+	jar := cjm.jars[key]
+	if jar == nil {
+		cjm.mu.Unlock()
+		return false
+	}
+	cjm.mu.Unlock()
+	jar.clear()
+	return true
 }
 
 // --- SessionRule ---
@@ -933,6 +1010,29 @@ func NewCoordinator(logger *zap.Logger) *Coordinator {
 // private, so this is how /api/session/cookies asks — see CookieJarManager.Jars for why the route
 // could not previously answer honestly.
 func (c *Coordinator) Cookies() []CookieJarEntry { return c.jarMgr.Jars() }
+
+// AbsorbCookie stores one Set-Cookie value through the jar (test and tooling seam over
+// jarMgr.AbsorbSetCookie, which the response paths call directly).
+func (c *Coordinator) AbsorbCookie(host string, port uint16, tls bool, val string) {
+	c.jarMgr.AbsorbSetCookie(host, port, tls, val)
+}
+
+// SetCookie writes one cookie into an authority's jar (dkb) — the operator's hand behind the
+// jar, Burp's "edit cookies manually". Creation rule identical to AbsorbSetCookie's.
+func (c *Coordinator) SetCookie(host string, port uint16, tls bool, name, value string) {
+	c.jarMgr.SetCookie(host, port, tls, name, value)
+}
+
+// RemoveCookie deletes one cookie from an authority's jar (dkb) and reports whether it was there.
+func (c *Coordinator) RemoveCookie(host string, port uint16, tls bool, name string) bool {
+	return c.jarMgr.RemoveCookie(host, port, tls, name)
+}
+
+// ClearJar empties one authority's jar (dkb) — Burp's "empty the jar altogether" — and reports
+// whether the authority had a jar at all.
+func (c *Coordinator) ClearJar(host string, port uint16, tls bool) bool {
+	return c.jarMgr.ClearJar(host, port, tls)
+}
 
 // ErrNoSuchRule is what UpdateRule returns for an id the coordinator does not hold, so a caller can
 // tell "the rule you edited is gone" (a 404) from "the edit is not a valid rule" (a 400) without
