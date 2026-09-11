@@ -721,9 +721,15 @@ const showResponseInBrowser = (exchange: Exchange) => {
  * One hook fixes all three at once, and — the point — makes it impossible to add a fourth row
  * table that quietly omits them.
  *
- * `preventDefault` fires only when a row is actually in hand, matching what the page can honestly
- * claim: with nothing selected there is no send to make, so the key is left to the browser rather
- * than being swallowed into a no-op.
+ * The claim is unconditional (bc2 holes 2 and 3): preventDefault fires on every table page
+ * whether or not a row is selected, and even when focus is in a form field — because the two
+ * guard shapes that "left the key to the browser" are precisely how the browser's reload ate
+ * the operator's page state. Nothing selected on a fresh page load: first Ctrl+R reloaded the
+ * console. Hands in the DSL query box or a column filter: the handler never ran at all. Both
+ * holes survive a selected-row-only fix, so the chord is claimed on every table page and the
+ * no-row case answers with a toast — a swallowed key that says nothing is a dead key, which is
+ * a different bad outcome. enableOnFormTags: true follows the in-repo precedent (intercept.tsx's
+ * proxy.forward), and F5 remains the deliberate reload path.
  */
 export function useSendShortcuts(exchange: Exchange | null | undefined): void {
  const actions = useExchangeActions();
@@ -734,31 +740,40 @@ export function useSendShortcuts(exchange: Exchange | null | undefined): void {
  useHotkeys(
   repeaterChord,
   (event) => {
-   if (!exchange) return;
    event.preventDefault();
+   if (!exchange) {
+    toast.info("Select a row to send it to Repeater");
+    return;
+   }
    void actions.sendToRepeater(exchange);
   },
-  { enableOnFormTags: false },
+  { enableOnFormTags: true, enableOnContentEditable: true },
   [repeaterChord, exchange, actions],
  );
  useHotkeys(
   intruderChord,
   (event) => {
-   if (!exchange) return;
    event.preventDefault();
+   if (!exchange) {
+    toast.info("Select a row to send it to Intruder");
+    return;
+   }
    actions.sendToIntruder(exchange);
   },
-  { enableOnFormTags: false },
+  { enableOnFormTags: true, enableOnContentEditable: true },
   [intruderChord, exchange, actions],
  );
  useHotkeys(
   organizerChord,
   (event) => {
-   if (!exchange) return;
    event.preventDefault();
+   if (!exchange) {
+    toast.info("Select a row to send it to Organizer");
+    return;
+   }
    void actions.addToOrganizer(exchange);
   },
-  { enableOnFormTags: false },
+  { enableOnFormTags: true, enableOnContentEditable: true },
   [organizerChord, exchange, actions],
  );
 }
