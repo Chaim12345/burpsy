@@ -295,6 +295,16 @@ type Downgrade struct {
 	// Detail names the construct for the Kinds whose Explanation refers to one: the field name, the
 	// unreadable line, the target. Empty for the rest.
 	Detail string
+	// Forced is true when this DowngradeNegotiatedHTTP11 (or DowngradeNoALPN) came from a send pinned
+	// to ProtocolPreferenceForceH2 rather than the default Auto (burpsy-react-ui-57yk). The Reason is
+	// deliberately the same either way — Force does not invent a bespoke finding for an ordinary ALPN
+	// choice, and force_h2_test.go already pins that a Force send that gets downgraded must still
+	// succeed as an unremarkable HTTP/1.1 exchange, not fail or report differently. What Forced adds is
+	// the one bit Auto has no use for and Force does: whether *this* target declined a requirement the
+	// operator stated, versus one Auto never stated in the first place. Always false for every other
+	// Reason — a plaintext target or an unrepresentable construct blocks the same way regardless of
+	// preference, so there is nothing for a Force pin to have specifically required and lost.
+	Forced bool
 }
 
 // String renders the downgrade as a sentence, naming the detail only when this Reason has one.

@@ -881,9 +881,9 @@ func (s *Sender) SendRawOutcome(
 		// h2 was offered and did not happen: the two ways that can go are different findings, so they
 		// are different reasons.
 		if negotiated == "" {
-			down = &Downgrade{Reason: DowngradeNoALPN}
+			down = &Downgrade{Reason: DowngradeNoALPN, Forced: plan.mustH2}
 		} else {
-			down = &Downgrade{Reason: DowngradeNegotiatedHTTP11}
+			down = &Downgrade{Reason: DowngradeNegotiatedHTTP11, Forced: plan.mustH2}
 			if negotiated != alpn.HTTP11 {
 				// Unreachable against a conformant peer, which must choose from the offer or fail the
 				// handshake. Named rather than collapsed, so a peer that does this is visible instead of
@@ -928,6 +928,18 @@ func (s *Sender) finish(
 type sendPlan struct {
 	// wantH2 says whether the dial offers h2. False means block says why not.
 	wantH2 bool
+	// mustH2 says whether the caller pinned ProtocolPreferenceForceH2 for this send, and is valid only
+	// when wantH2: it is the field sendPlan used to be missing entirely (burpsy-react-ui-57yk).
+	// planSend switched on only !useTLS and ProtocolPreferenceHTTP1, so Auto and ForceH2 fell through
+	// to the same branch and produced byte-identical plans — the preference was parsed at the web
+	// layer and then had nowhere to go. wantH2 alone cannot carry "the operator specifically asked for
+	// h2" versus "h2 happens to be on offer": both read as true. mustH2 is that missing bit, read back
+	// at SendRawOutcome's negotiated-http/1.1 branch to mark the resulting Downgrade as one a Force
+	// pin, not Auto, produced — see Downgrade.Forced. It does not change what gets dialled: Force
+	// still offers h2 and still falls back on the same terms Auto does (planSend's own comment below,
+	// and force_h2_test.go, both predate this field and already fix that half — an h2-only offer would
+	// abort the handshake at exactly the target an operator pinning Force is trying to observe).
+	mustH2 bool
 	// http2 is the request to send if ALPN chooses h2; valid only when wantH2.
 	http2 h2Request
 	// http1 is the bytes to write if it does not. For HTTP/1.1 input these are the caller's own bytes,
@@ -952,13 +964,15 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 		}
 		// Bytes that already say HTTP/2 have an HTTP/1.1 rendering available, so a target that will not
 		// take h2 still gets the request rather than a failed handshake — see renderHTTP1.
-		plan := sendPlan{wantH2: true, http2: req, http1: renderHTTP1(req)}
+		plan := sendPlan{wantH2: true, mustH2: pref == ProtocolPreferenceForceH2, http2: req, http1: renderHTTP1(req)}
 		switch {
 		case !useTLS:
 			plan.wantH2 = false
+			plan.mustH2 = false
 			plan.block = &Downgrade{Reason: DowngradePlaintextTarget}
 		case pref == ProtocolPreferenceHTTP1:
 			plan.wantH2 = false
+			plan.mustH2 = false
 			plan.block = &Downgrade{Reason: DowngradePinnedByCaller}
 		}
 		return plan, nil
@@ -978,11 +992,13 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 		// Force-h2 cannot change what h2 can carry: the construct that blocks Auto blocks this
 		// too. The plan is not marked wantH2, so the dial offers http/1.1 and the bytes go out
 		// verbatim with the reason naming the construct — the honest answer to "use h2" when h2
-		// has nowhere to put the request.
+		// has nowhere to put the request. Nor is it marked mustH2: h2 was never offered, so there is
+		// nothing a Force pin can be said to have required and then not gotten.
 		plan.block = block
 		return plan, nil
 	}
 	plan.wantH2 = true
+	plan.mustH2 = pref == ProtocolPreferenceForceH2
 	plan.http2 = h2Request{
 		Method:    h2.Method,
 		Path:      h2.Path,
