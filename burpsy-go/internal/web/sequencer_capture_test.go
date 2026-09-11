@@ -13,6 +13,10 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/sender"
+
+	"net/http/httptest"
+	"strings"
+	"sync"
 )
 
 // tokenServer answers every request with a Set-Cookie carrying a distinct token, and counts how many
@@ -381,5 +385,65 @@ func Test_a_capture_against_an_excluded_host_is_refused(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if got := atomic.LoadInt64(hits); got != 0 {
 		t.Errorf("the excluded target received %d requests", got)
+	}
+}
+
+// Burp's "Ignore token whose length deviates by X characters"
+// (burpsy-react-ui-rcs): the origin alternates a 10-char token with a 40-char blob, and the
+// filter drops the blobs from the sample — counted as gated (misses) with their reason,
+// while the accepted sample stays clean.
+func TestLengthDeviationFilterDropsOutliersAndCountsThem(t *testing.T) {
+	var mu sync.Mutex
+	serial := 0
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n := serial
+		serial++
+		mu.Unlock()
+		token := strings.Repeat("a", 10)
+		if n%2 == 1 {
+			// Every second response: the application returned something else entirely.
+			token = strings.Repeat("z", 40)
+		}
+		w.Header().Set("X-Token", token)
+		w.WriteHeader(200)
+	}))
+	defer origin.Close()
+	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+	port, _ := strconv.Atoi(portStr)
+
+	s := captureServer(t, host, uint16(port))
+	view := startCapture(t, s, map[string]any{
+		"target":          fmt.Sprintf("http://%s:%d", host, port),
+		"request":         fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\n\r\n", host, port),
+		"count":           6,
+		"location":        map[string]string{"kind": "header", "name": "X-Token"},
+		"length_deviates": map[string]any{"enable": true, "chars": 2},
+	})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		cap := getCapture(t, s, view.ID)
+		if !cap.Capturing {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	final := getCapture(t, s, view.ID)
+	if final.Requested != 6 {
+		t.Fatalf("requested = %d, want 6", final.Requested)
+	}
+	// The 40-char blobs deviate from the 10-char average by 30 > 2, so none may survive.
+	tokens := final.Tokens
+	if tokens == nil {
+		t.Fatal("no token list on the capture view")
+	}
+	for _, tok := range tokens {
+		if len(tok) != 10 {
+			t.Errorf("token %q (len %d) survived the length-deviation filter", tok, len(tok))
+		}
+	}
+	if final.Misses == 0 {
+		t.Error("misses = 0; the dropped blobs must be counted, not silently vanished")
 	}
 }

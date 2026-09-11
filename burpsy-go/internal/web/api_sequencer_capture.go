@@ -202,8 +202,17 @@ type sequencerCapture struct {
 	location tokenLocation
 
 	requested int
-	attempts  int
-	tokens    *sequencer.TokenList
+	// lengthDeviates is Burp's length-deviation filter: 0 disables it, N drops tokens whose
+	// length differs from the running average by more than N. The average is over tokens this
+	// capture already accepted, which is exactly the reference the operator means — the normal
+	// token this location produces.
+	lengthDeviates int
+	// tokenCount/tokenLenSum maintain the running average the filter compares against, both
+	// written on the worker that accepted the token under c.mu.
+	tokenCount  int
+	tokenLenSum int
+	attempts    int
+	tokens      *sequencer.TokenList
 	// misses is bounded: a capture of 5000 requests against a misspelled cookie name would otherwise
 	// accumulate 5000 identical strings. The count is exact; the examples are a sample, and say so.
 	misses    []captureMiss
@@ -380,6 +389,15 @@ type sequencerCaptureReq struct {
 	// DelayMs paces the loop. Sequencer captures are the one tool that deliberately hammers a single
 	// endpoint, and an operator who needs to stay under a rate limit has no other way to ask.
 	DelayMs int `json:"delay_ms"`
+	// LengthDeviates is Burp's "Ignore token whose length deviates by X characters"
+	// (settings/tools/sequencer.html): when set with Enable, tokens whose length differs from
+	// the running average by more than X are dropped from the sample and counted as gated.
+	// Useful when the application occasionally returns a different item where the token lives —
+	// an error page where the session id was.
+	LengthDeviates struct {
+		Enable bool `json:"enable"`
+		Chars  int  `json:"chars"`
+	} `json:"length_deviates"`
 	// Threads is Burp's "Number of threads" (settings/tools/sequencer.html): the maximum number of
 	// concurrent requests the capture makes. 1 (or absent) is the historical sequential capture —
 	// the honest default, because concurrency changes what the capture measures: a token that
@@ -458,6 +476,16 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "delay_ms cannot be negative", http.StatusBadRequest)
 		return
 	}
+	lengthDeviates := 0
+	if req.LengthDeviates.Enable {
+		// 0 enabled would drop nothing but still cost the average check per token; requiring a
+		// real bound keeps the setting meaning what it says.
+		if req.LengthDeviates.Chars < 1 || req.LengthDeviates.Chars > 1000 {
+			http.Error(w, "length_deviates.chars must be between 1 and 1000 when enabled", http.StatusBadRequest)
+			return
+		}
+		lengthDeviates = req.LengthDeviates.Chars
+	}
 	// Same host-level gate as Repeater and Intruder, and for the same reason: a capture is the most
 	// request-hungry thing in the tool, so a scope the operator set to constrain outbound traffic
 	// must not be bypassable by starting one.
@@ -472,12 +500,13 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 	}
 
 	capture := &sequencerCapture{
-		target:    req.Target,
-		location:  req.Location,
-		requested: count,
-		tokens:    sequencer.NewTokenList(),
-		running:   true,
-		startedMs: time.Now().UnixMilli(),
+		target:         req.Target,
+		location:       req.Location,
+		requested:      count,
+		lengthDeviates: lengthDeviates,
+		tokens:         sequencer.NewTokenList(),
+		running:        true,
+		startedMs:      time.Now().UnixMilli(),
 	}
 	s.captureSet().add(capture)
 
@@ -613,7 +642,21 @@ func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task
 				// A hit resets the worker's own streak; the global guard reads the workers' last
 				// states through noteMiss's accounting, so one lucky hit per worker is honoured.
 				atomic.StoreInt32(&consecutive, 0)
-				capture.tokens.Collect(token)
+				// Burp's length-deviation filter (burpsy-react-ui-rcs): a token whose length is
+				// far from the average is the application occasionally returning a different item
+				// where the token normally lives. Dropped from the sample and counted as gated —
+				// it happened, it just is not a token — and the streak resets like a hit, because
+				// for the location it IS a hit: the location worked, the value is the outlier.
+				if limit := capture.lengthDeviates; limit > 0 {
+					if avg := capture.tokenAverage(); avg >= 0 && absDiff(len(token), avg) > limit {
+						capture.miss(attempt, fmt.Sprintf(
+							"token dropped: length %d deviates from the %d-token average of %d by more than %d",
+							len(token), capture.tokenCount, avg, limit))
+						task.Advance(1)
+						continue
+					}
+				}
+				capture.acceptToken(token)
 				task.Advance(1)
 
 				if delay > 0 {
@@ -708,6 +751,36 @@ func (c *sequencerCapture) recordAttempt() int {
 	defer c.mu.Unlock()
 	c.attempts++
 	return c.attempts
+}
+
+// tokenAverage is the mean token length over the sample accepted so far, or -1 when nothing
+// has been accepted: the first token has nothing to deviate from, so it can never be filtered.
+// The sum is maintained on the capture loop's own thread (single writer per token accept),
+// read here under the same mutex the view uses.
+func (c *sequencerCapture) tokenAverage() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tokenCount == 0 {
+		return -1
+	}
+	return c.tokenLenSum / c.tokenCount
+}
+
+func absDiff(a, b int) int {
+	if a > b {
+		return a - b
+	}
+	return b - a
+}
+
+// acceptToken records one token into the sample and advances the running length average the
+// deviation filter compares against. Under c.mu because tokenAverage reads it from any worker.
+func (c *sequencerCapture) acceptToken(token string) {
+	c.mu.Lock()
+	c.tokens.Collect(token)
+	c.tokenCount++
+	c.tokenLenSum += len(token)
+	c.mu.Unlock()
 }
 
 func (c *sequencerCapture) miss(attempt int, reason string) {

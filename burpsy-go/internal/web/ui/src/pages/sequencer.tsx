@@ -341,6 +341,8 @@ export function SequencerPage(): JSX.Element {
  // file affordance, the same pattern app.tsx uses for configuration import. Read as text —
  // the editor's value is text, and a binary file shows its replacement characters honestly.
  const loadInputRef = useRef<HTMLInputElement | null>(null);
+ // Length-deviation filter (burpsy-react-ui-rcs): empty string is off, a number enables it.
+ const [deviates, setDeviates] = useState("");
  const [captureId, setCaptureId] = useState("");
  const [attached, setAttached] = useState("");
 
@@ -409,6 +411,9 @@ export function SequencerPage(): JSX.Element {
     ...(Number.isFinite(count) && count > 0 ? { count } : {}),
     ...(Number.isFinite(delay) && delay > 0 ? { delay_ms: delay } : {}),
     ...(Number.isFinite(threads) && threads > 1 ? { threads } : {}),
+    ...(Number.isFinite(Number(deviates)) && Number(deviates) > 0
+     ? { length_deviates: { enable: true, chars: Number(deviates) } }
+     : {}),
    },
    {
     onSuccess: (started) => {
@@ -662,6 +667,20 @@ export function SequencerPage(): JSX.Element {
         <span title="Re-run the randomness battery every 30 seconds while the capture runs, when the sample has grown — the verdict converges live.">
          <Checkbox label="Auto-analyse" checked={autoAnalyse} onCheckedChange={setAutoAnalyse} />
         </span>
+        {/* Burp's "Ignore token whose length deviates by X characters" (burpsy-react-ui-rcs).
+            Empty = off. The deviation is measured against the running average of accepted tokens. */}
+        <Field label="Ignore length deviates ±" style={{ maxWidth: "var(--w-xs)" }}>
+         {(id) => (
+          <Input
+           id={id}
+           value={deviates}
+           inputMode="numeric"
+           onChange={(event) => setDeviates(event.target.value)}
+           placeholder="off"
+           title="Drop tokens whose length differs from the running average by more than this many characters. The application occasionally returns a different item where the token normally appears — this keeps it out of the sample."
+          />
+         )}
+        </Field>
         <Button onClick={startCaptureRun} disabled={startCapture.isPending}>
          <Radio size={14} />
          {startCapture.isPending ? "Starting…" : "Start capture"}

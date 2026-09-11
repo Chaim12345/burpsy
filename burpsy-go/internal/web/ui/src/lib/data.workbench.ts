@@ -142,6 +142,9 @@ export interface SequencerCaptureRequest {
  /** Milliseconds between sends. A capture is the one tool that deliberately hammers one endpoint,
   *  so this is how an operator stays under a rate limit. */
  delay_ms?: number;
+ /** Burp's "Ignore token whose length deviates by X characters": when enabled, tokens whose
+  *  length differs from the running average by more than chars are dropped and counted as gated. */
+ length_deviates?: { enable: boolean; chars: number };
  location: TokenLocation;
 }
 
