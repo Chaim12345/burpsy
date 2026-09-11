@@ -3,6 +3,7 @@ package intruder
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -76,10 +77,17 @@ func TestManualPointSurvivesAFullAttack(t *testing.T) {
 	}
 	sets := []PayloadSet{{Kind: "list", Items: []string{"bravo", "charlie", "delta"}}}
 	plan := NewAttackPlan(AttackKindSniper, len(pts), []int{len(sets[0].Items)}, 100)
+	// Locked, and the bytes copied: Run's default limits allow several requests in flight, so it
+	// calls this from a worker pool. The unsynchronised append here was a real data race that
+	// `go test -race` reports every run — engine_test.go's recordingSender already takes a mutex
+	// for exactly this reason, and this test simply did not (burpsy-react-ui-1817).
+	var mu sync.Mutex
 	sent := make([][]byte, 0, 3)
 	attack := NewAttack(base, pts, sets, plan)
 	report := Run(attack, func(req []byte) (Sent, error) {
-		sent = append(sent, req)
+		mu.Lock()
+		sent = append(sent, append([]byte(nil), req...))
+		mu.Unlock()
 		status := 200
 		return Sent{Raw: []byte("HTTP/1.1 200 OK\r\nContent-Length: " + string(rune('0'+len(req))) + "\r\n\r\n"), Status: &status, Duration: 1}, nil
 	}, func([]byte) uint64 { return 0 })
@@ -89,9 +97,20 @@ func TestManualPointSurvivesAFullAttack(t *testing.T) {
 	if len(sent) != 3 {
 		t.Fatalf("sent %d requests, want 3", len(sent))
 	}
-	for i, want := range []string{"bravo", "charlie", "delta"} {
-		if !bytes.Contains(sent[i], []byte("q="+want)) {
-			t.Errorf("request %d = %s, want payload %s spliced", i, sent[i], want)
+	// Asserted as a set, not by index. Arrival order is not plan order under concurrency and the
+	// engine never promised it was — indexing sent[i] was asserting a property this test happened
+	// to observe rather than one the engine has. What the test is actually about is that every
+	// payload reached the wire spliced into the MANUAL point.
+	for _, want := range []string{"bravo", "charlie", "delta"} {
+		found := false
+		for _, req := range sent {
+			if bytes.Contains(req, []byte("q="+want)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no request carried payload %q spliced into the manual point; sent %s", want, sent)
 		}
 	}
 }

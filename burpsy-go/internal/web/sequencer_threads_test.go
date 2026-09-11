@@ -45,10 +45,23 @@ func concurrentOrigin(t *testing.T) (host string, port uint16, hits *atomic.Int6
 				buf := make([]byte, 4096)
 				_, _ = c.Read(buf)
 				time.Sleep(30 * time.Millisecond) // hold the connection: overlap is observable
+				// Released BEFORE the response is written, and that ordering is the whole point.
+				//
+				// The client cannot open its next connection until it has read this response, so
+				// decrementing first means the accept loop can never see this connection still
+				// occupying a slot while counting the next one. Decrementing after the write left
+				// exactly that window — the client read the response, closed, reconnected and was
+				// accepted (inFlight -> 2) before this goroutine was scheduled to run its
+				// decrement — and made a threads=1 capture report an overlap it never had, about
+				// one run in three (burpsy-react-ui-1817).
+				//
+				// It does not weaken the threads=4 case: four connections accepted together each
+				// hold their slot across the 30ms sleep, so the overlap those tests assert is
+				// still observed.
+				inFlight.Add(-1)
 				// The cookie rides a real header: the token location extracts from response
 				// headers, so a body string would be a miss for every request.
 				fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nSet-Cookie: SESSIONID=tok-%d\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", ordinal)
-				inFlight.Add(-1)
 			}(conn, n)
 		}
 	}()
