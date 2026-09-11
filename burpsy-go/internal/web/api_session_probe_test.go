@@ -34,7 +34,7 @@ func TestProbeParamNamesDoesNotReadPairsOutOfAJSONBody(t *testing.T) {
 	// this request. Reported against abb9bd8, where the body was read whenever it contained
 	// an "=" at all.
 	step := sessionStepDto{
-		URL: "https://app.test/login",
+		URL:  "https://app.test/login",
 		Body: `{"redirect_uri":"https://x/cb?csrf_token=abc&state=xyz"}`,
 		Headers: [][2]string{
 			{"Content-Type", "application/json"},
