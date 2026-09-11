@@ -545,7 +545,16 @@ func (s *Server) issuesByNode() map[string]*issueAgg {
 		return out
 	}
 	for _, f := range s.findings.All() {
-		rank := int(f.Severity)
+		// core.Finding's own contract: a dismissed finding stays in the store but "the severity
+		// counts exclude it" — the Issues page honours that, and the site map's per-node counts
+		// are the same severity counts by another door. A node that kept counting what the
+		// operator dismissed would disagree with the page that triage happened on.
+		if f.FalsePositive {
+			continue
+		}
+		// EffectiveSeverity, not the engine's Severity: an override is the operator's call on
+		// how the finding reads, and the dot on the node paints that call.
+		rank := int(f.EffectiveSeverity())
 		// One finding seen at three places marks three nodes; that is what "where are my issues" means.
 		for _, occ := range f.Occurrences {
 			ex, err := s.store.ExchangeByRequest(occ.Request)
