@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/burpsy-go/burpsy/internal/tools"
 )
@@ -390,8 +391,12 @@ func URLEncodeSet(ps *PayloadSet, chars string) {
 		// produce cannot be delivered. Only a payload with nothing to encode skips the walk.
 		needsWalk := false
 		for _, item := range ps.Items {
-			for _, r := range item {
-				if r <= 0x20 || r == 0x7f {
+			// Scanned as bytes, not runes: every character in the safe set is a single-byte rune
+			// in UTF-8, so this is the same question asked in the representation the payload
+			// actually is. A payload is a byte string, and ranging it as runes is what broke the
+			// pass below (burpsy-react-ui-8dli).
+			for i := 0; i < len(item); i++ {
+				if item[i] <= 0x20 || item[i] == 0x7f {
 					needsWalk = true
 					break
 				}
@@ -404,17 +409,37 @@ func URLEncodeSet(ps *PayloadSet, chars string) {
 			return
 		}
 	}
+	// A payload is a byte string, not a Go string, and the difference is not academic here: a
+	// payload set can be a wordlist read straight off disk (payload.go's "file" source uses
+	// os.ReadFile with no UTF-8 validation), so binary and extended-ASCII bytes are ordinary input.
+	//
+	// This ranged `string(b)` by rune, which decodes any invalid byte as utf8.RuneError and then
+	// re-encoded it as U+FFFD's three bytes: 61 ff 62 went out as 61 ef bf bd 62. Silently, with
+	// the box seeded non-empty so the pass is on by default — an operator fuzzing with a binary
+	// corpus was testing bytes they had not chosen, and a negative result meant nothing
+	// (burpsy-react-ui-8dli).
+	//
+	// Decoding is still per-rune, because the named set is a set of CHARACTERS and a multi-byte
+	// one must match as a unit. A byte that is not valid UTF-8 is not a character at all, so it is
+	// in no named set and in no safe set, and the documented rule — everything else passes through
+	// untouched — applies to it exactly as written.
 	encode := func(b []byte) []byte {
 		var out bytes.Buffer
-		for _, r := range string(b) {
-			c := string(r)
-			if chars != "" && strings.ContainsRune(chars, r) || r <= 0x20 || r == 0x7f {
-				for _, bb := range []byte(c) {
-					fmt.Fprintf(&out, "%%%02X", bb)
-				}
+		for i := 0; i < len(b); {
+			r, size := utf8.DecodeRune(b[i:])
+			if r == utf8.RuneError && size <= 1 {
+				out.WriteByte(b[i])
+				i++
 				continue
 			}
-			out.WriteString(c)
+			if (chars != "" && strings.ContainsRune(chars, r)) || r <= 0x20 || r == 0x7f {
+				for _, bb := range b[i : i+size] {
+					fmt.Fprintf(&out, "%%%02X", bb)
+				}
+			} else {
+				out.Write(b[i : i+size])
+			}
+			i += size
 		}
 		return out.Bytes()
 	}
