@@ -196,38 +196,66 @@ func messageView(msg *core.StoredMessage) *MessageView {
 		// head's Content-Encoding describes bytes that are not here.
 		return view
 	}
-	if !isUTF8(body) {
-		// text cannot carry these bytes (JSON/UTF-8 mangles them), so the exact octets ride along
-		// base64-encoded for the views that need the real thing.
-		view.Body64 = base64.StdEncoding.EncodeToString(body)
-	}
+
+	// plain tracks the body through each layer of wire framing as it comes off, and Body64 is always
+	// taken from wherever plain ends up (see the deferred assignment below) — never from `body` as
+	// captured. That used to be the bug (burpsy-react-ui-r0go): Body64 was populated from the still-
+	// chunked, still-compressed bytes before either transform ran, so a chunked or gzipped image handed
+	// the render tab's <img> decoder chunk-size digits or a gzip header instead of pixels. `text` keeps
+	// carrying the untouched wire bytes throughout, per the invariant on MessageView.Decoded.
+	plain := body
+	defer func() {
+		if !isUTF8(plain) {
+			// text cannot carry these bytes (JSON/UTF-8 mangles them), so the exact octets ride along
+			// base64-encoded for the views that need the real thing. Deferred so every return path below
+			// — decode success, decode failure, unsupported encoding, bad chunk framing — encodes
+			// whatever unwrapping was actually achieved rather than skipping this on the early returns.
+			view.Body64 = base64.StdEncoding.EncodeToString(plain)
+		}
+	}()
+
+	// compressed is read once so the chunk-framing step below can tell "nothing to decode" apart from
+	// "the decode failed" — DecodeError's own doc promises it names why a *compressed* message could
+	// not be decoded, and a plain chunked capture with bad framing has nothing compressed to blame.
 	encoding := firstHeaderValue(head, "Content-Encoding")
-	if encoding == "" || strings.EqualFold(encoding, "identity") {
-		return view
-	}
-	view.ContentEncoding = encoding
-	if !httputil.Unpackable(encoding) {
-		view.DecodeError = "no decoder for Content-Encoding " + strconv.Quote(encoding) +
-			" in this build; gzip and deflate are supported"
-		return view
-	}
-	// Chunk framing wraps the compressed bytes, so it has to come off first — feeding `size CRLF data`
-	// to gzip decodes the size prefix as payload.
-	if strings.EqualFold(firstHeaderValue(head, "Transfer-Encoding"), "chunked") {
-		unchunked, dok := dechunkForView(body)
-		if !dok {
-			view.DecodeError = "the chunk framing did not parse, so the compressed body could not be located"
+	compressed := encoding != "" && !strings.EqualFold(encoding, "identity")
+	if compressed {
+		view.ContentEncoding = encoding
+		if !httputil.Unpackable(encoding) {
+			view.DecodeError = "no decoder for Content-Encoding " + strconv.Quote(encoding) +
+				" in this build; gzip and deflate are supported"
 			return view
 		}
-		body = unchunked
 	}
-	plain, err := httputil.DecodeBody(encoding, body)
+
+	// Chunk framing wraps whatever is beneath it (compressed or not), so it has to come off before
+	// decompression is even attempted — feeding `size CRLF data` to gzip decodes the size prefix as
+	// payload. Unconditional on Content-Encoding being present, unlike the decode step below: a plain
+	// chunked image needs unwrapping for Body64 exactly as much as a compressed one, which is what this
+	// fix (burpsy-react-ui-r0go) added — the old code dechunked only when there was also a supported
+	// Content-Encoding to decode, so a chunked-only body's Body64 stayed framed.
+	if strings.EqualFold(firstHeaderValue(head, "Transfer-Encoding"), "chunked") {
+		unchunked, dok := dechunkForView(plain)
+		if !dok {
+			if compressed {
+				view.DecodeError = "the chunk framing did not parse, so the compressed body could not be located"
+			}
+			return view
+		}
+		plain = unchunked
+	}
+
+	if !compressed {
+		return view
+	}
+	decoded, err := httputil.DecodeBody(encoding, plain)
 	if err != nil {
 		view.DecodeError = err.Error()
 		return view
 	}
-	decoded := string(head) + "\r\n\r\n" + string(plain)
-	view.Decoded = &decoded
+	plain = decoded
+	decodedText := string(head) + "\r\n\r\n" + string(plain)
+	view.Decoded = &decodedText
 	return view
 }
 
