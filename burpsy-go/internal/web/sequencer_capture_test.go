@@ -56,6 +56,37 @@ func tokenServer(t *testing.T, setCookie func(n int) string) (host string, port 
 	return h, uint16(p), &count
 }
 
+// The capture bound is Burp's own FIPS 140-2 sample maximum (burpsy-react-ui-vhs0): 20000
+// is the size a formally compliant live capture must be able to reach, so it is accepted;
+// past it is a typo's commitment to a million requests and is refused. Pinning both sides
+// keeps the ceiling from drifting back down — the page presents FIPS results, and a capture
+// that could not reach the compliant size would make that presentation unreachable.
+func TestTheCaptureCountBoundIsBurpsFIPSMaximum(t *testing.T) {
+	s := newTestServer()
+	target := "http://127.0.0.1:1" // never dialed: the bound is checked before any send
+	request := "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+
+	rec := postJSON(t, s, "/api/sequencer/capture", map[string]any{
+		"target":   target,
+		"request":  request,
+		"count":    20000,
+		"location": map[string]string{"kind": "header", "name": "X-Token"},
+	})
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("count 20000 (FIPS-compliant maximum) = %d (%s), want accepted", rec.Code, rec.Body.String())
+	}
+
+	rec = postJSON(t, s, "/api/sequencer/capture", map[string]any{
+		"target":   target,
+		"request":  request,
+		"count":    20001,
+		"location": map[string]string{"kind": "header", "name": "X-Token"},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("count 20001 = %d, want 400 — past the maximum is a typo, not an ambition", rec.Code)
+	}
+}
+
 // captureServer builds a Server wired for capture: in-scope, with a real sender and a task registry.
 func captureServer(t *testing.T, host string, port uint16) *Server {
 	t.Helper()

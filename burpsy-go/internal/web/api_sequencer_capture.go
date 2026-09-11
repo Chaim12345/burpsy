@@ -389,10 +389,14 @@ type sequencerCaptureReq struct {
 	Threads int `json:"threads"`
 }
 
-// maxCaptureCount bounds one capture. Burp's own default sample is 100 and its statistical tests
-// stop gaining much past a few thousand; the bound exists so a typo in the count field cannot
-// commit the tool to a million requests against an engagement target.
-const maxCaptureCount = 5000
+// maxCaptureCount bounds one capture at Burp's own maximum: 20,000 is what the FIPS 140-2
+// statistical battery takes a formally compliant sample of, and the page presents FIPS
+// results — a live capture that could not reach the compliant size would make that claim
+// unreachable no matter how long the operator let it run. The default stays far below at
+// 100; the bound is a ceiling on what can be ASKED for, so a typo in the count field still
+// cannot commit the tool to a million requests against an engagement target
+// (burpsy-react-ui-vhs0).
+const maxCaptureCount = 20000
 
 // defaultCaptureCount is what an unspecified count means. 100 matches Burp's default sample size and
 // is enough for FIPS bit-level tests to report at all.
