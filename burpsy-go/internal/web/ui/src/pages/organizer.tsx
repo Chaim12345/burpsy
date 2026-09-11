@@ -172,6 +172,25 @@ function matchesMime(item: OrganizerItem, want: string): boolean {
  return mime === want;
 }
 
+/**
+ * The tool options offered (burpsy-react-ui-ldfk), derived from what the saved rows actually carry
+ * — same reasoning as mimeOptions above: a fixed list would offer tools nothing here used, and
+ * would omit one the server starts naming later without this page changing.
+ */
+function toolOptions(items: OrganizerItem[]): string[] {
+ const seen = new Set<string>();
+ for (const item of items) {
+  if (!item.resolved || !item.tool) continue;
+  seen.add(item.tool);
+ }
+ return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
+function matchesTool(item: OrganizerItem, want: string): boolean {
+ if (want === "all") return true;
+ return item.tool === want;
+}
+
 export function OrganizerPage(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = useOrganizer();
  const mutations = useOrganizerMutations();
@@ -188,6 +207,9 @@ export function OrganizerPage(): JSX.Element {
  const [inScopeOnly, setInScopeOnly] = useState(false);
  const [statusClass, setStatusClass] = useState<StatusClass>("all");
  const [mimeFilter, setMimeFilter] = useState("all");
+ /** Burp's "Filter by tool" (tools/organizer/filter.html: "Show or hide items that were sent to
+  *  Organizer from different tools"), burpsy-react-ui-ldfk. */
+ const [toolFilter, setToolFilter] = useState("all");
  /** The user-applied workflow status to filter on — Burp's "Filter by status", a different axis from the HTTP status class above. */
  const [workflowFilter, setWorkflowFilter] = useState<WorkflowStatus | "all">("all");
  // Burp's remaining filter axes (burpsy-react-ui-6a2l): a search term over the row's own text,
@@ -204,6 +226,7 @@ export function OrganizerPage(): JSX.Element {
  const items = useMemo(() => data?.items ?? [], [data]);
  const collections = useMemo(() => data?.collections ?? [], [data]);
  const mimes = useMemo(() => mimeOptions(items), [items]);
+ const tools = useMemo(() => toolOptions(items), [items]);
 
  useEffect(() => {
   const timer = setTimeout(() => setDebouncedTerm(term), 250);
@@ -226,6 +249,7 @@ export function OrganizerPage(): JSX.Element {
   inScopeOnly ||
   statusClass !== "all" ||
   mimeFilter !== "all" ||
+  toolFilter !== "all" ||
   workflowFilter !== "all" ||
   debouncedTerm.trim() !== "" ||
   extensionFilter !== "all" ||
@@ -255,6 +279,7 @@ export function OrganizerPage(): JSX.Element {
    if (inScopeOnly && item.in_scope !== true) continue;
    if (!matchesStatusClass(item, statusClass)) continue;
    if (!matchesMime(item, mimeFilter)) continue;
+   if (!matchesTool(item, toolFilter)) continue;
    // An item with no status on the wire predates the field; it reads as "new" (the same fallback
    // the Go load path applies), so the filter matches it against "new" rather than hiding it.
    if (workflowFilter !== "all" && (item.workflow_status ?? "new") !== workflowFilter) continue;
@@ -267,13 +292,20 @@ export function OrganizerPage(): JSX.Element {
    kept.push(item);
   }
   return { visible: kept, unjudged: exempt };
- }, [items, filtering, inScopeOnly, statusClass, mimeFilter, workflowFilter, collectionView, debouncedTerm, termRegex, termCase, termNegative, extensionFilter, annotatedOnly]);
+ }, [items, filtering, inScopeOnly, statusClass, mimeFilter, toolFilter, workflowFilter, collectionView, debouncedTerm, termRegex, termCase, termNegative, extensionFilter, annotatedOnly]);
 
  // A MIME option can disappear when the rows behind it are removed, which would leave the filter
  // pinned to a value nothing can match — an empty table with no visible reason. Fall back to "all".
  useEffect(() => {
   if (mimeFilter !== "all" && !mimes.includes(mimeFilter)) setMimeFilter("all");
  }, [mimes, mimeFilter]);
+
+ // Same failure shape as the MIME select, for the same reason: the tool filter's options are the
+ // tools actually present, so removing the last intruder-sourced item must not leave the filter
+ // pinned to "intruder" with nothing left to show.
+ useEffect(() => {
+  if (toolFilter !== "all" && !tools.includes(toolFilter)) setToolFilter("all");
+ }, [tools, toolFilter]);
 
  // The extension select has the same failure shape — its options derive from the current rows —
  // so it gets the same fallback. Without it, deleting the last .rss row leaves the filter on
@@ -703,6 +735,19 @@ export function OrganizerPage(): JSX.Element {
        </Select>
       )}
      </Field>
+     {/* Burp's "Filter by tool" (tools/organizer/filter.html), burpsy-react-ui-ldfk. */}
+     <Field label="Tool" className="field-inline">
+      {(id) => (
+       <Select id={id} value={toolFilter} onChange={(event) => setToolFilter(event.target.value)} disabled={tools.length === 0}>
+        <option value="all">Any tool</option>
+        {tools.map((tool) => (
+         <option key={tool} value={tool}>
+          {tool.charAt(0).toUpperCase() + tool.slice(1)}
+         </option>
+        ))}
+       </Select>
+      )}
+     </Field>
      {/* Burp's "Filter by status" (filter.html) — the user-applied status, distinct from the
          Status-class filter above. An item with no status on the wire reads as "new". */}
      <Field label="Workflow" className="field-inline">
@@ -745,6 +790,7 @@ export function OrganizerPage(): JSX.Element {
          setInScopeOnly(false);
          setStatusClass("all");
          setMimeFilter("all");
+         setToolFilter("all");
          setWorkflowFilter("all");
          setTerm("");
          setTermRegex(false);
@@ -920,7 +966,7 @@ export function OrganizerPage(): JSX.Element {
       detail={`All ${items.length} are still here. Widen or clear the filters to see them.`}
      />
     ) : (
-     <SimpleTable headers={["#", "Exchange", "Request", "Status", "Workflow", "Type", "Title", "Highlight", "Note", ""]}>
+     <SimpleTable headers={["#", "Exchange", "Tool", "Request", "Status", "Workflow", "Type", "Title", "Highlight", "Note", ""]}>
       {visible.map((item) => (
        <MenuRow
         key={item.id}
@@ -935,6 +981,19 @@ export function OrganizerPage(): JSX.Element {
         </td>
         <td>
          <span className="cell-num">#{item.exchange}</span>
+        </td>
+        {/* Burp's Organizer "Tool" column (burpsy-react-ui-ldfk): "The Burp tool that originally
+            generated the request. This always reflects the request's origin, even if the message
+            is later sent from Burp Logger or from within Organizer." A standalone cell rather than
+            folded into the three-column resolved/unresolved block below: it comes from
+            core.Exchange.Source the same way workflow_status comes from the item itself, not from
+            re-deriving anything the block below already handles. */}
+        <td>
+         {item.tool ? (
+          <Badge tone="neutral">{item.tool.charAt(0).toUpperCase() + item.tool.slice(1)}</Badge>
+         ) : (
+          <span className="cell-dim">—</span>
+         )}
         </td>
         {/* The three resolved columns. An unresolved row says so once, spanning them, rather
                     than showing three em-dashes that would read as "no status, no type, no host" —

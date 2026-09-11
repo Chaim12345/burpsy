@@ -611,6 +611,14 @@ export interface OrganizerItem extends OrganizerEdit {
  has_response: boolean;
  /** Response media type, parameters stripped and lowercased ("text/html"). */
  mime?: string;
+ /**
+  * The Burp tool that originally generated the request — "proxy", "repeater", "intruder",
+  * "scanner", "crawl", or "unattributed" for traffic nothing claimed (burpsy-react-ui-ldfk). Read
+  * off `core.Exchange.Source`, set once at capture and never rewritten, so a note saved from
+  * Logger still names the tool that actually sent the request rather than "logger" or "organizer".
+  * Absent exactly when `resolved` is false.
+  */
+ tool?: string;
  /** Absent exactly when `resolved` is false — see the note above on why this is not a plain bool. */
  in_scope?: boolean;
 

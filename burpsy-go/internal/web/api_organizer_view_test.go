@@ -178,6 +178,44 @@ func TestOrganizerRowRequestZeroIsNotDroppedAsIfAbsent(t *testing.T) {
 	}
 }
 
+// The Organizer's Tool column and filter-by-tool (burpsy-react-ui-ldfk) read core.Exchange.Source —
+// the field the crawler/repeater/intruder/scanner already set at capture and never rewrite — rather
+// than inventing a second notion of "which tool made this". Two rows: one a tool actually claimed,
+// one nobody did, because the unattributed case (proxy traffic captured before Source existed, or
+// simply never labelled) is the one most likely to be rendered as a blank cell by mistake.
+func TestOrganizerRowCarriesTheOriginatingTool(t *testing.T) {
+	s := organizerTestServer(t)
+
+	reqID, err := s.store.Put([]byte("GET /a HTTP/1.1\r\nHost: app.test\r\n\r\n"), core.DirectionRequest)
+	if err != nil {
+		t.Fatalf("put request: %v", err)
+	}
+	attributed := &core.Exchange{Host: "app.test", Port: 443, TLS: true, Method: "GET", Path: "/a", Request: reqID, Source: core.SourceIntruder}
+	s.store.AddExchange(attributed)
+	s.organizer.Add(int(attributed.ID))
+
+	// captureExchange (above) never sets Source, so this is the zero value.
+	s.organizer.Add(captureExchange(t, s, "app.test", "/b", 200, "text/html"))
+
+	rows := organizerRows(t, s)
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+	byPath := map[string]map[string]any{}
+	for _, row := range rows {
+		path, _ := row["path"].(string)
+		byPath[path] = row
+	}
+	if got := byPath["/a"]["tool"]; got != "intruder" {
+		t.Errorf("tool = %v, want intruder", got)
+	}
+	// Named, not blank: an empty string here would be indistinguishable from the field never
+	// having been sent, which is exactly the ambiguity Source.String() exists to remove.
+	if got := byPath["/b"]["tool"]; got != "unattributed" {
+		t.Errorf("tool = %v, want unattributed", got)
+	}
+}
+
 // The row that cannot be judged. This is the whole reason `resolved` exists.
 func TestAnOrganizerItemWhoseExchangeIsGoneIsShownAndMarkedUnresolved(t *testing.T) {
 	s := organizerTestServer(t)
@@ -200,8 +238,10 @@ func TestAnOrganizerItemWhoseExchangeIsGoneIsShownAndMarkedUnresolved(t *testing
 	// in_scope=false are all answers, and this row has none to give. request/response join the list
 	// for i3l: there is no message store id to read when there is no exchange to read it from, and a
 	// present-but-zero id here would send the page fetching /api/message/0, which belongs to
-	// whatever real message happens to sit at that position.
-	for _, field := range []string{"status", "mime", "in_scope", "host", "request", "response"} {
+	// whatever real message happens to sit at that position. tool joins it for ldfk: there is no
+	// core.Exchange to read a Source off, and Source.String() never returns "" (see Tool's own
+	// doc), so a present tool field here would always be a lie about a real origin.
+	for _, field := range []string{"status", "mime", "in_scope", "host", "request", "response", "tool"} {
 		if value, present := row[field]; present {
 			t.Errorf("%s = %v on an unresolved row; it must be absent rather than a default, because "+
 				"a default is indistinguishable from a real answer", field, value)

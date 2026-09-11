@@ -63,6 +63,15 @@ type organizerItemView struct {
 	// Mime is the response media type with parameters stripped, as the store recorded it.
 	Mime string `json:"mime,omitempty"`
 
+	// Tool is Burp's Organizer "Tool" column: "The Burp tool that originally generated the
+	// request. This always reflects the request's origin, even if the message is later sent from
+	// Burp Logger or from within Organizer" (burpsy-react-ui-ldfk). core.Exchange.Source already
+	// carries exactly this — proxy/repeater/intruder/scanner/crawl, set once at capture and never
+	// rewritten by anything downstream — so this reads it rather than inventing a second field.
+	// Source.String() names the unattributed case ("unattributed") instead of leaving it "", which
+	// is why `omitempty` here still only fires on an unresolved row: String() never returns "".
+	Tool string `json:"tool,omitempty"`
+
 	// Request and Response are message-store ids, in exchangeView's own wire shape (`request`/
 	// `response` as numbers, Response nil rather than 0 when there is none) — so the page can feed
 	// them straight to the same GET /api/message/{id} and useMessage hook History already uses,
@@ -109,6 +118,7 @@ func (s *Server) organizerView() []organizerItemView {
 		view.Method = exchange.Method
 		view.Path = exchange.Path
 		view.Mime = exchange.Mime
+		view.Tool = exchange.Source.String()
 		view.HasResponse = exchange.Response != nil
 		if exchange.Status != nil {
 			status := *exchange.Status
