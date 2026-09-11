@@ -1645,6 +1645,31 @@ export function IntruderPage(): JSX.Element {
     });
   };
 
+  // The payload upload (016): the operator's wordlist goes up as the request body, and the
+  // response's stored path drops into this set's file-path field — the ordinary file source
+  // resolves it, so an uploaded list and a server-side one are the same thing to the engine.
+  const [uploading, setUploading] = useState(false);
+  const uploadPayloadFile = async (index: number, file: File) => {
+    setUploading(true);
+    try {
+      const res = await fetch("/api/intruder/payload-files", {
+        method: "POST",
+        headers: { "X-Payload-Filename": file.name },
+        body: file,
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const out = (await res.json()) as { filename: string; lines: number };
+      setPayloadFiles((cur) => cur.map((v, i) => (i === index ? out.filename : v)));
+      toast.success(`Uploaded ${file.name} — ${formatCount(out.lines)} payloads; the server stored it as ${out.filename}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   // Only a known count can be over budget. When the estimate is a floor the guard may still fire —
   // a floor above the cap is certainly above it — but its silence proves nothing, which is why the
   // header says the number is a floor rather than presenting it as a count.
@@ -2031,18 +2056,36 @@ export function IntruderPage(): JSX.Element {
                         </Field>
                       </div>
                     ) : t === "file" ? (
-                      <Field label="Server file path" hint="File must exist on server; blank lines skipped">
-                        {(id) => (
-                          <Input
-                            id={id}
-                            value={payloadFiles[index] ?? ""}
-                            onChange={(e) =>
-                              setPayloadFiles((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
-                            }
-                            placeholder="/tmp/payloads.txt or ./wordlists/sqli.txt"
+                      <div className="stack">
+                        <Field label="Server file path" hint="File must exist on server; blank lines skipped">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadFiles[index] ?? ""}
+                              onChange={(e) =>
+                                setPayloadFiles((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
+                              }
+                              placeholder="/tmp/payloads.txt or ./wordlists/sqli.txt"
+                            />
+                          )}
+                        </Field>
+                        {/* Upload (016): the operator's own wordlist from their machine. The response's
+                            stored path fills the field above, so the attack reads it through the ordinary
+                            file source — the engine cannot tell an uploaded list from a server-side one,
+                            which is the whole point. */}
+                        <label className="field-label" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
+                          <input
+                            type="file"
+                            disabled={uploading}
+                            style={{ maxWidth: 260 }}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) void uploadPayloadFile(index, file);
+                            }}
                           />
-                        )}
-                      </Field>
+                          {uploading ? "uploading…" : "or upload from this machine"}
+                        </label>
+                      </div>
                     ) : t === "brute_force" ? (
                       <div className="form-grid">
                         <Field label="Charset">

@@ -834,6 +834,10 @@ func (s *Server) setupRoutes() {
 	// is only whether the operator asked for the read now, and a caller should not have to reconcile
 	// two views of one channel. See api_collaborator.go on why none of the GETs can register a channel.
 	s.mux.HandleFunc("/api/collaborator/interaction/", s.handleCollaboratorInteraction)
+	// The intruder payload upload (016): an operator's wordlist arrives as the body and lands
+	// in burpsy's upload directory; the response names the path the ordinary file payload
+	// source resolves. A POST because it stores state.
+	s.mux.HandleFunc("/api/intruder/payload-files", s.handleIntruderPayloadUpload)
 	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
 	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
 	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)

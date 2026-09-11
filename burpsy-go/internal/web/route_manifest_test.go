@@ -396,6 +396,15 @@ var manifest = map[string]route{
 		summary: "POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, " +
 			"an attack past acting on answers 409",
 	},
+	"/api/intruder/payload-files": {
+		// riskLocal, not riskAttack: the upload stores a file the operator explicitly chose and
+		// sends nothing to the target — the attack that consumes it is the run route's own
+		// riskAttack decision. A random stored name (not the client's) is what keeps the route
+		// from being a path-traversal primitive.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "upload a payload wordlist (one per line); answers with the stored path the file " +
+			"payload source resolves",
+	},
 	"/api/intruder/points": {
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "enumerate insertion points in a stored request; sends nothing",
