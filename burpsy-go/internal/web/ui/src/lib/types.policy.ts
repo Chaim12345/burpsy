@@ -261,7 +261,7 @@ export interface ScopeView {
 
 /** POST /api/scope. Port, path and protocol are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
- action: "include" | "exclude" | "remove" | "clear" | "toggle" | "drop_out_of_scope";
+ action: "include" | "exclude" | "remove" | "edit" | "clear" | "toggle" | "drop_out_of_scope";
  kind?: "include" | "exclude";
  pattern?: string;
  path?: string;
@@ -272,6 +272,13 @@ export interface ScopeUpdate {
   * the default — a rule is created active unless a caller says otherwise.
   */
  enabled?: boolean;
+ /** On "edit": the tuple being replaced, as the table showed it (k5l). The replacement arms ride
+  *  the same fields above — the usual edit narrows the host, so the old tuple cannot ride on it. */
+ old_pattern?: string;
+ old_kind?: "include" | "exclude";
+ old_path?: string;
+ old_port?: number;
+ old_protocol?: "http" | "https";
 }
 
 /* --- protocols / diagnostics ---------------------------------------------- */

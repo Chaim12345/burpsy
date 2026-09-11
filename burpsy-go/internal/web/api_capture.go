@@ -258,7 +258,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // ScopeRequest represents a scope modification request.
 type ScopeRequest struct {
-	Action  string `json:"action"` // "include", "exclude", "remove", "clear", "toggle" or "drop_out_of_scope"
+	Action  string `json:"action"` // "include", "exclude", "remove", "edit", "clear", "toggle" or "drop_out_of_scope"
 	Kind    string `json:"kind"`   // optional rule kind for "remove" and "toggle": "include" or "exclude"
 	Pattern string `json:"pattern"`
 	// Path limits the rule to requests whose path starts with it, and Port to one port. Both optional;
@@ -271,6 +271,14 @@ type ScopeRequest struct {
 	Port *uint16 `json:"port,omitempty"`
 	// Protocol limits the rule to one scheme: "http" or "https". Empty means either.
 	Protocol string `json:"protocol,omitempty"`
+	// Old* names the rule an "edit" replaces: the tuple as the table showed it. Separate from
+	// the replacement fields because the usual edit changes the pattern itself.
+	OldPattern string  `json:"old_pattern,omitempty"`
+	OldKind    string  `json:"old_kind,omitempty"`
+	OldPath    string  `json:"old_path,omitempty"`
+	OldPort    *uint16 `json:"old_port,omitempty"`
+	// OldProtocol is the scheme the rule being edited was limited to; empty means either.
+	OldProtocol string `json:"old_protocol,omitempty"`
 	// Enabled is required on "toggle" (the switch's target state); a nil there is a client
 	// that did not send the field, refused rather than guessed. On "include"/"exclude" a nil
 	// reads as the default (true): a rule is created active unless a caller says otherwise.
@@ -458,6 +466,49 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 		}
 		if !removed {
 			http.Error(w, "No matching rule found", http.StatusNotFound)
+			return
+		}
+	case "edit":
+		// Burp's "Edit the selected item" (k5l): the tuple names the rule being replaced
+		// (old_* — the row as the table showed it), the remaining fields are the replacement.
+		// Split naming matters because the common edit narrows a host (example.com →
+		// api.example.com): the replacement's pattern is the NEW one, so the old tuple cannot
+		// ride on it. Refusal when nothing matches is a 404, not a silent append — an edit that
+		// reports ok while the table refetches to show two rules is a lie about what happened.
+		if req.OldPattern == "" {
+			http.Error(w, "old_pattern is required for edit: it names the rule being replaced", http.StatusBadRequest)
+			return
+		}
+		if req.Pattern == "" {
+			http.Error(w, "pattern is required for edit: it is the replacement rule's host", http.StatusBadRequest)
+			return
+		}
+		oldPath, err := normaliseScopePath(req.OldPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		oldKind := core.ScopeInclude
+		if strings.EqualFold(req.OldKind, "exclude") {
+			oldKind = core.ScopeExclude
+		}
+		newKind := core.ScopeInclude
+		if strings.EqualFold(req.Kind, "exclude") {
+			newKind = core.ScopeExclude
+		}
+		replacement, err := buildScopeRule(newKind, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var oldProtocol *string
+		if req.OldProtocol != "" {
+			p := req.OldProtocol
+			oldProtocol = &p
+		}
+		replaced := s.scope.ReplaceScoped(oldKind, req.OldPattern, oldPath, req.OldPort, oldProtocol, replacement)
+		if !replaced {
+			http.Error(w, "No matching rule found: the rule may have been removed or changed by another request — refetch and retry", http.StatusNotFound)
 			return
 		}
 	case "toggle":

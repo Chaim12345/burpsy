@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { useScopeView, useUpdateScope } from "../lib/data.policy";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Select, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Modal, Select, Toolbar } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
 
 /** One row of the rules table: the exact tuple the wire reports, keyed for selection. */
@@ -72,6 +72,51 @@ export function ScopePage(): JSX.Element {
   setPort("");
   setPath("");
   setProtocol("");
+ };
+
+ // The edit affordance (k5l): Burp's "Edit the selected item" button. The dialog pre-fills from
+ // the selected row, and saving sends old_* (what the table showed) plus the replacement arms.
+ const [editing, setEditing] = useState(false);
+ const [editKind, setEditKind] = useState<"include" | "exclude">("include");
+ const [editPattern, setEditPattern] = useState("");
+ const [editPort, setEditPort] = useState("");
+ const [editPath, setEditPath] = useState("");
+ const [editProtocol, setEditProtocol] = useState<"" | "http" | "https">("");
+
+ const openEdit = () => {
+  if (!selected) return;
+  setEditKind(selected.kind.toLowerCase() as "include" | "exclude");
+  setEditPattern(selected.host);
+  setEditPort(selected.port !== null ? String(selected.port) : "");
+  setEditPath(selected.path ?? "");
+  setEditProtocol((selected.protocol as "http" | "https" | null) ?? "");
+  setEditing(true);
+ };
+
+ const saveEdit = () => {
+  if (!selected) return;
+  if (!editPattern.trim()) {
+   toast.error("Host is required");
+   return;
+  }
+  run(
+   {
+    action: "edit",
+    old_pattern: selected.host,
+    old_kind: selected.kind.toLowerCase() as "include" | "exclude",
+    ...(selected.port !== null ? { old_port: selected.port } : {}),
+    ...(selected.path !== null ? { old_path: selected.path } : {}),
+    ...(selected.protocol !== null ? { old_protocol: selected.protocol as "http" | "https" } : {}),
+    kind: editKind,
+    pattern: editPattern.trim(),
+    ...(editPort.trim() ? { port: Number(editPort) } : {}),
+    ...(editPath.trim() ? { path: editPath.trim() } : {}),
+    ...(editProtocol ? { protocol: editProtocol } : {}),
+   },
+   `Edited rule: ${selected.host} → ${editPattern.trim()}`,
+  );
+  setEditing(false);
+  setSelected(null);
  };
 
  const removeSelected = () => {
@@ -251,10 +296,16 @@ export function ScopePage(): JSX.Element {
      title="Rules"
      detail="Select a row to remove exactly that tuple — two rules on one host differing only in path are removed separately."
      actions={
-      <Button variant="outline" size="small" onClick={removeSelected} disabled={!selected}>
-       <Trash2 size={13} />
-       Remove rule
-      </Button>
+      <>
+       <Button variant="outline" size="small" onClick={openEdit} disabled={!selected}>
+        <Pencil size={13} />
+        Edit rule
+       </Button>
+       <Button variant="outline" size="small" onClick={removeSelected} disabled={!selected}>
+        <Trash2 size={13} />
+        Remove rule
+       </Button>
+      </>
      }
     />
     <VirtualTable
@@ -266,6 +317,50 @@ export function ScopePage(): JSX.Element {
      onSelect={setSelected}
      empty={<Empty title="No scope rules" detail="An empty scope means everything is in scope. Add a rule to restrict what burpsy touches." />}
     />
+
+   <Modal
+    open={editing}
+    onOpenChange={setEditing}
+    title="Edit scope rule"
+    description={`Replacing ${selected ? `${selected.kind.toLowerCase()} ${selected.host}` : ""} in place — the replacement takes its position in the list.`}
+   >
+    <div className="stack">
+     <Field label="Type">
+      {(id) => (
+       <Select id={id} value={editKind} onChange={(e) => setEditKind(e.target.value as "include" | "exclude")}>
+        <option value="include">Include in scope</option>
+        <option value="exclude">Exclude from scope</option>
+       </Select>
+      )}
+     </Field>
+     <Field label="Host">
+      {(id) => <Input id={id} value={editPattern} onChange={(e) => setEditPattern(e.target.value)} placeholder="*.example.com" />}
+     </Field>
+     <Field label="Port" hint="Blank matches any port.">
+      {(id) => <Input id={id} value={editPort} onChange={(e) => setEditPort(e.target.value)} placeholder="443" />}
+     </Field>
+     <Field label="Path prefix" hint="Blank covers the whole host.">
+      {(id) => <Input id={id} value={editPath} onChange={(e) => setEditPath(e.target.value)} placeholder="/api" />}
+     </Field>
+     <Field label="Protocol" hint="Blank matches either scheme.">
+      {(id) => (
+       <Select id={id} value={editProtocol} onChange={(e) => setEditProtocol(e.target.value as "" | "http" | "https")}>
+        <option value="">Any</option>
+        <option value="http">http</option>
+        <option value="https">https</option>
+       </Select>
+      )}
+     </Field>
+     <div className="page-actions">
+      <Button variant="outline" onClick={() => setEditing(false)}>
+       Cancel
+      </Button>
+      <Button disabled={update.isPending || !editPattern.trim()} onClick={saveEdit}>
+       Save
+      </Button>
+     </div>
+    </div>
+   </Modal>
    </Card>
   </div>
  );

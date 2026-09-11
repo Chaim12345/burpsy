@@ -278,6 +278,38 @@ func (s *Scope) SetRuleEnabled(kind ScopeRuleKind, pattern string, pathPrefix *s
 	return false
 }
 
+// ReplaceScoped swaps the rule at a kind/pattern/path/port tuple for a new rule, in place —
+// the edit primitive behind Burp's "Edit the selected item" button (k5l). It reports whether a
+// rule was found and replaced; false means the caller named a rule that is not there, which the
+// endpoint turns into a 404 rather than silently appending.
+//
+// The old tuple (kind included) is the identity, exactly RemoveScoped's: two rules on one host
+// differing only in path or port are the ordinary case, and an identity that dropped any arm
+// would let an edit replace a sibling. The replacement takes the old rule's list position, so an
+// edit never reorders the document the way remove-then-add does — reordering a scope is a
+// semantic change (first-match expectations, persistence layout), not a side effect an edit
+// should have. Enabled comes from the new rule, because retyping arms and flipping enabled are
+// two decisions; the toggle action owns the flag.
+func (s *Scope) ReplaceScoped(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16, protocol *string, replacement *ScopeRule) bool {
+	if replacement == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, rule := range s.rules {
+		if rule.Kind != kind || rule.Pattern != pattern {
+			continue
+		}
+		if !eqStrPtr(rule.PathPrefix, pathPrefix) || !eqPortPtr(rule.Port, port) || !eqStrPtr(rule.Protocol, protocol) {
+			continue
+		}
+		s.rules[i] = replacement
+		return true
+	}
+	return false
+}
+
 func eqStrPtr(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
