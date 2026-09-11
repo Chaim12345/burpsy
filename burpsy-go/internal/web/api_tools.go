@@ -784,6 +784,45 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// the number of requests and a payload a rule dropped never occupies an ordinal.
 	resolved := make([]intruder.PayloadSet, 0, len(sources))
 	for i, src := range sources {
+		// copy_other (2g13) is resolved here, against the sources already in `resolved`, rather
+		// than inside PayloadSource.Resolve: it has no generator of its own, and what it copies
+		// is the *processed* items of another position — the same bytes that position's own
+		// splice uses, after its own rule chain and URL-encoding already ran. Copying earlier in
+		// the pipeline (or re-running the chain/encoding on the copy) would let the two positions
+		// diverge, defeating the one thing this payload type exists to guarantee.
+		//
+		// Pitchfork only. It works there because pitchfork's Fill (plan.go) advances every
+		// position's set at the *same* index i — two positions given identical Items therefore
+		// receive identical payloads on every request. Cluster bomb's mixed-radix Fill advances
+		// each position's set at a rate that depends on its own position in the radix system, so
+		// two identical Items lists would coincide on some ordinals and diverge on most of the
+		// rest — a copy that is right most of the time is a correctness bug with a very good
+		// disguise, and refusing it is more honest than shipping that. Making it exact for cluster
+		// bomb needs the engine to read another position's *resolved slot* at splice time
+		// (engine.go's per-ordinal loop), not a static payload list — a larger change than this
+		// bead's evidence asks for, and it is refused by name here rather than silently.
+		if src.Type == "copy_other" {
+			if kind != intruder.AttackKindPitchfork {
+				http.Error(w, fmt.Sprintf(
+					"payload set %d (copy_other): only supported in pitchfork, where every position advances in lockstep; %s does not guarantee the two positions match on every request",
+					i, kind), http.StatusBadRequest)
+				return
+			}
+			target := -1
+			if src.CopyOther != nil {
+				target = src.CopyOther.Position
+			}
+			if target < 0 || target >= i {
+				http.Error(w, fmt.Sprintf(
+					"payload set %d (copy_other): position %d must name an earlier position in this attack (0..%d)",
+					i, target, i-1), http.StatusBadRequest)
+				return
+			}
+			copied := resolved[target]
+			copied.Kind = "copy_other"
+			resolved = append(resolved, copied)
+			continue
+		}
 		ps, err := src.Resolve(payloadCap)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("payload set %d (%s): %s", i, src.AsStr(), err), http.StatusBadRequest)
