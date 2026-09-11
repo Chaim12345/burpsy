@@ -1621,6 +1621,13 @@ export function IntruderPage(): JSX.Element {
             stop_duplicate: advBool(i, "stop_duplicate", true),
           };
         }
+        if (t === "collaborator") {
+          return {
+            type: "collaborator",
+            count: Number(advField(i, "collab_count", "10")) || 10,
+            include_location: advBool(i, "collab_include_location", true),
+          };
+        }
         return { type: "list", items: payloadList(payloadTexts[i] ?? "") };
       });
     } else {
@@ -1996,6 +2003,7 @@ export function IntruderPage(): JSX.Element {
                             <option value="ecb_shuffler">ECB block shuffler</option>
                             <option value="copy_other">Copy other payload</option>
                             <option value="recursive_grep">Recursive grep</option>
+                            <option value="collaborator">Collaborator payloads</option>
                           </Select>
                         )}
                       </Field>
@@ -2300,6 +2308,23 @@ export function IntruderPage(): JSX.Element {
                       >
                         {(id) => <Input id={id} type="number" min={0} value={advField(index, "position", "0")} onChange={(e) => setAdvField(index, "position", e.target.value)} />}
                       </Field>
+                    ) : t === "collaborator" ? (
+                      <div className="stack">
+                        <Field
+                          label="Number of payloads to generate"
+                          hint="One fresh out-of-band address per payload, minted when the attack launches and listed on the Collaborator page. Bounded at 100 by the server, like the Collaborator page's own batch."
+                        >
+                          {(id) => <Input id={id} type="number" min={1} max={100} value={advField(index, "collab_count", "10")} onChange={(e) => setAdvField(index, "collab_count", e.target.value)} />}
+                        </Field>
+                        <Checkbox
+                          checked={advBool(index, "collab_include_location", true)}
+                          onCheckedChange={(v) => setAdvBool(index, "collab_include_location", v)}
+                          label="Include Collaborator server location"
+                        />
+                        <p className="cell-dim">
+                          Each payload is a unique address on the interaction channel. Unchecking the server location yields the bare interaction id — it cannot receive a callback by itself. The attack refuses to launch when no interaction server is configured, rather than inserting a placeholder.
+                        </p>
+                      </div>
                     ) : t === "recursive_grep" ? (
                       <div className="stack">
                         <Field

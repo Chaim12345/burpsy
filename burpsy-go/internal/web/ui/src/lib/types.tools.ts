@@ -252,6 +252,7 @@ export type PayloadSourceType =
   | "dates"
   | "null"
   | "recursive_grep"
+  | "collaborator"
   | "char_substitution"
   | "case_modification"
   | "illegal_unicode"
@@ -295,6 +296,14 @@ export interface PayloadSourceCopyOther { type: "copy_other"; position: number }
  * `chain_payloads` — the payload set itself holds only the initial value.
  */
 export interface PayloadSourceRecursiveGrep { type: "recursive_grep"; initial: string; extract_re: string; stop_duplicate?: boolean }
+/**
+ * Burp's Intruder Collaborator payload type (hi8): each payload is a fresh out-of-band address,
+ * minted at launch and recorded in the Collaborator page's hub, so the interaction is attributed
+ * to the address the attack used. include_location=false yields the bare interaction id (Burp's
+ * "Include Collaborator server location" unchecked) — an id with no domain cannot receive a
+ * callback by itself.
+ */
+export interface PayloadSourceCollaborator { type: "collaborator"; count: number; include_location?: boolean }
 export type PayloadSource =
   | PayloadSourceList
   | PayloadSourceNumbers
@@ -311,7 +320,8 @@ export type PayloadSource =
   | PayloadSourceUsername
   | PayloadSourceECBShuffler
   | PayloadSourceCopyOther
-  | PayloadSourceRecursiveGrep;
+  | PayloadSourceRecursiveGrep
+  | PayloadSourceCollaborator;
 
 /**
  * What a report's counts actually describe.

@@ -837,6 +837,76 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		// bomb needs the engine to read another position's *resolved slot* at splice time
 		// (engine.go's per-ordinal loop), not a static payload list — a larger change than this
 		// bead's evidence asks for, and it is refused by name here rather than silently.
+		// The Collaborator payload type (hi8): mint Count fresh addresses at launch and hand
+		// Resolve an ordinary list, so the engine sees exactly the payloads that will reach the
+		// wire. The mint is the Collaborator page's own primitive (collaboratorMarker + the
+		// channel's domain), so an attack's payloads land in the hub the Collaborator page
+		// polls — the operator sees the interaction attributed to the address the attack used.
+		// Refusal before any request goes out when no channel is configured: Burp's own
+		// behaviour (Zcc_ ends the payload set on a missing channel) would silently shorten the
+		// attack instead, and a shortened OOB sweep reads as a clean one.
+		if src.Type == "collaborator" {
+			cfg := src.Collaborator
+			if cfg == nil {
+				http.Error(w, fmt.Sprintf("payload set %d (collaborator): missing configuration", i), http.StatusBadRequest)
+				return
+			}
+			count := cfg.Count
+			if count < 1 {
+				count = 1 // Burp's panel treats a non-number as 0 and stops; one payload is what a click means
+			}
+			if count > maxCollaboratorBatch {
+				http.Error(w, fmt.Sprintf("payload set %d (collaborator): count %d exceeds the batch bound of %d; a batch that large is a script's job, not a click's",
+					i, count, maxCollaboratorBatch), http.StatusBadRequest)
+				return
+			}
+			channel, err := s.scanner.OOBChannel(r.Context())
+			if err != nil {
+				http.Error(w, fmt.Sprintf("payload set %d (collaborator): no out-of-band interaction channel is configured, so no payload can be minted — an address for a channel nothing polls would report every OOB check as clean when none of them ran: %v",
+					i, err), http.StatusConflict)
+				return
+			}
+			// Nil = Burp's checked default (see CollaboratorSource.IncludeLocation).
+			includeLocation := cfg.IncludeLocation == nil || *cfg.IncludeLocation
+			items := make([]string, 0, count)
+			for j := 0; j < count; j++ {
+				marker, err := collaboratorMarker()
+				if err != nil {
+					http.Error(w, fmt.Sprintf("payload set %d (collaborator): minting failed: %v", i, err), http.StatusInternalServerError)
+					return
+				}
+				addr := marker
+				if includeLocation {
+					addr = marker + "." + channel.Domain()
+				}
+				items = append(items, addr)
+			}
+			// Record the mint in the hub the Collaborator page reads, so the payloads an attack
+			// used are visible and attributable there — the same accounting the page's own
+			// mint button gets.
+			hub := s.collab()
+			now := time.Now()
+			hubRows := make([]mintedPayload, 0, len(items))
+			for _, addr := range items {
+				marker := strings.TrimSuffix(addr, "."+channel.Domain())
+				hubRows = append(hubRows, mintedPayload{Address: addr, Marker: marker, MintedAt: now})
+			}
+			hub.mu.Lock()
+			hub.minted = append(hub.minted, hubRows...)
+			hub.mu.Unlock()
+
+			resolved = append(resolved, intruder.PayloadSet{
+				Kind:       "collaborator",
+				Items:      items,
+				Count:      len(items),
+				Total:      uint64(len(items)),
+				TotalExact: true,
+				MaxCount:   payloadCap,
+				Skipped:    0,
+				Dropped:    []intruder.DropReason{},
+			})
+			continue
+		}
 		if src.Type == "copy_other" {
 			if kind != intruder.AttackKindPitchfork {
 				http.Error(w, fmt.Sprintf(

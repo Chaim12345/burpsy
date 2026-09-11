@@ -211,6 +211,15 @@ type PayloadSource struct {
 	// Custom iterator live in — not a transform applied after some other type generated
 	// something.
 	CopyOther *CopyOtherSource
+	// Collaborator (hi8) is Burp's Intruder Collaborator payload type (Zg3a.COLLABORATOR_
+	// INTERACTION_IDS): each payload is a fresh out-of-band address, so an OOB probe can be
+	// swept across a parameter list. Like copy_other it has no generator of its own — the web
+	// layer mints the addresses at launch (it holds the interaction channel) and hands Resolve
+	// an ordinary list — because minting needs the channel and the engine package must not hold
+	// one. Burp mints per request at generation time (Zcc_.buildNextPayload); minting at launch
+	// differs only in when the address exists, and it moves the no-channel refusal BEFORE any
+	// request goes out, which is strictly more honest than Burp's set-ends-early-on-null.
+	Collaborator *CollaboratorSource
 	// RecursiveGrep (ztuu) is Burp's Recursive grep: the payload for request N+1 is extracted
 	// from the response to request N, so a chain follows dependent values (CSRF tokens,
 	// sequential DB enumeration) without a pre-resolved list. It is a PayloadSource variant
@@ -222,6 +231,26 @@ type PayloadSource struct {
 	// because it would replay the target out of order and record nothing the operator could
 	// pause or stop mid-chain.
 	RecursiveGrep *RecursiveGrepSource
+}
+
+// CollaboratorSource is the configuration for {"type":"collaborator"}.
+//
+// Count is Burp's "Number of payloads to generate" (Zrvn's payloadCollaboratorNumberOfPayloads,
+// persisted via ZNP). IncludeLocation is Burp's "Include Collaborator server location" checkbox:
+// off yields the bare interaction id without the server domain (Zcc_ passes the flag straight
+// through to the address builder).
+type CollaboratorSource struct {
+	// Count is how many distinct payloads to mint. 1..maxCollaboratorMint; the web layer
+	// validates against the same ceiling the Collaborator page's batch mint uses.
+	Count int `json:"count"`
+	// IncludeLocation controls whether the server domain follows the id: true produces
+	// `<marker>.<domain>`, false the bare `<marker>`. A POINTER with nil = true, because
+	// Burp's checkbox is CHECKED by default (Zrvn's constructor: ZE.setSelected(true)) and a
+	// plain bool would make the wire's absent field mean "off" — the opposite of the default
+	// an operator who never touched the box gets in Burp. An id without a domain cannot
+	// receive a callback by itself, so the address form is what an operator almost always
+	// wants spliced into a request.
+	IncludeLocation *bool `json:"include_location"`
 }
 
 // RecursiveGrepSource is the configuration for {"type":"recursive_grep"}.
@@ -489,6 +518,12 @@ func (s *PayloadSource) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		s.RecursiveGrep = &rg
+	case "collaborator":
+		var c CollaboratorSource
+		if err := json.Unmarshal(b, &c); err != nil {
+			return err
+		}
+		s.Collaborator = &c
 	default:
 		return fmt.Errorf("unknown payload source type %q", probe.Type)
 	}
@@ -682,6 +717,11 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		// that reaches here anyway gets a named refusal, not a payload set that pretends to mean
 		// something on its own.
 		return nil, fmt.Errorf("copy_other has no generator of its own; it must be resolved by the caller against the position it names")
+	case "collaborator":
+		// Same shape as copy_other's refusal: the web layer resolves this one, because minting
+		// needs the interaction channel the engine package must not hold. A caller that reaches
+		// here anyway gets a named refusal, not a payload set that pretends to mean something.
+		return nil, fmt.Errorf("collaborator has no generator of its own; the web layer mints the addresses at launch and hands over an ordinary list")
 	case "recursive_grep":
 		if s.RecursiveGrep == nil {
 			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "recursive_grep"}
