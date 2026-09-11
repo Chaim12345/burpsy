@@ -705,7 +705,7 @@ export function HttpEditor({
    toast.error("Open the Raw or Pretty view to insert a payload");
    return;
   }
-  mint.mutate(undefined, {
+  mint.mutate({ count: 1 }, {
    onSuccess: (payload) => {
     const view = cmViewRef.current;
     if (!view) return;

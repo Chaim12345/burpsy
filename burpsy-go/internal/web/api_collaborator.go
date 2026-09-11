@@ -44,6 +44,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -612,6 +613,30 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Batch generation (burpsy-react-ui-v8q): Burp's "Payloads to generate" field. 1 (or absent)
+	// is the historical single mint, so the existing client keeps working. The ceiling keeps a
+	// fat-fingered 100000 from minting a hundred thousand rows the page then renders; 100 covers
+	// every legitimate use — a payload per injection point in a large form or header set.
+	count := 1
+	if r.Body != nil {
+		var req struct {
+			Count int `json:"count"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "body must be JSON {'count': N} or empty", http.StatusBadRequest)
+			return
+		}
+		if req.Count > 0 {
+			count = req.Count
+		}
+	}
+	if count > maxCollaboratorBatch {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": fmt.Sprintf("count %d exceeds the batch bound of %d; a batch that large is a script's job, not a click's", count, maxCollaboratorBatch),
+		})
+		return
+	}
+
 	if _, configured := s.scanner.OOBRegistration(); !configured {
 		status := s.collaboratorStatusNow(false)
 		writeJSON(w, http.StatusConflict, map[string]interface{}{
@@ -637,32 +662,56 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	marker, err := collaboratorMarker()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
-		return
-	}
-	payload := mintedPayload{
-		Address:  marker + "." + channel.Domain(),
-		Marker:   marker,
-		MintedAt: time.Now(),
+	domain := channel.Domain()
+	minted := make([]mintedPayload, 0, count)
+	addresses := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		marker, err := collaboratorMarker()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+			return
+		}
+		payload := mintedPayload{
+			Address:  marker + "." + domain,
+			Marker:   marker,
+			MintedAt: time.Now(),
+		}
+		minted = append(minted, payload)
+		addresses = append(addresses, payload.Address)
 	}
 	hub := s.collab()
 	hub.mu.Lock()
-	hub.minted = append(hub.minted, payload)
+	hub.minted = append(hub.minted, minted...)
 	hub.mu.Unlock()
 
+	// One address in the response keeps the single-mint client working unchanged; a batch adds
+	// the full list under "addresses". Said plainly because it is the difference between these
+	// addresses and Burp's. One Interactsh registration is one domain; the marker is what makes
+	// an address individually correlatable, and a caller who strips it gets callbacks it cannot
+	// attribute.
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"address": payload.Address,
-		"marker":  payload.Marker,
-		"domain":  channel.Domain(),
-		// Said plainly because it is the difference between this address and Burp's. One Interactsh
-		// registration is one domain; the marker is what makes this address individually correlatable,
-		// and a caller who strips it gets callbacks it cannot attribute.
+		"address":   minted[0].Address,
+		"marker":    minted[0].Marker,
+		"domain":    domain,
+		"addresses": addresses,
+		"markers":   mintedMarkers(minted),
 		"marker_note": "the leading label is what attributes a callback to this address; every payload " +
 			"from this channel shares the domain after it",
 		"status": s.collaboratorStatusNow(true),
 	})
+}
+
+// maxCollaboratorBatch bounds one mint request. 100 payloads cover the real use — one per
+// injection point across a large request set — while keeping a typo from minting thousands
+// of rows the page then renders and the hub keeps forever.
+const maxCollaboratorBatch = 100
+
+func mintedMarkers(minted []mintedPayload) []string {
+	out := make([]string, 0, len(minted))
+	for _, m := range minted {
+		out = append(out, m.Marker)
+	}
+	return out
 }
 
 // handleCollaboratorInteractions serves GET /api/collaborator/interactions: index rows only.

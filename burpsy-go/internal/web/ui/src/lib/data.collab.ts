@@ -78,10 +78,23 @@ export function useCollaboratorInteraction(id: number | null) {
   });
 }
 
+// The mint response carries the single address the old client reads plus, for a batch,
+// every address and marker (burpsy-react-ui-v8q). markers is what an operator correlates a
+// callback to, so the batch list is useful as text rather than just a count.
+export interface CollaboratorMintResult {
+  address: string;
+  marker: string;
+  domain?: string;
+  addresses: string[];
+  markers: string[];
+}
+
+// Payloads to generate: 1 by default, bounded by the server's batch ceiling.
 export function useMintPayload() {
   const client = useQueryClient();
-  return useMutation<CollaboratorPayload, Error>({
-    mutationFn: () => api<CollaboratorPayload>("/api/collaborator/payload", json("POST", {})),
+  return useMutation<CollaboratorMintResult, Error, { count?: number }>({
+    mutationFn: ({ count }: { count?: number }) =>
+      api<CollaboratorMintResult>("/api/collaborator/payload", json("POST", { count: count ?? 1 })),
     onSuccess: () => void client.invalidateQueries({ queryKey: keys.collaborator }),
   });
 }

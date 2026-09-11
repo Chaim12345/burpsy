@@ -53,6 +53,7 @@ export function CollaboratorPage(): JSX.Element {
   const interactions = useCollaboratorInteractions();
   const blindxss = useBlindXSS();
   const mint = useMintPayload();
+  const [batchCount, setBatchCount] = useState(1);
   const poll = usePollNow();
   const mintBX = useMintBlindXSSPayload();
   const setServer = useSetCollaboratorServer();
@@ -156,20 +157,39 @@ export function CollaboratorPage(): JSX.Element {
           detail={s.configured ? (s.default_pool ? "Using the interactsh public pool." : s.server ?? undefined) : s.hint}
           actions={
             <>
+              <label
+                className="field-label"
+                style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}
+                title="Payloads to generate (burpsy-react-ui-v8q): one per injection point when a request needs the same probe in many places. Bounded at 100 by the server."
+              >
+                count
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={batchCount}
+                  onChange={(e) => setBatchCount(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+                  style={{ width: 56 }}
+                />
+              </label>
               <Button
                 size="small"
                 disabled={!s.configured || mint.isPending}
                 onClick={() =>
-                  mint.mutate(undefined, {
+                  mint.mutate({ count: batchCount }, {
                     onSuccess: (payload) => {
-                      void copyToClipboard(payload.address);
-                      toast.success(`Payload ${payload.address} copied`);
+                      void copyToClipboard(payload.address + (payload.addresses.length > 1 ? `\n${payload.addresses.slice(1).join("\n")}` : ""));
+                      toast.success(
+                        payload.addresses.length > 1
+                          ? `${payload.addresses.length} payloads copied`
+                          : `Payload ${payload.address} copied`,
+                      );
                     },
                     onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Minting a payload failed"),
                   })
                 }
               >
-                <Plus size={13} /> Copy payload
+                <Plus size={13} /> Copy payload{batchCount > 1 ? "s" : ""}
               </Button>
               <Button
                 variant="outline"
