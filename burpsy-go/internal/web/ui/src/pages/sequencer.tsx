@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { CircleStop, Copy, Download, Pause, Play, Radio } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, downloadText } from "../lib/api";
@@ -336,6 +336,10 @@ export function SequencerPage(): JSX.Element {
  const [source, setSource] = useState("paste");
  const [encoding, setEncoding] = useState("");
  const [tokens, setTokens] = useState("");
+ // Burp's Manual load offers Paste AND Load (burpsy-react-ui-ts3v): the hidden input is the
+ // file affordance, the same pattern app.tsx uses for configuration import. Read as text —
+ // the editor's value is text, and a binary file shows its replacement characters honestly.
+ const loadInputRef = useRef<HTMLInputElement | null>(null);
  const [captureId, setCaptureId] = useState("");
  const [attached, setAttached] = useState("");
 
@@ -493,6 +497,33 @@ export function SequencerPage(): JSX.Element {
      <TabsTrigger value="live">Capture from a live exchange</TabsTrigger>
     </TabsList>
     <TabsContent value="paste">
+     <div className="toolbar" style={{ marginBottom: 8 }}>
+      <Button
+       variant="outline"
+       size="small"
+       onClick={() => loadInputRef.current?.click()}
+      >
+       Load from file…
+      </Button>
+      <input
+       ref={loadInputRef}
+       type="file"
+       className="sr-only"
+       aria-hidden="true"
+       tabIndex={-1}
+       onChange={(event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+         setTokens(String(reader.result ?? ""));
+         toast.success(`Loaded ${file.name} — ${String(reader.result ?? "").split(/\r?\n/).filter(Boolean).length.toLocaleString()} line(s)`);
+        };
+        reader.readAsText(file);
+        event.target.value = "";
+       }}
+      />
+     </div>
      <HttpEditor
       views={false}
       label="Tokens, one per line"
