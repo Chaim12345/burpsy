@@ -10,11 +10,12 @@
  * and what it gates, never an empty interaction table that would read as
  * "nothing called back".
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { Check, Copy, Plus, RefreshCw, X } from "lucide-react";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, IconButton, Input, Metric, Select, Toolbar } from "../ui/primitives";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
+import { HIGHLIGHTS } from "../lib/types";
 import {
   useBlindXSS,
   useCollaboratorInteraction,
@@ -32,6 +33,19 @@ import { toast } from "sonner";
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString();
+}
+
+/**
+ * The annotated row's accent border. `--highlight-<name>` is the shared token vocabulary
+ * History and Organizer paint rows with (styles.css's row-highlight-* rules), each one bound
+ * to a distinct hex value. `--accent-<name>` was never defined per colour — only the plain
+ * `--accent`/`--accent-bright`/`--accent-strong`/`--accent-contrast` tokens exist — so every
+ * named highlight fell through to the same fallback and rendered as one colour. Exported as a
+ * pure function so the token choice is unit-testable without a DOM.
+ */
+export function highlightBorderStyle(highlight: string | undefined): CSSProperties | undefined {
+  if (!highlight || highlight === "none") return undefined;
+  return { borderLeft: `3px solid var(--highlight-${highlight}, var(--accent))` };
 }
 
 export function CollaboratorPage(): JSX.Element {
@@ -376,7 +390,7 @@ function InteractionsTable({
             <tr
               key={row.id}
               className={`${row.id === selected ? "selected-row" : ""} ${isRead ? "cell-dim" : ""}`}
-              style={annotation?.highlight && annotation.highlight !== "none" ? { borderLeft: `3px solid var(--accent-${annotation.highlight}, var(--accent))` } : undefined}
+              style={highlightBorderStyle(annotation?.highlight)}
             >
               <td className="cell-num">{row.id}</td>
               <td>
@@ -419,7 +433,7 @@ function InteractionsTable({
                         setAnnotation(row.id, { comment: annotation?.comment ?? "", highlight: colour });
                       }}
                     >
-                      {["none", "red", "orange", "yellow", "green", "blue", "purple", "pink"].map((colour) => (
+                      {HIGHLIGHTS.map((colour) => (
                         <option key={colour} value={colour}>
                           {colour}
                         </option>
