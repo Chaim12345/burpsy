@@ -128,19 +128,18 @@ var exchangeFieldRules = map[string]fieldRule{
 	// comparison is over real values, not two empty cells agreeing vacuously.
 	"Cookies": ruleIdentical,
 	"Title":   ruleIdentical,
-	// The two socket facts, and both are an asymmetry rather than parity — named here so the gap is
-	// a recorded decision instead of an omission (burpsy-react-ui-mr4p, burpsy-react-ui-he81).
+	// The two socket facts.
 	//
-	// ServerIP: the proxy reads it off the upstream socket it holds. The crawler's fetches go
-	// through sender, which does not surface the dialled address to its caller, so the crawled leg
-	// records "". That is a real gap and not a property of crawling — a crawled row deserves an IP
-	// as much as a proxied one — and it is filed as burpsy-react-ui-gj4f rather than blessed by
-	// being written down here. When it closes, this becomes ruleIdentical.
+	// ServerIP: now ruleIdentical (burpsy-react-ui-gj4f). The proxy reads it off the upstream
+	// socket it holds; the crawler's fetches read it off SendOutcome.ServerIP, which sender
+	// stamps from its own live connection the same way. Both are the address the bytes actually
+	// went to, read off the socket rather than re-resolved, so the two legs must agree — and
+	// this rule is what keeps them agreeing.
 	//
-	// ListenerPort: this one is genuinely asymmetric and always will be. A crawl is not traffic
+	// ListenerPort: genuinely asymmetric and always will be. A crawl is not traffic
 	// that arrived on a listener, so 0 is the correct answer for it, and any value at all would be
 	// an invented one.
-	"ServerIP":     ruleMayDiffer,
+	"ServerIP":     ruleIdentical,
 	"ListenerPort": ruleMayDiffer,
 }
 

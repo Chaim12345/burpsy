@@ -941,6 +941,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		Started:  time.Now().Add(-res.Duration),
 		Duration: res.Duration,
 		Protocol: core.ProtocolHTTP1,
+		// The address the fetch's socket actually reached — SendOutcome carries it read off the
+		// live connection, so a crawled row answers "which host did this name resolve to" the way
+		// a proxied row does (burpsy-react-ui-gj4f). Empty only when the send failed, and this
+		// path only runs after a successful one.
+		ServerIP: res.Outcome.ServerIP,
 		// Attributed, so history can distinguish what the crawl caused from what the operator's own
 		// browser did. Leaving it unset would land this in the store as unattributed, which is the
 		// store's honest default and the wrong answer when the surface is known.

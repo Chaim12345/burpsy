@@ -410,6 +410,13 @@ type SendOutcome struct {
 	// probe could not use it" — the reading an operator needs — and answers
 	// ProtocolSupportUnknown rather than guessing when no h2-offering handshake has happened yet.
 	Support ProtocolSupport
+	// ServerIP is the address the socket this send used actually reached — read off the live
+	// connection, not resolved by name, for the same reason the proxy records it that way: the
+	// row is a record of one exchange, and re-resolving later answers where the name points now,
+	// not where it pointed when this request went out. Empty for a send that failed before any
+	// connection existed. Under an upstream proxy it is the hop's address, which is the honest
+	// answer to "where did these bytes go" (burpsy-react-ui-gj4f).
+	ServerIP string
 }
 
 // Downgraded reports whether this send went out as HTTP/1.1.

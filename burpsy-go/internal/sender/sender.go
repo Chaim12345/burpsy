@@ -784,7 +784,11 @@ func (s *Sender) observe(target *url.URL, resp *http.Response) SendOutcome {
 	// The exchange completed — observe runs on a response — so this send is counted. No rendering is carried:
 	// the typed path's caller holds a *Request rather than bytes, and Sender.Render is the one place that
 	// turns one into the other.
-	return s.finish(host, port, isTLS, negotiated, downgradeFromResponse(resp, isTLS, negotiated), nil, nil, nil)
+	//
+	// No ServerIP here: the stdlib transport owns its connections and does not hand the dialled
+	// address to this layer. Inventing one by re-resolving would report where the name points now
+	// rather than where this request went, which is exactly the lie the field exists not to tell.
+	return s.finish(host, port, isTLS, negotiated, downgradeFromResponse(resp, isTLS, negotiated), nil, nil, "", nil)
 }
 
 // downgradeFromResponse names why a typed send did not travel over h2, or nil when it did.
@@ -849,8 +853,8 @@ func (s *Sender) SendRawOutcome(
 	if !useTLS {
 		// No ALPN exists on cleartext, so nothing was negotiated and nothing is learnt about this
 		// authority beyond what cleartext implies.
-		resp, err := s.sendHTTP1Plain(ctx, host, port, plan.http1)
-		out := s.finish(host, port, useTLS, "", plan.block, nil, nil, err)
+		resp, ip, err := s.sendHTTP1Plain(ctx, host, port, plan.http1)
+		out := s.finish(host, port, useTLS, "", plan.block, nil, nil, ip, err)
 		return resp, out, err
 	}
 
@@ -872,7 +876,7 @@ func (s *Sender) SendRawOutcome(
 	if plan.wantH2 && negotiated == alpn.H2 {
 		s.setDeadline(ctx, conn, host)
 		resp, err := sendOverH2(ctx, conn, plan.http2)
-		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), err)
+		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), remoteIP(conn), err)
 		return resp, out, err
 	}
 
@@ -893,7 +897,7 @@ func (s *Sender) SendRawOutcome(
 		}
 	}
 	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
-	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, err)
+	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
 	return resp, out, err
 }
 
@@ -914,13 +918,37 @@ func (s *Sender) finish(
 	down *Downgrade,
 	rewrites []Rewrite,
 	rendered []byte,
+	serverIP string,
 	err error,
 ) SendOutcome {
 	out := newOutcome(negotiated, s.protocols.Lookup(host, port, useTLS), down, rewrites, rendered)
+	// Stamp even on a failed send when the connection existed: "where did these bytes go" is
+	// answerable by anything that reached a socket, and a dial that connected but then failed
+	// still went somewhere real. A failure before any dial leaves it empty.
+	out.ServerIP = serverIP
 	if err == nil {
 		s.protocols.record(out)
 	}
 	return out
+}
+
+// remoteIP is the host half of a connection's remote address, read off the live socket — the
+// same fact proxy.serverIPOf records for its leg, so both producers of an exchange row answer
+// "which address did this name resolve to *for this request*" the same way. Empty for a nil
+// connection or an unparseable address, which a caller reports as absence rather than guessing.
+func remoteIP(conn net.Conn) string {
+	if conn == nil {
+		return ""
+	}
+	addr := conn.RemoteAddr()
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
 // sendPlan is what protocol selection decided from the request bytes alone, before any connection
@@ -1010,16 +1038,20 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 	return plan, nil
 }
 
-// sendHTTP1Plain dials cleartext and writes one request.
-func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte) ([]byte, error) {
+// sendHTTP1Plain dials cleartext and writes one request. The dialled address is returned
+// alongside the response, because a caller recording the exchange wants where the socket went
+// — the same fact the TLS path reads off its own connection (burpsy-react-ui-gj4f).
+func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte) ([]byte, string, error) {
 	conn, err := s.dialPlain(ctx, host, port)
 	if err != nil {
-		return nil, fmt.Errorf("connection failed: %w", err)
+		return nil, "", fmt.Errorf("connection failed: %w", err)
 	}
 	defer conn.Close()
 	// Cancelling the context must unblock the read, not merely be noticed after it. See cancel.go.
 	defer watchCancel(ctx, conn)()
-	return s.writeHTTP1(ctx, conn, host, raw)
+	ip := remoteIP(conn)
+	resp, err := s.writeHTTP1(ctx, conn, host, raw)
+	return resp, ip, err
 }
 
 // writeHTTP1 writes one request on an open connection and reads exactly one response back.
