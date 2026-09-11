@@ -4,12 +4,13 @@ import {
   getSortedRowModel,
   useReactTable,
   type ColumnDef,
+  type ColumnOrderState,
   type Row,
   type SortingState,
   type VisibilityState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3, Copy } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Copy, GripVertical } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
@@ -70,6 +71,101 @@ function useFluidRowHeight(density: "comfortable" | "compact"): [number, (node: 
  */
 function columnLabel(header: unknown, id: string): string {
   return typeof header === "string" ? header : id;
+}
+
+// --- column order (burpsy-react-ui-mem3) ---------------------------------------------------------
+//
+// Burp: "Move columns - Drag and drop the column header to a new location", on every table it
+// shows. VirtualTable had sizing and visibility but no order at all — the columns array's own
+// order was the only order a page could ever see.
+
+/** The id TanStack itself would derive for a column def that names no explicit `id`. */
+function columnKey<T>(def: Column<T>, index: number): string {
+  if (def.id) return def.id;
+  const accessorKey = (def as { accessorKey?: string }).accessorKey;
+  return accessorKey ?? `column-${index}`;
+}
+
+/**
+ * A stored order is only trusted for the id set it was written for — filtered down to ids still
+ * present, then whatever is new in `fallback` (a page's own column addition, or simply a
+ * first-ever visit) is appended in the page's own order. A stored order for a different table
+ * shape entirely (found via key collision, or hand-edited storage) degrades to the fallback rather
+ * than reordering columns it was never told about.
+ */
+function reconcileOrder(order: string[], fallback: string[]): string[] {
+  const known = new Set(fallback);
+  const kept = order.filter((id) => known.has(id));
+  const missing = fallback.filter((id) => !kept.includes(id));
+  return [...kept, ...missing];
+}
+
+function readStoredOrder(key: string, fallback: string[]): ColumnOrderState {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === "string")) return fallback;
+    return reconcileOrder(parsed, fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Column order, persisted per table shape rather than per page.
+ *
+ * `ariaLabel` was the obvious storage key and is wrong: Site map hands VirtualTable a fresh one
+ * per node (`Requests under ${path}`), so keying on it would forget the operator's arrangement
+ * the moment they clicked a different folder. The column *id set* a page renders does not change
+ * between those clicks, and does differ between actually different tables (History's ids are not
+ * Site map's), which makes it a fingerprint for "this kind of table" good enough to persist
+ * against — with no prop and no change required in any of VirtualTable's callers.
+ */
+function useColumnOrder(defaultOrder: string[]): [ColumnOrderState, (updater: ColumnOrderState | ((current: ColumnOrderState) => ColumnOrderState)) => void] {
+  const fingerprint = [...defaultOrder].sort().join("|");
+  const storageKey = `burpsy.table-column-order.${fingerprint}`;
+
+  const [order, setOrderState] = useState<ColumnOrderState>(() => readStoredOrder(storageKey, defaultOrder));
+
+  // The column set itself changing (a page adds/removes a column, or this is a different table
+  // reusing the hook) reconciles rather than resets, for the reason readStoredOrder does.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setOrderState((current) => {
+      const next = reconcileOrder(current, defaultOrder);
+      // Same sequence already: bail out so this cannot loop against the persist effect below just
+      // because `defaultOrder` is a fresh array reference on every render.
+      return next.length === current.length && next.every((id, i) => id === current[i]) ? current : next;
+    });
+  }, [fingerprint]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(order));
+    } catch {
+      // A private window or cleared site data: the order still holds for this session.
+    }
+  }, [storageKey, order]);
+
+  const setOrder = useCallback(
+    (updater: ColumnOrderState | ((current: ColumnOrderState) => ColumnOrderState)) => {
+      setOrderState((current) => (typeof updater === "function" ? updater(current) : updater));
+    },
+    [],
+  );
+
+  return [order, setOrder];
+}
+
+/** Move `moving` to sit immediately before `target` in `order`. A `target` no longer present
+ *  (dropped between drag-start and drop, or a stale event) is a no-op rather than a silent drop
+ *  of the moved column off the end. */
+function moveColumnBefore(order: readonly string[], moving: string, target: string): string[] {
+  const without = order.filter((id) => id !== moving);
+  const at = without.indexOf(target);
+  if (at < 0) return [...order];
+  return [...without.slice(0, at), moving, ...without.slice(at)];
 }
 
 export interface VirtualTableProps<T> {
@@ -164,14 +260,23 @@ export function VirtualTable<T>({
   const columnMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const columnMenuPanelRef = useRef<HTMLDivElement>(null);
 
+  // Drag-to-reorder (burpsy-react-ui-mem3): always on, unlike visibility, because every page gets
+  // it for free — see useColumnOrder for why persistence needs no prop from the caller either.
+  const defaultColumnOrder = useMemo(() => columns.map((def, index) => columnKey(def, index)), [columns]);
+  const [columnOrder, setColumnOrder] = useColumnOrder(defaultColumnOrder);
+  // Which column's header is mid-drag, purely to know what a drop on another header should move.
+  // Not persisted itself — only the resulting order is.
+  const [draggingColumn, setDraggingColumn] = useState<string | null>(null);
+
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, columnVisibility: visibility },
+    state: { sorting, columnVisibility: visibility, columnOrder },
     onSortingChange: setSorting,
     onColumnVisibilityChange: (updater) => {
       setVisibility(typeof updater === "function" ? updater(visibility) : updater);
     },
+    onColumnOrderChange: setColumnOrder,
     getRowId,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -395,7 +500,38 @@ export function VirtualTable<T>({
                     <span className="th-label">{flexRender(header.column.columnDef.header, header.getContext())}</span>
                   );
                   return (
-                    <th key={header.id} style={{ width: header.getSize() }} aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}>
+                    <th
+                      key={header.id}
+                      style={{ width: header.getSize() }}
+                      aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}
+                      className={cn(draggingColumn && draggingColumn !== header.column.id && "th-drop-target")}
+                      // The drop target is the whole header, not just the grip: Burp's own drag
+                      // and drop lands wherever the header is released, not on a fixed-size handle.
+                      onDragOver={(event) => {
+                        if (draggingColumn && draggingColumn !== header.column.id) event.preventDefault();
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (!draggingColumn || draggingColumn === header.column.id) return;
+                        setColumnOrder((current) => moveColumnBefore(current, draggingColumn, header.column.id));
+                        setDraggingColumn(null);
+                      }}
+                    >
+                      <span
+                        className="col-drag-handle"
+                        aria-hidden="true"
+                        title="Drag to reorder this column"
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          // Firefox refuses to start a drag with no data set on it at all.
+                          event.dataTransfer.setData("text/plain", header.column.id);
+                          setDraggingColumn(header.column.id);
+                        }}
+                        onDragEnd={() => setDraggingColumn(null)}
+                      >
+                        <GripVertical size={11} />
+                      </span>
                       <ContextMenu
                         groups={[
                           {
