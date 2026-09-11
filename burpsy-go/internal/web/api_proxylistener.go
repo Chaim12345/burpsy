@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // The proxy listener's runtime surface (burpsy-react-ui-77m, decision recorded on the
@@ -65,7 +66,19 @@ func (s *Server) handleProxyListener(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			// The old listener is still serving — the engine opened the new socket
 			// first — so this is a failed request, not a failed listener.
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			//
+			// Every Rebind failure used to answer 400 here (burpsy-react-ui-459i), though the
+			// close note on -77m already claimed the 409 this restores: "this port is already
+			// taken" is a state conflict the caller can resolve by picking another address, and
+			// is worth telling apart from "this address is malformed or unresolvable", which is
+			// the caller's own mistake. net.Listen wraps the dial-level error with %w (see
+			// proxy.Server.Rebind), so errors.Is sees through the wrapping to the syscall errno
+			// without this package needing to parse the message text.
+			status := http.StatusBadRequest
+			if errors.Is(err, syscall.EADDRINUSE) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 		writeJSON(w, http.StatusOK, proxyListenerView{Bind: s.proxyServer.ListenerAddr(), PreviousBind: previous})

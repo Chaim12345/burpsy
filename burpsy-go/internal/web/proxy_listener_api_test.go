@@ -116,7 +116,13 @@ func TestProxyListenerPutRebindsAndTheNewSocketServes(t *testing.T) {
 	}
 }
 
-func TestProxyListenerPutToAnOccupiedPortKeepsTheOldListener(t *testing.T) {
+// burpsy-react-ui-459i: every Rebind failure used to answer 400 here, though the close note on
+// -77m already claimed "an occupied port or unmeaning address leaves the previous listener serving
+// and is answered 409/400 with the reason" — the first half was true, the status code half was not.
+// An occupied port is a state conflict the caller can resolve by picking another address (409); a
+// malformed or unresolvable one is the caller's own mistake (400). This test used to assert the bug
+// (400 here) and is corrected to assert the note's original claim instead.
+func TestProxyListenerPutToAnOccupiedPortAnswers409AndKeepsTheOldListener(t *testing.T) {
 	ts, ps := startAPIProxy(t)
 	before := ps.ListenerAddr()
 
@@ -129,11 +135,33 @@ func TestProxyListenerPutToAnOccupiedPortKeepsTheOldListener(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ts.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/proxy/listener",
 		strings.NewReader(`{"bind":"`+squatter.Addr().String()+`"}`)))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("PUT onto an occupied port = %d, want 400: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("PUT onto an occupied port = %d, want 409: %s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "listen") {
-		t.Errorf("the 400 should carry the bind failure, got: %s", rec.Body.String())
+		t.Errorf("the 409 should carry the bind failure, got: %s", rec.Body.String())
+	}
+	if got := ps.ListenerAddr(); got != before {
+		t.Fatalf("after a failed rebind the listener is %q, want the untouched %q", got, before)
+	}
+}
+
+// A bind failure that is not "address already in use" stays 400: the caller asked for something
+// this host cannot do, not something merely unavailable right now. 10.255.255.1 is a valid IPv4
+// literal — it passes normalizeListenerAddr's host:port and port-range checks (a non-empty host and
+// a 0-65535 port are all that requires) and needs no DNS lookup, so the failure is immediate — but
+// it is not an address assigned to any local interface, so net.Listen fails with EADDRNOTAVAIL, not
+// EADDRINUSE. This exercises the same Rebind error branch the occupied-port case does and pins that
+// the branch actually distinguishes the errno rather than answering 409 for every Rebind failure.
+func TestProxyListenerPutToAnUnassignableAddressStays400(t *testing.T) {
+	ts, ps := startAPIProxy(t)
+	before := ps.ListenerAddr()
+
+	rec := httptest.NewRecorder()
+	ts.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/proxy/listener",
+		strings.NewReader(`{"bind":"10.255.255.1:0"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT to an unassignable address = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
 	if got := ps.ListenerAddr(); got != before {
 		t.Fatalf("after a failed rebind the listener is %q, want the untouched %q", got, before)
