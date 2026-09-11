@@ -83,6 +83,22 @@ function Fips({ report }: { report: SequencerAnalysis }): JSX.Element {
  return (
   <Card>
    <SectionHeading title="FIPS 140-2 bit-level tests" detail={coverage} />
+   {/* 3f3: the disclosure the issue requires. Burp's docs describe its FIPS battery as running
+       "at each bit position", and its results tab names the failing bits — an operator who knows
+       Burp reads this heading the same way. It is not: the thresholds are defined on a 20,000-bit
+       SAMPLE, so the stream is cut into blocks and each verdict describes a block — the whole
+       stream when the sample spans one. The honest per-position answer lives in Character
+       positions above, which IS per bit position (per character position of the token). Saying
+       so here is the difference between a caveat an operator can act on and one they discover
+       after trusting the verdict. */}
+   <div className="notice notice-warn">
+    These verdicts describe the <strong>whole bit stream</strong>, not individual bit positions.
+    Every FIPS 140-2 threshold is defined on a {fips.block_bits}-bit sample, so the stream is cut
+    into {fips.block_bits}-bit blocks and each row reports over those blocks — it cannot name
+    which bit positions of the token are weak. For the per-position answer (a fixed prefix, a
+    low-entropy counter field), read the Character positions section: it breaks the token down
+    at each position explicitly.
+   </div>
    {fips.tests === null ? (
     <div className="notice notice-warn">
      Not run. Every FIPS 140-2 threshold is defined on a {fips.block_bits}-bit sample, so running them against a
