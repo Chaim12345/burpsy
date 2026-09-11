@@ -41,6 +41,28 @@ type CheckContext struct {
 	InsertionPoint *bcheck.InsertionPoint
 	Sender         *sender.Sender
 	Config         *ScanConfig
+	// InsertionKinds is the bcheck point classes this run may probe — the audit configuration's
+	// `scanner/insertion_point_types/*` answer. Empty means the caller supplied none, and
+	// ProbeInsertionKinds falls back to the engine default.
+	//
+	// It lives here because Config is *ScanConfig, which is deliberately not merged with
+	// AuditConfig (see ScanConfig's doc), so there was no path from the operator's choice to a
+	// check at all: every probe site passed the DefaultProbeInsertionKinds literal, and the
+	// configuration reached only the audit-queue row. Turning cookie insertion off changed what
+	// the queue displayed and not one byte of what was sent (burpsy-react-ui-povm).
+	InsertionKinds []string
+}
+
+// ProbeInsertionKinds is the point classes an active probe may use: the audit configuration's when
+// one was supplied, the engine default otherwise.
+//
+// The "none" sentinel a fully-disabled overlay writes is returned as-is and matches no kind, which
+// is the point — a run configured to insert nowhere probes nowhere.
+func (cc *CheckContext) ProbeInsertionKinds() []string {
+	if cc == nil || len(cc.InsertionKinds) == 0 {
+		return DefaultProbeInsertionKinds
+	}
+	return cc.InsertionKinds
 }
 
 // NewCheckContext builds the shared evaluator input without copying request or
@@ -53,12 +75,23 @@ func NewCheckContext(scanner *ActiveScanner, exchange, stored *core.Exchange) *C
 		snd = scanner.sender
 		cfg = scanner.config
 	}
+	// Read from the scanner's effective audit configuration, which is exactly what the audit entry
+	// points run under: scanner.go's ActiveAudit and ActiveAuditSession both pass
+	// s.AuditConfig() as the run's cfg. A caller invoking AuditWithin/AuditSession directly with a
+	// bespoke config is the one case where this could differ from run.cfg, and it is stated here
+	// rather than papered over — threading run.cfg to this constructor would mean widening the
+	// dispatch closure signature that wrapDescriptor builds for every check.
+	var kinds []string
+	if scanner != nil {
+		kinds = scanner.AuditConfig().insertionKinds()
+	}
 	return &CheckContext{
 		Scanner:        scanner,
 		Exchange:       exchange,
 		StoredExchange: stored,
 		Sender:         snd,
 		Config:         cfg,
+		InsertionKinds: kinds,
 	}
 }
 

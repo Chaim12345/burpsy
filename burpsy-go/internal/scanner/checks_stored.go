@@ -62,7 +62,7 @@ func PlantStoredCanaries(ctx context.Context, cc *CheckContext) ([]StoredCanary,
 	if err != nil {
 		return nil, err
 	}
-	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, err
 	}

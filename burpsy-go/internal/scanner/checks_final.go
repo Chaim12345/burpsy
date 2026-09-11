@@ -30,7 +30,7 @@ import (
 // context matchers keeps the two families deciding "which row" the same way.
 func reflectedContextCheck(row, severity string, inContext func(body, token string) (string, bool)) CheckRunner {
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+		h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 		if err != nil {
 			return nil, err
 		}

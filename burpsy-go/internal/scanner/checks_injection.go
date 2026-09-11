@@ -133,7 +133,7 @@ func xpathProbePayloads() []string {
 }
 
 func checkXPathInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			return h.ProbeErrorSignatures(ctx, p, xpathProbePayloads(), XPathErrorSignatures)
 		})
@@ -147,7 +147,7 @@ func checkXPathInjection(ctx context.Context, cc *CheckContext) ([]*Finding, err
 }
 
 func checkXMLInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var payloads []string
 			for _, x := range XMLInjectionPayloads("bsyxml") {
@@ -169,7 +169,7 @@ func checkXMLInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error
 // ---------------------------------------------------------------------------
 
 func checkLDAPInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			payloads := LDAPPayloads(p.BaseValue)
 			// payloads[1] closes the filter and opens an always-true one; payloads[2]
@@ -195,7 +195,7 @@ func checkLDAPInjection(ctx context.Context, cc *CheckContext) ([]*Finding, erro
 // ---------------------------------------------------------------------------
 
 func checkFilePathManipulation(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			// A read is proven by file content, not by the absence of an error, which is
 			// why TraversalFileSignatures rather than an error bank.
@@ -225,7 +225,7 @@ func checkOSCommandInjection(ctx context.Context, cc *CheckContext) ([]*Finding,
 	// an error page quoting the last request — this check goes permanently silent on a genuinely
 	// command-injectable target, and silently, because Inconclusive never reaches a report.
 	marker := newProbeCanary("bsycmd")
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
 			for _, payload := range OSCommandPayloads(marker) {
@@ -249,7 +249,7 @@ func checkOSCommandInjection(ctx context.Context, cc *CheckContext) ([]*Finding,
 // language's emitters across all three quoting contexts.
 func codeInjectionCheck(rowName, language, severity string) CheckRunner {
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+		res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
 			func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 				var probes []InjectionProbe
 				for _, probe := range CodeInjectionProbeSet(language) {
@@ -299,7 +299,7 @@ func templateArithmeticPayloads() []string {
 }
 
 func checkServerSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
 			for _, payload := range templateArithmeticPayloads() {
@@ -318,7 +318,7 @@ func checkServerSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]
 
 func checkExpressionLanguageInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	arith := fmt.Sprintf("%d*%d", ArithmeticProofLeft, ArithmeticProofRight)
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
 			// The EL subset of the template delimiters, plus the recovered class-probe

@@ -266,7 +266,7 @@ var linkManipulationAttributes = [...]string{"href", "src", "action", "formactio
 // the check was silent on every real target and nobody noticed, because silence is what a clean
 // endpoint looks like.
 func checkLinkManipulation(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", linkManipulationIssue, err)
 	}
@@ -424,7 +424,7 @@ var codeInjectionHeaders = [...]string{"User-Agent", "Referer"}
 // product* while not containing the literal payload — evidence the server evaluated the expression
 // rather than merely echoing it back.
 func checkCodeInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", codeInjectionIssue, err)
 	}
@@ -496,7 +496,7 @@ const ssiInjectionIssue = "SSI injection"
 // token and the literal directive syntax do not — a server that left the directive unprocessed
 // would reflect all three or none, so seeing only the true branch is evidence of SSI evaluation.
 func checkSSIInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ssiInjectionIssue, err)
 	}

@@ -309,7 +309,7 @@ func checkTLSCertificate(ctx context.Context, cc *CheckContext) ([]*Finding, err
 // ---------------------------------------------------------------------------
 
 func checkSMTPHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +522,7 @@ func oobCheck(row, protocol string) CheckRunner {
 		if err := cc.RequireEgress(); err != nil {
 			return nil, fmt.Errorf("%s: %w", row, err)
 		}
-		h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+		h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 		if err != nil {
 			return nil, err
 		}
