@@ -95,6 +95,93 @@ const CODECS: { value: Codec; label: string; apply: (input: string) => string }[
 
 const codecOf = (value: Codec) => CODECS.find((entry) => entry.value === value)!;
 
+/* ==== code point (burpsy-react-ui-luu3) ====================================
+ *
+ * Burp's message-editor docs: select a character in the Inspector and "an entry will appear ...
+ * that indicates the decimal and hex code points for the character. In editable contexts ... you
+ * can edit this value to overwrite the selected character" — the way to type a byte with no
+ * keyboard representation (NUL, ESC, a raw 0x81) into a request.
+ *
+ * This reads the native input's own selection (selectionStart/End), which is UTF-16 code-unit
+ * offsets — the same unit String.prototype.slice already uses everywhere else in this file, so a
+ * codepoint above U+FFFF (a surrogate pair, two code units) is out of scope here exactly as it
+ * would be for the rest of the Selection section's string handling, not a new limitation.
+ */
+
+/** A control character renders as nothing at all; showing its Unicode Control Picture glyph (the
+ *  ␀-␟ block, plus ␡ for DEL) is what makes "which byte did I select" answerable at a glance. */
+function displayChar(char: string): string {
+  const codePoint = char.codePointAt(0) ?? 0;
+  if (codePoint <= 0x1f) return String.fromCodePoint(0x2400 + codePoint);
+  if (codePoint === 0x7f) return "␡";
+  return char;
+}
+
+function CodePointEditor({
+  char,
+  writable,
+  onOverwrite,
+}: {
+  char: string;
+  writable: boolean;
+  onOverwrite: (nextChar: string) => void;
+}): JSX.Element {
+  const codePoint = char.codePointAt(0) ?? 0;
+  const [decimal, setDecimal] = useState(String(codePoint));
+  const [hex, setHex] = useState(codePoint.toString(16).toUpperCase());
+
+  // An edit that does not parse, or names a value outside the Unicode range, reverts to the
+  // current code point rather than writing anything — the same "refuse rather than guess" rule
+  // this codebase's own decoders follow (see api_toolkit.go's decodeLayer).
+  const commit = (parsed: number) => {
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 0x10ffff) {
+      setDecimal(String(codePoint));
+      setHex(codePoint.toString(16).toUpperCase());
+      return;
+    }
+    if (parsed !== codePoint) onOverwrite(String.fromCodePoint(parsed));
+  };
+
+  return (
+    <div className="inspector-decoder">
+      <span className="cell-dim" title={`Selected character (U+${codePoint.toString(16).toUpperCase().padStart(4, "0")})`}>
+        {displayChar(char)}
+      </span>
+      <Input
+        className="inspector-input"
+        aria-label="Selected character's code point, decimal"
+        title="Decimal code point"
+        value={decimal}
+        readOnly={!writable}
+        inputMode="numeric"
+        onChange={(event) => setDecimal(event.target.value)}
+        onBlur={() => commit(Number.parseInt(decimal, 10))}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit(Number.parseInt(decimal, 10));
+          }
+        }}
+      />
+      <Input
+        className="inspector-input"
+        aria-label="Selected character's code point, hex"
+        title="Hex code point"
+        value={hex}
+        readOnly={!writable}
+        onChange={(event) => setHex(event.target.value)}
+        onBlur={() => commit(Number.parseInt(hex, 16))}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit(Number.parseInt(hex, 16));
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 /** The value the Selection section is working on, and where Apply writes it back to. */
 interface Selection {
   /** Section and row, for the label and for the write-back. */
@@ -374,6 +461,22 @@ function SelectionSection({
   writable: boolean;
 }): JSX.Element {
   const result = decoded(selection);
+  // Which one character (if exactly one) is selected in the field below — not the section's own
+  // `selection.stages`, which is the decoder stack, a different "selection" than the one this
+  // tracks (a highlighted range of text within `result`).
+  const [charRange, setCharRange] = useState<{ start: number; end: number } | null>(null);
+  const captureCharRange = (event: React.SyntheticEvent<HTMLInputElement>) => {
+    const el = event.currentTarget;
+    const { selectionStart, selectionEnd } = el;
+    // Burp shows this for exactly one selected character, not a cursor position and not a longer
+    // run — a wider selection has no single code point to report.
+    setCharRange(
+      selectionStart !== null && selectionEnd !== null && selectionEnd - selectionStart === 1
+        ? { start: selectionStart, end: selectionEnd }
+        : null,
+    );
+  };
+  const selectedChar = charRange ? result[charRange.start] : undefined;
   return (
     <div className="inspector-section inspector-selection">
       <div className="inspector-head-row">
@@ -432,11 +535,32 @@ function SelectionSection({
           value={result}
           readOnly={selection.stages.length > 0}
           onChange={(event) => onChangeSelection({ ...selection, original: event.target.value, stages: [] })}
+          onSelect={captureCharRange}
+          onClick={captureCharRange}
+          onKeyUp={captureCharRange}
         />
         {selection.stages.length > 0 ? (
           <p className="inspector-note">
             Showing the decoder output. Remove the decoders to type into it directly.
           </p>
+        ) : null}
+        {selectedChar !== undefined && charRange ? (
+          <CodePointEditor
+            // Remounts on a new selection (or once the char it names has itself changed), so the
+            // decimal/hex drafts inside always start from what is actually selected rather than
+            // carrying over a stale edit from the previous character.
+            key={`${charRange.start}-${selectedChar}`}
+            char={selectedChar}
+            writable={writable && selection.stages.length === 0}
+            onOverwrite={(nextChar) => {
+              const { start, end } = charRange;
+              onChangeSelection({
+                ...selection,
+                original: result.slice(0, start) + nextChar + result.slice(end),
+                stages: [],
+              });
+            }}
+          />
         ) : null}
         <div className="inspector-actions">
           <Button
