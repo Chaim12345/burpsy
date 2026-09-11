@@ -24,6 +24,7 @@ import {
  cookiesOf,
  eolOf,
  fixContentLength,
+ hexDumpBytes,
  headerSpans,
  jsonMemberSpans,
  parseMessage,
@@ -556,5 +557,23 @@ describe("compactMessage — the Pretty write-back (burpsy-react-ui-dmf)", () =>
 
  test("a body with nothing formattable passes through untouched", () => {
   expect(compactMessage(FORM)).toBe(FORM);
+ });
+});
+
+describe("hexDumpBytes", () => {
+ test("dumps the exact bytes it is given, including non-UTF-8 ones hexDump would mangle", () => {
+  // The wire bytes of the p836 verification body: c9 e8 e8 are É è è in windows-1252, and 92 93
+  // are its curly quotes. As a JS string those bytes arrive as U+FFFD after the JSON round trip,
+  // so TextEncoder would emit EF BF BD triplets — a dump of a lie. hexDumpBytes must show the
+  // bytes themselves.
+  const wire = new Uint8Array([0xc9, 0xe8, 0xe8, 0x20, 0x63, 0x61, 0x66, 0x65, 0x20, 0x92, 0x93]);
+  const dump = hexDumpBytes(wire);
+  expect(dump).toContain("c9 e8 e8");
+  expect(dump).toContain("92 93");
+  expect(dump).not.toContain("efbfbd");
+  expect(dump).not.toContain("ef bf bd");
+  // Non-printable bytes show as "." in the ASCII gutter.
+  const lines = dump.split("\n");
+  expect(lines[0]).toBe("00000000  c9 e8 e8 20 63 61 66 65  20 92 93                 |... cafe ..|");
  });
 });

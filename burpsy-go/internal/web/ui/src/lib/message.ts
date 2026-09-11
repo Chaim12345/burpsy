@@ -350,22 +350,29 @@ function prettyMarkup(input: string): string {
 
 /** Classic 16-byte-per-line dump with an ASCII gutter, like Burp's Hex view. */
 export function hexDump(input: string): string {
-  const bytes = new TextEncoder().encode(input);
-  const lines: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 16) {
-    const slice = bytes.subarray(offset, offset + 16);
-    const hex: string[] = [];
-    let ascii = "";
-    for (let i = 0; i < 16; i++) {
-      const byte = slice[i];
-      hex.push(byte === undefined ? "  " : byte.toString(16).padStart(2, "0"));
-      if (byte !== undefined) ascii += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : ".";
-    }
-    const left = hex.slice(0, 8).join(" ");
-    const right = hex.slice(8).join(" ");
-    lines.push(`${offset.toString(16).padStart(8, "0")}  ${left}  ${right}  |${ascii}|`);
+ return hexDumpBytes(new TextEncoder().encode(input));
+}
+
+/** hexDump over bytes the caller already holds. The charset work (burpsy-react-ui-p836) needs
+ *  this: for a non-UTF-8 body `input` has already been through a UTF-8 round trip that replaced
+ *  every byte >= 0x80 with U+FFFD, and re-encoding that string dumps EF BF BD triplets where the
+ *  wire bytes belong — a hex view that lies about the bytes is worse than no hex view. */
+export function hexDumpBytes(bytes: Uint8Array): string {
+ const lines: string[] = [];
+ for (let offset = 0; offset < bytes.length; offset += 16) {
+  const slice = bytes.subarray(offset, offset + 16);
+  const hex: string[] = [];
+  let ascii = "";
+  for (let i = 0; i < 16; i++) {
+   const byte = slice[i];
+   hex.push(byte === undefined ? "  " : byte.toString(16).padStart(2, "0"));
+   if (byte !== undefined) ascii += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : ".";
   }
-  return lines.length ? lines.join("\n") : "(empty)";
+  const left = hex.slice(0, 8).join(" ");
+  const right = hex.slice(8).join(" ");
+  lines.push(`${offset.toString(16).padStart(8, "0")}  ${left}  ${right}  |${ascii}|`);
+ }
+ return lines.length ? lines.join("\n") : "(empty)";
 }
 
 /** The body alone, for the Render view's sandboxed iframe. */

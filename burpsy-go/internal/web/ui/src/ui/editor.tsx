@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, hexDump, isResponse, prettyMessage } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, hexDumpBytes, isResponse, parseMessage, prettyMessage } from "../lib/message";
 import { breakGlyphs, byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
 import {
  base64Decode,
@@ -374,6 +374,14 @@ export function HttpEditor({
  // copy, which a dialog with a copy affordance serves. Cleared on close.
  const [conversionResult, setConversionResult] = useState<undefined | { label: string; output: string }>(undefined);
 
+ // Burp's message-editor character-set control (burpsy-react-ui-p836): "Recognize automatically
+ // based on message headers", "Use the platform default" (UTF-8, this editor's behaviour before
+ // this control existed), "Display as raw bytes", "Use a specific character set" — and "The
+ // charset encoding options only apply to the message body." State only; see charsetLabel below
+ // for how each maps to an actual decode.
+ const [charsetMode, setCharsetMode] = useState<"utf-8" | "auto" | "raw-bytes" | "custom">("utf-8");
+ const [customCharset, setCustomCharset] = useState("windows-1252");
+
  const editable = !readOnly && Boolean(onChange);
  // The search spec this editor last auto-scrolled for. Outside the useMemo because the
  // listener closes over it; per-editor, so two editors do not fight over one marker.
@@ -480,6 +488,95 @@ export function HttpEditor({
   return `data:${contentType};base64,${btoa(binary)}`;
  }, [contentType, value, bodyBase64]);
 
+ // The body's exact octets, regardless of which branch of messageView.Body64 produced them.
+ // body_base64 IS the answer for a non-UTF-8 body — the only case the server ever sends it, per
+ // its own doc on why. For a UTF-8-valid body it is absent, but that absence is itself proof the
+ // body round-trips exactly through `value`: text that decoded as valid UTF-8 server-side and
+ // survived JSON re-encodes to identical bytes on re-encode. Either way this recovers the real
+ // wire bytes without a second request — which is what makes the specific-charset control below
+ // possible with no server change at all.
+ const bodyBytes = useMemo(() => {
+  if (!views) return null;
+  let body: Uint8Array;
+  if (bodyBase64) {
+   try {
+    const binary = atob(bodyBase64);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    body = out;
+   } catch {
+    return null;
+   }
+  } else {
+   body = new TextEncoder().encode(bodyOf(value));
+  }
+  const head = new TextEncoder().encode(value.slice(0, parseMessage(value).bodyOffset));
+  const full = new Uint8Array(head.length + body.length);
+  full.set(head, 0);
+  full.set(body, head.length);
+  return full;
+ }, [views, bodyBase64, value]);
+
+ // Whether TextDecoder recognises a label at all. An unsupported one (a typo, a legacy code page
+ // nothing implements) is refused rather than silently falling back to UTF-8 — the same "refuse
+ // rather than guess" rule api_toolkit.go's decodeLayer follows for an unknown encoding name.
+ const supportsCharset = useCallback((label: string): boolean => {
+  try {
+   new TextDecoder(label);
+   return true;
+  } catch {
+   return false;
+  }
+ }, []);
+
+ // Burp's "Recognize automatically based on message headers": the `charset` parameter off
+ // Content-Type, when the header names one this runtime can actually decode.
+ const headerCharset = useMemo(() => {
+  const match = /charset\s*=\s*"?([^;"\s]+)"?/i.exec(contentType);
+  const label = match?.[1]?.toLowerCase() ?? "";
+  return label && supportsCharset(label) ? label : "";
+ }, [contentType, supportsCharset]);
+
+ const charsetLabel =
+  charsetMode === "utf-8"
+   ? "utf-8"
+   : charsetMode === "raw-bytes"
+    ? // Burp calls this "ASCII", but true ASCII cannot represent a byte >= 0x80 at all. ISO-8859-1
+      // maps every one of the 256 byte values to its own code point with no loss and no
+      // substitution, which is what "one glyph per byte" actually requires.
+      "iso-8859-1"
+    : charsetMode === "auto"
+     ? headerCharset || "utf-8"
+     : customCharset.trim().toLowerCase();
+
+ const charsetError =
+  charsetMode === "custom" && customCharset.trim() !== "" && !supportsCharset(charsetLabel)
+   ? `"${customCharset.trim()}" is not a character set this browser can decode`
+   : null;
+
+ // Active means "showing something other than what `value` already carries" — which restricts
+ // the editor to a single read-only view below, so this is also the flag that keeps that
+ // restriction off by default (charsetMode starts at "utf-8", today's only behaviour).
+ const charsetActive = views && charsetMode !== "utf-8" && !charsetError;
+
+ const decodedBody = useMemo(() => {
+  if (!charsetActive || !bodyBytes) return null;
+  try {
+   return new TextDecoder(charsetLabel, { fatal: false }).decode(bodyBytes);
+  } catch {
+   return null;
+  }
+ }, [charsetActive, bodyBytes, charsetLabel]);
+
+ // The full message re-rendered for display: the head untouched (headers are always ASCII-safe
+ // wire syntax; Burp's own doc says the charset options apply to the body only) plus the body
+ // reinterpreted under the chosen charset. Never fed back through onChange — see the editor's
+ // forced read-only state below for why editing stays off while this is showing.
+ const charsetOverride = useMemo(() => {
+  if (!charsetActive || decodedBody === null) return null;
+  return value.slice(0, parseMessage(value).bodyOffset) + decodedBody;
+ }, [charsetActive, decodedBody, value]);
+
  // Pretty is only offered when it would actually change something.
  const prettied = useMemo(() => (views ? prettyMessage(value) : value), [views, value]);
  const canPretty = views && prettied !== value;
@@ -492,17 +589,23 @@ export function HttpEditor({
  const jwt = useMemo(() => (views ? findJwts(value) : null), [views, value]);
  const params = useMemo(() => (views ? paramsOf(value) : null), [views, value]);
 
- const available: MessageView[] = views
-  ? ([
-   ...(canPretty ? ["pretty"] : []),
-   "raw",
-   "hex",
-   ...(renderable ? ["render"] : []),
-   ...(graphql ? ["graphql"] : []),
-   ...(jwt && jwt.tokens.length ? ["jwt"] : []),
-   ...(params && params.rows.length ? ["params"] : []),
-  ] as MessageView[])
-  : [];
+ const available: MessageView[] = !views
+  ? []
+  : charsetActive
+   ? // Pretty/Render/GraphQL/JWT/Params all assume the platform-default decoding of `value`; showing
+     // them unchanged while the operator has deliberately asked to view the body under a different
+     // charset would look like the charset applied everywhere when it only applies to Raw. Hex stays
+     // — it is a byte-exact view the charset choice was never about.
+     (["raw", "hex"] as MessageView[])
+   : ([
+    ...(canPretty ? ["pretty"] : []),
+    "raw",
+    "hex",
+    ...(renderable ? ["render"] : []),
+    ...(graphql ? ["graphql"] : []),
+    ...(jwt && jwt.tokens.length ? ["jwt"] : []),
+    ...(params && params.rows.length ? ["params"] : []),
+   ] as MessageView[]);
 
  // Resolve the active view. The "raw" initial state means "the operator has not
  // chosen yet", and for an unchosen editor a formattable body opens on Pretty —
@@ -522,7 +625,10 @@ export function HttpEditor({
   : !pickedRef.current && canPretty
    ? "pretty"
    : "raw";
- const shown = active === "pretty" ? prettied : value;
+ // Raw is the one view the charset override actually changes — Hex always shows the true bytes
+ // (the override never reaches this variable when active is "hex"), and Pretty/Render/GraphQL/
+ // JWT/Params are simply not offered while charsetActive (see `available` above).
+ const shown = active === "pretty" ? prettied : active === "raw" && charsetActive ? (charsetOverride ?? value) : value;
  // Refreshed every render, before any plugin constructor or update can run: the EOL plugin
  // names breaks off the raw text (CM6 normalises CRLF away in the document), and reading it
  // here keeps `value` out of the extensions useMemo deps - which would otherwise rebuild the
@@ -531,8 +637,12 @@ export function HttpEditor({
  rawTextRef.current = shown;
  // What the toolbar's Copy hands over. Hex still copies a dump — that is what an
  // operator pasting into a ticket wants, and it is why message.ts's read-only
- // hexDump did not go away when the view became editable.
- const clipboard = active === "pretty" ? prettied : active === "hex" ? hexDump(value) : value;
+ // hexDump did not go away when the view became editable. Raw under a charset override copies
+ // what is actually on screen, matching every other "what you see is what exports" surface in
+ // this codebase (History and Organizer's CSV exports both follow the same rule).
+ const hexDumpText = useMemo(() => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""), [active, bodyBytes, value]);
+ const clipboard =
+  active === "pretty" ? prettied : active === "hex" ? hexDumpText : active === "raw" && charsetActive ? (charsetOverride ?? value) : value;
 
  // A Hex selection handed to the Raw view. The byte range is mapped to a character
  // range on the way, because the two views index the same message differently.
@@ -758,6 +868,35 @@ export function HttpEditor({
        }
       />
      ) : null}
+     {/* Burp's message-editor character-set control (burpsy-react-ui-p836), settings/ui/message-
+              editor.html: "The charset encoding options only apply to the message body." Gated on
+              `views` like Pretty/GraphQL/JWT/Params — a payload blob with no head/body split has
+              nothing for this control to mean. */}
+     {views ? (
+      <select
+       className="input select"
+       aria-label={`${label} character set`}
+       title="How the message body is decoded for display. Headers are always shown as captured."
+       value={charsetMode}
+       onChange={(event) => setCharsetMode(event.target.value as typeof charsetMode)}
+       style={{ maxWidth: "11ch" }}
+      >
+       <option value="utf-8">Platform default</option>
+       <option value="auto">Recognize automatically</option>
+       <option value="raw-bytes">Raw bytes</option>
+       <option value="custom">Specific charset…</option>
+      </select>
+     ) : null}
+     {views && charsetMode === "custom" ? (
+      <input
+       className="input"
+       aria-label="Specific character set"
+       title="A charset name your browser's TextDecoder recognises, e.g. windows-1252, shift_jis, iso-8859-15"
+       value={customCharset}
+       onChange={(event) => setCustomCharset(event.target.value)}
+       style={{ maxWidth: "14ch" }}
+      />
+     ) : null}
      {/* Wrapping is a CodeMirror setting, so the toggle is offered only on the two
               views CodeMirror renders. It used to be hidden for Render alone, which left
               a dead control on Hex. */}
@@ -825,6 +964,7 @@ export function HttpEditor({
      ) : active === "hex" ? (
       <HexEditor
        value={shown}
+       bytes={bodyBytes ?? undefined}
        onChange={editable ? onChange : undefined}
        label={label}
        onRevealInRaw={
@@ -862,14 +1002,19 @@ export function HttpEditor({
         // never silently grows to the pretty layout. A mid-edit JSON parse
         // failure passes the operator's text through untouched, and Raw then
         // shows precisely what they typed.
-        active === "pretty" && editable
-         ? (next) => onChange?.(compactMessage(next))
-         : active === "raw"
-          ? onChange
-          : undefined
+        // Never fires while charsetActive: the document on screen is the reinterpreted body,
+        // not the real bytes, and writing it back through onChange would send whatever the
+        // chosen charset happened to produce as if the operator had typed it.
+        charsetActive
+         ? undefined
+         : active === "pretty" && editable
+          ? (next) => onChange?.(compactMessage(next))
+          : active === "raw"
+           ? onChange
+           : undefined
        }
-       editable={editable && (active === "raw" || active === "pretty")}
-       readOnly={!(editable && (active === "raw" || active === "pretty"))}
+       editable={editable && !charsetActive && (active === "raw" || active === "pretty")}
+       readOnly={!(editable && !charsetActive && (active === "raw" || active === "pretty"))}
        height="100%"
        theme={editorTheme}
        extensions={extensions}
@@ -935,6 +1080,15 @@ export function HttpEditor({
    {editable && active !== "raw" && active !== "hex" && active !== "pretty" ? (
     <div className="editor-note">
      Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back.
+    </div>
+   ) : null}
+   {charsetError ? (
+    <div className="editor-note">{charsetError} — showing the platform default instead.</div>
+   ) : charsetActive ? (
+    <div className="editor-note">
+     Raw is showing the body decoded as {charsetLabel}. Hex still shows the true bytes, but editing and the
+     Pretty/Render/GraphQL/JWT/Params views are off while a character set override is active — switch back
+     to "Platform default" to use them again.
     </div>
    ) : null}
   </div>
