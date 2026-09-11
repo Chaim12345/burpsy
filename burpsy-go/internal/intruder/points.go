@@ -13,6 +13,8 @@ package intruder
 import (
 	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -280,7 +282,7 @@ func FindPoints(msg *core.StoredMessage, cfg *PointConfig) []InsertionPoint {
 			// JSON fields (and base64/XML nested inside body values) come from the
 			// scanner's enumerator — see points_bcheck.go for why Intruder keeps
 			// exactly one body-container parser.
-			out = appendJSONAndNestedPoints(raw, msg, body, out)
+			out = appendJSONAndNestedPoints(raw, msg, body, raw[body.Offset:body.End()], out)
 		}
 		if cfg.EntireBody {
 			out = append(out, InsertionPoint{
@@ -383,6 +385,23 @@ func ApplyAll(raw []byte, places []ApplyPlace) []byte {
 		cursor = s.end
 	}
 	out = append(out, raw[cursor:]...)
+
+	// A chunked request's body is a sequence of size-prefixed chunks, and the
+	// splices above changed the bytes inside one of them. Every size before the
+	// spliced chunk still describes its data exactly; the spliced chunk's size
+	// is the only one that can be stale, and rewriteChunkedBody restates each
+	// size against the bytes it precedes — the same walk dechunk runs on the
+	// way in (rrm6). It also drops a stale Content-Length: with
+	// Transfer-Encoding: chunked the chunk stream frames the body, and a
+	// Content-Length counting the pre-splice bytes is the framing disagreement
+	// a smuggling probe is built to surface. Our own attack request is kept to
+	// one honest framing rather than two contradictory ones.
+	if shape, err := core.Parse(raw, core.DirectionRequest); err == nil {
+		if te := headerSpan(raw, shape, "transfer-encoding"); te != nil &&
+			bytes.Contains(bytes.ToLower(raw[te.Offset:te.End()]), []byte("chunked")) {
+			return rewriteChunkedBody(raw, out)
+		}
+	}
 	return fixContentLength(out)
 }
 
@@ -422,6 +441,140 @@ func fixContentLength(raw []byte) []byte {
 	out = append(out, newVal...)
 	out = append(out, raw[min(hdr.End(), len(raw)):]...)
 	return out
+}
+
+// rewriteChunkedBody re-emits the spliced request's chunked body with honest
+// chunk sizes, and drops a Content-Length that no longer describes the body.
+//
+// The size lines in `out` are stale: exactly one chunk — the one a splice
+// landed in — has a size that no longer counts the bytes following it, so a
+// walk that trusted those sizes would measure every later chunk from the wrong
+// place. The walk is therefore anchored in `base`, the pre-splice request,
+// whose sizes are all honest: each base chunk's data span is located from
+// base's own size lines, then the same span is measured in `out` — identical
+// bytes for untouched chunks (only absolute offsets moved by the earlier
+// splices), one payload longer or shorter for the spliced chunk. The fresh
+// size is computed from what `out` actually holds, which is the whole repair.
+//
+// Content-Length is dropped when present: with Transfer-Encoding: chunked the
+// chunk stream frames the body, and a Content-Length counting the pre-splice
+// bytes is precisely the framing disagreement a smuggling probe is built to
+// surface. An attack request keeps one honest framing rather than two
+// contradictory ones.
+func rewriteChunkedBody(base, out []byte) []byte {
+	shape, err := core.Parse(base, core.DirectionRequest)
+	if err != nil {
+		return out
+	}
+	bodyStart := shape.Body.Offset
+	head := base[:bodyStart]
+
+	// The head is byte-identical between base and out — every splice lands
+	// inside the body — so out's body starts at the same offset. Rebuild the
+	// head, minus Content-Length, and track how its length moved so the body
+	// walk can translate offsets between the two frames.
+	sb := make([]byte, 0, len(out)+16)
+	sb = append(sb, head...)
+	delta := 0
+	if cl := headerSpan(base, shape, "content-length"); cl != nil {
+		lineStart := cl.Offset
+		for lineStart > 0 && head[lineStart-1] != '\n' {
+			lineStart--
+		}
+		lineEnd := cl.End()
+		for lineEnd < bodyStart && head[lineEnd] != '\n' {
+			lineEnd++
+		}
+		if lineEnd < bodyStart {
+			lineEnd++ // the '\n'
+		}
+		sb = sb[:lineStart]
+		sb = append(sb, head[lineEnd:]...)
+		delta = len(sb) - bodyStart
+	}
+
+	baseBody := base[bodyStart:]
+	outBody := out[bodyStart:]
+	bcur, ocur := 0, 0
+	for {
+		nl := bytes.IndexByte(baseBody[bcur:], '\n')
+		if nl < 0 {
+			// No more chunk headers: keep out's remaining bytes verbatim.
+			sb = append(sb, outBody[ocur:]...)
+			break
+		}
+		line := strings.TrimSpace(string(baseBody[bcur : bcur+nl]))
+		sizeHex := line
+		if i := strings.IndexByte(line, ';'); i >= 0 {
+			sizeHex = line[:i]
+		}
+		size, err := strconv.ParseUint(sizeHex, 16, 64)
+		if err != nil || size == 0 || uint64(len(baseBody)-(bcur+nl+1)) < size {
+			// Terminal chunk, truncated stream, or not a chunk header at all.
+			// No splice can live past this point — points are refused outside
+			// chunk data — so the tail is byte-identical modulo the shift.
+			sb = append(sb, outBody[ocur:]...)
+			break
+		}
+		dataStart := bcur + nl + 1
+		dataEnd := dataStart + int(size)
+		oLineStart := bcur + delta
+		oDataStart := dataStart + delta
+		// The spliced chunk's data in out: base's data with every splice that
+		// landed inside it already applied. Its length is whatever separates
+		// out's data start from the first byte of out's copy of the NEXT
+		// base line — but simpler and exact: out's body is base's body with
+		// the splices applied, so the next chunk header in out begins at
+		// (nextBaseHeader + deltaAfter), where deltaAfter accumulates each
+		// chunk's size change. Track it as we go.
+		nextNl := bytes.IndexByte(baseBody[dataEnd:], '\n')
+		var oDataEnd int
+		if nextNl < 0 {
+			oDataEnd = len(outBody)
+		} else {
+			oDataEnd = dataEnd + delta + nextNl
+			// oDataEnd currently points at out's next size line's newline;
+			// walk back over the CR to the end of out's data.
+			for oDataEnd > oDataStart && (outBody[oDataEnd-1] == '\n' || outBody[oDataEnd-1] == '\r') {
+				oDataEnd--
+			}
+		}
+		newSize := oDataEnd - oDataStart
+		if newSize < 0 {
+			sb = append(sb, outBody[ocur:]...)
+			break
+		}
+		// Emit: out's bytes up to the size line (excluding the old size text),
+		// then the fresh size, then the CRLF that ended base's size line, then
+		// out's data, then the CRLF that follows it.
+		sb = append(sb, outBody[ocur:oLineStart]...)
+		sb = append(sb, strconv.FormatInt(int64(newSize), 16)...)
+		sb = append(sb, baseBody[bcur+nl:dataStart]...) // the original "\r\n" of the size line
+		sb = append(sb, outBody[oDataStart:oDataEnd]...)
+		// chunk-terminating CRLF: in base it sits at dataEnd..(dataEnd+2 when CRLF).
+		sepEnd := dataEnd
+		for sepEnd < len(baseBody) && (baseBody[sepEnd] == '\r' || baseBody[sepEnd] == '\n') {
+			sepEnd++
+		}
+		oSepEnd := sepEnd + delta
+		sb = append(sb, outBody[oDataEnd:oSepEnd]...)
+		bcur = sepEnd
+		ocur = oSepEnd
+		// Accumulate this chunk's size change into the running offset delta.
+		delta += newSize - int(size)
+	}
+	return sb
+}
+
+// headerSpan returns the span of the first header named name, or nil.
+func headerSpan(raw []byte, shape core.MessageShape, name string) *core.Span {
+	for _, h := range shape.Headers {
+		if nameEq(raw, h.Name, name) {
+			vv := h.Value
+			return &vv
+		}
+	}
+	return nil
 }
 
 // ---- span helpers ------------------------------------------------------------------------

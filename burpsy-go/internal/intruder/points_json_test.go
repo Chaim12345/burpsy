@@ -1,6 +1,7 @@
 package intruder
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
@@ -180,6 +181,162 @@ func TestJSONPointsAppearBeforeEntireBody(t *testing.T) {
 	if lastJSON > entire {
 		t.Errorf("entire_body at %d precedes json points at %d..%d; fixed order broken", entire, firstJSON, lastJSON)
 	}
+}
+
+// rrm6: a chunked JSON body's insertion point must cover the value it names,
+// not the chunk header that precedes it. The enumerator dechunks before
+// enumerating, so its windows are relative to the decoded stream while
+// Intruder's spans are absolute into the raw wire bytes; the two frames only
+// agree when the body is not chunked. Both framings are asserted side by
+// side, and ApplyAll must produce a well-formed request: the chunk sizes must
+// count the bytes that actually follow them, and a stale Content-Length must
+// not sit beside Transfer-Encoding claiming a different body length.
+func TestChunkedJSONBodyPointsMatchContentLengthBody(t *testing.T) {
+	jsonBody := []byte(`{"a":"secret"}`)
+	clRaw := "POST /api HTTP/1.1\r\nHost: t.test\r\nContent-Type: application/json\r\nContent-Length: " +
+		strconv.Itoa(len(jsonBody)) + "\r\n\r\n" + string(jsonBody)
+
+	chunked := chunkedBody(jsonBody)
+	chRaw := "POST /api HTTP/1.1\r\nHost: t.test\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked
+
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{"content-length", clRaw},
+		{"chunked", chRaw},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := storeReq(t, tc.raw)
+			pts := FindPoints(m, DefaultPointConfig())
+			var a *InsertionPoint
+			for i := range pts {
+				if pts[i].Kind == PointBodyJSONValue && pts[i].Label == "a" {
+					a = &pts[i]
+				}
+			}
+			if a == nil {
+				t.Fatalf("no body_json_value point named \"a\"")
+			}
+			// The window covers the value's content without its quotes: both
+			// framings must name the same six bytes.
+			got := string(m.Raw()[a.Span.Offset : a.Span.Offset+a.Span.Len])
+			if got != "secret" {
+				t.Errorf("point \"a\" window is %q, want %q — span %+v", got, "secret", a.Span)
+			}
+			out := ApplyAll(m.Raw(), []ApplyPlace{{Point: a, Payload: []byte("PAYLOAD")}})
+
+			// The wire body carries framing, so the JSON document is asserted
+			// on the decoded bytes in both branches; the framing itself is
+			// asserted separately per branch below.
+			var body []byte
+			if tc.name == "chunked" {
+				decoded, ok := testDechunk(bodyOf(out))
+				if !ok {
+					t.Fatalf("spliced chunk stream does not parse: %q", bodyOf(out))
+				}
+				body = decoded
+			} else {
+				body = bodyOf(out)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(body, &doc); err != nil {
+				t.Fatalf("spliced body is not valid JSON: %v\n%s", err, out)
+			}
+			if v, ok := doc["a"].(string); !ok || v != "PAYLOAD" {
+				t.Errorf("spliced body is %q, want {\"a\":\"PAYLOAD\"}", body)
+			}
+
+			if tc.name == "chunked" {
+				// Chunk sizes must be honest: the body chunk counts exactly the
+				// bytes between its CRLF and the terminator, so dechunking the
+				// spliced wire body yields the spliced JSON and nothing else.
+				body := bodyOf(out)
+				decoded, ok := testDechunk(body)
+				if !ok {
+					t.Fatalf("spliced chunk stream does not parse: %q", body)
+				}
+				if string(decoded) != `{"a":"PAYLOAD"}` {
+					t.Errorf("dechunked spliced body is %q, want %q", decoded, `{"a":"PAYLOAD"}`)
+				}
+				// And no Content-Length may disagree with the chunk framing.
+				if cl := contentLength(out); cl != -1 {
+					t.Errorf("Content-Length %d left beside Transfer-Encoding: chunked — one framing only", cl)
+				}
+				return
+			}
+			wantCL := len(`{"a":"PAYLOAD"}`)
+			if gotCL := contentLength(out); gotCL != wantCL {
+				t.Errorf("Content-Length is %d, want %d (decoded body length)", gotCL, wantCL)
+			}
+		})
+	}
+}
+
+// TestChunkedJSONValueAcrossChunkBoundaryIsRefused pins the straddle rule: a
+// value split across two chunks has no contiguous wire span, so it must not
+// become a point at all — a splice into the middle would corrupt both chunks.
+func TestChunkedJSONValueAcrossChunkBoundaryIsRefused(t *testing.T) {
+	// "secret" is split as "se" | "cret" across the two chunks.
+	chunked := "8\r\n{\"a\":\"se\r\n6\r\ncret\"}\r\n0\r\n\r\n"
+	raw := "POST /api HTTP/1.1\r\nHost: t.test\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked
+	m := storeReq(t, raw)
+	pts := FindPoints(m, DefaultPointConfig())
+	for _, p := range pts {
+		if p.Kind == PointBodyJSONValue && p.Label == "a" {
+			window := string(m.Raw()[p.Span.Offset : p.Span.Offset+p.Span.Len])
+			t.Errorf("value split across chunks became a point spanning %q — refusal expected", window)
+		}
+	}
+}
+
+// chunkedBody wraps a body in Transfer-Encoding: chunked framing, one chunk.
+func chunkedBody(body []byte) string {
+	return strconv.FormatInt(int64(len(body)), 16) + "\r\n" + string(body) + "\r\n0\r\n\r\n"
+}
+
+// testDechunk mirrors dechunk's parse for test assertions only: it is the
+// honest check that the emitted sizes count the bytes that follow them.
+func testDechunk(body []byte) ([]byte, bool) {
+	var out []byte
+	for {
+		nl := bytes.IndexByte(body, '\n')
+		if nl < 0 {
+			return out, false
+		}
+		line := strings.TrimSpace(string(body[:nl]))
+		size, err := strconv.ParseUint(line, 16, 64)
+		if err != nil {
+			return out, false
+		}
+		body = body[nl+1:]
+		if size == 0 {
+			return out, true
+		}
+		if uint64(len(body)) < size {
+			return out, false
+		}
+		out = append(out, body[:size]...)
+		body = body[size:]
+		for len(body) > 0 && (body[0] == '\r' || body[0] == '\n') {
+			body = body[1:]
+		}
+	}
+}
+
+// contentLength reads the Content-Length header value from a serialized
+// request, or -1 when there is none.
+func contentLength(raw []byte) int {
+	for _, line := range strings.Split(string(raw), "\r\n") {
+		if strings.HasPrefix(strings.ToLower(line), "content-length:") {
+			n, err := strconv.Atoi(strings.TrimSpace(line[len("content-length:"):]))
+			if err != nil {
+				return -1
+			}
+			return n
+		}
+	}
+	return -1
 }
 
 func TestMultipartBodyGainsNoContainerPoints(t *testing.T) {
