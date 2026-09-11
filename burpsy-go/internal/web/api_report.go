@@ -79,7 +79,11 @@ func (f reportFilter) applies(finding *core.Finding, hosts []string) bool {
 	if len(f.severities) > 0 {
 		kept := false
 		for _, sev := range f.severities {
-			if finding.Severity == sev {
+			// EffectiveSeverity, not Severity: the operator's override is the severity this
+			// finding HAS. Filtering on the engine's original dropped a finding they had just
+			// raised to Critical from a ?severity=critical export, and included it in a
+			// ?severity=low one as though the triage never happened (burpsy-react-ui-5qfr).
+			if finding.EffectiveSeverity() == sev {
 				kept = true
 				break
 			}
@@ -118,10 +122,13 @@ func (s *Server) reportRows(filter reportFilter) []report.Row {
 			continue
 		}
 		row := report.Row{
-			ID:          f.ID,
-			Name:        f.Name,
-			Severity:    f.Severity.String(),
-			Confidence:  f.Confidence.String(),
+			ID:   f.ID,
+			Name: f.Name,
+			// The same values the Issues page shows (api_capture.go's findingToIssueView), for the
+			// same reason: a report is the document the triage exists to produce, so it cannot be
+			// the one surface that ignores it.
+			Severity:    f.EffectiveSeverity().String(),
+			Confidence:  f.EffectiveConfidence().String(),
 			Description: f.Description,
 			Remediation: f.Remediation,
 			Hosts:       hosts,
