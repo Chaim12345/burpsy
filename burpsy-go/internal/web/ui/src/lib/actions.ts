@@ -258,10 +258,22 @@ export function useExchangeActions(): {
   const sendToSequencer = async (exchange: Exchange) => {
    try {
     const raw = await fetchRaw(exchange.request);
+    // The response rides along when it exists (6t8): the token-location picker lists the
+    // cookies, headers and form fields actually present in it. A request with no response yet
+    // (a hand-off before any send) seeds the request alone.
+    let response: string | null = null;
+    if (exchange.response !== null) {
+     try {
+      response = await fetchRaw(exchange.response);
+     } catch {
+      response = null; // a response that cannot be read leaves the picker to the typed path
+     }
+    }
     setSequencerSeed({
      request: raw,
      target: exchangeAuthority(exchange),
      label: `#${exchange.id} ${exchange.method} ${exchange.path}`,
+     response,
     });
     setRoute("sequencer");
     toast.success(`Exchange #${exchange.id} sent to Sequencer`);

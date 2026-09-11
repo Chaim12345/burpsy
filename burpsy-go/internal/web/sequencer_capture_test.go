@@ -447,3 +447,48 @@ func TestLengthDeviationFilterDropsOutliersAndCountsThem(t *testing.T) {
 		t.Error("misses = 0; the dropped blobs must be counted, not silently vanished")
 	}
 }
+
+// The form-field token location (6t8): Burp's "Form field — Select an HTML form field value
+// from the drop-down list. You can use this method to transmit anti-CSRF tokens and other
+// per-page tokens to clients." The extractor parses, it does not regex — the operator picks a
+// name, and the surrounding HTML is this code's problem, not theirs.
+func TestTheFormFieldTokenLocationExtractsQuotedValues(t *testing.T) {
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" +
+		"<html><body><form method=\"post\">" +
+		"<input type=\"hidden\" NAME=\"csrf_token\" value=\"a1b2c3d4\">" +
+		"<input type='text' name='user' value='ignored'>" +
+		"<input type=\"hidden\" name=\"empty\" value=\"\">" +
+		"</form></body></html>")
+
+	cases := []struct {
+		name    string
+		loc     tokenLocation
+		want    string
+		wantErr string
+	}{
+		{name: "double quoted, case-insensitive name", loc: tokenLocation{Kind: "form_field", Name: "CSRF_TOKEN"}, want: "a1b2c3d4"},
+		{name: "single quoted", loc: tokenLocation{Kind: "form_field", Name: "user"}, want: "ignored"},
+		{name: "absent field names itself", loc: tokenLocation{Kind: "form_field", Name: "nonce"}, wantErr: "no form field named nonce"},
+		{name: "empty value is an error, not a token", loc: tokenLocation{Kind: "form_field", Name: "empty"}, wantErr: "empty value"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.loc.compile(); err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			got, err := tc.loc.extract(response)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("extract error = %v, want it to name %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("extract: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("extracted %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

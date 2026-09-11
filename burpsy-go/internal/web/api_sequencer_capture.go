@@ -57,7 +57,7 @@ import (
 // tokenLocation says where in a response the token lives. The operator declares it; nothing here
 // infers it.
 type tokenLocation struct {
-	// Kind is "cookie", "header" or "body_regex".
+	// Kind is "cookie", "header", "form_field" or "body_regex".
 	Kind string `json:"kind"`
 	// Name is the cookie or header name, for those two kinds. Matched case-insensitively, because
 	// header names are case-insensitive on the wire and Set-Cookie names in practice are not typed
@@ -70,6 +70,12 @@ type tokenLocation struct {
 	re *regexp.Regexp
 }
 
+// formFieldRe matches the value-bearing form controls a token travels in: input, select and
+// textarea, self-closing or not. The value attribute is captured when quoted — the only shape
+// that survives HTML's quoting rules — and the attribute run before '>' is captured so the
+// name can be matched case-insensitively without rebuilding the tag.
+var formFieldRe = regexp.MustCompile(`(?i)<(?:input|select|textarea)((?:[^>"']|"[^"]*"|'[^']*')*)value\s*=\s*("([^"]*)"|'([^']*)')`)
+
 // Describe is the location as one operator-facing line, for the task target and the capture note.
 func (loc tokenLocation) Describe() string {
 	switch strings.ToLower(loc.Kind) {
@@ -77,6 +83,8 @@ func (loc tokenLocation) Describe() string {
 		return "cookie " + loc.Name
 	case "header":
 		return "header " + loc.Name
+	case "form_field":
+		return "form field " + loc.Name
 	case "body_regex":
 		return "body /" + loc.Pattern + "/"
 	}
@@ -89,7 +97,7 @@ func (loc *tokenLocation) compile() error {
 	loc.Kind = strings.ToLower(strings.TrimSpace(loc.Kind))
 	loc.Name = strings.TrimSpace(loc.Name)
 	switch loc.Kind {
-	case "cookie", "header":
+	case "cookie", "header", "form_field":
 		if loc.Name == "" {
 			return fmt.Errorf("a %s location needs the %s name to read the token from", loc.Kind, loc.Kind)
 		}
@@ -106,9 +114,10 @@ func (loc *tokenLocation) compile() error {
 		return nil
 	case "":
 		return fmt.Errorf(`no token location given: pass {"kind":"cookie","name":"SESSIONID"}, ` +
-			`{"kind":"header","name":"X-Token"} or {"kind":"body_regex","pattern":"..."}`)
+			`{"kind":"header","name":"X-Token"}, {"kind":"form_field","name":"csrf_token"} ` +
+			`or {"kind":"body_regex","pattern":"..."}`)
 	default:
-		return fmt.Errorf("unknown token location kind %q: want cookie, header or body_regex", loc.Kind)
+		return fmt.Errorf("unknown token location kind %q: want cookie, header, form_field or body_regex", loc.Kind)
 	}
 }
 
@@ -139,6 +148,32 @@ func (loc tokenLocation) extract(response []byte) (string, error) {
 			}
 		}
 		return "", fmt.Errorf("no %s header in this response", loc.Name)
+	case "form_field":
+		// Burp's "Form field" location (6t8): the value of an input/select/textarea by name —
+		// the shape anti-CSRF and per-page tokens travel in. Parsed, not regexed, so the
+		// operator picks a name off a list instead of writing HTML-aware patterns; matched
+		// case-insensitively because HTML attribute names are case-insensitive and authors are
+		// not consistent about it.
+		name := strings.ToLower(loc.Name)
+		for _, m := range formFieldRe.FindAllSubmatch(body, -1) {
+			// m[1] = attributes between the tag name and '>'; the value landed in group 3
+			// (double-quoted) or group 4 (single-quoted), whichever matched. Name matching is
+			// case-insensitive over the attribute run because HTML attribute names are
+			// case-insensitive and authors are not consistent about quoting either.
+			attrs := strings.ToLower(string(m[1]))
+			if !strings.Contains(attrs, `name="`+name+`"`) && !strings.Contains(attrs, "name='"+name+"'") {
+				continue
+			}
+			value := strings.TrimSpace(string(m[3]))
+			if value == "" {
+				value = strings.TrimSpace(string(m[4]))
+			}
+			if value == "" {
+				return "", fmt.Errorf("form field %s has an empty value in this response", loc.Name)
+			}
+			return value, nil
+		}
+		return "", fmt.Errorf("no form field named %s in this response", loc.Name)
 	case "body_regex":
 		m := loc.re.FindSubmatch(body)
 		if m == nil {

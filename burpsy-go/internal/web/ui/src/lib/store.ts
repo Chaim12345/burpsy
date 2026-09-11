@@ -76,11 +76,14 @@ export interface IntruderSeed {
 }
 
 /** A request handed to the Sequencer's live capture (fhp): the raw bytes and the authority, so
- *  the capture starts without the operator retyping either. Mirrors IntruderSeed. */
+ *  the capture starts without the operator retyping either. Mirrors IntruderSeed. The response
+ *  rides along when one exists (6t8): the token-location picker populates from it — cookies,
+ *  headers and form fields actually present — while staying session-only like the rest. */
 interface SequencerSeed {
  request: string;
  target: string;
  label: string;
+ response: string | null;
 }
 
 /** How a grep pattern was typed: a literal to be quoted, or a regex sent as written. */

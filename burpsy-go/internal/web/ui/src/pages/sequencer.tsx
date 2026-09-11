@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleStop, Copy, Download, Pause, Play, Radio } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../lib/store";
+import { cookieOptions, formFieldOptions, headerOptions, type TokenOption } from "../lib/sequencer-token-options";
 import { copyToClipboard, downloadText } from "../lib/api";
 import {
  SEQUENCER_ENCODINGS,
@@ -362,6 +363,22 @@ export function SequencerPage(): JSX.Element {
   toast.success(`Loaded ${sequencerSeed.label} — pick the token location, then Start live capture`);
  }, [sequencerSeed, setSequencerSeed]);
 
+ // The picker's contents (6t8): the cookies, headers and form fields actually present in the
+ // response that arrived with the hand-off. Empty when the seed carried no response — the
+ // typed inputs remain the path then, exactly as before.
+ const [seedResponse, setSeedResponse] = useState<string | null>(null);
+ useEffect(() => {
+  setSeedResponse(sequencerSeed?.response ?? null);
+ }, [sequencerSeed]);
+ const locationOptions = useMemo(
+  () => ({
+   cookie: seedResponse ? cookieOptions(seedResponse) : [],
+   header: seedResponse ? headerOptions(seedResponse) : [],
+   form_field: seedResponse ? formFieldOptions(seedResponse) : [],
+  }),
+  [seedResponse],
+ );
+
  const [captureCount, setCaptureCount] = useState("100");
  const [captureDelay, setCaptureDelay] = useState("0");
  // Burp's "Number of threads" (burpsy-react-ui-9t1). Empty means sequential — the historical
@@ -608,11 +625,19 @@ export function SequencerPage(): JSX.Element {
          />
         )}
        </Field>
-       <Field label="Token location">
+       <Field
+        label="Token location"
+        hint={
+         seedResponse
+          ? "The lists below are what the handed-off response actually contains — you pick; nothing is auto-selected."
+          : "No response arrived with this capture, so the names are typed: run the request once (or Send to Sequencer from history) to populate the pickers."
+        }
+       >
         {(id) => (
          <Select id={id} value={locationKind} onChange={(event) => setLocationKind(event.target.value as TokenLocationKind)}>
           <option value="cookie">Set-Cookie value</option>
           <option value="header">Response header value</option>
+          <option value="form_field">Form field value</option>
           <option value="body_regex">Body, by pattern</option>
          </Select>
         )}
@@ -629,15 +654,35 @@ export function SequencerPage(): JSX.Element {
          )}
         </Field>
        ) : (
-        <Field label={locationKind === "cookie" ? "Cookie name" : "Header name"}>
-         {(id) => (
-          <Input
-           id={id}
-           value={locationName}
-           onChange={(event) => setLocationName(event.target.value)}
-           placeholder={locationKind === "cookie" ? "SESSIONID" : "X-Csrf-Token"}
-          />
-         )}
+        <Field
+         label={locationKind === "cookie" ? "Cookie name" : locationKind === "form_field" ? "Form field name" : "Header name"}
+         hint={
+          seedResponse
+           ? "Pick from what the response carries, or switch to free text."
+           : "Typed: no response arrived with this capture to pick from."
+         }
+        >
+         {(id) =>
+          locationOptions[locationKind].length > 0 ? (
+           <Select id={id} value={locationName} onChange={(event) => setLocationName(event.target.value)}>
+            <option value="" disabled>
+             {locationOptions[locationKind].length} found in the response — pick one
+            </option>
+            {locationOptions[locationKind].map((option: TokenOption) => (
+             <option key={option.name.toLowerCase()} value={option.name}>
+              {option.name} — {option.excerpt}
+             </option>
+            ))}
+           </Select>
+          ) : (
+           <Input
+            id={id}
+            value={locationName}
+            onChange={(event) => setLocationName(event.target.value)}
+            placeholder={locationKind === "cookie" ? "SESSIONID" : "X-Csrf-Token"}
+           />
+          )
+         }
         </Field>
        )}
        <Toolbar>

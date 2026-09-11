@@ -217,11 +217,11 @@ export interface SequencerAnalysis {
 }
 
 /** Where in a response the token lives. The operator declares it; the server never guesses. */
-export type TokenLocationKind = "cookie" | "header" | "body_regex";
+export type TokenLocationKind = "cookie" | "header" | "form_field" | "body_regex";
 
 export interface TokenLocation {
  kind: TokenLocationKind;
- /** The cookie or header name, for those two kinds. Matched case-insensitively. */
+ /** The cookie, header or form-field name, for those three kinds. Matched case-insensitively. */
  name?: string;
  /** An RE2 pattern for body_regex. Capture group 1 is the token when the pattern has one. */
  pattern?: string;
