@@ -1073,9 +1073,6 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
 			requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
 		}
-		// Same Miscellaneous request knobs as the plaintext path (5q8u/6s2).
-		requestData = s.config.options.ApplyRequestEgress(requestData)
-
 		// Intercept: hold the decrypted request before it is forwarded upstream.
 		if s.config.intercept != nil {
 			if held := s.config.intercept.Hold(intercept.ParseMessage(
@@ -1097,6 +1094,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			requestData, wsStripped = s.stripWsHandshake(requestData)
 		}
 		requestData = s.applyRequestRules(requestData)
+
+		// Same Miscellaneous request knobs as the plaintext path (5q8u/6s2), in the same
+		// after-intercept slot and for the same reason — see that site's comment
+		// (burpsy-react-ui-6keo).
+		requestData = s.config.options.ApplyRequestEgress(requestData)
 
 		// Scope decides retention, not egress: an excluded request is still
 		// forwarded, it is simply not kept. The request bytes are not stored
@@ -1448,12 +1450,6 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
 		requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
 	}
-	// The two Miscellaneous request knobs (strip Proxy-* headers, Connection: close) run
-	// after M&R and after intercept: the operator's rules and edits see the client's real
-	// bytes, and what goes upstream is what burpsy decided to send — the same invariant
-	// this site's other egress edits follow.
-	requestData = s.config.options.ApplyRequestEgress(requestData)
-
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
 	// connection without reaching upstream. heldNote/heldHighlight carry the
@@ -1494,6 +1490,21 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// The request-direction options run in the same slot, for the same reasons. See
 	// applyRequestRules.
 	requestData = s.applyRequestRules(requestData)
+
+	// The two Miscellaneous request knobs (strip Proxy-* headers, Connection: close), in the same
+	// after-intercept slot and for the same reason (burpsy-react-ui-6keo).
+	//
+	// This call used to sit ABOVE the hold, directly under a comment claiming it ran after it. With
+	// "strip Proxy-* headers" seeded ON, a held request had already lost its Proxy-Authorization
+	// and Proxy-Connection by the time the operator saw it — they could not read what the client
+	// sent, could not decide about it, and could not put it back. Intercept exists to show the
+	// client's real bytes; a transform applied before the hold is invisible and unrecoverable.
+	//
+	// The consequence, stated rather than glossed: the held request shows the client's headers,
+	// while history and the wire both show the stripped ones. Those are different questions — "what
+	// did the client send" and "what did burpsy send" — and the store runs after this line, so the
+	// recorded bytes and the forwarded bytes stay identical, which is the invariant that matters.
+	requestData = s.config.options.ApplyRequestEgress(requestData)
 
 	// Check scope
 	inScope := s.config.scope.Contains(host, port, path, false)
