@@ -807,7 +807,7 @@ function TaskDetail({
      </Card>
     </TabsContent>
 
-    <TabsContent value="events">
+    <TabsContent value="summary">
      <div className="task-detail-grid">
       <Card>
        <SectionHeading title="Findings" detail={issuesEnabled ? "What this task and the live sweep have reported so far." : "The scanner is disabled; findings below are historical."} />
