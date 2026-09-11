@@ -107,6 +107,16 @@ type route struct {
 	// with no id is not what any caller sends, and testing the bare prefix would exercise a branch no
 	// operator reaches.
 	subPath string
+	// actionPaths are the ACTION sub-paths under a subtree pattern, each with its own allowed-method
+	// set — "1/cancel": {"POST"} under "/api/tasks/". subPath alone cannot express these: one
+	// subtree can route "/api/tasks/1" to DELETE and "/api/tasks/1/cancel" to POST, and a single
+	// concrete path tests exactly one of them.
+	//
+	// This exists because that gap shipped a bug. The /api/tasks/ entry's subPath was narrowed from
+	// "{id}/cancel" to "1" in the same commit that moved cancel into an inline branch with no verb
+	// guard, so GET /api/tasks/pause answered 200 and set the suite-wide pause
+	// (burpsy-react-ui-0gg5). Naming each action path here is what makes the 405 sweep reach them.
+	actionPaths map[string][]string
 	// pathValidatedFirst marks a handler that resolves its path segment *before* checking the method,
 	// so a bogus segment answers 404 rather than 405 whatever the verb. Correct behaviour — "there is
 	// no such direction" is a truer answer than "wrong verb" — but it means the 405 test has to send a
@@ -649,6 +659,11 @@ var manifest = map[string]route{
 		// scan dialog — is classified by what the crawl does after the start, which the confirmation
 		// gate already covers at its own route.
 		methods: []string{"POST", "DELETE"}, risk: riskLocal, subPath: "1",
+		actionPaths: map[string][]string{
+			"1/cancel": {"POST"},
+			"pause":    {"POST"},
+			"resume":   {"POST"},
+		},
 		summary: "POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
 			"POST {id}/again re-runs a crawl task at its target (only crawl kind re-runs; 409 otherwise); " +
 			"DELETE {id} removes a finished task's row (a running task answers 409 — cancel first)",
@@ -918,6 +933,33 @@ func Test_every_route_rejects_a_verb_it_does_not_implement(t *testing.T) {
 		path := pattern
 		if spec.subPath != "" {
 			path = pattern + spec.subPath
+		}
+		// Each action sub-path is swept with its own allowed set, so a verb guard missing from one
+		// branch of a subtree cannot hide behind a sibling branch that has one.
+		for suffix, verbs := range spec.actionPaths {
+			actionAllowed := map[string]bool{}
+			for _, v := range verbs {
+				actionAllowed[v] = true
+			}
+			if actionAllowed[http.MethodGet] {
+				actionAllowed[http.MethodHead] = true
+			}
+			actionPath := pattern + suffix
+			for _, method := range allMethods {
+				if actionAllowed[method] || method == http.MethodOptions {
+					continue
+				}
+				t.Run(method+" "+actionPath, func(t *testing.T) {
+					req := httptest.NewRequest(method, actionPath, nil)
+					rec := httptest.NewRecorder()
+					s.mux.ServeHTTP(rec, req)
+					if rec.Code != http.StatusMethodNotAllowed {
+						t.Errorf("%s %s answered %d, want 405. This is an ACTION path: it changes state, "+
+							"so every verb it does not implement must be refused before it acts.\nbody: %s",
+							method, actionPath, rec.Code, strings.TrimSpace(rec.Body.String()))
+					}
+				})
+			}
 		}
 		for _, method := range allMethods {
 			if allowed[method] || method == http.MethodOptions {

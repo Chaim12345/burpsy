@@ -628,6 +628,16 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	} else {
 		v.AdvisoryNote = note
 	}
+	// Empty, not nil. A finding can legitimately have no occurrences — activeFinding leaves them
+	// off when the exchange has rolled out of the store, on the documented principle that no
+	// location is honest and a partial one is not — and a nil slice marshals to JSON `null`.
+	// types.attack.ts declares `occurrences: Occurrence[]`, so scanner.tsx reads `.length` on it
+	// without a guard, inside groupFindings, which runs over the WHOLE list on every render: one
+	// such finding blanked the entire Issues tab, not just its own row (burpsy-react-ui-qmlk).
+	//
+	// Newly reachable rather than theoretical: GetExchange could not fail for a live id until
+	// history gained Delete items and Clear.
+	v.Occurrences = []issueOccurrenceView{}
 	for _, occ := range f.Occurrences {
 		ex, err := s.store.ExchangeByRequest(occ.Request)
 		if err == nil {

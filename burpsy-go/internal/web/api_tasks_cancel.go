@@ -99,8 +99,25 @@ func (s *Server) taskAction(w http.ResponseWriter, r *http.Request, _ string) {
 	// state, so /api/tasks/pause and /api/tasks/resume answer for every running task at once.
 	// The count in the answer says whether anything was actually holding; pausing an empty
 	// dashboard is fine, but "paused 0 tasks" is the honest version of that reply.
+	// Every branch below changes state, so each one states its verb. The two inline branches —
+	// pause/resume and /cancel — had no guard at all, because they are handled here rather than
+	// delegated to handleTaskAgain/handleTaskDelete, which do check (burpsy-react-ui-0gg5). That
+	// made GET /api/tasks/pause answer 200 and set the suite-wide gate, so a prefetcher, a link
+	// scanner or an <img> on any page the operator visited could pause the dashboard or cancel a
+	// running task — no body, no custom header, no preflight.
+	requirePost := func() bool {
+		if r.Method == http.MethodPost {
+			return true
+		}
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
 	switch rest {
 	case "pause", "resume":
+		if !requirePost() {
+			return
+		}
 		var n int
 		if rest == "pause" {
 			n = s.tasks.PauseAll()
@@ -112,6 +129,9 @@ func (s *Server) taskAction(w http.ResponseWriter, r *http.Request, _ string) {
 	}
 	switch {
 	case strings.HasSuffix(rest, "/cancel"):
+		if !requirePost() {
+			return
+		}
 		idStr := strings.TrimSuffix(rest, "/cancel")
 		id, err := strconv.ParseUint(idStr, 10, 64)
 		if err != nil {
