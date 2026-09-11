@@ -818,9 +818,26 @@ function TaskDetail({
          value={task.kind === "live audit" ? (liveFindings ?? 0) : Number(/([\d,]+)/.exec(task.result?.summary ?? "")?.[1]?.replace(/,/g, "") ?? 0) || 0}
          detail={task.kind === "live audit" ? "live audit sweep" : "recorded by this task"}
         />
-        {task.state !== "running" ? (
-         <Metric label="Elapsed" value={formatDuration(task.elapsed_ms)} />
-        ) : null}
+        {/* burpsy-react-ui-uxi, the derivable half: requests done and the average rate are both
+            facts the task row already carries — done over elapsed seconds — so neither is invented.
+            The rate is a whole-task average, not a live window; saying so keeps it from reading as
+            an instantaneous measurement. Byte transfer is deliberately absent: nothing on any egress
+            path accounts bytes per task, and a metric nobody measures is a number somebody made up. */}
+        <Metric label="Requests" value={task.done.toLocaleString()} detail="sent by this task" />
+        <Metric
+         label="Elapsed"
+         value={formatDuration(task.elapsed_ms)}
+         detail={task.state === "running" ? "still running" : undefined}
+        />
+        <Metric
+         label="Avg throughput"
+         value={
+          task.elapsed_ms > 0
+           ? `${(task.done / (task.elapsed_ms / 1000)).toFixed(1)} req/s`
+           : "—"
+         }
+         detail="whole-task average"
+        />
        </div>
        {/* Burp's "Most serious vulnerabilities found" table. The per-task result does not
                   carry the findings themselves — the Issues page does — so the honest equivalent is
