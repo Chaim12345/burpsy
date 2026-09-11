@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleStop, Copy, Download, Pause, Play, Radio } from "lucide-react";
 import { toast } from "sonner";
+import { useApp } from "../lib/store";
 import { copyToClipboard, downloadText } from "../lib/api";
 import {
  SEQUENCER_ENCODINGS,
@@ -348,6 +349,19 @@ export function SequencerPage(): JSX.Element {
 
  const [captureTarget, setCaptureTarget] = useState("");
  const [captureRequest, setCaptureRequest] = useState("");
+ // Send to Sequencer (fhp): a hand-off from the row context menu lands here once and is
+ // consumed immediately — the seed is session-only, and a second visit to the page must not
+ // re-offer yesterday's request.
+ const sequencerSeed = useApp((state) => state.sequencerSeed);
+ const setSequencerSeed = useApp((state) => state.setSequencerSeed);
+ useEffect(() => {
+  if (!sequencerSeed) return;
+  setCaptureRequest(sequencerSeed.request);
+  setCaptureTarget(sequencerSeed.target);
+  setSequencerSeed(null);
+  toast.success(`Loaded ${sequencerSeed.label} — pick the token location, then Start live capture`);
+ }, [sequencerSeed, setSequencerSeed]);
+
  const [captureCount, setCaptureCount] = useState("100");
  const [captureDelay, setCaptureDelay] = useState("0");
  // Burp's "Number of threads" (burpsy-react-ui-9t1). Empty means sequential — the historical

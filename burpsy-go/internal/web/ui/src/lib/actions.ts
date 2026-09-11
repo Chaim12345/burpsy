@@ -19,8 +19,7 @@ import {
  ScanSearch,
  ShieldCheck,
  Terminal,
- Waypoints,
-} from "lucide-react";
+ Waypoints, Activity } from "lucide-react";
 import { toast } from "sonner";
 import { useHotkeys } from "react-hotkeys-hook";
 import { api, copyToClipboard, downloadText, json } from "./api";
@@ -185,6 +184,7 @@ function isChunked(raw: string): boolean {
 export function useExchangeActions(): {
  sendToRepeater: (exchange: Exchange) => Promise<void>;
  sendToIntruder: (exchange: Exchange) => void;
+ sendToSequencer: (exchange: Exchange) => Promise<void>;
  sendToComparer: (exchange: Exchange, slot: "a" | "b") => Promise<void>;
  addToOrganizer: (exchange: Exchange) => Promise<void>;
  copyUrl: (exchange: Exchange) => Promise<void>;
@@ -211,6 +211,7 @@ export function useExchangeActions(): {
  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
  const setRoute = useApp((state) => state.setRoute);
  const setIntruderSeed = useApp((state) => state.setIntruderSeed);
+ const setSequencerSeed = useApp((state) => state.setSequencerSeed);
  const setComparerSlot = useApp((state) => state.setComparerSlot);
  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
@@ -250,6 +251,24 @@ export function useExchangeActions(): {
   setRoute("intruder");
   toast.success(`Exchange #${exchange.id} sent to Intruder`);
  };
+
+  // Send to Sequencer (fhp): the capture needs the request bytes and the authority — exactly
+  // what the exchange carries. Fetching the raw bytes here (like sendToComparer) means the
+  // capture tab is filled on arrival, not on the sequencer page's own fetch.
+  const sendToSequencer = async (exchange: Exchange) => {
+   try {
+    const raw = await fetchRaw(exchange.request);
+    setSequencerSeed({
+     request: raw,
+     target: exchangeAuthority(exchange),
+     label: `#${exchange.id} ${exchange.method} ${exchange.path}`,
+    });
+    setRoute("sequencer");
+    toast.success(`Exchange #${exchange.id} sent to Sequencer`);
+   } catch (error) {
+    toast.error(`Could not load request bytes: ${error instanceof Error ? error.message : String(error)}`);
+   }
+  };
 
  const sendToComparer = async (exchange: Exchange, slot: "a" | "b") => {
   try {
@@ -550,6 +569,7 @@ const showResponseInBrowser = (exchange: Exchange) => {
    actions: [
     { id: "repeater", label: "Send to Repeater", icon: Repeat2, shortcut: "R", onSelect: () => void sendToRepeater(exchange) },
     { id: "intruder", label: "Send to Intruder", icon: Crosshair, shortcut: "I", onSelect: () => sendToIntruder(exchange) },
+    { id: "sequencer", label: "Send to Sequencer", icon: Activity, shortcut: "Q", onSelect: () => void sendToSequencer(exchange) },
     { id: "compare-a", label: "Send to Comparer (A)", icon: Combine, onSelect: () => void sendToComparer(exchange, "a") },
     { id: "compare-b", label: "Send to Comparer (B)", icon: ArrowRightLeft, onSelect: () => void sendToComparer(exchange, "b") },
     // Decoder is a client-side transform pipeline, so this is a seed hand-off, not a wire call.
@@ -650,6 +670,7 @@ const showResponseInBrowser = (exchange: Exchange) => {
   recordIssue,
   sendToRepeater,
   sendToIntruder,
+  sendToSequencer,
   sendToComparer,
   addToOrganizer,
   copyUrl,

@@ -75,6 +75,14 @@ export interface IntruderSeed {
  label: string;
 }
 
+/** A request handed to the Sequencer's live capture (fhp): the raw bytes and the authority, so
+ *  the capture starts without the operator retyping either. Mirrors IntruderSeed. */
+interface SequencerSeed {
+ request: string;
+ target: string;
+ label: string;
+}
+
 /** How a grep pattern was typed: a literal to be quoted, or a regex sent as written. */
 export type GrepMatchMode = "simple" | "regex";
 
@@ -259,6 +267,9 @@ interface AppState {
  closedRepeaterTabs: RepeaterTab[];
  repeaterGroups: RepeaterGroup[];
  intruderSeed: IntruderSeed | null;
+ /** The live-capture request handed over by a Send to Sequencer action, consumed once by the
+  *  page on mount (fhp). Session-only: a seed from yesterday is a request from yesterday. */
+ sequencerSeed: SequencerSeed | null;
  /** The one live Intruder attack configuration. Persisted — see IntruderConfig. */
  intruder: IntruderConfig;
  /** The last finished attack, or null when none has run. Persisted alongside its configuration:
@@ -308,6 +319,7 @@ interface AppState {
  setRepeaterTabOptions: (tabId: string, options: RepeaterSendOptions) => void;
 
  setIntruderSeed: (seed: IntruderSeed | null) => void;
+ setSequencerSeed: (seed: SequencerSeed | null) => void;
  /** Patch the attack configuration. Takes an updater so the page's field setters compose. */
  setIntruder: (next: IntruderConfig | ((current: IntruderConfig) => IntruderConfig)) => void;
  setIntruderRun: (run: IntruderRun | null) => void;
@@ -375,6 +387,7 @@ export const useApp = create<AppState>()(
    closedRepeaterTabs: [],
    repeaterGroups: [],
    intruderSeed: null,
+  sequencerSeed: null,
    intruder: emptyIntruderConfig(),
    intruderRun: null,
    intruderTab: "positions",
@@ -530,6 +543,7 @@ export const useApp = create<AppState>()(
     })),
 
    setIntruderSeed: (intruderSeed) => set({ intruderSeed }),
+   setSequencerSeed: (sequencerSeed) => set({ sequencerSeed }),
    setIntruder: (next) =>
     set((state) => ({ intruder: typeof next === "function" ? next(state.intruder) : next })),
    setIntruderRun: (intruderRun) => set({ intruderRun }),
