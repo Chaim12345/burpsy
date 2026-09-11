@@ -1104,6 +1104,25 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		// producer once it is complete. See handleHTTP.
 		inScope := s.config.scope.Contains(reqHost, reqPort, path, true)
 
+		// ...unless the operator turned "Drop all out-of-scope requests" on, which is the one
+		// setting that makes scope an egress fence as well (burpsy-react-ui-ckqx). The switch
+		// was wired into core.Scope and read by nothing on this path, so the proxy — the source
+		// of most of burpsy's traffic — forwarded excluded hosts exactly as before while the
+		// settings page reported the fence was up.
+		//
+		// Answered rather than dropped silently: a closed connection is indistinguishable from
+		// a network failure, and an operator who forgot the switch would debug the wrong thing.
+		// Same shape as the intercept drop below.
+		//
+		// Written to tlsClient, not clientConn: inside this loop the client side is the decrypted
+		// channel, and plaintext on the raw socket reaches the browser as "server gave HTTP
+		// response to HTTPS client" — a TLS error, which is the one report that would send the
+		// operator looking at certificates instead of at their scope list.
+		if !s.config.scope.AuthoriseRequest(reqHost, reqPort, path, true) {
+			tlsClient.Write(scopeDropResponse(reqHost, reqPort, path, true, s.config.scope))
+			return
+		}
+
 		// Forward over the persistent upstream connection.
 		if _, err := upstream.Write(requestData); err != nil {
 			return
@@ -1478,6 +1497,15 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 
 	// Check scope
 	inScope := s.config.scope.Contains(host, port, path, false)
+
+	// The egress half of the same question — see the TLS path for why this is answered rather
+	// than dropped on the floor. It sits before the dont_log_out_of_scope branch below because
+	// that branch forwards: a request refused at egress must not reach the origin by the
+	// retention path either.
+	if !s.config.scope.AuthoriseRequest(host, port, path, false) {
+		clientConn.Write(scopeDropResponse(host, port, path, false, s.config.scope))
+		return
+	}
 
 	// dont_log_out_of_scope decides retention, live: on (the seed) keeps the
 	// engine's always-forward-never-keep behaviour for excluded hosts, off makes
@@ -1859,6 +1887,23 @@ func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	}
 
 	return buf.Bytes()
+}
+
+// scopeDropResponse is what a client gets when "Drop all out-of-scope requests" refuses its
+// request. 403 rather than a closed connection, and the deciding rule in the body rather than an
+// empty one: this refusal comes from a setting the operator may have enabled hours ago, and the
+// difference between "burpsy refused this" and "the network failed" is the difference between a
+// five-second fix and an afternoon.
+//
+// Explain names the rule that decided, the same text the Repeater and Intruder refusals carry, so
+// one refusal is worded one way across the whole tool.
+func scopeDropResponse(host string, port uint16, path string, tls bool, scope *core.Scope) []byte {
+	body := "burpsy dropped this request: out-of-scope request handling is set to drop.\n" +
+		scope.Explain(host, port, path, tls) + "\n"
+	return []byte("HTTP/1.1 403 Forbidden\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+		"Connection: close\r\n\r\n" + body)
 }
 
 func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16) {

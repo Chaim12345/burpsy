@@ -124,8 +124,13 @@ type Scope struct {
 	allowAll bool
 	// dropOutOfScope is Burp's "Out-of-scope request handling: Drop all out-of-scope requests"
 	// (settings/project/scope.html). When set, every scope refusal becomes an egress refusal:
-	// Contains keeps its retention meaning, AuthoriseRequest/AuthoriseRaw refuse, and the proxy's
-	// MayContainHost pre-filter refuses the host before it is dialed. Seed off: the proxy has
+	// Contains keeps its retention meaning, and AuthoriseRequest — the gate the proxy relay paths
+	// ask before forwarding — refuses instead of letting the request through unrecorded.
+	//
+	// It deliberately does NOT reach MayContainHost: that is a host-level pre-filter and cannot
+	// carry a per-request decision, for the reasons its own doc comment gives. An earlier version
+	// of this comment named MayContainHost as an enforcement point, which contradicted that
+	// method and described a fence nothing had built. Seed off: the proxy has
 	// always forwarded what the browser asked for, and flipping that on upgrade would break
 	// every session mid-flight for operators who never touched the setting. Burp defaults it
 	// off for the same reason.
@@ -327,16 +332,26 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 	return !hasIncludeRule
 }
 
-// AuthoriseRequest checks if a request is authorized to be sent.
+// AuthoriseRequest reports whether a request may be ISSUED — a different question from Contains,
+// which decides whether it is RETAINED.
+//
+// The two answers differ exactly when the request is out of scope and the drop switch is off:
+// Burp's default out-of-scope handling forwards such a request and simply does not process it,
+// which is also what this proxy has always done. Turning the switch on is what collapses the two
+// answers into one, and that is the whole content of the setting.
+//
+// This is the gate for pass-through traffic. Operator-initiated tools go through AuthoriseRaw
+// instead, which refuses an out-of-scope target either way — burpsy's own stricter stance for a
+// request the operator asked it to compose, where "I did not mean to send that" is not a
+// recoverable mistake. The switch changes the wording of that refusal, not the verdict.
+//
+// It returned a bare Contains for some time, which made the switch inert everywhere it was read
+// and left the setting describing an enforcement that did not exist (burpsy-react-ui-ckqx).
 func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bool) bool {
 	if s.Contains(host, port, path, isTLS) {
 		return true
 	}
-	// With the drop switch on, a scope refusal is also an egress refusal: the request is
-	// not issued at all, which is the safety control 5j4i asks for. With it off this stays
-	// a pure Contains pass-through — retention and egress independent, the contract
-	// dont_log_out_of_scope already documents.
-	return false
+	return !s.DropOutOfScope()
 }
 
 // MayContainHost reports whether *any* path on this host could be in scope. A pre-filter, never an
