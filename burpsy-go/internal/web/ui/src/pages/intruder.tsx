@@ -1541,6 +1541,14 @@ export function IntruderPage(): JSX.Element {
         if (t === "copy_other") {
           return { type: "copy_other", position: Number(advField(i, "position", "0")) || 0 };
         }
+        if (t === "recursive_grep") {
+          return {
+            type: "recursive_grep",
+            initial: advField(i, "initial"),
+            extract_re: advField(i, "extract_re"),
+            stop_duplicate: advBool(i, "stop_duplicate", true),
+          };
+        }
         return { type: "list", items: payloadList(payloadTexts[i] ?? "") };
       });
     } else {
@@ -1890,6 +1898,7 @@ export function IntruderPage(): JSX.Element {
                             <option value="username">Username generator</option>
                             <option value="ecb_shuffler">ECB block shuffler</option>
                             <option value="copy_other">Copy other payload</option>
+                            <option value="recursive_grep">Recursive grep</option>
                           </Select>
                         )}
                       </Field>
@@ -2176,6 +2185,29 @@ export function IntruderPage(): JSX.Element {
                       >
                         {(id) => <Input id={id} type="number" min={0} value={advField(index, "position", "0")} onChange={(e) => setAdvField(index, "position", e.target.value)} />}
                       </Field>
+                    ) : t === "recursive_grep" ? (
+                      <div className="stack">
+                        <Field
+                          label="Initial payload for first request"
+                          hint="The chain starts here — the first extraction needs a response to read."
+                        >
+                          {(id) => <Input id={id} value={advField(index, "initial")} onChange={(e) => setAdvField(index, "initial", e.target.value)} placeholder="e.g. a — the first row key to enumerate" />}
+                        </Field>
+                        <Field
+                          label="Extract grep item (regex)"
+                          hint="First capture group of its match in the previous response becomes the next payload; the whole match when the pattern has no group. Capture capped at 256 bytes."
+                        >
+                          {(id) => <Input id={id} value={advField(index, "extract_re")} onChange={(e) => setAdvField(index, "extract_re", e.target.value)} placeholder="e.g. next: ([a-z]+)" />}
+                        </Field>
+                        <Checkbox
+                          checked={advBool(index, "stop_duplicate", true)}
+                          onCheckedChange={(v) => setAdvBool(index, "stop_duplicate", v)}
+                          label="Stop if duplicate payload found"
+                        />
+                        <p className="cell-dim">
+                          Runs one request at a time (each payload derives from the previous response — the server forces max_in_flight to 1, as Burp forces its resource pool for these attacks). The chain ends when the extract matches nothing, or on a duplicate if checked; the report lists every derived payload per request.
+                        </p>
+                      </div>
                     ) : null}
                   </Card>
                 );

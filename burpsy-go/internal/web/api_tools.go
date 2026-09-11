@@ -468,6 +468,13 @@ type intruderRunReq struct {
 	// unconfigured. Simple strings are case-folded unless case_sensitive; regex entries
 	// carry their own case flags, the way Go's regexp works.
 	AutoPause *autoPauseReq `json:"auto_pause"`
+	// RecursiveGrep is Burp's Recursive grep payload type (ztuu). Non-nil switches the engine to
+	// the serial chain driver: send the initial payload, extract the next from each response.
+	// The struct is the wire form of the per-position payload source {"type":"recursive_grep"}
+	// — carried as its own request field rather than only inside payload_sources because the
+	// chain has attack-level consequences (forced serial execution, unbounded-at-launch set)
+	// that belong to the run, not to one position's generator.
+	RecursiveGrep *intruder.RecursiveGrepSource `json:"recursive_grep"`
 	// URLEncode is Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the
 	// characters percent-encoded in every generated payload as the final pass, after the
 	// rule chain. Empty (or absent) means no extra encoding — matching the off state, not
@@ -958,6 +965,43 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		WithLimits(limits).
 		WithGrep(grep).
 		WithControl(control)
+	// Recursive grep (ztuu): the chain driver. Attached only when the request names it, so an
+	// ordinary attack's Run path is byte-for-byte what it always was. Two wire shapes carry the
+	// config: the explicit request field, and a per-position payload_sources entry (Burp's own
+	// shape — the payload type is chosen per position). The source form wins when both name one,
+	// because the source is what the operator saw in the payload-type menu.
+	var recursiveSource *intruder.RecursiveGrepSource
+	for _, src := range sources {
+		if src.RecursiveGrep != nil {
+			recursiveSource = src.RecursiveGrep
+			break
+		}
+	}
+	if recursiveSource != nil && req.RecursiveGrep != nil {
+		http.Error(w, "recursive_grep appears both as a payload source and as the request's recursive_grep field; send one — the two forms would compete for which chain runs",
+			http.StatusBadRequest)
+		return
+	}
+	if recursiveSource != nil {
+		req.RecursiveGrep = recursiveSource
+	}
+	if req.RecursiveGrep != nil {
+		re, err := regexp.Compile(req.RecursiveGrep.ExtractRe)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("recursive_grep: extract pattern does not compile: %v", err), http.StatusBadRequest)
+			return
+		}
+		attack.WithRecursive(&intruder.RecursiveGrep{Re: re, StopDuplicate: req.RecursiveGrep.StopDuplicate})
+		// Burp forces the resource pool to max concurrent 1 for these attacks (Zsvp.Zx: the pool
+		// builder answers 1 whenever the attack uses a recursive-grep source), rather than
+		// refusing the operator's pool. Same here: the serial driver ignores concurrency by
+		// construction, so clamping is the honest action — the report then names the pool that
+		// ran at 1, and an operator who wonders why a fast pool ran serially can read this
+		// comment in the code rather than a refusal in the UI. Refusing instead would make
+		// the payload type unusable from the bundled UI, whose default max_in_flight is 10.
+		limits.MaxInFlight = 1
+		limits.Burst = 1
+	}
 	// Auto-pause (burpsy-react-ui-8f2): compiled once, refused here if an expression does
 	// not compile — an auto-pause that silently never fires is a control that lies by
 	// omission, the same rule the grep patterns follow.
@@ -1026,7 +1070,13 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		rows := make([]AttemptView, 0, len(report.Attempts))
 		for _, a := range report.Attempts {
 			payload := ""
-			if pl := payloadsAt(plan, resolved, a.Ordinal); len(pl) > 0 {
+			if len(report.ChainPayloads) > 0 {
+				// The recursive chain (ztuu): plan arithmetic cannot name a response-derived
+				// payload, so the driver recorded it — read the record instead of the plan.
+				if a.Ordinal < len(report.ChainPayloads) {
+					payload = report.ChainPayloads[a.Ordinal]
+				}
+			} else if pl := payloadsAt(plan, resolved, a.Ordinal); len(pl) > 0 {
 				payload = pl[0]
 			}
 			rows = append(rows, AttemptView{
@@ -1053,10 +1103,21 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// (internal/intruder/engine.go), so this does not unbound the response (burpsy-react-ui-fvx).
 	seenOrdinal := make(map[int]bool, len(report.Buckets)+len(report.Attempts))
 	examples := make([]BucketExample, 0, len(report.Buckets)+len(report.Attempts))
+	// For the recursive chain (ztuu), the plan cannot name the payloads — the driver recorded
+	// them per ordinal (report.ChainPayloads), and every example reads that record instead.
+	examplePayloads := func(ordinal int) []string {
+		if len(report.ChainPayloads) > 0 {
+			if ordinal < len(report.ChainPayloads) {
+				return []string{report.ChainPayloads[ordinal]}
+			}
+			return []string{}
+		}
+		return payloadsAt(plan, resolved, ordinal)
+	}
 	for _, b := range report.Buckets {
 		examples = append(examples, BucketExample{
 			FirstOrdinal: b.FirstOrdinal,
-			Payloads:     payloadsAt(plan, resolved, b.FirstOrdinal),
+			Payloads:     examplePayloads(b.FirstOrdinal),
 		})
 		seenOrdinal[b.FirstOrdinal] = true
 	}
@@ -1065,7 +1126,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seenOrdinal[a.Ordinal] = true
-		if pl := payloadsAt(plan, resolved, a.Ordinal); len(pl) > 0 {
+		if pl := examplePayloads(a.Ordinal); len(pl) > 0 {
 			examples = append(examples, BucketExample{FirstOrdinal: a.Ordinal, Payloads: pl})
 		}
 	}

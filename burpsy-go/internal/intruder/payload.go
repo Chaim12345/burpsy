@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -210,6 +211,36 @@ type PayloadSource struct {
 	// Custom iterator live in — not a transform applied after some other type generated
 	// something.
 	CopyOther *CopyOtherSource
+	// RecursiveGrep (ztuu) is Burp's Recursive grep: the payload for request N+1 is extracted
+	// from the response to request N, so a chain follows dependent values (CSRF tokens,
+	// sequential DB enumeration) without a pre-resolved list. It is a PayloadSource variant
+	// because Burp offers it in the same per-position payload-type menu — but unlike every
+	// other variant, Resolve cannot produce the set: the payloads do not exist until the
+	// responses do. Resolve returns the one-payload set holding Initial, and the engine's
+	// recursive driver (Run's recursive branch, engine.go) owns the chain from there. The
+	// obvious alternative — resolving at launch by pre-sending the whole chain — is refused
+	// because it would replay the target out of order and record nothing the operator could
+	// pause or stop mid-chain.
+	RecursiveGrep *RecursiveGrepSource
+}
+
+// RecursiveGrepSource is the configuration for {"type":"recursive_grep"}.
+//
+// Field names follow Burp's own three settings (payload-types.html): Initial payload for first
+// request, Extract grep item, Stop if duplicate payload found. The extract item here is a single
+// regex with the same convention Grep.extract already holds — first capture group, or the whole
+// match when the pattern has no group — capped at MAX_EXTRACT, which is Burp's own default
+// maximum capture length (100) made one byte-budget across both features.
+type RecursiveGrepSource struct {
+	// Initial is the payload for the first request. The chain starts here because the first
+	// extraction needs a response to read.
+	Initial string `json:"initial"`
+	// ExtractRe is the regex whose match in the previous response becomes the next payload.
+	ExtractRe string `json:"extract_re"`
+	// StopDuplicate is Burp's "Stop if duplicate payload found": stop when the extracted payload
+	// equals the one just sent — "the same payload is derived twice in succession. This
+	// normally indicates that the exercise is complete."
+	StopDuplicate bool `json:"stop_duplicate"`
 }
 
 // ListSource is the items for {"type":"list"}.
@@ -452,6 +483,12 @@ func (s *PayloadSource) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		s.CopyOther = &c
+	case "recursive_grep":
+		var rg RecursiveGrepSource
+		if err := json.Unmarshal(b, &rg); err != nil {
+			return err
+		}
+		s.RecursiveGrep = &rg
 	default:
 		return fmt.Errorf("unknown payload source type %q", probe.Type)
 	}
@@ -645,6 +682,22 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		// that reaches here anyway gets a named refusal, not a payload set that pretends to mean
 		// something on its own.
 		return nil, fmt.Errorf("copy_other has no generator of its own; it must be resolved by the caller against the position it names")
+	case "recursive_grep":
+		if s.RecursiveGrep == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "recursive_grep"}
+		}
+		if s.RecursiveGrep.ExtractRe == "" {
+			return nil, fmt.Errorf("recursive_grep: extract_re is empty — there is no way to derive the second payload, so the chain would stop after the first request")
+		}
+		if _, err := regexp.Compile(s.RecursiveGrep.ExtractRe); err != nil {
+			return nil, fmt.Errorf("recursive_grep: extract pattern does not compile: %w", err)
+		}
+		// The set holds the initial payload only; the chain is the engine's. Total is inexact
+		// because the chain length is unknown until the responses arrive — an exact-looking 1
+		// would make the report claim the attack had one payload when the plan's bound (the
+		// operator's max_requests) is the real ceiling.
+		items = []string{s.RecursiveGrep.Initial}
+		total, exact = 0, false
 	default:
 		return nil, fmt.Errorf("unknown payload source type %q", s.Type)
 	}

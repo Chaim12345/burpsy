@@ -233,6 +233,7 @@ export type PayloadSourceType =
   | "custom_iterator"
   | "dates"
   | "null"
+  | "recursive_grep"
   | "char_substitution"
   | "case_modification"
   | "illegal_unicode"
@@ -269,6 +270,13 @@ export interface PayloadSourceECBShuffler { type: "ecb_shuffler"; sample: string
  * doc and api_tools.go's handleIntruderRun for why cluster bomb cannot honour this exactly.
  */
 export interface PayloadSourceCopyOther { type: "copy_other"; position: number }
+/**
+ * Burp's Recursive grep (ztuu): the payload for request N+1 is extracted from the response to
+ * request N. The server runs the chain serially (max_in_flight forced to 1, as Burp forces its
+ * resource pool for these attacks) and the report carries the derived payloads per ordinal in
+ * `chain_payloads` — the payload set itself holds only the initial value.
+ */
+export interface PayloadSourceRecursiveGrep { type: "recursive_grep"; initial: string; extract_re: string; stop_duplicate?: boolean }
 export type PayloadSource =
   | PayloadSourceList
   | PayloadSourceNumbers
@@ -284,7 +292,8 @@ export type PayloadSource =
   | PayloadSourceBitFlipper
   | PayloadSourceUsername
   | PayloadSourceECBShuffler
-  | PayloadSourceCopyOther;
+  | PayloadSourceCopyOther
+  | PayloadSourceRecursiveGrep;
 
 /**
  * What a report's counts actually describe.

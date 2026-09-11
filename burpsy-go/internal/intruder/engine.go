@@ -225,6 +225,48 @@ func (g *Grep) extract(raw []byte) (string, bool) {
 	return string(m), true
 }
 
+// RecursiveGrep is Burp's Recursive grep payload type (ztuu): the payload for request N+1 is
+// extracted from the response to request N. Ported from the decompiled original — Zm2n holds the
+// initial payload (ZLI), the previous payload (ZLj), the current one (ZL1) and the stop-on-
+// duplicate flag (ZLp); Zccc.Zt stops when the current payload is null (the extraction matched
+// nothing) or when stop-duplicate fires with current == previous; Zsvp.Zx forces the resource
+// pool to max concurrent 1 whenever the attack uses this source, because the chain is only
+// meaningful in send order — request 2's payload is derived from request 1's response.
+type RecursiveGrep struct {
+	// Re extracts the next payload from the previous response. Same convention as Grep.extract:
+	// first capture group, or the whole match when the pattern has no group; capped at
+	// MAX_EXTRACT.
+	Re *regexp.Regexp
+	// StopDuplicate stops the attack when the extracted payload equals the one just sent —
+	// Burp: "This normally indicates that the exercise is complete."
+	StopDuplicate bool
+}
+
+// extract applies Re to one response. ok=false is the chain's natural end: nothing matched, so
+// there is no next payload. This is Grep.extract's contract on a different field, not a copy of
+// it — the recursive driver feeds the result back as a payload, so an empty group hit is a real
+// "no payload" rather than a "keep the old one".
+func (rg *RecursiveGrep) extract(raw []byte) (string, bool) {
+	if rg == nil || rg.Re == nil {
+		return "", false
+	}
+	sub := rg.Re.FindSubmatch(raw)
+	if sub == nil {
+		return "", false
+	}
+	m := sub[0]
+	if rg.Re.NumSubexp() > 0 {
+		if len(sub) < 2 || sub[1] == nil {
+			return "", false
+		}
+		m = sub[1]
+	}
+	if len(m) > MAX_EXTRACT {
+		m = m[:MAX_EXTRACT]
+	}
+	return string(m), true
+}
+
 // Attack holds everything an attack needs that is not "how do I reach the network".
 type Attack struct {
 	// Base is the request every attempt starts from. Never mutated; each attempt splices a copy.
@@ -272,6 +314,10 @@ type Attack struct {
 	// AutoPause is Burp's auto-pause predicate, evaluated on every response in the same
 	// place Grep runs. Nil is unconfigured: the attack runs to its bound. See AutoPause.
 	AutoPause *AutoPause
+	// Recursive is the recursive-grep driver config (ztuu). Non-nil switches Run to the serial
+	// chain driver: the plan is not consulted, because the payloads are response-derived and
+	// therefore unknown at plan time. See RecursiveGrep.
+	Recursive *RecursiveGrep
 	// autoPaused counts trigger events. Atomic: doSend's send goroutines write it while the
 	// collector reads it for the report.
 	autoPaused atomic.Int64
@@ -324,6 +370,12 @@ func (a *Attack) WithGrep(g Grep) *Attack {
 // WithAutoPause attaches the auto-pause predicate. Nil is unconfigured.
 func (a *Attack) WithAutoPause(ap *AutoPause) *Attack {
 	a.AutoPause = ap
+	return a
+}
+
+// WithRecursive attaches the recursive-grep driver. Nil is an ordinary attack.
+func (a *Attack) WithRecursive(rg *RecursiveGrep) *Attack {
+	a.Recursive = rg
 	return a
 }
 
@@ -449,6 +501,12 @@ type AttackReport struct {
 	// themselves; non-zero says the predicate did it — the report's own account of who
 	// pressed the button.
 	AutoPaused int `json:"auto_paused"`
+	// ChainPayloads is the recursive-grep chain's payload per ordinal, set only by the chain
+	// driver (ztuu). Plan arithmetic cannot answer "what payload produced ordinal 3" for a
+	// response-derived chain — the payloads exist only because the responses did — so the
+	// driver records them as it goes and the wire view reads this instead of payloadsAt.
+	// Empty (not nil) for every plan-driven attack, so the wire shape never varies.
+	ChainPayloads []string `json:"chain_payloads"`
 }
 
 // bucketKey is the distinct-behaviour triple. hasStatus distinguishes "no response" from a
@@ -504,6 +562,9 @@ type collector struct {
 	failed       int
 	unbucketed   int
 	grepMatched  int
+	// chain is the recursive driver's payload-per-ordinal record (ztuu); nil for every
+	// plan-driven attack, which is how finish() knows to leave ChainPayloads empty.
+	chain []string
 }
 
 func newCollector(a *Attack, record RecordFn) *collector {
@@ -530,6 +591,15 @@ func newCollector(a *Attack, record RecordFn) *collector {
 		detailLimit:  a.DetailLimit,
 		maxBuckets:   mb,
 	}
+}
+
+// chainOrEmpty is the wire-shape guard for ChainPayloads: never nil, so the JSON is [] and not
+// null — the same contract the row slices already hold (newCollector's nil-slice note).
+func (c *collector) chainOrEmpty() []string {
+	if c.chain == nil {
+		return []string{}
+	}
+	return c.chain
 }
 
 // absorb folds one outcome into the running summary.
@@ -660,6 +730,9 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		AutoPaused: a.AutoPauseFired(),
 		Status:     reportStatus(a.Control), StopReason: a.Control.StopReason(),
 		Enumerated: enumerated,
+		// Empty for every plan-driven attack (nil chain), set for the recursive driver — see
+		// AttackReport.ChainPayloads.
+		ChainPayloads: c.chainOrEmpty(),
 	}
 }
 
@@ -673,6 +746,14 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	started := time.Now()
 	limiter := NewRateLimiter(&a.Limits)
 	col := newCollector(a, record)
+
+	// The recursive chain (ztuu) is a different shape of attack, not a mode of the plan: the
+	// payloads do not exist until the responses do, so there is nothing to enumerate up front
+	// and nothing to fan out — request 2 is built from request 1's response, so concurrency
+	// could only reorder a chain whose meaning depends on its order.
+	if a.Recursive != nil {
+		return runRecursive(a, send, limiter, col)
+	}
 
 	results := make(chan outcome, 64)
 	// enumerated is how many plan positions the loop actually reached. A stopped attack's report must
@@ -758,6 +839,103 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	// Read after the range loop: the driver goroutine's writes to enumerated happen-before the
 	// channel close, which happens-before the loop's exit.
 	return col.finish(a, limiter, time.Since(started), enumerated)
+}
+
+// runRecursive drives Burp's Recursive grep chain (ztuu): send the current payload, extract the
+// next from the response, repeat. Ported from Zccc.Zt's stop conditions — current payload nil
+// (the extraction matched nothing) or stop-duplicate with current == previous — and the driver
+// is serial by construction, the same constraint Burp imposes (its resource pool is forced to
+// max concurrent 1 for these attacks; Zsvp.Zx).
+//
+// Every attempt flows through the same collector, recorder, guard, limiter and control gates
+// the plan-driven loop uses, so a chain's rows, buckets, exemplars and dashboard progress are
+// indistinguishable from any other attack's — the operator's pause and stop work mid-chain.
+func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) *AttackReport {
+	started := time.Now()
+	// The initial payload is the first set's first item: Resolve put it there (payload.go), so
+	// the wire contract's "payload_sets" and the chain agree on where the chain starts.
+	if len(a.Sets) == 0 || len(a.setBytes) == 0 || len(a.setBytes[0]) == 0 {
+		// Nothing to start from. Reported as an empty, completed attack rather than an error:
+		// the caller validated the source shape before attaching the driver, and the honest
+		// answer to "what did the chain do" with no initial payload is "nothing".
+		return col.finish(a, limiter, time.Since(started), 0)
+	}
+	current := a.setBytes[0][0]
+	ordinal := 0
+	// Chained is the honest denominator: unlike a plan, the chain's length is not known until it
+	// ends, so every field the report derives from "enumerated" counts what actually ran.
+	chained := 0
+	// chainPayloads is the per-ordinal record the wire view needs (ztuu): plan arithmetic
+	// cannot name a response-derived payload, so the driver writes each one down as it goes.
+	chainPayloads := []string{}
+	for {
+		if !a.Control.gate() {
+			break
+		}
+		if a.SuiteGate != nil {
+			a.SuiteGate(context.Background())
+		}
+		if ordinal >= a.Plan.maxRequests {
+			break
+		}
+		chained++
+		chainPayloads = append(chainPayloads, string(current))
+		places := make([]ApplyPlace, 0, len(a.Points))
+		payloads := make([][]byte, 0, len(a.Points))
+		for i := range a.Points {
+			places = append(places, ApplyPlace{Point: &a.Points[i], Payload: current})
+			payloads = append(payloads, current)
+		}
+		permit := limiter.Acquire()
+		req := ApplyAll(a.Base, places)
+		if a.Guard != nil {
+			if err := a.Guard(req); err != nil {
+				permit.Release()
+				col.absorb(outcome{ordinal: ordinal, err: err, sentAt: time.Now()})
+				// A refused request produced no response to extract from: the chain's next
+				// payload is unknowable, and continuing with the same one would resend bytes
+				// the guard just refused. Stop, the refusal is already counted.
+				break
+			}
+		}
+		sentAt := time.Now()
+		h, err := doSend(a, limiter, send, req, payloads)
+		// Released immediately after the send, matching the plan loop's defer-permit in its
+		// goroutine (which releases the moment doSend returns): the serial driver holds one
+		// permit across exactly one request, and holding it across the extraction would
+		// deadlock the chain at max_in_flight=1 — the very limit this driver runs under.
+		permit.Release()
+		if err != nil {
+			col.absorb(outcome{ordinal: ordinal, err: err, sentAt: sentAt})
+			// Same reasoning as the guard refusal: no response, no extraction, no chain. The
+			// error is counted; a retry loop that re-derived payloads would be a different
+			// feature (Burp's retry settings, n39).
+			break
+		}
+		h.request = req
+		col.absorb(outcome{ordinal: ordinal, hit: h, sentAt: sentAt})
+		a.Control.note(true)
+
+		next, ok := a.Recursive.extract(h.raw)
+		if !ok {
+			// Zccc's first stop: the extraction matched nothing. The chain is complete, not
+			// failed — "the exercise is complete" is Burp's own reading of an extraction that
+			// stops matching.
+			break
+		}
+		if a.Recursive.StopDuplicate && string(next) == string(current) {
+			// Zccc's second stop: stop-if-duplicate. The comparison is next against the payload
+			// just sent — Zccc compares its newly-derived payload (var3, from ZL1) with the one
+			// before it (var4, ZLj) — i.e. "the same payload is derived twice in succession",
+			// not "any payload ever seen".
+			break
+		}
+		current = []byte(next)
+		ordinal++
+	}
+	a.Control.complete()
+	col.chain = chainPayloads
+	return col.finish(a, limiter, time.Since(started), chained)
 }
 
 // doSend runs one request: send, observe the limiter, ask the reflection and grep questions.
