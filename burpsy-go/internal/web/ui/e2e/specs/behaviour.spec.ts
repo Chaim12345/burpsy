@@ -657,39 +657,63 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
   const row = page.locator("tr.data-row", { hasText: "/mango/deep/path" });
   const otherRow = page.locator("tr.data-row", { hasText: "/beta" });
   await row.click();
+  const rowId = await row.locator("td").nth(1).innerText();
 
-  // The picker only exists once a row is selected — it lives in the detail pane, not the row
-  // itself, so painting a colour never costs one of the 24px rows the density budget is spent on.
-  await page.getByRole("button", { name: "Highlight row red" }).click();
-  await expect(row).toHaveClass(/row-highlight-red/);
+  try {
+   // The picker only exists once a row is selected — it lives in the detail pane, not the row
+   // itself, so painting a colour never costs one of the 24px rows the density budget is spent on.
+   await page.getByRole("button", { name: "Highlight row red" }).click();
+   await expect(row).toHaveClass(/row-highlight-red/);
 
-  // A real background fill, not the 2px inset shadow row-flag-bad/warn render as (the survey's
-  // finding this task exists to fix) — the highlighted row's cell colour must actually differ from
-  // an unhighlighted one, not just carry a class nothing paints.
-  const tinted = await row.locator("td").first().evaluate((el) => getComputedStyle(el).backgroundColor);
-  const plain = await otherRow.locator("td").first().evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(tinted, "the row-highlight-red class landed but the background did not change").not.toBe(plain);
+   // A real background fill, not the 2px inset shadow row-flag-bad/warn render as (the survey's
+   // finding this task exists to fix) — the highlighted row's cell colour must actually differ from
+   // an unhighlighted one, not just carry a class nothing paints.
+   const tinted = await row.locator("td").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+   const plain = await otherRow.locator("td").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+   expect(tinted, "the row-highlight-red class landed but the background did not change").not.toBe(plain);
 
-  await page.reload();
-  await expect(page.locator("main h1")).toHaveText(/^HTTP history/);
-  await expect(page.locator("tr.data-row", { hasText: "/mango/deep/path" })).toHaveClass(/row-highlight-red/);
+   await page.reload();
+   await expect(page.locator("main h1")).toHaveText(/^HTTP history/);
+   await expect(page.locator("tr.data-row", { hasText: "/mango/deep/path" })).toHaveClass(/row-highlight-red/);
+  } finally {
+   // Same leak class as the note below (q4i0): the store outlives the test, and a second run —
+   // a repeat, or a later test that starts comparing colours — would inherit this red. Clear it.
+   await page.request.patch(`/api/exchange/${rowId}`, { data: { highlight: "" } });
+  }
 
   expect(consoleErrors).toEqual([]);
  });
 
  test("a note on a history row shows the comment indicator", async ({ page, consoleErrors }) => {
-  await gotoRoute(page, route("history"));
+  // One shared burpsy holds one exchange store, so a note written here outlives this test —
+  // the q4i0 flake: on a repeat (or any future test reordering) /quokka still carried the
+  // first run's note and the toHaveCount(0) precondition failed. The store's own contract
+  // (PATCH /api/exchange/{id}, notes:null clears) is the cleanup: find the row's exchange id
+  // first, clear in finally, and read the indicator's absence from a noteless row either way.
   const row = page.locator("tr.data-row", { hasText: "/quokka?size=8" });
+  await gotoRoute(page, route("history"));
   await row.click();
-  await expect(row.locator(".comment-indicator")).toHaveCount(0);
 
-  const note = page.getByRole("textbox", { name: "Row note" });
-  await note.fill("came back to check this one");
-  await note.blur();
+  // The exchange id is the "#" cell of the row — the dense counter the store assigns, which is
+  // also what PATCH addresses. Read it once the row exists; a row without an id cell would be
+  // a different bug.
+  const rowId = await row.locator("td").nth(1).innerText();
 
-  await expect(row.locator(".comment-indicator")).toBeVisible();
-  // The glyph is decorative; the reason it is there is not, and that has to reach a screen reader.
-  await expect(row.locator(".comment-indicator")).toHaveAttribute("title", "Has a note");
+  try {
+   // The precondition, not the assertion: the row must start noteless, and a leftover note
+   // from an earlier run must say so rather than silently passing through the rest.
+   await expect(row.locator(".comment-indicator")).toHaveCount(0);
+
+   const note = page.getByRole("textbox", { name: "Row note" });
+   await note.fill("came back to check this one");
+   await note.blur();
+
+   await expect(row.locator(".comment-indicator")).toBeVisible();
+   // The glyph is decorative; the reason it is there is not, and that has to reach a screen reader.
+   await expect(row.locator(".comment-indicator")).toHaveAttribute("title", "Has a note");
+  } finally {
+   await page.request.patch(`/api/exchange/${rowId}`, { data: { notes: null } });
+  }
 
   expect(consoleErrors).toEqual([]);
  });
