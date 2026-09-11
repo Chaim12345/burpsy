@@ -1154,23 +1154,57 @@ func (s *Server) toolLogSetComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid log entry id", http.StatusBadRequest)
 		return
 	}
+	// Comment and Highlight are *string, not string, for the reason toolLogSetCaptureReq's Filter and
+	// Capacity (above) are already pointers: a plain string cannot tell "the caller wrote {}" apart
+	// from "the caller wrote {comment: \"\"}", and burpsy-react-ui-iyb6 was exactly that collapse — a
+	// comment-only PATCH decoded the absent highlight key as "" and SetHighlight wrote it over
+	// whatever colour the row already had. A key that is absent from the body now leaves that axis
+	// alone; a key present with "" still clears it, same as before.
 	var req struct {
-		Comment   string `json:"comment"`
-		Highlight string `json:"highlight"`
+		Comment   *string `json:"comment"`
+		Highlight *string `json:"highlight"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Highlight != "" && !core.ValidHighlights[req.Highlight] {
+	if req.Highlight != nil && *req.Highlight != "" && !core.ValidHighlights[*req.Highlight] {
 		http.Error(w, "Invalid highlight; use one of red orange yellow green cyan blue pink magenta gray or empty", http.StatusBadRequest)
 		return
 	}
-	if !s.toolLog.SetComment(id, req.Comment) {
-		http.Error(w, "No such log entry", http.StatusNotFound)
-		return
+	// SetComment and SetHighlight both refuse an unknown id on their own, and both look it up in the
+	// same entries slice — so for one id they can only ever agree on whether it exists. Each call here
+	// is gated on its own field being present, and 404s immediately rather than letting a later call
+	// paper over a bad id with an unrelated field's success.
+	if req.Comment != nil {
+		if !s.toolLog.SetComment(id, *req.Comment) {
+			http.Error(w, "No such log entry", http.StatusNotFound)
+			return
+		}
 	}
-	s.toolLog.SetHighlight(id, req.Highlight)
+	if req.Highlight != nil {
+		if !s.toolLog.SetHighlight(id, *req.Highlight) {
+			http.Error(w, "No such log entry", http.StatusNotFound)
+			return
+		}
+	}
+	if req.Comment == nil && req.Highlight == nil {
+		// Neither axis given: there is nothing to change, but a PATCH addressed at an id that does not
+		// exist must still 404 rather than silently succeed at doing nothing to nothing. ToolLog has no
+		// bare existence check — SetComment/SetHighlight fold theirs into a mutation — so this is the
+		// one path that has to look rather than set.
+		found := false
+		for _, e := range s.toolLog.All() {
+			if e.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "No such log entry", http.StatusNotFound)
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }

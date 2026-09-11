@@ -177,3 +177,97 @@ func TestToolLogHighlightRoundTripAndValidation(t *testing.T) {
 		t.Errorf("PATCH invalid highlight: status = %d, want 400", rec.Code)
 	}
 }
+
+// burpsy-react-ui-iyb6: Comment and Highlight used to be plain strings, so an absent JSON key
+// decoded to "" and was written unconditionally — a comment-only PATCH cleared whatever highlight
+// the row already carried, and a highlight-only PATCH cleared any comment. This pins both
+// directions, plus the two edge cases the pointer rewrite has to get right: an empty patch body
+// still 404s on an unknown id and is a no-op success on a known one.
+func TestToolLogPatchLeavesTheOmittedAxisAlone(t *testing.T) {
+	s := newTestServer()
+	id := s.toolLog.Record(toollog.ToolRepeater, "a.test", 80, false, "GET", "/", 200, toollog.Bytes(1), 1, "", nil)
+
+	// Seed both axes, then patch comment alone: highlight must survive.
+	seed, _ := http.NewRequest(http.MethodPatch, "/api/tools/log/"+itoa(id),
+		jsonBody(t, map[string]any{"comment": "first", "highlight": "red"}))
+	if rec := httptestRec(t, s, seed); rec.Code != http.StatusOK {
+		t.Fatalf("seed PATCH: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	commentOnly, _ := http.NewRequest(http.MethodPatch, "/api/tools/log/"+itoa(id),
+		jsonBody(t, map[string]any{"comment": "second"}))
+	if rec := httptestRec(t, s, commentOnly); rec.Code != http.StatusOK {
+		t.Fatalf("comment-only PATCH: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	entry := toolLogEntryByID(t, s, id)
+	if entry.Comment != "second" {
+		t.Errorf("comment = %q, want the new comment applied", entry.Comment)
+	}
+	if entry.Highlight != "red" {
+		t.Errorf("highlight = %q, want the seeded highlight to survive a comment-only PATCH", entry.Highlight)
+	}
+
+	// Now patch highlight alone: comment must survive in the other direction.
+	highlightOnly, _ := http.NewRequest(http.MethodPatch, "/api/tools/log/"+itoa(id),
+		jsonBody(t, map[string]any{"highlight": "blue"}))
+	if rec := httptestRec(t, s, highlightOnly); rec.Code != http.StatusOK {
+		t.Fatalf("highlight-only PATCH: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	entry = toolLogEntryByID(t, s, id)
+	if entry.Highlight != "blue" {
+		t.Errorf("highlight = %q, want the new highlight applied", entry.Highlight)
+	}
+	if entry.Comment != "second" {
+		t.Errorf("comment = %q, want the prior comment to survive a highlight-only PATCH", entry.Comment)
+	}
+
+	// An empty body on a known id changes nothing and still succeeds.
+	empty, _ := http.NewRequest(http.MethodPatch, "/api/tools/log/"+itoa(id), jsonBody(t, map[string]any{}))
+	if rec := httptestRec(t, s, empty); rec.Code != http.StatusOK {
+		t.Fatalf("empty PATCH on a known id: status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	entry = toolLogEntryByID(t, s, id)
+	if entry.Comment != "second" || entry.Highlight != "blue" {
+		t.Errorf("entry = %+v, want an empty PATCH to change nothing", entry)
+	}
+
+	// An empty body on an unknown id still 404s: "nothing to change" must not read as "found".
+	emptyMissing, _ := http.NewRequest(http.MethodPatch, "/api/tools/log/99999", jsonBody(t, map[string]any{}))
+	if rec := httptestRec(t, s, emptyMissing); rec.Code != http.StatusNotFound {
+		t.Errorf("empty PATCH on an unknown id: status = %d, want 404", rec.Code)
+	}
+}
+
+// toolLogEntryByID fetches one row's comment/highlight off the wire, the same projection every
+// consumer of /api/tools/log reads — asserting against the handler's own struct fields would prove
+// nothing about what a caller actually receives.
+func toolLogEntryByID(t *testing.T, s *Server, id uint64) struct {
+	Comment   string `json:"comment"`
+	Highlight string `json:"highlight"`
+} {
+	t.Helper()
+	rec := get(t, s, "/api/tools/log")
+	var body struct {
+		Entries []struct {
+			ID        uint64 `json:"id"`
+			Comment   string `json:"comment"`
+			Highlight string `json:"highlight"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, e := range body.Entries {
+		if e.ID == id {
+			return struct {
+				Comment   string `json:"comment"`
+				Highlight string `json:"highlight"`
+			}{Comment: e.Comment, Highlight: e.Highlight}
+		}
+	}
+	t.Fatalf("no entry with id %d in /api/tools/log", id)
+	return struct {
+		Comment   string `json:"comment"`
+		Highlight string `json:"highlight"`
+	}{}
+}
