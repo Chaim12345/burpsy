@@ -197,6 +197,7 @@ export function useExchangeActions(): {
  saveItems: (exchange: Exchange) => Promise<void>;
  copyLinks: (exchange: Exchange) => Promise<void>;
  requestInBrowser: (exchange: Exchange) => void;
+ showResponseInBrowser: (exchange: Exchange) => void;
  changeRequestMethod: (exchange: Exchange) => Promise<void>;
  changeBodyEncoding: (exchange: Exchange) => Promise<void>;
  crawlFrom: (exchange: Exchange, scope: "branch" | "host") => Promise<void>;
@@ -386,6 +387,17 @@ export function useExchangeActions(): {
   window.open(exchangeUrl(exchange), "_blank", "noopener");
   toast.info("Opened in your browser — it is captured only if that browser uses burpsy's proxy");
  };
+
+/**
+ * Burp's "Show response in browser" (burpsy-react-ui-js5y): the operator's own browser opens
+ * a URL that serves THIS exchange's stored response verbatim — relative links resolve, and
+ * the page renders as the target produced it. Unlike Open URL, nothing is re-fetched: what
+ * the browser shows is what burpsy holds, which is the point in an access-control test.
+ */
+const showResponseInBrowser = (exchange: Exchange) => {
+ window.open(`/api/exchange/in-browser/${exchange.id}`, "_blank", "noopener");
+ toast.info(`Serving the stored response of #${exchange.id} — relative links resolve against this console's origin`);
+};
 
  /** Flip GET/POST on a copy and hand it to Repeater; history rows stay immutable. */
  const changeRequestMethod = async (exchange: Exchange) => {
@@ -606,6 +618,12 @@ export function useExchangeActions(): {
     { id: "organizer", label: "Add to Organizer", icon: NotebookPen, onSelect: () => void addToOrganizer(exchange) },
     { id: "host", label: `Filter history by ${exchange.host}`, icon: FolderTree, onSelect: () => filterByHost(exchange) },
     { id: "browser", label: "Open URL in browser", icon: Globe, onSelect: () => requestInBrowser(exchange) },
+    {
+     id: "response-in-browser",
+     label: "Show response in browser",
+     icon: Globe,
+     onSelect: () => showResponseInBrowser(exchange),
+    },
    ],
   },
   {
@@ -644,6 +662,7 @@ export function useExchangeActions(): {
   copyLinks,
   saveItems,
   requestInBrowser,
+ showResponseInBrowser,
   changeRequestMethod,
   changeBodyEncoding,
   crawlFrom,

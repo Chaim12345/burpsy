@@ -275,6 +275,10 @@ var manifest = map[string]route{
 		methods: []string{"GET", "PATCH"}, risk: riskLocal, subPath: "0",
 		summary: "one exchange row by id; PATCH sets its notes and/or highlight (UX-15)",
 	},
+	"/api/exchange/in-browser/": {
+		methods: []string{"GET"}, risk: riskRead, subPath: "1",
+		summary: "one exchange's stored response replayed verbatim for Show response in browser",
+	},
 	"/api/exchanges/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "legacy alias for /api/exchange/ — kept because the Rust UI shipped against it",
