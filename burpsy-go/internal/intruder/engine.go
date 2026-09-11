@@ -39,13 +39,18 @@ package intruder
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"net"
+	"os"
 	"regexp"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 // MAX_EXTRACT is the longest grep-extract this will report.
@@ -384,6 +389,25 @@ type Attempt struct {
 	Error       *string `json:"error"`
 	GrepMatched *bool   `json:"grep_matched"`
 	GrepExtract *string `json:"grep_extract"`
+	// TimeOfDay is when this attempt was dispatched — or, for a guard refusal, when it was refused.
+	// Burp's results table carries it as its own column ("the time of day the request was made";
+	// viewing-results.html), and an attack that runs for an hour needs it to line up a row with
+	// whatever else was happening against the target at that moment. Set unconditionally, so it is
+	// never the zero time even for a row that never reached the network.
+	TimeOfDay time.Time `json:"time_of_day"`
+	// Cookies are the names Set-Cookie carried in this attempt's response — Burp: "any cookies
+	// received in the response". Names only, never values: an attack report is a document that gets
+	// pasted into tickets, and a session token belongs in the stored response (ResponseID above), not
+	// in a summary row — the same restraint intruderSessionCookies (internal/web) already holds to.
+	// Empty, never nil: see newCollector's nil-slice note, which is the same wire contract applied to
+	// a field inside each row rather than to the top-level slices.
+	Cookies []string `json:"cookies"`
+	// Timeout is true when Error above is specifically the per-request deadline expiring, rather than
+	// any other failure (connection refused, TLS failure, a guard refusal). Burp lists Timeout as a
+	// column distinct from Error for exactly this reason: a target that stalls on every Nth payload is
+	// a pattern worth seeing at a glance, and folding it into free-text error strings buries it behind
+	// having to read every row.
+	Timeout bool `json:"timeout"`
 }
 
 // AttackReport is the answer to "what happened".
@@ -448,6 +472,9 @@ type hit struct {
 	grepExtract *string
 	raw         []byte
 	request     []byte
+	// cookies are the Set-Cookie names this response carried, computed once here (doSend) so the
+	// collector never needs the raw bytes to answer Attempt.Cookies. Always non-nil.
+	cookies []string
 }
 
 // outcome is one attempt's result as the collector sees it. Guard refusals and send failures
@@ -456,6 +483,8 @@ type outcome struct {
 	ordinal int
 	hit     *hit
 	err     error
+	// sentAt is when this ordinal was dispatched or refused. See Attempt.TimeOfDay.
+	sentAt time.Time
 }
 
 // collector reduces a stream of outcomes into the report. Buckets are keyed by behaviour, not
@@ -510,7 +539,11 @@ func (c *collector) absorb(o outcome) {
 		if o.ordinal < c.detailLimit {
 			e := o.err.Error()
 			c.attempts = append(c.attempts, Attempt{
-				Ordinal: o.ordinal, Error: &e,
+				// Cookies is []string{}, not nil: a failed send never reached a response, but the
+				// field's wire contract (types.tools.ts declares Attempt.cookies non-nullable) does
+				// not get an exception for that — see the nil-slice note on newCollector.
+				Ordinal: o.ordinal, Error: &e, TimeOfDay: o.sentAt, Timeout: isTimeout(o.err),
+				Cookies: []string{},
 			})
 		}
 		c.noteError(o.ordinal, o.err.Error())
@@ -564,6 +597,7 @@ func (c *collector) absorb(o outcome) {
 			Ordinal: o.ordinal, Status: h.status, ResponseLen: h.length, DurationMS: h.durationMS,
 			Reflected: h.reflected, RequestID: requestID, ResponseID: responseID,
 			GrepMatched: h.grepMatched, GrepExtract: h.grepExtract,
+			TimeOfDay: o.sentAt, Cookies: h.cookies,
 		})
 	}
 }
@@ -684,7 +718,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			if a.Guard != nil {
 				if err := a.Guard(req); err != nil {
 					permit.Release()
-					results <- outcome{ordinal: i, err: err}
+					results <- outcome{ordinal: i, err: err, sentAt: time.Now()}
 					continue
 				}
 			}
@@ -692,16 +726,21 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			go func(ordinal int, raw []byte, payloads [][]byte, permit *Permit) {
 				defer wg.Done()
 				defer permit.Release()
+				// Captured here, not before the permit or the guard: this is the closest point to the
+				// actual send that every ordinal passes through, so it is what Attempt.TimeOfDay means
+				// by "the time of day the request was made" — a rate-limiter wait or a guard refusal
+				// must not be counted as part of it.
+				sentAt := time.Now()
 				defer func() {
 					if r := recover(); r != nil {
-						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r)}
+						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt}
 					}
 				}()
 				h, err := doSend(a, limiter, send, raw, payloads)
 				if h != nil {
 					h.request = raw
 				}
-				results <- outcome{ordinal: ordinal, hit: h, err: err}
+				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt}
 			}(i, req, payloads, permit)
 		}
 		wg.Wait()
@@ -748,11 +787,41 @@ func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [
 		a.autoPaused.Add(1)
 		a.AutoPause.ReArm()
 	}
+	// core.CookieNames is the same capture-path function the HTTP history table's Cookies column
+	// reads (internal/core/capture_fields.go) — reused rather than re-parsed here so there is one
+	// definition of "what counts as a cookie name" for a raw response, not two that could disagree.
+	// It returns nil for "no Set-Cookie", which Attempt.Cookies' wire contract does not allow.
+	cookies := core.CookieNames(sent.Raw)
+	if cookies == nil {
+		cookies = []string{}
+	}
 	return &hit{
 		status: sent.Status, length: len(sent.Raw), durationMS: sent.Duration.Milliseconds(),
 		reflected: reflected, grepMatched: grepMatched, grepExtract: grepExtract,
-		raw: sent.Raw,
+		raw: sent.Raw, cookies: cookies,
 	}, nil
+}
+
+// isTimeout reports whether err is the per-request deadline expiring, as distinct from any other
+// send failure (connection refused, TLS failure, a guard refusal). See Attempt.Timeout for why that
+// distinction is its own column rather than text inside Error.
+//
+// Checked three ways because a timeout reaches this package wrapped differently depending on the
+// path a send took: internal/sender/cancel.go's explainCancellation re-wraps a socket deadline as
+// context.DeadlineExceeded when the caller's own context expired — the ordinary case here, since
+// api_tools.go gives every send a per-request context.WithTimeout — a bare deadline can still
+// surface as the stdlib's os.ErrDeadlineExceeded sentinel, and a streamed send (sender/pipeline.go,
+// sender/h2program.go) reports a net.Error whose Timeout() is the only signal either way carries.
+// A caller asking "was this a timeout" should not have to know which path a particular send took.
+func isTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // containsBytes is bytes.Contains with the "empty needle always matches" trap removed. A zero-

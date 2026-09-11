@@ -2,6 +2,7 @@ package intruder
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -856,5 +857,144 @@ func TestAReportWithNoSendsAtAllStillMarshalsArrays(t *testing.T) {
 	}
 	if bytes.Contains(encoded, []byte(`"buckets":null`)) {
 		t.Fatalf("buckets went out as null: %s", encoded)
+	}
+}
+
+// ---- Time-of-day, Cookies, Timeout (burpsy-react-ui-c7w6) ---------------------------------------
+//
+// Burp's results table (tools/intruder/results/viewing-results.html) carries four columns burpsy's
+// Attempt never had: Time of day, Cookies, Comment and a Timeout distinct from Error. Comment has no
+// server-side row to live on (an attack report is generated once per run and never persisted; it is
+// a browser-only annotation — see intruder.tsx and intruder-export.ts), so only the other three are
+// engine fields, and these tests are what proves them wired rather than merely declared.
+
+// fakeTimeoutErr is a minimal net.Error whose Timeout() is the only thing isTimeout may consult for
+// a send that never went through a context deadline — the pipeline/h2 path's own signal.
+type fakeTimeoutErr struct{}
+
+func (fakeTimeoutErr) Error() string   { return "i/o timeout" }
+func (fakeTimeoutErr) Timeout() bool   { return true }
+func (fakeTimeoutErr) Temporary() bool { return true }
+
+func TestEveryAttemptCarriesATimeOfDayEvenWhenRefused(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := sets([]string{"ok", "blocked"})
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{2}, 100)
+
+	before := time.Now()
+	a := NewAttack(base, sel, payloads, plan).
+		WithLimits(Unthrottled(1)).
+		WithGuard(func(raw []byte) error {
+			if bytes.Contains(raw, []byte("a=blocked")) {
+				return fmt.Errorf("refused: out of scope")
+			}
+			return nil
+		})
+	r := Run(a, recordingSender(&[][]byte{}, &sync.Mutex{}, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+	after := time.Now()
+
+	if len(r.Attempts) != 2 {
+		t.Fatalf("want a row for both the sent and the refused attempt, got %d", len(r.Attempts))
+	}
+	for _, x := range r.Attempts {
+		if x.TimeOfDay.Before(before) || x.TimeOfDay.After(after) {
+			t.Fatalf("attempt %d's time_of_day %v is outside the run window [%v, %v] — a refusal must "+
+				"be timestamped too, not left at the zero time", x.Ordinal, x.TimeOfDay, before, after)
+		}
+	}
+}
+
+func TestAttemptCookiesNamesTheSetCookiesAndIsNeverNil(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := sets([]string{"with-cookie", "without"})
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{2}, 100)
+
+	sender := func(raw []byte) (Sent, error) {
+		if bytes.Contains(raw, []byte("a=with-cookie")) {
+			return Sent{
+				Raw: []byte("HTTP/1.1 200 OK\r\nSet-Cookie: sessid=abc123; Path=/\r\n" +
+					"Set-Cookie: csrf=xyz; HttpOnly\r\nContent-Length: 2\r\n\r\nok"),
+				Duration: time.Millisecond, Status: ptr(200),
+			}, nil
+		}
+		return Sent{Raw: []byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), Duration: time.Millisecond, Status: ptr(200)}, nil
+	}
+
+	a := NewAttack(base, sel, payloads, plan).WithLimits(Unthrottled(1))
+	r := Run(a, sender, nil)
+
+	if len(r.Attempts) != 2 {
+		t.Fatalf("want both rows, got %d", len(r.Attempts))
+	}
+	byOrdinal := map[int]Attempt{}
+	for _, x := range r.Attempts {
+		byOrdinal[x.Ordinal] = x
+	}
+	if got := byOrdinal[0].Cookies; fmt.Sprint(got) != "[sessid csrf]" {
+		t.Fatalf("cookies = %v, want [sessid csrf] in header order", got)
+	}
+	if got := byOrdinal[1].Cookies; got == nil || len(got) != 0 {
+		t.Fatalf("cookies = %#v, want a non-nil empty slice for a response with no Set-Cookie", got)
+	}
+
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(`"cookies":null`)) {
+		t.Fatalf("an attempt's cookies went out as null; types.tools.ts declares Attempt.cookies "+
+			"non-nullable: %s", encoded)
+	}
+}
+
+func TestTimeoutIsTrueOnlyForTheDeadlineNotForAnyOtherFailure(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := sets([]string{"deadline", "netTimeout", "refused", "guarded"})
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{4}, 100)
+
+	sender := func(raw []byte) (Sent, error) {
+		switch {
+		case bytes.Contains(raw, []byte("a=deadline")):
+			// The exact wrapping internal/sender/cancel.go's explainCancellation produces for the
+			// intruder's own per-request context.WithTimeout expiring.
+			return Sent{}, fmt.Errorf("the send exceeded its deadline: %w", context.DeadlineExceeded)
+		case bytes.Contains(raw, []byte("a=netTimeout")):
+			return Sent{}, fakeTimeoutErr{}
+		default:
+			return Sent{}, fmt.Errorf("connection failed: connection refused")
+		}
+	}
+
+	a := NewAttack(base, sel, payloads, plan).
+		WithLimits(Unthrottled(1)).
+		WithGuard(func(raw []byte) error {
+			if bytes.Contains(raw, []byte("a=guarded")) {
+				return fmt.Errorf("refused: out of scope")
+			}
+			return nil
+		})
+	r := Run(a, sender, nil)
+
+	if r.Failed != 4 {
+		t.Fatalf("failed = %d, want all four", r.Failed)
+	}
+	byOrdinal := map[int]Attempt{}
+	for _, x := range r.Attempts {
+		byOrdinal[x.Ordinal] = x
+	}
+	if !byOrdinal[0].Timeout {
+		t.Fatalf("ordinal 0 wrapped context.DeadlineExceeded and must read as a timeout: %+v", byOrdinal[0])
+	}
+	if !byOrdinal[1].Timeout {
+		t.Fatalf("ordinal 1 is a net.Error with Timeout()==true and must read as a timeout: %+v", byOrdinal[1])
+	}
+	if byOrdinal[2].Timeout {
+		t.Fatalf("ordinal 2 is a connection refusal, not a timeout: %+v", byOrdinal[2])
+	}
+	if byOrdinal[3].Timeout {
+		t.Fatalf("ordinal 3 is a guard refusal, not a timeout: %+v", byOrdinal[3])
 	}
 }
