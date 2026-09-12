@@ -1416,7 +1416,7 @@ tbody td {
 
 .layout-switch {
   display: inline-flex;
-  gap: 2px;
+  gap: 2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
   margin-left: auto;
 }
 
