@@ -137,6 +137,28 @@ export interface Exchange {
   * exchange that did not come from a listener — Repeater, Intruder, the crawler, the scanner.
   */
  listener_port: number;
+ /**
+  * Burp's three readings of a message, per direction (burpsy-react-ui-c05).
+  *
+  * A non-null id means "this reading exists *and* differs from the bytes that travelled"; null means
+  * one of two things the server deliberately does not distinguish, because the distinction does not
+  * change what the viewer should do: nothing was modified, or the reading would show the same bytes
+  * as `edited`. Either way the pane shows the row's own `request`/`response` id.
+  *
+  * Resolved server-side rather than exposed as the four raw stage ids, so the walk from "which stage
+  * was stored" to "which message holds this reading" lives in one place (`core.Exchange.VariantFor`)
+  * instead of being reimplemented here. Getting that walk wrong does not crash — it shows the
+  * client's bytes under an "Auto-modified" label, which is indistinguishable from a rule that
+  * genuinely changed nothing.
+  */
+ variants?: {
+  request_original: number | null;
+  request_auto_modified: number | null;
+  response_original: number | null;
+  response_auto_modified: number | null;
+  /** Whether either direction differs from what the peer sent — the History "Edited" column. */
+  edited: boolean;
+ };
 }
 
 export interface MessageView {

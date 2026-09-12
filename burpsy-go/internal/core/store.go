@@ -433,6 +433,181 @@ type Exchange struct {
 	// It exists because a rebindable listener and several configured listeners are both reachable
 	// now, and with neither recorded there was no way to tell which one captured a row.
 	ListenerPort uint16
+
+	// The earlier stages of this exchange's own bytes, retained so history can show what a
+	// transformation did rather than only that one happened (burpsy-react-ui-c05, under epic mrjw).
+	//
+	// # The four fields, and why the naming is "the stage that differs from the next one"
+	//
+	// Burp's Proxy history lets an operator read a message three ways — Original (what the client
+	// sent), Auto-modified (what the tool's own rules made of it) and Edited (what the operator's
+	// hand made of that, which is what actually went out). burpsy kept only the last of the three,
+	// so a Match & Replace rule's effect on real traffic was invisible; Counters.ModifiedUnrecorded
+	// is an accountability substitute for the bytes, which is how proxy.go's own comment puts it.
+	//
+	// The stages are:
+	//
+	//	stage 0  the client's bytes, after protocol normalisation only  (RequestOriginal)
+	//	stage 1  after the automatic rules                               (RequestAuto)
+	//	stage 2  after any manual edit — what went on the wire          (Request / Response)
+	//
+	// A variant is stored **only when it differs from the next stage**, and nil means "the same as
+	// the next stage". So nothing modified costs no extra message at all, an edit made by a rule and
+	// not by hand costs one, and an exchange edited both ways costs two. Storing all three
+	// unconditionally would be simpler and would be wrong here: it would multiply the resident set
+	// by three for all traffic, and this store's whole design is that the resident set does not
+	// scale with work in flight. See the package doc's "raw bytes are written once and never
+	// copied" — a variant is a second write, so it is spent only where a difference exists to
+	// describe.
+	//
+	// Reading a variant is therefore a walk backwards, which VariantFor does so no caller has to
+	// remember the rule.
+	RequestOriginal *MsgId
+	RequestAuto     *MsgId
+	// ResponseOriginal and ResponseAuto are the response's stages, on the same rule. They are
+	// pointers like Response rather than values like Request, because a response may not exist yet
+	// and "no response" must not be confusable with "response identical to the original".
+	ResponseOriginal *MsgId
+	ResponseAuto     *MsgId
+}
+
+// Variant names one of Burp's three readings of a message in history.
+//
+// It exists as a type rather than three loose accessors because the UI, the wire and the store all
+// have to agree on the same three names, and because the zero value is deliberately VariantEdited:
+// every caller that does not know about variants at all must keep getting exactly what it got
+// before, which is the bytes that travelled.
+type Variant int
+
+const (
+	// VariantEdited is the message as it went on the wire — the request after the operator's own
+	// intercept edit, the response after theirs. This is the zero value and the default view.
+	VariantEdited Variant = iota
+	// VariantOriginal is the message as the peer sent it, before any automatic rule or manual edit.
+	VariantOriginal
+	// VariantAutoModified is the message after the automatic (Match & Replace) rules and before any
+	// manual edit. With no manual edit this equals VariantEdited, and with no automatic rule it
+	// equals VariantOriginal; both fall out of the storage rule rather than needing special cases.
+	VariantAutoModified
+)
+
+// String renders a variant for the wire and for an operator. Unknown values render as "edited"
+// rather than as an empty string, because every caller that has no opinion means the wire bytes.
+func (v Variant) String() string {
+	switch v {
+	case VariantOriginal:
+		return "original"
+	case VariantAutoModified:
+		return "auto-modified"
+	default:
+		return "edited"
+	}
+}
+
+// ParseVariant reads a variant name off the wire, refusing anything it does not know rather than
+// falling back to a default: a query string asking for a view that does not exist is a caller
+// mistake, and answering it with different bytes than were asked for is how a comparison tool
+// silently compares the wrong thing.
+func ParseVariant(s string) (Variant, bool) {
+	switch s {
+	case "", "edited":
+		return VariantEdited, true
+	case "original":
+		return VariantOriginal, true
+	case "auto-modified", "automodified":
+		return VariantAutoModified, true
+	}
+	return VariantEdited, false
+}
+
+// VariantFor resolves one variant of a request or response to the message that holds it, walking
+// the stages backwards.
+//
+// The walk is the whole point of storing only the differing stages, and it is why this is one
+// method rather than four field reads at each call site: getting the order wrong here is how a
+// caller ends up showing the original bytes under the "auto-modified" label. ok is false when the
+// variant does not exist — no response for this exchange, or a request stage that was never
+// stored because nothing differed. Callers must treat that as "this variant is not available"
+// rather than substituting the edited view, or the UI would offer three tabs whose contents are
+// two lies.
+func (e *Exchange) VariantFor(direction Direction, v Variant) (MsgId, bool) {
+	if e == nil {
+		return 0, false
+	}
+	if direction == DirectionRequest {
+		switch v {
+		case VariantOriginal:
+			// stage 0, or the earliest stage that was actually written.
+			if e.RequestOriginal != nil {
+				return *e.RequestOriginal, true
+			}
+			if e.RequestAuto != nil {
+				return *e.RequestAuto, true
+			}
+			return e.Request, true
+		case VariantAutoModified:
+			if e.RequestAuto != nil {
+				return *e.RequestAuto, true
+			}
+			return e.Request, true
+		default:
+			return e.Request, true
+		}
+	}
+	switch v {
+	case VariantOriginal:
+		if e.ResponseOriginal != nil {
+			return *e.ResponseOriginal, true
+		}
+		if e.ResponseAuto != nil {
+			return *e.ResponseAuto, true
+		}
+		if e.Response == nil {
+			return 0, false
+		}
+		return *e.Response, true
+	case VariantAutoModified:
+		if e.ResponseAuto != nil {
+			return *e.ResponseAuto, true
+		}
+		if e.Response == nil {
+			return 0, false
+		}
+		return *e.Response, true
+	default:
+		if e.Response == nil {
+			return 0, false
+		}
+		return *e.Response, true
+	}
+}
+
+// HasRetainedStage reports whether this exchange kept any earlier reading of a message than the one
+// that travelled, so a caller can offer exactly the comparisons that have bytes behind them.
+//
+// A single bool rather than one per variant, because the two earlier readings appear and disappear
+// together: the storage rule writes stage 1 only where it differs from the final bytes and stage 0
+// only where it differs from stage 1, so at least one of them exists as soon as the message was
+// changed by anything at all. Which of the two a given reading resolves to is VariantFor's question,
+// and answering that one here as well is how the two answers would come to disagree.
+//
+// Derived from the stored ids rather than from a separate flag, for the same reason: a flag is a
+// second answer to a question the ids already answer.
+func (e *Exchange) HasRetainedStage(direction Direction) bool {
+	if e == nil {
+		return false
+	}
+	if direction == DirectionRequest {
+		return e.RequestOriginal != nil || e.RequestAuto != nil
+	}
+	if e.Response == nil {
+		// No response at all, so there is no earlier reading of one either. Spelled out rather than
+		// left to two nil checks on the stage ids: those are nil for an exchange whose response has
+		// not arrived *and* for one whose response arrived unmodified, and a caller that wants to
+		// distinguish those is asking about Response, not about this.
+		return false
+	}
+	return e.ResponseOriginal != nil || e.ResponseAuto != nil
 }
 
 // Source names the surface an exchange came from.

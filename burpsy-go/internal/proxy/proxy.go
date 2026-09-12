@@ -1089,9 +1089,14 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		// plain path in handleHTTP: before intercept, before the scope-gated store, so the
 		// bytes forwarded upstream equal the bytes recorded. Requests inside the tunnel
 		// already arrive origin-form, so there is no toOriginForm step to precede it here.
+		// The request's stage boundaries, by the same rule as the plaintext path's
+		// (burpsy-react-ui-c05): stage 0 after the tunnel's origin-form normalisation, stage 1 after
+		// the automatic rules and before the hold. See messageStages.
+		reqStages := messageStages{original: requestData}
 		if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
 			requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
 		}
+		reqStages.auto = requestData
 		// Intercept: hold the decrypted request before it is forwarded upstream.
 		if s.config.intercept != nil {
 			if held := s.config.intercept.Hold(intercept.ParseMessage(
@@ -1165,7 +1170,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					return
 				}
 				responseData := append(head, body...)
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime, serverIPOf(upstream)) {
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream)) {
 					return
 				}
 				continue
@@ -1187,6 +1192,12 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					Started:  startTime,
 					Duration: time.Since(startTime),
 					Protocol: core.ProtocolHTTP1,
+
+					// The handshake's request stages. No response stages: a 101 has no body and the
+					// response rules are not applied to it, so there is no earlier version of it to
+					// retain — see ws.go's note on why rewriting a handshake would break it.
+					RequestOriginal: reqStages.original,
+					RequestAuto:     reqStages.auto,
 
 					ServerIP:     serverIPOf(upstream),
 					ListenerPort: listenerPortOf(clientConn),
@@ -1225,7 +1236,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		}
 		responseData := append(head, body...)
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, inScope, responseData, startTime, serverIPOf(upstream)) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream)) {
 			return
 		}
 	}
@@ -1246,7 +1257,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 // serverIP is threaded in rather than read here: this function holds the client side of the
 // decrypted channel and not the upstream socket, and the destination address is a property of that
 // socket. Passing it keeps the answer the one the exchange actually used (burpsy-react-ui-mr4p).
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, requestData []byte, inScope bool, responseData []byte, startTime time.Time, serverIP string) bool {
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, serverIP string) bool {
+	// The response's stage boundaries, by the same rule as completeResponse's
+	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
+	// and before the hold. See messageStages.
+	respStages := messageStages{original: responseData}
 	// Apply Match & Replace on response
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
@@ -1272,6 +1287,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	} else {
 		responseData = s.applyResponseRulesUnrecorded(responseData)
 	}
+	respStages.auto = responseData
 
 	// Intercept: hold the response before it reaches the client.
 	var notes *string
@@ -1320,6 +1336,11 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 			Started:  startTime,
 			Duration: time.Since(startTime),
 			Protocol: core.ProtocolHTTP1,
+
+			RequestOriginal:  reqStages.original,
+			RequestAuto:      reqStages.auto,
+			ResponseOriginal: respStages.original,
+			ResponseAuto:     respStages.auto,
 
 			ServerIP:     serverIP,
 			ListenerPort: listenerPortOf(clientConn),
@@ -1475,9 +1496,17 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// never fire until this call existed; only DirResponse was ever applied. A body rule that
 	// changes the body length has its Content-Length corrected inside Apply when the operator
 	// enabled that toggle — the same fix intercept's forward path performs after a body edit.
+	// The request's stage boundaries (burpsy-react-ui-c05). Stage 0 is the client's bytes as they
+	// are after toOriginForm, above; stage 1 is taken directly below, after the automatic rules and
+	// before the hold, so an operator edit is what separates stage 1 from the recorded bytes. Both
+	// are handed to the recorder unconditionally — a stage identical to the next costs no bytes,
+	// and gating the capture on "M&R ran" would lose the stages of an exchange the operator edited
+	// by hand. See messageStages.
+	reqStages := messageStages{original: requestData}
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
 		requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
 	}
+	reqStages.auto = requestData
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
 	// connection without reaching upstream. heldNote/heldHighlight carry the
@@ -1570,7 +1599,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// after it are WebSocket frames, not a response body. Gated on the request,
 	// so every other request takes the identical path it always took.
 	if core.IsWsUpgradeRequest(requestData) {
-		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, startTime, wsStripped)
+		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, reqStages, startTime, wsStripped)
 		return
 	}
 
@@ -1581,7 +1610,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		return
 	}
 
-	s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime, heldNote, heldHighlight, serverIP)
+	s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, heldNote, heldHighlight, serverIP)
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1608,13 +1637,18 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // message it indexed whenever a response rule fired.
 // serverIP is threaded in for the reason handleTLSResponse's is: the upstream socket is owned and
 // closed by the forwarder, so this is the last point the address is still knowable.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, responseData []byte, startTime time.Time, heldNote, heldHighlight, serverIP string) {
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, heldNote, heldHighlight, serverIP string) {
+	// The response's stage boundaries (burpsy-react-ui-c05): stage 0 is the origin's bytes as the
+	// forwarder read them, stage 1 is after the automatic rules and before the hold. The recorded
+	// bytes are stage 2. Same rule as the request side's — see messageStages.
+	respStages := messageStages{original: responseData}
 	// Apply Match & Replace on response, then the blanket response modification
 	// rules — same order, and for the same reason, as handleTLSResponse.
 	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
 		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
 	}
 	responseData = s.applyResponseRules(responseData)
+	respStages.auto = responseData
 
 	// Intercept: hold the response for the operator before it reaches the client.
 	var notes *string
@@ -1672,6 +1706,11 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		Started:  startTime,
 		Duration: time.Since(startTime),
 		Protocol: core.ProtocolHTTP1,
+
+		RequestOriginal:  reqStages.original,
+		RequestAuto:      reqStages.auto,
+		ResponseOriginal: respStages.original,
+		ResponseAuto:     respStages.auto,
 
 		ServerIP:     serverIP,
 		ListenerPort: listenerPortOf(clientConn),

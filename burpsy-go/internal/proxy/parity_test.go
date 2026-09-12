@@ -141,6 +141,23 @@ var exchangeFieldRules = map[string]fieldRule{
 	// an invented one.
 	"ServerIP":     ruleIdentical,
 	"ListenerPort": ruleMayDiffer,
+	// The retained earlier stages of each message (burpsy-react-ui-c05). All four are ruleAbsent for
+	// ordinary traffic, and that is a claim rather than a placeholder: the exchange this test
+	// compares is modified by nothing — no Match & Replace rule is enabled and no intercept hold
+	// edits it — so stage 0, stage 1 and the recorded bytes are all the same bytes, and the storage
+	// seam drops every stage that equals the one after it (scanner.Capture.storeStages).
+	//
+	// Which makes this the assertion that guards the memory cost. The whole reason the stages are
+	// stored "only where they differ" instead of unconditionally is that this store's resident set
+	// must not scale with traffic; a producer that started retaining a copy of every untouched
+	// message would still pass every functional test in this repository while multiplying the
+	// resident set by three, and this rule is what would catch it. The crawler is the second half of
+	// the claim: it records through the same seam and passes no stages at all, so an unmodified crawl
+	// fetch and an unmodified proxied relay must both come back with nil in all four fields.
+	"RequestOriginal":  ruleAbsent,
+	"RequestAuto":      ruleAbsent,
+	"ResponseOriginal": ruleAbsent,
+	"ResponseAuto":     ruleAbsent,
 }
 
 func TestTheProxyAndTheCrawlerRecordTheSameShapeOfExchange(t *testing.T) {

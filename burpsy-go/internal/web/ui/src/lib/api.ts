@@ -203,14 +203,21 @@ export function historyToCSV(exchanges: {
  duration_ms: number;
  tls?: boolean;
  notes?: string | null;
+ /** Burp's "Edited" flag (burpsy-react-ui-c05). Optional because a caller holding an older row
+  *  shape still exports; absent reads as "not edited", which is the flag's own default. */
+ variants?: { edited: boolean };
 }[]): string {
  // Extension and Query are derived here rather than read off the row, for the same reason the
  // history table derives them: they are a property of the path, which the export already has.
  // Both doors -- this button and the desktop shell's File > Export History -- render through this
  // one helper precisely so the CSV and the table cannot disagree about what a column means.
+ //
+ // "Edited" sits next to Status rather than at the end because it belongs with the row's identity,
+ // not with the operator's annotation: an export that is read to find out which traffic a Match &
+ // Replace rule touched must not need its last column to be scrolled to.
  const headers = [
   "ID", "Timestamp", "Method", "Host", "Port", "Path", "Extension", "Query", "TLS",
-  "Status", "Length", "MIME", "Duration", "Comment",
+  "Edited", "Status", "Length", "MIME", "Duration", "Comment",
  ];
  const rows = exchanges.map((ex) => [
   ex.id,
@@ -222,6 +229,7 @@ export function historyToCSV(exchanges: {
   csvExtension(ex.path),
   csvQueryCount(ex.path),
   ex.tls === undefined ? "" : ex.tls ? "yes" : "no",
+  ex.variants?.edited ? "yes" : "no",
   ex.status ?? "",
   ex.response_len,
   ex.mime ?? "",

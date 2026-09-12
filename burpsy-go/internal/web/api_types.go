@@ -80,6 +80,54 @@ type ExchangeView struct {
 	// not come from a listener — Repeater, Intruder, the crawler, the scanner. Same reasoning as
 	// ServerIP for being unconditional (burpsy-react-ui-he81).
 	ListenerPort uint16 `json:"listener_port"`
+	// Variants says which of Burp's three readings this row can actually show, per direction, so the
+	// history viewer offers exactly the views that have bytes behind them (burpsy-react-ui-c05).
+	//
+	// Two ids, not a count or a bitmask: the UI needs to know *which* views exist, and a count of
+	// retained stages cannot tell an original-only exchange from an auto-modified-only one — the two
+	// differ in which radio button reads as the untouched bytes, which is the entire question the
+	// feature answers. Derived from the ids on the exchange rather than stored, because a stored flag
+	// is a second answer to a question the ids already answer, and the two would drift exactly the way
+	// every duplicated answer does.
+	//
+	// Present unconditionally: an exchange that retained nothing sends every field false, which is a
+	// real answer and the common one. Omitting the object would make "nothing was modified"
+	// indistinguishable from "this server does not report variants", and the UI would have to guess
+	// which of those it was looking at.
+	Variants VariantView `json:"variants"`
+}
+
+// VariantView carries, per direction, the message id to fetch for each earlier reading — or null,
+// which means "this reading is the same bytes as the edited one", so the UI shows the row's own
+// request/response id.
+//
+// Ids rather than booleans, because a boolean would answer "does this view exist" and leave the UI
+// needing the id anyway; and resolved ids rather than the four stored stage ids, because resolving
+// them is a walk (core.Exchange.VariantFor) whose rule must not be reimplemented in TypeScript —
+// getting that walk wrong is how a viewer ends up showing the original bytes under the
+// "auto-modified" label.
+//
+// The four are independent: an operator can edit a request by hand and leave the response alone,
+// which is the ordinary case for an intercept hold, so a request view and a response view disagree
+// about how many readings exist on the same row.
+type VariantView struct {
+	RequestOriginal  *uint64 `json:"request_original"`
+	RequestAuto      *uint64 `json:"request_auto_modified"`
+	ResponseOriginal *uint64 `json:"response_original"`
+	ResponseAuto     *uint64 `json:"response_auto_modified"`
+	// Edited says whether either direction differs from what the peer sent, which is what the history
+	// table's "Edited" column reads.
+	//
+	// Computed here rather than left to the UI to derive from four nullable fields, so the column and
+	// the readings cannot disagree: the rule is "this row has something to compare", and it is the
+	// same four fields the viewer offers readings for. Making the client sum them would put a second
+	// copy of that rule in TypeScript, where a fifth field added later would be missed silently — the
+	// column would simply stop counting one kind of edit.
+	//
+	// Worth having as its own field for the reason the whole feature exists: the overwhelming
+	// majority of proxied exchanges are modified by nothing, so the column's normal state is a blank
+	// cell and it must not report every row as edited.
+	Edited bool `json:"edited"`
 }
 
 // MessageView is the wire shape for a stored message: id, byte length, and a lossy UTF-8 text
@@ -186,7 +234,54 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		// uint16 on the wire so the column cannot render a negative or out-of-range port; the
 		// engine's own field is the same width for the same reason.
 		ListenerPort: ex.ListenerPort,
+		Variants:     variantView(ex),
 	}
+}
+
+// variantView resolves an exchange's earlier readings to message ids, leaving nil wherever a
+// reading is the same bytes as the edited one. See ExchangeView.Variants.
+func variantView(ex *core.Exchange) VariantView {
+	if ex == nil {
+		return VariantView{}
+	}
+	var v VariantView
+	if ex.HasRetainedStage(core.DirectionRequest) {
+		v.RequestOriginal = wireMsgID(ex, core.DirectionRequest, core.VariantOriginal)
+		v.RequestAuto = wireMsgID(ex, core.DirectionRequest, core.VariantAutoModified)
+	}
+	if ex.HasRetainedStage(core.DirectionResponse) {
+		v.ResponseOriginal = wireMsgID(ex, core.DirectionResponse, core.VariantOriginal)
+		v.ResponseAuto = wireMsgID(ex, core.DirectionResponse, core.VariantAutoModified)
+	}
+	v.Edited = v.RequestOriginal != nil || v.RequestAuto != nil ||
+		v.ResponseOriginal != nil || v.ResponseAuto != nil
+	return v
+}
+
+// wireMsgID resolves one reading to a uint64 for the wire, nil when that reading is the bytes that
+// travelled.
+//
+// The comparison against the edited id is what gives the four fields one meaning instead of two:
+// non-nil says both "this reading exists" and "it differs from the edited one", which is exactly the
+// pair of questions the viewer needs answered to decide whether to offer the reading at all. Without
+// it VariantFor's fallback would make every field non-nil on every exchange — the fallback is right
+// for a caller asking for bytes and wrong for one asking whether a comparison exists, and that
+// distinction is the whole reason this helper is separate from VariantFor.
+//
+// A row whose only change was an automatic rule reports both earlier readings at the same id, and
+// that is correct rather than a bug to smooth over: with no manual edit, the auto-modified reading
+// *is* the original reading, and both differ from the bytes that travelled.
+func wireMsgID(ex *core.Exchange, dir core.Direction, variant core.Variant) *uint64 {
+	edited, ok := ex.VariantFor(dir, core.VariantEdited)
+	if !ok {
+		return nil
+	}
+	id, ok := ex.VariantFor(dir, variant)
+	if !ok || id == edited {
+		return nil
+	}
+	v := uint64(id)
+	return &v
 }
 
 // messageView projects one stored message, with a decoded rendering beside the raw bytes when the

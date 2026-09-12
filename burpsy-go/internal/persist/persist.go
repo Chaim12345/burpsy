@@ -293,6 +293,27 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("session_rules", "scope_params", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// exchanges gained the four earlier-stage message ids (burpsy-react-ui-c05), so a Match & Replace
+	// rewrite or an intercept edit stays comparable against the bytes the peer actually sent after a
+	// restart. NULL means "this stage was not retained" — which is both "nothing differed" and "this
+	// row predates the columns", and the two read the same way on the way back in: core.Exchange's
+	// VariantFor falls through to the next stage, so a legacy row simply has one view, which is what
+	// it has always had. Restoring a NULL as anything else — pointing the original at the recorded
+	// bytes, say — would make every legacy exchange claim a comparison that was never kept.
+	//
+	// The columns hold message ids rather than bytes, for the reason every message reference in this
+	// schema does: the bytes live once, in the segment log or in `messages`, and a second copy here
+	// would be the third place the same payload is stored.
+	for _, col := range []struct{ name, decl string }{
+		{"request_original_msg", "INTEGER"},
+		{"request_auto_msg", "INTEGER"},
+		{"response_original_msg", "INTEGER"},
+		{"response_auto_msg", "INTEGER"},
+	} {
+		if err := s.addColumn("exchanges", col.name, col.decl); err != nil {
+			return err
+		}
+	}
 	// exchanges gained duration_us so that "fast" and "never measured" stop being the same row.
 	// duration_ms is a whole-millisecond count, so a sub-millisecond exchange stored 0 — exactly what an
 	// exchange nobody timed stores. NULL here means unmeasured and a number means measured, including
@@ -565,12 +586,14 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
-		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
+		  request_original_msg, request_auto_msg, response_original_msg, response_auto_msg)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
-		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title)
+		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title,
+		nullMsg(ex.RequestOriginal), nullMsg(ex.RequestAuto), nullMsg(ex.ResponseOriginal), nullMsg(ex.ResponseAuto))
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -668,7 +691,8 @@ func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
 func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
-		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title
+		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
+		        request_original_msg, request_auto_msg, response_original_msg, response_auto_msg
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -692,11 +716,20 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		var mime sql.NullString
 		var cookies []byte
 		var title sql.NullString
+		// The four stage ids, NULL-tolerant for the columns' own sake: a row written before they
+		// existed scans NULL, which reads as "this stage was not retained" — the same answer a row
+		// written by this build for an unmodified exchange carries. See the migrate note.
+		var reqOriginal, reqAuto, respOriginal, respAuto sql.NullInt64
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
-			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title); err != nil {
+			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title,
+			&reqOriginal, &reqAuto, &respOriginal, &respAuto); err != nil {
 			return nil, err
 		}
+		ex.RequestOriginal = msgIDPtr(reqOriginal)
+		ex.RequestAuto = msgIDPtr(reqAuto)
+		ex.ResponseOriginal = msgIDPtr(respOriginal)
+		ex.ResponseAuto = msgIDPtr(respAuto)
 		ex.Highlight = highlight.String
 		// NullString rather than string for the same reason source uses one: a row written before the
 		// column existed scans as NULL, and scanning NULL into a string is an error that would fail the
@@ -2017,6 +2050,16 @@ func nullMsg(id *core.MsgId) any {
 		return nil
 	}
 	return uint64(*id)
+}
+
+// msgIDPtr is nullMsg's inverse: a stored stage id back to a pointer, so NULL stays "not retained"
+// rather than becoming message 0, which is a real message.
+func msgIDPtr(id sql.NullInt64) *core.MsgId {
+	if !id.Valid {
+		return nil
+	}
+	m := core.MsgId(id.Int64)
+	return &m
 }
 
 func nullStr(s *string) any {

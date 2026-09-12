@@ -12,6 +12,7 @@ import { useApp } from "../lib/store";
 import { HIGHLIGHTS, type Exchange } from "../lib/types";
 import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
+import { availableVariants, VariantPicker, variantMessageId, type MessageVariant } from "../ui/variant-picker";
 import { Inspector } from "../ui/inspector";
 import { MessageLayoutSwitch, PageHeader, RefreshButton, SplitPane, useMessageLayout } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toolbar, Tooltip } from "../ui/primitives";
@@ -672,8 +673,92 @@ export function HistoryPage(): JSX.Element {
  // table without them — see useSendShortcuts in lib/actions.ts.
  useSendShortcuts(selected);
 
- const request = useMessage(selected?.request);
- const response = useMessage(selected?.response ?? null);
+ // Burp's three readings of each message (burpsy-react-ui-c05). Two pieces of state because the
+ // request and the response are independent: an operator can edit a held request and leave the
+ // response alone, so forcing one choice on both panes would make one of them show bytes under a
+ // label that does not describe them.
+ const [requestVariant, setRequestVariant] = useState<MessageVariant>("edited");
+ const [responseVariant, setResponseVariant] = useState<MessageVariant>("edited");
+
+ // Every selection starts on the bytes that travelled, which is the reading an operator wants by
+ // default and the only one every row has. Reset on selection change so a comparison made on one
+ // row does not silently carry to the next, where that reading may not even exist.
+ useEffect(() => {
+  setRequestVariant("edited");
+  setResponseVariant("edited");
+ }, [selectedId]);
+
+ const requestVariants = availableVariants(selected?.variants?.request_original, selected?.variants?.request_auto_modified);
+ const responseVariants = availableVariants(selected?.variants?.response_original, selected?.variants?.response_auto_modified);
+
+ // A reading the server did not resolve falls back to the bytes that travelled rather than
+ // fetching nothing, so a pane is never empty while the picker claims a reading exists.
+ const requestId = variantMessageId(selected?.request ?? null, selected?.variants?.request_original, selected?.variants?.request_auto_modified, requestVariant);
+ const responseId = variantMessageId(selected?.response ?? null, selected?.variants?.response_original, selected?.variants?.response_auto_modified, responseVariant);
+
+ const request = useMessage(requestId);
+ const response = useMessage(responseId);
+
+ // The two panes, built once and placed by whichever layout is active, so the readings and the
+ // file names cannot drift between the combined and split arrangements.
+ //
+ // The picker is wrapped *only* when there is something to compare. That keeps the common case's
+ // DOM exactly what it was — no extra element in the editor grid, no new chance of a layout
+ // regression on the rows that have nothing to show — and it is also what makes the wrapper's
+ // presence meaningful rather than decorative.
+ const renderPane = (
+  label: string,
+  options: MessageVariant[],
+  value: MessageVariant,
+  onChange: (next: MessageVariant) => void,
+  editor: JSX.Element,
+ ): JSX.Element =>
+  options.length < 2 ? (
+   editor
+  ) : (
+   <div className="reading-pane">
+    <VariantPicker label={label} options={options} value={value} onChange={onChange} />
+    {editor}
+   </div>
+  );
+
+ // Gated on a selection because the panes are built on every render while the detail block renders
+ // only when something is selected, and actions.menu wants a row.
+ const requestPane = selected ? (
+  renderPane(
+   "Request",
+   requestVariants,
+   requestVariant,
+   setRequestVariant,
+   <HttpEditor
+    label="Request"
+    readOnly
+    value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+    filename={`exchange-${selected.id}-request-${requestVariant}.txt`}
+    menuGroups={actions.menu(selected)}
+   />,
+  )
+ ) : null;
+ const responsePane = selected ? (
+  renderPane(
+   "Response",
+   responseVariants,
+   responseVariant,
+   setResponseVariant,
+   <HttpEditor
+    label="Response"
+    readOnly
+    value={
+     selected.response === null
+      ? "No response was captured for this exchange."
+      : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+    }
+    bodyBase64={response.data?.body_base64}
+    filename={`exchange-${selected.id}-response-${responseVariant}.txt`}
+    menuGroups={actions.menu(selected)}
+   />,
+  )
+ ) : null;
 
  // The note field mirrors the selected row's own copy — see organizer.tsx's identical comment on
  // its own draft state — but reset only on a selection change, not on every background refetch, so
@@ -885,6 +970,23 @@ export function HistoryPage(): JSX.Element {
     },
    },
    {
+    // Burp's "Edited" column (burpsy-react-ui-c05): a row whose request or response differs from
+    // what the peer sent. The badge is the same fact the reading picker makes available in the
+    // detail pane, in the form you can scan down — which is how an operator finds the traffic a
+    // Match & Replace rule actually touched instead of reasoning about which rows it *should* have.
+    //
+    // The empty state is the table's own `—` rather than a blank cell, because every other column
+    // reads that way and a column that was silently empty would look like a field this build had
+    // forgotten to populate. What stands out on the rows that carry something is the badge, which
+    // is the point: the unedited majority is the background this column is read against.
+    id: "edited",
+    header: "Edited",
+    size: 76,
+    accessorFn: (row: Exchange) => row.variants?.edited ?? false,
+    cell: (info) =>
+     info.getValue<boolean>() ? <Badge tone="warn">edited</Badge> : <span className="cell-dim">—</span>,
+   },
+   {
     accessorKey: "response_len",
     header: "Length",
     size: 84,
@@ -989,50 +1091,16 @@ export function HistoryPage(): JSX.Element {
        <TabsTrigger value="response">Response</TabsTrigger>
       </TabsList>
       <TabsContent value="request" className="tabs-fill">
-       <HttpEditor
-        label="Request"
-        readOnly
-        value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
-        filename={`exchange-${selected.id}-request.txt`}
-        menuGroups={actions.menu(selected)}
-       />
+       {requestPane}
       </TabsContent>
       <TabsContent value="response" className="tabs-fill">
-       <HttpEditor
-        label="Response"
-        readOnly
-        value={
-         selected.response === null
-          ? "No response was captured for this exchange."
-          : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
-        }
-        bodyBase64={response.data?.body_base64}
-        filename={`exchange-${selected.id}-response.txt`}
-        menuGroups={actions.menu(selected)}
-       />
+       {responsePane}
       </TabsContent>
      </Tabs>
     ) : (
      <>
-      <HttpEditor
-       label="Request"
-       readOnly
-       value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
-       filename={`exchange-${selected.id}-request.txt`}
-       menuGroups={actions.menu(selected)}
-      />
-      <HttpEditor
-       label="Response"
-       readOnly
-       value={
-        selected.response === null
-         ? "No response was captured for this exchange."
-         : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
-       }
-       bodyBase64={response.data?.body_base64}
-       filename={`exchange-${selected.id}-response.txt`}
-       menuGroups={actions.menu(selected)}
-      />
+      {requestPane}
+      {responsePane}
      </>
     )}
     {inspector ? (

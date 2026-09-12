@@ -178,7 +178,7 @@ func wsStripNote(removed []string) *string {
 // instead, so a refused upgrade is handled exactly like any other response.
 // strippedExtensions carries whatever stripWsHandshake removed from the request,
 // so the exchange can say the handshake was rewritten.
-func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, startTime time.Time, strippedExtensions []string) {
+func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, reqStages messageStages, startTime time.Time, strippedExtensions []string) {
 	upstream, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return
@@ -204,7 +204,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 			return
 		}
 		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime, "", "", serverIPOf(upstream))
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, "", "", serverIPOf(upstream))
 		return
 	}
 
@@ -231,6 +231,14 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 		Started:  startTime,
 		Duration: time.Since(startTime),
 		Protocol: core.ProtocolHTTP1,
+
+		// The handshake's request stages, so an operator can see what a Match & Replace rule or
+		// their own intercept edit did to the handshake (burpsy-react-ui-c05). No response stages:
+		// the 101 head is recorded as the origin sent it, because the response rules deliberately
+		// do not run against an upgrade — see the note above on why rewriting a handshake would
+		// break it, and there is therefore no earlier version of it to retain.
+		RequestOriginal: reqStages.original,
+		RequestAuto:     reqStages.auto,
 
 		ServerIP:     serverIPOf(upstream),
 		ListenerPort: listenerPortOf(clientConn),

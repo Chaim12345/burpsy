@@ -31,6 +31,7 @@
 package scanner
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -90,6 +91,19 @@ type CapturedExchange struct {
 	// Request and Response are the exact bytes sent and received.
 	Response []byte
 	Request  []byte
+	// RequestOriginal and RequestAuto are the request's earlier stages (burpsy-react-ui-c05), and
+	// ResponseOriginal and ResponseAuto the response's — see core.Exchange's four fields for what a
+	// stage is and for the rule that a variant is written only where it differs from the next one.
+	//
+	// Nil is the common case and means "nothing differed", so a producer that never touches bytes
+	// passes nothing and stores nothing extra. Record enforces the rule rather than trusting the
+	// producer: a stage equal to the one after it is not written, because the difference between
+	// two identical byte slices is not information and paying a second copy of every unmodified
+	// message to record "nothing changed" would undo the store's whole cost model.
+	RequestOriginal  []byte
+	RequestAuto      []byte
+	ResponseOriginal []byte
+	ResponseAuto     []byte
 	// Started is when the request went out and Duration how long the exchange took; both are
 	// carried rather than measured here, because Record runs after the fact.
 	//
@@ -199,6 +213,13 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 	if err != nil {
 		return nil, fmt.Errorf("capture: storing the request: %w", err)
 	}
+	// The earlier stages, walked forward so each is compared against the stage that follows it —
+	// which is the rule the store reads back with (core.Exchange.VariantFor). A failure to store an
+	// *extra* copy is reported but never fatal: the exchange's own bytes are already committed, and
+	// losing a variant costs the operator a comparison view, whereas refusing the exchange would
+	// cost them the traffic. The error is returned only for the request/response themselves.
+	reqOriginal, reqAuto := c.storeStages("request", x.RequestOriginal, x.RequestAuto, x.Request, core.DirectionRequest)
+
 	respID, err := c.Store.Put(x.Response, core.DirectionResponse)
 	if err != nil {
 		// The request is already in the message log, which is append-only and has no retraction. That
@@ -207,9 +228,16 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// nothing will read it as a completed exchange.
 		return nil, fmt.Errorf("capture: storing the response: %w", err)
 	}
+	respOriginal, respAuto := c.storeStages("response", x.ResponseOriginal, x.ResponseAuto, x.Response, core.DirectionResponse)
 	ex := &core.Exchange{
-		Request:     reqID,
-		Response:    &respID,
+		Request:  reqID,
+		Response: &respID,
+
+		RequestOriginal:  reqOriginal,
+		RequestAuto:      reqAuto,
+		ResponseOriginal: respOriginal,
+		ResponseAuto:     respAuto,
+
 		Status:      storedStatus(c.Store, respID),
 		Host:        x.Host,
 		Port:        x.Port,
@@ -243,6 +271,51 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 	c.Store.AddExchange(ex)
 	c.ScanExchange(ex)
 	return ex, nil
+}
+
+// storeStages writes the earlier stages of one message and returns the ids worth recording, or nil
+// nils when nothing differed (burpsy-react-ui-c05).
+//
+// It walks forward — original against auto, auto against the final — so the two comparisons are the
+// same ones core.Exchange.VariantFor walks backwards to read. Both directions having to agree is why
+// the rule lives in one place per side rather than being re-decided at each capture site, and it is
+// the reason a stage is dropped when it is byte-identical to the next: two references to one message
+// would be the store's honest shape for "nothing changed", but a *fourth* copy of an unmodified
+// message per exchange is not, and the difference is what keeps this feature from multiplying the
+// resident set by three.
+//
+// A failure to store an extra stage is logged and the stage is dropped rather than failing the
+// capture: the exchange's own bytes are already committed, and losing a comparison view costs the
+// operator far less than losing the traffic. Under-recorded and said so, which is this project's
+// direction for every partial result.
+func (c Capture) storeStages(what string, original, auto, final []byte, dir core.Direction) (origID, autoID *core.MsgId) {
+	if auto == nil && original == nil {
+		return nil, nil
+	}
+	keep := func(stage []byte, next []byte) *core.MsgId {
+		if stage == nil || bytes.Equal(stage, next) {
+			return nil
+		}
+		id, err := c.Store.Put(stage, dir)
+		if err != nil {
+			if c.Logger != nil {
+				c.Logger.Warn("capture: keeping the earlier stage of a message failed, so this exchange records only the later one",
+					zap.String("message", what), zap.Error(err))
+			}
+			return nil
+		}
+		return &id
+	}
+	// Auto is compared against the final first; the original is then compared against auto when auto
+	// was kept, and against the final when it was not — which is exactly "compared against the next
+	// stage that exists".
+	autoID = keep(auto, final)
+	next := final
+	if autoID != nil {
+		next = auto
+	}
+	origID = keep(original, next)
+	return origID, autoID
 }
 
 // duration reads CapturedExchange.Duration as a measurement or as the absence of one.

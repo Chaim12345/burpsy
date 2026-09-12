@@ -1414,6 +1414,31 @@ tbody td {
   min-height: 0;
 }
 
+/* A message pane with a reading picker above it (burpsy-react-ui-c05): the wrapper exists only when
+   the row has an earlier reading to compare, so the common case keeps the editor grid's DOM and its
+   children count exactly as before. It fills its grid cell and lets the editor take the rest, which
+   is why it needs the min-height the pane's own children already rely on. */
+.reading-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.reading-pane > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.variant-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: var(--s1) var(--s2);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-deep);
+}
+
 .layout-switch {
   display: inline-flex;
   gap: 2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
