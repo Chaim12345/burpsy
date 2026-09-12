@@ -29,6 +29,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/upstream"
 	"github.com/burpsy-go/burpsy/internal/web"
 	"go.uber.org/zap"
@@ -432,6 +433,13 @@ func main() {
 	// after the builder chain) rather than a second NewOptions, because NewProxyConfig seeds
 	// engine defaults into its set — the WebSocket handshake strip starts on — and a fresh
 	// all-off set attached over it would silently have turned that default off.
+	// The unified traffic log (burpsy-react-ui-6dt): one instance for the listener and for the
+	// console, so a proxied request and a Repeater send land in the same ordered log, are
+	// gated by the same capture axis, and are persisted by the same sink. Built here rather
+	// than inside the web server because the listener's relay goroutines read it from the
+	// moment the proxy starts, and the web server is constructed after that.
+	toolLog := toollog.New()
+
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
@@ -455,7 +463,10 @@ func main() {
 		// a client certificate could only be reached by putting its host on the TLS
 		// passthrough list — which is to say by giving up interception, which is the one
 		// thing the operator started this tool to do.
-		WithClientCerts(clientCerts)
+		WithClientCerts(clientCerts).
+		// What the listener relayed for the operator's browser is logged beside what burpsy's
+		// own tools sent — Logger's coverage, not just the tools' (burpsy-react-ui-6dt).
+		WithToolLog(toolLog)
 	proxyOptions := proxyConfig.Options()
 
 	// Start proxy server
@@ -554,6 +565,9 @@ func main() {
 	// every active-audit probe, and a settings panel that covered the proxy listener but not these
 	// would be the same half-covered defect from the other side.
 	webServer := web.NewServer(store, scope).
+		// First in the chain, so everything downstream — including WithPersist's restore and
+		// its save sink — is wired to the log the proxy is already recording into.
+		WithToolLog(toolLog).
 		WithLogger(logger).
 		WithSender(httpSender).
 		// WithScope is not optional here even though ActiveScanner treats it as such: without it this

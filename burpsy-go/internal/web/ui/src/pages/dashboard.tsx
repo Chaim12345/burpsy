@@ -954,7 +954,7 @@ function TaskDetail({
 
     <TabsContent value="activity">
      <Card>
-      <SectionHeading title="Requests sent by burpsy" detail="Tool traffic, kept separate from proxy history." />
+      <SectionHeading title="Recent traffic" detail="What burpsy sent and what it relayed, newest first. The full log is on the Logger page." />
       <ActivityTable rows={activity.slice(0, 20)} />
      </Card>
     </TabsContent>

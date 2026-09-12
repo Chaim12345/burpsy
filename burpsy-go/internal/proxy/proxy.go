@@ -29,6 +29,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 	upstreamproxy "github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
 )
@@ -548,6 +549,14 @@ type ProxyConfig struct {
 	// after NewProxyConfig, and the same pointer the web API holds — see WithOptions
 	// and internal/proxy/options.go.
 	options *Options
+	// toolLog receives one row per exchange this listener relays, so proxied browser traffic
+	// appears in the unified tool log (burpsy-react-ui-6dt). Nil — the default — records
+	// nothing, which is what an embedder that owns no log gets. The console hands it the same
+	// instance the Logger page reads and persists, so the capture axis, the capture filter
+	// and the eviction counter apply to a proxied request exactly as they do to a Repeater
+	// send. Set before NewServer rather than after: the field is read by every relay
+	// goroutine, so a later write would be a data race, not a late binding.
+	toolLog *toollog.ToolLog
 	// cookieJar receives the Set-Cookie headers of every response this listener captures, so an
 	// operator who browses the target logged-in through the proxy has a jar the other tools can draw
 	// on. Nil absorbs nothing, which is what a proxy built without a session coordinator does. See
@@ -698,6 +707,19 @@ func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 	if err := c.options.Set(OptStripWsExtensions, strip); err != nil {
 		panic("proxy: " + err.Error())
 	}
+	return c
+}
+
+// WithToolLog attaches the unified tool log this listener records its relayed exchanges
+// into (burpsy-react-ui-6dt). Nil — the default — records nothing, which is the behaviour
+// every caller had before the listener was part of the log at all.
+//
+// The log is the whole tool log, not a proxy-specific sink, because the point of the wiring
+// is that proxy traffic is a tool's traffic: it shares the capture axis (an operator can
+// stop recording it and the Uncaptured counter says how many requests that cost), the
+// capture filter, and the eviction counter with every other tool's rows.
+func (c *ProxyConfig) WithToolLog(tl *toollog.ToolLog) *ProxyConfig {
+	c.toolLog = tl
 	return c
 }
 
@@ -1761,9 +1783,41 @@ func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
 			zap.String("method", x.Method),
 			zap.String("path", x.Path),
 			zap.Error(err))
+		// The request still came from the operator's client and was still relayed, so the
+		// refusal gets a log row too — with no exchange to link and no response length,
+		// which is exactly what Entry.Exchange's nil and Entry.ResponseLen's nil mean
+		// (burpsy-react-ui-6dt). Dropping the row would make the unified log quieter about
+		// a real send than any per-tool view is, which is the direction a log must never
+		// fail in.
+		s.noteProxied(x, 0, nil, nil, err.Error())
 		return nil
 	}
+	if s.config.toolLog != nil {
+		status := 0
+		if ex.Status != nil {
+			status = int(*ex.Status)
+		}
+		id := ex.ID
+		s.noteProxied(x, status, toollog.Bytes(len(x.Response)), &id, "")
+	}
 	return ex
+}
+
+// noteProxied writes one tool-log row for an exchange this listener relayed.
+//
+// It exists so both outcomes of the capture are logged the same way instead of the success
+// path being the only one that thought about the log: a stored exchange links to its bytes
+// and carries the response length, a refused one carries the reason in the row's note and
+// points at nothing. The length convention is the web layer's — toollog.Bytes(len(response))
+// as api_tools.go writes it — rather than the parsed body length HTTP history shows, so a
+// Logger row and the Repeater row for the same send are measured the same way.
+func (s *Server) noteProxied(x scanner.CapturedExchange, status int, respLen *int, exchange *core.ExchangeID, note string) {
+	tl := s.config.toolLog
+	if tl == nil {
+		return
+	}
+	tl.Record(toollog.ToolProxy, x.Host, x.Port, x.TLS, x.Method, x.Path, status,
+		respLen, uint64(x.Duration.Milliseconds()), note, exchange)
 }
 
 // runPassiveScan is gone with the last caller that needed it. It existed as the proxy's own name for

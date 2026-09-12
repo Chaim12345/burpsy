@@ -18,7 +18,8 @@ import { BucketMenu } from "../ui/column-visibility-menu";
 import { VirtualTable, type Column, type VisibilityState } from "../ui/table";
 
 /**
- * A logged row records a request one of burpsy's own tools sent. The log carries
+ * A logged row records a request burpsy made or relayed — one of its own tools, or
+ * the proxy listener (burpsy-react-ui-6dt). The log carries
  * no TLS flag, so the scheme is inferred from the port — the only honest guess
  * available, and why the URL actions say "as logged".
  */
@@ -607,7 +608,7 @@ export function LoggerPage(): JSX.Element {
     defaultMasterSize="64"
     master={
      <VirtualTable
-      ariaLabel="Requests sent by burpsy's own tools"
+      ariaLabel="Requests burpsy made or relayed"
       data={filteredRows}
       columns={columns}
       getRowId={(row) => String(row.id)}
@@ -705,7 +706,7 @@ export function LoggerPage(): JSX.Element {
         detail={
          term || tool
           ? "Relax the search or switch back to all tools."
-          : "Repeater, Intruder, Scanner and the crawler record every request they send here, apart from proxy history."
+          : "Every request burpsy makes or relays is recorded here — Repeater, Intruder, Scanner, Sequencer, the crawler and the proxy listener. HTTP history is the same traffic seen as browser requests."
         }
        />
       }

@@ -207,12 +207,20 @@ test.describe("data views", () => {
   await expect(rows.first()).toHaveAttribute("aria-selected", "true");
  });
 
- test("the Tool log shows the request burpsy itself sent", async ({ page, consoleErrors }) => {
-  // Logger's whole subject is traffic burpsy originated, so proxy traffic must NOT appear here and
-  // the harness's one repeater send must. A logger that echoed HTTP history would pass a row count.
+ test("the unified log shows what burpsy sent and what it relayed", async ({ page, consoleErrors }) => {
+  // burpsy-react-ui-6dt: Logger's coverage is every tool's traffic, the proxy listener included —
+  // "Logger records all the HTTP traffic that Burp Suite generates", against HTTP history's
+  // proxied-browser-only view. The harness seeds both kinds through the real binaries, so this pins
+  // inclusion AND attribution: the relayed row is tool `proxy`, the Repeater send is `repeater`.
+  // A log that only echoed HTTP history would show the relayed row under the wrong tool; one that
+  // kept the old exclusion would not show it at all.
   await gotoRoute(page, route("logger"));
-  await expect(page.locator("tr.data-row", { hasText: "/repeated" })).toHaveCount(1);
-  await expect(page.locator("tr.data-row", { hasText: "/mango/deep/path" })).toHaveCount(0);
+  const relayed = page.locator("tr.data-row", { hasText: "/mango/deep/path" });
+  await expect(relayed).toHaveCount(1);
+  await expect(relayed.getByText("proxy", { exact: true })).toBeVisible();
+  const sent = page.locator("tr.data-row", { hasText: "/repeated" });
+  await expect(sent).toHaveCount(1);
+  await expect(sent.getByText("repeater", { exact: true })).toBeVisible();
   expect(consoleErrors).toEqual([]);
  });
 
