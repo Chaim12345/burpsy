@@ -1,6 +1,7 @@
 package intruder
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -234,4 +235,41 @@ func queryOf(raw []byte) string {
 		rest = rest[:j]
 	}
 	return rest
+}
+
+// A chain that dies is a settled failure, and the live progress view has to say so: control.go's
+// contract is that its counters are "the same totals the eventual report carries, so a live view
+// cannot disagree with it". runRecursive called note(true) on the success path only, so a chain
+// ending on a send error or a guard refusal reported failed=1 in the report while a poll of the
+// control route still said 0 — the view under-reporting the one thing an operator watching a
+// stalled attack is looking at.
+func Test_a_chain_that_dies_counts_its_failure_in_the_live_progress(t *testing.T) {
+	rg := &RecursiveGrep{Re: regexp.MustCompile(`next: ([a-z]+)`)}
+
+	run := func(t *testing.T, guard bool) {
+		t.Helper()
+		base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+		plan := NewAttackPlan(AttackKindSniper, 1, []int{1}, 10)
+		ctrl := NewControl()
+		atk := NewAttack(base, pts[:1], sets([]string{"a"}), plan).
+			WithLimits(Unthrottled(1)).
+			WithControl(ctrl).
+			WithRecursive(rg)
+		if guard {
+			atk.Guard = func(raw []byte) error { return errors.New("refused by the test guard") }
+		}
+		send := func(raw []byte) (Sent, error) { return Sent{}, errors.New("connection reset") }
+
+		report := Run(atk, send, nil)
+		if report.Failed != 1 {
+			t.Fatalf("report.Failed = %d, want 1 — the chain's single attempt failed", report.Failed)
+		}
+		sent, failed := ctrl.Progress()
+		if failed != 1 {
+			t.Errorf("live progress = sent %d / failed %d, want failed 1: a poll of the control route must not disagree with the report it will be compared against", sent, failed)
+		}
+	}
+
+	t.Run("a send that fails", func(t *testing.T) { run(t, false) })
+	t.Run("a request the guard refuses", func(t *testing.T) { run(t, true) })
 }

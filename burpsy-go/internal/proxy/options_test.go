@@ -425,6 +425,51 @@ func Test_remove_secure_flag_from_cookies_rewrites_the_head_and_nothing_else(t *
 			t.Errorf("counters = %+v, want one skipped_not_html and one modified", c)
 		}
 	})
+
+	// The composition the non-HTML case above does NOT cover, and the one that was broken: the
+	// body rules ran, found nothing, and the head change was thrown away on the way out. Ticking
+	// "Remove secure flag from cookies" alongside any body rule must not silently switch it off
+	// for HTML responses the body rule had no work in.
+	t.Run("the head change survives an HTML body the rules found nothing to rewrite in", func(t *testing.T) {
+		raw := htmlResponse(`<html><body>nothing to rewrite here</body></html>`)
+		raw = []byte(strings.Replace(string(raw), "Content-Type: text/html; charset=utf-8\r\n",
+			"Content-Type: text/html; charset=utf-8\r\nSet-Cookie: session=abc; Secure; Path=/\r\n", 1))
+		o := optionsWith(t, OptRemoveSecureFlagFromCookies, OptRemoveAllJavaScript)
+		out := o.ApplyResponse(raw)
+
+		head := string(out[:bytes.Index(out, []byte("\r\n\r\n"))])
+		if strings.Contains(strings.ToLower(head), "secure") {
+			t.Errorf("Secure survived an HTML response the body rule did not change: %q", head)
+		}
+		if got := bodyOf(t, out); got != `<html><body>nothing to rewrite here</body></html>` {
+			t.Errorf("the body was touched by a head rule: %q", got)
+		}
+		// The message really did change, so it is a modification. Counting it unchanged would
+		// report the option as having had nothing to do, which is the counter lying about the
+		// feature rather than about the bytes.
+		if c := o.Counters(); c.Modified != 1 || c.Unchanged != 0 {
+			t.Errorf("counters = %+v, want one modified and no unchanged", c)
+		}
+	})
+
+	// The other skip that used to drop it: a body whose chunk sizes do not add up. The head is
+	// still the head, and the cookie flag is still in it.
+	t.Run("the head change survives unparseable chunk framing", func(t *testing.T) {
+		raw := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
+			"Set-Cookie: session=abc; Secure\r\n" +
+			"Transfer-Encoding: chunked\r\n\r\n" +
+			"ff\r\n<script>alert(1)</script>\r\n0\r\n\r\n") // declares 255 bytes, sends 25
+		o := optionsWith(t, OptRemoveSecureFlagFromCookies, OptRemoveAllJavaScript)
+		out := o.ApplyResponse(raw)
+
+		head := string(out[:bytes.Index(out, []byte("\r\n\r\n"))])
+		if strings.Contains(strings.ToLower(head), "secure") {
+			t.Errorf("Secure survived a response whose body rules skipped: %q", head)
+		}
+		if c := o.Counters(); c.SkippedUnframed != 1 || c.Modified != 1 {
+			t.Errorf("counters = %+v, want one skipped_unframed and one modified", c)
+		}
+	})
 }
 
 func Test_strip_accept_encoding_removes_the_header_and_counts_only_real_strips(t *testing.T) {

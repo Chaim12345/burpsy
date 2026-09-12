@@ -1505,8 +1505,11 @@ func (s *Store) SaveOrganizer(items []organizer.Item) {
 		return
 	}
 	for _, it := range items {
-		// An empty Status stores NULL and reads back as "new" (LoadOrganizer) — the honest
-		// fallback, because a caller that never set a status never triaged the item.
+		// An empty Status is stored as the empty string and reads back as "new": LoadOrganizer
+		// treats "" and NULL alike, and the column is nullable, so a NULL written by an
+		// earlier build lands in the same state. That is the honest fallback — a caller that
+		// never set a status never triaged the item — as opposed to inventing a default that
+		// would look like a decision.
 		if _, err := s.db.Exec(
 			`INSERT OR REPLACE INTO organizer_items (id, exchange, title, note, highlight, status, collection)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,

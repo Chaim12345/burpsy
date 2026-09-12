@@ -685,6 +685,14 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		decoded, ok := dechunk(body)
 		if !ok {
 			o.skippedUnframed.Add(1)
+			// The body rules are out, but the head rule is not: it never needed the body. A
+			// strip that already happened must survive this skip, exactly as it survives the
+			// not-HTML one above — the two skips differ in what they could read, not in
+			// whether the cookie flag is still there to remove.
+			if headChanged {
+				o.modified.Add(1)
+				return concatMessage(head, sep, body)
+			}
 			return raw
 		}
 		plain = decoded
@@ -718,9 +726,21 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 	}
 
 	if bytes.Equal(out, plain) {
-		// Nothing fired. Return the original bytes, chunk framing and all: a
-		// response the rules did not change must not be re-framed as a side effect
-		// of having been looked at.
+		// Nothing in the BODY fired. The original bytes go back, chunk framing and all — a
+		// body the rules did not change must not be re-framed as a side effect of having
+		// been looked at.
+		//
+		// The head rule is checked first, and that ordering is the fix for a real bug: this
+		// branch used to return `raw` unconditionally, so with a body rule ticked and nothing
+		// for it to match, a Set-Cookie Secure flag the operator had asked to strip was
+		// silently kept — and the response was counted `unchanged`, which said the option had
+		// nothing to do when in fact it had done the work and had the result thrown away.
+		// Every other skip path already offered the head its change first; this one and the
+		// unparseable-chunking one are the two that did not.
+		if headChanged {
+			o.modified.Add(1)
+			return concatMessage(head, sep, body)
+		}
 		o.unchanged.Add(1)
 		return raw
 	}

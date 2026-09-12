@@ -112,6 +112,39 @@ func Test_the_pause_before_retry_is_waited_and_stoppable(t *testing.T) {
 	}
 }
 
+// The stop has to reach retries configured with NO pause. The gate check lived inside the delay
+// loop, so with a zero pause the loop never ran and the check never happened: a stopped attack
+// went on to retry — one more request per retry, which is the exact failure the Control type was
+// written to prevent ("a cluster bomb aimed at the wrong host could not be halted"). Burp's own
+// bound allows a 0ms pause, so this is a configuration an operator can reach.
+func Test_a_zero_pause_does_not_let_a_stopped_attack_retry(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{1}, 10)
+	atk := NewAttack(base, pts[:1], sets([]string{"dead"}), plan).
+		WithLimits(Unthrottled(1)).
+		WithRetries(3, 0). // no pause: nothing for the in-loop check to happen after
+		WithControl(NewControl())
+
+	var calls int32
+	send := func(raw []byte) (Sent, error) {
+		atomic.AddInt32(&calls, 1)
+		atk.Control.Stop("stopped from the test")
+		return Sent{}, errors.New("connection reset")
+	}
+
+	report := Run(atk, send, nil)
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("a stopped attack made %d send attempts, want 1: a stop must not depend on the pause being non-zero", got)
+	}
+	if report.RetriesUsed != 0 {
+		t.Fatalf("a stop wins over the retry, got %d retries", report.RetriesUsed)
+	}
+	if report.Status != StatusStopped {
+		t.Fatalf("the report should say stopped, got %q", report.Status)
+	}
+}
+
 // Burp's "Make unmodified baseline request" (v34): the template with all positions at their
 // base values, issued as item 0 before every attack request — "useful to provide a base
 // response against which to compare the attack responses" (settings.html). The decompiled

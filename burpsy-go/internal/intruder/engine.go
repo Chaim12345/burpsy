@@ -534,7 +534,17 @@ func (a *Attack) RetriesUsed() int {
 // slicing is to cut the wait short: a plain time.Sleep(delay) would hold a stopped attack's
 // send goroutine for the whole pause, and a 600-second sleep per dead connection is how an
 // operator learns the stop button lied. Returns false when the control was stopped mid-wait.
+//
+// The gate is also asked BEFORE the loop, and that check is not redundant. A zero pause is
+// inside Burp's own 0..600000 bound and is what a caller who wants immediate retries passes;
+// with it set the loop body never runs, so the checks inside it never happen and a stopped
+// attack would go on retrying — one request per retry, after the operator had halted it. "Stop
+// means stop" must not depend on a delay being non-zero. (The gate also blocks while the
+// attack is paused, which is the same answer one step earlier: hold the retries too.)
 func (a *Attack) retryWait(ctx context.Context) bool {
+	if !a.Control.gate() {
+		return false
+	}
 	remaining := a.RetryDelay
 	const slice = 25 * time.Millisecond
 	for remaining > 0 {
@@ -1159,6 +1169,11 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 			if err := a.Guard(req); err != nil {
 				permit.Release()
 				col.absorb(outcome{ordinal: ordinal, err: err, sentAt: time.Now()})
+				// The live progress view is fed here too, not only on the success path: this
+				// outcome is a settled failure and the report will count it, and control.go's
+				// contract is that a poll cannot disagree with the report. Leaving it out made a
+				// chain that died on a guard refusal report failed=1 while the view said 0.
+				a.Control.note(false)
 				// A refused request produced no response to extract from: the chain's next
 				// payload is unknowable, and continuing with the same one would resend bytes
 				// the guard just refused. Stop, the refusal is already counted.
@@ -1174,6 +1189,8 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 		permit.Release()
 		if err != nil {
 			col.absorb(outcome{ordinal: ordinal, err: err, sentAt: sentAt})
+			// Same as the guard refusal above: a counted failure is a settled failure.
+			a.Control.note(false)
 			// Same reasoning as the guard refusal: no response, no extraction, no chain. The
 			// error is counted; a retry loop that re-derived payloads would be a different
 			// feature (Burp's retry settings, n39).

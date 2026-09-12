@@ -50,6 +50,28 @@ func TestRegexDialMakesBodyContainsAPattern(t *testing.T) {
 	}
 }
 
+// The case-folding prefix is unconditional, because RE2's flag groups compose. An earlier guard
+// skipped it for any pattern beginning `(?`, which turned the "Case sensitive" checkbox off for
+// `(?s)…` and for named groups — the two shapes most likely to open a real pattern — while
+// preventing nothing. Silently matching case-sensitively is the dangerous direction here: the
+// clause fails to match and the rule reports the session invalid, re-logging in on a page the
+// operator meant to match.
+func TestOtherInlineFlagsDoNotSuppressCaseFolding(t *testing.T) {
+	dotall := &ValidityRule{Regex: true, BodyContains: `(?s)START.*END`}
+	if got := dotall.Evaluate(200, nil, []byte("start\nmiddle\nend"), ""); got != Valid {
+		t.Errorf("(?s) pattern against a lower-case body = %d, want Valid — (?i) and (?s) compose, so an unchecked Case sensitive still folds", got)
+	}
+	named := &ValidityRule{Regex: true, BodyContains: `(?P<tok>SESSION)`}
+	if got := named.Evaluate(200, nil, []byte("session ok"), ""); got != Valid {
+		t.Errorf("named-group pattern = %d, want Valid — a named group is not a statement about case", got)
+	}
+	// The operator's own opt-out still outranks the prefix: a later flag wins.
+	explicit := &ValidityRule{Regex: true, BodyContains: `(?-i)SESSION`}
+	if got := explicit.Evaluate(200, nil, []byte("session ok"), ""); got != Invalid {
+		t.Errorf("(?-i) pattern = %d, want Invalid — the pattern's own flag must beat the automatic prefix", got)
+	}
+}
+
 // An uncompilable regex never matches rather than panicking: Evaluate is configuration
 // executed inside the login check.
 func TestAnUncompilableRegexReportsNoMatch(t *testing.T) {

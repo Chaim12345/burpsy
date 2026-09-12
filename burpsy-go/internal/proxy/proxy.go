@@ -792,9 +792,6 @@ func NewServer(config *ProxyConfig) *Server {
 	}
 }
 
-// ErrNoListener reports that Rebind was asked to move a listener that is not running.
-var ErrNoListener = errors.New("proxy listener is not running")
-
 // ListenerAddr returns the address the live listener is bound to, in net.Addr form
 // (an ephemeral port is resolved), or "" when nothing is listening.
 func (s *Server) ListenerAddr() string {

@@ -164,7 +164,13 @@ func bodyMatches(vr *ValidityRule, raw []byte, pattern string, invert bool) bool
 	}
 	if vr.Regex {
 		expr := pattern
-		if !vr.CaseSensitive && !hasInlineFlag(expr) {
+		if !vr.CaseSensitive {
+			// The prefix is unconditional, because RE2's flag groups compose: `(?i)(?s)x`
+			// means both, and an operator's own later flag still wins over this one
+			// (`(?i)(?-i)x` stays case-sensitive). An earlier version skipped the prefix for
+			// ANY expression beginning `(?`, which silently ignored the Case sensitive
+			// checkbox for `(?s)…` and for named groups like `(?P<tok>…)` — the two shapes
+			// most likely to open a real pattern — while preventing nothing.
 			expr = "(?i)" + expr
 		}
 		re, err := regexp.Compile(expr)
@@ -177,14 +183,6 @@ func bodyMatches(vr *ValidityRule, raw []byte, pattern string, invert bool) bool
 		return bytes.Contains(raw, []byte(pattern))
 	}
 	return bytes.Contains(bytes.ToLower(raw), bytes.ToLower([]byte(pattern)))
-}
-
-// hasInlineFlag reports whether the expression already opens with Go's inline flags group, so
-// the case-folding prefix is not stacked on a pattern that states its own — "(?i)token" plus
-// another "(?i)" is harmless, but "(?s)" plus "(?i)" would silently change what the operator
-// wrote.
-func hasInlineFlag(expr string) bool {
-	return strings.HasPrefix(expr, "(?")
 }
 
 func boolState(ok bool) ValidityState {
@@ -870,11 +868,22 @@ type SessionRule struct {
 	// across all requests, such as a CSRF token". Nil/empty is the unrestricted rule, exactly
 	// what every rule built before this field existed means, so MatchParams reads an empty
 	// list as "always applies" the same way MatchHost reads empty hosts.
-	ScopeParams []string      `json:"scope_params,omitempty"`
-	Steps       []MacroStep   `json:"macro"`
-	Validity    *ValidityRule `json:"validity"`
-	MaxAttempts int           `json:"max_attempts"`
-	Extractions []*Extraction `json:"extractions"`
+	ScopeParams []string `json:"scope_params,omitempty"`
+	// ScopeMode is Burp's URL-scope radio (7nh2), from Zgw7's own labels: "all" = Include all
+	// URLs, "suite" = Use suite scope [defined in Target tab], "custom" = Use custom scope.
+	// Empty means "all" — every rule built before the field existed applies everywhere, which is
+	// exactly what MatchHost's empty-hosts reading already said, so the two emptinesses agree.
+	ScopeMode string `json:"scope_mode,omitempty"`
+	// ScopePathPrefix limits a custom-scope rule to requests whose path starts with it;
+	// ScopePort to one port; ScopeProtocol to one scheme. All three optional — a custom
+	// rule with none of them is the historical host-pattern-only scope, unchanged.
+	ScopePathPrefix string        `json:"scope_path_prefix,omitempty"`
+	ScopePort       *uint16       `json:"scope_port,omitempty"`
+	ScopeProtocol   string        `json:"scope_protocol,omitempty"`
+	Steps           []MacroStep   `json:"macro"`
+	Validity        *ValidityRule `json:"validity"`
+	MaxAttempts     int           `json:"max_attempts"`
+	Extractions     []*Extraction `json:"extractions"`
 }
 
 // MatchHost says whether this rule's scope covers `host`.
@@ -903,6 +912,62 @@ func (r *SessionRule) MatchHost(host string) bool {
 		}
 	}
 	return false
+}
+
+// RequestIdentity is what a session rule needs to know about one request to answer the URL-scope
+// question (7nh2): the host is the axis MatchingRule always had; Path, Port and TLS carry the
+// custom-scope arms Burp's URL-matching rules specify (protocol/host/port/path).
+type RequestIdentity struct {
+	Host string
+	Path string
+	Port uint16
+	TLS  bool
+}
+
+// MatchRequest answers the URL-scope question for one request. Suite mode delegates to the
+// caller's suite-scope verdict — the session package cannot see the Target scope, so the web
+// layer passes scopeContains and this method only routes; custom mode adds the path/port/
+// protocol arms to the host axis; all mode is the historical everywhere rule.
+//
+// The suite delegation is a parameter rather than a field because the suite scope is live
+// state the Target tab can change while a rule exists; capturing it on the rule would freeze a
+// scope snapshot into session handling and quietly diverge from what the operator sees.
+func (r *SessionRule) MatchRequest(req RequestIdentity, scopeContains func() bool) bool {
+	if r == nil {
+		return false
+	}
+	switch r.ScopeMode {
+	case "suite":
+		if scopeContains == nil {
+			// A rule configured for the suite scope in a process with no scope answer has
+			// nothing to match; refusing is the honest answer and the web layer always
+			// supplies the predicate.
+			return false
+		}
+		return scopeContains()
+	case "custom":
+		if !r.MatchHost(req.Host) {
+			return false
+		}
+		if r.ScopePathPrefix != "" && !strings.HasPrefix(req.Path, r.ScopePathPrefix) {
+			return false
+		}
+		if r.ScopePort != nil && req.Port != *r.ScopePort {
+			return false
+		}
+		if r.ScopeProtocol != "" {
+			scheme := "http"
+			if req.TLS {
+				scheme = "https"
+			}
+			if !strings.EqualFold(r.ScopeProtocol, scheme) {
+				return false
+			}
+		}
+		return true
+	default: // "all" and the empty pre-field reading
+		return r.MatchHost(req.Host)
+	}
 }
 
 // MatchParams says whether this rule's parameter scope covers a request whose parsed parameters
@@ -1258,6 +1323,25 @@ func (c *Coordinator) MatchingRuleFor(host string, params []string) *SessionRule
 	return nil
 }
 
+// MatchingRuleForRequest is the URL-scope-aware match (7nh2): the first enabled rule whose
+// URL scope (suite or custom arms) AND parameter scope cover the request. scopeContains is the
+// caller's live suite-scope verdict for the request, consulted only by rules configured for
+// suite mode.
+func (c *Coordinator) MatchingRuleForRequest(req RequestIdentity, params []string, scopeContains func() bool) *SessionRule {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, id := range c.order {
+		r := c.rules[id]
+		if r == nil || !r.Enabled {
+			continue
+		}
+		if r.MatchRequest(req, scopeContains) && r.MatchParams(params) {
+			return r
+		}
+	}
+	return nil
+}
+
 // MatchingRule is MatchingRuleFor with no parameter information: the host axis only, which is
 // every caller's behaviour before parameter scope existed. Kept as its own name so the
 // call sites that could pass parameters but do not are visible in a grep.
@@ -1279,7 +1363,27 @@ func (c *Coordinator) HandleResponse(host string, port uint16, tls bool, status 
 			c.absorb.cookies.Add(1)
 		}
 	}
-	rule := c.MatchingRule(host)
+	c.handleResponseFor(host, port, tls, "", status, hdrs, body, nil)
+}
+
+// HandleResponseFor is HandleResponse with the request identity the URL-scope arms need
+// (7nh2): the path a custom-scope rule matches on, and the caller's live suite-scope verdict.
+// HandleResponse keeps its signature (the crawler interface implements it) and delegates with
+// no path — a rule scoped to a path cannot claim a response whose request path is unknown, so
+// the empty path fails a path-scoped rule honestly rather than over-matching.
+func (c *Coordinator) HandleResponseFor(host string, port uint16, tls bool, path string, status int, hdrs map[string]string, body []byte, scopeContains func() bool) {
+	c.handleResponseFor(host, port, tls, path, status, hdrs, body, scopeContains)
+}
+
+func (c *Coordinator) handleResponseFor(host string, port uint16, tls bool, path string, status int, hdrs map[string]string, body []byte, scopeContains func() bool) {
+	c.absorb.responses.Add(1)
+	for k, v := range hdrs {
+		if strings.EqualFold(k, "Set-Cookie") {
+			c.jarMgr.AbsorbSetCookie(host, port, tls, v)
+			c.absorb.cookies.Add(1)
+		}
+	}
+	rule := c.MatchingRuleForRequest(RequestIdentity{Host: host, Path: path, Port: port, TLS: tls}, nil, scopeContains)
 	if rule != nil && rule.Validity != nil {
 		// Live proxy traffic: no redirect chain is followed here, so the redirect-target clause is unmeasured.
 		state := rule.Validity.Evaluate(status, hdrs, body, "")
