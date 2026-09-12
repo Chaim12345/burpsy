@@ -25,7 +25,8 @@ import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
 import { api, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
-import { queryClient, useConnection, useEventStream, useScope, useStats } from "./lib/data";
+import { queryClient, useConnection, useEventStream, useIntercept, useScope, useStats } from "./lib/data";
+import { attentionFor, attentionSignals } from "./lib/attention";
 import { useCaCert } from "./lib/data.policy";
 import { onDesktopEvent } from "./lib/runtime";
 import { resolveTheme, useApp } from "./lib/store";
@@ -167,6 +168,20 @@ function App(): JSX.Element {
   const live = useConnection((state) => state.live);
   const lastEventAt = useConnection((state) => state.lastEventAt);
   const eventCount = useConnection((state) => state.eventCount);
+
+  // Tool attention (burpsy-react-ui-xvo). Burp's shell owns this per tool rather than letting each
+  // tool surface it on its own page, and the reason is the Proxy case below: interception holding a
+  // request makes the operator's browser hang, and the page that would explain it is the one they
+  // are not looking at.
+  //
+  // `useIntercept` polls, which makes the shell the second place in the console that does — so it is
+  // worth saying why. Held messages are the one thing that has to appear while an operator is
+  // waiting on it, and the poll is what guarantees the count arrives even if the event stream is
+  // down; the `intercept` event kind invalidates the same key, so the steady state is event-driven
+  // and the 1.5s poll is the floor under it. On a crawl or an audit the shell's own polling is one
+  // small GET every 1.5s against a stream already coalescing hundreds of exchanges a second.
+  const interceptQuery = useIntercept();
+  const attention = attentionSignals({ intercept: interceptQuery.data });
 
   const leaf = findLeaf(route);
   const tool = toolOf(route);
@@ -643,17 +658,35 @@ function App(): JSX.Element {
             {TOOLS.map((entry) => {
               const Icon = entry.icon;
               const current = entry.id === tool.id;
+              const signal = attentionFor(attention, entry.id);
               return (
                 <button
                   key={entry.id}
                   type="button"
                   className={current ? "tool-tab tool-tab-active" : "tool-tab"}
                   aria-current={current ? "page" : undefined}
-                  title={entry.hotkey ? `${entry.label} (alt+${entry.hotkey})` : entry.label}
+                  // The count is in the tab before the tooltip is read, because a tooltip is not a
+                  // signal: it needs a hover, and the operator is on another page with a stalled
+                  // browser. The tooltip carries the sentence that explains it.
+                  title={
+                    signal ? `${signal.label}` : entry.hotkey ? `${entry.label} (alt+${entry.hotkey})` : entry.label
+                  }
                   onClick={() => navigate(entryLeaf(entry))}
                 >
                   <Icon size={14} />
                   <span>{entry.label}</span>
+                  {signal ? (
+                    <>
+                      {/* The bare number is for the eye, so it is hidden from the accessible name
+                          and the sentence carries it instead — the same split inspector.tsx uses,
+                          and for the same reason: aria-label cannot name a <span>, which maps to
+                          the generic role, so the label would simply be dropped. */}
+                      <Badge tone="warn" className="tool-tab-attention" aria-hidden="true">
+                        {signal.count}
+                      </Badge>
+                      <span className="sr-only">{signal.label}</span>
+                    </>
+                  ) : null}
                 </button>
               );
             })}

@@ -341,6 +341,19 @@ code {
   color: var(--text);
 }
 
+/* A tool's attention badge in the tab strip (burpsy-react-ui-xvo). Sized down from the standard
+   Badge because it sits inside a tab whose height is fixed by the chrome, and given tabular figures
+   so a count going 9 -> 10 does not shift the tab labels beside it — the strip is the one place in
+   the console where a width change moves everything to its right. The tone is Badge's warn, so the
+   colour means here what it means everywhere else; nothing animates, so a held request does not
+   pulse at someone using prefers-reduced-motion. */
+.tool-tab-attention {
+  min-height: calc(var(--control-h-sm) * 0.68);
+  padding: 0 var(--s1);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 .tool-tab-active {
   background: var(--paper);
   color: var(--text);
