@@ -1290,8 +1290,13 @@ func newFakeCoordinator(host, cookie string) *fakeCoordinator {
 	return &fakeCoordinator{host: host, cookie: cookie, rule: r}
 }
 
-func (f *fakeCoordinator) MatchingRule(host string) *session.SessionRule {
-	if f.host != "" && host != f.host {
+// MatchingRuleForRequest stands in for the real lookup. It answers the host axis alone, like the
+// interface's simpler predecessor, and ignores the identity's path/port/scheme and the suite-scope
+// predicate — this fake exists to drive the recovery budget, not to exercise URL scope, which
+// internal/session's own tests own. It ignores the predicate rather than calling it so a test
+// cannot accidentally depend on the crawl's scope handle being non-nil.
+func (f *fakeCoordinator) MatchingRuleForRequest(req session.RequestIdentity, _ []string, _ func() bool) *session.SessionRule {
+	if f.host != "" && req.Host != f.host {
 		return nil
 	}
 	return f.rule
@@ -1307,7 +1312,7 @@ func (f *fakeCoordinator) EnsureLoggedIn(rule *session.SessionRule, _ session.Ma
 	return session.LoginOutcome{Kind: session.LoginSucceeded, Attempts: 1}
 }
 
-func (f *fakeCoordinator) HandleResponse(_ string, _ uint16, _ bool, _ int, _ map[string]string, _ []byte) {
+func (f *fakeCoordinator) HandleResponseFor(_ string, _ uint16, _ bool, _ string, _ int, _ map[string]string, _ []byte, _ func() bool) {
 }
 
 func (f *fakeCoordinator) CookieHeader(_ string, _ uint16, _ bool) string {

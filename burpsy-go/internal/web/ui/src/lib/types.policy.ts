@@ -110,15 +110,29 @@ export interface SessionValidity {
  not?: SessionValidity;
 }
 
-/** The scope document a session rule carries. Only `host` is read server-side. */
+/** The scope document a session rule carries. */
 export interface SessionScopeRule {
  kind: "Include" | "Exclude";
  host: string | null;
+ /** Custom-scope URL arms (7nh2): the host pattern plus optional path prefix / port / protocol —
+  *  Burp's URL-matching rules are per full URL, and these are the arms this rule's host pattern
+  *  is narrowed by. */
+ path?: string;
+ port?: number;
+ protocol?: "http" | "https";
 }
 
 export interface SessionScope {
  allow_all: boolean;
  rules: SessionScopeRule[];
+ /** Burp's URL-scope radio (7nh2): "suite" = Use suite scope [defined in Target tab],
+  *  "custom" = Use custom scope; absent/other = Include all URLs (the historical shape). */
+ mode?: "suite" | "custom";
+ /** Custom-scope arms carried at the scope-block level (the server reads them from here): a
+  *  path prefix, one port, one protocol. */
+ path?: string;
+ port?: number;
+ protocol?: "http" | "https";
 }
 
 export interface SessionRuleFull {

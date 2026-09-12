@@ -47,8 +47,16 @@ interface RuleDraft {
  id?: number;
  name: string;
  enabled: boolean;
- /** Only host patterns are read server-side; an empty list means "applies everywhere". */
+ /** Host patterns for the custom scope; an empty list means "applies everywhere". */
  hosts: string[];
+ /** Burp's URL-scope radio (7nh2), from its own labels: "all" = Include all URLs, "suite" =
+  * Use suite scope [defined in Target tab], "custom" = Use custom scope. The custom arms below
+  * ride alongside the host list. */
+ scopeMode: "all" | "suite" | "custom";
+ /** Custom-scope arms: path prefix, port, protocol. Empty/undefined = the arm does not apply. */
+ scopePath: string;
+ scopePort: string;
+ scopeProtocol: "" | "http" | "https";
  /** Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
   * parameter exists. Empty = everywhere. */
  params: string[];
@@ -115,6 +123,11 @@ function ruleIn(rule: SessionRuleFull): RuleDraft {
   name: rule.name,
   enabled: rule.enabled,
   hosts: (rule.scope?.rules ?? []).map((entry) => entry.host ?? "").filter(Boolean),
+  // URL scope (7nh2): the mode and custom arms ride the scope block.
+  scopeMode: (rule.scope?.mode as RuleDraft["scopeMode"]) ?? "all",
+  scopePath: rule.scope?.path ?? "",
+  scopePort: rule.scope?.port !== undefined && rule.scope?.port !== null ? String(rule.scope.port) : "",
+  scopeProtocol: (rule.scope?.protocol as RuleDraft["scopeProtocol"]) ?? "",
   params: rule.scope_params ?? [],
   validity: rule.validity ?? {},
   maxAttempts: rule.max_attempts === undefined ? "" : String(rule.max_attempts),
@@ -146,7 +159,21 @@ function ruleOut(draft: RuleDraft): SessionRuleFull {
  if (draft.id !== undefined) out.id = draft.id;
  // Omitted rather than sent empty: absent means "applies everywhere", and a stated
  // but empty scope is refused by the server because it would match nothing.
- if (draft.hosts.length) {
+ // URL scope (7nh2): Burp's three-mode radio. "all" sends nothing (the historical shape);
+ // "suite" sends the mode alone; "custom" sends the mode, the host rules and the URL arms.
+ if (draft.scopeMode === "suite") {
+  out.scope = { allow_all: true, mode: "suite", rules: [] };
+ } else if (draft.scopeMode === "custom") {
+  const port = Number(draft.scopePort.trim());
+  out.scope = {
+   allow_all: false,
+   mode: "custom",
+   ...(draft.scopePath.trim() ? { path: draft.scopePath.trim() } : {}),
+   ...(draft.scopePort.trim() && Number.isInteger(port) && port > 0 ? { port } : {}),
+   ...(draft.scopeProtocol ? { protocol: draft.scopeProtocol } : {}),
+   rules: draft.hosts.map((host) => ({ kind: "Include" as const, host })),
+  };
+ } else if (draft.hosts.length) {
   out.scope = { allow_all: false, rules: draft.hosts.map((host) => ({ kind: "Include" as const, host })) };
  }
  // Parameter scope is omitted when empty, like the host scope: absent means "applies
@@ -165,6 +192,10 @@ function emptyRule(): RuleDraft {
   name: "",
   enabled: true,
   hosts: [],
+  scopeMode: "all",
+  scopePath: "",
+  scopePort: "",
+  scopeProtocol: "",
   params: [],
   validity: { status_is: 200 },
   maxAttempts: "",
@@ -866,6 +897,59 @@ export function SessionPage(): JSX.Element {
        </Field>
       </div>
 
+      {/* URL scope (7nh2) — Burp's own radio, with its own labels (Zgw7): Include all URLs /
+          Use suite scope [defined in Target tab] / Use custom scope. The host list and the
+          path/port/protocol arms belong to the custom mode; nothing is auto-selected. */}
+      <div className="stack-tight">
+       <span className="eyebrow">URL scope</span>
+       <div className="row-list">
+        {([["all", "Include all URLs"], ["suite", "Use suite scope [defined in Target tab]"], ["custom", "Use custom scope"]] as const).map(
+          ([mode, label]) => (
+            <label key={mode} className="field-label" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-sm)" }}>
+              <input
+                type="radio"
+                name="url-scope-mode"
+                value={mode}
+                checked={editing.scopeMode === mode}
+                disabled={!wired}
+                onChange={() => setEditing({ ...editing, scopeMode: mode })}
+              />
+              {label}
+            </label>
+          ),
+        )}
+       </div>
+       {editing.scopeMode === "custom" ? (
+        <>
+         <div className="form-grid">
+          <Field label="Path prefix" hint="Blank covers the whole host.">
+           {(id) => (
+            <Input id={id} value={editing.scopePath} disabled={!wired} placeholder="/api"
+             onChange={(event) => setEditing({ ...editing, scopePath: event.target.value })} />
+           )}
+          </Field>
+          <Field label="Port" hint="Blank matches any port.">
+           {(id) => (
+            <Input id={id} value={editing.scopePort} disabled={!wired} placeholder="443" inputMode="numeric"
+             onChange={(event) => setEditing({ ...editing, scopePort: event.target.value })} />
+           )}
+          </Field>
+          <Field label="Protocol" hint="Blank matches either scheme.">
+           {(id) => (
+            <select id={id} value={editing.scopeProtocol} disabled={!wired}
+             onChange={(event) => setEditing({ ...editing, scopeProtocol: event.target.value as "" | "http" | "https" })}>
+             <option value="">Any</option>
+             <option value="http">http</option>
+             <option value="https">https</option>
+            </select>
+           )}
+          </Field>
+         </div>
+        </>
+       ) : null}
+      </div>
+
+      {editing.scopeMode === "custom" ? (
       <div className="stack-tight">
        <span className="eyebrow">Hosts this rule covers</span>
        {editing.hosts.length === 0 ? (
@@ -915,7 +999,8 @@ export function SessionPage(): JSX.Element {
          Add host
         </Button>
        </div>
-      </div>
+       </div>
+      ) : null}
 
       <div className="stack-tight">
        <span className="eyebrow">Only requests carrying these parameters</span>

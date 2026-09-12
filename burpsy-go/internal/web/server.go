@@ -218,6 +218,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 	// The site map subscribes to the store here rather than rebuilding itself when
 	// the tab is opened — see the sitemap package docs (CRAWL-05). Constructed
 	// before any traffic can arrive, which is the ordering ObserveExchanges needs.
+	s.installSuiteScopePredicate()
 	s.sitemap.Follow(store)
 	// The traffic store's two live signals are installed once, here, because the
 	// store is never replaced after construction — there is no WithStore. The
@@ -723,7 +724,37 @@ func (s *Server) Tasks() *dash.Registry { return s.tasks }
 // WithSessionCoordinator sets the session coordinator.
 func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
 	s.sessionCoordinator = sc
+	s.installSuiteScopePredicate()
 	return s
+}
+
+// installSuiteScopePredicate gives the session coordinator this console's live suite-scope verdict
+// (7nh2), so a rule configured for "Use suite scope [defined in Target tab]" is matched against the
+// Target scope as it stands at match time.
+//
+// Installed here rather than passed in at each call site because the session package has match
+// sites of its own — HandleRecovery above all — where no scope handle is in reach, and a suite-mode
+// rule must not be unreachable from any one of them. A caller that owns a scope (the proxy's, the
+// crawler's, the CLI's) still passes its own predicate to MatchingRuleForRequest and that one wins.
+//
+// The closure reads s.scope and s.store's live scope state per request instead of capturing a copy:
+// the Target tab rewrites the scope while rules exist, and a captured verdict is the divergence
+// between what session handling matched and what the Scope tab shows.
+func (s *Server) installSuiteScopePredicate() {
+	if s.sessionCoordinator == nil {
+		return
+	}
+	s.sessionCoordinator.SetSuiteScopePredicate(func(req session.RequestIdentity) bool {
+		if s.scope == nil {
+			// No Target scope handle at all, so there is no suite verdict to give. Refusing keeps
+			// suite mode from collapsing into "everything" in a process that has no scope to
+			// consult — the one reading that would fire a login macro at an arbitrary host.
+			// (An empty *scope*, by contrast, is this codebase's documented default-allow and
+			// answers true through Contains below, exactly as every other scope gate reads it.)
+			return false
+		}
+		return s.scope.Contains(req.Host, req.Port, req.Path, req.TLS)
+	})
 }
 
 // WithMatchReplace sets the match/replace rule set.

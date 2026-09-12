@@ -936,8 +936,7 @@ func (r *SessionRule) MatchRequest(req RequestIdentity, scopeContains func() boo
 	if r == nil {
 		return false
 	}
-	switch r.ScopeMode {
-	case "suite":
+	if r.ScopeMode == "suite" {
 		if scopeContains == nil {
 			// A rule configured for the suite scope in a process with no scope answer has
 			// nothing to match; refusing is the honest answer and the web layer always
@@ -945,29 +944,55 @@ func (r *SessionRule) MatchRequest(req RequestIdentity, scopeContains func() boo
 			return false
 		}
 		return scopeContains()
-	case "custom":
-		if !r.MatchHost(req.Host) {
-			return false
-		}
-		if r.ScopePathPrefix != "" && !strings.HasPrefix(req.Path, r.ScopePathPrefix) {
-			return false
-		}
-		if r.ScopePort != nil && req.Port != *r.ScopePort {
-			return false
-		}
-		if r.ScopeProtocol != "" {
-			scheme := "http"
-			if req.TLS {
-				scheme = "https"
-			}
-			if !strings.EqualFold(r.ScopeProtocol, scheme) {
-				return false
-			}
-		}
-		return true
-	default: // "all" and the empty pre-field reading
-		return r.MatchHost(req.Host)
 	}
+	// "custom" and the default ("all", plus the empty pre-field reading) are the rule's own stated
+	// arms: a host list, optionally narrowed by a path prefix, a port and a scheme.
+	return r.MatchCustomArms(req)
+}
+
+// MatchCustomArms answers the URL-scope question from the rule's own stated arms alone (7nh2),
+// without the suite-mode delegation — hence "custom", which is Burp's own name for the mode these
+// arms belong to.
+//
+// RunMacro needs the distinction: a suite-mode rule delegates the scope question to the Target
+// scope, but a macro's steps are the operator's explicit configuration, so judging them against the
+// Target scope would skip the login POST whenever the login URL happened to sit outside it, leaving
+// a rule that is configured, matched, and can never log in. The arms a rule states about itself are
+// the only scope a step may be skipped for.
+func (r *SessionRule) MatchCustomArms(req RequestIdentity) bool {
+	if r == nil {
+		return false
+	}
+	if !r.MatchHost(req.Host) {
+		return false
+	}
+	if r.ScopePathPrefix != "" && !strings.HasPrefix(req.Path, r.ScopePathPrefix) {
+		return false
+	}
+	if r.ScopePort != nil && req.Port != *r.ScopePort {
+		return false
+	}
+	if r.ScopeProtocol != "" {
+		scheme := "http"
+		if req.TLS {
+			scheme = "https"
+		}
+		if !strings.EqualFold(r.ScopeProtocol, scheme) {
+			return false
+		}
+	}
+	return true
+}
+
+// StatesURLArms reports whether the rule's own URL-scope arms restrict anything (7nh2): a path
+// prefix, a port or a scheme.
+//
+// Exported because two other layers ask the same question: validate.go's stated-but-empty refusal,
+// which used to be a question about the host list alone ("no hosts" stopped being the same as
+// "states nothing" once a rule could be scoped by path or port with no host restriction), and the
+// web layer's ruleToDto, which must not drop a scope block that holds only arms.
+func (r *SessionRule) StatesURLArms() bool {
+	return r != nil && (r.ScopePathPrefix != "" || r.ScopePort != nil || r.ScopeProtocol != "")
 }
 
 // MatchParams says whether this rule's parameter scope covers a request whose parsed parameters
@@ -1059,6 +1084,13 @@ type Coordinator struct {
 	// absorb records which surfaces feed the cookie jar and how much traffic they have offered it,
 	// so an empty jar can be told apart from a jar nothing is watching. See internal/session/absorb.go.
 	absorb absorption
+
+	// suiteScope is the live suite-scope (Target scope) verdict, installed once by whichever console
+	// owns a Target scope (7nh2). It exists because the in-package match sites — HandleRecovery above
+	// all — run inside this package, where no scope handle is in reach, and a suite-scoped rule must
+	// not become silently unreachable from them. A caller that owns a scope passes its own predicate
+	// to MatchingRuleForRequest instead; that one wins, because the caller is closer to the request.
+	suiteScope func(RequestIdentity) bool
 }
 
 func NewCoordinator(logger *zap.Logger) *Coordinator {
@@ -1069,6 +1101,21 @@ func NewCoordinator(logger *zap.Logger) *Coordinator {
 		runs:     make(map[RuleID]*loginRun),
 		observed: make(map[RuleID][]MacroStep),
 	}
+}
+
+// SetSuiteScopePredicate installs the live suite-scope verdict that suite-mode rules are matched
+// against (7nh2).
+//
+// A function read at match time rather than a bool captured at install time, and consulted per
+// request rather than stored on a rule: the Target tab can change the scope while a rule exists, and
+// freezing a snapshot into session handling would have the rule keep matching a scope the operator
+// has since narrowed — the divergence this feature exists to remove. Nil (the default) leaves a
+// suite-mode rule matching nothing, which is the honest answer for a process with no Target scope;
+// MatchRequest's refusal is documented there.
+func (c *Coordinator) SetSuiteScopePredicate(f func(RequestIdentity) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.suiteScope = f
 }
 
 // Cookies reports every cookie the coordinator is holding, per authority. The jar manager is
@@ -1312,24 +1359,32 @@ func (c *Coordinator) Rule(id RuleID) *SessionRule {
 // that DO hold the request's parameters pass them; that is where Burp's "update this parameter
 // across all requests" restriction does its work.
 func (c *Coordinator) MatchingRuleFor(host string, params []string) *SessionRule {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, id := range c.order {
-		r := c.rules[id]
-		if r.Enabled && r.MatchHost(host) && r.MatchParams(params) {
-			return r
-		}
-	}
-	return nil
+	// A host-only identity, deliberately: the parameter axis is optional for the callers this
+	// serves, and the URL-scope arms are not evaluable without a path — a rule scoped to a path
+	// must not claim a request whose path nobody read. That is the safe direction (a rule that
+	// does not fire) rather than the dangerous one (a login macro fired at a URL the rule's own
+	// editor excludes). Callers that hold a path pass a full RequestIdentity instead.
+	return c.MatchingRuleForRequest(RequestIdentity{Host: host}, params, nil)
 }
 
 // MatchingRuleForRequest is the URL-scope-aware match (7nh2): the first enabled rule whose
 // URL scope (suite or custom arms) AND parameter scope cover the request. scopeContains is the
 // caller's live suite-scope verdict for the request, consulted only by rules configured for
-// suite mode.
+// suite mode; nil falls back to the predicate installed by SetSuiteScopePredicate, which is how
+// the in-package callers that own no scope handle keep suite-mode rules reachable.
 func (c *Coordinator) MatchingRuleForRequest(req RequestIdentity, params []string, scopeContains func() bool) *SessionRule {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if scopeContains == nil {
+		scopeContains = c.suitePredicateLocked(req)
+	}
+	return c.matchRequestLocked(req, params, scopeContains)
+}
+
+// matchRequestLocked is the scan both MatchingRuleForRequest and the in-package callers that must
+// hold their own read lock (recovery's rule lookup) run, so predicate resolution and the ordering
+// rule live in one place instead of two.
+func (c *Coordinator) matchRequestLocked(req RequestIdentity, params []string, scopeContains func() bool) *SessionRule {
 	for _, id := range c.order {
 		r := c.rules[id]
 		if r == nil || !r.Enabled {
@@ -1340,6 +1395,18 @@ func (c *Coordinator) MatchingRuleForRequest(req RequestIdentity, params []strin
 		}
 	}
 	return nil
+}
+
+// suitePredicateLocked adapts the installed suite-scope predicate to one request. The caller must
+// hold the read lock; the closure it returns reads `live` — the console's own function, which
+// consults the Target scope rather than any state this package holds — so "live" means exactly
+// that: the operator's scope as it stands when the request is matched.
+func (c *Coordinator) suitePredicateLocked(req RequestIdentity) func() bool {
+	live := c.suiteScope
+	if live == nil {
+		return nil
+	}
+	return func() bool { return live(req) }
 }
 
 // MatchingRule is MatchingRuleFor with no parameter information: the host axis only, which is
@@ -1467,7 +1534,7 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 		// Interpolate extractions from earlier responses into this step.
 		step = interpolateStep(step, extracted)
 		sent = append(sent, step)
-		if !rule.MatchHost(hostOf(step.URL)) {
+		if !rule.MatchCustomArms(identityOf(step.URL)) {
 			results = append(results, nil)
 			continue
 		}
@@ -1671,6 +1738,33 @@ func interpolateStep(step MacroStep, extracted map[string]string) MacroStep {
 func hostOf(url string) string {
 	host, _, _ := authorityOf(url)
 	return host
+}
+
+// identityOf is the URL-scope identity of one macro step's URL (7nh2): authorityOf's host, port and
+// scheme, plus the path a custom-scope path prefix is matched against.
+//
+// The path is "/" when the URL states none, which is what an empty path means in HTTP rather than a
+// convenience: a rule scoped to "/api" must not claim a request to the bare origin, and "" would
+// match that prefix if the rule's prefix were empty. A query or fragment is not part of the path
+// Burp's URL-matching rule compares, so it is cut here rather than left to make "/api?x=1" fail a
+// "/api" prefix.
+func identityOf(url string) RequestIdentity {
+	host, port, tls := authorityOf(url)
+	id := RequestIdentity{Host: host, Port: port, TLS: tls, Path: "/"}
+	rest := url
+	if i := strings.Index(rest, "://"); i >= 0 {
+		rest = rest[i+3:]
+	}
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		path := rest[i:]
+		if j := strings.IndexAny(path, "?#"); j >= 0 {
+			path = path[:j]
+		}
+		if path != "" {
+			id.Path = path
+		}
+	}
+	return id
 }
 
 func authorityOf(url string) (host string, port uint16, tls bool) {

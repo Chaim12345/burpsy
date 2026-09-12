@@ -304,13 +304,41 @@ func ruleToDto(r *session.SessionRule) sessionRuleDto {
 			dto.Validity = b
 		}
 	}
-	// Scope: express ScopeHosts as rules in the ScopeInfo shape.
-	if r.ScopeHosts != nil {
+	// Scope: express ScopeHosts as rules in the ScopeInfo shape, and the URL-scope mode and arms
+	// beside them (7nh2). The arms have to be emitted here or the editor lies: dtoToRule reads
+	// them back, so a rule saved as "Use custom scope" with a path prefix would come back as
+	// "Include all URLs" with the arms blank — and the next save from that form would write the
+	// blanks over the stored arms. That is the same restore-drops-a-field defect this file already
+	// names for extractions, and it is worse here because the form keeps showing the operator a
+	// scope their rule no longer has.
+	// Emitted whenever the rule states anything about its scope, not only when it lists hosts: a
+	// suite-mode rule and a custom rule scoped by path alone both carry no hosts, and keying the
+	// block off ScopeHosts dropped their whole scope on the way out — the form reopened on
+	// "Include all URLs" and the arms existed only until the next save.
+	if r.ScopeHosts != nil || r.ScopeMode != "" || r.StatesURLArms() {
 		hosts := make([]map[string]interface{}, 0, len(r.ScopeHosts))
 		for _, h := range r.ScopeHosts {
 			hosts = append(hosts, map[string]interface{}{"kind": "Include", "host": h})
 		}
-		if b, err := json.Marshal(map[string]interface{}{"allow_all": len(hosts) == 0, "rules": hosts}); err == nil {
+		scope := map[string]interface{}{
+			// A suite-mode rule carries no hosts of its own; allow_all is what the suite reading
+			// is, so the flag follows the mode rather than the host list alone.
+			"allow_all": len(hosts) == 0 || r.ScopeMode == "suite",
+			"rules":     hosts,
+		}
+		if r.ScopeMode != "" {
+			scope["mode"] = r.ScopeMode
+		}
+		if r.ScopePathPrefix != "" {
+			scope["path"] = r.ScopePathPrefix
+		}
+		if r.ScopePort != nil {
+			scope["port"] = *r.ScopePort
+		}
+		if r.ScopeProtocol != "" {
+			scope["protocol"] = r.ScopeProtocol
+		}
+		if b, err := json.Marshal(scope); err == nil {
 			dto.Scope = b
 		}
 	}
@@ -376,8 +404,11 @@ func dtoToRule(dto sessionRuleDto) (*session.SessionRule, error) {
 		var scope struct {
 			AllowAll bool `json:"allow_all"`
 			Rules    []struct {
-				Kind string  `json:"kind"`
-				Host *string `json:"host"`
+				Kind     string  `json:"kind"`
+				Host     *string `json:"host"`
+				Path     *string `json:"path"`
+				Port     *uint16 `json:"port"`
+				Protocol *string `json:"protocol"`
 			} `json:"rules"`
 		}
 		if err := json.Unmarshal(dto.Scope, &scope); err != nil {
@@ -395,6 +426,31 @@ func dtoToRule(dto sessionRuleDto) (*session.SessionRule, error) {
 	rule := session.NewSessionRule(dto.Name, scopeHosts, nil)
 	rule.Enabled = dto.Enabled
 	rule.ScopeParams = dto.ScopeParams
+	// Burp's URL-scope radio (7nh2): the DTO carries the mode and the custom-scope arms; the
+	// arms ride the scope block's first rule (the scope builder above flattens to hosts for the
+	// host axis, and these three fields are the URL-matching arms Burp's editor holds per rule).
+	if len(dto.Scope) > 0 {
+		var arms struct {
+			Mode     string  `json:"mode"`
+			Path     string  `json:"path"`
+			Port     *uint16 `json:"port"`
+			Protocol string  `json:"protocol"`
+		}
+		if err := json.Unmarshal(dto.Scope, &arms); err == nil {
+			if arms.Mode == "suite" || arms.Mode == "custom" {
+				rule.ScopeMode = arms.Mode
+			}
+			// Stored exactly as sent. An earlier line trimmed the empty prefix, which is a no-op
+			// spelled like a normalisation — the kind of line a later reader "fixes" into trimming
+			// a leading slash and thereby changes which paths a rule covers. Burp's path arm is a
+			// prefix of the request path, so the operator's own spelling is what is compared.
+			rule.ScopePathPrefix = arms.Path
+			rule.ScopePort = arms.Port
+			if arms.Protocol == "http" || arms.Protocol == "https" {
+				rule.ScopeProtocol = arms.Protocol
+			}
+		}
+	}
 	rule.Validity = validity
 	// Omitted means the default, which NewSessionRule already applied. Overwriting it with 1 — as
 	// this did — turned the UI's "default" placeholder into "one attempt only", so a login that
@@ -632,19 +688,26 @@ func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "A probe URL is required", http.StatusBadRequest)
 		return
 	}
-	host, _, _, err := targetParts(probe.URL)
+	host, port, tls, err := targetParts(probe.URL)
 	if err != nil {
 		http.Error(w, "Invalid probe URL: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	probePath := "/"
+	if u, perr := url.Parse(probe.URL); perr == nil && u.Path != "" {
+		probePath = u.Path
+	}
 	step := stepDtoToMacroStep(probe)
 
 	// (1) Nothing is sent until a rule is known to own this target — including parameter
-	// scope (burpsy-react-ui-9hip): the probe's own parameters are what a parameter-restricted
-	// rule is judged against, which is the exact point of the feature ("update this parameter
-	// across all requests" — a rule scoped to csrf_token must not claim a request that carries
-	// no csrf_token).
-	rule := s.sessionCoordinator.MatchingRuleFor(host, probeParamNames(probe))
+	// scope (burpsy-react-ui-9hip) and the URL-scope arms (7nh2): the probe's own parameters
+	// are what a parameter-restricted rule is judged against, and the probe's full identity
+	// (host, path, port, scheme) is what a custom-scope or suite-scope rule is judged against.
+	// The suite verdict is live Target-scope state, decided here rather than frozen on the rule.
+	rule := s.sessionCoordinator.MatchingRuleForRequest(
+		session.RequestIdentity{Host: host, Path: probePath, Port: port, TLS: tls},
+		probeParamNames(probe),
+		func() bool { return s.scope.MayContainHost(host, port, tls) })
 	if rule == nil {
 		count := len(s.sessionCoordinator.AllRules())
 		writeJSON(w, http.StatusOK, sessionLoginResp{
@@ -876,7 +939,10 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 		for k, v := range resp.Headers {
 			hdrs[k] = v
 			if strings.EqualFold(k, "Set-Cookie") {
-				s.sessionCoordinator.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
+				// The step's own request identity (7nh2): a path- or suite-scoped rule is judged
+				// against the request that actually produced this response.
+				s.sessionCoordinator.HandleResponseFor(host, port, tls, path, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body,
+					func() bool { return s.scope.MayContainHost(host, port, tls) })
 			}
 		}
 		// The body's length, because a session step goes out through SendRequest, which returns a parsed

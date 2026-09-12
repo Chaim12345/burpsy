@@ -315,13 +315,17 @@ func (c *Coordinator) recordObserved(id RuleID, sent []MacroStep) {
 // --- public recovery API ------------------------------------------------------
 
 // HandleRecovery evaluates `response` against the validity rule of whichever rule owns `original`'s
-// host and, if it is not valid (or the rule could not tell), recovers: run that rule's login macro
+// URL and, if it is not valid (or the rule could not tell), recovers: run that rule's login macro
 // (once, or share an already-running one) and retry `original` with the freshly-authenticated jar.
+//
+// The rule lookup uses the step's full URL identity, not its host (7nh2): a rule scoped to a path,
+// port or scheme would otherwise claim a step outside its own stated scope and fire a login macro at
+// an endpoint the operator excluded in the rule editor.
 //
 // Anything other than Valid — including Indeterminate — takes the recovery path, matching the Rust
 // crate's refusal to treat "the rule could not tell" as fail-open.
 func (c *Coordinator) HandleRecovery(original MacroStep, response *StepResult, runner MacroStepRunner) RecoveryOutcome {
-	id, rule := c.matchingRuleID(hostOf(original.URL))
+	id, rule := c.matchingRuleID(identityOf(original.URL))
 	if rule == nil {
 		return RecoveryOutcome{Kind: RecoveryNoRuleApplies, URL: original.URL}
 	}
@@ -341,13 +345,21 @@ func (c *Coordinator) EnsureLoggedIn(rule *SessionRule, runner MacroStepRunner) 
 	return c.ensureLoggedIn(id, rule, runner)
 }
 
-// matchingRuleID returns the id and rule of the first enabled rule whose scope covers `host`.
-func (c *Coordinator) matchingRuleID(host string) (RuleID, *SessionRule) {
+// matchingRuleID returns the id and rule of the first enabled rule whose URL scope covers `req`.
+//
+// It runs the same scan MatchingRuleForRequest does, under its own read lock, because the match
+// happens inside the package and the coordinator's lock is not reentrant. Sharing matchRequestLocked
+// is what keeps the two lookups from drifting apart — a rule that MatchingRuleForRequest would skip
+// cannot be the one recovery picks.
+func (c *Coordinator) matchingRuleID(req RequestIdentity) (RuleID, *SessionRule) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, id := range c.order {
 		r := c.rules[id]
-		if r.Enabled && r.MatchHost(host) {
+		if r == nil || !r.Enabled {
+			continue
+		}
+		if r.MatchRequest(req, c.suitePredicateLocked(req)) {
 			return id, r
 		}
 	}

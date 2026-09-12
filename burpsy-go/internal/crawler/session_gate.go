@@ -59,14 +59,20 @@ import (
 // already uses — a coordinator wired for proxied traffic is wired for the crawl the
 // same way, so there is no second, drift-prone way to think about re-login.
 type SessionCoordinator interface {
-	// MatchingRule returns the first enabled rule whose scope covers `host`, or nil.
-	MatchingRule(host string) *session.SessionRule
+	// MatchingRuleForRequest returns the first enabled rule whose URL scope covers `req`, or
+	// nil. The request identity rather than a bare host (7nh2): a rule scoped to a path, port
+	// or scheme must not claim a crawl item outside its own stated scope, and a host-only
+	// lookup cannot tell the difference. params is nil here — a crawl item has a method and a
+	// URL, not a parsed parameter set, and MatchParams reads nil as "unknown" rather than as
+	// "carries none".
+	MatchingRuleForRequest(req session.RequestIdentity, params []string, scopeContains func() bool) *session.SessionRule
 	// EnsureLoggedIn runs the rule's login macro, single-flight per rule, and reports
 	// the outcome as an enum rather than as an error string.
 	EnsureLoggedIn(rule *session.SessionRule, runner session.MacroStepRunner) session.LoginOutcome
-	// HandleResponse lets the coordinator absorb a macro step's Set-Cookie into its
-	// jar, exactly as the web surface's runner does.
-	HandleResponse(host string, port uint16, tls bool, status int, hdrs map[string]string, body []byte)
+	// HandleResponseFor lets the coordinator absorb a macro step's Set-Cookie into its
+	// jar, exactly as the web surface's runner does, and judge the step's validity against
+	// the step's own URL identity rather than its host alone.
+	HandleResponseFor(host string, port uint16, tls bool, path string, status int, hdrs map[string]string, body []byte, scopeContains func() bool)
 	// CookieHeader returns the jar's Cookie header value for an origin, or "" when
 	// the jar holds nothing for it.
 	CookieHeader(host string, port uint16, tls bool) string
@@ -132,9 +138,25 @@ const (
 // rather than as quietly unauthenticated.
 func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *LimitReport) (raw []byte, result recoverResult, detail string) {
 	host := item.url.Hostname()
-	rule := c.cfg.SessionCoordinator.MatchingRule(host)
+	// The full identity, not the hostname: a rule scoped to a path or port must not be the rule
+	// that fires a login macro for a crawl item its own editor excludes (7nh2). The suite-scope
+	// verdict is this crawl's own scope handle, read live.
+	rule := c.cfg.SessionCoordinator.MatchingRuleForRequest(
+		session.RequestIdentity{
+			Host: host,
+			Path: item.url.EscapedPath(),
+			Port: portOf(item.url),
+			TLS:  strings.EqualFold(item.url.Scheme, "https"),
+		},
+		nil,
+		func() bool {
+			if c.cfg.Scope == nil {
+				return false
+			}
+			return c.cfg.Scope.Contains(host, portOf(item.url), item.url.EscapedPath(), strings.EqualFold(item.url.Scheme, "https"))
+		})
 	if rule == nil {
-		return nil, reloginFailed, "no session rule covers host " + host
+		return nil, reloginFailed, "no session rule covers " + item.url.String()
 	}
 	if c.relogins >= c.limits.MaxRelogins {
 		lim.record(StopReloginBudget)
@@ -258,11 +280,26 @@ func (c *Crawler) crawlSessionRunner(ctx context.Context) session.MacroStepRunne
 		for k, v := range resp.Headers {
 			hdrs[k] = v
 			if strings.EqualFold(k, "Set-Cookie") {
-				c.cfg.SessionCoordinator.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
+				c.cfg.SessionCoordinator.HandleResponseFor(host, port, tls, stepPath(step.URL), resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body, nil)
 			}
 		}
 		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil
 	}
+}
+
+// stepPath is the path a macro step's URL names, for the URL-scope axes the coordinator matches a
+// step's response on (7nh2).
+//
+// "/" when the URL states no path — that is what an absent path means in HTTP, and it means a rule
+// scoped to "/api" does not claim a step that names the bare origin. A URL that will not parse
+// yields "/" for the same reason: the honest answer is "this step's path is unknown", and an
+// unknown path must not satisfy a path-scoped rule.
+func stepPath(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Path == "" {
+		return "/"
+	}
+	return u.Path
 }
 
 // buildRequestWithCookie is buildRequest with one addition: a Cookie header written

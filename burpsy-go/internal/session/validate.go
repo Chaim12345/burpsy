@@ -107,9 +107,14 @@ func validateRule(rule *SessionRule, scopeStated bool) error {
 	if strings.TrimSpace(rule.Name) == "" {
 		return refuse("a rule needs a name: every outcome and error this package reports names its rule")
 	}
-	if scopeStated && len(rule.ScopeHosts) == 0 {
-		return refuse("the scope has no hosts, so it matches nothing and this rule would never fire; " +
-			"omit the scope (or set allow_all) to apply everywhere")
+	if scopeStated && len(rule.ScopeHosts) == 0 && rule.ScopeMode != "suite" && !rule.StatesURLArms() {
+		// Stated-and-empty in every axis the rule can be scoped by (7nh2): no hosts, no path, no
+		// port, no scheme, and not delegated to the suite scope. This is the reading Rust's
+		// Option<Scope> cannot express and the web layer hands in as scopeStated, so it keeps its
+		// refusal — but the wording now names the axes, because "the scope has no hosts" stopped
+		// being the only way to state a scope without stating nothing.
+		return refuse("the scope states no hosts, no path, no port and no protocol, so it can only be read as one that matches nothing; " +
+			"omit the scope (or set allow_all) to apply everywhere, or state a host, a path prefix, a port or a scheme")
 	}
 	if rule.MaxAttempts < 1 {
 		return refuse("max_attempts must be at least 1, or the macro can never run; %d is the default",

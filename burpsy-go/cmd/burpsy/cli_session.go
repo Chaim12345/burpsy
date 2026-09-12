@@ -247,13 +247,20 @@ func sessionLogin(ctx *cliContext, args []string) error {
 	if *url == "" {
 		return fmt.Errorf("usage: burpsy session login -url https://host/...")
 	}
-	host, _, _, _, err := parseTargetURL(*url)
+	host, port, tls, path, err := parseTargetURL(*url)
 	if err != nil {
 		return err
 	}
 	// Resolved before anything is sent: with no rule for this target there is no macro to run with
 	// whatever comes back, so sending the probe would cost the target a request to no purpose.
-	rule := ctx.sess.MatchingRule(host)
+	//
+	// The probe's full identity, not its host (7nh2): a rule scoped to a path, port or scheme must
+	// not be the rule that fires for a probe URL its own editor excludes. A rule configured for
+	// "Use suite scope" is judged against this process's Target scope, read live.
+	rule := ctx.sess.MatchingRuleForRequest(
+		session.RequestIdentity{Host: host, Path: path, Port: port, TLS: tls},
+		nil,
+		func() bool { return ctx.scope.Contains(host, port, path, tls) })
 	if rule == nil {
 		fmt.Fprintf(ctx.out, "no_rule_applies url=%s rules=%d\n", *url, len(ctx.sess.AllRules()))
 		return nil
@@ -340,7 +347,10 @@ func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 		for k, v := range resp.Headers {
 			hdrs[k] = v
 			if strings.EqualFold(k, "Set-Cookie") {
-				ctx.sess.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
+				// The step's own path, so a path-scoped rule judges this response against the request
+				// that produced it rather than against a host alone (7nh2).
+				ctx.sess.HandleResponseFor(host, port, tls, path, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body,
+					func() bool { return ctx.scope.Contains(host, port, path, tls) })
 			}
 		}
 		// The body's length only — see the same record in internal/web/api_session.go for why a session
