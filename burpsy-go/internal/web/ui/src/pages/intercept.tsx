@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
-import { ArrowDown, ArrowUp, Columns3, Combine, ArrowRightLeft, FileCode2, FileOutput, Globe, Link2, MessageSquare, Plus, Repeat2, Send, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Combine, ArrowRightLeft, FileCode2, FileOutput, Globe, Link2, MessageSquare, Pencil, Plus, Repeat2, Send, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, copyToClipboard, downloadText, formatBytes, formatDuration, json } from "../lib/api";
 import { exchangeUrl, rawToCurl } from "../lib/actions";
@@ -15,6 +15,13 @@ import {
  useSaveInterceptRules,
  type InterceptDirection,
 } from "../lib/data.attack";
+import {
+ describeTarget,
+ sameTarget,
+ targetFromDraft,
+ targetOf,
+ type InterceptTarget,
+} from "../lib/intercept-target";
 import type { HeldMessageDetail, InterceptRuleSpec } from "../lib/types.attack";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
@@ -26,6 +33,7 @@ import {
  Checkbox,
  Empty,
  ErrorNotice,
+ Field,
  IconButton,
  Input,
  Modal,
@@ -388,6 +396,105 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
  );
 }
 
+/**
+ * The three fields an operator edits to point a held request at another destination, with what each
+ * one means (burpsy-react-ui-akv).
+ *
+ * A component of its own so the in-progress strings die with the dialog that holds it. Kept as state
+ * in the page instead, a half-typed port would survive Cancel and be sent with the next Forward —
+ * the trap the wire's own contract exists to avoid (api_intercept.go refuses a partial destination
+ * rather than filling the missing fields in from the hold).
+ *
+ * Nothing here talks to the server. The draft is applied to the page's state and the request is not
+ * affected until Forward, so the operator can see the new destination and change their mind with the
+ * message still exactly where it was.
+ */
+function TargetEditor({
+ original,
+ onApply,
+ onRevert,
+}: {
+ original: InterceptTarget;
+ onApply: (target: InterceptTarget) => void;
+ onRevert: () => void;
+}): JSX.Element {
+ const [host, setHost] = useState(original.host);
+ const [port, setPort] = useState(String(original.port));
+ const [tls, setTls] = useState(original.tls);
+ const result = targetFromDraft(host, port, tls);
+ const unchanged = result.ok && sameTarget(result.target, original);
+
+ return (
+  <>
+   <div className="form-grid">
+    <Field
+     label="Host"
+     hint="burpsy dials this name. The bytes are sent as they are, so a virtual host that routes on the Host header needs that header edited in the request above."
+    >
+     {(id) => (
+      <Input id={id} value={host} autoFocus onChange={(event) => setHost(event.target.value)} />
+     )}
+    </Field>
+    <Field label="Port" hint="1 to 65535.">
+     {(id) => (
+      <Input
+       id={id}
+       value={port}
+       inputMode="numeric"
+       onChange={(event) => setPort(event.target.value)}
+      />
+     )}
+    </Field>
+    <Field label="Scheme" hint="Whether burpsy wraps this one connection in TLS.">
+     {(id) => (
+      <Select
+       id={id}
+       value={tls ? "https" : "http"}
+       onChange={(event) => setTls(event.target.value === "https")}
+      >
+       <option value="http">http</option>
+       <option value="https">https</option>
+      </Select>
+     )}
+    </Field>
+   </div>
+
+   {result.ok ? null : <div className="notice notice-warn">{result.error}</div>}
+
+   {/* "Nothing changed" is worth saying rather than leaving as a silence: the operator may have
+       opened this to check where the message is already going, and a Save button that looks
+       identical either way would leave them unsure whether a retarget is now in force. */}
+   {unchanged ? (
+    <div className="notice">
+     This is where the client already sent it — nothing will change.
+    </div>
+   ) : null}
+
+   <div className="notice">
+    Retargeting a request that is a WebSocket upgrade is refused: the client&apos;s frames keep
+    arriving on the connection it opened, so the handshake would be answered from one origin while
+    the frames went to another. burpsy answers the client with a 502 explaining that instead.
+   </div>
+
+   <div className="page-actions">
+    <Button variant="outline" onClick={onRevert} disabled={unchanged}>
+     Revert to {describeTarget(original)}
+    </Button>
+    <Button
+     onClick={() => {
+      // Narrowed rather than asserted: a disabled button should not be the only thing standing
+      // between an unparseable draft and a Forward to it.
+      if (result.ok) onApply(result.target);
+     }}
+     disabled={!result.ok || unchanged}
+    >
+     Use this destination
+    </Button>
+   </div>
+  </>
+ );
+}
+
 export function InterceptPage(): JSX.Element {
  const { data, error, isFetching, refetch } = useInterceptDetailed();
  // Enable and drop come from the shared controls; forward has its own hook because the shared one
@@ -424,6 +531,14 @@ export function InterceptPage(): JSX.Element {
  const [fixContentLength, setFixContentLength] = useState(true);
  const [directionFilter, setDirectionFilter] = useState<HeldDirectionFilter>("all");
  const [inspector, setInspector] = useState(true);
+ /**
+  * Burp's "Edit target" (burpsy-react-ui-akv): where everything Forward will send THIS message, as
+  * the operator last edited it. Keyed to the selection exactly like `raw` above, so a poll of the
+  * same message cannot overwrite a destination mid-typing and a new selection starts from that row's
+  * own authority rather than inheriting the previous row's.
+  */
+ const [targetDraft, setTargetDraft] = useState<InterceptTarget | null>(null);
+ const [targetEditorOpen, setTargetEditorOpen] = useState(false);
 
  const heldAll = data?.held ?? [];
  // Apply direction filter to the held queue — the operator can focus on
@@ -439,6 +554,10 @@ export function InterceptPage(): JSX.Element {
   setRaw(selected?.raw ?? "");
   setCommentDraft(selected?.comment ?? "");
   setHighlightDraft(selected?.highlight ?? "");
+  // The destination draft follows the selection for the same reason: a target edited on one held
+  // message must not become the destination of the next one the operator clicks.
+  setTargetDraft(selected ? targetOf(selected) : null);
+  setTargetEditorOpen(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: keyed on id, not on `selected`'s contents
  }, [selectedId]);
 
@@ -462,18 +581,25 @@ export function InterceptPage(): JSX.Element {
  };
 
  /**
-  * Forward one held message by id, with its body and the Content-Length decision passed in.
-  *
-  * Taking all three explicitly is the point. The previous shape closed over `selected` and `raw`,
+ * Forward one held message by id, with its body, the Content-Length decision and — when the operator
+ * has pointed it somewhere else — its destination all passed in.
+ *
+ * Taking all of them explicitly is the point. The previous shape closed over `selected` and `raw`,
   * which was fine for the toolbar — it only ever acts on the selection — and wrong for anything
   * that acts on a row the operator pointed at instead. A caller that set the selection and then
   * invoked a closure captured at the previous render would forward the PREVIOUS message, with the
   * previous message's edit buffer as its body, and the success toast would name the one that
   * actually went. See burpsy-react-ui-3g5.
   */
- const forwardMessage = (id: number, body: string, fixCL: boolean, holdResponse = false) => {
+ const forwardMessage = (
+  id: number,
+  body: string,
+  fixCL: boolean,
+  holdResponse = false,
+  target?: InterceptTarget,
+ ) => {
   forwardHeld.mutate(
-   { id, raw: body, fixContentLength: fixCL, holdResponse },
+   { id, raw: body, fixContentLength: fixCL, holdResponse, target },
    {
     onSuccess: () => {
      setSelectedId(null);
@@ -483,6 +609,17 @@ export function InterceptPage(): JSX.Element {
    },
   );
  };
+
+ /**
+  * The destination to send `row` to: the operator's edit, but only for the row it belongs to.
+  *
+  * The draft is keyed to the selection while a menu acts on whatever row was pointed at, so sending
+  * the selection's edited destination under another row's id would be the same class of bug the
+  * comment above records (burpsy-react-ui-3g5) — one message's instruction applied to another
+  * message's bytes. A row that is not the selection forwards where the client asked, unchanged.
+  */
+ const targetFor = (row: HeldMessageDetail): InterceptTarget | undefined =>
+  row.direction === "request" && row.id === selectedId && targetDraft ? targetDraft : undefined;
 
  /**
   * Burp's "Don't intercept ..." quick actions (burpsy-react-ui-35i4): append a pass rule
@@ -685,7 +822,7 @@ export function InterceptPage(): JSX.Element {
       //
       // fixContentLength, not a hardcoded true: two forward paths disagreeing about
       // whether they rewrite a header is invisible from either one.
-      onSelect: () => forwardMessage(row.id, row.raw, fixContentLength),
+      onSelect: () => forwardMessage(row.id, row.raw, fixContentLength, false, targetFor(row)),
      },
      {
       id: "drop",
@@ -720,7 +857,7 @@ export function InterceptPage(): JSX.Element {
        {
         id: "intercept-response",
         label: "Do intercept the response to this request",
-        onSelect: () => forwardMessage(row.id, row.raw, fixContentLength, true),
+        onSelect: () => forwardMessage(row.id, row.raw, fixContentLength, true, targetFor(row)),
        },
       ]
       : row.direction === "response"
@@ -796,7 +933,7 @@ export function InterceptPage(): JSX.Element {
  // The toolbar's two actions: the selection, its edit buffer, and the operator's toggle.
  const forward = () => {
   if (!selected) return;
-  forwardMessage(selected.id, raw, fixContentLength);
+  forwardMessage(selected.id, raw, fixContentLength, false, targetFor(selected));
  };
 
  const drop = () => {
@@ -885,16 +1022,54 @@ export function InterceptPage(): JSX.Element {
   [selectedIds],
  );
 
+ /**
+  * The destination the header bar names: the operator's edit when they have made one, the row's own
+  * authority otherwise. Spelled by `describeTarget`, the same function the held-message table's Host
+  * column uses, so the row an operator clicked and the bar above the editor cannot disagree about
+  * where the message is going.
+  */
+ const authority = targetDraft ?? selected;
+ /**
+  * Whether the draft is the operator's edit rather than the row's own authority. Reported in the
+  * header bar because a retarget is otherwise invisible once the editor closes: the bytes look the
+  * same, and an operator who pointed a message elsewhere a minute ago would have no way to tell that
+  * this Forward is not the ordinary one.
+  */
+ const retargeted = authority !== null && selected !== null && !sameTarget(authority, targetOf(selected));
+
  const detail = selected ? (
   <div className="tabs-fill">
    <div className="detail-head">
     <div className="detail-head-title">
      <span className="eyebrow">HELD #{selected.id}</span>
-     <strong>
+     <strong
+      title={
+       retargeted
+        ? `The client asked for ${selected.host}:${selected.port}${selected.tls ? " (tls)" : ""}. This Forward goes to the destination shown instead.`
+        : undefined
+      }
+     >
       {selected.direction === "response" ? `${selected.status ?? "?"} response to ` : ""}
-      {selected.method} {selected.host}:{selected.port}
+      {selected.method} {describeTarget(authority ?? selected)}
       {selected.path}
      </strong>
+     {/* Burp's "Edit target" pencil (BurpClass9694.java proxyInterceptEditTargetButton, tooltip
+         "Click to modify"), beside the authority label rather than inside a menu, because the
+         destination is a property of the message on screen and not an action on it. Requests only:
+         a response has already come back from a destination, and a WebSocket frame has no
+         addressing of its own — the engine refuses a retarget on both, so offering the control
+         would promise something the wire answers with an error. */}
+     {selected.direction === "request" ? (
+      <IconButton
+       label={retargeted ? `Edit target — currently ${describeTarget(authority ?? selected)}` : "Edit target"}
+       size="small"
+       aria-pressed={targetEditorOpen}
+       onClick={() => setTargetEditorOpen(true)}
+      >
+       <Pencil size={13} />
+      </IconButton>
+     ) : null}
+     {retargeted ? <Badge tone="warn">retargeted</Badge> : null}
     </div>
     <div className="detail-actions">
      {/* The frame type, when there is one. A WebSocket payload alone does not say how to read
@@ -1110,6 +1285,30 @@ export function InterceptPage(): JSX.Element {
        {controls.dropAll.isPending ? "Dropping…" : `Drop all ${held.length}`}
       </Button>
      </div>
+    </Modal>
+
+    {/* Burp's "Edit target" editor. A dialog rather than an editable authority in the header bar:
+        the header is a display, and making it hold a three-part destination would leave a Forward
+        one keystroke away from a half-typed host. Nothing is sent until Forward, so the
+        operator can look at the new destination and change their mind without the message having
+        moved. */}
+    <Modal
+     open={targetEditorOpen}
+     onOpenChange={setTargetEditorOpen}
+     title={`Send held #${selected.id} somewhere else`}
+     description={`Applies to this one request. The client's connection stays where it is, and the next request on it goes to ${selected.host}:${selected.port} again.`}
+    >
+     <TargetEditor
+      original={targetOf(selected)}
+      onApply={(target) => {
+       setTargetDraft(target);
+       setTargetEditorOpen(false);
+      }}
+      onRevert={() => {
+       setTargetDraft(targetOf(selected));
+       setTargetEditorOpen(false);
+      }}
+     />
     </Modal>
    </div>
   </div>

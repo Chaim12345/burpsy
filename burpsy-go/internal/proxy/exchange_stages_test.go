@@ -222,7 +222,7 @@ func TestAnInterceptEditKeepsThePreEditBytesReadable(t *testing.T) {
 					continue
 				}
 				edited := strings.Replace(string(held.Raw), "as-sent", "as-edited", 1)
-				_ = engine.Forward(held.ID, &edited, false)
+				_ = engine.Forward(held.ID, &edited, false, nil)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}

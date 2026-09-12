@@ -63,7 +63,7 @@ func TestAHeldRequestStillCarriesTheHeadersEgressWillStrip(t *testing.T) {
 				// Recorded exactly as the operator would read it, then forwarded unchanged: the
 				// subject is what they were shown, not what they could do to it.
 				heldRequest.Store(string(held.Raw))
-				_ = engine.Forward(held.ID, nil, false)
+				_ = engine.Forward(held.ID, nil, false, nil)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}

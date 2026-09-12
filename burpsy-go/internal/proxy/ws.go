@@ -732,7 +732,10 @@ func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, p
 		return originals, false
 	}
 
-	action, edited := held.Wait()
+	// The destination is ignored: a WebSocket frame has no addressing of its own, and the engine
+	// refuses a retarget on one (see intercept.Engine.Forward). The value is still discarded here
+	// rather than defaulted so the compiler makes any future Wait caller state what it does with it.
+	action, edited, _ := held.Wait()
 	if action == intercept.ActionDrop {
 		return nil, true
 	}

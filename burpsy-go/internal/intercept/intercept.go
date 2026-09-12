@@ -334,6 +334,37 @@ const (
 	ActionDrop
 )
 
+// Target is a destination an operator has retargeted a held message to.
+//
+// Burp's intercept header bar carries an "Edit target" pencil beside the authority label
+// (BurpClass9694.java: proxyInterceptEditTargetButton, tooltip "Click to modify"), which lets the
+// operator send the item they are holding to a different host, port or scheme than the one the
+// client asked for. burpsy rendered the authority twice and read-only, and the wire carried no
+// destination at all, so the capability was absent end to end rather than merely unrendered
+// (burpsy-react-ui-akv).
+//
+// # Why it is a value the caller must be given rather than a field anyone may read
+//
+// A retarget changes where bytes land, which is the one thing the engagement scope exists to decide.
+// The proxy therefore has to see the edited destination *before* it authorises the request, and it
+// cannot get that by reading a field off the hold whenever it likes — a field read after the
+// decision would be an authorisation answered about one host and applied to another. So the target
+// is returned from Wait, alongside the bytes, as part of one decision, and the proxy re-runs its
+// scope check against what came back.
+type Target struct {
+	Host string
+	Port uint16
+	TLS  bool
+}
+
+// SameAs reports whether this target is the destination the message already had, so a caller can
+// treat "the operator retyped the same host" exactly like "the operator changed nothing" — a
+// distinction that matters because the retargeted path dials a fresh connection when the original
+// connection is still usable.
+func (t Target) SameAs(host string, port uint16, tls bool) bool {
+	return t.Host == host && t.Port == port && t.TLS == tls
+}
+
 // Held is one queued message. The proxy blocks on Wait until the operator
 // resolves it; the result carries the edited bytes for forwarding.
 type Held struct {
@@ -365,23 +396,32 @@ type Held struct {
 	resolved bool
 	action   Action
 	outRaw   []byte
-	reason   string
+	// target is the operator's edited destination, nil when they left it alone. Set only by Forward:
+	// a dropped message has no destination, and inventing one would let a drop carry a retarget into
+	// the history row of an exchange that never happened.
+	target *Target
+	reason string
 }
 
 // Wait blocks until the operator forwards or drops the message. It is safe to
 // call once; the returned bytes are the possibly-edited message to put on the
 // wire (forward) or nil (drop).
-func (h *Held) Wait() (Action, []byte) {
+//
+// The target is the operator's edited destination, nil when they left it alone. It is returned here
+// rather than exposed as an accessor because it has to reach the caller as part of the same
+// decision as the bytes: the proxy authorises the request against the destination it is about to
+// use, and a destination fetched separately could be read before the operator's edit landed.
+func (h *Held) Wait() (Action, []byte, *Target) {
 	<-h.done
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.action, h.outRaw
+	return h.action, h.outRaw, h.target
 }
 
 // resolve marks the message resolved exactly once; a second resolve (e.g. an
 // API request arriving twice) is ignored so the proxy cannot act on a stale
 // decision.
-func (h *Held) resolve(a Action, raw []byte, reason string) bool {
+func (h *Held) resolve(a Action, raw []byte, target *Target, reason string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.resolved {
@@ -390,6 +430,7 @@ func (h *Held) resolve(a Action, raw []byte, reason string) bool {
 	h.resolved = true
 	h.action = a
 	h.outRaw = raw
+	h.target = target
 	h.reason = reason
 	close(h.done)
 	return true
@@ -808,7 +849,19 @@ func (e *Engine) Get(id uint64) *Held {
 // line looks like a header block to that function — so forwarding a held WebSocket message with the
 // default settings would have injected a Content-Length header into the middle of application data.
 // Skipped by direction, because the direction is a fact and the bytes are a guess.
-func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool) error {
+//
+// # The target
+//
+// nil means "send it where the client asked", which is what every caller that has no opinion gets.
+// A non-nil Target replaces the destination for this one request — Burp's "Edit target" pencil,
+// which is per-item and not a repointing of the connection. A target equal to the one the message
+// already has collapses to nil, so the console can send the authority it is showing without
+// changing the path the proxy takes.
+//
+// A target the engine cannot dial is refused with the hold left unresolved: resolving it and then
+// failing to dial would either drop the request or send it to the original destination, and both
+// are the opposite of the instruction.
+func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool, target *Target) error {
 	e.mu <- struct{}{}
 	h := e.held[id]
 	<-e.mu
@@ -822,7 +875,35 @@ func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool) error
 	if fixContentLength && !h.Direction.IsWebSocket() {
 		raw = rewriteContentLength(raw)
 	}
-	if !h.resolve(ActionForward, raw, "") {
+	// A destination the engine cannot dial is refused here rather than at the dial, and the hold is
+	// left untouched so the operator can correct it: resolving the hold with a target that fails
+	// would release the request down the original path, which is precisely not what they asked for.
+	if target != nil {
+		// Trimmed here rather than only at the API, because the engine is the last thing between an
+		// operator's field and a dial: a host of " " is an empty host that the wire's own validation
+		// would have caught, and a value that reaches this far by another route must be caught too.
+		// Normalised on a copy so the caller's struct is left as it was passed.
+		normalised := *target
+		normalised.Host = strings.TrimSpace(normalised.Host)
+		if normalised.Host == "" {
+			return fmt.Errorf("a retarget needs a host: an empty one would dial the local machine")
+		}
+		if normalised.Port == 0 {
+			return fmt.Errorf("a retarget needs a port in 1..65535")
+		}
+		if h.Direction.IsWebSocket() {
+			return fmt.Errorf("a WebSocket frame has no destination of its own; retarget the handshake instead")
+		}
+		// The unchanged case collapses to no target at all, so a caller that always sends the current
+		// authority (the console does, because the operator may have retyped it) still takes the
+		// ordinary path and reuses the connection the proxy already has.
+		if normalised.SameAs(h.Host, h.Port, h.TLS) {
+			target = nil
+		} else {
+			target = &normalised
+		}
+	}
+	if !h.resolve(ActionForward, raw, target, "") {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
 	// Remove from the hold map so a long-running proxy does not leak one full
@@ -844,7 +925,7 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	if h == nil {
 		return fmt.Errorf("no held message %d", id)
 	}
-	if !h.resolve(ActionDrop, nil, reason) {
+	if !h.resolve(ActionDrop, nil, nil, reason) {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
 	e.mu <- struct{}{}
@@ -891,7 +972,7 @@ func (e *Engine) ForwardAll() int {
 		// h.Raw, not nil: the resolve payload IS the proxy side's answer, and nil
 		// reads as an empty message there — a forward of nothing. The client's own
 		// held bytes are the unmodified content this method promises.
-		if h.resolve(ActionForward, h.Raw, "") {
+		if h.resolve(ActionForward, h.Raw, nil, "") {
 			forwarded = append(forwarded, h)
 		}
 	}
@@ -925,7 +1006,7 @@ func (e *Engine) DropAll(reason string) int {
 	<-e.mu
 	dropped := make([]*Held, 0, len(all))
 	for _, h := range all {
-		if h.resolve(ActionDrop, nil, reason) {
+		if h.resolve(ActionDrop, nil, nil, reason) {
 			dropped = append(dropped, h)
 		}
 	}

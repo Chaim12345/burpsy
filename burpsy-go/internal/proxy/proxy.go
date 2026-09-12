@@ -1085,6 +1085,17 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		requestData := readFullRequest(requestLine, br)
 		startTime := time.Now()
 
+		// reqTLS is the destination's scheme, and it is a variable rather than the literal `true` this
+		// used to pass everywhere because a retarget can move the request off TLS entirely
+		// (burpsy-react-ui-akv). The scope check, the egress authorisation and the record all read it,
+		// so each answers about where the bytes are actually going.
+		reqTLS := true
+
+		// retarget is the operator's edited destination for this iteration, nil when they left it
+		// alone. Declared out here rather than inside the hold block because the forward below reads
+		// it: which connection this request goes out on is decided after the hold resolves.
+		var retarget *intercept.Target
+
 		// Apply Match & Replace on the request — same position and same reasoning as the
 		// plain path in handleHTTP: before intercept, before the scope-gated store, so the
 		// bytes forwarded upstream equal the bytes recorded. Requests inside the tunnel
@@ -1102,11 +1113,17 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			if held := s.config.intercept.Hold(intercept.ParseMessage(
 				intercept.DirectionRequest, reqHost, reqPort, true, method, path, requestData,
 			)); held != nil {
-				action, raw := held.Wait()
+				action, raw, edited := held.Wait()
 				if action == intercept.ActionDrop {
 					return
 				}
 				requestData = raw
+				// Burp's "Edit target" (akv), applied above the scope check and the egress
+				// authorisation so both answer about the destination the request will reach.
+				if edited != nil {
+					retarget = edited
+					reqHost, reqPort, reqTLS = edited.Host, edited.Port, edited.TLS
+				}
 			}
 		}
 
@@ -1128,7 +1145,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		// forwarded, it is simply not kept. The request bytes are not stored
 		// here — both halves of an exchange are put away together by the one
 		// producer once it is complete. See handleHTTP.
-		inScope := s.config.scope.Contains(reqHost, reqPort, path, true)
+		inScope := s.config.scope.Contains(reqHost, reqPort, path, reqTLS)
 
 		// ...unless the operator turned "Drop all out-of-scope requests" on, which is the one
 		// setting that makes scope an egress fence as well (burpsy-react-ui-ckqx). The switch
@@ -1144,9 +1161,38 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		// channel, and plaintext on the raw socket reaches the browser as "server gave HTTP
 		// response to HTTPS client" — a TLS error, which is the one report that would send the
 		// operator looking at certificates instead of at their scope list.
-		if !s.config.scope.AuthoriseRequest(reqHost, reqPort, path, true) {
-			tlsClient.Write(scopeDropResponse(reqHost, reqPort, path, true, s.config.scope))
+		if !s.config.scope.AuthoriseRequest(reqHost, reqPort, path, reqTLS) {
+			tlsClient.Write(scopeDropResponse(reqHost, reqPort, path, reqTLS, s.config.scope))
 			return
+		}
+
+		// A retargeted request (akv) goes out over its own connection, because the tunnel's own is
+		// already dialled and its TLS is negotiated to the name the client asked for — a retarget
+		// cannot ride it. The connection is closed after this one exchange, and the tunnel's own stays
+		// where it is for whatever the client sends next; Burp's "Edit target" is per item, not a
+		// repointing of the connection.
+		//
+		// A WebSocket upgrade is refused here rather than retargeted, and that is a correctness
+		// limit rather than an unimplemented one: the client's frames keep arriving on this tunnel the
+		// operator did not retarget, so a handshake sent elsewhere would get a relay whose two halves
+		// talk to different origins. Answered, with the reason, so the operator is not left reading a
+		// hang as a network fault.
+		if retarget != nil {
+			if core.IsWsUpgradeRequest(requestData) {
+				s.config.logger.Warn("refused to retarget a WebSocket upgrade",
+					zap.String("host", reqHost), zap.Uint16("port", reqPort))
+				tlsClient.Write(wsRetargetRefusalResponse())
+				continue
+			}
+			responseData, serverIP, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
+			if err != nil {
+				s.config.logger.Error("retargeted forward failed", zap.Error(err))
+				return
+			}
+			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIP) {
+				return
+			}
+			continue
 		}
 
 		// Forward over the persistent upstream connection.
@@ -1170,7 +1216,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					return
 				}
 				responseData := append(head, body...)
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream)) {
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream)) {
 					return
 				}
 				continue
@@ -1236,7 +1282,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		}
 		responseData := append(head, body...)
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream)) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream)) {
 			return
 		}
 	}
@@ -1257,7 +1303,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 // serverIP is threaded in rather than read here: this function holds the client side of the
 // decrypted channel and not the upstream socket, and the destination address is a property of that
 // socket. Passing it keeps the answer the one the exchange actually used (burpsy-react-ui-mr4p).
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, serverIP string) bool {
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, serverIP string) bool {
 	// The response's stage boundaries, by the same rule as completeResponse's
 	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
 	// and before the hold. See messageStages.
@@ -1294,9 +1340,12 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	keepServing := true
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
-			intercept.DirectionResponse, host, port, true, method, path, responseData,
+			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		)); held != nil {
-			action, raw := held.Wait()
+			// A response has no destination of its own to retarget: the bytes already came back from
+			// one. The target is therefore ignored here rather than applied, and the engine only ever
+			// sets it on a forward.
+			action, raw, _ := held.Wait()
 			if action == intercept.ActionDrop {
 				keepServing = false
 				notes = interceptDropNote()
@@ -1326,9 +1375,12 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 
 	if recorded {
 		s.record(scanner.CapturedExchange{
-			Host:     host,
-			Port:     port,
-			TLS:      true,
+			Host: host,
+			Port: port,
+			// The destination's scheme, not the tunnel's: a request retargeted to an http origin is
+			// recorded as the plaintext exchange it was (burpsy-react-ui-akv). Recorded after the
+			// rewrite, like everything else here — history must show what went on the wire.
+			TLS:      tls,
 			Method:   method,
 			Path:     path,
 			Request:  requestData,
@@ -1511,17 +1563,29 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// A held request blocks this connection until resolved; a drop closes the
 	// connection without reaching upstream. heldNote/heldHighlight carry the
 	// operator's annotation from the hold to the recorded exchange (5q8u).
+	// scheme is the destination's scheme, and it is a variable rather than a literal `false` from here
+	// on because a retarget can change it (burpsy-react-ui-akv). Everything downstream that asks "is
+	// this TLS" — the scope check, the egress authorisation, the record — has to answer about the
+	// destination the bytes will actually reach, not the one the client originally named.
+	scheme := false
 	var heldNote, heldHighlight string
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
-			intercept.DirectionRequest, host, port, false, method, path, requestData,
+			intercept.DirectionRequest, host, port, scheme, method, path, requestData,
 		)); held != nil {
-			action, raw := held.Wait()
+			action, raw, retarget := held.Wait()
 			if action == intercept.ActionDrop {
 				clientConn.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"))
 				return
 			}
 			requestData = raw
+			// Burp's "Edit target" (akv): the operator's destination replaces the client's for this one
+			// request. Applied here, above the scope check and above the egress authorisation, so both are
+			// answered about where the request is actually going — a host typed into the intercept pane
+			// must not be a way around the fence the engagement scope puts up.
+			if retarget != nil {
+				host, port, scheme = retarget.Host, retarget.Port, retarget.TLS
+			}
 			// The operator's annotation rides the hold to the recorded exchange: this is
 			// Burp's "annotations that you make also appear against the item in the HTTP
 			// history". Forwarded-but-unrecorded traffic (dont_log_out_of_scope) simply
@@ -1563,15 +1627,17 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// recorded bytes and the forwarded bytes stay identical, which is the invariant that matters.
 	requestData = s.config.options.ApplyRequestEgress(requestData)
 
-	// Check scope
-	inScope := s.config.scope.Contains(host, port, path, false)
+	// Check scope. The scheme is the destination's, not the client's: a request retargeted from http to
+	// https must be matched by the https arm of a scope rule, or the scheme arm would be answering a
+	// question about a host the request is not going to.
+	inScope := s.config.scope.Contains(host, port, path, scheme)
 
 	// The egress half of the same question — see the TLS path for why this is answered rather
 	// than dropped on the floor. It sits before the dont_log_out_of_scope branch below because
 	// that branch forwards: a request refused at egress must not reach the origin by the
 	// retention path either.
-	if !s.config.scope.AuthoriseRequest(host, port, path, false) {
-		clientConn.Write(scopeDropResponse(host, port, path, false, s.config.scope))
+	if !s.config.scope.AuthoriseRequest(host, port, path, scheme) {
+		clientConn.Write(scopeDropResponse(host, port, path, scheme, s.config.scope))
 		return
 	}
 
@@ -1604,13 +1670,13 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	}
 
 	// Forward to upstream
-	responseData, serverIP, err := s.forwardRequest(requestData, host, port)
+	responseData, serverIP, err := s.forwardRequest(requestData, host, port, scheme)
 	if err != nil {
 		s.config.logger.Error("forward failed", zap.Error(err))
 		return
 	}
 
-	s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, heldNote, heldHighlight, serverIP)
+	s.completeResponse(clientConn, method, host, port, scheme, path, requestData, reqStages, responseData, startTime, heldNote, heldHighlight, serverIP)
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1658,7 +1724,9 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		)); held != nil {
-			action, raw := held.Wait()
+			// The destination is ignored for a response, by the same reasoning as
+			// handleTLSResponse's: it has already been reached.
+			action, raw, _ := held.Wait()
 			if action == intercept.ActionDrop {
 				dropped = true
 				notes = interceptDropNote()
@@ -2069,6 +2137,27 @@ func scopeDropResponse(host string, port uint16, path string, tls bool, scope *c
 		"Connection: close\r\n\r\n" + body)
 }
 
+// wsRetargetRefusalResponse answers a held WebSocket upgrade the operator pointed at another
+// destination (burpsy-react-ui-akv).
+//
+// Refused rather than retargeted, and this is a correctness boundary rather than a gap: the client's
+// frames arrive on the tunnel the operator did not retarget, so a handshake sent elsewhere would
+// produce a relay whose two halves are talking to different origins — the client's frames would keep
+// going to the original host while the origin that answered is a different one. That is not a
+// degraded version of the feature; it is two conversations mixed together. Answered with the reason
+// so the operator sees a 502 with an explanation rather than a hang they would read as a network
+// fault, which is the convention the scope drop already follows.
+func wsRetargetRefusalResponse() []byte {
+	body := "burpsy did not retarget this request: it is a WebSocket upgrade, whose frames keep " +
+		"arriving on the connection the client opened. Retargeting the handshake would relay the client's " +
+		"frames to the original origin while the response came from another one. Retarget a plain " +
+		"request instead.\n"
+	return []byte("HTTP/1.1 502 Bad Gateway\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+		"Connection: close\r\n\r\n" + body)
+}
+
 func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16) {
 	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
@@ -2132,8 +2221,27 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 // The resolved destination IP comes back with the response because this function owns the socket
 // and closes it before returning: by the time the caller records the exchange there is nothing left
 // to ask (burpsy-react-ui-mr4p). Empty on any path that never dialled.
-func (s *Server) forwardRequest(requestData []byte, host string, port uint16) ([]byte, string, error) {
-	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
+// forwardRequest sends one request to one destination over a fresh connection and reads the whole
+// response. tls decides whether that connection is wrapped, which is what makes an operator's
+// retarget able to change the scheme as well as the host (burpsy-react-ui-akv).
+//
+// One request per connection, deliberately. This is the path a retarget uses, and a retargeted
+// request has nowhere to keep a connection: the item the operator edited is one exchange, and
+// holding a socket open to a host that the client never asked for would leave the proxy dialled into
+// a destination nobody is talking to any more.
+func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) ([]byte, string, error) {
+	var upstreamConn net.Conn
+	var err error
+	if tls {
+		// No ALPN offer: this path speaks HTTP/1.1 to the origin (the caller has already read the
+		// response head itself and is not negotiating a multiplexed connection), and offering h2
+		// while writing an HTTP/1.1 request line is how an origin that accepts h2 answers with a
+		// protocol error.
+		conn, _, dialErr := s.dialUpstreamTLS(host, net.JoinHostPort(host, strconv.Itoa(int(port))), nil)
+		upstreamConn, err = conn, dialErr
+	} else {
+		upstreamConn, err = s.dialUpstream(context.Background(), host, port)
+	}
 	if err != nil {
 		return nil, "", err
 	}

@@ -460,6 +460,13 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 			// Burp's "Do intercept > Response to this request". Refused for anything but a held
 			// request, by the engine.
 			HoldResponse bool `json:"hold_response"`
+			// Target is the operator's edited destination — Burp's "Edit target" pencil
+			// (burpsy-react-ui-akv). Absent means "send it where the client asked", which is what
+			// every caller that has no opinion sends. The three fields are separate rather than a
+			// nested object so a caller that changes only the port does not have to restate the host.
+			Host *string `json:"host"`
+			Port *uint16 `json:"port"`
+			TLS  *bool   `json:"tls"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -471,8 +478,39 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err := s.intercept.Forward(id, req.Raw, req.FixContentLength); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+		// A destination is only built when the caller said something about one. An outright empty
+		// host is not treated as "no target": it is a caller that named a destination it cannot
+		// have, and the engine refuses it below by name rather than silently sending the request to
+		// the original host — which would look like a successful forward to the wrong place.
+		var target *intercept.Target
+		set := 0
+		for _, present := range []bool{req.Host != nil, req.Port != nil, req.TLS != nil} {
+			if present {
+				set++
+			}
+		}
+		switch {
+		case set == 0:
+			// No opinion: send it where the client asked. This is the ordinary forward.
+		case set < 3:
+			// Partial, and refused rather than completed from the hold. Filling the gaps from the current
+			// authority would look helpful and be a trap: a caller that sent host alone would silently
+			// inherit the old port, and a caller that sent port alone would silently inherit the old host
+			// — both of which produce a destination the operator never typed. The console sends all three
+			// because it is showing all three.
+			http.Error(w, "A retarget needs host, port and tls together; a partial one would inherit the fields it left out", http.StatusBadRequest)
+			return
+		default:
+			target = &intercept.Target{Host: strings.TrimSpace(*req.Host), Port: *req.Port, TLS: *req.TLS}
+		}
+		if err := s.intercept.Forward(id, req.Raw, req.FixContentLength, target); err != nil {
+			// A refused destination is the caller's mistake about the request, not a missing hold —
+			// 400 rather than 404, so the console shows the reason instead of "no such item".
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "no held message") || strings.Contains(err.Error(), "already resolved") {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

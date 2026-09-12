@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { api, json } from "./api";
 import { keys, useInvalidate, useResource } from "./data";
+import type { InterceptTarget } from "./intercept-target";
 import type { IssueTriagePatch } from "./issue-triage";
 import type {
  AuditResult,
@@ -102,14 +103,29 @@ export function useSaveInterceptRules(dir: InterceptDirection) {
  * to true: rewriting a body and having the length silently corrected is usually what an operator
  * wants, but testing how a server handles a mismatched Content-Length is a real thing to do, so the
  * flag is a parameter here rather than a decision made for them.
+ *
+ * `target` is Burp's "Edit target" pencil (burpsy-react-ui-akv): the destination this one request goes
+ * to, when the operator pointed it somewhere other than where the client asked. It is sent as all
+ * three fields or none at all — the server refuses a partial destination rather than inheriting the
+ * fields it left out, because an inherited port is a destination nobody typed. `undefined` is the
+ * ordinary forward and the only shape every other caller needs.
  */
 export function useForwardHeld() {
  const client = useQueryClient();
- return useMutation<unknown, Error, { id: number; raw: string; fixContentLength: boolean; holdResponse?: boolean }>({
-  mutationFn: ({ id, raw, fixContentLength, holdResponse }) =>
+ return useMutation<
+  unknown,
+  Error,
+  { id: number; raw: string; fixContentLength: boolean; holdResponse?: boolean; target?: InterceptTarget }
+ >({
+  mutationFn: ({ id, raw, fixContentLength, holdResponse, target }) =>
    api<unknown>(
     `/api/intercept/${id}/forward`,
-    json("POST", { raw, fix_content_length: fixContentLength, hold_response: holdResponse ?? false }),
+    json("POST", {
+     raw,
+     fix_content_length: fixContentLength,
+     hold_response: holdResponse ?? false,
+     ...(target ? { host: target.host, port: target.port, tls: target.tls } : {}),
+    }),
    ),
   onSuccess: () => void client.invalidateQueries({ queryKey: keys.intercept }),
  });
