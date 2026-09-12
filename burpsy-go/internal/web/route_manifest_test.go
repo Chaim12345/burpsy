@@ -613,6 +613,21 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskScope,
 		summary: "the engagement scope: what every sender is allowed to reach",
 	},
+	"/api/search": {
+		// riskRead, and it stays riskRead however much it scans. It sends nothing, changes nothing, and
+		// returns only offsets into messages every other read route already serves — the rows it walks
+		// are the same rows /api/history and /api/tools/log hand out without a gate. Calling it a
+		// heavier read would not make it a different class, and the safe reading of an unscoped GET is
+		// the one to keep: a gate here would train an unattended caller to confirm without reading.
+		//
+		// The scan is deliberately *not* bounded by the scope unless in_scope is sent: this is the one
+		// search that crosses tools, and refusing to look at traffic burpsy already captured and already
+		// shows in History would answer "no matches" for bytes the operator can see on screen.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "Burp's suite-wide search across Proxy, Crawler, Repeater, Intruder, Scanner and " +
+			"Organizer traffic, with the case/regex/negative, in-scope, location and area axes; " +
+			"returns matching exchanges plus byte offsets, never message copies",
+	},
 	"/api/sequencer/analyse": {
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "statistical analysis of a token sample; sends nothing",

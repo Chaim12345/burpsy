@@ -781,6 +781,9 @@ func (s *Server) setupRoutes() {
 	// Capture + stats
 	s.mux.HandleFunc("/api/history", s.handleHistory)
 	s.mux.HandleFunc("/api/message/", s.handleMessage)
+	// Burp's suite-wide Search dialog (vs9k): the one search that crosses tools, run over the
+	// store because the history rows the console holds carry no bytes to search. See api_search.go.
+	s.mux.HandleFunc("/api/search", s.handleSearch)
 	s.mux.HandleFunc("/api/exchange/", s.handleExchange)
 	s.mux.HandleFunc("/api/exchanges/", s.handleExchange) // legacy alias for /api/exchange/
 	s.mux.HandleFunc("/api/stats", s.handleStats)

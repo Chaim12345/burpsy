@@ -1624,6 +1624,149 @@ tbody td {
   margin-top:2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
 }
 
+/* Burp's suite-wide Search dialog (vs9k). Three regions: the filters, the result table, and the
+   message the selected row matched in. The filters are a fixed-width column because they are a
+   form, and the two result regions share the remaining width so the preview is as wide as the
+   table it explains. */
+.search-dialog {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-rows: minmax(140px, auto) minmax(0, 1fr);
+  gap: var(--s3);
+  max-height: min(70vh, 720px);
+  min-height: 0;
+}
+
+.search-dialog-form {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  display: grid;
+  gap: var(--s3);
+  align-content: start;
+  overflow: auto;
+  min-width: 0;
+}
+
+.search-dialog-results {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.search-dialog-preview {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  overflow: auto;
+}
+
+.search-dialog-checks,
+.search-dialog-tools {
+  display: grid;
+  gap: var(--s1);
+}
+
+.search-dialog-axes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--s2);
+  align-items: start;
+}
+
+.search-dialog-actions {
+  display: grid;
+  gap: var(--s2);
+  align-content: start;
+}
+
+/* What the current options actually mean. Stated in words because the results below are only
+   interpretable against the filters that produced them, and the form can scroll out of view. */
+.search-dialog-scope {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+}
+
+.search-dialog-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s1);
+}
+
+/* The row whose message the preview is showing. Two signals, because the tint alone is invisible to
+   anyone who cannot see it: a left edge mark and the aria-selected state the table announces. */
+.search-row {
+  cursor: pointer;
+}
+
+.search-row-selected > td {
+  background: var(--paper-deep);
+}
+
+.search-row-selected > td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.search-url {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.search-dialog-message {
+  background: var(--editor-bg);
+  color: var(--editor-fg);
+  border: 1px solid var(--line);
+  padding: var(--s2) var(--s3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 34vh;
+  overflow: auto;
+  margin: 0;
+}
+
+/* The matched bytes. The text colour is set explicitly to the editor's own foreground rather than
+   inherited, so the highlight cannot change the contrast the editor background was chosen for; the
+   underline is the signal that survives a theme where the tint is faint, and colour blindness. */
+.search-dialog-message mark {
+  background: color-mix(in srgb, var(--warn) 18%, var(--editor-bg));
+  color: var(--editor-fg);
+  box-shadow: inset 0 -2px 0 var(--warn);
+  padding: 0;
+}
+
+/* Whether the preview was cut off. A pane that silently showed the first few kilobytes of a
+   response would read as the whole response. */
+.search-dialog-cut {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+@media (max-width: 980px) {
+  .search-dialog {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(120px, auto) minmax(0, 1fr);
+  }
+  .search-dialog-form {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .search-dialog-results {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .search-dialog-preview {
+    grid-column: 1;
+    grid-row: 3;
+  }
+}
+
 .palette {
   position: fixed;
   z-index: var(--z-dialog);

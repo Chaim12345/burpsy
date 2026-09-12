@@ -6,15 +6,15 @@ import {
   Command,
   Database,
   FileDown,
-  FileUp,
-  Gauge,
-  Keyboard,
-  Moon,
+  FileUp,	Gauge,
+	Keyboard,
+	Moon,
   Network,
   Plus,
   Repeat2,
   RotateCcw,
   Rows3,
+  Search,
   Settings,
   ShieldCheck,
   Sun,
@@ -37,6 +37,7 @@ import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
 import { DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
+import { SearchDialog } from "./ui/search-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
 
@@ -151,6 +152,10 @@ function App(): JSX.Element {
   const openRepeaterTab = useApp((state) => state.openRepeaterTab);
   const repeaterTabCount = useApp((state) => state.repeaterTabs.length);
   const setShortcutsOpen = useApp((state) => state.setShortcutsOpen);
+  // Burp puts Search on the tab bar, and it is shell state rather than a page's: it crosses tools,
+  // so no single tool owns it. Local rather than in the store because nothing outside the shell
+  // opens it — the command palette and the menu item are both built here.
+  const [searchOpen, setSearchOpen] = useState(false);
 
   useThemeEffect();
   useDocumentTitle();
@@ -397,6 +402,18 @@ function App(): JSX.Element {
         },
       },
       {
+        id: "cmd:search",
+        // The menu bar is hidden on narrow viewports and this dialog lives on it, so the palette
+        // has to reach the same action or Search would simply be unavailable on a small screen.
+        label: "Search across tools…",
+        // Its own group rather than "Go to": the Go-to heading is built by flat-mapping the tools
+        // over their leaves, so a facility filed under it would read as a route that is not one.
+        group: "Search",
+        keywords: "find grep suite-wide proxy repeater organizer",
+        icon: Search,
+        run: () => setSearchOpen(true),
+      },
+      {
         id: "cmd:shortcuts",
         label: "Show keyboard shortcuts",
         group: "Help",
@@ -446,6 +463,7 @@ function App(): JSX.Element {
           actions: [
             { id: "settings", label: "Settings", icon: Settings, onSelect: () => navigate("settings") },
             { id: "palette", label: "Command palette", shortcut: "mod+K", icon: Command, onSelect: () => setPaletteOpen(true) },
+            { id: "search", label: "Search across tools…", icon: Search, onSelect: () => setSearchOpen(true) },
             { id: "keys", label: "Keyboard shortcuts", shortcut: "?", icon: Keyboard, onSelect: () => setShortcutsOpen(true) },
           ],
         },
@@ -699,6 +717,11 @@ function App(): JSX.Element {
             <IconButton label="Command palette (mod+K)" onClick={() => setPaletteOpen(true)}>
               <Command size={15} />
             </IconButton>
+            {/* Burp's Search lives on the tab bar, and it is here rather than on a page because it
+                crosses tools — a page-local button would imply a page-local search. */}
+            <IconButton label="Search across tools" onClick={() => setSearchOpen(true)}>
+              <Search size={15} />
+            </IconButton>
             <IconButton label="Keyboard shortcuts (?)" onClick={() => setShortcutsOpen(true)}>
               <Keyboard size={15} />
             </IconButton>
@@ -778,6 +801,7 @@ function App(): JSX.Element {
       </div>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
+      <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
       <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       {/* Hidden on purpose: the File menu item is the affordance; the input only has to accept the
           chosen file. Cleared after every change so picking the same file twice still fires. */}
