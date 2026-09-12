@@ -1,4 +1,5 @@
 import { Bug, Play } from "lucide-react";
+import { parseSeeds } from "../lib/parse-seeds";
 import { useState } from "react";
 import { useCrawls, useStartCrawl } from "../lib/data.observe";
 import type { CrawlRun } from "../lib/types.observe";
@@ -25,10 +26,7 @@ export function CrawlLauncher(): JSX.Element {
   const start = useStartCrawl();
   const { data, running } = useCrawls();
 
-  const seedList = seeds
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const seedList = parseSeeds(seeds);
 
   const launch = () => {
     start.mutate(

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { parseSeeds } from "../lib/parse-seeds";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Copy, FolderTree, MoreVertical, Pause, Play, Plus, Radar, Search, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -480,6 +481,10 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  const startCrawl = useStartCrawl();
  const [kind, setKind] = useState<string>("crawl");
  const [seed, setSeed] = useState("");
+ // f3k: the New scan dialog takes Burp's "URLs to scan" shape — many seeds, one box
+ // (Burp: "Define the URLs to scan. Burp will begin crawling from these URLs"). The wire has
+ // taken an array all along; only the input was single.
+ const seeds = parseSeeds(seed);
  const [maxRequests, setMaxRequests] = useState("50");
  const [maxDepth, setMaxDepth] = useState("5");
  const [maxDuration, setMaxDuration] = useState("");
@@ -488,7 +493,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  const submit = () => {
   startCrawl.mutate(
    {
-    seeds: [seed.trim()],
+    seeds,
     max_requests: Number(maxRequests) || undefined,
     max_depth: Number(maxDepth) || undefined,
     max_duration_secs: Number(maxDuration) || undefined,
@@ -522,8 +527,18 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     </div>
     {kind === "crawl" ? (
      <>
-      <Field label="Seed URL">
-       {(id) => <Input id={id} value={seed} onChange={(event) => setSeed(event.target.value)} placeholder="https://demo.local/" />}
+      <Field
+       label="URLs to scan"
+       hint="One per line, or comma separated — Burp's own field is many URLs in one box."
+      >
+       {(id) => (
+        <Input
+         id={id}
+         value={seed}
+         onChange={(event) => setSeed(event.target.value)}
+         placeholder={"https://demo.local/\nhttps://api.demo.local/"}
+        />
+       )}
       </Field>
       <div className="metric-grid wide">
        <Field label="Max requests (empty = uncapped)">
