@@ -259,6 +259,57 @@ func TestRestoreKeepsAURLScopedRuleAndLeavesLegacyRulesUnscoped(t *testing.T) {
 	}
 }
 
+// The tools scope (so3) survives the round trip, and a legacy row comes back unrestricted.
+//
+// Checked here rather than only over the wire because this is the path a restart takes: a rule
+// restricted to the crawler that came back unrestricted would fire for every tool the next time the
+// process started, and that is the failure the operator cannot see — the rule still looks scoped in
+// the editor right up until the restart.
+//
+// The legacy direction is the one that must not be over-corrected: reading a row written before this
+// column as "restricted to no tool" would silently stop every existing login macro from matching.
+func TestRestoreKeepsAToolScopedRuleAndLeavesLegacyRulesUnrestricted(t *testing.T) {
+	p := newTestStore(t)
+	scoped := savedRule(31, "crawl re-login", "https://app.test/login")
+	scoped.ScopeTools = []string{"crawler", "session"}
+	p.SaveSessionRules([]*session.SessionRule{savedRule(32, "plain login", "https://app.test/plain"), scoped})
+
+	sess := session.NewCoordinator(zap.NewNop())
+	if err := p.Restore(nil, nil, nil, nil, sess, nil, nil); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	byID := map[session.RuleID]*session.SessionRule{}
+	for _, r := range sess.AllRules() {
+		byID[r.ID] = r
+	}
+	got := byID[31]
+	if got == nil {
+		t.Fatal("the tool-scoped rule did not come back")
+	}
+	if len(got.ScopeTools) != 2 || got.ScopeTools[0] != "crawler" || got.ScopeTools[1] != "session" {
+		t.Fatalf("restored ScopeTools = %v, want [crawler session]", got.ScopeTools)
+	}
+	if !got.MatchTools("crawler") {
+		t.Error("the restored rule does not match a tool it names")
+	}
+	if got.MatchTools("intruder") {
+		t.Error("the restored rule matched Intruder; the tools scope did not survive the restart, so a " +
+			"re-login rule kept away from an attack fuzzing the session cookie would come back and fire")
+	}
+
+	legacy := byID[32]
+	if legacy == nil {
+		t.Fatal("the legacy rule did not come back")
+	}
+	if len(legacy.ScopeTools) != 0 {
+		t.Fatalf("a rule written before the column existed came back with ScopeTools=%v; a row that states "+
+			"no tools scope is unrestricted", legacy.ScopeTools)
+	}
+	if !legacy.MatchTools("intruder") {
+		t.Error("the legacy rule no longer matches Intruder traffic; the empty default must read as unrestricted")
+	}
+}
+
 // The parameter scope (burpsy-react-ui-9hip) survives the round trip. The dangerous direction
 // is the legacy read: a rule written before the column existed must come back UNRESTRICTED —
 // reading a legacy rule as parameter-restricted would silently stop every existing login

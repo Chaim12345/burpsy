@@ -18,6 +18,11 @@ package session
 //     name an operator can act on.
 //   - A scope that was stated and is empty. It matches nothing, so the rule would never fire — see
 //     ValidateRuleStatedScope for why only the *stated* case can be caught here.
+//   - A tools scope naming an empty tool. No request is ever attributed to a tool with no name, so
+//     such an entry is a restriction that can never match — the same dead arm as a host pattern of
+//     "", which is why this check exists here and not only at the wire. Whether a *non-empty* name
+//     is one burpsy has is not this package's question: the vocabulary belongs to internal/toollog
+//     and the wire refuses an unrecognised name against it.
 //   - max_attempts below 1. The macro could never run at all.
 //   - A macro with no steps. There is nothing to run.
 //   - A step with no method, or a URL with no readable host. A hostless URL cannot be keyed in the
@@ -115,6 +120,16 @@ func validateRule(rule *SessionRule, scopeStated bool) error {
 		// being the only way to state a scope without stating nothing.
 		return refuse("the scope states no hosts, no path, no port and no protocol, so it can only be read as one that matches nothing; " +
 			"omit the scope (or set allow_all) to apply everywhere, or state a host, a path prefix, a port or a scheme")
+	}
+	// The tools scope is checked for the one fault this package can see without knowing the tool
+	// vocabulary: an empty name, which no request can ever carry. A near-miss against a real tool
+	// name cannot be caught here and is caught at the wire instead (see MatchTools' doc for why
+	// the comparison is exact rather than fuzzy).
+	for _, tool := range rule.ScopeTools {
+		if strings.TrimSpace(tool) == "" {
+			return refuse("the tools scope names an empty tool, which no request can be attributed to; " +
+				"remove the entry or name a tool")
+		}
 	}
 	if rule.MaxAttempts < 1 {
 		return refuse("max_attempts must be at least 1, or the macro can never run; %d is the default",

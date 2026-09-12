@@ -184,7 +184,16 @@ type sessionRuleDto struct {
 	Scope   json.RawMessage `json:"scope,omitempty"`
 	// ScopeParams is Burp's parameter scope (burpsy-react-ui-9hip): when set, the rule applies
 	// only to requests carrying every named parameter. Nil is the unrestricted rule.
-	ScopeParams []string         `json:"scope_params,omitempty"`
+	ScopeParams []string `json:"scope_params,omitempty"`
+	// ScopeTools is Burp's tools scope (so3): the tools this rule applies to, from the same
+	// vocabulary the Logger's filter uses (toollog's tool names).
+	//
+	// A pointer so that "the operator unchecked every tool" is distinguishable from "this client
+	// never sent a tools scope". They must not be the same value: absent means every tool, and
+	// nothing checked means the rule applies to no request at all — dtoToRule refuses that rather
+	// than silently widening it back to every tool, which is the reading that would let a
+	// restriction the operator deliberately stated be quietly dropped.
+	ScopeTools  *[]string        `json:"scope_tools,omitempty"`
 	Steps       []sessionStepDto `json:"steps"`
 	Validity    json.RawMessage  `json:"validity"`
 	MaxAttempts *int             `json:"max_attempts,omitempty"`
@@ -195,6 +204,16 @@ type sessionRulesResp struct {
 	Wired bool             `json:"wired"`
 	Rules []sessionRuleDto `json:"rules"`
 	Hint  string           `json:"hint,omitempty"`
+	// Tools is every tool name a rule's tools scope may name (so3), served so the editor's checklist
+	// is built from the list this server actually enforces rather than a copy of it. A copy in the
+	// UI would be a second vocabulary, and the failure it produces is silent in the direction that
+	// matters: the editor offers a tool the API refuses, or omits one it accepts, and neither shows
+	// up as an error anywhere.
+	//
+	// Never omitempty, for the reason the cookies response's AbsorbingFrom is not: an absent field
+	// and an empty list are the same JSON, and "this server knows of no tools" is precisely the
+	// fact a client must not confuse with "the server is too old to say".
+	Tools []string `json:"tools"`
 }
 
 // sessionCookiesResp mirrors the UI's CookiesResp.
@@ -282,6 +301,47 @@ type sessionLoginResponseView struct {
 
 // ---- conversions --------------------------------------------------------------------------------
 
+// toolNames is every tool name burpsy has, in toollog's order, for the refusal below to name the
+// alternatives. Built here rather than spelled as a literal so a tool added to toollog cannot be
+// missing from the list an operator is shown when they mistype one — the shape of the drift this
+// whole vocabulary-in-one-place arrangement exists to prevent.
+func toolNames() []string {
+	out := make([]string, 0, len(toollog.ToolAll))
+	for _, t := range toollog.ToolAll {
+		out = append(out, t.String())
+	}
+	return out
+}
+
+// scopeToolNames validates Burp's tools scope (so3) against the one vocabulary of tool names, which
+// internal/toollog owns: `ToolFromName` is the same resolver the tool log's own wire round-trip
+// uses, so the rule editor and the Logger's filter cannot disagree about what "crawler" means.
+//
+// A stated-but-empty list is refused rather than read as "every tool". Both readings are defensible
+// in the abstract and only one is defensible here: a rule whose editor showed every tool unchecked
+// and which then applied to every tool would be doing the opposite of what its own form said, and
+// the operator has no way to tell. Refusing costs them one click; the other reading costs them the
+// restriction they deliberately stated.
+func scopeToolNames(sent *[]string) ([]string, error) {
+	if sent == nil {
+		return nil, nil
+	}
+	if len(*sent) == 0 {
+		return nil, fmt.Errorf("the tools scope names no tools, so no request could ever trigger this rule; "+
+			"omit scope_tools to apply the rule to every tool, or name at least one of %s", strings.Join(toolNames(), ", "))
+	}
+	for _, name := range *sent {
+		if _, ok := toollog.ToolFromName(name); !ok {
+			return nil, fmt.Errorf("the tools scope names %q, which is not a tool burpsy has; the tools are %s",
+				name, strings.Join(toolNames(), ", "))
+		}
+	}
+	// Stored exactly as sent, in the order sent: this is a set for matching, but the editor's own
+	// order is what it renders back, and reordering it here would show the operator a list they
+	// did not write.
+	return append([]string(nil), (*sent)...), nil
+}
+
 // ruleToDto converts a stored rule into the UI wire shape. Scope is expressed with the same
 // ScopeInfo body as /api/scope so the UI's scopeSummary renders it the same way.
 func ruleToDto(r *session.SessionRule) sessionRuleDto {
@@ -346,6 +406,14 @@ func ruleToDto(r *session.SessionRule) sessionRuleDto {
 	// so folding it into the hosts-shaped scope would be a type lie.
 	if len(r.ScopeParams) > 0 {
 		dto.ScopeParams = r.ScopeParams
+	}
+	// The tools scope likewise (so3): it constrains by which tool asked, which is neither an
+	// origin nor the request's content. Emitted whenever the rule names a tool, so a save from
+	// the editor cannot write the empty list over a restriction the operator stated — the same
+	// restore-drops-a-field defect this function already names for extractions and the URL arms.
+	if len(r.ScopeTools) > 0 {
+		tools := append([]string(nil), r.ScopeTools...)
+		dto.ScopeTools = &tools
 	}
 	// Extractions are stored in one flat list naming the step each one reads (session.Extraction.Step)
 	// and are served back attached to that step, because that is the shape the UI edits them in — a
@@ -423,9 +491,14 @@ func dtoToRule(dto sessionRuleDto) (*session.SessionRule, error) {
 			}
 		}
 	}
+	tools, err := scopeToolNames(dto.ScopeTools)
+	if err != nil {
+		return nil, err
+	}
 	rule := session.NewSessionRule(dto.Name, scopeHosts, nil)
 	rule.Enabled = dto.Enabled
 	rule.ScopeParams = dto.ScopeParams
+	rule.ScopeTools = tools
 	// Burp's URL-scope radio (7nh2): the DTO carries the mode and the custom-scope arms; the
 	// arms ride the scope block's first rule (the scope builder above flattens to hosts for the
 	// host axis, and these three fields are the URL-matching arms Burp's editor holds per rule).
@@ -538,7 +611,7 @@ func (s *Server) sessionRulesGet(w http.ResponseWriter, r *http.Request) {
 		dtos = append(dtos, ruleToDto(rule))
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sessionRulesResp{Wired: true, Rules: dtos})
+	json.NewEncoder(w).Encode(sessionRulesResp{Wired: true, Rules: dtos, Tools: toolNames()})
 }
 
 func (s *Server) sessionRulesPost(w http.ResponseWriter, r *http.Request) {
@@ -704,8 +777,12 @@ func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
 	// are what a parameter-restricted rule is judged against, and the probe's full identity
 	// (host, path, port, scheme) is what a custom-scope or suite-scope rule is judged against.
 	// The suite verdict is live Target-scope state, decided here rather than frozen on the rule.
+	// The requesting tool is stated (so3), not left empty: these probes are the Session tool's own
+	// traffic — the same attribution the tool log already records for them (toollog.ToolSession) —
+	// so a rule restricted to, say, the crawler must not fire for them, and a rule restricted to
+	// the session tool must.
 	rule := s.sessionCoordinator.MatchingRuleForRequest(
-		session.RequestIdentity{Host: host, Path: probePath, Port: port, TLS: tls},
+		session.RequestIdentity{Host: host, Path: probePath, Port: port, TLS: tls, Tool: toollog.ToolSession.String()},
 		probeParamNames(probe),
 		func() bool { return s.scope.MayContainHost(host, port, tls) })
 	if rule == nil {
@@ -733,7 +810,7 @@ func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// (3) The coordinator decides whether this counts as a valid session and, if not, runs the macro.
-	outcome := s.sessionCoordinator.HandleRecovery(step, response, runner)
+	outcome := s.sessionCoordinator.HandleRecovery(toollog.ToolSession.String(), step, response, runner)
 
 	// Nothing is written to s.loginRuns here on purpose. A successful login already recorded what it
 	// sent inside the coordinator (recordObserved, untemplated), and that is what
@@ -939,9 +1016,12 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 		for k, v := range resp.Headers {
 			hdrs[k] = v
 			if strings.EqualFold(k, "Set-Cookie") {
-				// The step's own request identity (7nh2): a path- or suite-scoped rule is judged
-				// against the request that actually produced this response.
-				s.sessionCoordinator.HandleResponseFor(host, port, tls, path, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body,
+				// The step's own request identity (7nh2), including the tool that sent it (so3): a
+				// path-, port- or tool-scoped rule is judged against the request that actually
+				// produced this response.
+				s.sessionCoordinator.HandleResponseFor(
+					session.RequestIdentity{Host: host, Path: path, Port: port, TLS: tls, Tool: toollog.ToolSession.String()},
+					resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body,
 					func() bool { return s.scope.MayContainHost(host, port, tls) })
 			}
 		}

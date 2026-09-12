@@ -50,7 +50,14 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 )
+
+// crawlTool is the tool every request this crawl makes is attributed to, for the tools scope of a
+// session rule (so3). Named from toollog's vocabulary rather than spelled as a literal here: that
+// package owns the names, and a second spelling would drift from the one the Logger's filter and the
+// rule editor both offer.
+func crawlTool() string { return toollog.ToolCrawler.String() }
 
 // SessionCoordinator is the session-handling seam a crawl can be wired to. nil keeps
 // the static-Headers behaviour unchanged; *session.Coordinator satisfies it.
@@ -71,8 +78,9 @@ type SessionCoordinator interface {
 	EnsureLoggedIn(rule *session.SessionRule, runner session.MacroStepRunner) session.LoginOutcome
 	// HandleResponseFor lets the coordinator absorb a macro step's Set-Cookie into its
 	// jar, exactly as the web surface's runner does, and judge the step's validity against
-	// the step's own URL identity rather than its host alone.
-	HandleResponseFor(host string, port uint16, tls bool, path string, status int, hdrs map[string]string, body []byte, scopeContains func() bool)
+	// the step's own request identity — path, port, scheme and the tool that sent it (so3) —
+	// rather than its host alone.
+	HandleResponseFor(req session.RequestIdentity, status int, hdrs map[string]string, body []byte, scopeContains func() bool)
 	// CookieHeader returns the jar's Cookie header value for an origin, or "" when
 	// the jar holds nothing for it.
 	CookieHeader(host string, port uint16, tls bool) string
@@ -141,12 +149,16 @@ func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *Li
 	// The full identity, not the hostname: a rule scoped to a path or port must not be the rule
 	// that fires a login macro for a crawl item its own editor excludes (7nh2). The suite-scope
 	// verdict is this crawl's own scope handle, read live.
+	// The tool too (so3): these are the crawler's own requests, so a rule the operator restricted
+	// to another tool must not re-login on the crawl's behalf — and one restricted to the crawler
+	// must, even though it names no host.
 	rule := c.cfg.SessionCoordinator.MatchingRuleForRequest(
 		session.RequestIdentity{
 			Host: host,
 			Path: item.url.EscapedPath(),
 			Port: portOf(item.url),
 			TLS:  strings.EqualFold(item.url.Scheme, "https"),
+			Tool: crawlTool(),
 		},
 		nil,
 		func() bool {
@@ -280,7 +292,9 @@ func (c *Crawler) crawlSessionRunner(ctx context.Context) session.MacroStepRunne
 		for k, v := range resp.Headers {
 			hdrs[k] = v
 			if strings.EqualFold(k, "Set-Cookie") {
-				c.cfg.SessionCoordinator.HandleResponseFor(host, port, tls, stepPath(step.URL), resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body, nil)
+				c.cfg.SessionCoordinator.HandleResponseFor(
+					session.RequestIdentity{Host: host, Path: stepPath(step.URL), Port: port, TLS: tls, Tool: crawlTool()},
+					resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body, nil)
 			}
 		}
 		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil

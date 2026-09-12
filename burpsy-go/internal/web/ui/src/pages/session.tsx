@@ -57,10 +57,13 @@ interface RuleDraft {
  /** Custom-scope arms: path prefix, port, protocol. Empty/undefined = the arm does not apply. */
  scopePath: string;
  scopePort: string;
- scopeProtocol: "" | "http" | "https";
- /** Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
-  * parameter exists. Empty = everywhere. */
- params: string[];
+ scopeProtocol: "" | "http" | "https";	/** Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
+	 * parameter exists. Empty = everywhere. */
+	params: string[];
+	/** Burp's tools scope (so3): the tools the rule applies to, from the server's own list.
+	 * Empty = everywhere, which the section says out loud — the server refuses the wire form of
+	 * "checked nothing" precisely so this reading is never what an operator gets by accident. */
+	tools: string[];
  validity: SessionValidity;
  /** Kept as text so "" can mean "the server's default" rather than one attempt. */
  maxAttempts: string;
@@ -144,8 +147,8 @@ function ruleIn(rule: SessionRuleFull): RuleDraft {
   scopeMode: (rule.scope?.mode as RuleDraft["scopeMode"]) ?? "all",
   scopePath: rule.scope?.path ?? "",
   scopePort: rule.scope?.port !== undefined && rule.scope?.port !== null ? String(rule.scope.port) : "",
-  scopeProtocol: (rule.scope?.protocol as RuleDraft["scopeProtocol"]) ?? "",
-  params: rule.scope_params ?? [],
+  scopeProtocol: (rule.scope?.protocol as RuleDraft["scopeProtocol"]) ?? "",	params: rule.scope_params ?? [],
+	tools: rule.scope_tools ?? [],
   validity: rule.validity ?? {},
   maxAttempts: rule.max_attempts === undefined ? "" : String(rule.max_attempts),
   steps: (rule.steps ?? []).map(stepIn),
@@ -186,13 +189,16 @@ function ruleOut(draft: RuleDraft): SessionRuleFull {
   };
  } else if (draft.hosts.length) {
   out.scope = { allow_all: false, rules: draft.hosts.map((host) => ({ kind: "Include" as const, host })) };
- }
- // Parameter scope is omitted when empty, like the host scope: absent means "applies
- // everywhere", so an operator who never opened the field never changes a rule's meaning.
- if (draft.params.length) {
-  const names = draft.params.map((name) => name.trim()).filter(Boolean);
-  if (names.length) out.scope_params = names;
- }
+ }	// Parameter scope is omitted when empty, like the host scope: absent means "applies
+	// everywhere", so an operator who never opened the field never changes a rule's meaning.
+	if (draft.params.length) {
+		const names = draft.params.map((name) => name.trim()).filter(Boolean);
+		if (names.length) out.scope_params = names;
+	}
+	// Same again for the tools scope. Omitted rather than sent empty: an empty array is the
+	// server's refused "names no tools at all", which is a different statement from "every tool"
+	// and must not be what the form says when the operator has restricted nothing.
+	if (draft.tools.length) out.scope_tools = [...draft.tools];
  const attempts = Number(draft.maxAttempts.trim());
  if (draft.maxAttempts.trim() !== "" && Number.isInteger(attempts) && attempts > 0) out.max_attempts = attempts;
  return out;
@@ -249,8 +255,8 @@ function emptyRule(): RuleDraft {
   scopeMode: "all",
   scopePath: "",
   scopePort: "",
-  scopeProtocol: "",
-  params: [],
+  scopeProtocol: "",	params: [],
+	tools: [],
   validity: { status_is: 200 },
   maxAttempts: "",
   steps: [{ method: "POST", url: "", headers: [], body: "", extract: [] }],
@@ -260,12 +266,17 @@ function emptyRule(): RuleDraft {
 function scopeSummary(rule: SessionRuleFull): string {
  const hosts = (rule.scope?.rules ?? []).map((entry) => entry.host ?? "").filter(Boolean);
  let hostPart = "every host";
- if (rule.scope && !rule.scope.allow_all && hosts.length > 0) hostPart = hosts.join(", ");
- // A parameter scope is a further restriction; say what it needs so the row reads whole.
- if (rule.scope_params?.length) {
-  return `${hostPart} carrying ${rule.scope_params.join(" + ")}`;
- }
- return hostPart;
+ if (rule.scope && !rule.scope.allow_all && hosts.length > 0) hostPart = hosts.join(", ");	// The tools scope is a restriction on a different axis, and it is the one an operator is most
+	// likely to have forgotten, so it is named first — "every host" alone reads as "fires for
+	// everything" when a tools restriction may be quietly holding it back.
+	const toolsPart = rule.scope_tools?.length ? `from ${rule.scope_tools.join(", ")}` : "";
+	// A parameter scope is a further restriction; say what it needs so the row reads whole.
+	if (rule.scope_params?.length) {
+		return toolsPart
+			? `${hostPart} ${toolsPart} carrying ${rule.scope_params.join(" + ")}`
+			: `${hostPart} carrying ${rule.scope_params.join(" + ")}`;
+	}
+	return toolsPart ? `${hostPart} ${toolsPart}` : hostPart;
 }
 
 function hasNestedValidity(validity: SessionValidity): boolean {
@@ -954,6 +965,44 @@ export function SessionPage(): JSX.Element {
          />
         )}
        </Field>
+      </div>
+
+      {/* Tools scope (so3) — Burp's first axis on the Scope tab, and the one with no substitute:
+          URL scope is coarser host matching, parameter scope needs content the rule can inspect,
+          but "not Intruder" cannot be expressed any other way. The names come from the server's
+          own list so this checklist cannot offer a tool the API would refuse. */}
+      <div className="stack-tight">
+       <span className="eyebrow">Tools this rule applies to</span>
+       <small className="field-hint">
+        {editing.tools.length === 0
+         ? "No tools checked, so the rule applies to every tool."
+         : "The rule fires only for requests made by the checked tools — Burp's tools scope. A re-login rule kept away from Intruder is the case this exists for: an Intruder attack that is deliberately fuzzing the session cookie must not be repaired mid-flight."}
+       </small>
+       <div className="row-list">
+        {(rulesQuery.data?.tools ?? []).map((tool) => (
+         <label
+          key={tool}
+          className="field-label"
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-sm)" }}
+         >
+          <input
+           type="checkbox"
+           aria-label={`Apply this rule to ${tool}`}
+           checked={editing.tools.includes(tool)}
+           disabled={!wired}
+           onChange={() =>
+            setEditing({
+             ...editing,
+             tools: editing.tools.includes(tool)
+              ? editing.tools.filter((name) => name !== tool)
+              : [...editing.tools, tool],
+            })
+           }
+          />
+          {tool}
+         </label>
+        ))}
+       </div>
       </div>
 
       {/* URL scope (7nh2) — Burp's own radio, with its own labels (Zgw7): Include all URLs /

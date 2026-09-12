@@ -200,6 +200,7 @@ CREATE TABLE IF NOT EXISTS session_rules (
 	scope_path     TEXT NOT NULL DEFAULT '',
 	scope_port     INTEGER,
 	scope_protocol TEXT NOT NULL DEFAULT '',
+	scope_tools    TEXT NOT NULL DEFAULT '',
 	macro          TEXT NOT NULL,
 	validity       TEXT,
 	max_attempts   INTEGER NOT NULL,
@@ -317,6 +318,15 @@ CREATE TABLE IF NOT EXISTS tool_log (
 		if err := s.addColumn("session_rules", col.name, col.decl); err != nil {
 			return err
 		}
+	}
+	// session_rules gained scope_tools for Burp's tools scope (so3): the tools a rule applies to.
+	// A JSON array in one column rather than a join table, because the list is an unordered set of
+	// names read whole or not at all and never queried across rules — the same reasoning scope_hosts
+	// already followed, and a second table would be a second place for it to be half-written.
+	// Empty is the unrestricted rule every row written before this column carried, which is the only
+	// safe default: reading a legacy rule as restricted to some tool would silently stop it firing.
+	if err := s.addColumn("session_rules", "scope_tools", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
 	}
 	// exchanges gained the four earlier-stage message ids (burpsy-react-ui-c05), so a Match & Replace
 	// rewrite or an intercept edit stays comparable against the bytes the peer actually sent after a
@@ -1458,6 +1468,10 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		if err != nil {
 			params = nil
 		}
+		tools, err := json.Marshal(r.ScopeTools)
+		if err != nil {
+			tools = nil
+		}
 		macro, err := json.Marshal(r.Steps)
 		if err != nil {
 			macro = nil
@@ -1480,10 +1494,10 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		if _, err := s.db.Exec(
 			`INSERT OR REPLACE INTO session_rules
 			 (id, name, enabled, scope_hosts, scope_params, scope_mode, scope_path, scope_port, scope_protocol,
-			  macro, validity, max_attempts, extractions, ord)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  scope_tools, macro, validity, max_attempts, extractions, ord)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, params, r.ScopeMode, r.ScopePathPrefix, scopePort,
-			r.ScopeProtocol, macro, validity, r.MaxAttempts, exts, i); err != nil {
+			r.ScopeProtocol, tools, macro, validity, r.MaxAttempts, exts, i); err != nil {
 			s.log("session rule", err)
 			return
 		}
@@ -1500,7 +1514,7 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, enabled, scope_hosts, scope_params, scope_mode, scope_path, scope_port, scope_protocol,
-		        macro, validity, max_attempts, extractions
+		        scope_tools, macro, validity, max_attempts, extractions
 		 FROM session_rules ORDER BY COALESCE(ord, id), id`)
 	if err != nil {
 		return nil, err
@@ -1511,18 +1525,25 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 		r := &session.SessionRule{}
 		var id int64
 		var enabled int
-		var hosts, params, macro, validity, exts []byte
+		var hosts, params, macro, validity, exts, tools []byte
 		var maxAttempts int
 		// Nullable on purpose: NULL is "no port arm", which is a fact about the rule, not a
 		// number. A legacy row reads back NULL here and the rule keeps the unrestricted port.
 		var scopePort *int64
 		if err := rows.Scan(&id, &r.Name, &enabled, &hosts, &params, &r.ScopeMode, &r.ScopePathPrefix,
-			&scopePort, &r.ScopeProtocol, &macro, &validity, &maxAttempts, &exts); err != nil {
+			&scopePort, &r.ScopeProtocol, &tools, &macro, &validity, &maxAttempts, &exts); err != nil {
 			return nil, err
 		}
 		r.ID = session.RuleID(id)
 		r.Enabled = enabled != 0
 		r.MaxAttempts = maxAttempts
+		// A legacy row's empty column reads as no tools scope, which is unrestricted — the same
+		// fallback scope_hosts and scope_params take, for the same reason.
+		if len(tools) > 0 {
+			if err := json.Unmarshal(tools, &r.ScopeTools); err != nil {
+				return nil, err
+			}
+		}
 		if scopePort != nil {
 			port := uint16(*scopePort)
 			r.ScopePort = &port

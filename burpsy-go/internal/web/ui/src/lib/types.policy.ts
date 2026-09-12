@@ -140,21 +140,31 @@ export interface SessionRuleFull {
  name: string;
  enabled: boolean;
  /** Omitted means "applies everywhere"; a stated but empty scope is refused. */
- scope?: SessionScope;
- /**
-  * Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
-  * parameter exists. Omitted = unrestricted, like the host scope.
-  */
- scope_params?: string[];
+ scope?: SessionScope;	/**
+	 * Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
+	 * parameter exists. Omitted = unrestricted, like the host scope.
+	 */
+	scope_params?: string[];
+	/**
+	 * Burp's tools scope (so3): the rule applies only to requests made by one of these tools,
+	 * named as the Logger's capture filter names them. Omitted = every tool. An empty array is
+	 * refused by the server rather than read as "every tool" — an operator who unchecked every
+	 * box meant the opposite of that, and the form shows the meaning either way.
+	 */
+	scope_tools?: string[];
  steps: SessionMacroStep[];
  validity: SessionValidity;
  max_attempts?: number;
-}
-
-export interface SessionRulesResponse {
- wired: boolean;
- rules: SessionRuleFull[];
- hint?: string;
+}export interface SessionRulesResponse {
+	wired: boolean;
+	rules: SessionRuleFull[];
+	hint?: string;
+	/**
+	 * Every tool name a rule's tools scope may name (so3), served by the API so this checklist
+	 * cannot drift from what the server enforces. Always present: the server sends it even when
+	 * the rules list is empty.
+	 */
+	tools: string[];
 }
 
 export interface SessionCookiePair {

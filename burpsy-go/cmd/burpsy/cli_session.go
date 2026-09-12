@@ -257,8 +257,11 @@ func sessionLogin(ctx *cliContext, args []string) error {
 	// The probe's full identity, not its host (7nh2): a rule scoped to a path, port or scheme must
 	// not be the rule that fires for a probe URL its own editor excludes. A rule configured for
 	// "Use suite scope" is judged against this process's Target scope, read live.
+	// The tool is stated (so3): `burpsy session check` is the Session tool's own probe, the same
+	// attribution the tool log gives it below, so a rule restricted to other tools must not fire
+	// for it — and one restricted to the session tool must.
 	rule := ctx.sess.MatchingRuleForRequest(
-		session.RequestIdentity{Host: host, Path: path, Port: port, TLS: tls},
+		session.RequestIdentity{Host: host, Path: path, Port: port, TLS: tls, Tool: toollog.ToolSession.String()},
 		nil,
 		func() bool { return ctx.scope.Contains(host, port, path, tls) })
 	if rule == nil {
@@ -272,7 +275,7 @@ func sessionLogin(ctx *cliContext, args []string) error {
 		fmt.Fprintf(ctx.out, "probe_failed rule=%s error=%s\n", rule.Name, err)
 		return nil
 	}
-	outcome := ctx.sess.HandleRecovery(probe, response, runner)
+	outcome := ctx.sess.HandleRecovery(toollog.ToolSession.String(), probe, response, runner)
 	switch outcome.Kind {
 	case session.RecoveryNoRuleApplies:
 		// Unreachable here, since the rule was resolved above. Printed faithfully anyway rather than
@@ -347,9 +350,11 @@ func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 		for k, v := range resp.Headers {
 			hdrs[k] = v
 			if strings.EqualFold(k, "Set-Cookie") {
-				// The step's own path, so a path-scoped rule judges this response against the request
-				// that produced it rather than against a host alone (7nh2).
-				ctx.sess.HandleResponseFor(host, port, tls, path, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body,
+				// The step's own path and tool, so a path- or tool-scoped rule judges this response
+				// against the request that produced it rather than against a host alone (7nh2, so3).
+				ctx.sess.HandleResponseFor(
+					session.RequestIdentity{Host: host, Path: path, Port: port, TLS: tls, Tool: toollog.ToolSession.String()},
+					resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body,
 					func() bool { return ctx.scope.Contains(host, port, path, tls) })
 			}
 		}

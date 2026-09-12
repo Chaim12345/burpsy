@@ -877,13 +877,25 @@ type SessionRule struct {
 	// ScopePathPrefix limits a custom-scope rule to requests whose path starts with it;
 	// ScopePort to one port; ScopeProtocol to one scheme. All three optional — a custom
 	// rule with none of them is the historical host-pattern-only scope, unchanged.
-	ScopePathPrefix string        `json:"scope_path_prefix,omitempty"`
-	ScopePort       *uint16       `json:"scope_port,omitempty"`
-	ScopeProtocol   string        `json:"scope_protocol,omitempty"`
-	Steps           []MacroStep   `json:"macro"`
-	Validity        *ValidityRule `json:"validity"`
-	MaxAttempts     int           `json:"max_attempts"`
-	Extractions     []*Extraction `json:"extractions"`
+	ScopePathPrefix string  `json:"scope_path_prefix,omitempty"`
+	ScopePort       *uint16 `json:"scope_port,omitempty"`
+	ScopeProtocol   string  `json:"scope_protocol,omitempty"`
+	// ScopeTools is Burp's tools scope (so3): when non-empty, the rule applies only to requests
+	// attributed to one of the named tools; empty means every tool, the same reading MatchHost
+	// gives an empty host list. The names are toollog's tool names ("repeater", "intruder",
+	// "scanner", "sequencer", "crawler", "proxy", …) and this package treats them as opaque
+	// strings it compares for equality, exactly as it treats a host pattern — the vocabulary
+	// belongs to internal/toollog and is enforced where the wire and the durable mirror meet.
+	//
+	// Describing the axis as names rather than ordinals is deliberate: an ordinal from another
+	// package's enum would be a number this package's persisted JSON and SQLite rows could not
+	// be read back from once that enum's order changed, which toollog's own Tool doc says is
+	// exactly why a new tool goes on the end and never in the middle.
+	ScopeTools  []string      `json:"scope_tools,omitempty"`
+	Steps       []MacroStep   `json:"macro"`
+	Validity    *ValidityRule `json:"validity"`
+	MaxAttempts int           `json:"max_attempts"`
+	Extractions []*Extraction `json:"extractions"`
 }
 
 // MatchHost says whether this rule's scope covers `host`.
@@ -914,14 +926,26 @@ func (r *SessionRule) MatchHost(host string) bool {
 	return false
 }
 
-// RequestIdentity is what a session rule needs to know about one request to answer the URL-scope
-// question (7nh2): the host is the axis MatchingRule always had; Path, Port and TLS carry the
-// custom-scope arms Burp's URL-matching rules specify (protocol/host/port/path).
+// RequestIdentity is what a session rule needs to know about one request to answer the scope
+// question: the host is the axis MatchingRule always had; Path, Port and TLS carry the custom-scope
+// arms Burp's URL-matching rules specify (protocol/host/port/path, 7nh2); Tool carries the tools
+// scope (so3).
 type RequestIdentity struct {
 	Host string
 	Path string
 	Port uint16
 	TLS  bool
+	// Tool names the tool making this request, in toollog's vocabulary, or "" when the caller
+	// cannot say.
+	//
+	// Empty is not "some other tool" and must not be read as one: an unattributed request still
+	// matches a tool-restricted rule (see MatchTools), because the alternative is the failure mode
+	// MatchHost's doc calls the worst a session rule can have — a rule that is enabled, listed,
+	// and silently never fires. Every caller in this tree that can attribute a request does so;
+	// the host-only convenience entry points (MatchingRule, MatchingRuleFor, HandleResponse)
+	// cannot, and a rule restricted to the crawler must not stop handling a request those paths
+	// carry.
+	Tool string
 }
 
 // MatchRequest answers the URL-scope question for one request. Suite mode delegates to the
@@ -936,6 +960,14 @@ func (r *SessionRule) MatchRequest(req RequestIdentity, scopeContains func() boo
 	if r == nil {
 		return false
 	}
+	// The tool axis is checked before the mode branch rather than inside MatchCustomArms,
+	// because it is orthogonal to the URL axis: a rule in "Use suite scope" mode is still
+	// restricted to the tools it names, and routing the check through the custom arms would
+	// have left every suite-mode rule applying to every tool — a tool restriction that holds
+	// only half the time, which reads to an operator as the restriction being ignored.
+	if !r.MatchTools(req.Tool) {
+		return false
+	}
 	if r.ScopeMode == "suite" {
 		if scopeContains == nil {
 			// A rule configured for the suite scope in a process with no scope answer has
@@ -948,6 +980,39 @@ func (r *SessionRule) MatchRequest(req RequestIdentity, scopeContains func() boo
 	// "custom" and the default ("all", plus the empty pre-field reading) are the rule's own stated
 	// arms: a host list, optionally narrowed by a path prefix, a port and a scheme.
 	return r.MatchCustomArms(req)
+}
+
+// MatchTools says whether this rule's tools scope covers a request made by `tool` (so3).
+//
+// Empty ScopeTools applies everywhere, for the reason MatchHost's empty host list does: the rules
+// every operator already has state no tools scope, and reading their silence as "matches no tool"
+// would leave each of them enabled, listed, and unable to fire.
+//
+// An empty `tool` also applies, and that direction is the deliberate one. "" is a caller saying it
+// does not know which tool made the request — the host-only entry points that predate this axis —
+// not a claim that the tool was something out of scope. Refusing would make a tool-restricted rule
+// vanish for those callers, which is a silent loss of session handling on traffic the rule was
+// written to handle; over-matching here is visible (the rule fires where the operator named it) and
+// recoverable, while under-matching is not visible at all. Every caller that *can* attribute a
+// request in this tree does, so the hole is a narrow one rather than the common path.
+//
+// Comparison is exact, and expected to be: tool names are a closed vocabulary whose owner
+// (internal/toollog) refuses to resolve anything unrecognised via ToolFromName, so a near-miss
+// cannot be spelled here — an unrecognised name is refused at the wire instead of being compared
+// loosely and matching by accident.
+func (r *SessionRule) MatchTools(tool string) bool {
+	if r == nil {
+		return false
+	}
+	if len(r.ScopeTools) == 0 || tool == "" {
+		return true
+	}
+	for _, t := range r.ScopeTools {
+		if tool == t {
+			return true
+		}
+	}
+	return false
 }
 
 // MatchCustomArms answers the URL-scope question from the rule's own stated arms alone (7nh2),
@@ -1430,32 +1495,37 @@ func (c *Coordinator) HandleResponse(host string, port uint16, tls bool, status 
 			c.absorb.cookies.Add(1)
 		}
 	}
-	c.handleResponseFor(host, port, tls, "", status, hdrs, body, nil)
+	c.handleResponseFor(RequestIdentity{Host: host, Port: port, TLS: tls}, status, hdrs, body, nil)
 }
 
-// HandleResponseFor is HandleResponse with the request identity the URL-scope arms need
-// (7nh2): the path a custom-scope rule matches on, and the caller's live suite-scope verdict.
-// HandleResponse keeps its signature (the crawler interface implements it) and delegates with
-// no path — a rule scoped to a path cannot claim a response whose request path is unknown, so
-// the empty path fails a path-scoped rule honestly rather than over-matching.
-func (c *Coordinator) HandleResponseFor(host string, port uint16, tls bool, path string, status int, hdrs map[string]string, body []byte, scopeContains func() bool) {
-	c.handleResponseFor(host, port, tls, path, status, hdrs, body, scopeContains)
+// HandleResponseFor is HandleResponse with the full request identity the scope axes need: the path
+// and port a custom-scope rule matches on (7nh2), the requesting tool a tools-scoped rule matches on
+// (so3), and the caller's live suite-scope verdict.
+//
+// The identity travels as a struct rather than four loose parameters plus a tool. The loose form was
+// already the reason a response could reach this far carrying no tool at all, and each new axis
+// widened the same call. HandleResponse keeps its host-only signature (the crawler interface
+// implements it) and delegates with a bare identity — a rule scoped to a path or a tool cannot claim
+// a response whose request is only known by its host, so the omitted arms fail such a rule honestly
+// rather than over-matching.
+func (c *Coordinator) HandleResponseFor(req RequestIdentity, status int, hdrs map[string]string, body []byte, scopeContains func() bool) {
+	c.handleResponseFor(req, status, hdrs, body, scopeContains)
 }
 
-func (c *Coordinator) handleResponseFor(host string, port uint16, tls bool, path string, status int, hdrs map[string]string, body []byte, scopeContains func() bool) {
+func (c *Coordinator) handleResponseFor(req RequestIdentity, status int, hdrs map[string]string, body []byte, scopeContains func() bool) {
 	c.absorb.responses.Add(1)
 	for k, v := range hdrs {
 		if strings.EqualFold(k, "Set-Cookie") {
-			c.jarMgr.AbsorbSetCookie(host, port, tls, v)
+			c.jarMgr.AbsorbSetCookie(req.Host, req.Port, req.TLS, v)
 			c.absorb.cookies.Add(1)
 		}
 	}
-	rule := c.MatchingRuleForRequest(RequestIdentity{Host: host, Path: path, Port: port, TLS: tls}, nil, scopeContains)
+	rule := c.MatchingRuleForRequest(req, nil, scopeContains)
 	if rule != nil && rule.Validity != nil {
 		// Live proxy traffic: no redirect chain is followed here, so the redirect-target clause is unmeasured.
 		state := rule.Validity.Evaluate(status, hdrs, body, "")
 		if state == Invalid {
-			c.logger.Debug("session invalid", zap.String("rule", rule.Name), zap.String("host", host))
+			c.logger.Debug("session invalid", zap.String("rule", rule.Name), zap.String("host", req.Host))
 		}
 	}
 }

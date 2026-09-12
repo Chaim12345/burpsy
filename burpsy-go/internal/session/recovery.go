@@ -318,14 +318,27 @@ func (c *Coordinator) recordObserved(id RuleID, sent []MacroStep) {
 // URL and, if it is not valid (or the rule could not tell), recovers: run that rule's login macro
 // (once, or share an already-running one) and retry `original` with the freshly-authenticated jar.
 //
-// The rule lookup uses the step's full URL identity, not its host (7nh2): a rule scoped to a path,
-// port or scheme would otherwise claim a step outside its own stated scope and fire a login macro at
-// an endpoint the operator excluded in the rule editor.
+// The rule lookup uses the step's full URL identity, not its host (7nh2), plus the tool that made it
+// (so3): a rule scoped to a path, port or scheme would otherwise claim a step outside its own stated
+// scope and fire a login macro at an endpoint the operator excluded in the rule editor, and a rule
+// restricted to the crawler would fire for traffic the operator deliberately kept it away from — the
+// re-login rule that corrupts an Intruder attack fuzzing the session cookie is exactly this case.
 //
 // Anything other than Valid — including Indeterminate — takes the recovery path, matching the Rust
 // crate's refusal to treat "the rule could not tell" as fail-open.
-func (c *Coordinator) HandleRecovery(original MacroStep, response *StepResult, runner MacroStepRunner) RecoveryOutcome {
-	id, rule := c.matchingRuleID(identityOf(original.URL))
+// `tool` names the tool that made the original request, in toollog's vocabulary, or "" when the
+// caller cannot attribute it — see RequestIdentity.Tool for why an unattributed request still
+// matches a tool-restricted rule, and MatchTools for the direction that reading protects.
+//
+// It is a parameter rather than something derived from `original` because a MacroStep cannot
+// support it: a step carries a method, a URL and headers, and nothing in it says which tool sent
+// it. A recovery path that guessed the tool would be inventing the one fact the tools scope exists
+// to constrain (so3), and the guess would be invisible — the rule would simply fire, or not, for a
+// reason no row in the log records.
+func (c *Coordinator) HandleRecovery(tool string, original MacroStep, response *StepResult, runner MacroStepRunner) RecoveryOutcome {
+	identity := identityOf(original.URL)
+	identity.Tool = tool
+	id, rule := c.matchingRuleID(identity)
 	if rule == nil {
 		return RecoveryOutcome{Kind: RecoveryNoRuleApplies, URL: original.URL}
 	}
