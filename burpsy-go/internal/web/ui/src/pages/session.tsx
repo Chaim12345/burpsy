@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, History, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { useDeleteSessionRule, useSaveSessionRule } from "../lib/data";
 import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useUpdateSessionMacro, useCookieJarWrite } from "../lib/data.policy";
+import { MacroRecorder } from "../ui/macro-recorder";
 import type {
  SessionExtractFrom,
  SessionExtractHow,
@@ -118,6 +119,22 @@ function extractionOut(draft: ExtractDraft): SessionExtraction {
  return { name: draft.name, from, how };
 }
 
+/**
+ * One wire step as an editable draft. Shared by the rule loader and the Macro Recorder, so a step
+ * recorded from history and a step read back from a saved rule land in the editor in exactly the
+ * same shape — a second mapping in the recorder is how a recorded step ends up with headers the
+ * editor cannot round-trip.
+ */
+function stepIn(step: SessionMacroStep): StepDraft {
+ return {
+  method: step.method || "GET",
+  url: step.url,
+  headers: (step.headers ?? []).map(([name, value]) => [name, value] as [string, string]),
+  body: step.body,
+  extract: (step.extract ?? []).map(extractionIn),
+ };
+}
+
 function ruleIn(rule: SessionRuleFull): RuleDraft {
  const draft: RuleDraft = {
   name: rule.name,
@@ -131,13 +148,7 @@ function ruleIn(rule: SessionRuleFull): RuleDraft {
   params: rule.scope_params ?? [],
   validity: rule.validity ?? {},
   maxAttempts: rule.max_attempts === undefined ? "" : String(rule.max_attempts),
-  steps: (rule.steps ?? []).map((step) => ({
-   method: step.method || "GET",
-   url: step.url,
-   headers: (step.headers ?? []).map(([name, value]) => [name, value] as [string, string]),
-   body: step.body,
-   extract: (step.extract ?? []).map(extractionIn),
-  })),
+  steps: (rule.steps ?? []).map(stepIn),
  };
  if (rule.id !== undefined) draft.id = rule.id;
  return draft;
@@ -185,6 +196,49 @@ function ruleOut(draft: RuleDraft): SessionRuleFull {
  const attempts = Number(draft.maxAttempts.trim());
  if (draft.maxAttempts.trim() !== "" && Number.isInteger(attempts) && attempts > 0) out.max_attempts = attempts;
  return out;
+}
+
+/**
+ * True for a step the editor created and nobody has touched yet.
+ *
+ * `emptyRule` seeds a rule with one of these, and "Add step" appends more of them, so before an
+ * operator types anything every step in the editor is a placeholder. They exist to be typed into,
+ * not to be sent: a macro step with an empty URL fails validation, so leaving them below recorded
+ * steps would put an unrunnable step at the top of a login flow.
+ *
+ * The method is part of the test, and it is the only part that is not obviously required. Changing
+ * it is the one edit an operator can make to a placeholder without typing any content, so a step
+ * whose method is no longer the template's is a step somebody has formed an intention about — and
+ * quietly discarding a deliberate choice is worse than leaving a visibly blank step on screen for
+ * them to fill in.
+ */
+function isBlankStep(step: StepDraft): boolean {
+  return (
+    step.url === "" &&
+    step.body === "" &&
+    step.headers.length === 0 &&
+    step.extract.length === 0 &&
+    step.method.toUpperCase() === "POST"
+  );
+}
+
+/**
+ * Where recorded steps go: onto the end of what is already there, minus any untouched placeholders.
+ *
+ * Trailing placeholders only. A blank step the operator deliberately left in the middle of a flow
+ * still marks a position — dropping it would silently renumber every step after it, and an
+ * extraction is only usable by a *later* step, so renumbering is how a macro breaks. Trailing ones
+ * are the ones the editor adds, and they hold no position to preserve: the recorded steps are about
+ * to occupy exactly that place.
+ */
+function withRecordedSteps(current: StepDraft[], recorded: StepDraft[]): StepDraft[] {
+  let keep = current.length;
+  while (keep > 0) {
+    const step = current[keep - 1];
+    if (step === undefined || !isBlankStep(step)) break;
+    keep -= 1;
+  }
+  return [...current.slice(0, keep), ...recorded];
 }
 
 function emptyRule(): RuleDraft {
@@ -491,6 +545,11 @@ export function SessionPage(): JSX.Element {
  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
  const [newHost, setNewHost] = useState("");
  const [newParam, setNewParam] = useState("");
+
+ // The Macro Recorder (burpsy-react-ui-escl): Burp builds a macro by selecting rows out of the
+ // Proxy history, and until this existed the only way to reproduce a documented login flow was to
+ // retype a request the proxy had already captured.
+ const [recorderOpen, setRecorderOpen] = useState(false);
 
  const [probe, setProbe] = useState<StepDraft>({ method: "GET", url: "", headers: [], body: "", extract: [] });
  const [loginResult, setLoginResult] = useState<SessionLoginResponse | null>(null);
@@ -1205,20 +1264,26 @@ export function SessionPage(): JSX.Element {
        title="Macro steps"
        detail="Replayed in order. A later step can send an earlier step's extracted value as {{name}}."
        actions={
-        <Button
-         variant="outline"
-         size="small"
-         disabled={!wired}
-         onClick={() =>
-          setEditing({
-           ...editing,
-           steps: [...editing.steps, { method: "POST", url: "", headers: [], body: "", extract: [] }],
-          })
-         }
-        >
-         <Plus size={13} />
-         Add step
-        </Button>
+        <div className="page-actions">
+         <Button variant="outline" size="small" disabled={!wired} onClick={() => setRecorderOpen(true)}>
+          <History size={13} />
+          Record from history
+         </Button>
+         <Button
+          variant="outline"
+          size="small"
+          disabled={!wired}
+          onClick={() =>
+           setEditing({
+            ...editing,
+            steps: [...editing.steps, { method: "POST", url: "", headers: [], body: "", extract: [] }],
+           })
+          }
+         >
+          <Plus size={13} />
+          Add step
+         </Button>
+        </div>
        }
       />
       {editing.steps.length === 0 ? (
@@ -1239,6 +1304,22 @@ export function SessionPage(): JSX.Element {
         ))}
        </div>
       )}
+      {/* Recorded steps land on the end, replacing any untouched placeholder steps already
+          sitting there — see withRecordedSteps. Insertion at the caret would be the other reading of
+          "add", and it is the wrong one: the recorder seeds a rule from traffic, so the flow it
+          records has to come out in the order the operator selected rather than after whatever
+          happened to be in the editor. */}
+      <MacroRecorder
+       open={recorderOpen}
+       onOpenChange={setRecorderOpen}
+       onRecord={(steps) =>
+        setEditing((current) =>
+         current === null
+          ? current
+          : { ...current, steps: withRecordedSteps(current.steps, steps.map(stepIn)) },
+        )
+       }
+      />
      </div>
     </Card>
    ) : null}

@@ -639,6 +639,15 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskCredential,
 		summary: "run a login macro, or probe whether the current session is still valid",
 	},
+	"/api/session/macro-steps": {
+		// riskRead, not riskCredential: the endpoint converts stored requests the engagement already
+		// captured and sends nothing. The requests carry credentials, which is why it is not riskLocal
+		// either — an unattended caller gets a reading of the traffic history out of it, so it sits
+		// with the other reads over that history rather than with the rules that replay it.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "the macro recorder: turn selected Proxy-history rows into macro steps, naming any row " +
+			"that could not be converted instead of dropping it (burpsy-react-ui-escl)",
+	},
 	"/api/session/rules": {
 		methods: []string{"GET", "POST"}, risk: riskCredential,
 		summary: "session handling rules: which hosts get re-authenticated, and how",

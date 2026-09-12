@@ -229,6 +229,31 @@ export function useMoveSessionRule() {
 }
 
 /**
+ * POST /api/session/macro-steps — the macro recorder (burpsy-react-ui-escl). Burp's Macro Recorder is
+ * "select the items you need from the Proxy history list", so the request is a list of exchange ids
+ * and the answer is one step per row that could be converted.
+ *
+ * `skipped` is not an error channel to be discarded: it names each selected row that could not become
+ * a step and why, and the caller must show it. A recorder that silently returns fewer steps than the
+ * operator selected is how a login macro ends up one request short, failing at login time with
+ * nothing to point at.
+ *
+ * Deliberately no invalidation: reading the history does not change a rule, and invalidating
+ * ["session"] here would refetch and re-render the rule list while the operator is still picking
+ * rows from the recorder.
+ */
+export interface RecordedMacro {
+ steps: SessionMacroStep[];
+ skipped: { exchange: number; reason: string }[];
+}
+
+export function useRecordMacroSteps() {
+ return useMutation<RecordedMacro, Error, { exchanges: number[]; variant?: "edited" | "original" | "auto-modified" }>({
+  mutationFn: (vars) => api<RecordedMacro>("/api/session/macro-steps", json("POST", vars)),
+ });
+}
+
+/**
  * POST /api/session/rules/{id}/test — Burp's "Test macro" (burpsy-react-ui-7zdm): a dry-run of the
  * rule's steps. Deliberately no cache invalidation: the dry-run is read-only by contract (it writes
  * nothing to the login-run memory), and the cookie jar DOES move — which the report shows per step,

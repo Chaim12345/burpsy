@@ -882,6 +882,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/session/rules/", s.handleSessionRuleDetail)
 	s.mux.HandleFunc("/api/session/cookies", s.handleSessionCookies)
 	s.mux.HandleFunc("/api/session/login", s.handleSessionLogin)
+	// The macro recorder: turns selected Proxy-history rows into macro steps (burpsy-react-ui-escl).
+	// Bare POST, under /api/session/ but deliberately not under /api/session/rules/: it neither reads
+	// nor writes a rule, it converts messages, and parking it under the rules subtree would make it
+	// inherit the credential risk class it does not deserve.
+	s.mux.HandleFunc("/api/session/macro-steps", s.handleSessionMacroSteps)
 
 	// Network: platform authentication and client TLS certificates. Neither route ever
 	// serves a secret — see api_network.go.
