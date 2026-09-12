@@ -177,6 +177,88 @@ func TestRestoreRoundTripsAJSONPathExtraction(t *testing.T) {
 	}
 }
 
+// The URL scope (7nh2) survives the round trip: the mode radio and the custom scope's path prefix,
+// port and protocol.
+//
+// The bug this pins is 6db6: 7nh2 landed those four fields in the model, the matcher, the validator
+// and the wire, but not in this table, so SaveSessionRules wrote none of them and LoadSessionRules
+// read none back. A rule saved as "Use custom scope, path prefix /api" matched every path and every
+// port after a restart — the operator's stated exclusion silently gone, and in the dangerous
+// direction: a rule they confined to /api would replay a login macro at /logout.
+//
+// Each arm is asserted against a request it must now refuse, not just for equality of the field: a
+// column that round-trips a value the matcher ignores would pass a field-by-field test and still be
+// the same defect.
+func TestRestoreKeepsAURLScopedRuleAndLeavesLegacyRulesUnscoped(t *testing.T) {
+	p := newTestStore(t)
+	scoped := savedRule(21, "api refresh", "https://app.test/api/refresh")
+	scoped.ScopeMode = "custom"
+	scoped.ScopePathPrefix = "/api"
+	port := uint16(8443)
+	scoped.ScopePort = &port
+	scoped.ScopeProtocol = "https"
+	suite := savedRule(22, "suite login", "https://app.test/login")
+	suite.ScopeMode = "suite"
+	p.SaveSessionRules([]*session.SessionRule{savedRule(23, "plain login", "https://app.test/plain"), scoped, suite})
+
+	sess := session.NewCoordinator(zap.NewNop())
+	if err := p.Restore(nil, nil, nil, nil, sess, nil, nil); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	byID := map[session.RuleID]*session.SessionRule{}
+	for _, r := range sess.AllRules() {
+		byID[r.ID] = r
+	}
+	got := byID[21]
+	if got == nil {
+		t.Fatal("the URL-scoped rule did not come back")
+	}
+	if got.ScopeMode != "custom" || got.ScopePathPrefix != "/api" || got.ScopePort == nil || *got.ScopePort != 8443 || got.ScopeProtocol != "https" {
+		t.Fatalf("restored URL scope = mode %q path %q port %v protocol %q; want custom /api 8443 https",
+			got.ScopeMode, got.ScopePathPrefix, got.ScopePort, got.ScopeProtocol)
+	}
+	// The arms must be *load-bearing* after the restore, not merely present. A rule whose stated
+	// scope came back but is no longer consulted matches the path it excluded, which is the whole
+	// defect this test exists for.
+	inScope := session.RequestIdentity{Host: "app.test", Path: "/api/refresh", Port: 8443, TLS: true}
+	if !got.MatchCustomArms(inScope) {
+		t.Error("the restored rule no longer matches a request inside its own stated scope")
+	}
+	outOfScope := session.RequestIdentity{Host: "app.test", Path: "/logout", Port: 8443, TLS: true}
+	if got.MatchCustomArms(outOfScope) {
+		t.Error("the restored rule matched /logout; the path prefix did not survive the restart, so a rule " +
+			"confined to /api would replay a login macro at /logout")
+	}
+	wrongPort := session.RequestIdentity{Host: "app.test", Path: "/api/refresh", Port: 443, TLS: true}
+	if got.MatchCustomArms(wrongPort) {
+		t.Error("the restored rule matched a port it excludes; the port arm did not survive the restart")
+	}
+	plainHTTP := session.RequestIdentity{Host: "app.test", Path: "/api/refresh", Port: 8443, TLS: false}
+	if got.MatchCustomArms(plainHTTP) {
+		t.Error("the restored rule matched http; the protocol arm did not survive the restart")
+	}
+
+	if byID[22] == nil || byID[22].ScopeMode != "suite" {
+		t.Fatalf("the suite-mode rule came back with ScopeMode=%q; want suite, or it silently widens to every URL",
+			byID[22].ScopeMode)
+	}
+
+	// The dangerous direction for a legacy row: absent arms must read as *unrestricted*, never as
+	// restricted to the empty path or to port 0, which would silently stop every pre-existing rule
+	// from matching after the upgrade.
+	legacy := byID[23]
+	if legacy == nil {
+		t.Fatal("the legacy rule did not come back")
+	}
+	if legacy.ScopeMode != "" || legacy.StatesURLArms() {
+		t.Fatalf("a legacy rule came back stating a URL scope (mode %q, arms %v); a row written before these "+
+			"columns existed states none", legacy.ScopeMode, legacy.StatesURLArms())
+	}
+	if !legacy.MatchCustomArms(session.RequestIdentity{Host: "app.test", Path: "/anything", Port: 443, TLS: true}) {
+		t.Error("the legacy rule no longer matches a request; the empty default must read as unrestricted")
+	}
+}
+
 // The parameter scope (burpsy-react-ui-9hip) survives the round trip. The dangerous direction
 // is the legacy read: a rule written before the column existed must come back UNRESTRICTED —
 // reading a legacy rule as parameter-restricted would silently stop every existing login

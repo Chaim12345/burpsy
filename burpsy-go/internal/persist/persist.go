@@ -191,15 +191,19 @@ CREATE TABLE IF NOT EXISTS settings (
 	value TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS session_rules (
-	id           INTEGER PRIMARY KEY,
-	name         TEXT NOT NULL,
-	enabled      INTEGER NOT NULL,
-	scope_hosts  TEXT NOT NULL,
-	scope_params TEXT NOT NULL DEFAULT '',
-	macro        TEXT NOT NULL,
-	validity     TEXT,
-	max_attempts INTEGER NOT NULL,
-	extractions  TEXT
+	id             INTEGER PRIMARY KEY,
+	name           TEXT NOT NULL,
+	enabled        INTEGER NOT NULL,
+	scope_hosts    TEXT NOT NULL,
+	scope_params   TEXT NOT NULL DEFAULT '',
+	scope_mode     TEXT NOT NULL DEFAULT '',
+	scope_path     TEXT NOT NULL DEFAULT '',
+	scope_port     INTEGER,
+	scope_protocol TEXT NOT NULL DEFAULT '',
+	macro          TEXT NOT NULL,
+	validity       TEXT,
+	max_attempts   INTEGER NOT NULL,
+	extractions    TEXT
 );
 CREATE TABLE IF NOT EXISTS organizer_items (
 	id        INTEGER PRIMARY KEY,
@@ -292,6 +296,27 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	// matching.
 	if err := s.addColumn("session_rules", "scope_params", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
+	}
+	// session_rules gained the four URL-scope arms (burpsy-react-ui-6db6): the mode radio and the
+	// custom scope's path prefix, port and protocol. 7nh2 landed those arms in the model, the
+	// matcher, the validator and the wire but not here, so a rule saved as "Use custom scope,
+	// path prefix /api" came back after a restart matching every path and every port — the
+	// operator's stated *exclusion* silently gone, which is the dangerous direction: a rule
+	// confined to /api would replay a login macro at /logout.
+	//
+	// Empty is the unrestricted reading every row written before these columns carried, and it is
+	// the only safe default for the same reason scope_params' is: a legacy row must not come back
+	// restricted to a path or a port nobody stated. scope_port is the one nullable column because
+	// NULL means "no port arm", which an empty string cannot express for a numeric field.
+	for _, col := range []struct{ name, decl string }{
+		{"scope_mode", "TEXT NOT NULL DEFAULT ''"},
+		{"scope_path", "TEXT NOT NULL DEFAULT ''"},
+		{"scope_port", "INTEGER"},
+		{"scope_protocol", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.addColumn("session_rules", col.name, col.decl); err != nil {
+			return err
+		}
 	}
 	// exchanges gained the four earlier-stage message ids (burpsy-react-ui-c05), so a Match & Replace
 	// rewrite or an intercept edit stays comparable against the bytes the peer actually sent after a
@@ -1445,11 +1470,20 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		if len(r.Extractions) > 0 {
 			exts, _ = json.Marshal(r.Extractions)
 		}
+		// The URL-scope arms are written as their own columns rather than folded into the hosts
+		// blob: they are a different axis (origin vs URL-shape), and a single blob would make a
+		// legacy row's *absence* of arms indistinguishable from a row that states none.
+		var scopePort interface{}
+		if r.ScopePort != nil {
+			scopePort = int64(*r.ScopePort)
+		}
 		if _, err := s.db.Exec(
 			`INSERT OR REPLACE INTO session_rules
-			 (id, name, enabled, scope_hosts, scope_params, macro, validity, max_attempts, extractions, ord)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, params, macro, validity, r.MaxAttempts, exts, i); err != nil {
+			 (id, name, enabled, scope_hosts, scope_params, scope_mode, scope_path, scope_port, scope_protocol,
+			  macro, validity, max_attempts, extractions, ord)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, params, r.ScopeMode, r.ScopePathPrefix, scopePort,
+			r.ScopeProtocol, macro, validity, r.MaxAttempts, exts, i); err != nil {
 			s.log("session rule", err)
 			return
 		}
@@ -1465,7 +1499,8 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 // order column existed: such a row was written in id order, so id is the honest fallback for it.
 func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, enabled, scope_hosts, scope_params, macro, validity, max_attempts, extractions
+		`SELECT id, name, enabled, scope_hosts, scope_params, scope_mode, scope_path, scope_port, scope_protocol,
+		        macro, validity, max_attempts, extractions
 		 FROM session_rules ORDER BY COALESCE(ord, id), id`)
 	if err != nil {
 		return nil, err
@@ -1478,12 +1513,20 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 		var enabled int
 		var hosts, params, macro, validity, exts []byte
 		var maxAttempts int
-		if err := rows.Scan(&id, &r.Name, &enabled, &hosts, &params, &macro, &validity, &maxAttempts, &exts); err != nil {
+		// Nullable on purpose: NULL is "no port arm", which is a fact about the rule, not a
+		// number. A legacy row reads back NULL here and the rule keeps the unrestricted port.
+		var scopePort *int64
+		if err := rows.Scan(&id, &r.Name, &enabled, &hosts, &params, &r.ScopeMode, &r.ScopePathPrefix,
+			&scopePort, &r.ScopeProtocol, &macro, &validity, &maxAttempts, &exts); err != nil {
 			return nil, err
 		}
 		r.ID = session.RuleID(id)
 		r.Enabled = enabled != 0
 		r.MaxAttempts = maxAttempts
+		if scopePort != nil {
+			port := uint16(*scopePort)
+			r.ScopePort = &port
+		}
 		if len(hosts) > 0 {
 			if err := json.Unmarshal(hosts, &r.ScopeHosts); err != nil {
 				return nil, err
