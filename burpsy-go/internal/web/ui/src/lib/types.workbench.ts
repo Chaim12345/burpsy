@@ -193,6 +193,49 @@ export interface FipsReport {
  tests: FipsTest[] | null;
 }
 
+/**
+ * One member of the extended randomness battery (burpsy-react-ui-d2g): the four
+ * tests Burp's Sequencer runs beside the FIPS four.
+ *
+ * Two states, and both are reported: `tested` with the statistic behind its
+ * verdict, or a refusal with the reason the sample could not support it — the
+ * same shape the FIPS suite uses when it reports "not tested" below one block.
+ */
+export interface AdvancedTest {
+ id: "transition" | "spectral" | "correlation" | "compression";
+ name: string;
+ /** Burp's description of the test and the standard statistic used to evaluate it. */
+ basis: string;
+ /** The pass condition, with the constants it was read against. */
+ requirement: string;
+ tested: boolean;
+ /** Why the test could not run. Present exactly when `tested` is false. */
+ reason?: string;
+ passed: boolean;
+ /** The statistic that decided the verdict: the most significant point examined. */
+ observed: string;
+ /** Data points the test could evaluate. */
+ examined: number;
+ /** How many of them were significant at `threshold`. */
+ flagged: number;
+ /** The Bonferroni-corrected level applied. Zero when the rule is `tolerance`. */
+ threshold: number;
+ /** The margin compared against a control, for the test that has one. */
+ tolerance?: number;
+ notices?: string[];
+}
+
+/**
+ * The extended battery's outcome. Additive: `affects_grade` is always false,
+ * because the grade and verdict are the FIPS battery's, byte-for-byte the Rust
+ * reference's.
+ */
+export interface AdvancedReport {
+ tests: AdvancedTest[];
+ summary: string;
+ affects_grade: boolean;
+}
+
 /** The full report from POST /api/sequencer/analyse. */
 export interface SequencerAnalysis {
  tokens: number;
@@ -211,6 +254,8 @@ export interface SequencerAnalysis {
  };
  bits: BitStats;
  fips: FipsReport;
+ /** The four further randomness tests, additive to the grade (burpsy-react-ui-d2g). */
+ advanced: AdvancedReport;
  grade: "insufficient" | "pass" | "fail";
  verdict: string;
  warnings: string[] | null;

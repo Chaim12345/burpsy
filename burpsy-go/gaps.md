@@ -644,6 +644,23 @@ request" pane cannot drive it. That is a separate nameable difference, not part
 of the FIPS/report contract this gap existed to close, and it is not claimed
 complete here.
 
+**Go-only addition with no Rust counterpart: the extended battery**
+(`internal/sequencer/advanced.go` + `chi.go`, burpsy-react-ui-d2g). Burp's
+Sequencer runs four further tests beside the FIPS four — character transition
+analysis, the spectral test, the correlation test and the compression test — and
+the Rust crate has none of them, so there is no oracle to port against and this
+is Burp parity rather than Rust parity. It rides the report as
+`SequencerReport.Advanced` (`advanced.tests[]`, `advanced.summary`,
+`advanced.affects_grade: false`) and **cannot** move `Grade`, which stays the
+Rust verdict byte-for-byte: `AffectsGrade` is on the wire so no reader has to
+infer that from a comment. Each member either reports its statistic or refuses
+with the reason the sample could not support it, mirroring the FIPS suite's
+behaviour below one whole block, and the chi-square upper tail the significance
+verdicts need is written out in `chi.go` rather than assumed. The p-values are
+therefore **not** comparable with any Rust number — Rust prints none — and this
+paragraph exists so a future parity audit does not read the extra field as
+drift.
+
 ### 8. `RequestEdit` absent as a type — COMPLETE
 
 **Rust:** `crates/core/src/edit.rs` class at `:28` — `from_raw:54`, `target:119`,

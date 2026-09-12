@@ -138,6 +138,61 @@ function Fips({ report }: { report: SequencerAnalysis }): JSX.Element {
  );
 }
 
+/**
+ * The extended battery (burpsy-react-ui-d2g): Burp's four further randomness
+ * tests beside the FIPS four. Each row is either a statistic or the reason the
+ * sample could not support the test — the same two states the FIPS table uses —
+ * and the section says out loud that the grade above is the FIPS battery's, so
+ * nobody reads a flagged compression position as a grade change.
+ */
+function Advanced({ report }: { report: SequencerAnalysis }): JSX.Element | null {
+ const advanced = report.advanced;
+ if (!advanced?.tests?.length) return null;
+ return (
+  <Card>
+   <SectionHeading title="Extended tests" detail={advanced.summary} />
+   <SimpleTable headers={["Test", "Result", "Observed", "Requirement", "Flagged"]}>
+    {advanced.tests.map((test) =>
+     test.tested ? (
+      <tr key={test.id}>
+       <td title={test.basis}>{test.name}</td>
+       <td>
+        <Badge tone={test.passed ? "good" : "bad"}>{test.passed ? "pass" : "fail"}</Badge>
+       </td>
+       <td className="cell-num">{test.observed}</td>
+       <td className="cell-dim">{test.requirement}</td>
+       <td className="cell-num">
+        {test.flagged} / {test.examined}
+       </td>
+      </tr>
+     ) : (
+      <tr key={test.id}>
+       <td title={test.basis}>{test.name}</td>
+       <td>
+        <Badge tone="warn">not tested</Badge>
+       </td>
+       <td className="cell-dim" colSpan={3}>
+        {test.reason}
+       </td>
+      </tr>
+     ),
+    )}
+   </SimpleTable>
+   {advanced.tests.map((test) =>
+    test.tested && test.notices?.length ? (
+     <div className="field-hint" key={`${test.id}-notices`}>
+      <strong>{test.name}:</strong> {test.notices.join(" ")}
+     </div>
+    ) : null,
+   )}
+   <div className="field-hint">
+    These four do not change the grade above, which is the FIPS 140-2 battery's. A flagged row here is a
+    finding about the sample; how far it moves the verdict is a judgement the operator makes.
+   </div>
+  </Card>
+ );
+}
+
 function Positions({ characters }: { characters: CharacterAnalysis }): JSX.Element {
  const [showAll, setShowAll] = useState(false);
  const shown = showAll ? characters.positions : characters.positions.slice(0, POSITIONS_SHOWN);
@@ -243,6 +298,7 @@ function Report({ report }: { report: SequencerAnalysis }): JSX.Element {
    </p>
    <ExtraStats report={report} />
    <Fips report={report} />
+   <Advanced report={report} />
    <Positions characters={characters} />
   </>
  );

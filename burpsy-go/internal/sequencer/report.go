@@ -153,7 +153,14 @@ type SequencerReport struct {
 	ExtraStats ExtraAnalysis `json:"extra_stats"`
 	Bits       BitStats      `json:"bits"`
 	Fips       FipsReport    `json:"fips"`
-	Grade      Grade         `json:"grade"`
+	// Advanced is the extended battery of advanced.go: Burp's four further
+	// randomness tests, each of which either reports a statistic or says why
+	// the sample could not support it. It is additive and does not feed `Grade`
+	// — the grade and verdict below are the FIPS battery's, byte-for-byte the
+	// Rust reference's, and `Advanced.AffectsGrade` says so on the wire rather
+	// than leaving it to be inferred.
+	Advanced AdvancedReport `json:"advanced"`
+	Grade    Grade          `json:"grade"`
 	// Verdict is one sentence an operator can act on, with the numbers in it.
 	Verdict string `json:"verdict"`
 	// Warnings is everything that limits how far the verdict can be trusted.
@@ -287,6 +294,7 @@ func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
 		ExtraStats:       extraFor(tokens),
 		Bits:             bits,
 		Fips:             fips,
+		Advanced:         advancedFor(tokens, enc, bitStream),
 		Grade:            grade,
 		Verdict:          verdict,
 		Warnings:         warnings,
