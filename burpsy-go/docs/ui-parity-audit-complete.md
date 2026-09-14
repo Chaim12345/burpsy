@@ -22,13 +22,18 @@
 > Those two documents are the accurate record for the pages they cover; this one remains the
 > checklist for the pages no sweep has reached. A third sweep covers the tool pages —
 > [`ui-parity-verify-2026-09-14-intruder-tools.md`](./ui-parity-verify-2026-09-14-intruder-tools.md)
-> (Intruder, Repeater, Sequencer, Decoder, Comparer, Logger, Organizer). It corrects this audit
-> again — Intruder's Settings section describes the *scanner's* launch dialog (three of its six rows
-> have zero hits in Burp's own strings), "Max permutations" does not exist in Burp at all, and it
-> calls Sequencer's two HIGH rows already-shipped — and its top finding is a live defect this audit
-> could not have seen: a running Intruder attack cannot be paused or stopped from the console
-> (Pause/Resume/Stop never render, no progress indicator) because the page never identifies its own
-> attack id, while the backend serves both the counts and the control routes.
+> (Intruder, Repeater, Sequencer, Decoder, Comparer, Logger, Organizer): **41 claims, 29 closed, 8
+> wrong or renamed, 4 still open**, and it corrects this audit again — Intruder's Settings section
+> describes the *scanner's* launch dialog (three of its six rows have zero hits in Burp's own
+> strings), "Max permutations" does not exist in Burp at all, and Intruder's Results rows are all
+> shipped, including a live progress bar and working Pause/Stop.
+>
+> **That document also carries a retraction worth reading before trusting any sweep, including these
+> ones:** it first reported the Intruder attack controls as missing, on a 24-second attack, and that
+> was a measurement artefact — the polls ran with the Payloads tab selected, and the controls render
+> on the Results tab. It re-ran with the right tab and retracted. The same trap caught this
+> checklist's author once (a control that only renders with a selection was read as absent), which is
+> why "not visible" is never recorded here as "not there" without saying what was on screen.
 >
 > Re-verified against the running console (`./ui-live.sh`, port 18281, seeded
 > traffic) on 2026-09-14, reading the rendered DOM rather than the source:
