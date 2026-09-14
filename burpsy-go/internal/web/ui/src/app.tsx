@@ -36,7 +36,7 @@ import { useChord, useKeymap } from "./lib/keymap";
 import { clearHiddenToolTabs, readHiddenToolTabs, writeHiddenToolTabs } from "./lib/tool-tabs";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
-import { DropdownMenu, type MenuGroup } from "./ui/menu";
+import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { SearchDialog } from "./ui/search-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
@@ -699,8 +699,31 @@ function App(): JSX.Element {
               const current = entry.id === tool.id;
               const signal = attentionFor(attention, entry.id);
               return (
-                <button
+                // Burp puts exactly three things on a tool tab's context menu: detach, reattach and
+                // hide. Detach is honoured as the browser's own answer to it — the route opened in a
+                // new window — and reattach is deliberately absent, because there is no window this
+                // page created and can close; the operator's browser window is their own. Hide
+                // writes the same preference the View menu's checkboxes do, so the two affordances
+                // cannot disagree about what is showing.
+                <ContextMenu
                   key={entry.id}
+                  groups={[
+                    {
+                      id: "tab",
+                      actions: [
+                        {
+                          id: "tab-detach",
+                          label: "Detach tab",
+                          onSelect: () => {
+                            window.open(`#${entryLeaf(entry)}`, "_blank", "noopener,noreferrer");
+                          },
+                        },
+                        { id: "tab-hide", label: "Hide tab", onSelect: () => setToolHidden(entry.id, true) },
+                      ],
+                    },
+                  ]}
+                >
+                <button
                   type="button"
                   className={current ? "tool-tab tool-tab-active" : "tool-tab"}
                   aria-current={current ? "page" : undefined}
@@ -727,6 +750,7 @@ function App(): JSX.Element {
                     </>
                   ) : null}
                 </button>
+                </ContextMenu>
               );
             })}
           </nav>
