@@ -2,8 +2,16 @@
 
 > ## ⚠️ Re-verification pass in progress — 2026-09-14
 >
-> This audit dates from 2026-08-27 and several of its "missing" rows are **false**: the capabilities
-> shipped afterwards. Re-verified against the running console (`./ui-live.sh`, port 18281, seeded
+> This audit dates from 2026-08-27 and most of its "missing" rows are **false**: the capabilities
+> shipped afterwards. A live sweep of Target, Scope and Proxy was run on 2026-09-14 and is recorded
+> in full in [`ui-parity-verify-2026-09-14-target-proxy.md`](./ui-parity-verify-2026-09-14-target-proxy.md):
+> **57 claims checked, 45 closed, 5 not-applicable, 1 unverified, 6 still open** — and the one
+> HIGH item it found (Proxy settings shows one listener rather than Burp's listener list, with no
+> per-listener redirect / force-TLS / invisible mode) was *missed by this audit entirely*. That
+> sweep is the more accurate document for those pages; this one remains the checklist for the pages
+> no sweep has covered yet.
+>
+> Re-verified against the running console (`./ui-live.sh`, port 18281, seeded
 > traffic) on 2026-09-14, reading the rendered DOM rather than the source:
 >
 > | Row this audit calls missing | Live finding (2026-09-14) |
