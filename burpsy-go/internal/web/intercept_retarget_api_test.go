@@ -39,7 +39,7 @@ func TestForwardCarriesATargetTheEngineReportsBack(t *testing.T) {
 
 	done := make(chan *intercept.Target, 1)
 	go func() {
-		_, _, target := h.Wait()
+		_, _, target, _ := h.Wait()
 		done <- target
 	}()
 
@@ -97,7 +97,7 @@ func TestForwardWithoutATargetIsUnchanged(t *testing.T) {
 
 	done := make(chan *intercept.Target, 1)
 	go func() {
-		_, _, target := h.Wait()
+		_, _, target, _ := h.Wait()
 		done <- target
 	}()
 	if rec := postJSON(t, s, "/api/intercept/"+strconv.FormatUint(h.ID, 10)+"/forward", map[string]any{}); rec.Code != http.StatusOK {

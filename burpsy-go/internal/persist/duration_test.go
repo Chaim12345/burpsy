@@ -185,6 +185,14 @@ func TestAnOldDatabaseWithoutTheDurationColumnStillLoads(t *testing.T) {
 	if got := loaded[0].Duration; !got.Measured || got.Us != 3000 {
 		t.Fatalf("the old row's duration loaded as %+v, want a measured 3000µs", got)
 	}
+	// The other additive migration on the exchanges table: user_edited (burpsy-react-ui-sd0d). A row
+	// written before the column existed must read back as "nobody edited this". The opposite default
+	// would mark every row in an existing database as a hand edit, which is the false badge the column
+	// was added to remove — so the NOT NULL DEFAULT 0 is the behaviour under test, not an implementation
+	// detail of addColumn.
+	if loaded[0].UserEdited {
+		t.Error("a row from a database that predates the edited column loaded as edited by the operator; history would show the whole of the operator's existing capture as hand-modified")
+	}
 
 	// The other additive migration in the same release: session_rules.ord. An old row has none, and its
 	// id is the honest fallback ordering.

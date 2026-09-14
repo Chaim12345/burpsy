@@ -104,6 +104,11 @@ type CapturedExchange struct {
 	RequestAuto      []byte
 	ResponseOriginal []byte
 	ResponseAuto     []byte
+	// UserEdited says the operator modified this exchange by hand (Burp's history "Edited"
+	// column). Carried from the producing site rather than derived here, because only that site
+	// knows: it is the one that compares the bytes it showed the operator with the bytes the hold
+	// returned. See core.Exchange.UserEdited for why the stage fields cannot stand in for it.
+	UserEdited bool
 	// Started is when the request went out and Duration how long the exchange took; both are
 	// carried rather than measured here, because Record runs after the fact.
 	//
@@ -263,6 +268,9 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// the other when both are unset — unattributed is a real answer, see above.
 		Source: sourceOf(x.Source, c.Source),
 		TaskID: taskOf(x.TaskID, c.TaskID),
+		// Carried, not derived — the producing site is the only one that saw both the bytes it showed
+		// the operator and the bytes the hold returned. See core.Exchange.UserEdited.
+		UserEdited: x.UserEdited,
 		// Carried, never derived. Both describe sockets that are closed by the time a row is
 		// listed, so this seam is the only place either answer exists.
 		ServerIP:     x.ServerIP,

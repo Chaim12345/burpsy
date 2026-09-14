@@ -138,7 +138,7 @@ func TestEngine_HeldForwardCarriesEditedBytes(t *testing.T) {
 			t.Errorf("Forward: %v", err)
 		}
 	}()
-	action, raw, _ := h.Wait()
+	action, raw, _, _ := h.Wait()
 	if action != ActionForward {
 		t.Fatalf("action = %v, want forward", action)
 	}
@@ -162,7 +162,7 @@ func TestEngine_DropResolvesToNilBytes(t *testing.T) {
 			t.Errorf("Drop: %v", err)
 		}
 	}()
-	action, raw, _ := h.Wait()
+	action, raw, _, _ := h.Wait()
 	if action != ActionDrop {
 		t.Fatalf("action = %v, want drop", action)
 	}
@@ -335,7 +335,7 @@ func TestEngine_DropAllDropsEveryHeldMessageAndCountsOnlyItsOwn(t *testing.T) {
 		t.Fatalf("queue not empty after DropAll: %d left", left)
 	}
 	// The dropped message's proxy side wakes with a drop and no bytes.
-	action, raw, _ := second.Wait()
+	action, raw, _, _ := second.Wait()
 	if action != ActionDrop || raw != nil {
 		t.Fatalf("Wait = (%v, %q), want (drop, nil)", action, raw)
 	}
@@ -374,7 +374,7 @@ func TestEngine_ForwardAllForwardsEveryHeldMessageUnmodifiedAndCountsOnlyItsOwn(
 	// The forwarded message's proxy side wakes with a forward and the exact
 	// bytes the client put on the wire — the rewriteContentLength pass that a
 	// per-id Forward applies on request has no place here.
-	action, raw, _ := second.Wait()
+	action, raw, _, _ := second.Wait()
 	if action != ActionForward {
 		t.Fatalf("Wait action = %v, want forward", action)
 	}

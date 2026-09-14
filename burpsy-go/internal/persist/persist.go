@@ -349,6 +349,16 @@ CREATE TABLE IF NOT EXISTS tool_log (
 			return err
 		}
 	}
+	// exchanges gained user_edited: the operator modified this item by hand (Burp's history
+	// "Edited" column, burpsy-react-ui-sd0d). A column rather than arithmetic over the four stage
+	// ids beside it, because those say what the bytes became while this says who changed them — the
+	// stages are taken above the hold and several automatic rewrites run below it, so "a stage was
+	// retained" is not the same fact. NOT NULL DEFAULT 0 so a row written before the column existed
+	// reads back as "nobody edited this", which is the only safe reading: the alternative would
+	// mark every legacy row as hand-modified, which is the bug this column exists to fix.
+	if err := s.addColumn("exchanges", "user_edited", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	// exchanges gained duration_us so that "fast" and "never measured" stop being the same row.
 	// duration_ms is a whole-millisecond count, so a sub-millisecond exchange stored 0 — exactly what an
 	// exchange nobody timed stores. NULL here means unmeasured and a number means measured, including
@@ -622,13 +632,14 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
 		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
-		  request_original_msg, request_auto_msg, response_original_msg, response_auto_msg)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
 		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title,
-		nullMsg(ex.RequestOriginal), nullMsg(ex.RequestAuto), nullMsg(ex.ResponseOriginal), nullMsg(ex.ResponseAuto))
+		nullMsg(ex.RequestOriginal), nullMsg(ex.RequestAuto), nullMsg(ex.ResponseOriginal), nullMsg(ex.ResponseAuto),
+		boolInt(ex.UserEdited))
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -727,7 +738,7 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
 		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
-		        request_original_msg, request_auto_msg, response_original_msg, response_auto_msg
+		        request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -755,12 +766,14 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		// existed scans NULL, which reads as "this stage was not retained" — the same answer a row
 		// written by this build for an unmodified exchange carries. See the migrate note.
 		var reqOriginal, reqAuto, respOriginal, respAuto sql.NullInt64
+		var userEdited int
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
 			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title,
-			&reqOriginal, &reqAuto, &respOriginal, &respAuto); err != nil {
+			&reqOriginal, &reqAuto, &respOriginal, &respAuto, &userEdited); err != nil {
 			return nil, err
 		}
+		ex.UserEdited = userEdited != 0
 		ex.RequestOriginal = msgIDPtr(reqOriginal)
 		ex.RequestAuto = msgIDPtr(reqAuto)
 		ex.ResponseOriginal = msgIDPtr(respOriginal)

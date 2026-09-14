@@ -469,6 +469,31 @@ type Exchange struct {
 	// and "no response" must not be confusable with "response identical to the original".
 	ResponseOriginal *MsgId
 	ResponseAuto     *MsgId
+
+	// UserEdited says the operator modified this exchange by hand — in Intercept. It is Burp's
+	// history "Edited" column: "Flag whether the request or response were modified by the user",
+	// and Montoya's ProxyHttpRequestResponse.edited().
+	//
+	// # Why this is a fact and not arithmetic over the stages
+	//
+	// It used to be derived — "any stage was retained, so something changed the bytes" — and that
+	// is wrong in the direction that matters, because the stage boundary is taken *above* the
+	// operator's hold while several automatic rewrites run below it. Stripping Proxy-* headers,
+	// the request-direction option rules and the retarget all happen after the hold, so each of
+	// them landed in the same gap a hand edit occupies: a request curl sent through the proxy was
+	// recorded as user-edited purely because burpsy had removed its Proxy-Connection header
+	// (burpsy-react-ui-sd0d). A column that flags most traffic as hand-modified has no signal left.
+	//
+	// The two facts are independent and both are kept, because they answer different questions:
+	// the stages say *what the bytes became* (the viewer's Original / Auto-modified / Edited
+	// readings, and they stay exactly as they were), and this says *who did it*. A Match & Replace
+	// rule that rewrites a header produces a retained stage and leaves this false — the rule is
+	// the tool's, not the operator's.
+	//
+	// A retarget sets it: the bytes may be identical and the item is still not the one the client
+	// sent, because its destination is not. That is a modification by the operator's hand, and it
+	// is exactly what an operator looking at this column is trying to find.
+	UserEdited bool
 }
 
 // Variant names one of Burp's three readings of a message in history.

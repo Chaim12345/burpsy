@@ -253,8 +253,12 @@ func variantView(ex *core.Exchange) VariantView {
 		v.ResponseOriginal = wireMsgID(ex, core.DirectionResponse, core.VariantOriginal)
 		v.ResponseAuto = wireMsgID(ex, core.DirectionResponse, core.VariantAutoModified)
 	}
-	v.Edited = v.RequestOriginal != nil || v.RequestAuto != nil ||
-		v.ResponseOriginal != nil || v.ResponseAuto != nil
+	// The operator's own edit, carried as a fact off the exchange rather than inferred from the
+	// stages above. Deriving it from "a stage was retained" made every automatic rewrite below the
+	// hold — the Proxy-* strip, the request option rules — read as a hand edit
+	// (burpsy-react-ui-sd0d), which is the one thing this flag exists to distinguish. See
+	// core.Exchange.UserEdited: the stages say what the bytes became, this says who did it.
+	v.Edited = ex.UserEdited
 	return v
 }
 

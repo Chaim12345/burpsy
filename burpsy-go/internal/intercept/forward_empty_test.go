@@ -38,7 +38,7 @@ func TestForwardWithNilKeepsTheHeldBytes(t *testing.T) {
 	done := make(chan struct{})
 	var action Action
 	var out []byte
-	go func() { action, out, _ = held.Wait(); close(done) }()
+	go func() { action, out, _, _ = held.Wait(); close(done) }()
 
 	if err := e.Forward(held.ID, nil, false, nil); err != nil {
 		t.Fatalf("Forward: %v", err)
@@ -58,7 +58,7 @@ func TestForwardWithAnEmptyStringClearsThePayload(t *testing.T) {
 
 	done := make(chan struct{})
 	var out []byte
-	go func() { _, out, _ = held.Wait(); close(done) }()
+	go func() { _, out, _, _ = held.Wait(); close(done) }()
 
 	empty := ""
 	if err := e.Forward(held.ID, &empty, false, nil); err != nil {
@@ -82,7 +82,7 @@ func TestForwardDoesNotRewriteContentLengthOnAWebSocketFrame(t *testing.T) {
 
 	done := make(chan struct{})
 	var out []byte
-	go func() { _, out, _ = held.Wait(); close(done) }()
+	go func() { _, out, _, _ = held.Wait(); close(done) }()
 
 	// fixContentLength true, exactly as the console sends by default.
 	if err := e.Forward(held.ID, nil, true, nil); err != nil {
@@ -104,7 +104,7 @@ func TestForwardStillRewritesContentLengthOnHTTP(t *testing.T) {
 
 	done := make(chan struct{})
 	var out []byte
-	go func() { _, out, _ = held.Wait(); close(done) }()
+	go func() { _, out, _, _ = held.Wait(); close(done) }()
 
 	if err := e.Forward(held.ID, nil, true, nil); err != nil {
 		t.Fatalf("Forward: %v", err)
@@ -122,7 +122,7 @@ func TestForwardRewritesContentLengthToMatchAnEdit(t *testing.T) {
 
 	done := make(chan struct{})
 	var out []byte
-	go func() { _, out, _ = held.Wait(); close(done) }()
+	go func() { _, out, _, _ = held.Wait(); close(done) }()
 
 	edited := "POST /x HTTP/1.1\r\nHost: a.test\r\nContent-Length: 5\r\n\r\nmuch longer body"
 	if err := e.Forward(held.ID, &edited, true, nil); err != nil {

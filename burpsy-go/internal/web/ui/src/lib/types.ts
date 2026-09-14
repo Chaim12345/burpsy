@@ -156,7 +156,16 @@ export interface Exchange {
   request_auto_modified: number | null;
   response_original: number | null;
   response_auto_modified: number | null;
-  /** Whether either direction differs from what the peer sent — the History "Edited" column. */
+  /**
+   * Whether the operator modified either direction by hand in Intercept — the History "Edited"
+   * column, and Burp's `ProxyHttpRequestResponse.edited()`.
+   *
+   * Deliberately *not* "this row's bytes differ from the peer's": burpsy rewrites traffic of its own
+   * accord after the hold (it strips the Proxy-* header family, it can force `Connection: close`), so
+   * the two questions have different answers on ordinary traffic, and reading this one as that one
+   * marked rows nobody had touched (burpsy-react-ui-sd0d). A rule rewriting a message does not raise
+   * this either — that is what the `auto_modified` readings above are for.
+   */
   edited: boolean;
  };
 }

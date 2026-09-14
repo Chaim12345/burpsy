@@ -34,10 +34,15 @@ type variantWire struct {
 	} `json:"variants"`
 }
 
-// seedVariantExchange stores one exchange whose four stages are set as the caller asks, so each test
-// below is about the wire shape rather than about how the stages got there — that is the proxy's
-// tests' job, and this file deliberately does not repeat it.
-func seedVariantExchange(t *testing.T, s *Server, reqOriginal, reqAuto, respOriginal, respAuto bool) core.ExchangeID {
+// seedVariantExchange stores one exchange whose four stages, and whose "the operator edited this"
+// flag, are set as the caller asks, so each test below is about the wire shape rather than about how
+// the stages got there — that is the proxy's tests' job, and this file deliberately does not repeat
+// it.
+//
+// The flag is a separate input from the stages deliberately. They answer different questions — the
+// stages say what the bytes became, the flag says who changed them (burpsy-react-ui-sd0d) — and a
+// seed that derived one from the other would let a projection that conflated them still pass.
+func seedVariantExchange(t *testing.T, s *Server, reqOriginal, reqAuto, respOriginal, respAuto, userEdited bool) core.ExchangeID {
 	t.Helper()
 	put := func(body string, dir core.Direction) core.MsgId {
 		id, err := s.store.Put([]byte(body), dir)
@@ -57,6 +62,8 @@ func seedVariantExchange(t *testing.T, s *Server, reqOriginal, reqAuto, respOrig
 		Method:   "GET",
 		Path:     "/page",
 		Status:   &status,
+
+		UserEdited: userEdited,
 	}
 	// Descending ids so a field landing in the wrong column is visible in the assertion rather than
 	// hidden by two stages sharing a value.
@@ -98,7 +105,7 @@ func exchangeVariantWire(t *testing.T, s *Server, id core.ExchangeID) variantWir
 // viewer that offered comparisons here would bury the rows that have something to compare.
 func TestAnUnmodifiedExchangeOffersNoEarlierReadings(t *testing.T) {
 	s := newTestServer()
-	id := seedVariantExchange(t, s, false, false, false, false)
+	id := seedVariantExchange(t, s, false, false, false, false, false)
 
 	got := exchangeVariantWire(t, s, id)
 	if got.Variants.RequestOriginal != nil || got.Variants.RequestAuto != nil || got.Variants.ResponseOriginal != nil || got.Variants.ResponseAuto != nil {
@@ -118,11 +125,18 @@ func TestAnUnmodifiedExchangeOffersNoEarlierReadings(t *testing.T) {
 // "this reading exists", and the viewer offers a comparison exactly when one exists.
 func TestARuleOnlyChangeReportsThePreRuleBytesAsTheOriginal(t *testing.T) {
 	s := newTestServer()
-	id := seedVariantExchange(t, s, true, false, false, false)
+	id := seedVariantExchange(t, s, true, false, false, false, false)
 
 	got := exchangeVariantWire(t, s, id)
-	if !got.Variants.Edited {
-		t.Error("edited = false for an exchange whose request a rule rewrote")
+	// Not edited, and that is the point of the pair of assertions (burpsy-react-ui-sd0d).
+	// A Match & Replace rule rewrote these bytes; nobody edited them. Burp's flag is "the request or
+	// response were modified by the user" — which is why its viewer offers a separate Auto-modified
+	// reading — so an automatic rewrite must not raise it. What it must do is leave something to
+	// compare, which the reading assertion below checks, and the two are different questions: this
+	// row offers a comparison *and* is not "Edited", and the projection that used to derive one from
+	// the other could not express that.
+	if got.Variants.Edited {
+		t.Error("edited = true for an exchange a rule rewrote; history would mark the operator's own work where they had none")
 	}
 	if got.Variants.RequestOriginal == nil {
 		t.Fatal("the original reading is absent; the client's own bytes are what the operator needs to compare against")
@@ -144,9 +158,12 @@ func TestARuleOnlyChangeReportsThePreRuleBytesAsTheOriginal(t *testing.T) {
 // rather than falling through to the bytes that travelled.
 func TestAManualOnlyChangeReportsThePreEditBytesAsBothReadings(t *testing.T) {
 	s := newTestServer()
-	id := seedVariantExchange(t, s, false, true, false, false)
+	id := seedVariantExchange(t, s, false, true, false, false, true)
 
 	got := exchangeVariantWire(t, s, id)
+	if !got.Variants.Edited {
+		t.Error("edited = false for an exchange the operator edited by hand; the flag is exactly this case")
+	}
 	if got.Variants.RequestOriginal == nil || got.Variants.RequestAuto == nil {
 		t.Fatalf("readings = (%v, %v), want both present after a manual edit", got.Variants.RequestOriginal, got.Variants.RequestAuto)
 	}
@@ -162,7 +179,7 @@ func TestAManualOnlyChangeReportsThePreEditBytesAsBothReadings(t *testing.T) {
 // Changed both ways: three distinct readings, in order.
 func TestAnExchangeChangedTwiceReportsThreeDistinctReadings(t *testing.T) {
 	s := newTestServer()
-	id := seedVariantExchange(t, s, true, true, false, false)
+	id := seedVariantExchange(t, s, true, true, false, false, true)
 
 	got := exchangeVariantWire(t, s, id)
 	if got.Variants.RequestOriginal == nil || got.Variants.RequestAuto == nil {
@@ -180,7 +197,7 @@ func TestAnExchangeChangedTwiceReportsThreeDistinctReadings(t *testing.T) {
 // branched once for both directions would look right whenever only one of them had changed.
 func TestAResponseOnlyChangeLeavesTheRequestsReadingsAbsent(t *testing.T) {
 	s := newTestServer()
-	id := seedVariantExchange(t, s, false, false, true, true)
+	id := seedVariantExchange(t, s, false, false, true, true, false)
 
 	got := exchangeVariantWire(t, s, id)
 	if got.Variants.RequestOriginal != nil || got.Variants.RequestAuto != nil {
@@ -192,8 +209,28 @@ func TestAResponseOnlyChangeLeavesTheRequestsReadingsAbsent(t *testing.T) {
 	if *got.Variants.ResponseOriginal == *got.Variants.ResponseAuto {
 		t.Error("the response's two earlier readings are the same message despite a rule and an edit both having run")
 	}
+	// A rule rewrote the response and nobody edited it, so the flag stays down while the readings
+	// above are both present — see TestARuleOnlyChangeReportsThePreRuleBytesAsTheOriginal for why
+	// those are separate answers (burpsy-react-ui-sd0d).
+	if got.Variants.Edited {
+		t.Error("edited = true for a response only a rule rewrote")
+	}
+}
+
+// A response the operator edited by hand raises the flag on its own, with the request half of the row
+// carrying no stages at all. Asserted from the response side deliberately: a projection that read the
+// request half twice would look correct on every test above, because the request is the half those
+// seeds put the stages on.
+func TestAnOperatorsEditToTheResponseRaisesTheFlag(t *testing.T) {
+	s := newTestServer()
+	id := seedVariantExchange(t, s, false, false, false, true, true)
+
+	got := exchangeVariantWire(t, s, id)
 	if !got.Variants.Edited {
-		t.Error("edited = false for an exchange whose response was rewritten")
+		t.Error("edited = false for an exchange whose response the operator edited by hand")
+	}
+	if got.Variants.RequestOriginal != nil || got.Variants.RequestAuto != nil {
+		t.Errorf("the untouched request offered readings: (%v,%v)", got.Variants.RequestOriginal, got.Variants.RequestAuto)
 	}
 }
 

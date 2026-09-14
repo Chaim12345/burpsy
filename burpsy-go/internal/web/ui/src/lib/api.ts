@@ -203,8 +203,10 @@ export function historyToCSV(exchanges: {
  duration_ms: number;
  tls?: boolean;
  notes?: string | null;
- /** Burp's "Edited" flag (burpsy-react-ui-c05). Optional because a caller holding an older row
-  *  shape still exports; absent reads as "not edited", which is the flag's own default. */
+ /** Burp's "Edited" flag (burpsy-react-ui-c05, corrected by sd0d): the operator edited this row by
+  *  hand in Intercept — not merely "burpsy's bytes differ from the peer's", which is true of traffic
+  *  nobody touched. Optional because a caller holding an older row shape still exports; absent reads
+  *  as "not edited", which is the flag's own default. */
  variants?: { edited: boolean };
 }[]): string {
  // Extension and Query are derived here rather than read off the row, for the same reason the
@@ -213,8 +215,10 @@ export function historyToCSV(exchanges: {
  // one helper precisely so the CSV and the table cannot disagree about what a column means.
  //
  // "Edited" sits next to Status rather than at the end because it belongs with the row's identity,
- // not with the operator's annotation: an export that is read to find out which traffic a Match &
- // Replace rule touched must not need its last column to be scrolled to.
+ // not with the operator's annotation: an export read to find out which rows the operator changed by
+ // hand must not need its last column to be scrolled to. (An automatic rewrite is a different
+ // question with a different answer — see Exchange variants for the readings that carry it — and
+ // this column deliberately does not answer both, which is what sd0d was.)
  const headers = [
   "ID", "Timestamp", "Method", "Host", "Port", "Path", "Extension", "Query", "TLS",
   "Edited", "Status", "Length", "MIME", "Duration", "Comment",

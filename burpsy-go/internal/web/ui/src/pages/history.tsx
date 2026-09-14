@@ -970,10 +970,11 @@ export function HistoryPage(): JSX.Element {
     },
    },
    {
-    // Burp's "Edited" column (burpsy-react-ui-c05): a row whose request or response differs from
-    // what the peer sent. The badge is the same fact the reading picker makes available in the
-    // detail pane, in the form you can scan down — which is how an operator finds the traffic a
-    // Match & Replace rule actually touched instead of reasoning about which rows it *should* have.
+    // Burp's "Edited" column (burpsy-react-ui-c05, corrected by sd0d): a row the *operator* modified by
+    // hand in Intercept. Not "a row whose bytes differ from the peer's" — burpsy rewrites traffic of
+    // its own accord after the hold, so that reading put this badge on traffic nobody had touched.
+    // Automatic rewrites are still visible per row, one click away, in the reading picker: this column
+    // answers who changed the message, the picker answers what it became.
     //
     // The empty state is the table's own `—` rather than a blank cell, because every other column
     // reads that way and a column that was silently empty would look like a field this build had

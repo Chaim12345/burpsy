@@ -178,7 +178,10 @@ func wsStripNote(removed []string) *string {
 // instead, so a refused upgrade is handled exactly like any other response.
 // strippedExtensions carries whatever stripWsHandshake removed from the request,
 // so the exchange can say the handshake was rewritten.
-func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, reqStages messageStages, startTime time.Time, strippedExtensions []string) {
+// requestEdited is whether the operator's own hold edited the handshake request, threaded in for the
+// same reason handleTLSResponse threads it: the hold resolved before this function was called, and
+// the row below is the only record of it.
+func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, reqStages messageStages, startTime time.Time, strippedExtensions []string, requestEdited bool) {
 	upstream, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return
@@ -204,7 +207,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 			return
 		}
 		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, "", "", serverIPOf(upstream))
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, "", "", serverIPOf(upstream), requestEdited)
 		return
 	}
 
@@ -242,6 +245,10 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 
 		ServerIP:     serverIPOf(upstream),
 		ListenerPort: listenerPortOf(clientConn),
+
+		// A handshake the operator edited in the hold is "Edited" in history, by the same rule as
+		// every other row (burpsy-react-ui-sd0d).
+		UserEdited: requestEdited,
 
 		// A handshake this proxy rewrote must not look pristine.
 		Notes: wsStripNote(strippedExtensions),
@@ -735,7 +742,12 @@ func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, p
 	// The destination is ignored: a WebSocket frame has no addressing of its own, and the engine
 	// refuses a retarget on one (see intercept.Engine.Forward). The value is still discarded here
 	// rather than defaulted so the compiler makes any future Wait caller state what it does with it.
-	action, edited, _ := held.Wait()
+	//
+	// So is the edited flag. A frame is relayed, not recorded: this package's only rows for a
+	// WebSocket are the handshake's, and the handshake's own flag comes from the request hold. An
+	// edit to a frame therefore has nowhere to be reported — a gap rather than a decision, filed as
+	// burpsy-react-ui-d7bu so it does not read as an oversight here.
+	action, edited, _, _ := held.Wait()
 	if action == intercept.ActionDrop {
 		return nil, true
 	}

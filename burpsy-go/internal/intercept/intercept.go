@@ -11,6 +11,7 @@
 package intercept
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -400,7 +401,25 @@ type Held struct {
 	// a dropped message has no destination, and inventing one would let a drop carry a retarget into
 	// the history row of an exchange that never happened.
 	target *Target
-	reason string
+	// userEdited says the operator's edit buffer differed from the bytes the message arrived with,
+	// which is Burp's history "Edited" column: "Flag whether the request or response were modified by
+	// the user" (ProxyHttpRequestResponse.edited()).
+	//
+	// # Why this is decided here and not by whoever reads the bytes back
+	//
+	// The console sends the editor's current contents on *every* forward — intercept.tsx forwards
+	// row.raw, the same buffer it rendered — so "a buffer was supplied" is not an edit, and a caller
+	// downstream cannot tell an untouched buffer from a retyped one without comparing against
+	// something it does not have. This struct is the only place holding both the bytes the operator
+	// was shown (Raw) and the bytes they sent back.
+	//
+	// It is deliberately *not* derived from the recorded bytes differing from an earlier stage of
+	// them. That reading counts burpsy's own rewrites as the operator's work: a request whose
+	// Proxy-Connection header an egress option strips, or whose Content-Length fixContentLength
+	// corrects, differs from the client's bytes without anyone having edited anything — and history
+	// then reported "Edited" for traffic nobody had touched (burpsy-react-ui-sd0d).
+	userEdited bool
+	reason     string
 }
 
 // Wait blocks until the operator forwards or drops the message. It is safe to
@@ -410,18 +429,20 @@ type Held struct {
 // The target is the operator's edited destination, nil when they left it alone. It is returned here
 // rather than exposed as an accessor because it has to reach the caller as part of the same
 // decision as the bytes: the proxy authorises the request against the destination it is about to
-// use, and a destination fetched separately could be read before the operator's edit landed.
-func (h *Held) Wait() (Action, []byte, *Target) {
+// use, and a destination fetched separately could be read before the operator's edit landed. The
+// last value, userEdited, is returned for the same reason — it is the operator's decision about
+// *this* message, and it is what history's "Edited" column must be told, not recomputed.
+func (h *Held) Wait() (Action, []byte, *Target, bool) {
 	<-h.done
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.action, h.outRaw, h.target
+	return h.action, h.outRaw, h.target, h.userEdited
 }
 
 // resolve marks the message resolved exactly once; a second resolve (e.g. an
 // API request arriving twice) is ignored so the proxy cannot act on a stale
 // decision.
-func (h *Held) resolve(a Action, raw []byte, target *Target, reason string) bool {
+func (h *Held) resolve(a Action, raw []byte, target *Target, userEdited bool, reason string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.resolved {
@@ -431,6 +452,7 @@ func (h *Held) resolve(a Action, raw []byte, target *Target, reason string) bool
 	h.action = a
 	h.outRaw = raw
 	h.target = target
+	h.userEdited = userEdited
 	h.reason = reason
 	close(h.done)
 	return true
@@ -903,7 +925,21 @@ func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool, targe
 			target = &normalised
 		}
 	}
-	if !h.resolve(ActionForward, raw, target, "") {
+	// The bytes the operator was shown versus the bytes they handed back, decided against the
+	// operator's own buffer rather than against what goes on the wire below. The rewrite between them
+	// is burpsy's, not the operator's: fixContentLength recomputes a header the operator may not even
+	// have looked at, and counting it as a manual edit would mark every forward of a request whose
+	// framing burpsy corrected. See Held.userEdited for why no caller can make this call.
+	userEdited := edited != nil && !bytes.Equal([]byte(*edited), h.Raw)
+	// A second way to modify an item by hand, and it leaves the bytes alone: Burp's "Edit target".
+	// `target` is nil both when the operator named no destination and when they named the one the
+	// message already had (the collapse above), so what survives is a destination the client did not
+	// ask for — an item that is not the one the client sent even when it is byte-for-byte the same.
+	// See core.Exchange.UserEdited, which names this case.
+	if target != nil {
+		userEdited = true
+	}
+	if !h.resolve(ActionForward, raw, target, userEdited, "") {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
 	// Remove from the hold map so a long-running proxy does not leak one full
@@ -925,7 +961,7 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	if h == nil {
 		return fmt.Errorf("no held message %d", id)
 	}
-	if !h.resolve(ActionDrop, nil, nil, reason) {
+	if !h.resolve(ActionDrop, nil, nil, false, reason) {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
 	e.mu <- struct{}{}
@@ -972,7 +1008,9 @@ func (e *Engine) ForwardAll() int {
 		// h.Raw, not nil: the resolve payload IS the proxy side's answer, and nil
 		// reads as an empty message there — a forward of nothing. The client's own
 		// held bytes are the unmodified content this method promises.
-		if h.resolve(ActionForward, h.Raw, nil, "") {
+		// false, not a comparison: "unmodified" is this method's contract, so there is nothing an
+		// operator edited here to notice.
+		if h.resolve(ActionForward, h.Raw, nil, false, "") {
 			forwarded = append(forwarded, h)
 		}
 	}
@@ -1006,7 +1044,7 @@ func (e *Engine) DropAll(reason string) int {
 	<-e.mu
 	dropped := make([]*Held, 0, len(all))
 	for _, h := range all {
-		if h.resolve(ActionDrop, nil, nil, reason) {
+		if h.resolve(ActionDrop, nil, nil, false, reason) {
 			dropped = append(dropped, h)
 		}
 	}

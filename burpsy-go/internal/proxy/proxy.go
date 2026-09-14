@@ -1095,6 +1095,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		// alone. Declared out here rather than inside the hold block because the forward below reads
 		// it: which connection this request goes out on is decided after the hold resolves.
 		var retarget *intercept.Target
+		// requestEdited is whether the operator modified this request by hand, and it travels the same
+		// way and for the same reason: the record below — and the record of the response it earns — has
+		// to report it (burpsy-react-ui-sd0d).
+		var requestEdited bool
 
 		// Apply Match & Replace on the request — same position and same reasoning as the
 		// plain path in handleHTTP: before intercept, before the scope-gated store, so the
@@ -1113,7 +1117,8 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 			if held := s.config.intercept.Hold(intercept.ParseMessage(
 				intercept.DirectionRequest, reqHost, reqPort, true, method, path, requestData,
 			)); held != nil {
-				action, raw, edited := held.Wait()
+				action, raw, edited, heldEdited := held.Wait()
+				requestEdited = heldEdited
 				if action == intercept.ActionDrop {
 					return
 				}
@@ -1195,7 +1200,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 				s.config.logger.Error("retargeted forward failed", zap.Error(err))
 				return
 			}
-			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIP) {
+			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIP, requestEdited) {
 				return
 			}
 			continue
@@ -1222,7 +1227,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 					return
 				}
 				responseData := append(head, body...)
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream)) {
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream), requestEdited) {
 					return
 				}
 				continue
@@ -1253,6 +1258,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 
 					ServerIP:     serverIPOf(upstream),
 					ListenerPort: listenerPortOf(clientConn),
+
+					// A handshake the operator edited in the hold is "Edited" in history, by the same rule
+					// as every other row (burpsy-react-ui-sd0d).
+					UserEdited: requestEdited,
 
 					// A handshake this proxy rewrote must not look pristine.
 					Notes: wsStripNote(wsStripped),
@@ -1288,7 +1297,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		}
 		responseData := append(head, body...)
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream)) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream), requestEdited) {
 			return
 		}
 	}
@@ -1309,7 +1318,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 // serverIP is threaded in rather than read here: this function holds the client side of the
 // decrypted channel and not the upstream socket, and the destination address is a property of that
 // socket. Passing it keeps the answer the one the exchange actually used (burpsy-react-ui-mr4p).
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, serverIP string) bool {
+// requestEdited is whether the operator's own hold edited the request half of this exchange, which
+// this function cannot see: the request hold resolved before the request was forwarded. It is
+// threaded in so the recorded row's "Edited" column reports an operator edit in either direction,
+// which is what Burp's flag means ("the request or response were modified by the user").
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, serverIP string, requestEdited bool) bool {
 	// The response's stage boundaries, by the same rule as completeResponse's
 	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
 	// and before the hold. See messageStages.
@@ -1344,6 +1357,9 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// Intercept: hold the response before it reaches the client.
 	var notes *string
 	keepServing := true
+	// responseEdited is the operator's own edit to the response half, paired below with the request
+	// half this function was handed.
+	var responseEdited bool
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
@@ -1351,7 +1367,8 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 			// A response has no destination of its own to retarget: the bytes already came back from
 			// one. The target is therefore ignored here rather than applied, and the engine only ever
 			// sets it on a forward.
-			action, raw, _ := held.Wait()
+			action, raw, _, heldEdited := held.Wait()
+			responseEdited = heldEdited
 			if action == intercept.ActionDrop {
 				keepServing = false
 				notes = interceptDropNote()
@@ -1402,6 +1419,12 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 
 			ServerIP:     serverIP,
 			ListenerPort: listenerPortOf(clientConn),
+
+			// Either direction being the operator's own work makes this row "Edited", which is Burp's
+			// reading of the flag (burpsy-react-ui-sd0d). Deliberately not a comparison of the recorded
+			// bytes against an earlier stage of themselves: that counts burpsy's own rewrites as the
+			// operator's, which is the defect this replaces.
+			UserEdited: requestEdited || responseEdited,
 
 			Notes: notes,
 		})
@@ -1575,11 +1598,16 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// destination the bytes will actually reach, not the one the client originally named.
 	scheme := false
 	var heldNote, heldHighlight string
+	// requestEdited is the operator's own edit to this request, threaded to whichever record this
+	// exchange ends in — the plain response below or a WebSocket handshake. See
+	// intercept.Held.userEdited for why it is read from the hold and not recomputed from the bytes.
+	var requestEdited bool
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
 			intercept.DirectionRequest, host, port, scheme, method, path, requestData,
 		)); held != nil {
-			action, raw, retarget := held.Wait()
+			action, raw, retarget, heldEdited := held.Wait()
+			requestEdited = heldEdited
 			if action == intercept.ActionDrop {
 				clientConn.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"))
 				return
@@ -1676,7 +1704,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// after it are WebSocket frames, not a response body. Gated on the request,
 	// so every other request takes the identical path it always took.
 	if core.IsWsUpgradeRequest(requestData) {
-		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, reqStages, startTime, wsStripped)
+		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, reqStages, startTime, wsStripped, requestEdited)
 		return
 	}
 
@@ -1687,7 +1715,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		return
 	}
 
-	s.completeResponse(clientConn, method, host, port, scheme, path, requestData, reqStages, responseData, startTime, heldNote, heldHighlight, serverIP)
+	s.completeResponse(clientConn, method, host, port, scheme, path, requestData, reqStages, responseData, startTime, heldNote, heldHighlight, serverIP, requestEdited)
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1714,7 +1742,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // message it indexed whenever a response rule fired.
 // serverIP is threaded in for the reason handleTLSResponse's is: the upstream socket is owned and
 // closed by the forwarder, so this is the last point the address is still knowable.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, heldNote, heldHighlight, serverIP string) {
+// requestEdited is whether the operator's own hold edited the request half of this exchange; see
+// handleTLSResponse, which threads the same value for the same reason.
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, heldNote, heldHighlight, serverIP string, requestEdited bool) {
 	// The response's stage boundaries (burpsy-react-ui-c05): stage 0 is the origin's bytes as the
 	// forwarder read them, stage 1 is after the automatic rules and before the hold. The recorded
 	// bytes are stage 2. Same rule as the request side's — see messageStages.
@@ -1731,13 +1761,17 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	var notes *string
 	var highlight string
 	dropped := false
+	// responseEdited is the operator's own edit to the response half; requestEdited, above, is the
+	// other half of the same flag.
+	var responseEdited bool
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		)); held != nil {
 			// The destination is ignored for a response, by the same reasoning as
 			// handleTLSResponse's: it has already been reached.
-			action, raw, _ := held.Wait()
+			action, raw, _, heldEdited := held.Wait()
+			responseEdited = heldEdited
 			if action == intercept.ActionDrop {
 				dropped = true
 				notes = interceptDropNote()
@@ -1793,6 +1827,9 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 
 		ServerIP:     serverIP,
 		ListenerPort: listenerPortOf(clientConn),
+
+		// Either direction being the operator's own work makes this row "Edited" (burpsy-react-ui-sd0d).
+		UserEdited: requestEdited || responseEdited,
 
 		Notes:     notes,
 		Highlight: highlight,

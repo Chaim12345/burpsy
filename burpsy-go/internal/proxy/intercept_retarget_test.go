@@ -302,7 +302,7 @@ func TestARetargetEqualToTheCurrentDestinationTakesTheOrdinaryPath(t *testing.T)
 	}
 	done := make(chan *intercept.Target, 1)
 	go func() {
-		_, _, target := held.Wait()
+		_, _, target, _ := held.Wait()
 		done <- target
 	}()
 	if err := engine.Forward(held.ID, nil, false, &intercept.Target{Host: aHost, Port: aPort, TLS: false}); err != nil {

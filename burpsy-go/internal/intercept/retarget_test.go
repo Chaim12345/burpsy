@@ -34,7 +34,7 @@ func TestEngine_ForwardRefusesARetargetWithoutAHost(t *testing.T) {
 	// request down the original path, which is the opposite of what the operator asked for.
 	done := make(chan Action, 1)
 	go func() {
-		action, _, _ := h.Wait()
+		action, _, _, _ := h.Wait()
 		done <- action
 	}()
 	select {
@@ -84,7 +84,7 @@ func TestEngine_ForwardCarriesTheTargetToWait(t *testing.T) {
 			t.Errorf("Forward: %v", err)
 		}
 	}()
-	action, _, got := h.Wait()
+	action, _, got, _ := h.Wait()
 	if action != ActionForward {
 		t.Fatalf("action = %v, want forward", action)
 	}
@@ -112,7 +112,7 @@ func TestEngine_DropDropsTheTargetToo(t *testing.T) {
 			t.Errorf("Drop: %v", err)
 		}
 	}()
-	action, raw, target := h.Wait()
+	action, raw, target, _ := h.Wait()
 	if action != ActionDrop || raw != nil {
 		t.Fatalf("action = %v raw = %q, want a drop with no bytes", action, raw)
 	}

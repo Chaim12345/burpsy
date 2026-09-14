@@ -158,6 +158,14 @@ var exchangeFieldRules = map[string]fieldRule{
 	"RequestAuto":      ruleAbsent,
 	"ResponseOriginal": ruleAbsent,
 	"ResponseAuto":     ruleAbsent,
+	// Absent for the same reason the four stages above are, and it is the sharper half of the claim
+	// (burpsy-react-ui-sd0d). The exchange this test compares is edited by nobody — no intercept hold
+	// touches it, and the crawler has no hold at all — so both legs must record it as not edited by
+	// the operator. A proxy that derived the flag from the recorded bytes differing from the client's
+	// would fail here on its own rewrites: the proxied leg is the one that strips Proxy-* headers and
+	// corrects framing, so it is exactly the leg that used to report "Edited" for traffic nobody
+	// touched. The flag now comes from the hold, so both sides answer false and this is what says so.
+	"UserEdited": ruleAbsent,
 }
 
 func TestTheProxyAndTheCrawlerRecordTheSameShapeOfExchange(t *testing.T) {
