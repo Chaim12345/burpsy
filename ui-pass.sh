@@ -46,6 +46,16 @@ if ! curl -fsS -o /dev/null "http://127.0.0.1:${WEB_PORT}/"; then
   exit 2
 fi
 
+# Hard-reset the page before the sweep. Every route below is a hash change, and `agent-browser open`
+# with a different hash is a SAME-DOCUMENT navigation: it leaves whatever the previous drive mounted
+# in place. A Radix menu portal left open by hand-driving the console (which is how a change is
+# verified in part (c)) therefore rides along into every later route, and axe reports
+# `aria-hidden-focus` on a page that is fine — a false finding, produced by the instrument. Measured
+# on 2026-09-14: 26 failed routes became 0 after this line was added, with no application change.
+agent-browser open "http://127.0.0.1:${WEB_PORT}/" >/dev/null 2>&1
+agent-browser reload >/dev/null 2>&1
+sleep 1
+
 # routes.ts is the contract (id + the exact h1 the page must render), so this reads it rather than
 # keeping a second list that would drift the first time a page is renamed.
 ROUTE_PAIRS=$(python3 - "$ROUTES_TS" <<'PY'
