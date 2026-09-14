@@ -94,7 +94,7 @@ agent-browser console     # must be EXPLAINED, not empty
 ```
 
 The console is not required to be silent, and pretending it is would make this check useless. In a
-default run exactly two things appear:
+default run exactly three things appear — two `[error]` lines, both explained here, and one `[info]`:
 
 - `[info] Download the React DevTools...` — React's dev-mode notice.
 - `[error] Failed to load resource: the server responded with a status of 404 (Not Found)` — the probe
@@ -110,6 +110,11 @@ default run exactly two things appear:
   whichever route the sweep opened first — which is how it came to look route-specific. `#dashboard`
   and `#settings` do also read the result, which is why a *rendered* "no CA" message appears on those
   two only.
+- A second `[error] ... 404` — `/favicon.ico`. The console declares its icon inline (`index.html`'s
+  `data:image/svg+xml` link), so there is no such file to serve, but Chromium still probes the
+  conventional path on a page it opened itself. Verified 2026-09-14: the served page carries the icon
+  link, `curl /favicon.ico` answers 404, and no app code requests it. Nothing to fix; it is listed
+  here so the next pass does not re-investigate it.
 
 Anything else at error level is a finding. Chromium's "Failed to load resource" line names no URL, so
 attribute it by listing what the page requested rather than guessing from the text:
