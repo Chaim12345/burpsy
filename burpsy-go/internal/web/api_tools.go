@@ -1510,6 +1510,14 @@ type sequencerAnalyseReq struct {
 	Text     *string   `json:"text"`
 	Tokens   *[]string `json:"tokens"`
 	Encoding *string   `json:"encoding"`
+	// SignificancePercent is the operator's significance level, as a percentage:
+	// 0.03 means 0.03%, not 3%. Burp makes this the input to the whole analysis
+	// ("you can choose the probability you use to interpret the randomness of
+	// your findings"), and it reaches exactly one part of the report — the
+	// effective-entropy curve. A pointer so an absent level is answered with the
+	// default and marked as defaulted, rather than being indistinguishable from
+	// an operator who typed the default.
+	SignificancePercent *float64 `json:"significance_percent"`
 }
 
 // parseEncoding maps the UI's "hex" | "base64" | "raw" onto the engine's
@@ -1568,7 +1576,22 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 	// were supplied", and that is more useful to whoever pasted the wrong buffer
 	// than a 400 with no analysis in it.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sequencer.AnalyseAs(tokens, encoding))
+	if req.SignificancePercent == nil {
+		json.NewEncoder(w).Encode(sequencer.AnalyseAs(tokens, encoding))
+		return
+	}
+	// Refused, not clamped. A level above 10% or below 0.001% is outside the
+	// range Burp's analysis is defined over, and silently moving it to the edge
+	// would answer a different question under the operator's number — the same
+	// refusal the encoding field makes for an unknown alphabet.
+	if !sequencer.ValidSignificancePercent(*req.SignificancePercent) {
+		http.Error(w, fmt.Sprintf(
+			"significance_percent %g is outside the range this analysis is defined over: %g to %g, as a percentage (0.03 means 0.03%%, not 3%%). Burp's own guidance puts FIPS work at 0.002%%-0.03%% and scientific work at 1%%-5%%.",
+			*req.SignificancePercent, sequencer.MinSignificancePercent, sequencer.MaxSignificancePercent),
+			http.StatusBadRequest)
+		return
+	}
+	json.NewEncoder(w).Encode(sequencer.AnalyseWith(tokens, encoding, *req.SignificancePercent))
 }
 
 // helpers ----------------------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import type {
  TransformRun,
  TransformStep,
 } from "./types.workbench";
+import type { EffectiveEntropyReport } from "./sequencer-significance";
 
 /**
  * Read hooks for the Workbench tools. Keys keep the "toollog" / "sequencer"
@@ -103,19 +104,46 @@ export const SEQUENCER_ENCODINGS = ["hex", "base64", "raw"] as const;
 
 /* --- sequencer ------------------------------------------------------------ */
 
+/**
+ * The analyse response, with the effective-entropy curve the Go report has
+ * carried since burpsy-react-ui-boq.
+ *
+ * Intersected here rather than added to `SequencerAnalysis` because that
+ * interface lives in types.workbench.ts, which another agent holds while this
+ * lands; the field belongs there and should be folded in centrally. The
+ * intersection makes it non-optional for every caller in the meantime, which is
+ * the honest shape — the server sends it on every analyse, at a default level
+ * when none was asked for.
+ */
+export type SequencerAnalysisWithEntropy = SequencerAnalysis & { effective_entropy: EffectiveEntropyReport };
+
+/**
+ * The operator's significance level, as the page holds it: "" means "let the
+ * server use its default", exactly as "" means "detect" for the encoding. The
+ * distinction survives to the report — `significance_defaulted` — so the page can
+ * say "default" rather than implying a choice nobody made.
+ */
+function analyseBody(base: Record<string, unknown>, encoding: string, significancePercent: string): Record<string, unknown> {
+ return {
+  ...base,
+  ...(encoding ? { encoding } : {}),
+  ...(significancePercent ? { significance_percent: Number(significancePercent) } : {}),
+ };
+}
+
 export function useSequencerAnalyse() {
- return useMutation<SequencerAnalysis, Error, { text: string; encoding: string }>({
+ return useMutation<SequencerAnalysisWithEntropy, Error, { text: string; encoding: string; significancePercent: string }>({
   // An omitted encoding is what makes the server detect one; sending "" is an error there.
-  mutationFn: ({ text, encoding }) =>
-   api<SequencerAnalysis>("/api/sequencer/analyse", json("POST", encoding ? { text, encoding } : { text })),
+  mutationFn: ({ text, encoding, significancePercent }) =>
+   api<SequencerAnalysisWithEntropy>("/api/sequencer/analyse", json("POST", analyseBody({ text }, encoding, significancePercent))),
  });
 }
 
 /** Analyse an already-collected token list rather than a pasted blob. */
 export function useSequencerAnalyseTokens() {
- return useMutation<SequencerAnalysis, Error, { tokens: string[]; encoding: string }>({
-  mutationFn: ({ tokens, encoding }) =>
-   api<SequencerAnalysis>("/api/sequencer/analyse", json("POST", encoding ? { tokens, encoding } : { tokens })),
+ return useMutation<SequencerAnalysisWithEntropy, Error, { tokens: string[]; encoding: string; significancePercent: string }>({
+  mutationFn: ({ tokens, encoding, significancePercent }) =>
+   api<SequencerAnalysisWithEntropy>("/api/sequencer/analyse", json("POST", analyseBody({ tokens }, encoding, significancePercent))),
  });
 }
 

@@ -160,7 +160,15 @@ type SequencerReport struct {
 	// Rust reference's, and `Advanced.AffectsGrade` says so on the wire rather
 	// than leaving it to be inferred.
 	Advanced AdvancedReport `json:"advanced"`
-	Grade    Grade          `json:"grade"`
+	// EffectiveEntropy is Burp's headline Sequencer output: the number of bit
+	// positions that survive the frequency test at each of a range of
+	// significance levels, so an operator can see whether a verdict is robust to
+	// the level they picked (burpsy-react-ui-boq). Like Advanced it is additive —
+	// `effective_entropy.affects_grade` is false and `Grade` below is still the
+	// FIPS battery's, byte-for-byte the Rust reference's. effective.go states in
+	// full what the number is and, at more length, what it is not.
+	EffectiveEntropy EffectiveEntropyReport `json:"effective_entropy"`
+	Grade            Grade                  `json:"grade"`
 	// Verdict is one sentence an operator can act on, with the numbers in it.
 	Verdict string `json:"verdict"`
 	// Warnings is everything that limits how far the verdict can be trusted.
@@ -233,12 +241,34 @@ func AnalyseReport(tokens []string) SequencerReport {
 	return AnalyseAs(tokens, nil)
 }
 
-// AnalyseAs analyses a token sample, optionally forcing the bit-level encoding.
-// Forcing it is the operator's escape hatch for the case detection cannot see:
-// tokens that happen to be all hex characters but are really opaque bytes
-// carried in hex, or the reverse. Detection is a heuristic over the alphabet
-// and says so in the report.
+// AnalyseAs analyses a token sample, optionally forcing the bit-level encoding,
+// at the default significance level.
+// Forcing the encoding is the operator's escape hatch for the case detection
+// cannot see: tokens that happen to be all hex characters but are really opaque
+// bytes carried in hex, or the reverse. Detection is a heuristic over the
+// alphabet and says so in the report.
 func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
+	return analyse(tokens, encoding, DefaultSignificancePercent, true)
+}
+
+// AnalyseWith is AnalyseAs plus the operator's significance level, the input
+// Burp's Sequencer takes for the whole analysis (burpsy-react-ui-boq).
+//
+// The level reaches exactly one part of the report — EffectiveEntropy — and
+// nothing else. `Fips`, `Grade` and `Verdict` are identical for every level a
+// caller can pass, because every FIPS 140-2 threshold is a fixed constant of the
+// standard and not a function of a chosen confidence; pretending otherwise would
+// be inventing a FIPS variant nobody specified. effective_test.go pins that
+// orthogonality rather than leaving it to be assumed.
+//
+// An out-of-range level is a caller error and is refused at the HTTP boundary
+// (ValidSignificancePercent); this function does not clamp, because a silently
+// clamped level answers a question the operator did not ask.
+func AnalyseWith(tokens []string, encoding *Encoding, significancePercent float64) SequencerReport {
+	return analyse(tokens, encoding, significancePercent, false)
+}
+
+func analyse(tokens []string, encoding *Encoding, significancePercent float64, significanceDefaulted bool) SequencerReport {
 	detected := encoding == nil
 	enc := EncodingRaw
 	if detected {
@@ -286,6 +316,17 @@ func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
 	}
 
 	grade, verdict := verdictFor(len(tokens), &characters, &fips)
+	effective := AnalyseEffectiveEntropy(tokens, enc, significancePercent, significanceDefaulted, &fips)
+	// The sample cannot answer at the level the operator chose. That is a limit
+	// on the verdict they are about to quote, so it belongs beside the other
+	// caveats and not only inside the curve — an operator who reads the headline
+	// number and nothing else must still be told there is no headline number.
+	if !effective.Chosen.Computed {
+		warnings = append(warnings, fmt.Sprintf(
+			"no effective-entropy figure at the %g%% significance level you chose: %s",
+			effective.SignificancePercent, effective.Chosen.Reason,
+		))
+	}
 	return SequencerReport{
 		Tokens:           len(tokens),
 		Encoding:         enc,
@@ -295,6 +336,7 @@ func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
 		Bits:             bits,
 		Fips:             fips,
 		Advanced:         advancedFor(tokens, enc, bitStream),
+		EffectiveEntropy: effective,
 		Grade:            grade,
 		Verdict:          verdict,
 		Warnings:         warnings,

@@ -5,6 +5,14 @@ import { useApp } from "../lib/store";
 import { cookieOptions, formFieldOptions, headerOptions, type TokenOption } from "../lib/sequencer-token-options";
 import { copyToClipboard, downloadText } from "../lib/api";
 import {
+ buildEffectiveEntropyChart,
+ runPolyline,
+ significanceLabel,
+ spreadExceedsChance,
+ SIGNIFICANCE_LEVELS,
+ type EffectiveEntropyReport,
+} from "../lib/sequencer-significance";
+import {
  SEQUENCER_ENCODINGS,
  usePauseSequencerCapture,
  useSequencerAnalyse,
@@ -15,11 +23,11 @@ import {
 } from "../lib/data.workbench";
 import type {
  CharacterAnalysis,
- SequencerAnalysis,
  SequencerCapture,
  TokenLocation,
  TokenLocationKind,
 } from "../lib/types.workbench";
+import type { SequencerAnalysisWithEntropy } from "../lib/data.workbench";
 import { HttpEditor } from "../ui/editor";
 import { DetailList } from "../ui/json";
 import { PageHeader, SectionHeading } from "../ui/layout";
@@ -41,6 +49,11 @@ import {
  Toolbar,
 } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
+
+/** The analyse report as this page reads it, with the effective-entropy curve
+ *  (burpsy-react-ui-boq). The field is intersected on in data.workbench.ts rather
+ *  than declared on `SequencerAnalysis` itself; see the note there. */
+type SequencerAnalysis = SequencerAnalysisWithEntropy;
 
 const GRADE_LABEL: Record<string, string> = { pass: "PASS", fail: "FAIL", insufficient: "NOT TESTED" };
 const GRADE_CLASS: Record<string, string> = { pass: "good-text", fail: "bad-text", insufficient: "warn-text" };
@@ -193,6 +206,215 @@ function Advanced({ report }: { report: SequencerAnalysis }): JSX.Element | null
  );
 }
 
+/** The plot box, in SVG user units. Scaled by the viewBox, so these are ratios, not pixels. */
+const CHART_W = 640;
+const CHART_H = 160;
+
+/**
+ * The effective-entropy chart (burpsy-react-ui-boq) — Burp's headline Sequencer
+ * output, which this page reported as one number and a grade until this section
+ * existed.
+ *
+ * Burp: "The Effective entropy chart shows the number of bits that pass the
+ * randomness tests at various significance levels, ranging from > 0.001% to 10%.
+ * In most cases, the Effective entropy chart shows that the choice of
+ * significance level is not important."
+ *
+ * Three rules this drawing keeps, each of which is the difference between a chart
+ * and a misleading picture:
+ *
+ *  1. A level the sample cannot answer is a GAP. It is not a point at zero, and
+ *     the line is not drawn through it — `buildEffectiveEntropyChart` splits the
+ *     curve into runs at every such level, and `sequencer-significance.test.ts`
+ *     asserts that it does. A zero there would tell the operator the generator
+ *     produced no entropy at that level, which is the opposite of "this sample
+ *     cannot say".
+ *  2. The y axis tops out at the bit positions EXAMINED, not at the largest count
+ *     plotted, so a sample that loses everything renders as a floor rather than a
+ *     full chart.
+ *  3. The numbers are in a table as well as in the picture. The SVG is decorative
+ *     — `aria-hidden` — and the table is the accessible representation, because a
+ *     line drawn from fourteen points is not something a screen reader can be
+ *     asked to describe, and the reasons behind the absent points only exist in
+ *     words anyway.
+ */
+function EffectiveEntropy({ effective }: { effective: EffectiveEntropyReport }): JSX.Element | null {
+ const [showAll, setShowAll] = useState(false);
+ const chart = useMemo(() => buildEffectiveEntropyChart(effective?.curve ?? []), [effective]);
+ if (!effective || !effective.curve?.length) return null;
+
+ const chosen = effective.chosen;
+ const headline = chosen?.computed && chosen.bits !== null ? `${chosen.bits} of ${chosen.bits_examined} bit(s)` : "no answer";
+ const rows = showAll ? effective.curve : effective.curve.filter((point) => point.chosen || isLadderHighlight(point.significance_percent));
+
+ return (
+  <Card>
+   <SectionHeading
+    title="Effective entropy by significance level"
+    detail={`${effective.tokens_used.toLocaleString()} token(s) · ${effective.bit_positions_examined} bit position(s) examined · at ${significanceLabel(effective.significance_percent)}${effective.significance_defaulted ? " (default)" : ""}: ${headline}`}
+    actions={
+     <Button variant="outline" size="small" aria-pressed={showAll} onClick={() => setShowAll((current) => !current)}>
+      {showAll ? "Key levels only" : `All ${effective.curve.length} levels`}
+     </Button>
+    }
+   />
+
+   {chart.marks.length > 0 ? (
+    <figure style={{ margin: 0 }}>
+     <svg
+      viewBox={`0 0 ${CHART_W + 48} ${CHART_H + 28}`}
+      width="100%"
+      height="200"
+      aria-hidden="true"
+      focusable="false"
+      style={{ display: "block", overflow: "visible" }}
+     >
+      <g transform="translate(40, 8)">
+       {/* The ceiling and the floor: the chart is read against bit positions
+           examined, so both are drawn and labelled rather than implied. */}
+       <line x1={0} y1={0} x2={CHART_W} y2={0} stroke="var(--line)" strokeDasharray="3 3" />
+       <line x1={0} y1={CHART_H} x2={CHART_W} y2={CHART_H} stroke="var(--line-strong)" />
+       <line x1={0} y1={0} x2={0} y2={CHART_H} stroke="var(--line-strong)" />
+       <text x={-6} y={4} textAnchor="end" fontSize="10" fill="var(--muted)">
+        {chart.maxBits}
+       </text>
+       <text x={-6} y={CHART_H} textAnchor="end" fontSize="10" fill="var(--muted)">
+        0
+       </text>
+       {/* A level with no answer: a dashed column, not a data point. */}
+       {chart.gaps.map((gap) => (
+        <line
+         key={`gap-${gap.percent}`}
+         x1={gap.x * CHART_W}
+         y1={0}
+         x2={gap.x * CHART_W}
+         y2={CHART_H}
+         stroke="var(--muted)"
+         strokeDasharray="2 4"
+         opacity={0.5}
+        />
+       ))}
+       {chart.runs.map((run, index) => (
+        <polyline
+         key={`run-${index}`}
+         points={runPolyline(run, CHART_W, CHART_H)}
+         fill="none"
+         stroke="var(--accent)"
+         strokeWidth={2}
+        />
+       ))}
+       {chart.marks.map((mark) => (
+        <circle
+         key={`mark-${mark.percent}`}
+         cx={mark.x * CHART_W}
+         cy={(1 - mark.y) * CHART_H}
+         r={mark.chosen ? 5 : 3}
+         fill={mark.chosen ? "var(--accent-bright)" : "var(--accent)"}
+         stroke={mark.chosen ? "var(--ink)" : "none"}
+        />
+       ))}
+       {[...chart.marks, ...chart.gaps].map((point) =>
+        isLadderHighlight(point.percent) || point.chosen ? (
+         <text
+          key={`tick-${point.percent}`}
+          x={point.x * CHART_W}
+          y={CHART_H + 16}
+          textAnchor="middle"
+          fontSize="10"
+          fill="var(--muted)"
+         >
+          {significanceLabel(point.percent)}
+         </text>
+        ) : null,
+       )}
+      </g>
+     </svg>
+     <figcaption className="field-hint">
+      Significance level, logarithmic, from {significanceLabel(effective.curve[0]?.significance_percent ?? 0.001)} on the
+      left to {significanceLabel(effective.curve[effective.curve.length - 1]?.significance_percent ?? 10)} on the right.
+      A dashed column is a level this sample cannot answer — the line breaks there rather than being drawn through a
+      value that does not exist. The table below carries every number in the picture.
+     </figcaption>
+    </figure>
+   ) : (
+    <div className="notice notice-warn">
+     No level in the chart&apos;s range could be answered by this sample, so there is nothing to draw. That is an absence,
+     not a curve at zero — the table below says why for each level.
+    </div>
+   )}
+
+   <SimpleTable headers={["Level", "Effective entropy", "Rejected", "Expected by chance", "Note"]}>
+    {rows.map((point) => (
+     <tr key={point.significance_percent}>
+      <td className="cell-num">
+       {significanceLabel(point.significance_percent)}
+       {point.chosen ? <Badge tone="info">chosen</Badge> : null}
+      </td>
+      <td className="cell-num">
+       {point.computed && point.bits !== null ? (
+        <>
+         {point.bits} / {point.bits_examined} bit(s)
+        </>
+       ) : (
+        <Badge tone="warn">insufficient sample</Badge>
+       )}
+      </td>
+      <td className="cell-num">{point.computed && point.bits_rejected !== null ? point.bits_rejected : "—"}</td>
+      <td className="cell-num">
+       {point.computed && point.expected_chance_rejections !== null
+        ? point.expected_chance_rejections.toFixed(2)
+        : "—"}
+      </td>
+      <td className="cell-dim">{point.computed ? "" : point.reason}</td>
+     </tr>
+    ))}
+   </SimpleTable>
+   {!showAll && rows.length < effective.curve.length ? (
+    <p className="field-hint">
+     {effective.curve.length - rows.length} more level(s) not shown. The chart above draws all of them.
+    </p>
+   ) : null}
+
+   {/* `robust` on the server is strict equality, which is the honest reading of "the
+       choice of level does not change this verdict". It is not the right thing to style
+       as a warning: a healthy sample loses a position or two at 5% and 10% to the
+       level's own false-positive rate, and colouring that red would call an artefact a
+       defect. The warn styling is reserved for movement larger than chance explains. */}
+   <div className={spreadExceedsChance(effective.curve) ? "notice notice-warn" : "notice"}>
+    {effective.robustness_note}
+   </div>
+
+   <div className="field-hint">
+    <strong>What this number is.</strong> {effective.definition} Tests run at each bit position:{" "}
+    {effective.tests.join("; ")}. No multiple-comparison correction is applied — correcting would flatten the slope this
+    chart exists to show — so read every loss against the &quot;expected by chance&quot; column beside it.
+   </div>
+   {effective.bit_positions_skipped_variable_length > 0 ? (
+    <div className="field-hint">
+     {effective.bit_positions_skipped_variable_length} bit position(s) present in the longest token but not the shortest
+     were excluded: they have a smaller sample than the rest, and testing them against this sample size would
+     manufacture a rejection.
+    </div>
+   ) : null}
+   {effective.positions_truncated ? (
+    <div className="notice notice-warn">
+     Only the first {effective.bit_positions_examined} bit positions were examined. The counts above are out of that
+     number, not out of the whole token.
+    </div>
+   ) : null}
+   <div className="field-hint">
+    <strong>Against the FIPS grade.</strong> {effective.fips_agreement}
+   </div>
+  </Card>
+ );
+}
+
+/** The levels labelled on the axis and listed by default: the ends of Burp's range and
+ *  the ends of the two bands it names, which is as many labels as fit without overlapping. */
+function isLadderHighlight(percent: number): boolean {
+ return percent === 0.001 || percent === 0.002 || percent === 0.03 || percent === 0.1 || percent === 1 || percent === 5 || percent === 10;
+}
+
 function Positions({ characters }: { characters: CharacterAnalysis }): JSX.Element {
  const [showAll, setShowAll] = useState(false);
  const shown = showAll ? characters.positions : characters.positions.slice(0, POSITIONS_SHOWN);
@@ -296,6 +518,7 @@ function Report({ report }: { report: SequencerAnalysis }): JSX.Element {
     {characters.max_possible_bits.toFixed(1)} bits, and {report.tokens.toLocaleString()} sample(s) cap any single
     position at {characters.entropy_ceiling_bits.toFixed(1)} bits however good the generator is.
    </p>
+   <EffectiveEntropy effective={report.effective_entropy} />
    <ExtraStats report={report} />
    <Fips report={report} />
    <Advanced report={report} />
@@ -410,6 +633,11 @@ function CaptureProgress({ capture }: { capture: SequencerCapture }): JSX.Elemen
 export function SequencerPage(): JSX.Element {
  const [source, setSource] = useState("paste");
  const [encoding, setEncoding] = useState("");
+ // The operator's significance level (burpsy-react-ui-boq). "" means "the server's
+ // default", the same idiom the encoding select uses for "detect" — and the report
+ // says `significance_defaulted` back, so the page can label it as the default
+ // rather than implying a choice was made.
+ const [significancePercent, setSignificancePercent] = useState("");
  const [tokens, setTokens] = useState("");
  // Burp's Manual load offers Paste AND Load (burpsy-react-ui-ts3v): the hidden input is the
  // file affordance, the same pattern app.tsx uses for configuration import. Read as text —
@@ -477,7 +705,7 @@ export function SequencerPage(): JSX.Element {
 
  const runPaste = () =>
   analysePaste.mutate(
-   { text: tokens, encoding },
+   { text: tokens, encoding, significancePercent },
    {
     onSuccess: (result) => toast.success(`${result.tokens.toLocaleString()} token(s) analysed`),
     onError: (cause) => toast.error(`Analysis failed: ${cause.message}`),
@@ -533,7 +761,7 @@ export function SequencerPage(): JSX.Element {
 
  const runCaptured = () =>
   analyseTokens.mutate(
-   { tokens: captured, encoding },
+   { tokens: captured, encoding, significancePercent },
    {
     onSuccess: (result) => toast.success(`${result.tokens.toLocaleString()} captured token(s) analysed`),
     onError: (cause) => toast.error(`Analysis failed: ${cause.message}`),
@@ -555,7 +783,7 @@ export function SequencerPage(): JSX.Element {
    if (analyseTokens.isPending) return;
    lastAnalysedCount.current = captured.length;
    analyseTokens.mutate(
-    { tokens: captured, encoding },
+    { tokens: captured, encoding, significancePercent },
     {
      onSuccess: (result) => toast.message(`Auto-analysis over ${result.tokens.toLocaleString()} token(s)`),
      onError: (cause) => toast.error(`Auto-analysis failed: ${cause.message}`),
@@ -565,7 +793,7 @@ export function SequencerPage(): JSX.Element {
   return () => window.clearInterval(timer);
   // analyseTokens identity changes with its internals; the interval only needs the trigger.
   // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [autoAnalyse, capture.data?.capturing, captured.length, encoding]);
+ }, [autoAnalyse, capture.data?.capturing, captured.length, encoding, significancePercent]);
 
  // Pause/resume the live capture (burpsy-react-ui-5kx). The gate is between sends server-side,
  // so the sample is never half-recorded; the capture keeps polling and shows the pause state.
@@ -613,6 +841,27 @@ export function SequencerPage(): JSX.Element {
        {SEQUENCER_ENCODINGS.map((name) => (
         <option key={name} value={name}>
          {name === "raw" ? "raw bytes" : name}
+        </option>
+       ))}
+      </Select>
+      {/* The significance level is the operator's input to the whole analysis, not a
+          display option — Burp: "you can choose the probability you use to interpret
+          the randomness of your findings". It sits beside the encoding because both
+          are decisions the analysis is run UNDER, and both are echoed back in the
+          report so a quoted finding carries them. The two bands are the ones Burp
+          names; the analysis still draws the whole curve whatever is picked here. */}
+      <Select
+       aria-label="Significance level"
+       title="Significance level: the probability below which a bit position is judged non-random"
+       value={significancePercent}
+       onChange={(event) => setSignificancePercent(event.target.value)}
+       style={{ maxWidth: "var(--w-sm)" }}
+      >
+       <option value="">significance: default (1%)</option>
+       {SIGNIFICANCE_LEVELS.map((level) => (
+        <option key={level.percent} value={String(level.percent)}>
+         {level.label}
+         {level.band ? ` — ${level.band}` : ""}
         </option>
        ))}
       </Select>

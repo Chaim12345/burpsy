@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-08-18 | Updated: 2026-08-18 -->
+<!-- Generated: 2026-08-18 | Updated: 2026-09-14 -->
 
 # sequencer
 
@@ -7,15 +7,20 @@
 
 Statistical randomness analysis of captured session tokens — the Go port of
 `../../crates/sequencer`, plus four more tests Burp's Sequencer runs that the Rust crate does not.
-It answers one question three ways: a character-level view (alphabet, per-position variation,
-Shannon entropy), the bit-level FIPS 140-2 battery, and the extended battery (transition, spectral,
-correlation, compression), assembled into one `SequencerReport` with a `Grade`.
+It answers one question four ways: a character-level view (alphabet, per-position variation,
+Shannon entropy), the bit-level FIPS 140-2 battery, the extended battery (transition, spectral,
+correlation, compression), and the effective-entropy curve against the operator's chosen
+significance level, assembled into one `SequencerReport` with a `Grade`.
 
 ## Three APIs in this package (a Go-specific split)
 
 - **The faithful report** (`report.go` + `fips.go`): `AnalyseReport(tokens)` / `AnalyseAs(tokens, *Encoding)`
   build a `SequencerReport` (`Grade`, `CharacterAnalysis`, `FipsReport`). This is the port that
   mirrors the Rust crate's `lib.rs`/`chars.rs`/`fips.rs` to the letter and is the authority.
+- **The significance-level surface** (`effective.go`): `SequencerReport.EffectiveEntropy`, Burp's
+  chosen significance level and the effective-entropy curve over its whole range. **Go-only: there
+  is no Rust counterpart to port.** Additive like the extended battery —
+  `effective_entropy.affects_grade` is always false.
 - **The extended battery** (`advanced.go` + `chi.go`): `SequencerReport.Advanced`, four further
   tests that exist in Burp and not in the Rust crate, plus the chi-square upper tail they read
   their verdicts against. **Go-only: there is no Rust counterpart to port**, so this is Burp parity
@@ -30,8 +35,9 @@ correlation, compression), assembled into one `SequencerReport` with a `Grade`.
 | File | Description |
 |------|-------------|
 | `fips.go` | The four FIPS 140-2 tests (monobit, poker, runs, long-runs), `Encoding` (raw/hex/base64) with `DetectEncoding`, `BitsOf`, `BitStats`, `FipsReport`, `AnalyseFips`/`AnalyseFipsBits`. `BlockBits = 20000`; every threshold is quoted with its spec section |
-| `report.go` | `Grade`, `CharCount`, `PositionStats`, `CharacterAnalysis`, `SequencerReport`; `AnalyseReport`/`AnalyseAs`, `verdictFor`, `TokensFromText`. Assembles the verdict and names its assumptions |
+| `report.go` | `Grade`, `CharCount`, `PositionStats`, `CharacterAnalysis`, `SequencerReport`; `AnalyseReport`/`AnalyseAs`/`AnalyseWith`, `verdictFor`, `TokensFromText`. Assembles the verdict and names its assumptions. `AnalyseWith` takes the operator's significance level, which reaches `EffectiveEntropy` and nothing else — `Fips`, `Grade` and `Verdict` are identical at every level, and `effective_test.go` pins that |
 | `advanced.go` | The extended battery: `AdvancedTest`/`AdvancedReport`, `advancedFor`, and the four tests (`transitionTest`, `spectralTest`, `correlationTest`, `compressionTest`) with every constant and refusal documented |
+| `effective.go` | `EffectiveEntropyReport`/`EffectiveEntropyPoint`, `AnalyseEffectiveEntropy`, `binomialTwoSidedP`, `minAttainableP`, `ValidSignificancePercent`. Burp's significance level and effective-entropy chart (burpsy-react-ui-boq): bits surviving a two-sided exact binomial frequency test at each level from 0.001% to 10%, with the levels the sample cannot answer reported as absent |
 | `chi.go` | `chiSquareUpperTail(x, df)` — `Q(df/2, x/2)` by the standard series / continued-fraction split. The distribution written out rather than assumed; `chi_test.go` pins it against closed forms and published critical values |
 | `sequencer.go` | `TokenList` (mutex-guarded collector) and the descriptive statistics surface listed above |
 
@@ -63,6 +69,18 @@ correlation, compression), assembled into one `SequencerReport` with a `Grade`.
    would make it runnable. Do not relax those floors to make a row render a verdict: a chi-square
    p-value from a sparse table is wrong, not conservative, and wrong in the direction of flagging.
 
+5. **The effective-entropy curve counts bits, it does not measure them.** `effective.go` reports,
+   for each significance level in Burp's range, the number of bit positions the frequency test did
+   **not** reject. A surviving position is counted as one whole bit, which the test cannot show —
+   it only failed to show otherwise — so the number is an upper bound the tests could not knock
+   down, never a measurement of entropy and never a probability that the tokens are random. Where
+   a level is below `2^(1-n)` (the smallest p-value `n` tokens can produce) the point is reported
+   as not computed, with the token count that would reach it: at such a level nothing could be
+   rejected whatever the data says, and "all N bits survived" would be an artefact of the sample
+   size. Those points marshal `bits: null`, never 0. And unlike the extended battery this curve is
+   deliberately **not** Bonferroni-corrected — correcting flattens the slope the chart exists to
+   show — so every point carries `expected_chance_rejections` instead.
+
 The 140-2 (not 140-1) constants are hard-coded: monobit `9725 < ones < 10275`, poker
 `2.16 < X < 46.17`, long run fails at length `>= 26`, and the twelve runs intervals for lengths
 1..6. The poker interval is two-sided, so a perfectly even nibble spread *fails* it — that is
@@ -70,9 +88,13 @@ correct, not a bug.
 
 ### Also deliberately absent
 
-- **No Burp-comparable "effective entropy".** What is reported is raw per-position Shannon entropy,
-  the sample ceiling that bounds it, and an explicit "assumes positional independence" flag —
-  `CharacterAnalysis` names the assumption so a sum is not mistaken for a measurement.
+- **No Burp-comparable "effective entropy" measurement.** The character-level surface reports raw
+  per-position Shannon entropy, the sample ceiling that bounds it, and an explicit "assumes
+  positional independence" flag — `CharacterAnalysis` names the assumption so a sum is not mistaken
+  for a measurement. The `effective_entropy` curve added in burpsy-react-ui-boq is a different
+  thing and says so on the wire (`effective_entropy.definition`): a count of bit positions that
+  survive a named test at a named level, not an entropy figure. The two will not agree and are not
+  meant to.
 - **No token store beyond the caller's list**, and per-position reporting is capped
   (`MaxPositionsReported = 256`) so a pathological huge "token" cannot turn a report into a memory
   problem; the truncation is stated.
@@ -92,8 +114,10 @@ there is simply no egress path in this package to grow one on. `MinTokensForConf
 go test ./internal/sequencer/...
 ```
 
-Tests are inline (`fips_test.go`, `report_test.go`) and use known-answer vectors; they touch no
-network.
+Tests are inline (`fips_test.go`, `report_test.go`, `effective_test.go`) and use known-answer
+vectors; they touch no network. `effective_test.go`'s fixtures are hand-computed from binomial
+coefficients — ten two-character hex tokens, four bit positions constant (p = 2^-9) and four split
+exactly 5/5 (p = 1) — rather than golden values read off this implementation.
 
 ## Dependencies
 
