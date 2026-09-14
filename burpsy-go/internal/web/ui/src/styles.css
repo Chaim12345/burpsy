@@ -4008,8 +4008,9 @@ tbody td {
    below it is a genuine component bug with no Penpot counterpart to fix — see its own comment.
 
    Both rules are meant to stay reviewable rather than permanent: --muted's is a stopgap, meant to be
-   DELETED once the Penpot value lands and is re-fetched; re-run e2e-ui.sh's axe checks afterward to
-   confirm the token fix alone still clears it. .brand-symbol's is a real fix, not a stopgap, and stays.
+   DELETED once the Penpot value lands and is re-fetched; re-run the live pass's axe check afterward
+   (burpsy-go/docs/UI-VERIFICATION.md — the same rule set the a11y spec used) to confirm the token fix
+   alone still clears it. .brand-symbol's is a real fix, not a stopgap, and stays.
 
    Both values carry real margin over 4.5:1, not a bare pass — the first attempt at .brand-symbol's fix
    scraped in at a computed 4.50 that rounded down to 4.49 in axe's own arithmetic, which is why margin

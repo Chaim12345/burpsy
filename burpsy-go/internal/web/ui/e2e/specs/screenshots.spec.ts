@@ -1,5 +1,7 @@
-// Screenshots of every route, at both viewports, in both themes: 18 × 2 × 2 = 72 images.
-// Screenshots of every route, at both viewports, in both themes: 20 × 2 × 2 = 80 images.
+// Screenshots of every route, at both viewports, in both themes. No count in this comment, on purpose:
+// the two stale ones it used to carry (18 × 2 × 2 = 72, then 20 × 2 × 2 = 80) were both left behind as
+// routes were added, and the list they counted is harness/routes.ts. A number here is a claim nobody
+// re-derives; the spec's own summary line reports the real one when it runs.
 //
 // Why this exists rather than a note saying the design was reviewed: docs/ui-map/07-design-analysis.md
 // reports measurements taken out-of-tree that cannot be reproduced from this repository, and it
