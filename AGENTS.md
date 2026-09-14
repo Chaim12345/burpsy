@@ -42,7 +42,8 @@ is Rust, `burpsy-go/internal/scanner` is Go, and they are different code with th
 | `Cargo.toml` | Rust workspace manifest. Edition 2024, resolver 3, thirteen member crates |
 | `verify.sh` | The Rust gate: build with zero warnings, clippy, unit tests, BCheck corpus conformance, e2e suites. `QUICK=1` skips e2e |
 | `e2e-go.sh` | End-to-end smoke test that runs the **Go** binary — the Go analogue of `e2e.sh`, ports offset by 100 so the two suites cannot collide |
-| `e2e-ui.sh` | End-to-end suite for the React web UI served by the Go binary |
+| `ui-live.sh` | **The UI gate.** Boots the real console, seeded, and prints the live browser pass an agent drives with `agent-browser` (see `burpsy-go/docs/UI-VERIFICATION.md`) |
+| `e2e-ui.sh` | Playwright suite for the React web UI. Still runnable, no longer the gate — see `burpsy-go/docs/UI-VERIFICATION.md` for why |
 | `ROADMAP.md` | Top-level feature roadmap / Burp teardown reference (the working plan lives in `.planning/`) |
 | `DESIGN.md` | The design-system contract between the Figma source and the React UI in `burpsy-go/internal/web/ui/` |
 | `serve.sh`, `integrate.sh` | Launch / integration harness for the Rust tree |
@@ -81,8 +82,10 @@ There are two hierarchies, one per tree:
   `burpsy-go/`. Check `burpsy-go/gaps.md` before assuming a capability is missing — it may already be
   ported.
 - **The Go gate is `go build ./... && go vet ./... && gofmt -l . && go test ./...`, all clean, plus
-  `e2e-go.sh` / `e2e-ui.sh`.** The Rust gate is `verify.sh`. Run the gate for the tree you touched;
-  do not declare work complete without it.
+  `e2e-go.sh`.** A change that touches the React console additionally takes the live browser pass
+  (`./ui-live.sh`, then `burpsy-go/docs/UI-VERIFICATION.md`) — Playwright is no longer the UI gate.
+  The Rust gate is `verify.sh`. Run the gate for the tree you touched; do not declare work complete
+  without it.
 - **Commit messages here are unusually substantive** — they explain why a change is right and what
   the obvious alternative gets wrong. Match that; a one-line summary will look out of place.
 - Never commit CA material or keys, and never commit compiled binaries (a 13 MB `crawl-scan-demo`
@@ -105,7 +108,14 @@ go vet ./...                   # must be clean
 gofmt -l .                     # must print nothing
 go test ./...                  # unit tests across every package
 ../e2e-go.sh                   # end-to-end against the Go binary
-../e2e-ui.sh                   # end-to-end for the React UI
+```
+
+UI changes (anything under `burpsy-go/internal/web/ui/`) add a live browser pass:
+
+```bash
+./ui-live.sh                   # boot the real console, seeded, and print the pass
+                               # ... drive it with agent-browser, then ./ui-live.sh --stop
+                               # what the pass must cover: burpsy-go/docs/UI-VERIFICATION.md
 ```
 
 Rust (the frozen reference):

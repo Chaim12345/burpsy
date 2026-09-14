@@ -33,6 +33,10 @@ aspirational behavior is documented as if it exists.
 
 ## Reference / design
 
+- **[UI-VERIFICATION.md](./UI-VERIFICATION.md)** — how a change to the web console is
+  verified: `./ui-live.sh` boots the real console on seeded traffic and the pass is
+  driven in a browser with `agent-browser`. This is the UI gate; the playwright
+  suite is still runnable but is no longer what a UI claim has to survive.
 - **[DATA-MODEL.md](./DATA-MODEL.md)** — the entities, how they are identified,
   and the identity hazard the type design exists to prevent.
 - **[HANDOFF-2026-08-18.md](./HANDOFF-2026-08-18.md)** — the latest dated work

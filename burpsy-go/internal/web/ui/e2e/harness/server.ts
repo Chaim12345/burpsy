@@ -238,6 +238,25 @@ async function postJson(webPort: number, path: string, body: unknown): Promise<u
 }
 
 /**
+ * The traffic every run seeds, exported because a second consumer now names the same paths.
+ *
+ * `ui-live.sh` stands this harness up and hands the console to an agent that drives it in a browser
+ * instead of to Playwright, and that agent has to know what it should be looking at: "history has
+ * rows" is not a claim anyone can check, "history holds these five paths, and no sixth" is. Spelling
+ * the list in a shell script as well as here is how the two would drift, so it is spelled once.
+ *
+ * A change here changes what the live pass looks at, which is why it is a const rather than an
+ * inline array — someone editing the fixture should see that it is load-bearing.
+ */
+export const SEEDED_PATHS = ["/zebra", "/alpha?q=1", "/mango/deep/path", "/beta", "/quokka?size=8"] as const;
+
+/** The Repeater send's path — the one row that belongs in the Tool log and not in proxy history. */
+export const SEEDED_REPEATER_PATH = "/repeated";
+
+/** Dense ids start at zero and id 0 is a real exchange, so the seeded audit names it explicitly. */
+export const SEEDED_AUDIT_ID = 0;
+
+/**
  * Give every data view something real to render.
  *
  * The paths, methods and response sizes are deliberately all different. A sort assertion against
@@ -250,25 +269,25 @@ async function seed(harness: Omit<Harness, "burpsyPid" | "targetPid">): Promise<
 
  // Proxy traffic: fills HTTP history, the site map, and the dashboard's activity counters. The paths
  // are deliberately not in alphabetical order, so an ascending sort in the UI has to move something.
- for (const path of ["/zebra", "/alpha?q=1", "/mango/deep/path", "/beta", "/quokka?size=8"]) {
+ for (const path of SEEDED_PATHS) {
   try {
    await viaProxy(proxyPort, `${origin}${path}`);
   } catch (error) {
    throw new Error(`seeding ${path} through the proxy failed: ${(error as Error).message}`);
   }
  }
- note(`seeded 5 proxied exchanges through 127.0.0.1:${proxyPort}`);
+ note(`seeded ${SEEDED_PATHS.length} proxied exchanges through 127.0.0.1:${proxyPort}`);
 
  // A repeater send: fills the Tool log, which only ever shows requests burpsy itself made, so
  // proxy traffic alone would leave that route on its empty state.
- const raw = `GET /repeated?x=9 HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\nConnection: close\r\n\r\n`;
+ const raw = `GET ${SEEDED_REPEATER_PATH}?x=9 HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\nConnection: close\r\n\r\n`;
  await postJson(webPort, "/api/repeater/send", { target: origin, protocol: "http", request: raw });
  note("seeded one repeater send");
 
  // An audit against the first exchange: fills Issues. Exchange ids are a dense counter from zero
  // and id 0 is a real id — e2e-go.sh has a whole section on the bug where it was rejected.
- await postJson(webPort, "/api/audit/0", {});
- note("seeded one audit against exchange 0");
+ await postJson(webPort, `/api/audit/${SEEDED_AUDIT_ID}`, {});
+ note(`seeded one audit against exchange ${SEEDED_AUDIT_ID}`);
 
  // The server records exchanges asynchronously; give the last of them a moment to land so the
  // first test to open HTTP history does not race the write.

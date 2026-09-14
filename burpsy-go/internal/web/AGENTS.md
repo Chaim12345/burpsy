@@ -105,7 +105,13 @@ The package is test-heavy (roughly one `*_test.go` per feature area — see `rou
 `dashboard_api_test.go`, `session_api_test.go`, `liveaudit_coverage_test.go`, etc.). Tests construct
 `Server` directly rather than through the full binary wiring, which is why nil-tolerant subsystems and
 lazy construction (`captureOnce`) matter. As part of the whole-tree gate: `go build ./...`,
-`go vet ./...`, `gofmt -l .`, then `../e2e-go.sh` and `../e2e-ui.sh`.
+`go vet ./...`, `gofmt -l .`, then `../e2e-go.sh`.
+
+A change to the React console (anything under `ui/`) additionally takes the live browser pass —
+`../ui-live.sh` (paths here are relative to the module root) boots the real console on seeded traffic
+and prints it; the pass itself is `docs/UI-VERIFICATION.md`. That pass, not the playwright suite, is
+the UI gate: the suite is still runnable (`../e2e-ui.sh`) and still generates the screenshots, but a
+green spec run is no longer what a UI claim has to survive.
 
 ## Dependencies
 
