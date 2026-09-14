@@ -23,6 +23,7 @@ import {
 import { toast } from "sonner";
 import { useHotkeys } from "react-hotkeys-hook";
 import { api, copyToClipboard, downloadText, json } from "./api";
+import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding as convertBody, type BodyEncoding } from "./body-encoding";
 import { useAnnotateExchange } from "./data";
 import { useChord } from "./keymap";
 import { useApp } from "./store";
@@ -199,7 +200,10 @@ export function useExchangeActions(): {
  requestInBrowser: (exchange: Exchange) => void;
  showResponseInBrowser: (exchange: Exchange) => void;
  changeRequestMethod: (exchange: Exchange) => Promise<void>;
- changeBodyEncoding: (exchange: Exchange) => Promise<void>;
+ /** Burp's separate operation, kept under its own label: swap Content-Length for chunk framing. */
+ toggleChunkedFraming: (exchange: Exchange) => Promise<void>;
+ /** Burp's "Change body encoding": re-encode the body as form, multipart or JSON (wv5). */
+ convertBodyEncoding: (exchange: Exchange, target: BodyEncoding) => Promise<void>;
  crawlFrom: (exchange: Exchange, scope: "branch" | "host") => Promise<void>;
  setHighlight: (exchange: Exchange, colour: string) => void;
  addComment: (exchange: Exchange) => void;
@@ -449,8 +453,15 @@ const showResponseInBrowser = (exchange: Exchange) => {
   }
  };
 
- /** Toggle chunked framing on a copy and hand it to Repeater. */
- const changeBodyEncoding = async (exchange: Exchange) => {
+ /**
+  * Toggle chunked framing on a copy and hand it to Repeater.
+  *
+  * This used to be labelled "Change body encoding", which is the name Burp gives a different
+  * operation — converting the body between form, multipart and JSON (burpsy-react-ui-wv5). That
+  * conversion is now `convertBodyEncoding` below, and this keeps the framing name it always
+  * described.
+  */
+ const toggleChunkedFraming = async (exchange: Exchange) => {
   try {
    const raw = await fetchRaw(exchange.request);
    const next = isChunked(raw) ? dechunkBody(raw) : chunkBody(raw);
@@ -467,6 +478,43 @@ const showResponseInBrowser = (exchange: Exchange) => {
    });
    setRoute("repeater");
    toast.success(isChunked(raw) ? "Body dechunked in a new Repeater tab" : "Body reframed as chunked in a new Repeater tab");
+  } catch (error) {
+   toast.error(`Could not load request bytes: ${error instanceof Error ? error.message : String(error)}`);
+  }
+ };
+
+ /**
+  * Burp's "Change body encoding" (burpsy-react-ui-wv5): re-encode the request body as form
+  * URL-encoding, multipart or JSON and open the result as a Repeater tab to edit and send.
+  *
+  * The refusal is a toast carrying the transform's own reason, not a generic failure. A
+  * conversion this cannot make faithfully — a file part, a nested JSON member, a repeated
+  * parameter on the way to a JSON object — produces no tab at all, because a half-converted
+  * request that still looks sendable teaches the operator something false about the server.
+  *
+  * The three targets are all offered unconditionally rather than greying out the one the body is
+  * already in: this menu is built from the row synchronously and the bytes only arrive from
+  * `fetchRaw` afterwards, so "which encoding is this?" is not knowable at render time. Picking
+  * the current one answers with the refusal that says so. The Repeater editor's copy of this
+  * menu, where `active.request` is in hand, does disable it.
+  */
+ const convertBodyEncoding = async (exchange: Exchange, target: BodyEncoding) => {
+  try {
+   const raw = await fetchRaw(exchange.request);
+   const result = convertBody(raw, target);
+   if (!result.ok) {
+    toast.error(`Could not re-encode the body as ${BODY_ENCODING_LABELS[target]}: ${result.reason}`);
+    return;
+   }
+   openRepeaterTab({
+    name: `#${exchange.id} as ${BODY_ENCODING_LABELS[target]}`.slice(0, 42),
+    target: exchangeAuthority(exchange),
+    protocol: schemeOf(exchange),
+    request: result.raw,
+    fromExchange: exchange.id,
+   });
+   setRoute("repeater");
+   toast.success(`Body re-encoded as ${BODY_ENCODING_LABELS[target]} in a new Repeater tab`);
   } catch (error) {
    toast.error(`Could not load request bytes: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -593,7 +641,25 @@ const showResponseInBrowser = (exchange: Exchange) => {
    title: "Edit a copy in Repeater",
    actions: [
     { id: "flip-method", label: "Change request method (GET/POST)", onSelect: () => void changeRequestMethod(exchange) },
-    { id: "body-encoding", label: "Change body encoding (chunked)", onSelect: () => void changeBodyEncoding(exchange) },
+    {
+     id: "body-encoding",
+     label: "Change body encoding",
+     // A submenu, like the highlight picker: the operation is "convert to X", and three
+     // sibling rows named after the three encodings say that better than one row that
+     // cycles through them in an order the operator cannot see.
+     submenu: [
+      {
+       id: "encodings",
+       actions: BODY_ENCODINGS.map((encoding) => ({
+        id: encoding,
+        label: BODY_ENCODING_LABELS[encoding],
+        onSelect: () => void convertBodyEncoding(exchange, encoding),
+       })),
+      },
+     ],
+     onSelect: () => undefined,
+    },
+    { id: "chunked-framing", label: "Toggle chunked transfer framing", onSelect: () => void toggleChunkedFraming(exchange) },
    ],
   },
   {
@@ -697,7 +763,8 @@ const showResponseInBrowser = (exchange: Exchange) => {
   requestInBrowser,
  showResponseInBrowser,
   changeRequestMethod,
-  changeBodyEncoding,
+  toggleChunkedFraming,
+  convertBodyEncoding,
   crawlFrom,
   setHighlight,
   addComment,

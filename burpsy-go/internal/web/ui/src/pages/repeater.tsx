@@ -4,6 +4,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
 import { useExchangeActions } from "../lib/actions";
+import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEncoding, type BodyEncoding } from "../lib/body-encoding";
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
 import { SendCancelled, useRepeaterSend, useSendRepeaterGroup } from "../lib/data.tools";
@@ -117,6 +118,20 @@ export function RepeaterPage(): JSX.Element {
   const [history, setHistory] = useState<Record<string, RepeaterHistoryEntry[]>>({});
   /** Which entry of the active tab's history is on screen. Null follows the newest. */
   const [viewing, setViewing] = useState<Record<string, number | null>>({});
+  /**
+   * The encoding each tab's body was in before its last conversion — what Burp's "Toggle body
+   * encoding" switches back to (burpsy-react-ui-wv5).
+   *
+   * Keyed by tab id because Burp's own wording is "the two most recently used encodings in the
+   * current Repeater tab": two tabs converted in different directions must toggle in different
+   * directions, and one global "last encoding" would make the second tab's toggle do whatever the
+   * first tab did. Only one encoding is remembered, not a third slot — the other half of "the two
+   * most recently used" is the one the body is in now, which is read from the draft itself.
+   *
+   * Deliberately not in the store: this is a transient editing affordance, and a persisted toggle
+   * direction surviving a page reload would be a state the operator cannot see and did not set.
+   */
+  const [previousEncoding, setPreviousEncoding] = useState<Record<string, BodyEncoding>>({});
   const [handingOff, setHandingOff] = useState(false);
   const [inspector, setInspector] = useState(true);
   /**
@@ -160,6 +175,7 @@ export function RepeaterPage(): JSX.Element {
     const alive = new Set(tabs.map((tab) => tab.id));
     setHistory((current) => Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id))));
     setViewing((current) => Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id))));
+    setPreviousEncoding((current) => Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id))));
   }, [tabs]);
 
   const [renamingTab, setRenamingTab] = useState<string | null>(null);
@@ -441,6 +457,66 @@ export function RepeaterPage(): JSX.Element {
       </div>
     );
   }
+
+  /**
+   * Burp's "Change body encoding" and "Toggle body encoding", on the draft itself (wv5).
+   *
+   * The row menu's copy of this opens a NEW tab, because there the operator is acting on a
+   * captured exchange they must not overwrite. Here the draft IS the thing being edited, so the
+   * conversion lands in place and the toggle can take it straight back — which is the whole point
+   * of Burp offering the toggle: convert, send, convert back, send, and read the two responses.
+   *
+   * A refusal changes nothing at all: no tab, no draft edit, and a toast carrying the transform's
+   * own reason. Half-converting a request that still looks sendable is the failure this exists to
+   * avoid.
+   */
+  const convertDraft = (target: BodyEncoding) => {
+    const from = detectBodyEncoding(active.request);
+    const result = changeBodyEncoding(active.request, target);
+    if (!result.ok) {
+      toast.error(`Could not re-encode the body as ${BODY_ENCODING_LABELS[target]}: ${result.reason}`);
+      return;
+    }
+    updateRepeaterTab(active.id, { request: result.raw });
+    if (from) setPreviousEncoding((current) => ({ ...current, [active.id]: from }));
+    toast.success(`Body re-encoded as ${BODY_ENCODING_LABELS[target]}`);
+  };
+
+  const draftEncoding = detectBodyEncoding(active.request);
+  const previous = previousEncoding[active.id];
+  /** Enabled only when this tab has actually been converted once and is not already back. */
+  const canToggle = previous !== undefined && previous !== draftEncoding;
+
+  /**
+   * Offered on the request pane only, and only while the draft is editable — paged back through
+   * the history the pane shows a request that has already been sent, and re-encoding it would
+   * write over a draft that is not on screen.
+   */
+  const bodyEncodingMenu: MenuGroup[] =
+    viewedRequest != null
+      ? []
+      : [
+          {
+            id: "body-encoding",
+            title: "Body encoding",
+            actions: [
+              ...BODY_ENCODINGS.map((encoding) => ({
+                id: `to-${encoding}`,
+                label: `Change body encoding: ${BODY_ENCODING_LABELS[encoding]}`,
+                // Here — unlike the row menu — the bytes are in hand, so the encoding the body is
+                // already in is greyed out rather than offered and then refused.
+                disabled: encoding === draftEncoding,
+                onSelect: () => convertDraft(encoding),
+              })),
+              {
+                id: "toggle",
+                label: canToggle ? `Toggle body encoding (back to ${BODY_ENCODING_LABELS[previous]})` : "Toggle body encoding",
+                disabled: !canToggle,
+                onSelect: () => canToggle && convertDraft(previous),
+              },
+            ],
+          },
+        ];
 
   /** How many overrides the active tab carries — shown on the Config trigger so a panel that is
    *  closed cannot silently narrow what Send will do. */
@@ -881,7 +957,7 @@ export function RepeaterPage(): JSX.Element {
           onChange={(value) => updateRepeaterTab(active.id, { request: value })}
           filename="repeater-request.txt"
           placeholder="GET / HTTP/1.1"
-          menuGroups={messageMenu}
+          menuGroups={[...(messageMenu ?? []), ...bodyEncodingMenu]}
         />
         <div className="stack">
           {finalResponse != null ? (
