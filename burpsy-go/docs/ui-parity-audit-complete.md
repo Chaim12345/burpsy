@@ -3,13 +3,25 @@
 > ## ⚠️ Re-verification pass in progress — 2026-09-14
 >
 > This audit dates from 2026-08-27 and most of its "missing" rows are **false**: the capabilities
-> shipped afterwards. A live sweep of Target, Scope and Proxy was run on 2026-09-14 and is recorded
-> in full in [`ui-parity-verify-2026-09-14-target-proxy.md`](./ui-parity-verify-2026-09-14-target-proxy.md):
-> **57 claims checked, 45 closed, 5 not-applicable, 1 unverified, 6 still open** — and the one
-> HIGH item it found (Proxy settings shows one listener rather than Burp's listener list, with no
-> per-listener redirect / force-TLS / invisible mode) was *missed by this audit entirely*. That
-> sweep is the more accurate document for those pages; this one remains the checklist for the pages
-> no sweep has covered yet.
+> shipped afterwards. Two live sweeps were run on 2026-09-14 and are recorded in full beside this
+> file:
+>
+> * [`ui-parity-verify-2026-09-14-target-proxy.md`](./ui-parity-verify-2026-09-14-target-proxy.md) —
+>   Target, Scope, Proxy: **57 claims, 45 closed, 5 not-applicable, 1 unverified, 6 still open**, and
+>   its one HIGH item (Proxy settings shows one listener rather than Burp's listener list) was missed
+>   by this audit entirely.
+> * [`ui-parity-verify-2026-09-14-shell-settings.md`](./ui-parity-verify-2026-09-14-shell-settings.md) —
+>   the shell, Session, Discover, Extensions, Extender options/APIs, Settings, Collaborator. It also
+>   corrects this audit in the other direction: "context menus: burpsy 0" is false (a history row's
+>   menu has 28 items), Extender load/unload is served, and content discovery exists as
+>   `Target › Content discovery`. Its ranked list starts with the Settings page having no navigation
+>   tree, no search and no filter — the largest visible divergence from Burp on any page — then the
+>   absent **Intruder** menu, Burp's tab-visibility **View** menu, the tool-tab context menu, and
+>   `Send to…` on the message-editor context menu.
+>
+> Those two documents are the accurate record for the pages they cover; this one remains the
+> checklist for the pages no sweep has reached (the tool pages — Intruder, Repeater, Sequencer,
+> Decoder, Comparer, Logger, Organizer — have a third sweep still running).
 >
 > Re-verified against the running console (`./ui-live.sh`, port 18281, seeded
 > traffic) on 2026-09-14, reading the rendered DOM rather than the source:
@@ -24,6 +36,9 @@
 > | Target → Issues → "Tree structure | Host→Path→Finding | Flat list | HIGH" | **Present.** The page renders a host/path tree — `Collapse 127.0.0.1`, then `Collapse /zebra`, `/alpha?q=1`, `/beta`, `/held-test?x=1`, `/mango/deep/path`, `/quokka?size=8` — over the findings, with severity and confidence filters, "Hide false positives", a finding count, and HTML/JSON/SARIF export. Not a flat list. |
 > | Proxy → Proxy settings → "Resource pools | Yes | No | HIGH" | **Capability present, in the place this engine puts it:** `#proxysettings` is response-modification rules (nine Burp-shaped rewrite toggles, in-scope-only, live outcome counters), and resource pools live under Settings → Resource pools — which is where the Intruder page's "Saved resource pool" selector points ("Bind this attack to a pool created in Settings → Resource pools"). Burp nests pools under Proxy options; this is a placement divergence, not an absent capability, and the audit's row should say which. |
 > | Proxy → Match & Replace → "Edit rule | Yes | No | HIGH", "Remove rule | Yes | No | HIGH" | **Not verified here.** The page has Add rule (requests and responses lists), Save rules, Revert, the in-scope-only toggle and a draft tester; per-row Edit and Remove were not visible in the rendered DOM of an empty rule list, and this pass did not create a rule to look. Left open deliberately rather than called closed. |
+> | Dashboard → "Pause/resume controls | Yes | No | MEDIUM" | **Closed.** `Pause all tasks` is a toolbar button, and each task row carries its own `Options for task N` control; the page also has `New scan` and `New live task`. |
+> | Dashboard → "Task progress bar | Animated with ETA | Static text | HIGH" | **Partly open, and LOW rather than HIGH.** No progress-bar element exists (`[role=progressbar], progress, .progress` finds none); the task row renders `10/10 (100%)` as text beside `Issues: 10` and "found, and nothing was skipped, errored or gated". Nothing is misreported by the absence — it is a look difference, not the "text where a task is stuck" defect the HIGH ranking implies. |
+> | Dashboard → "Event log | Table with popup menu | Static list | MEDIUM", "Activity log | … | MEDIUM" | **Unverified.** The tabs exist (`Summary`, `Issue activity`, `Event log`, `Activity`) but this harness's synthetic clicks do not switch Radix tabs, and the pass did not drive them with real input; the tab contents were not read. |
 >
 > Rows **not** listed above are still as this document left them until the sweep covering them
 > finishes. Do not quote a row as a gap without re-checking it against the live console first —
