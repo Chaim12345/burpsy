@@ -45,6 +45,16 @@ Rust crate's `tls.rs` has been extracted to `internal/alpn` here (see that packa
   whitespace) and leaves asterisk-form and origin-form untouched. The invariant is that what history
   shows, what the operator edits, and what upstream receives are the same bytes. `e2e-go.sh` caught the
   un-rewritten case as a Rust parity mismatch on the first proxied request.
+- **The method and path are re-read from the final bytes, not carried from the client's line.**
+  `refreshedRequestLine` / `requestLineOf` run late in each HTTP/1 relay path — after Match & Replace,
+  the operator's hold and the egress options — because everything in that slot can rewrite the first
+  line. Both downstream readers depend on it: a path-prefixed scope rule (`core.NewScopeRuleWithPath`)
+  is asked about the path this request is going to, and `core.Exchange.Path` is what history, the site
+  map and search show without touching a message's bytes. Carried from the client's line, an edit to the
+  target in Intercept was checked against a URL nobody was sending to and recorded as a row pointing at
+  an endpoint the capture does not contain (`request_line_after_edit_test.go` pins both, plus the
+  forward-but-mark-out-of-scope case). The WebSocket- and h2-specific paths take the same values from
+  the same place.
 - **CA material is written only when interception is requested.** `LoadOrGenerateCA` is called by the
   CLI only under `--intercept-tls`. `GetCertificate` caches per-host leaves with double-checked locking,
   clamps each leaf's validity window to the CA's own, and presents the chain leaf-then-CA. `/ca/`,

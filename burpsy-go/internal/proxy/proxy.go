@@ -1141,6 +1141,12 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		// (burpsy-react-ui-6keo).
 		requestData = s.config.options.ApplyRequestEgress(requestData)
 
+		// The bytes are final, so the method and path the rest of this iteration answers about are
+		// re-read from them rather than kept from the client's line — see requestLineOf. Above the
+		// scope check deliberately: the check below is the egress fence, and it must ask about the URL
+		// this request is going to.
+		method, path = refreshedRequestLine(requestData, method, path)
+
 		// Scope decides retention, not egress: an excluded request is still
 		// forwarded, it is simply not kept. The request bytes are not stored
 		// here — both halves of an exchange are put away together by the one
@@ -1627,6 +1633,11 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// recorded bytes and the forwarded bytes stay identical, which is the invariant that matters.
 	requestData = s.config.options.ApplyRequestEgress(requestData)
 
+	// The bytes are final, so the method and path the scope check, the record and the WebSocket strip
+	// below all answer about are re-read from them rather than kept from the client's line — see
+	// requestLineOf. Every transformation that could have changed the line has now run.
+	method, path = refreshedRequestLine(requestData, method, path)
+
 	// Check scope. The scheme is the destination's, not the client's: a request retargeted from http to
 	// https must be matched by the https arm of a scope rule, or the scheme arm would be answering a
 	// question about a host the request is not going to.
@@ -1984,6 +1995,62 @@ func toOriginForm(requestData []byte, target, path string) []byte {
 	out = append(out, path...)
 	out = append(out, line[at+len(target):]...)
 	return append(out, requestData[end:]...)
+}
+
+// refreshedRequestLine applies requestLineOf to a request whose bytes are final, keeping the values
+// it was given when the line cannot be read. Split out from requestLineOf so the two call sites —
+// the plain and the tunnelled relay paths — state the same fallback rule rather than each writing
+// their own three-line version of it.
+func refreshedRequestLine(raw []byte, method, path string) (string, string) {
+	if m, p, ok := requestLineOf(raw); ok {
+		return m, p
+	}
+	return method, path
+}
+
+// requestLineOf re-reads the method and path out of a request's first line.
+//
+// # Why the proxy needs this a second time
+//
+// method and path are parsed once, from the client's request line, at handleConnection. Everything
+// after that point can rewrite the line — Match & Replace's request_first_line category, the
+// request-direction option rules, and above all the operator's own hold in Intercept — and until this
+// existed the locals kept the client's original answer for the rest of the exchange. Two things
+// downstream read them:
+//
+//   - The scope check. A rule with a path prefix (core.NewScopeRuleWithPath) is evaluated against
+//     this path, so an edit that moved a request under an excluded prefix was checked against the
+//     path the client asked for and let through — the fence answered about a URL nobody was going to
+//     send to. Same class as the retarget arming the host check above, and the reason that one is
+//     re-run after the hold too.
+//
+//   - The recorded index row. core.Exchange.Path is what history, the site map and the search index
+//     show without reading a message's bytes, so a row whose Path disagreed with its own request was
+//     a row pointing at a URL the capture does not contain. The operator could see the Edited badge
+//     and still have no idea which endpoint was touched.
+//
+// Absolute-form is honoured, not assumed away: the bytes are rewritten to origin-form before the
+// hold (see toOriginForm), and an operator is free to type an absolute URL back into the held request.
+// Returning ok=false on an unreadable head rather than guessing keeps a malformed line from silently
+// repointing anything — the caller keeps what it had, and the bytes are still whatever they are.
+func requestLineOf(raw []byte) (method, path string, ok bool) {
+	end := bytes.IndexByte(raw, '\n')
+	if end < 0 {
+		return "", "", false
+	}
+	fields := strings.Fields(strings.TrimRight(string(raw[:end]), "\r\n"))
+	if len(fields) < 2 {
+		return "", "", false
+	}
+	target := fields[1]
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		_, _, p := parseTarget(target)
+		if p == "" {
+			return "", "", false
+		}
+		return fields[0], p, true
+	}
+	return fields[0], target, true
 }
 
 func parseTarget(target string) (host string, port uint16, path string) {
