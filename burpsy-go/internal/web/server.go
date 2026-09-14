@@ -945,6 +945,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
 	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
 	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
+	// The fourth scan kind's door. Unlike /api/crawl it answers POST only: a run started here is
+	// retained in the same registry the crawls are, so GET /api/crawl?task=N reads it back — see
+	// api_apiscan.go's package comment for why there is one read door and not two.
+	s.mux.HandleFunc("/api/apiscan", s.handleAPIScan)
 	// Content discovery: Burp's "Discover content" engagement tool, delegated to ffuf. Registered
 	// beside the crawl because they answer the same operator question from opposite ends — a crawl
 	// follows what the application links to, a sweep guesses what it does not.

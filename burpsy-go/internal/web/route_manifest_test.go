@@ -141,6 +141,21 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead, subPath: "00100200",
 		summary: "one issue definition in full, by hexadecimal type index",
 	},
+	"/api/apiscan": {
+		// POST only, and riskAttack for the same reason /api/crawl is: it sends unbounded traffic.
+		// The bound it is given is the definition's own endpoint count, which for a large document is
+		// large — and unlike a crawl, whose seed count an operator can see at a glance, a pasted
+		// document's size is not visible until it has been parsed. Any model-driven caller therefore
+		// needs confirmation here before it knows how much traffic it is about to cause.
+		//
+		// A `dry_run: true` body reads the definition and answers with what a run *would* send
+		// (endpoint list, resolved base URL, how many values were invented) without starting anything,
+		// which is what the New scan dialog renders before the operator commits.
+		//
+		// Read back through GET /api/crawl?task=N, as an API scan's run lives in the same registry.
+		methods: []string{"POST"}, risk: riskAttack,
+		summary: "start an API-only scan from an OpenAPI 3.x or Swagger 2.0 definition (JSON or YAML), sending the endpoints it describes in place of URLs to crawl; dry_run: true reports what a run would send instead",
+	},
 	"/api/audit/": {
 		methods: []string{"POST"}, risk: riskAttack, subPath: "0",
 		summary: "run an active audit over one captured exchange, by id (0 is valid — see HONEST-05)",
@@ -1093,7 +1108,7 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	sort.Strings(execute)
 
 	wantAttack := []string{
-		"/api/audit/", "/api/audit/selected", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
+		"/api/apiscan", "/api/audit/", "/api/audit/selected", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
 		// "Audit again" belongs here for the same reason /api/audit/ does: it re-runs the whole check set
 		// against a live target through runAudit. That it is spelled as an action on an existing queue
 		// row does not make it cheaper than a first audit — AuditWithin gives it a fresh admission

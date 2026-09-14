@@ -108,7 +108,8 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | Method | Path | Risk | Summary |
 |---|---|---|---|
 | GET | `/api/sitemap` | read | The site map tree (also listed above). |
-| GET, POST | `/api/crawl` | attack | GET: the last crawl's coverage report. POST: crawl from a seed URL under stated bounds. |
+| GET, POST | `/api/crawl` | attack | GET: the last crawl's coverage report, or one run by `?task=N`. POST: crawl from a seed URL under stated bounds. |
+| POST | `/api/apiscan` | attack | Start an API-only scan — Burp's fourth scan kind. Body `{definition, base_url?, audit?, max_requests?, pool?, requests_per_second?, user_agent?, headers?}`, where `definition` is an OpenAPI 3.x or Swagger 2.0 document as text (JSON or YAML). Answers **202** with `{task_id, state, kind:"api-scan", audit, definition:{...}}`; the endpoints are sent by the crawl engine in seeds-only mode and `report.seeds_only` is `true` on the retained run. `dry_run: true` instead answers **200** with `{dry_run:true, definition}` and starts nothing — the New scan dialog's preview. Refusals are 400 and name what the document actually is (AsyncAPI, Postman, Swagger 1.x, RAML); a document naming no host is a 400 asking for `base_url`; a host no scope rule can reach is a 400 quoting the scope's own explanation. |
 
 ## Change events (SSE)
 

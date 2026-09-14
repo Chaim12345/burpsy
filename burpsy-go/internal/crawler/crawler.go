@@ -165,6 +165,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -210,9 +211,29 @@ type Scope interface {
 // Config configures one crawl. Zero-valued Limits and RequestsPerSecond take their defaults; the
 // collaborators are required and New says so rather than crawling with a piece missing.
 type Config struct {
-	// Seeds are the URLs the crawl starts from. At least one is required, and each must be an
-	// absolute http or https URL with a host.
+	// Seeds are the URLs the crawl starts from. At least one is required — unless SeedRequests is
+	// set — and each must be an absolute http or https URL with a host.
 	Seeds []string
+	// SeedRequests are concrete requests to send instead of, or beside, Seeds: a method, a URL, the
+	// headers belonging to that one request, and a body. They exist for the one caller whose attack
+	// surface is not a set of URLs — the API-only scan, whose definition names methods and bodies, so
+	// `DELETE /items/1` and `GET /items/1` are two endpoints of one path and cannot both be a URL.
+	//
+	// Only honoured when SeedsOnly is set, and refused by New otherwise rather than ignored: a plain
+	// crawl silently dropping the caller's method and body would send a GET at a path the operator
+	// meant to POST to, and nothing on screen would say so.
+	SeedRequests []SeedRequest
+	// SeedsOnly fetches exactly what Seeds and SeedRequests name and follows nothing: no robots.txt
+	// probe, no link or form extraction, no redirect traversal. See Run and perform.
+	//
+	// This is a different scan rather than a tighter bound on the same one. A crawl's job is
+	// discovery, so every mechanism that adds a request the operator did not name is a feature of it;
+	// an API-only scan's job is to send the endpoints a definition describes and audit the replies, so
+	// the same mechanisms are switched off rather than merely budgeted — a definition describing
+	// twelve operations should produce twelve requests and a report that says twelve, not twelve
+	// requests plus whatever a JSON response's embedded links happened to suggest. Report.SeedsOnly
+	// records which of the two ran, so a report can be read without knowing what was launched.
+	SeedsOnly bool
 	// Scope is the engagement scope. Required: a crawler with no scope gate is an SSRF engine that
 	// dials whatever the target names.
 	Scope Scope
@@ -279,6 +300,32 @@ type Config struct {
 	Logger *zap.Logger
 }
 
+// SeedRequest is one concrete request a seeds-only run sends: what one operation of an API
+// definition reduces to.
+//
+// It carries a method, headers and a body rather than a URL, because those are the whole identity of
+// the endpoint. A URL is what a crawl starts from; a request is what a scan of a *described* API
+// starts from, and a described API's endpoints are distinguished by their verbs and their bodies.
+// The values themselves come from wherever the definition's schema or schema-free request line came
+// from (see internal/apidoc, which is the package that builds these).
+type SeedRequest struct {
+	// Method is the HTTP method. Empty means GET, which is what a definition that omits `method`
+	// means too.
+	Method string
+	// URL is the absolute request target, query string included.
+	URL string
+	// Headers are headers for this one request, on top of Config.Headers. Framing headers — Host,
+	// Content-Length, Content-Type — are refused at construction rather than written, because the
+	// request line and the body would disagree. See validateHeader.
+	Headers map[string]string
+	// Body, when non-empty, is sent with ContentType below and a computed Content-Length.
+	Body []byte
+	// ContentType is the body's media type. Empty with a non-empty Body sends no Content-Type at
+	// all, which is a request the target has to decide how to read — so callers give one whenever
+	// they can, and internal/apidoc always does when it synthesises a body.
+	ContentType string
+}
+
 // Fetch is one request the crawl actually sent, and what came back. The list of these is the "what
 // it did reach" half of the coverage story CRAWL-07 asks about; LimitReport.Unfetched is the other.
 type Fetch struct {
@@ -330,8 +377,13 @@ type Fetch struct {
 // A caller can therefore always answer "what happened to the other ones", which is the property that
 // makes a crawl report readable as coverage rather than as a highlight reel.
 type Report struct {
-	// Seeds is what the crawl was pointed at.
+	// Seeds is what the crawl was pointed at. On a seeds-only run every SeedRequest's URL appears
+	// here too, so the field answers "what did this scan point at" for both scan kinds.
 	Seeds []string `json:"seeds"`
+	// SeedsOnly records that this run followed nothing: it fetched exactly the URLs it was given and
+	// stopped. Carried rather than inferred from the absence of links, because a crawl that found no
+	// links and a scan that never looked for any produce identical counts and are different runs.
+	SeedsOnly bool `json:"seeds_only,omitempty"`
 	// Query is the crawl-scope query as the operator wrote it, empty when there was none.
 	Query string `json:"query,omitempty"`
 	// RetentionQuery is the post-fetch traversal query as the operator wrote it.
@@ -434,10 +486,16 @@ func (r Report) Summary() string {
 type frontierItem struct {
 	url    *url.URL
 	method string
-	// body and contentType are set for a form submission, empty otherwise.
+	// body and contentType are set for a form submission and for a seeds-only request, empty
+	// otherwise.
 	body        []byte
 	contentType string
-	depth       int
+	// headers are per-request headers on top of Config.Headers, set only by admitSeedRequest. Kept
+	// on the item rather than folded into Config.Headers because they belong to one request: an API
+	// definition's declared header parameter is that operation's, and putting it in Config.Headers
+	// would send it on every other operation's request as well.
+	headers map[string]string
+	depth   int
 	// foundAt is the URL of the page this was discovered on, empty for a seed. Reporting only.
 	foundAt string
 	// text is the link text or form label, for reporting a later refusal against the right label.
@@ -467,6 +525,10 @@ type Crawler struct {
 	// seedURLs are the validated, absolute seeds. Held parsed rather than re-parsed per Run, because
 	// New has already rejected everything wrong with them.
 	seedURLs []*url.URL
+	// seedRequests are the validated SeedRequests as frontier items, admitted by Run in place of the
+	// seed loop when SeedsOnly is set. Built here for the same reason seedURLs is: New is where a
+	// malformed method, URL or header gets refused, so Run has nothing left to validate.
+	seedRequests []frontierItem
 	// retention is the parsed post-fetch query (DSL-03 gate b), nil when the operator gave none.
 	retention *query.Expr
 	// limiter is the aggregate rate cap; hostLimiters holds one per authority. See visit for why both.
@@ -548,8 +610,11 @@ type Crawler struct {
 // field a frontier URL does not have, a header that would split a request. A crawl that started and
 // then reported those as per-URL skips would bury an operator's typo in a refusal ledger.
 func New(cfg Config) (*Crawler, error) {
-	if len(cfg.Seeds) == 0 {
+	if len(cfg.Seeds) == 0 && len(cfg.SeedRequests) == 0 {
 		return nil, fmt.Errorf("a crawl needs at least one seed URL")
+	}
+	if len(cfg.SeedRequests) > 0 && !cfg.SeedsOnly {
+		return nil, fmt.Errorf("SeedRequests was set without SeedsOnly: a crawl that follows links does not know what to do with a method, a body or a per-request header, so it would send a GET at a path meant for a POST. Set SeedsOnly, or pass the URLs as Seeds")
 	}
 	if cfg.Scope == nil {
 		return nil, fmt.Errorf("a crawl needs a scope: without one the crawler dials whatever the target names, which is an SSRF engine and not a crawler")
@@ -582,6 +647,52 @@ func New(cfg Config) (*Crawler, error) {
 			u.Path = "/"
 		}
 		seeds = append(seeds, u)
+	}
+
+	// SeedRequests become frontier items here, and their URLs join the seed *set*: credentialOrigins,
+	// the robots decision and Report.Seeds all key off "the URLs the operator named", and a request
+	// the operator named is one of those. Validated to exactly the standard a seed URL is, because a
+	// definition is input like any other — the fact that it arrived as a file rather than as a typed
+	// URL changes nothing about what a request built from it may contain.
+	seedRequests := make([]frontierItem, 0, len(cfg.SeedRequests))
+	for i, req := range cfg.SeedRequests {
+		method := strings.ToUpper(strings.TrimSpace(req.Method))
+		if method == "" {
+			method = "GET"
+		}
+		label := fmt.Sprintf("request %d (%s %s)", i+1, method, req.URL)
+		u, err := url.Parse(strings.TrimSpace(req.URL))
+		if err != nil {
+			return nil, fmt.Errorf("%s is not a URL: %w", label, err)
+		}
+		if !supportedScheme(u.Scheme) {
+			return nil, fmt.Errorf("%s has scheme %q; a scan can only send http or https", label, u.Scheme)
+		}
+		if u.Host == "" {
+			return nil, fmt.Errorf("%s has no host", label)
+		}
+		if u.User != nil {
+			return nil, fmt.Errorf("%s embeds credentials in the URL; put them in Config.Headers or the request's own Headers", label)
+		}
+		u.Fragment = ""
+		u.RawFragment = ""
+		if u.Path == "" {
+			u.Path = "/"
+		}
+		for name, value := range req.Headers {
+			if err := validateHeader(name, value); err != nil {
+				return nil, fmt.Errorf("%s: %w", label, err)
+			}
+		}
+		if len(req.Body) > 0 && req.ContentType == "" {
+			return nil, fmt.Errorf("%s carries a %d-byte body with no Content-Type; a target has no way to know how to read it", label, len(req.Body))
+		}
+		seeds = append(seeds, u)
+		cfg.Seeds = append(cfg.Seeds, u.String())
+		seedRequests = append(seedRequests, frontierItem{
+			url: u, method: method, depth: 0,
+			body: req.Body, contentType: req.ContentType, headers: req.Headers,
+		})
 	}
 
 	var expr *query.Expr
@@ -713,6 +824,7 @@ func New(cfg Config) (*Crawler, error) {
 	// are recorded on the report's LimitReport through the same counters, so a seed refused by scope
 	// is visible rather than a crawl that mysteriously fetched nothing.
 	c.seedURLs = seeds
+	c.seedRequests = seedRequests
 	// Config.Headers travel only to the origins the operator seeded. Recorded here, from the parsed
 	// seeds, so the key is computed by the same function that keys the outgoing request.
 	for _, s := range seeds {
@@ -807,6 +919,7 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	started := time.Now()
 	rep := Report{
 		Seeds:          c.cfg.Seeds,
+		SeedsOnly:      c.cfg.SeedsOnly,
 		Query:          c.cfg.Query,
 		RetentionQuery: c.cfg.RetentionQuery,
 		FormSubmission: c.cfg.SubmitForms,
@@ -818,14 +931,23 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	}
 	lim := LimitReport{Limits: c.limits}
 
-	for _, u := range c.seedURLs {
-		c.admitSeed(u, &lim)
-	}
-	// One robots.txt per seed authority, queued behind the seeds so the operator's own starting points
-	// are fetched first. Not honoured as a restriction — read as a list of paths the target would
-	// rather nobody looked at. See the package docs.
-	for _, u := range c.seedURLs {
-		c.admitRobots(u, &lim)
+	if c.cfg.SeedsOnly {
+		// The definition is the attack surface, so the frontier starts as the definition's endpoints
+		// and — because perform returns before link extraction — stays that. No robots.txt: the probe
+		// is a request nobody described, which is the thing this mode exists to exclude.
+		for _, item := range c.seedRequests {
+			c.admitSeedRequest(item, &lim)
+		}
+	} else {
+		for _, u := range c.seedURLs {
+			c.admitSeed(u, &lim)
+		}
+		// One robots.txt per seed authority, queued behind the seeds so the operator's own starting
+		// points are fetched first. Not honoured as a restriction — read as a list of paths the target
+		// would rather nobody looked at. See the package docs.
+		for _, u := range c.seedURLs {
+			c.admitRobots(u, &lim)
+		}
 	}
 
 	for {
@@ -1043,6 +1165,22 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		}
 	}
 
+	// A seeds-only run is done with this request. It has been scope-authorised, sent, captured and
+	// scanned — everything above is shared with a crawl on purpose, so a definition-driven scan is no
+	// more privileged and no less recorded than any other traffic. What is skipped is everything that
+	// would add a request the definition did not name: the robots probe (not admitted at all), the
+	// redirect target, the retention query's traversal gate, and link and form extraction.
+	//
+	// Deliberately no fingerprint and no location record either. A fingerprint exists so a crawl can
+	// tell "the same page again" from "a new page" and not re-descend a subtree; this run never
+	// descends, so the map would only serve to collapse two endpoints returning the same bytes into
+	// one location — which is a coverage claim about a scan that made no such claim. Report.Locations
+	// is 0 for a seeds-only run and that number is true.
+	if c.cfg.SeedsOnly {
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
+
 	// robots.txt is captured and scanned like everything else — it has already been, above — and then
 	// read as a path list rather than as a location. It is deliberately not fingerprinted as a
 	// location: it is metadata about the application, not a page of it, and counting it as one would
@@ -1168,6 +1306,15 @@ func (c *Crawler) recordLocation(fingerprint, at string, fetch *Fetch, rep *Repo
 // destructive.go) and pass every other gate.
 func (c *Crawler) admitSeed(u *url.URL, lim *LimitReport) {
 	c.enqueue(frontierItem{url: u, method: "GET", depth: 0}, "", lim)
+}
+
+// admitSeedRequest puts one validated SeedRequest on the frontier. It goes through enqueue exactly as
+// a seed does — same scope gate, same crawl-scope query, same rate limiters, same capture — and
+// differs only in that it carries a method, a body and its own headers rather than being a URL.
+// Skipping the destructive check is the same judgement admitSeed makes, for the same reason: this is
+// the operator's own instruction, in this case one their API definition stated.
+func (c *Crawler) admitSeedRequest(item frontierItem, lim *LimitReport) {
+	c.enqueue(item, "", lim)
 }
 
 // admitRobots queues the one /robots.txt request for a seed's authority, at most once per authority.
@@ -1727,6 +1874,17 @@ func (c *Crawler) buildRequest(item frontierItem) []byte {
 			c.headersWithheld++
 		}
 	}
+	// This request's own headers, which only a seeds-only run sets — an API definition's declared
+	// header parameters. Sorted, because Go's map order is random and two scans of one definition
+	// must produce byte-identical requests: a request whose headers swap places between runs looks
+	// like the definition changed. validateHeader has already refused CR, LF, a colon in a name and
+	// every framing header, so this loop writes nothing that could split the request.
+	for _, name := range sortedHeaderNames(item.headers) {
+		b.WriteString(name)
+		b.WriteString(": ")
+		b.WriteString(item.headers[name])
+		b.WriteString("\r\n")
+	}
 	if len(item.body) > 0 {
 		b.WriteString("Content-Type: ")
 		b.WriteString(item.contentType)
@@ -1737,6 +1895,17 @@ func (c *Crawler) buildRequest(item frontierItem) []byte {
 	b.WriteString("\r\n")
 	b.Write(item.body)
 	return []byte(b.String())
+}
+
+// sortedHeaderNames orders one request's headers. See buildRequest for why the order is fixed rather
+// than incidental.
+func sortedHeaderNames(headers map[string]string) []string {
+	out := make([]string, 0, len(headers))
+	for name := range headers {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // hostHeader is the authority for the Host header: the port is omitted when it is the scheme's

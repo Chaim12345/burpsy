@@ -54,6 +54,11 @@ const (
 	// KindCrawl is one crawl from a seed URL. Named here rather than in the crawler so the crawler
 	// depends on this package and not the other way round.
 	KindCrawl Kind = "crawl"
+	// KindAPIScan is one seeds-only sweep of the endpoints an API definition describes. It runs on
+	// the crawl engine (see crawler.Config.SeedsOnly) and registers under its own kind anyway, because
+	// "did my link-following crawl finish" and "did my definition sweep finish" are different questions
+	// and the task list is where they get answered.
+	KindAPIScan Kind = "api-scan"
 	// KindDiscovery is one content-discovery sweep delegated to an external tool (ffuf). Named here
 	// for the same reason KindCrawl is: internal/extscan is a leaf that knows nothing about this
 	// registry, and the web handler that drives it should not have to invent a kind string.

@@ -48,7 +48,18 @@ func (s *Server) handleTaskAgain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if task.Kind != dash.KindCrawl {
-		http.Error(w, "Only crawl tasks can be re-run from the dashboard; an audit or an attack needs its original inputs", http.StatusConflict)
+		// Two refusals, said apart, because they are different facts and only one of them is obvious.
+		// An audit or an attack needs inputs this process never held. An API scan's inputs are a
+		// document it *did* read and deliberately did not keep: the run record carries what the scan
+		// sent — every resolved method, path and template — and not the file, so re-running from this
+		// row would mean re-sending the endpoints with bodies and header values this build would have
+		// to invent. That is a different scan wearing the same target, and the difference is exactly
+		// what the definition's own examples were there to prevent.
+		reason := "Only crawl tasks can be re-run from the dashboard; an audit or an attack needs its original inputs"
+		if task.Kind == dash.KindAPIScan {
+			reason = "An API scan cannot be re-run from here: the definition it read is not retained, only the endpoints it sent, so a re-run would be a different scan. Start a new one from the document."
+		}
+		http.Error(w, reason, http.StatusConflict)
 		return
 	}
 	if _, _, err := s.startCrawl(crawlStartReq{Seeds: []string{task.Target}}); err != nil {

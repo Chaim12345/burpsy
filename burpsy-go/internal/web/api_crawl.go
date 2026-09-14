@@ -52,16 +52,24 @@ type crawlRuns struct {
 type crawlRun struct {
 	TaskID uint64   `json:"task_id"`
 	Seeds  []string `json:"seeds"`
-	// Kind is which scan kind this run is: crawlKindCrawl or crawlKindAudit. Carried on the retained
-	// run rather than only in the request, so GET /api/crawl?task=N answers "what kind of scan was
-	// that" for a run an operator started this morning, and so the 202 reply echoes the kind the
-	// server took rather than the kind the caller hoped it sent.
-	Kind     string          `json:"kind"`
-	State    string          `json:"state"`
-	Started  time.Time       `json:"started"`
-	Finished *time.Time      `json:"finished,omitempty"`
-	Error    string          `json:"error,omitempty"`
-	Report   *crawler.Report `json:"report,omitempty"`
+	// Kind is which scan kind this run is: crawlKindCrawl, crawlKindAudit or runKindAPIScan. Carried
+	// on the retained run rather than only in the request, so GET /api/crawl?task=N answers "what kind
+	// of scan was that" for a run an operator started this morning, and so the 202 reply echoes the
+	// kind the server took rather than the kind the caller hoped it sent.
+	Kind string `json:"kind"`
+	// Definition is the API-scan half: the document a seeds-only run was built from, what it had to
+	// invent, and the endpoints it sent. Nil for the two crawl kinds, which were given URLs and have no
+	// definition to describe.
+	//
+	// Carried on the run rather than returned once from the launch, because "which endpoints did this
+	// scan send, and where did those values come from" is a question asked after the scan, when the
+	// launch reply is long gone.
+	Definition *apiScanSummary `json:"definition,omitempty"`
+	State      string          `json:"state"`
+	Started    time.Time       `json:"started"`
+	Finished   *time.Time      `json:"finished,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Report     *crawler.Report `json:"report,omitempty"`
 }
 
 func newCrawlRuns() *crawlRuns {
@@ -108,6 +116,17 @@ func (c *crawlRuns) get(taskID uint64) (*crawlRun, bool) {
 	defer c.mu.RUnlock()
 	run, ok := c.byID[taskID]
 	return run, ok
+}
+
+// setDefinition attaches an API scan's definition summary to the run the task id names. A no-op when
+// the run has already been evicted, which is the same race finish tolerates: retention is bounded by
+// run count, and a slow scan can outlive its own entry.
+func (c *crawlRuns) setDefinition(taskID uint64, summary *apiScanSummary) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if run := c.byID[taskID]; run != nil {
+		run.Definition = summary
+	}
 }
 
 // list returns the retained runs, newest first.
@@ -234,14 +253,37 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// crawlStartStatus maps a start failure to its status. A pool the operator named and that is not
-// saved is 404 — the request is well formed and the world is not what they thought — while a
-// malformed configuration is 400. Told apart because the fix differs: reload versus retype.
+// crawlStartStatus maps a start failure from any scan launch to its status. A pool the operator named
+// and that is not saved is 404 — the request is well formed and the world is not what they thought —
+// while a malformed configuration is 400. Told apart because the fix differs: reload versus retype.
 func crawlStartStatus(err error) int {
 	if errors.Is(err, pool.ErrNoSuchPool) {
 		return http.StatusNotFound
 	}
 	return http.StatusBadRequest
+}
+
+// resolveRunRate turns the two ways a caller can state a scan's rate — a saved pool's name, or an
+// inline requests-per-second — into the resolved limit a run gets, or nil for this package's defaults.
+//
+// Shared by every launch surface rather than repeated in each, because the two rules it encodes are
+// the same two for all of them: naming both is a refusal rather than an order of precedence (a scan
+// that ran at a rate the operator typed in a box they were told was ignored has no way to find out),
+// and a named pool that is not saved is an error rather than a silent fall back to the defaults.
+func (s *Server) resolveRunRate(poolName string, requestsPerSecond float64) (*intruder.RateLimit, error) {
+	if poolName == "" {
+		return nil, nil
+	}
+	if requestsPerSecond > 0 {
+		return nil, fmt.Errorf(
+			"this scan names both the pool %q and requests_per_second %v; the pool already states a "+
+				"rate, so send one or the other", poolName, requestsPerSecond)
+	}
+	limit, err := s.pools.Limit(poolName)
+	if err != nil {
+		return nil, fmt.Errorf("%w (saved pools: %s)", err, availablePools(s.pools))
+	}
+	return &limit, nil
 }
 
 // startCrawl validates a crawl request, registers the task and starts the crawl, returning the task
@@ -282,22 +324,9 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 		return 0, nil, errors.New("At least one seed URL is required")
 	}
 
-	// A named pool and an inline rate are refused together rather than resolved in some order. Both
-	// are the operator stating the crawl's rate, and picking one would mean the number they typed in
-	// the box was ignored — with no way for them to tell, since a crawl reports the rate it ran at
-	// and not the rate it was told twice.
-	if req.Pool != "" && req.RequestsPerSecond > 0 {
-		return 0, nil, fmt.Errorf(
-			"this crawl names both the pool %q and requests_per_second %v; the pool already states a "+
-				"rate, so send one or the other", req.Pool, req.RequestsPerSecond)
-	}
-	var poolLimit *intruder.RateLimit
-	if req.Pool != "" {
-		limit, err := s.pools.Limit(req.Pool)
-		if err != nil {
-			return 0, nil, fmt.Errorf("%w (saved pools: %s)", err, availablePools(s.pools))
-		}
-		poolLimit = &limit
+	poolLimit, err := s.resolveRunRate(req.Pool, req.RequestsPerSecond)
+	if err != nil {
+		return 0, nil, err
 	}
 
 	limits := crawler.DefaultLimits()
@@ -382,6 +411,9 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 // auditCrawledExchanges runs the audit half of a crawl-and-audit scan over the exchanges the crawl
 // itself produced.
 //
+// A one-line wrapper over auditFetchedExchanges, which is the same body the API-only scan's audit
+// half calls: the two differ only in what the task row calls the run.
+//
 // # Where the list comes from
 //
 // The crawl's own report, not the store. Report.Fetches carries one entry per request that reached
@@ -405,11 +437,23 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 // to audit" and "the audit half did not run" are different facts and only one of them is a problem,
 // and a row that says the former is the only way to tell them apart on screen.
 func (s *Server) auditCrawledExchanges(ctx context.Context, rep *crawler.Report) {
+	s.auditFetchedExchanges(ctx, rep, "crawl of "+crawlAuditHost(rep))
+}
+
+// auditFetchedExchanges runs the audit half of any scan whose fetches are known: the crawl-and-audit
+// phase and the API-only sweep.
+//
+// One body rather than two, for the reason the audit started as a shared call: two places that both
+// "audit these exchanges" is how a launched scan comes to audit less than another one did, with
+// nothing on screen saying which. subject names the run for the task row and is the callers' only
+// difference — the crawl names a host it discovered its way around, the API scan names a host it was
+// handed.
+func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report, subject string) *scanner.SessionOutcome {
 	ids := make([]core.ExchangeID, 0, len(rep.Fetches))
 	for _, f := range rep.Fetches {
 		ids = append(ids, f.ExchangeID)
 	}
-	target := fmt.Sprintf("crawl of %s (%d exchange(s))", crawlAuditHost(rep), len(ids))
+	target := fmt.Sprintf("%s (%d exchange(s))", subject, len(ids))
 	task := s.tasks.Start(dash.KindAuditSession, target, uint64(len(ids)))
 	// The config comes off the active scanner rather than from a preset name, because a crawl-and-audit
 	// is not launched with a configuration — the crawl's card names bounds, not a check set. The engine
@@ -417,7 +461,7 @@ func (s *Server) auditCrawledExchanges(ctx context.Context, rep *crawler.Report)
 	// "audit these exchanges" is how a launched scan comes to audit less than a crawl's own phase
 	// without anything on screen saying so.
 	cfg := s.activeScanner().AuditConfig()
-	s.runBulkAudit(ctx, task, target, ids, cfg, "the crawl produced no exchanges to audit")
+	return s.runBulkAudit(ctx, task, target, ids, cfg, "the run produced no exchanges to audit")
 }
 
 // crawlAuditHost names a crawl for the audit's task row: the first seed's host, or the seed itself

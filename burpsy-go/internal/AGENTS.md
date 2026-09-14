@@ -27,7 +27,8 @@ component is *not* allowed to reach, same as on the Rust side.
 | [`http2/`](http2/AGENTS.md) | Sockets-free, pure-byte HTTP/2 framing/HPACK/malformed-frame authoring for smuggling research |
 | [`intruder/`](intruder/AGENTS.md) | Insertion-point discovery and payload attacks (sniper/battering ram/pitchfork/cluster bomb), bucketing responses instead of retaining bodies |
 | [`sequencer/`](sequencer/AGENTS.md) | Statistical randomness analysis of session tokens: per-position Shannon entropy plus the FIPS 140-2 bit-level battery |
-| [`crawler/`](crawler/AGENTS.md) | Breadth-first application discovery from seed URLs, routed through the same scope-authorised sender as proxied traffic; no Rust counterpart |
+| [`crawler/`](crawler/AGENTS.md) | Breadth-first application discovery from seed URLs, routed through the same scope-authorised sender as proxied traffic — plus *seeds-only* mode, where the frontier is given rather than discovered and nothing is followed; no Rust counterpart |
+| [`apidoc/`](apidoc/AGENTS.md) | Reads an OpenAPI 3.x / Swagger 2.0 definition (JSON or YAML, local `$ref`s included) into the concrete requests an API-only scan sends, recording where every parameter value came from; refuses an unreadable document by name rather than as an empty one |
 | [`sitemap/`](sitemap/AGENTS.md) | Aggregates recorded exchanges into a host → path → method/status tree for the web UI, kept current via a store observer |
 | [`domexec/`](domexec/AGENTS.md) | Headless-Chrome (chromedp) DOM taint harness: plants a canary, reports every instrumented sink it reaches at runtime |
 | [`jsexec/`](jsexec/AGENTS.md) | DOM-less pure-Go JavaScript tier (goja) for prototype-pollution probing when Chrome is absent — not a browser substitute |

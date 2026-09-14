@@ -141,8 +141,69 @@ export interface CrawlRun {
  task_id: number;
  seeds: string[];
  state: "running" | "done" | "failed";
+ /** "crawl", "crawl-audit" or "api-scan". Carried on the run rather than only in the launch request
+  *  so a run read back tomorrow still says which of the three it was. */
+ kind?: string;
  started: string;
  finished?: string;
  error?: string;
  report?: CrawlReport;
+ /** Present only for an API-only scan: the document it was built from and what it sent. */
+ definition?: APIScanDefinition;
+}
+
+/**
+ * One endpoint an API scan sent, as the run record reports it.
+ *
+ * `template` is the path as the document wrote it (`/pets/{petId}`) and `path` is what went on the
+ * wire (`/pets/1`). Both, because the first is what an operator checks against their document and the
+ * second is the only one that names the request — and a run record carrying only the template could
+ * not say which value the scan chose.
+ */
+export interface APIScanOperation {
+ method: string;
+ template: string;
+ path: string;
+}
+
+/**
+ * What a definition resolved to, in the terms the operator asked about.
+ *
+ * The two value counts are the honest-reporting half: a document that supplies examples for every
+ * parameter drives a scan of the API as its authors documented it, and one that supplies none drives a
+ * scan of placeholders this build invented. Same endpoint count, different scans — so both numbers and
+ * `placeholder_note` travel with the run.
+ *
+ * Note what the counts cover: path, query and header parameters. A request body synthesised from a
+ * schema is counted by neither, which is why the note spells out the three places rather than saying
+ * "values".
+ */
+export interface APIScanDefinition {
+ format: string;
+ title?: string;
+ version?: string;
+ spec_version: string;
+ servers?: string[];
+ /** The host the paths were resolved against — the caller's override, or the document's first server. */
+ base_url: string;
+ operations: APIScanOperation[];
+ declared_values: number;
+ placeholder_values: number;
+ placeholder_note: string;
+}
+
+/** The reply to a dry run: what a launch would send, with nothing started. */
+export interface APIScanCheck {
+ dry_run: true;
+ definition: APIScanDefinition;
+}
+
+/** The reply to a launch: a task id to follow, not a finished scan. */
+export interface APIScanAccepted {
+ task_id: number;
+ state: string;
+ kind: string;
+ /** Whether the audit half was accepted. Echoed so the toast can say what was actually started. */
+ audit: boolean;
+ definition: APIScanDefinition;
 }

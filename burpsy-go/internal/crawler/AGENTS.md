@@ -20,7 +20,7 @@ not attempted.
 
 | File | Description |
 |------|-------------|
-| `crawler.go` | The engine: `Config`, `Crawler`, `New`, the breadth-first `Run` loop, `Fetch`/`Report`, the frontier queue, per-authority sender/limiter selection, request building. Carries the long package doc that states every named limit. |
+| `crawler.go` | The engine: `Config`, `Crawler`, `New`, the breadth-first `Run` loop, `Fetch`/`Report`, the frontier queue, per-authority sender/limiter selection, request building. Carries the long package doc that states every named limit. Also carries **seeds-only mode** (`Config.SeedsOnly` + `Config.SeedRequests`) — see below. |
 | `discover.go` | HTML parsing (`golang.org/x/net/html`): extracts links and forms, computes the page skeleton and location fingerprint, fills form-field defaults a browser would send. Subresources (`img`/`script`/`link`/`video`) are deliberately neither queued nor fingerprinted. |
 | `fingerprint.go` | The two identities: the pre-fetch request fingerprint (`requestFingerprint`, normalises query) and the URL template (`urlTemplate`, collapses id-shaped segments via `looksLikeID`/`isUUID`/`isHex`), plus the post-fetch content fingerprint. |
 | `limits.go` | `Limits`/`DefaultLimits`, the `CrawlStop` enum (12 stops, `CrawlStopAll`) with `String`/`Explanation`, and `LimitReport` (`Truncated`, `Unfetched`, `Caveat`). |
@@ -28,7 +28,23 @@ not attempted.
 | `destructive.go` | CRAWL-04 refusal: a signal table matched by token *runs* against link target and text (`classifyDestructive`, `tokenise`, `containsRun`), yielding a `DestructiveVerdict`. |
 | `session_gate.go` | Optional re-login seam: `SessionCoordinator`, expired-session detection (status-flip or login-page pattern), `recoverSession`, and request rebuilding with a fresh cookie. |
 | `crawler_test.go` | The bulk of the tests — discovery, the shared-seam authorisation chokepoint, scope/redirect/credential refusals, limits, query scoping, robots handling, session recovery. |
+| `seeds_only_test.go` | The seeds-only mode: that it sends exactly the requests it was given (method, body, headers), that it follows nothing and probes no robots.txt, that its report says which mode ran, and that its input is validated as strictly as a seed URL. |
 | `destructive_test.go`, `fingerprint_test.go`, `fingerprint_budget_test.go` | Focused tests for the signal table, the two fingerprints, and the fingerprint-budget cutoff. |
+
+## Two modes: discovery, and seeds-only
+
+`Config.SeedsOnly` fetches exactly what `Config.Seeds` / `Config.SeedRequests` name and follows
+nothing: no robots.txt probe, no redirect traversal, no link or form extraction, and no location
+fingerprint. `Config.SeedRequests` is the reason the mode exists — an API-only scan's attack surface is
+a definition's operations, and `DELETE /items/1` and `GET /items/1` are two endpoints of one path, so
+the frontier item carries a method, a body and its own headers rather than being a URL.
+
+This is a second scan kind rather than a tighter bound, and the distinction is load-bearing: every
+mechanism that adds a request the operator did not name is a *feature* of a crawl and would be a defect
+here. The run reports which mode it was in (`Report.SeedsOnly`), because a crawl that found no links and
+a scan that never looked produce identical counts and are different runs. `SeedRequests` without
+`SeedsOnly` is refused in `New` rather than ignored — a crawl has nowhere to put a method or a body,
+and silently sending a GET at a path meant for a POST is the failure the field would otherwise cause.
 
 ## For AI Agents
 

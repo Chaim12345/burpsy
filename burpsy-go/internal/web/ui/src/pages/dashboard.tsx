@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { parseSeeds } from "../lib/parse-seeds";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Copy, FolderTree, MoreVertical, Pause, Play, Plus, Radar, Search, Square } from "lucide-react";
@@ -7,11 +7,11 @@ import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, 
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
 import { useIssuesDetailed, useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import type { FindingDetail } from "../lib/types.attack";
-import { useAuditSelected, useStartCrawl } from "../lib/data.observe";
+import { useAPIScanCheck, useAuditSelected, useCrawlRun, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Switch, Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "../ui/primitives";
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
@@ -479,7 +479,8 @@ function ActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
 //
 //   * `launch` is which door the card posts to at all — "crawl" for the two that seed a crawl through
 //     /api/crawl, "audit" for the selection-driven one, which takes exchange ids rather than seeds and
-//     posts them to /api/audit/selected, and "none" for the one that cannot run.
+//     posts them to /api/audit/selected, "api" for the definition-driven one, which takes a document
+//     rather than seeds and posts it to /api/apiscan, and "none" for one that cannot run.
 //   * `wire` is the scan kind /api/crawl is told to run, for the two that go through it.
 //
 // A card cannot be marked ready without a launch, so a missing capability is never a click that does
@@ -518,10 +519,10 @@ const SCAN_TYPES = [
   id: "api",
   title: "API-only scan",
   detail: "Offers additional configuration options",
-  ready: false,
-  launch: "none",
+  ready: true,
+  launch: "api",
   wire: "",
-  missing: "no API-definition import — an OpenAPI/Swagger document cannot be loaded, so there are no endpoints to scan",
+  missing: "",
  },
 ] as const;
 
@@ -535,6 +536,7 @@ function selectedScanType(id: string) {
 function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const startCrawl = useStartCrawl();
  const auditSelected = useAuditSelected();
+ const startAPIScan = useStartAPIScan();
  // The selection the audit kind works on. It is the same store value the history table's tick column
  // writes, which is what makes "the selected items" one notion rather than two: Burp's wizard reads
  // the selection from whichever table made it, and so does this dialog.
@@ -550,12 +552,60 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  const [maxRequests, setMaxRequests] = useState("50");
  const [maxDepth, setMaxDepth] = useState("5");
  const [maxDuration, setMaxDuration] = useState("");
+ // The API-only scan's own inputs. `definitionName` is only ever a label — it is what the operator
+ // picked or pasted from, shown so a pasted document and an uploaded one are distinguishable after
+ // the fact — and never travels to the server, which reads the bytes and not the filename.
+ const [definition, setDefinition] = useState("");
+ const [definitionName, setDefinitionName] = useState("");
+ const [baseUrl, setBaseUrl] = useState("");
+ // Its own cap, empty by default. Sharing the crawl card's "50" would cap a definition sweep at fifty
+ // endpoints without the operator asking, and the server's default for this card is the document's own
+ // count — the honest reading of "scan these endpoints".
+ const [apiMaxRequests, setApiMaxRequests] = useState("");
+ // On by default, because this card is "API-only *scan*": the sweep is the seed and the audit is the
+ // scan. Turning it off is the operator asking for the endpoint sweep alone, which is a real thing to
+ // want ("what does my API do with its own documented requests") and not the default.
+ const [auditEndpoints, setAuditEndpoints] = useState(true);
+ const definitionFileRef = useRef<HTMLInputElement>(null);
+ // The server reads the document, decides the host and resolves every operation before answering, so
+ // what this renders is the same parse the launch will use. See useAPIScanCheck for why it is a POST
+ // behind a query hook rather than a second validate route.
+ const scanCheck = useAPIScanCheck(definition, baseUrl);
 
  const chosen = selectedScanType(kind);
  const close = () => onOpenChange(false);
  const auditing = chosen.launch === "audit";
- const canSubmit = auditing ? checked.length > 0 && !auditSelected.isPending : chosen.ready && seed.trim() !== "" && !startCrawl.isPending;
+ const apiScan = chosen.launch === "api";
+ const canSubmit = auditing
+  ? checked.length > 0 && !auditSelected.isPending
+  : apiScan
+   ? definition.trim() !== "" && scanCheck.data !== undefined && !startAPIScan.isPending
+   : chosen.ready && seed.trim() !== "" && !startCrawl.isPending;
  const submit = () => {
+  if (apiScan) {
+   // The check already passed on this exact text, so the launch cannot be refused for a reason the
+   // operator was not shown — both calls run the server's one prepareAPIScan.
+   startAPIScan.mutate(
+    {
+     definition,
+     base_url: baseUrl.trim() || undefined,
+     audit: auditEndpoints,
+     max_requests: Number(apiMaxRequests) || undefined,
+    },
+    {
+     onSuccess: (accepted) => {
+      const endpoints = accepted.definition.operations.length;
+      toast.success(
+       `${accepted.audit ? "API scan" : "API sweep"} started over ${endpoints} endpoint${endpoints === 1 ? "" : "s"}` +
+        (accepted.definition.placeholder_values > 0 ? ` (${accepted.definition.placeholder_note})` : ""),
+      );
+     },
+     onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Starting the API scan failed"),
+    },
+   );
+   close();
+   return;
+  }
   // The selection kind takes ids, not seeds, so it goes to /api/audit/selected and there is no crawl
   // to message about. The count in the toast is the reply's own — the server drops repeated ids and
   // says so — rather than the tick count, which is what the operator sees rather than what ran.
@@ -648,6 +698,159 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
        </Button>
       ) : null}
      </>
+    ) : apiScan ? (
+     <>
+      <p className="cell-dim" style={{ margin: 0 }}>
+       Sends the endpoints an API definition describes, instead of discovering them by crawling. The document's own examples,
+       defaults and enums become the parameter values where it supplies them; where it does not, this build invents visible
+       placeholders and says how many below.
+      </p>
+      <Field
+       label="API definition"
+       hint="OpenAPI 3.x or Swagger 2.0, in JSON or YAML. Paste it here, or load the file."
+      >
+       {(id) => (
+        <Textarea
+         id={id}
+         value={definition}
+         onChange={(event) => {
+          setDefinition(event.target.value);
+          // Cleared rather than kept: the box no longer holds the file, and a label naming a file
+          // whose contents have since been edited would be a caption that disagrees with the box.
+          setDefinitionName("");
+         }}
+         rows={7}
+         placeholder={'openapi: "3.0.3"\ninfo: {title: Petstore, version: "1.0.2"}\nservers: [{url: https://api.example.com/v1}]\npaths:\n  /pets:\n    get:\n      responses: {"200": {description: ok}}'}
+         aria-label="API definition"
+        />
+       )}
+      </Field>
+      <div className="toolbar">
+       <Button variant="outline" size="small" onClick={() => definitionFileRef.current?.click()}>
+        Load from file
+       </Button>
+       {definitionName ? <span className="cell-dim">{definitionName}</span> : null}
+       {definition ? (
+        <Button
+         variant="outline"
+         size="small"
+         onClick={() => {
+          setDefinition("");
+          setDefinitionName("");
+         }}
+        >
+         Clear
+        </Button>
+       ) : null}
+       <input
+        ref={definitionFileRef}
+        type="file"
+        accept=".json,.yaml,.yml,text/yaml,application/json"
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(event) => {
+         const file = event.target.files?.[0];
+         // Cleared so re-picking the same file fires change again: an edited document saved over the
+         // same path is an ordinary way to fix a line the check refused.
+         event.target.value = "";
+         if (!file) return;
+         void file.text().then((text) => {
+          setDefinition(text);
+          setDefinitionName(file.name);
+         });
+        }}
+       />
+      </div>
+      <Field
+       label="Base URL (optional)"
+       hint="Overrides the document's own servers[0]. Required when the document declares no server, or a relative one — a pasted document has no host of its own to be relative to."
+      >
+       {(id) => (
+        <Input
+         id={id}
+         value={baseUrl}
+         onChange={(event) => setBaseUrl(event.target.value)}
+         placeholder="https://api.example.com/v1"
+        />
+       )}
+      </Field>
+      {definition.trim() === "" ? (
+       <p className="cell-dim" style={{ margin: 0 }}>
+        Nothing to scan yet. As soon as the document is in the box above, it is read here — endpoint count, the host the paths
+        resolve against, and how many of its values this build would have to invent.
+       </p>
+      ) : scanCheck.error ? (
+       // Rendered as advice rather than as a query failure: while someone is editing a document, a
+       // refusal is the expected state, and the server's message names what the file actually is.
+       <ErrorNotice error={scanCheck.error} title="This document cannot be read" />
+      ) : scanCheck.data ? (
+       <>
+        <div className="metric-grid wide">
+         <Metric
+          label="Endpoints"
+          value={scanCheck.data.definition.operations.length}
+          detail={
+           scanCheck.data.definition.title
+            ? `${scanCheck.data.definition.title}${scanCheck.data.definition.version ? ` ${scanCheck.data.definition.version}` : ""}, ${scanCheck.data.definition.format} ${scanCheck.data.definition.spec_version}`
+            : `${scanCheck.data.definition.format} ${scanCheck.data.definition.spec_version}`
+          }
+         />
+         <Metric
+          label="Values invented"
+          value={`${scanCheck.data.definition.placeholder_values} / ${scanCheck.data.definition.declared_values}`}
+          tone={scanCheck.data.definition.placeholder_values > 0 ? "warn" : undefined}
+          detail={scanCheck.data.definition.placeholder_note}
+         />
+        </div>
+        <p className="cell-dim" style={{ margin: 0 }}>
+         Base URL <code>{scanCheck.data.definition.base_url}</code>. Every request is re-authorised against the current scope
+         before it is sent, exactly as a crawl's is.
+        </p>
+        {/* Capped at twelve rows, with the remainder counted rather than dropped: a document can
+            describe hundreds of endpoints, and a list that silently stopped at twelve would read as
+            the whole list. The full record is on the run, which keeps every operation. */}
+        <SimpleTable headers={["Method", "Document path", "Request"]}>
+         {scanCheck.data.definition.operations.slice(0, 12).map((op) => (
+          <tr key={`${op.method} ${op.template} ${op.path}`}>
+           <td>
+            <Badge tone={op.method === "GET" ? "info" : op.method === "DELETE" ? "bad" : "warn"}>{op.method}</Badge>
+           </td>
+           <td>
+            <code>{op.template}</code>
+           </td>
+           <td className="cell-dim">
+            <code>{op.path}</code>
+           </td>
+          </tr>
+         ))}
+        </SimpleTable>
+        {scanCheck.data.definition.operations.length > 12 ? (
+         <p className="cell-dim" style={{ margin: 0 }}>
+          …and {scanCheck.data.definition.operations.length - 12} more endpoint(s); the run's record lists every one.
+         </p>
+        ) : null}
+       </>
+      ) : (
+       <p className="cell-dim" style={{ margin: 0 }}>
+        Reading the document…
+       </p>
+      )}
+      <div className="metric-grid wide">
+       <Field label="Max requests (empty = one per endpoint)" hint="A cap below the document's endpoint count sends a prefix of the list, and the report says how many were never sent.">
+        {(id) => <Input id={id} type="number" min={1} value={apiMaxRequests} onChange={(event) => setApiMaxRequests(event.target.value)} placeholder={String(scanCheck.data?.definition.operations.length ?? "")} />}
+       </Field>
+      </div>
+      <div className="task-tile-row">
+       <span>Audit the endpoints once they have been fetched</span>
+       <Switch checked={auditEndpoints} label="Audit the API scan's endpoints" onCheckedChange={setAuditEndpoints} />
+      </div>
+      <p className="cell-dim" style={{ margin: 0 }}>
+       {auditEndpoints
+        ? "Two tasks appear below: the sweep, then a separate audit of the exchanges it fetched — the same audit half a crawl-and-audit runs."
+        : "One task appears below: the endpoints are sent and captured, and nothing is audited. The traffic still lands in HTTP history and is still scanned passively."}
+      </p>
+     </>
     ) : chosen.ready ? (
      <>
       <Field
@@ -687,7 +890,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       Cancel
      </Button>
      <Button size="small" disabled={!canSubmit} onClick={submit}>
-      {auditing ? "Audit selected items" : "Start"}
+      {auditing ? "Audit selected items" : apiScan ? `Scan ${scanCheck.data?.definition.operations.length ?? 0} endpoint${scanCheck.data?.definition.operations.length === 1 ? "" : "s"}` : "Start"}
      </Button>
     </div>
    </div>
@@ -853,6 +1056,11 @@ function TaskDetail({
  // next render without a second request. Reverse-chronological by id: the store is a dense counter
  // from zero, so higher id == raised later — the feed's whole point (burpsy-react-ui-i18).
  const issuesDetailed = useIssuesDetailed();
+ // The retained run behind this task, when there is one. Only an API scan's row carries anything the
+ // detail pane does not already have (its definition), and the request is made for every kind anyway
+ // because which kinds have a run is not something the console should have to predict — a crawl
+ // answers with its own run, and the card simply does not render for it.
+ const run = useCrawlRun(task.id > 0 ? task.id : null);
  const focusIssue = useApp((state) => state.focusIssue);
  const setRoute = useApp((state) => state.setRoute);
  const activityFindings = useMemo(
@@ -994,6 +1202,67 @@ function TaskDetail({
         </Button>
        </div>
       </Card>
+
+      {run.data?.definition ? (
+       <Card>
+        <SectionHeading
+         title="API definition"
+         detail="The document this scan read, and how much of the traffic it sent actually came from the document."
+        />
+        <div className="metric-grid wide">
+         <Metric
+          label="Endpoints sent"
+          value={run.data.definition.operations.length}
+          detail={
+           run.data.definition.title
+            ? `${run.data.definition.title}${run.data.definition.version ? ` ${run.data.definition.version}` : ""}, ${run.data.definition.format} ${run.data.definition.spec_version}`
+            : `${run.data.definition.format} ${run.data.definition.spec_version}`
+          }
+         />
+         {/* The number that decides how the run should be read. "0 of 5" and "5 of 5" are the same
+             endpoint count and different scans, so it is shown with the server's own sentence rather
+             than as a ratio an operator has to interpret. */}
+         <Metric
+          label="Values invented"
+          value={`${run.data.definition.placeholder_values} / ${run.data.definition.declared_values}`}
+          tone={run.data.definition.placeholder_values > 0 ? "warn" : undefined}
+          detail={run.data.definition.placeholder_note}
+         />
+        </div>
+        <DetailList
+         rows={[
+          { label: "Base URL", value: <code>{run.data.definition.base_url}</code> },
+          {
+           label: "Endpoints",
+           value: (
+            <div className="stack">
+             <SimpleTable headers={["Method", "Document path", "Request"]}>
+              {run.data.definition.operations.slice(0, 12).map((op) => (
+               <tr key={`${op.method} ${op.template} ${op.path}`}>
+                <td>
+                 <Badge tone={op.method === "GET" ? "info" : op.method === "DELETE" ? "bad" : "warn"}>{op.method}</Badge>
+                </td>
+                <td>
+                 <code>{op.template}</code>
+                </td>
+                <td className="cell-dim">
+                 <code>{op.path}</code>
+                </td>
+               </tr>
+              ))}
+             </SimpleTable>
+             {run.data.definition.operations.length > 12 ? (
+              <span className="cell-dim">
+               …and {run.data.definition.operations.length - 12} more endpoint(s); the run's record lists every one.
+              </span>
+             ) : null}
+            </div>
+           ),
+          },
+         ]}
+        />
+       </Card>
+      ) : null}
 
       <Card>
        <SectionHeading title="Task configuration" />

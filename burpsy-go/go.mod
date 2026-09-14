@@ -9,9 +9,11 @@ require (
 	github.com/chromedp/chromedp v0.16.0
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/projectdiscovery/wappalyzergo v0.2.93
+	github.com/wailsapp/wails/v2 v2.15.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/net v0.57.0
 	golang.org/x/text v0.40.0
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.55.0
 	mvdan.cc/sh/v3 v3.13.1
 	software.sslmate.com/src/go-pkcs12 v0.7.2
@@ -54,7 +56,6 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	github.com/wailsapp/wails/v2 v2.15.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
