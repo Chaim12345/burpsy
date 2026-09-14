@@ -889,6 +889,11 @@ test.describe("the editable Inspector — Unit 14", () => {
   await page.getByRole("button", { name: "Send", exact: true }).click();
   const responseEditor = page.locator(".editor-grid-inspected > *").nth(1);
   await expect(responseEditor).toContainText("ORIGIN-OK GET /inspector-edited");
+
+  // The fixture was destructured and never read, so this test said nothing about the console it had
+  // asked for (burpsy-react-ui-93au). Asserted rather than dropped: a Repeater send that logs an
+  // error while producing the right bytes is a real defect, and the console is where it shows.
+  expect(consoleErrors).toEqual([]);
  });
 });
 
@@ -1103,6 +1108,11 @@ test.describe("extender", () => {
    // A request still parked in the proxy would keep its socket open into teardown.
    if (inFlight) await inFlight.catch(() => null);
   }
+
+  // Same as the Repeater test above: the fixture was destructured and never read. This one matters
+  // more, because the test deliberately leaves a connection in a half-state (a held request, then a
+  // drop-all in cleanup), which is exactly the shape that logs a console error nobody would see.
+  expect(consoleErrors).toEqual([]);
  });
 
  test("the APIs tab renders exactly the method set the server dispatches", async ({

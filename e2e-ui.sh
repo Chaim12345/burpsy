@@ -62,6 +62,23 @@ try {
 
 [ "$CHECK_ONLY" = "1" ] && exit 0
 
+# ---- does the suite's own TypeScript compile? ---------------------------------------------------
+# Playwright transpiles without typechecking, so a spec with a type error still runs and still passes
+# — which is how two tests came to destructure the consoleErrors fixture and never read it, asserting
+# nothing about the console they had asked for (burpsy-react-ui-93au). The command was declared in
+# $E2E/package.json as `typecheck` and referenced by nothing at all, so the only thing that ever ran
+# it was someone remembering to. A check nothing runs is a check that reports nothing.
+#
+# A failure here does not stop the suite: the same shape as the bundle check below. The tests still
+# answer whatever they answer, this line is what says whether they were answering about the code you
+# think they were. `npm run --silent` so the output as printed is tsc's own.
+if TYPECHECK=$(cd "$E2E" && npm run --silent typecheck 2>&1); then
+  ok "the spec suite typechecks"
+else
+  no "the spec suite does NOT typecheck: a type error in a spec still runs, so it asserts less than it reads"
+  printf '%s\n' "$TYPECHECK" | sed -n '1,12p' | sed 's/^/        /'
+fi
+
 # ---- is the console under test the console in src/? ---------------------------------------------
 # The Go binary embeds ui/dist/app.js and ui/style.css via go:embed, so the browser only ever sees
 # the COMMITTED bundle. Edit a .tsx and forget `bun run build` and this suite passes a stale UI while
