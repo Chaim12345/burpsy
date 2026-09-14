@@ -70,6 +70,21 @@ after it is a connection error.
 
 Do all four. The first two are mechanical and the last two are where defects actually live.
 
+Parts (a), (b) and (d) are scripted — `./ui-pass.sh` (repo root) drives an already-running console:
+
+```bash
+./ui-live.sh &                    # in another terminal; the script never boots its own fixture
+./ui-pass.sh                      # every route: h1, axe, page errors
+./ui-pass.sh --route scope --route sequencer   # just the routes a change touched
+```
+
+It reads the route list and expected h1 text out of `e2e/harness/routes.ts` (the contract, not a
+second copy), injects axe per route, and exits non-zero on the first failure class it finds. It
+refuses rather than half-running when the console is not up, when agent-browser or python3 is
+missing, or when axe-core is not installed. A full sweep is ~75 seconds; a three-route check is ~6.
+Part (c) is still yours — that is the part that finds defects, and the script deliberately does not
+pretend to do it.
+
 ### a. Every route renders, and says which route it is
 
 The route list is `burpsy-go/internal/web/ui/e2e/harness/routes.ts` — 26 ids, and the exact list the
