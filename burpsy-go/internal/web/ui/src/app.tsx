@@ -33,6 +33,7 @@ import { resolveTheme, useApp } from "./lib/store";
 import type { Exchange } from "./lib/types";
 import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
 import { useChord, useKeymap } from "./lib/keymap";
+import { clearHiddenToolTabs, readHiddenToolTabs, writeHiddenToolTabs } from "./lib/tool-tabs";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
 import { DropdownMenu, type MenuGroup } from "./ui/menu";
@@ -156,6 +157,15 @@ function App(): JSX.Element {
   // so no single tool owns it. Local rather than in the store because nothing outside the shell
   // opens it — the command palette and the menu item are both built here.
   const [searchOpen, setSearchOpen] = useState(false);
+  // Which top-level tabs the operator has hidden (burpsy-react-ui-lje3). Burp's View menu is where
+  // this lives; the tab keeps working when hidden — hotkeys, the palette and links into its routes
+  // all still reach it — so hiding is a statement about chrome, never about capability.
+  const [hiddenTools, setHiddenTools] = useState<string[]>(() => readHiddenToolTabs());
+  const setToolHidden = (id: string, hidden: boolean) => {
+    const next = hidden ? [...new Set([...hiddenTools, id])] : hiddenTools.filter((entry) => entry !== id);
+    setHiddenTools(next);
+    writeHiddenToolTabs(next);
+  };
 
   useThemeEffect();
   useDocumentTitle();
@@ -562,25 +572,36 @@ function App(): JSX.Element {
       ],
     },
     {
-      label: "Tools",
-      groups: [
-        {
-          id: "tools",
-          // One item per tool, in tab order — the menu-bar twin of the tool-tab strip, which is
-          // where Burp's own Tools menu starts. entryLeaf lands on each tool's first page.
-          actions: TOOLS.map((entry) => ({
-            id: `tool-${entry.id}`,
-            label: entry.label,
-            icon: entry.icon,
-            shortcut: entry.hotkey ? `alt+${entry.hotkey}` : undefined,
-            onSelect: () => navigate(entryLeaf(entry)),
-          })),
-        },
-      ],
-    },
-    {
       label: "View",
       groups: [
+        {
+          id: "tabs",
+          // Burp's View menu: one checkable entry per top-level tab, checked when the tab is
+          // showing, plus a way back to the default layout. This is the tab list — the menu that
+          // used to hold it was a burpsy invention, and Burp's own affordance is a show/hide, not
+          // a navigate: a hidden tab is still reachable by hotkey and by the command palette.
+          title: "Top-level tabs",
+          actions: [
+            ...TOOLS.map((entry) => ({
+              id: `tab-${entry.id}`,
+              label: entry.label,
+              checked: !hiddenTools.includes(entry.id),
+              shortcut: entry.hotkey ? `alt+${entry.hotkey}` : undefined,
+              onSelect: () => setToolHidden(entry.id, !hiddenTools.includes(entry.id)),
+            })),
+            {
+              id: "restore-tabs",
+              label: "Restore default tab layout",
+              icon: RotateCcw,
+              disabled: hiddenTools.length === 0,
+              onSelect: () => {
+                clearHiddenToolTabs();
+                setHiddenTools([]);
+                toast.success("Showing every top-level tab");
+              },
+            },
+          ],
+        },
         {
           id: "theme",
           actions: [
@@ -673,7 +694,7 @@ function App(): JSX.Element {
             <span className="brand-name">burpsy</span>
           </div>
           <nav className="tool-tabs" aria-label="Tools">
-            {TOOLS.map((entry) => {
+            {TOOLS.filter((entry) => !hiddenTools.includes(entry.id)).map((entry) => {
               const Icon = entry.icon;
               const current = entry.id === tool.id;
               const signal = attentionFor(attention, entry.id);

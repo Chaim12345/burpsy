@@ -1,6 +1,6 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import * as DropdownPrimitive from "@radix-ui/react-dropdown-menu";
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 
 export interface MenuAction {
@@ -10,6 +10,12 @@ export interface MenuAction {
   icon?: ComponentType<{ size?: number }>;
   shortcut?: string;
   danger?: boolean;
+  /**
+   * Renders the row as a checkable item with this state, for menus whose entries are switches
+   * rather than commands — Burp's View menu, whose entries hide and show top-level tabs. Omit it
+   * and the row is an ordinary item. `onSelect` still fires on click; the caller owns the state.
+   */
+  checked?: boolean;
   disabled?: boolean;
   /**
    * Nested groups. When present the row becomes a submenu trigger and `onSelect` is
@@ -37,6 +43,8 @@ export interface MenuGroup {
  */
 interface MenuParts {
   Item: typeof ContextMenuPrimitive.Item | typeof DropdownPrimitive.Item;
+  CheckboxItem: typeof ContextMenuPrimitive.CheckboxItem | typeof DropdownPrimitive.CheckboxItem;
+  Indicator: typeof ContextMenuPrimitive.ItemIndicator | typeof DropdownPrimitive.ItemIndicator;
   Separator: typeof ContextMenuPrimitive.Separator | typeof DropdownPrimitive.Separator;
   Sub: typeof ContextMenuPrimitive.Sub | typeof DropdownPrimitive.Sub;
   SubTrigger: typeof ContextMenuPrimitive.SubTrigger | typeof DropdownPrimitive.SubTrigger;
@@ -46,6 +54,8 @@ interface MenuParts {
 
 const CONTEXT_PARTS: MenuParts = {
   Item: ContextMenuPrimitive.Item,
+  CheckboxItem: ContextMenuPrimitive.CheckboxItem,
+  Indicator: ContextMenuPrimitive.ItemIndicator,
   Separator: ContextMenuPrimitive.Separator,
   Sub: ContextMenuPrimitive.Sub,
   SubTrigger: ContextMenuPrimitive.SubTrigger,
@@ -55,6 +65,8 @@ const CONTEXT_PARTS: MenuParts = {
 
 const DROPDOWN_PARTS: MenuParts = {
   Item: DropdownPrimitive.Item,
+  CheckboxItem: DropdownPrimitive.CheckboxItem,
+  Indicator: DropdownPrimitive.ItemIndicator,
   Separator: DropdownPrimitive.Separator,
   Sub: DropdownPrimitive.Sub,
   SubTrigger: DropdownPrimitive.SubTrigger,
@@ -68,7 +80,7 @@ export function hasMenuActions(groups: MenuGroup[]): boolean {
 }
 
 function renderItems(groups: MenuGroup[], parts: MenuParts): ReactNode {
-  const { Item, Separator, Sub, SubTrigger, SubContent, Portal } = parts;
+  const { Item, CheckboxItem, Indicator, Separator, Sub, SubTrigger, SubContent, Portal } = parts;
   const visible = groups.filter((group) => group.actions.length > 0);
   return visible.map((group, index) => (
     <div key={group.id}>
@@ -98,6 +110,27 @@ function renderItems(groups: MenuGroup[], parts: MenuParts): ReactNode {
                 </SubContent>
               </Portal>
             </Sub>
+          );
+        }
+        if (action.checked !== undefined) {
+          // The tick sits in the icon slot rather than beside the label, so a checkable menu's
+          // labels stay aligned with an ordinary menu's (Burp's View list does the same thing).
+          return (
+            <CheckboxItem
+              key={action.id}
+              className="menu-item"
+              checked={action.checked}
+              disabled={action.disabled}
+              onSelect={action.onSelect}
+            >
+              <span className="menu-item-icon">
+                <Indicator>
+                  <Check size={14} />
+                </Indicator>
+              </span>
+              <span className="menu-item-label">{action.label}</span>
+              {action.shortcut ? <span className="menu-item-shortcut">{action.shortcut}</span> : null}
+            </CheckboxItem>
           );
         }
         return (
