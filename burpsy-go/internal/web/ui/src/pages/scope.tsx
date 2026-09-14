@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
-import { Plus, Trash2, Pencil } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Plus, Trash2, Pencil, ClipboardPaste, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
 import { useScopeView, useUpdateScope } from "../lib/data.policy";
+import { describeScopeRule, parseScopePaste, type ScopeRuleArms } from "../lib/scope-paste";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Modal, Select, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
 
 /** One row of the rules table: the exact tuple the wire reports, keyed for selection. */
@@ -24,6 +25,17 @@ const rowKey = (row: ScopeRow) =>
  * than the host-pattern-only form Settings grew from: the Go API has carried port and path arms
  * since ScopeRequest grew Path/Port, and remove matches the whole tuple, so the UI finally offers
  * both instead of pretending the API ends at the host.
+ *
+ * # Paste URL and Load from file (dao)
+ *
+ * Burp carries both on every scope-entry surface, because scoping a 40-host engagement through a
+ * five-field form is 40 decompositions done by hand. The paste box does the decomposition
+ * (lib/scope-paste.ts) and Load from file fills the same box, so the file format is one entry per
+ * line rather than a second format to agree on — which is the question the issue parked. Both are
+ * previewed before anything is written, and the lines that are not rules are named with their
+ * reasons, because the failure this feature has to avoid is a host that quietly never became a
+ * rule: the scan then touches something the operator did not authorise, or skips something they
+ * did, and nothing afterwards says which.
  */
 export function ScopePage(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = useScopeView();
@@ -35,6 +47,15 @@ export function ScopePage(): JSX.Element {
  const [path, setPath] = useState("");
  const [protocol, setProtocol] = useState<"" | "http" | "https">("");
  const [selected, setSelected] = useState<ScopeRow | null>(null);
+
+ // The paste dialog's own box. Kept out of the five Add fields deliberately: a pasted entry is
+ // decomposition *into* those fields' arms, and writing a URL into the Host field would be a rule
+ // named after a URL — the one shape Burp's Paste URL exists to prevent.
+ const [pasting, setPasting] = useState(false);
+ const [pasteText, setPasteText] = useState("");
+ // A hidden input is the only way a page reads a file the operator picked, and it has to be in
+ // the DOM to be clicked — the same shape the message editor's paste-from-file uses.
+ const pasteFileRef = useRef<HTMLInputElement>(null);
 
  const run = (body: Parameters<typeof update.mutate>[0], message: string) =>
   update.mutate(body, {
@@ -147,6 +168,73 @@ export function ScopePage(): JSX.Element {
    })),
   [data],
  );
+
+ /**
+  * What the box currently parses to, previewed before anything is written and recomputed as the
+  * operator types. The existing rules are handed in so a re-pasted list is reported as already in
+  * scope rather than doubling it — the parser treats "already there" as a refusal with a reason,
+  * because it is the same class of line: readable, and deliberately not added.
+  */
+ const pastePreview = useMemo(() => {
+  const existing: ScopeRuleArms[] = rows.map((row) => ({
+   pattern: row.host,
+   ...(row.port !== null ? { port: row.port } : {}),
+   ...(row.path !== null ? { path: row.path } : {}),
+   ...(row.protocol !== null ? { protocol: row.protocol as "http" | "https" } : {}),
+  }));
+  return parseScopePaste(pasteText, existing);
+ }, [pasteText, rows]);
+
+ /**
+  * Add every parsed rule under the kind the form is showing, and report what actually happened.
+  *
+  * A partial failure is stated as a partial failure and the box is left alone so the rest can be
+  * sent again: the alternative — a single "added" toast over a loop that stopped at line 12 — is the
+  * one outcome an operator cannot recover from, because the rules that did land are invisible until
+  * they read the table.
+  */
+ const addPasted = async () => {
+  const { rules: accepted, refused, duplicates } = pastePreview;
+  if (accepted.length === 0) {
+   toast.error("Nothing to add: no line in the box is a scope rule.");
+   return;
+  }
+  let added = 0;
+  let failure: unknown = null;
+  for (const rule of accepted) {
+   try {
+    await update.mutateAsync({
+     action: kind,
+     pattern: rule.pattern,
+     ...(rule.port !== undefined ? { port: rule.port } : {}),
+     ...(rule.path ? { path: rule.path } : {}),
+     ...(rule.protocol ? { protocol: rule.protocol } : {}),
+    });
+    added += 1;
+   } catch (problem) {
+    failure = problem;
+    break;
+   }
+  }
+  const skipped: string[] = [];
+  if (duplicates.length > 0) skipped.push(`${duplicates.length} already in scope`);
+  if (refused.length > 0) skipped.push(`${refused.length} unreadable`);
+  const tail = skipped.length > 0 ? ` (skipped ${skipped.join(", ")})` : "";
+  if (failure) {
+   const reason = failure instanceof Error ? failure.message : "the server refused it";
+   toast.error(`Added ${added} of ${accepted.length} rules, then the server refused the next one: ${reason}. The box is unchanged, so the rest can be added again.`);
+   return;
+  }
+  toast.success(`Added ${added} scope rule${added === 1 ? "" : "s"}${tail}`);
+  setPasteText("");
+  setPasting(false);
+ };
+
+ /** Load from file fills the box; the operator still sees and edits it before Add. */
+ const loadPasteFile = async (file: File) => {
+  const contents = await file.text();
+  setPasteText((current) => (current.trim() === "" ? contents : `${current.replace(/\n+$/, "")}\n${contents}`));
+ };
 
  const columns = useMemo<Column<ScopeRow>[]>(
   () => [
@@ -274,6 +362,11 @@ export function ScopePage(): JSX.Element {
       <Plus size={14} />
       Add rule
      </Button>
+     {/* Burp's second entry point, beside the form: a list of URLs into a list of rules. */}
+     <Button variant="outline" onClick={() => setPasting(true)}>
+      <ClipboardPaste size={14} />
+      Paste URL
+     </Button>
     </Toolbar>
    </Card>
 
@@ -317,6 +410,98 @@ export function ScopePage(): JSX.Element {
      onSelect={setSelected}
      empty={<Empty title="No scope rules" detail="An empty scope means everything is in scope. Add a rule to restrict what burpsy touches." />}
     />
+
+   <Modal
+    open={pasting}
+    onOpenChange={setPasting}
+    title="Paste URLs"
+    description="One entry per line: a full URL, or a bare host pattern like the Host field takes. Blank lines and lines starting with # are ignored. Each entry is decomposed into the rule's arms under the kind selected above."
+    wide
+   >
+    <div className="stack">
+     <Field
+      label={`Entries to add as ${kind === "include" ? "inclusions" : "exclusions"}`}
+      hint="Load from file reads the same format: one entry per line. Nothing is added until you press Add, and the lines that are not rules are listed below with the reason."
+     >
+      {(id) => (
+       <Textarea
+        id={id}
+        value={pasteText}
+        onChange={(event) => setPasteText(event.target.value)}
+        placeholder={"https://api.example.com:8443/v2\n*.example.com\n10.0.0.1:8080"}
+        rows={8}
+        aria-describedby="scope-paste-preview"
+       />
+      )}
+     </Field>
+     <Toolbar>
+      <Button variant="outline" size="small" onClick={() => pasteFileRef.current?.click()}>
+       <FolderOpen size={14} />
+       Load from file
+      </Button>
+      <Button
+       variant="outline"
+       size="small"
+       onClick={() => setPasteText("")}
+       disabled={pasteText.trim() === ""}
+      >
+       Clear
+      </Button>
+     </Toolbar>
+     {/*
+      * The preview is the whole point of a paste box: what each line becomes, and what each line
+      * that becomes nothing was refused for. Counts first, then the lines themselves, because the
+      * count is what the operator checks after fixing a list and the lines are what they fix.
+      */}
+     <div id="scope-paste-preview" className="stack">
+      <p>
+       {pastePreview.rules.length} rule{pastePreview.rules.length === 1 ? "" : "s"} to add
+       {pastePreview.duplicates.length > 0 ? `, ${pastePreview.duplicates.length} already in scope` : ""}
+       {pastePreview.refused.length > 0 ? `, ${pastePreview.refused.length} unreadable` : ""}
+      </p>
+      {pastePreview.rules.slice(0, 8).map((rule, index) => (
+       <p key={`rule-${index}`}>
+        <code>{describeScopeRule(rule)}</code>
+       </p>
+      ))}
+      {pastePreview.rules.length > 8 ? <p className="cell-dim">…and {pastePreview.rules.length - 8} more.</p> : null}
+      {[...pastePreview.duplicates, ...pastePreview.refused].map((line) => (
+       <p key={`line-${line.line}`} className="cell-dim">
+        Line {line.line}: <code>{line.text}</code> — {line.reason}.
+       </p>
+      ))}
+     </div>
+     <div className="page-actions">
+      <Button variant="outline" onClick={() => setPasting(false)}>
+       Cancel
+      </Button>
+      {/* The count is on the button in every state, including zero: the click that adds nothing is
+          the one worth disabling by name, and "Add rules" beside "0 rules to add" reads as if the
+          count were an accident. */}
+      <Button
+       disabled={update.isPending || pastePreview.rules.length === 0}
+       onClick={() => void addPasted()}
+      >
+       Add {pastePreview.rules.length} rule{pastePreview.rules.length === 1 ? "" : "s"}
+      </Button>
+     </div>
+     <input
+      ref={pasteFileRef}
+      type="file"
+      accept=".txt,.list,text/plain"
+      className="sr-only"
+      aria-hidden="true"
+      tabIndex={-1}
+      onChange={(event) => {
+       const file = event.target.files?.[0];
+       // Cleared so re-picking the same file fires change again: a file edited on disk and loaded
+       // twice is an ordinary way to fix a line the preview refused.
+       event.target.value = "";
+       if (file) void loadPasteFile(file);
+      }}
+     />
+    </div>
+   </Modal>
 
    <Modal
     open={editing}
