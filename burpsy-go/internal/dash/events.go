@@ -107,6 +107,11 @@ const (
 	EventLiveAuditSkipped  = "liveaudit.skipped"
 	EventLiveAuditBounded  = "liveaudit.bounded"
 	EventLedgerReset       = "audit.ledger_reset"
+	// EventAuditBounded is a bulk audit that stopped before it ran everything — the crawl-and-audit
+	// scan's audit phase. Its own kind rather than reusing EventLiveAuditBounded: "liveaudit" names
+	// the always-on sweep over proxied traffic, and an operator filtering the log for what the live
+	// sweep did should not get rows from a scan they launched by hand.
+	EventAuditBounded = "audit.bounded"
 	// EventCrawlBounded and EventCrawlRefused are declared here, unused by this package, so the
 	// crawler names its events rather than inventing spellings the UI has never seen.
 	EventCrawlBounded = "crawl.bounded"

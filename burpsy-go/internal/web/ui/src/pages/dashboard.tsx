@@ -469,17 +469,61 @@ function ActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
 
 // Two entry points, matching Burp's dashboard header: "New scan" starts bounded work against a
 // seed, "New live task" flips the always-on sweep. The scan-type cards mirror the New scan dialog's
-// first page; the two kinds burpsy cannot run yet render as disabled cards that say so rather than
-// disappearing, because a missing capability silently hidden is the defect this UI exists to avoid.
+// first page — all four of its options (Zhw0 in the 2026.7.1 teardown): Crawl and audit, Crawl,
+// Audit selected items and API-only scan. The kinds burpsy cannot run render as disabled cards that
+// name *what is missing* rather than disappearing, because a missing capability silently hidden is
+// the defect this UI exists to avoid — and "not built yet" is a reason no operator can act on.
+//
+// `wire` is what the server's scan kind is called for the two that run; it is empty for the two that
+// do not, so a card cannot be marked ready without a kind to send. See the Go side's scanKind, which
+// refuses an unknown kind rather than running a plain crawl — the two lists therefore have to agree,
+// and a mismatch fails loudly instead of producing a launch that does something else.
 const SCAN_TYPES = [
- { id: "crawl-audit", title: "Crawl and audit", detail: "Maps the attack surface and audits what it finds.", ready: false },
- { id: "crawl", title: "Crawl", detail: "Maps the attack surface of the web application.", ready: true },
- { id: "api", title: "API-only scan", detail: "Scans detected API definitions.", ready: false },
+ {
+  id: "crawl-audit",
+  title: "Crawl and audit",
+  detail: "Maps the attack surface and audits what it finds.",
+  ready: true,
+  wire: "crawl-audit",
+  missing: "",
+ },
+ {
+  id: "crawl",
+  title: "Crawl",
+  detail: "Maps the attack surface of the web application.",
+  ready: true,
+  wire: "crawl",
+  missing: "",
+ },
+ {
+  id: "audit-selected",
+  title: "Audit selected items",
+  detail: "Identifies vulnerabilities in the selected items",
+  ready: false,
+  wire: "",
+  missing: "no selection-driven launch — auditing is one exchange at a time from the Scanner queue",
+ },
+ {
+  id: "api",
+  title: "API-only scan",
+  detail: "Offers additional configuration options",
+  ready: false,
+  wire: "",
+  missing: "no API-definition import — an OpenAPI/Swagger document cannot be loaded, so there are no endpoints to scan",
+ },
 ] as const;
+
+// selectedScanType resolves the card the operator picked. A lookup rather than an index, so the
+// submit button's enablement and the kind that goes on the wire come from the one description of the
+// card instead of two conditions that can disagree.
+function selectedScanType(id: string) {
+ return SCAN_TYPES.find((scan) => scan.id === id) ?? SCAN_TYPES[0];
+}
 
 function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const startCrawl = useStartCrawl();
- const [kind, setKind] = useState<string>("crawl");
+ // Burp's dialog opens on "Crawl and audit" — its primary workflow and the one it defaults to.
+ const [kind, setKind] = useState<string>("crawl-audit");
  const [seed, setSeed] = useState("");
  // f3k: the New scan dialog takes Burp's "URLs to scan" shape — many seeds, one box
  // (Burp: "Define the URLs to scan. Burp will begin crawling from these URLs"). The wire has
@@ -489,18 +533,25 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  const [maxDepth, setMaxDepth] = useState("5");
  const [maxDuration, setMaxDuration] = useState("");
 
+ const chosen = selectedScanType(kind);
  const close = () => onOpenChange(false);
  const submit = () => {
+  // The kind travels with the seeds, so the server runs what the card said it would. The success
+  // message names the scan that started rather than always "Crawl": a crawl-and-audit's audit phase
+  // produces findings minutes after the crawl task finishes, and a toast that called it a crawl
+  // would leave the operator with nothing to connect them to.
+  const verb = chosen.id === "crawl-audit" ? "Crawl and audit" : "Crawl";
   startCrawl.mutate(
    {
     seeds,
+    kind: chosen.wire,
     max_requests: Number(maxRequests) || undefined,
     max_depth: Number(maxDepth) || undefined,
     max_duration_secs: Number(maxDuration) || undefined,
    },
    {
-    onSuccess: () => toast.success(`Crawl started on ${seed.trim()}`),
-    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Starting the crawl failed"),
+    onSuccess: () => toast.success(`${verb} started on ${seed.trim()}`),
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : `Starting the ${verb.toLowerCase()} failed`),
    },
   );
   close();
@@ -521,11 +572,11 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       >
        <strong>{scan.title}</strong>
        <span>{scan.detail}</span>
-       {!scan.ready ? <small className="cell-dim">not built yet</small> : null}
+       {!scan.ready ? <small className="cell-dim">{scan.missing}</small> : null}
       </button>
      ))}
     </div>
-    {kind === "crawl" ? (
+    {chosen.ready ? (
      <>
       <Field
        label="URLs to scan"
@@ -540,6 +591,12 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
         />
        )}
       </Field>
+      {chosen.id === "crawl-audit" ? (
+       <p className="cell-dim" style={{ margin: 0 }}>
+        Two tasks appear below: the crawl, then a separate audit of the exchanges it fetched. The audit starts when the
+        crawl finishes, and its own row reports the checks it could not run — a bounded sweep is never shown as a clean one.
+       </p>
+      ) : null}
       <div className="metric-grid wide">
        <Field label="Max requests (empty = uncapped)">
         {(id) => <Input id={id} type="number" min={1} value={maxRequests} onChange={(event) => setMaxRequests(event.target.value)} />}
@@ -557,7 +614,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
      <Button variant="outline" size="small" onClick={close}>
       Cancel
      </Button>
-     <Button size="small" disabled={kind !== "crawl" || !seed.trim() || startCrawl.isPending} onClick={submit}>
+     <Button size="small" disabled={!chosen.ready || !seed.trim() || startCrawl.isPending} onClick={submit}>
       Start
      </Button>
     </div>

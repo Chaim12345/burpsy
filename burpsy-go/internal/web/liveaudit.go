@@ -412,10 +412,16 @@ const liveAuditSweepInterval = 3 * time.Second
 // 9,000 behind" rather than "swept 400".
 const liveAuditBatchSize = 200
 
-// liveAuditSeverity grades a finished sweep for the event log. A sweep the breaker paused or the budget
-// bounded is a warning: the next tick starts again against a target that has already stopped answering,
-// and an operator scanning the log must be able to see that without reading every line's counts.
-func liveAuditSeverity(outcome *scanner.SessionOutcome) dash.Severity {
+// auditOutcomeSeverity grades a finished bulk audit for the event log. A run the breaker paused or the
+// budget bounded is a warning: for the live sweep the next tick starts again against a target that has
+// already stopped answering, and for a crawl-and-audit's audit phase the run is over having looked at
+// less than it was given. Either way an operator scanning the log must be able to see that without
+// reading every line's counts.
+//
+// Named for what it grades rather than for its first caller (it was liveAuditSeverity), because the
+// crawl-and-audit phase asks the same question of the same type — and a second caller reaching for a
+// function named after the first one is how two severity rules start to drift.
+func auditOutcomeSeverity(outcome *scanner.SessionOutcome) dash.Severity {
 	if outcome == nil {
 		return dash.SeverityInfo
 	}
@@ -659,7 +665,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	//
 	// Recorded per sweep-with-work, matching the task registration above, so the event log and the task
 	// table describe the same set of runs.
-	s.events.RecordFor(task.ID(), dash.EventLiveAuditBounded, liveAuditSeverity(outcome), fmt.Sprintf(
+	s.events.RecordFor(task.ID(), dash.EventLiveAuditBounded, auditOutcomeSeverity(outcome), fmt.Sprintf(
 		"live sweep of %s: %s", liveAuditTarget(s.store, ids), outcome.Summary()))
 	s.logger.Debug("live audit sweep",
 		zap.Int("exchanges", len(ids)),

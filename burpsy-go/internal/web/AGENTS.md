@@ -33,6 +33,7 @@ here; do not assume it.
 | `api_extensions.go` | The EXTENDER surface (`/api/extensions/*`): list, load, unload, the two consoles, the protocol contract, and one invocation. Six exact patterns rather than a subtree, and deliberately no BApp Store route — see the file's own comment |
 | `api_ws.go` | The WebSocket capture surface (`/api/ws/*`): index rows only, mirroring `wshistory.ts` |
 | `api_sequencer_capture.go`, `api_dashboard.go`, `api_capture.go`, `liveaudit.go` | Sequencer capture runs, dashboard summary counts, history/message/stats, and live-audit state |
+| `api_crawl.go` | The crawl surface (`/api/crawl`): the retained run reports, and the two scan kinds — `crawl`, and `crawl-audit` which audits the exchanges that crawl itself fetched (a second `audit-session` task, not a phase of the crawl's own row). An unknown kind is a 400 that names the accepted pair; the kind is echoed in the 202 and on the retained run, so a launch that audits nothing cannot look like one that ran |
 | `ui/` | The React UI: TypeScript source in `ui/src/`, bun-bundled to `ui/dist/app.js`. Owned elsewhere (see `../DESIGN.md`); do not add wire fields no consumer reads |
 
 ## For AI Agents

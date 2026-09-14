@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"go.uber.org/zap"
 )
 
 // ---- Crawl ---------------------------------------------------------------------------------------
@@ -49,8 +51,13 @@ type crawlRuns struct {
 
 // crawlRun is one crawl: its request, its state, and its report once there is one.
 type crawlRun struct {
-	TaskID   uint64          `json:"task_id"`
-	Seeds    []string        `json:"seeds"`
+	TaskID uint64   `json:"task_id"`
+	Seeds  []string `json:"seeds"`
+	// Kind is which scan kind this run is: crawlKindCrawl or crawlKindAudit. Carried on the retained
+	// run rather than only in the request, so GET /api/crawl?task=N answers "what kind of scan was
+	// that" for a run an operator started this morning, and so the 202 reply echoes the kind the
+	// server took rather than the kind the caller hoped it sent.
+	Kind     string          `json:"kind"`
 	State    string          `json:"state"`
 	Started  time.Time       `json:"started"`
 	Finished *time.Time      `json:"finished,omitempty"`
@@ -62,10 +69,10 @@ func newCrawlRuns() *crawlRuns {
 	return &crawlRuns{byID: map[uint64]*crawlRun{}}
 }
 
-func (c *crawlRuns) start(taskID uint64, seeds []string) *crawlRun {
+func (c *crawlRuns) start(taskID uint64, seeds []string, kind string) *crawlRun {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	run := &crawlRun{TaskID: taskID, Seeds: seeds, State: "running", Started: time.Now()}
+	run := &crawlRun{TaskID: taskID, Seeds: seeds, Kind: kind, State: "running", Started: time.Now()}
 	c.byID[taskID] = run
 	c.order = append(c.order, taskID)
 	for len(c.order) > crawlRunsKept {
@@ -118,10 +125,31 @@ func (c *crawlRuns) list() []*crawlRun {
 	return out
 }
 
+// The two scan kinds POST /api/crawl can start, Burp's New-scan dialog's first page reduced to the
+// two burpsy can run.
+//
+// Burp has four — "Crawl and audit", "Crawl", "Audit selected items" and "API-only scan" (Zhw0 in
+// the 2026.7.1 teardown, the dialog's four radio buttons) — and the difference that matters here is
+// whether the crawl is followed by an audit of what it found. Naming them as constants rather than
+// leaving a bare string in the request means an unknown kind is refused by name, and the two UI
+// cards, the request and this handler cannot drift apart silently.
+const (
+	// crawlKindCrawl maps the attack surface and stops there. The default, and the behaviour every
+	// caller predating this field gets.
+	crawlKindCrawl = "crawl"
+	// crawlKindAudit maps the attack surface and then audits the exchanges the crawl itself produced.
+	crawlKindAudit = "crawl-audit"
+)
+
 // crawlStartReq is the POST body. Every bound is optional and falls back to the engine's own
 // documented default rather than to a value invented here, so "what bounds a crawl" has one answer.
 type crawlStartReq struct {
 	Seeds []string `json:"seeds"`
+	// Kind is which scan kind to run: crawlKindCrawl (the default, empty) or crawlKindAudit. An
+	// unrecognised value is refused rather than treated as the default — see startCrawl. A typo'd
+	// kind that silently ran a plain crawl would leave an operator waiting for findings that the
+	// audit half was never going to produce, and nothing on screen would say why.
+	Kind string `json:"kind,omitempty"`
 	// Query gates each URL before it is fetched, so it may only name host and method. The engine
 	// refuses one naming post-fetch fields rather than evaluating it against absent values.
 	Query string `json:"query"`
@@ -191,14 +219,19 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, _ := s.crawls.get(taskID)
-	state := ""
+	state, kind := "", crawlKindCrawl
 	if run != nil {
 		state = run.State
+		kind = run.Kind
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"task_id": taskID,
 		"seeds":   seeds,
 		"state":   state,
+		// Echoed for the same reason /api/scanner/audit echoes config_name: a reply that looked the
+		// same whether or not the audit half was accepted could not be told apart from one that
+		// accepted the kind and ran a plain crawl.
+		"kind": kind,
 	})
 }
 
@@ -219,7 +252,27 @@ func crawlStartStatus(err error) int {
 // saved params here rather than re-implementing seed trimming, limit defaults and pool resolution.
 // Two code paths that both "start a crawl" would drift, and the one that drifted would be the
 // unattended one nobody watches.
+// scanKind normalises the requested scan kind, refusing anything it does not recognise.
+//
+// Empty means the plain crawl, because that is what every caller predating the field asked for by
+// omission. Anything else non-empty must name one of the two constants: an unknown kind is refused
+// with the accepted set in the message, never quietly downgraded to a crawl.
+func scanKind(requested string) (string, error) {
+	switch requested {
+	case "", crawlKindCrawl:
+		return crawlKindCrawl, nil
+	case crawlKindAudit:
+		return crawlKindAudit, nil
+	}
+	return "", fmt.Errorf(
+		"unknown scan kind %q; this build runs %q and %q", requested, crawlKindCrawl, crawlKindAudit)
+}
+
 func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
+	kind, kerr := scanKind(req.Kind)
+	if kerr != nil {
+		return 0, nil, kerr
+	}
 	seeds := make([]string, 0, len(req.Seeds))
 	for _, seed := range req.Seeds {
 		if t := strings.TrimSpace(seed); t != "" {
@@ -290,12 +343,18 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 	c.WithSuiteGate(s.tasks.GateCheck)
 
 	task := s.tasks.Start(dash.KindCrawl, strings.Join(seeds, ", "), uint64(limits.MaxRequests))
-	s.crawls.start(task.ID(), seeds)
+	s.crawls.start(task.ID(), seeds, kind)
 
 	// Detached from the request context on purpose: a crawl outlives the HTTP call that started it,
 	// and binding it to r.Context() would cancel the whole crawl the moment the operator's browser
 	// navigated away. The bound that actually stops it is Limits.MaxDuration, which the engine
 	// enforces, plus the request budget — both reported in the Report either way.
+	// The one thing the capture handle could not be given at construction time: the task id does not
+	// exist until the task is registered, and the config above is built before it on purpose (a
+	// mistyped bound must be a 400, not a task that appears only to fail). Handing the crawler the id
+	// afterwards is what makes "show me the traffic this scan produced" answerable at all.
+	c.WithTaskID(task.ID())
+
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -303,6 +362,12 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 		s.crawls.finish(task.ID(), &rep, nil)
 		task.SetNote(fmt.Sprintf("%d fetched, %d refused, %d failed", rep.Fetched, rep.Refused, rep.Failed))
 		task.Advance(uint64(rep.Fetched))
+		if kind == crawlKindAudit {
+			// Before Finish, because the audit phase's own task id is handed to the findings it
+			// produces and the crawl task stays open while it runs — the two rows then read as one
+			// scan's two halves, which is what the operator launched.
+			s.auditCrawledExchanges(ctx, &rep)
+		}
 		task.Finish(dash.Breakdown{})
 		// changeHistory covers the site map and every traffic-derived count; changeIssues covers the
 		// findings the capture path produced along the way. Both, because a crawl is the one tool that
@@ -313,6 +378,82 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 	}()
 
 	return task.ID(), seeds, nil
+}
+
+// auditCrawledExchanges runs the audit half of a crawl-and-audit scan over the exchanges the crawl
+// itself produced.
+//
+// # Where the list comes from
+//
+// The crawl's own report, not the store. Report.Fetches carries one entry per request that reached
+// the target, each with the exchange id the capture path wrote — so the audit is over exactly what
+// this crawl fetched, and a second crawl running beside it cannot contribute a single row. A scan of
+// "everything recorded since the crawl started" would audit the operator's own browsing, and the
+// task row would count it as the scan's work.
+//
+// # Why it is a second task rather than a phase of the first
+//
+// The crawl's progress is counted in requests fetched against a request budget, and the audit's work
+// is counted in exchanges audited against an exchange count. Folding them into one row would need
+// one total in two units, and a fraction computed from that number is a number that means nothing.
+// Registering the audit as its own task is the same call the live sweep makes for its own ticks
+// (see liveAuditTick), and it is what lets the audit report the engine's own outcome — including the
+// checks its budget did not admit — against a total an operator can check.
+//
+// # What it refuses to leave unsaid
+//
+// The task is registered even when there is nothing to audit, because "the crawl found no exchanges
+// to audit" and "the audit half did not run" are different facts and only one of them is a problem,
+// and a row that says the former is the only way to tell them apart on screen.
+func (s *Server) auditCrawledExchanges(ctx context.Context, rep *crawler.Report) {
+	ids := make([]core.ExchangeID, 0, len(rep.Fetches))
+	for _, f := range rep.Fetches {
+		ids = append(ids, f.ExchangeID)
+	}
+	target := fmt.Sprintf("crawl of %s (%d exchange(s))", crawlAuditHost(rep), len(ids))
+	task := s.tasks.Start(dash.KindAuditSession, target, uint64(len(ids)))
+	if len(ids) == 0 {
+		task.FinishWithNote(dash.Breakdown{}, "the crawl produced no exchanges to audit")
+		return
+	}
+	scanner := s.activeScanner()
+	cfg := scanner.AuditConfig()
+	// The queue, for the same reason the live sweep attaches it: this is a bulk audit, and a bulk
+	// audit is exactly the caller that makes "which of these did the budget bound" answerable.
+	cfg.Items = s.auditItems
+	outcome, findings := scanner.AuditSession(ctx, ids, cfg)
+	task.Advance(uint64(len(ids)))
+	task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
+	for _, f := range findings {
+		s.findings.Add(s.activeFinding(f, task.ID()))
+	}
+	s.events.RecordFor(task.ID(), dash.EventAuditBounded, auditOutcomeSeverity(outcome), fmt.Sprintf(
+		"audit of %s: %s", target, outcome.Summary()))
+	s.logger.Debug("crawl-and-audit phase",
+		zap.Int("exchanges", len(ids)),
+		zap.Int("findings", len(findings)),
+		zap.String("engine", outcome.Summary()))
+	if outcome.Paused || outcome.TimedOut {
+		s.logger.Warn("crawl-and-audit was bounded before it finished",
+			zap.Int("exchanges", len(ids)),
+			zap.Int("checks_not_admitted", outcome.NotAdmitted()),
+			zap.Bool("paused", outcome.Paused),
+			zap.Bool("timed_out", outcome.TimedOut))
+	}
+	s.live.notify(changeIssues)
+	s.live.notify(changeDashboard)
+}
+
+// crawlAuditHost names a crawl for the audit's task row: the first seed's host, or the seed itself
+// when it has no parseable host, so the row is never blank.
+func crawlAuditHost(rep *crawler.Report) string {
+	if len(rep.Seeds) == 0 {
+		return "no seeds"
+	}
+	if u, err := url.Parse(rep.Seeds[0]); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return rep.Seeds[0]
 }
 
 // availablePools names the saved pools for an error message, so a refusal says what *is* there.

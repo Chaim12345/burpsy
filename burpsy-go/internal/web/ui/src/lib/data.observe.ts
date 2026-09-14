@@ -98,8 +98,13 @@ export function usePassiveScanBranch() {
 export function useStartCrawl() {
  const invalidate = useInvalidate();
  return useMutation({
+  // `kind` is which Burp scan kind to run: "crawl", or "crawl-audit" for the crawl followed by an
+  // audit of the exchanges it fetched. Omitted means a plain crawl, which is what every caller
+  // predating the field sends. The server refuses a kind it does not recognise rather than treating
+  // it as a crawl — see its scanKind — so a typo here is a visible error and not a silent downgrade.
   mutationFn: (body: {
    seeds: string[];
+   kind?: string;
    max_requests?: number;
    max_depth?: number;
    max_duration_secs?: number;
@@ -107,7 +112,7 @@ export function useStartCrawl() {
    submit_forms?: boolean;
    query?: string;
    retention_query?: string;
-  }) => api<{ task_id: number; seeds: string[]; state: string }>("/api/crawl", json("POST", body)),
+  }) => api<{ task_id: number; seeds: string[]; state: string; kind: string }>("/api/crawl", json("POST", body)),
   onSuccess: () => invalidate([keys.crawls, keys.dashboard, keys.sitemap]),
  });
 }

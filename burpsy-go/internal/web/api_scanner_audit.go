@@ -130,6 +130,39 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s.runAudit(ctx, core.ExchangeID(id), cfg, named, unapplied))
 }
 
+// activeScanner returns this server's active scanner, building it on first use.
+//
+// Extracted from runAudit because a second caller arrived: the audit half of a crawl-and-audit scan
+// needs exactly this wiring, and the two must not drift. Left inline, the wiring would be copied, and
+// the copy that drifted would be the one with fewer checks or no scope gate — a crawl-and-audit that
+// audited a fraction of what a hand-driven audit does, with nothing on screen to say so.
+//
+// Built with the engagement scope: an active audit sends real traffic, and the engine refuses an
+// out-of-scope exchange before it plans any work. The corpus's active checks ride along when a
+// passive scanner (loaded via --bchecks) is attached — the same source main.go wires explicitly, so
+// an unwired server and a wired one cannot disagree about which checks run.
+//
+// The construction is memoised on s.scanner, which is what makes the corpus checks a property of the
+// process rather than of whichever route ran first: a server that has never served an audit and one
+// that has just served a hundred build the same scanner.
+func (s *Server) activeScanner() *scanner.ActiveScanner {
+	if s.scanner == nil {
+		active := scanner.NewActiveScanner(s.store, s.logger).
+			WithScope(s.scope).
+			WithPace(pool.ContextPacer{}).
+			// The dashboard's Pause all tasks reaches the audit loop (burpsy-react-ui-cijs).
+			WithSuiteGate(s.tasks.GateCheck)
+		if s.passiveScanner != nil {
+			active = active.WithCorpusChecks(s.passiveScanner.ActiveChecks())
+		}
+		if s.toolRunner != nil {
+			active = active.WithToolRunner(s.toolRunner)
+		}
+		s.scanner = active
+	}
+	return s.scanner
+}
+
 // auditTarget names one audited exchange for the task list, falling back to the id when the exchange
 // is not readable — an unnamed task is still better than a task that does not appear.
 func auditTarget(store *core.TrafficStore, id core.ExchangeID) string {
@@ -156,24 +189,7 @@ func auditTarget(store *core.TrafficStore, id core.ExchangeID) string {
 // scanner.ts renders this by pretty-printing the JSON it gets back, so the richer body needs no
 // change on the TypeScript side — there is no typed audit response to keep in sync.
 func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string) map[string]interface{} {
-	if s.scanner == nil {
-		// Built with the engagement scope: an active audit sends real traffic, and the engine refuses
-		// an out-of-scope exchange before it plans any work. The corpus's active checks ride along
-		// when a passive scanner (loaded via --bchecks) is attached — the same source main.go wires
-		// explicitly, so an unwired server and a wired one cannot disagree about which checks run.
-		active := scanner.NewActiveScanner(s.store, s.logger).
-			WithScope(s.scope).
-			WithPace(pool.ContextPacer{}).
-			// The dashboard's Pause all tasks reaches the audit loop (burpsy-react-ui-cijs).
-			WithSuiteGate(s.tasks.GateCheck)
-		if s.passiveScanner != nil {
-			active = active.WithCorpusChecks(s.passiveScanner.ActiveChecks())
-		}
-		if s.toolRunner != nil {
-			active = active.WithToolRunner(s.toolRunner)
-		}
-		s.scanner = active
-	}
+	s.scanner = s.activeScanner()
 	body := map[string]interface{}{
 		"started":       true,
 		"exchange_id":   id,

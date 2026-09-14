@@ -785,6 +785,24 @@ func (c *Crawler) WithSuiteGate(gate func(context.Context)) *Crawler {
 	return c
 }
 
+// WithTaskID stamps every exchange and finding this crawl captures with the registry task that owns
+// it, returning the crawler so it reads as part of a construction chain.
+//
+// A method rather than a Config field because of an ordering constraint that cannot be removed: the
+// id is handed out when the task is registered, and the config is built *before* that, so a
+// configuration mistake is a refusal the operator can fix rather than a task that appears only to
+// fail. Config.Capture.TaskID therefore cannot be set by the caller that knows the id, and the only
+// alternative would be for every crawl caller to rebuild the whole config after registering.
+//
+// Nothing here is crawler-specific — it writes Config.Capture.TaskID, which scanner.Capture already
+// documented as the one place a surface states whose run its traffic belongs to. Without it a crawl's
+// exchanges are indistinguishable from the operator's own browsing, and "audit what I just crawled"
+// has to be answered by guessing from timestamps.
+func (c *Crawler) WithTaskID(id uint64) *Crawler {
+	c.cfg.Capture.TaskID = id
+	return c
+}
+
 func (c *Crawler) Run(ctx context.Context) Report {
 	started := time.Now()
 	rep := Report{
