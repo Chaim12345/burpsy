@@ -127,7 +127,7 @@ func (s *Server) handleScannerConfigs(w http.ResponseWriter, r *http.Request) {
 		// row in the engine's table, so a key it cannot apply is reported by name with its reason.
 		"shipped_by_burp":   scanner.BurpShippedConfigCount,
 		"implemented_here":  len(scanner.BuiltInConfigs),
-		"omitted_reason":    "those configurations mostly set crawl tuning, per-issue selection and JavaScript-analysis keys, which this engine has no equivalent of; every key they set is listed with applies=false and a reason, and honouring key counts are pinned by internal/scanner's own tests",
+		"omitted_reason":    "those configurations mostly set crawl tuning, per-issue selection and JavaScript-analysis keys, which this engine has no equivalent of; every key they set is listed with applies=false and a reason, and the honoured key counts are pinned by internal/scanner's own tests",
 		"how_to_run_under":  "POST /api/audit/{exchange_id} or /api/scanner/audit with {\"config\": \"<name>\"}",
 		"applies_to_server": "the CLI flag -scan-config sets the default above for every audit this server runs",
 	})

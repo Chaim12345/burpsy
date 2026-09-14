@@ -1353,15 +1353,32 @@ func BuiltInConfigNames() []string {
 // like the whole of what Burp has.
 const BurpShippedConfigCount = 29
 
+// BurpShippedConfigsSettingAnHonouredKey is how many of those 29 set at least one scanner key this
+// engine honours — the answer to "will loading this file do anything here?", which is a different
+// question from "how many are transcribed as built-in presets" (6).
+//
+// The two numbers were conflated in the CLI listing, which said 6 of 29 configurations set a key
+// this engine honours. Six presets are *transcribed*; fifteen shipped files actually set a key that
+// takes effect, because nine more configure only `issues_reported/*` keys, which this engine has
+// honoured all along. Re-derived on 2026-09-14 by walking every `scanner/*` leaf in
+// /root/burp-re/in/extract/resources/BuiltInConfigs and intersecting it with this table's
+// applies=true rows; the key table it was derived against is pinned by
+// audit_config_keys_test.go, so promoting a key moves this constant deliberately rather than
+// silently.
+const BurpShippedConfigsSettingAnHonouredKey = 15
+
 // BuiltInConfigs is the six shipped configurations that set a key this engine implements.
 //
-// Transcribed from `resources/BuiltInConfigs/*.json` in the Burp Suite 2026.7.1 jar.
+// Transcribed from `resources/BuiltInConfigs/*.json` in the Burp Suite 2026.7.1 jar, and faithful
+// for every key this engine *honours*: the error-handling and time limits they always carried, plus
+// the eight `insertion_point_types` keys three of them select and the percentage two of them set.
+// Those were missing for as long as the engine had no field for them, which made a selected preset
+// silently ignore part of what Burp's own file says — the same defect the unapplied-key report
+// exists to prevent, one layer up.
 //
-// Two of the 29 shipped configurations *do* set `pause_task_failed_audit_item_percentage`, both to
-// 0 — "Crawl and Audit - CICD Optimized" and "Never stop audit due to application errors". No
-// preset here carries it because BuiltInConfig has no field for the key, so it could not be
-// overlaid even where it is set. That is a gap in what this engine reads, not an absence in what
-// Burp ships.
+// A key these files set that this engine does not honour is deliberately absent here and named by
+// `-scan-config list-unapplied` instead: transcribing a value into a preset that cannot act on it
+// would put a number in the listing that means nothing.
 var BuiltInConfigs = []BuiltInConfig{
 	{
 		Name:                                  "Crawl and Audit - Balanced",
@@ -1373,7 +1390,16 @@ var BuiltInConfigs = []BuiltInConfig{
 		ConsecutiveCheckFailuresToAbandonUnit: SomeUint32(2),
 		ConsecutiveUnitFailuresToFailItem:     SomeUint32(2),
 		PauseSessionAfterFailedItems:          SomeUint32(0),
+		PauseSessionAtFailedItemPercentage:    SomeUint32(0),
 		MaximumAuditTimeMinutes:               SomeUint32(15),
+		InsertURLParams:                       SomeUint32(1),
+		InsertBodyParams:                      SomeUint32(1),
+		InsertCookies:                         SomeUint32(1),
+		InsertHTTPHeaders:                     SomeUint32(0),
+		InsertParamName:                       SomeUint32(0),
+		InsertURLPathFilename:                 SomeUint32(0),
+		InsertURLPathFolders:                  SomeUint32(0),
+		InsertEntireBody:                      SomeUint32(0),
 	},
 	{
 		Name:                                  "Crawl and Audit - Deep",
@@ -1385,6 +1411,14 @@ var BuiltInConfigs = []BuiltInConfig{
 		Name:                                  "Crawl and Audit - Fast",
 		ConsecutiveCheckFailuresToAbandonUnit: SomeUint32(2),
 		ConsecutiveUnitFailuresToFailItem:     SomeUint32(2),
+		InsertURLParams:                       SomeUint32(1),
+		InsertBodyParams:                      SomeUint32(1),
+		InsertCookies:                         SomeUint32(1),
+		InsertHTTPHeaders:                     SomeUint32(0),
+		InsertParamName:                       SomeUint32(0),
+		InsertURLPathFilename:                 SomeUint32(0),
+		InsertURLPathFolders:                  SomeUint32(0),
+		InsertEntireBody:                      SomeUint32(0),
 	},
 	{
 		Name:                                  "Crawl and Audit - Lightweight",
@@ -1392,12 +1426,21 @@ var BuiltInConfigs = []BuiltInConfig{
 		ConsecutiveUnitFailuresToFailItem:     SomeUint32(2),
 		PauseSessionAfterFailedItems:          SomeUint32(0),
 		MaximumAuditTimeMinutes:               SomeUint32(15),
+		InsertURLParams:                       SomeUint32(1),
+		InsertBodyParams:                      SomeUint32(1),
+		InsertCookies:                         SomeUint32(1),
+		InsertHTTPHeaders:                     SomeUint32(0),
+		InsertParamName:                       SomeUint32(0),
+		InsertURLPathFilename:                 SomeUint32(0),
+		InsertURLPathFolders:                  SomeUint32(0),
+		InsertEntireBody:                      SomeUint32(0),
 	},
 	{
 		Name:                                  "Never stop audit due to application errors",
 		ConsecutiveCheckFailuresToAbandonUnit: SomeUint32(2),
 		ConsecutiveUnitFailuresToFailItem:     SomeUint32(2),
 		PauseSessionAfterFailedItems:          SomeUint32(0),
+		PauseSessionAtFailedItemPercentage:    SomeUint32(0),
 	},
 }
 

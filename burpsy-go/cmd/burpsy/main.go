@@ -790,12 +790,13 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 			}
 			fmt.Printf("      (%d further key(s) this engine honours are left unset by this configuration)\n", unsetHonoured)
 		}
-		fmt.Printf("\n%d of the %d configurations Burp ships set a key this engine honours. Those\n"+
-			"configurations also set crawl-tuning, per-issue-selection and DOM-analysis keys this\n"+
-			"engine has no equivalent of: every such key is attributed rather than dropped, listed\n"+
-			"by `-scan-config list-unapplied`. A Burp configuration file can be loaded directly by\n"+
-			"passing its path instead of a name.\n",
-			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount)
+		fmt.Printf("\n%d of the %d configurations Burp ships are transcribed above; %d of them set at\n"+
+			"least one key this engine honours, so loading one of those files takes effect. The others\n"+
+			"set crawl tuning, per-issue selection or DOM analysis this engine has no equivalent of:\n"+
+			"every such key is attributed rather than dropped, listed by `-scan-config list-unapplied`.\n"+
+			"A Burp configuration file can be loaded directly by passing its path instead of a name.\n",
+			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount,
+			scanner.BurpShippedConfigsSettingAnHonouredKey)
 		os.Exit(0)
 	case "list-unapplied":
 		// The other half of the accounting, in the form an operator comparing against Burp's own

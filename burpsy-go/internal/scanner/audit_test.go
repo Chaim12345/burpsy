@@ -698,6 +698,31 @@ func Test_run_insertion_kinds_come_from_the_configuration(t *testing.T) {
 	}
 }
 
+// insertionKindsByName and relocationKindsByName are this test's own copy of which point class each
+// key governs, written out here so the oracle is independent of the table's apply functions. It is
+// the one place a row pointed at the wrong class can be caught by a test that does not read the
+// table it is checking.
+var (
+	insertionKindsByName = map[string][]string{
+		"insert_url_params":        {"query"},
+		"insert_body_params":       {"body"},
+		"insert_cookies":           {"cookie"},
+		"insert_http_headers":      {"header"},
+		"insert_param_name":        {"param_name_url", "param_name_body"},
+		"insert_url_path_filename": {"url_path_filename"},
+		"insert_url_path_folders":  {"url_path_folder"},
+		"insert_entire_body":       {"entire_body"},
+	}
+	relocationKindsByName = map[string]string{
+		"relocate_body_to_url":    "relocate_body_to_query",
+		"relocate_body_to_cookie": "relocate_body_to_cookie",
+		"relocate_url_to_body":    "relocate_query_to_body",
+		"relocate_url_to_cookie":  "relocate_query_to_cookie",
+		"relocate_cookie_to_body": "relocate_cookie_to_body",
+		"relocate_cookie_to_url":  "relocate_cookie_to_query",
+	}
+)
+
 // Keys() and Apply() must agree, and the oracle is a switch written out by hand here: this test's copy
 // of "which AuditConfig field does this key land in" is independent of the table's, so a row whose
 // apply function writes the wrong field fails rather than agreeing with itself.
@@ -729,17 +754,17 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				wantSet = uint64(time.Duration(k.Value) * time.Minute)
 				wantUnset = uint64(base.TimeBudget)
 			case "scan_type_passive":
-				got, wantSet, wantUnset = optField(applied.PassiveChecks), uint64(k.Value), optField(applied.PassiveChecks)
+				got, wantSet, wantUnset = optField(applied.PassiveChecks), uint64(k.Value), optField(base.PassiveChecks)
 			case "scan_type_light_active":
-				got, wantSet, wantUnset = optField(applied.LightActiveChecks), uint64(k.Value), optField(applied.LightActiveChecks)
+				got, wantSet, wantUnset = optField(applied.LightActiveChecks), uint64(k.Value), optField(base.LightActiveChecks)
 			case "scan_type_medium_active":
-				got, wantSet, wantUnset = optField(applied.MediumActiveChecks), uint64(k.Value), optField(applied.MediumActiveChecks)
+				got, wantSet, wantUnset = optField(applied.MediumActiveChecks), uint64(k.Value), optField(base.MediumActiveChecks)
 			case "scan_type_intrusive_active":
-				got, wantSet, wantUnset = optField(applied.IntrusiveActiveChecks), uint64(k.Value), optField(applied.IntrusiveActiveChecks)
+				got, wantSet, wantUnset = optField(applied.IntrusiveActiveChecks), uint64(k.Value), optField(base.IntrusiveActiveChecks)
 			case "scan_type_javascript_analysis":
-				got, wantSet, wantUnset = optField(applied.JavaScriptAnalysis), uint64(k.Value), optField(applied.JavaScriptAnalysis)
+				got, wantSet, wantUnset = optField(applied.JavaScriptAnalysis), uint64(k.Value), optField(base.JavaScriptAnalysis)
 			case "store_issues_within_queue_items":
-				got, wantSet, wantUnset = optField(applied.StoreQueueItems), uint64(k.Value), optField(applied.StoreQueueItems)
+				got, wantSet, wantUnset = optField(applied.StoreQueueItems), uint64(k.Value), optField(base.StoreQueueItems)
 			case "scan_only_selected_issues", "select_individual_issues", "selected_issues":
 				// Field-less by design: this engine has no per-issue selection, the row reports
 				// Applies false, and Apply reports the key unapplied. Nothing on the applied config
@@ -747,17 +772,32 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				got, wantSet, wantUnset = 1, 1, 1
 			case "relocate_body_to_url", "relocate_body_to_cookie", "relocate_url_to_body",
 				"relocate_url_to_cookie", "relocate_cookie_to_body", "relocate_cookie_to_url":
-				// A relocation key adds one point class to the run's set rather than landing in a
-				// scalar field. Which class each name maps to is pinned against the enumerator's own
-				// kind constants by Test_each_relocation_key_adds_exactly_its_own_point_class; here
-				// only the set/unset contract is checked.
-				got, wantSet, wantUnset = uint64(len(applied.InsertionKinds)), 1, 0
+				// A relocation key adds or removes one point class. The class is spelled here, by
+				// hand, so a row pointed at the wrong one fails rather than agreeing with itself.
+				// (Burp spells the query string "url".)
+				present := uint64(0)
+				if containsKind(applied.InsertionKinds, relocationKindsByName[k.Name]) {
+					present = 1
+				}
+				got = present
+				wantSet = uint64(k.Value) // 1 adds the class, 0 removes it
+				wantUnset = 0             // the base holds no relocation class
 			case "insert_url_params", "insert_body_params", "insert_cookies", "insert_http_headers",
 				"insert_param_name", "insert_url_path_filename", "insert_url_path_folders", "insert_entire_body":
-				// Insertion keys land in the point-class list, not a scalar field; the dedicated overlay
-				// test verifies add/remove against the kind mapping, so here only the set/unset contract
-				// is checked: a set key must have produced a point list.
-				got, wantSet, wantUnset = uint64(len(applied.InsertionKinds)), 1, 0
+				// Insertion keys land in the point-class list, not a scalar field, and a preset that
+				// sets any of them materialises the full Burp-shaped set before applying each. So the
+				// contract checked here is per class: every class this key governs is present when the
+				// key is 1 and absent when it is 0, and an unset key leaves the class absent (the base
+				// holds no point classes at all).
+				present := uint64(0)
+				for _, kind := range insertionKindsByName[k.Name] {
+					if containsKind(applied.InsertionKinds, kind) {
+						present = 1
+					}
+				}
+				got = present
+				wantSet = uint64(k.Value)
+				wantUnset = 0
 			default:
 				// A key with no field and no apply path can only be reported, never overlaid, so the
 				// contract this test checks for it is that it did not reach a scalar. Naming all of
