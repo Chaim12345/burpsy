@@ -288,6 +288,17 @@ interface AppState {
  historyFocus: number | null;
  /** Set when another page pushes a filter expression into History. */
  historyQuery: string;
+ /** The rows ticked in HTTP history, by exchange id.
+  *
+  *  It lives here rather than in history.tsx because a second surface acts on it: the New scan
+  *  dialog's "Audit selected items" (Burp's third scan kind) audits the current selection, and the
+  *  dialog is on the dashboard while the ticks are in the table. Burp's selection is one notion
+  *  shared by the table and the wizard for the same reason — "the selected items" has to mean the
+  *  same thing wherever it is read.
+  *
+  *  Session-only, like historyFocus: a selection restored from a reload would name rows that may be
+  *  gone, and the operator would be launching a scan of items they chose in a different session. */
+ checkedExchanges: number[];
  /** Set when another page asks the Issues page to select one finding (its id). Session-only,
   * like historyFocus: a stale one would masquerade as current work after a reload. */
  issueFocus: number | null;
@@ -331,6 +342,7 @@ interface AppState {
  setComparerSlot: (slot: "a" | "b", value: string) => void;
  focusExchange: (id: number | null) => void;
  setHistoryQuery: (value: string) => void;
+ setCheckedExchanges: (ids: number[]) => void;
  focusIssue: (id: number | null) => void;
 }
 
@@ -398,6 +410,7 @@ export const useApp = create<AppState>()(
    comparerSlots: { a: "", b: "" },
    historyFocus: null,
    historyQuery: "",
+   checkedExchanges: [],
    issueFocus: null,
 
    setRoute: (route) => set({ route, paletteOpen: false }),
@@ -555,6 +568,7 @@ export const useApp = create<AppState>()(
    setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
    focusExchange: (historyFocus) => set({ historyFocus }),
    setHistoryQuery: (historyQuery) => set({ historyQuery }),
+   setCheckedExchanges: (checkedExchanges) => set({ checkedExchanges }),
    focusIssue: (issueFocus) => set({ issueFocus }),
   }),
   { name: "burpsy.workspace", partialize: persistedWorkspace },

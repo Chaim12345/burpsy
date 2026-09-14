@@ -145,6 +145,17 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack, subPath: "0",
 		summary: "run an active audit over one captured exchange, by id (0 is valid — see HONEST-05)",
 	},
+	"/api/audit/selected": {
+		// riskAttack, and the strongest case for it in the manifest: the pattern takes a list, so the
+		// work is chosen by the caller's selection rather than by anything this server bounds. A model
+		// that ticks every row in a 12,000-exchange capture and posts them is a scan of 12,000 items.
+		//
+		// Registered as a literal under the "/api/audit/" subtree; the more specific pattern wins, so
+		// this is reachable and the subtree keeps its own subPath test.
+		methods: []string{"POST"}, risk: riskAttack,
+		summary: "run one active audit over a selection of captured exchanges (Burp's \"Audit selected " +
+			"items\"); answers 202 with the task id, because a selection has no bound on its size",
+	},
 	"/api/backup": {
 		// riskDestructive, not riskLocal, and the reasoning is worth stating because "take a backup"
 		// sounds like the safest call in the manifest.
@@ -1082,7 +1093,7 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	sort.Strings(execute)
 
 	wantAttack := []string{
-		"/api/audit/", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
+		"/api/audit/", "/api/audit/selected", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
 		// "Audit again" belongs here for the same reason /api/audit/ does: it re-runs the whole check set
 		// against a live target through runAudit. That it is spelled as an action on an existing queue
 		// row does not make it cheaper than a first audit — AuditWithin gives it a fresh admission

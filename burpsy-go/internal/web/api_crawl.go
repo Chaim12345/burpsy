@@ -19,7 +19,6 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/scanner"
-	"go.uber.org/zap"
 )
 
 // ---- Crawl ---------------------------------------------------------------------------------------
@@ -412,36 +411,13 @@ func (s *Server) auditCrawledExchanges(ctx context.Context, rep *crawler.Report)
 	}
 	target := fmt.Sprintf("crawl of %s (%d exchange(s))", crawlAuditHost(rep), len(ids))
 	task := s.tasks.Start(dash.KindAuditSession, target, uint64(len(ids)))
-	if len(ids) == 0 {
-		task.FinishWithNote(dash.Breakdown{}, "the crawl produced no exchanges to audit")
-		return
-	}
-	scanner := s.activeScanner()
-	cfg := scanner.AuditConfig()
-	// The queue, for the same reason the live sweep attaches it: this is a bulk audit, and a bulk
-	// audit is exactly the caller that makes "which of these did the budget bound" answerable.
-	cfg.Items = s.auditItems
-	outcome, findings := scanner.AuditSession(ctx, ids, cfg)
-	task.Advance(uint64(len(ids)))
-	task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
-	for _, f := range findings {
-		s.findings.Add(s.activeFinding(f, task.ID()))
-	}
-	s.events.RecordFor(task.ID(), dash.EventAuditBounded, auditOutcomeSeverity(outcome), fmt.Sprintf(
-		"audit of %s: %s", target, outcome.Summary()))
-	s.logger.Debug("crawl-and-audit phase",
-		zap.Int("exchanges", len(ids)),
-		zap.Int("findings", len(findings)),
-		zap.String("engine", outcome.Summary()))
-	if outcome.Paused || outcome.TimedOut {
-		s.logger.Warn("crawl-and-audit was bounded before it finished",
-			zap.Int("exchanges", len(ids)),
-			zap.Int("checks_not_admitted", outcome.NotAdmitted()),
-			zap.Bool("paused", outcome.Paused),
-			zap.Bool("timed_out", outcome.TimedOut))
-	}
-	s.live.notify(changeIssues)
-	s.live.notify(changeDashboard)
+	// The config comes off the active scanner rather than from a preset name, because a crawl-and-audit
+	// is not launched with a configuration — the crawl's card names bounds, not a check set. The engine
+	// half is shared with the selection-driven launch (api_scanner_audit.go): two places that both
+	// "audit these exchanges" is how a launched scan comes to audit less than a crawl's own phase
+	// without anything on screen saying so.
+	cfg := s.activeScanner().AuditConfig()
+	s.runBulkAudit(ctx, task, target, ids, cfg, "the crawl produced no exchanges to audit")
 }
 
 // crawlAuditHost names a crawl for the audit's task row: the first seed's host, or the seed itself

@@ -854,6 +854,11 @@ func (s *Server) setupRoutes() {
 	// unrelated routes despite the shared prefix.
 	s.mux.HandleFunc("/api/scanner/audit-items", s.handleScannerAuditItems)
 	s.mux.HandleFunc("/api/scanner/audit-items/", s.handleScannerAuditItemAction)
+	// Registered as a literal pattern as well as living under the /api/audit/ subtree: net/http's mux
+	// prefers the more specific pattern, so this wins over the subtree and does not have to be special
+	// cased inside handleAuditByPath — where a bare ParseUint failure on "selected" would answer 400
+	// "Invalid exchange id" for a request that names no id at all.
+	s.mux.HandleFunc("/api/audit/selected", s.handleAuditSelected)
 	s.mux.HandleFunc("/api/audit/", s.handleAuditByPath)
 	s.mux.HandleFunc("/api/sequencer/analyse", s.handleSequencerAnalyse)
 	// Two patterns, because they are two operations: the exact path starts a capture, the subtree

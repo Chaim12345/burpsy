@@ -7,7 +7,7 @@ import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, 
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
 import { useIssuesDetailed, useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import type { FindingDetail } from "../lib/types.attack";
-import { useStartCrawl } from "../lib/data.observe";
+import { useAuditSelected, useStartCrawl } from "../lib/data.observe";
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
@@ -474,16 +474,25 @@ function ActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
 // name *what is missing* rather than disappearing, because a missing capability silently hidden is
 // the defect this UI exists to avoid — and "not built yet" is a reason no operator can act on.
 //
-// `wire` is what the server's scan kind is called for the two that run; it is empty for the two that
-// do not, so a card cannot be marked ready without a kind to send. See the Go side's scanKind, which
-// refuses an unknown kind rather than running a plain crawl — the two lists therefore have to agree,
-// and a mismatch fails loudly instead of producing a launch that does something else.
+// Two fields describe a card, because the four kinds reach the server through two different doors and
+// neither field can cover both:
+//
+//   * `launch` is which door the card posts to at all — "crawl" for the two that seed a crawl through
+//     /api/crawl, "audit" for the selection-driven one, which takes exchange ids rather than seeds and
+//     posts them to /api/audit/selected, and "none" for the one that cannot run.
+//   * `wire` is the scan kind /api/crawl is told to run, for the two that go through it.
+//
+// A card cannot be marked ready without a launch, so a missing capability is never a click that does
+// nothing. See the Go side's scanKind, which refuses an unknown kind rather than running a plain crawl
+// — the two lists therefore have to agree, and a mismatch fails loudly at the launch instead of
+// producing a scan that does something else.
 const SCAN_TYPES = [
  {
   id: "crawl-audit",
   title: "Crawl and audit",
   detail: "Maps the attack surface and audits what it finds.",
   ready: true,
+  launch: "crawl",
   wire: "crawl-audit",
   missing: "",
  },
@@ -492,6 +501,7 @@ const SCAN_TYPES = [
   title: "Crawl",
   detail: "Maps the attack surface of the web application.",
   ready: true,
+  launch: "crawl",
   wire: "crawl",
   missing: "",
  },
@@ -499,15 +509,17 @@ const SCAN_TYPES = [
   id: "audit-selected",
   title: "Audit selected items",
   detail: "Identifies vulnerabilities in the selected items",
-  ready: false,
+  ready: true,
+  launch: "audit",
   wire: "",
-  missing: "no selection-driven launch — auditing is one exchange at a time from the Scanner queue",
+  missing: "",
  },
  {
   id: "api",
   title: "API-only scan",
   detail: "Offers additional configuration options",
   ready: false,
+  launch: "none",
   wire: "",
   missing: "no API-definition import — an OpenAPI/Swagger document cannot be loaded, so there are no endpoints to scan",
  },
@@ -522,6 +534,12 @@ function selectedScanType(id: string) {
 
 function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const startCrawl = useStartCrawl();
+ const auditSelected = useAuditSelected();
+ // The selection the audit kind works on. It is the same store value the history table's tick column
+ // writes, which is what makes "the selected items" one notion rather than two: Burp's wizard reads
+ // the selection from whichever table made it, and so does this dialog.
+ const checked = useApp((state) => state.checkedExchanges);
+ const setRoute = useApp((state) => state.setRoute);
  // Burp's dialog opens on "Crawl and audit" — its primary workflow and the one it defaults to.
  const [kind, setKind] = useState<string>("crawl-audit");
  const [seed, setSeed] = useState("");
@@ -535,7 +553,28 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
 
  const chosen = selectedScanType(kind);
  const close = () => onOpenChange(false);
+ const auditing = chosen.launch === "audit";
+ const canSubmit = auditing ? checked.length > 0 && !auditSelected.isPending : chosen.ready && seed.trim() !== "" && !startCrawl.isPending;
  const submit = () => {
+  // The selection kind takes ids, not seeds, so it goes to /api/audit/selected and there is no crawl
+  // to message about. The count in the toast is the reply's own — the server drops repeated ids and
+  // says so — rather than the tick count, which is what the operator sees rather than what ran.
+  if (auditing) {
+   auditSelected.mutate(
+    { exchange_ids: [...checked] },
+    {
+     onSuccess: (reply) =>
+      toast.success(
+       reply.duplicates_dropped > 0
+        ? `Audit started over ${reply.count} selected item${reply.count === 1 ? "" : "s"} (${reply.duplicates_dropped} repeated id${reply.duplicates_dropped === 1 ? "" : "s"} dropped)`
+        : `Audit started over ${reply.count} selected item${reply.count === 1 ? "" : "s"}`,
+      ),
+     onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Starting the audit failed"),
+    },
+   );
+   close();
+   return;
+  }
   // The kind travels with the seeds, so the server runs what the card said it would. The success
   // message names the scan that started rather than always "Crawl": a crawl-and-audit's audit phase
   // produces findings minutes after the crawl task finishes, and a toast that called it a crawl
@@ -576,7 +615,40 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       </button>
      ))}
     </div>
-    {chosen.ready ? (
+    {auditing ? (
+     <>
+      <p className="cell-dim" style={{ margin: 0 }}>
+       Scans the items ticked in HTTP history, as one task. Burp takes its selection from the table you are looking at, and so
+       does this — the ticks are the selection, and the scan is over exactly those rows.
+      </p>
+      <div className="metric-grid wide">
+       <Metric
+        label="Selected items"
+        value={checked.length}
+        tone={checked.length === 0 ? "warn" : undefined}
+        detail={
+         checked.length === 0
+          ? "Nothing is ticked. Tick the rows you mean in HTTP history, then reopen this dialog — a launch with no selection is refused, because an audit of nothing is not a scan."
+          : `Exactly these ${checked.length} exchange${checked.length === 1 ? "" : "s"} will be audited, and nothing else in the capture.`
+        }
+       />
+      </div>
+      {checked.length === 0 ? (
+       <Button
+        variant="outline"
+        size="small"
+        onClick={() => {
+         // Leaves the dialog open: the operator is being sent somewhere to make a selection, and
+         // closing behind them would lose the scan type they picked.
+         setRoute("history");
+         close();
+        }}
+       >
+        Go to HTTP history
+       </Button>
+      ) : null}
+     </>
+    ) : chosen.ready ? (
      <>
       <Field
        label="URLs to scan"
@@ -614,8 +686,8 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
      <Button variant="outline" size="small" onClick={close}>
       Cancel
      </Button>
-     <Button size="small" disabled={!chosen.ready || !seed.trim() || startCrawl.isPending} onClick={submit}>
-      Start
+     <Button size="small" disabled={!canSubmit} onClick={submit}>
+      {auditing ? "Audit selected items" : "Start"}
      </Button>
     </div>
    </div>

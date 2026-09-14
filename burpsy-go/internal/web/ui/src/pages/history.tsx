@@ -5,6 +5,7 @@ import { useExchangeActions, useSendShortcuts, exchangeUrl } from "../lib/action
 import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useMessage, useStats } from "../lib/data";
+import { useAuditSelected } from "../lib/data.observe";
 import { useScopeView } from "../lib/data.policy";
 import { compileHistorySearch } from "../lib/history-search";
 import { QUERY_PANEL } from "../lib/reference";
@@ -494,7 +495,14 @@ export function HistoryPage(): JSX.Element {
  // clear does: rows is null for "the selected rows", or "all" for Clear. undefined means the
  // modal is closed; the value decides what the confirm button says and sends.
  const [confirmDelete, setConfirmDelete] = useState<undefined | { scope: "selected" | "all" }>(undefined);
- const [checkedRows, setCheckedRows] = useState<Set<number>>(new Set());
+ // The ticked rows live in the store, not here, because a second surface acts on them: the New scan
+ // dialog's "Audit selected items" audits the current selection from the dashboard. Keeping a local
+ // copy would give the two surfaces two answers to "what is selected" — the drift the store exists
+ // to prevent. The Set is a view of the store's array, memoised so the tick column's memo holds.
+ const checkedExchanges = useApp((state) => state.checkedExchanges);
+ const setCheckedExchanges = useApp((state) => state.setCheckedExchanges);
+ const checkedRows = useMemo(() => new Set(checkedExchanges), [checkedExchanges]);
+ const auditSelected = useAuditSelected();
 
  // Another page asked to filter here (for example "filter by this host").
  useEffect(() => {
@@ -780,7 +788,7 @@ export function HistoryPage(): JSX.Element {
   removeRows.mutate(ids, {
    onSuccess: ({ removed, requested }) => {
     setConfirmDelete(undefined);
-    setCheckedRows(new Set());
+    setCheckedExchanges([]);
     if (selectedId !== null && ids !== null && ids.includes(selectedId)) setSelectedId(null);
     // Honest count, not a bare success: requested > removed means the operator named rows
     // already gone (another view deleted them, or the limit hid them). Say what actually
@@ -789,6 +797,29 @@ export function HistoryPage(): JSX.Element {
    },
    onError: (cause) => toast.error(`Could not delete: ${cause.message}`),
   });
+ };
+
+ /** Burp's "Audit selected items" (Zhw0): one scan over exactly the ticked rows.
+  *
+  *  The toast reports the reply's own count rather than the number of ticks, because the two can
+  *  differ — the server drops repeated ids — and a message quoting the selection would claim work the
+  *  scan did not take on. The selection is deliberately left in place: Burp keeps it too, and an
+  *  operator auditing a set and then sending the same set to Intruder should not have to tick it
+  *  twice. */
+ const launchSelectedAudit = () => {
+  auditSelected.mutate(
+   { exchange_ids: [...checkedRows] },
+   {
+    onSuccess: (reply) =>
+     toast.success(
+      reply.duplicates_dropped > 0
+       ? `Audit started over ${reply.count} item${reply.count === 1 ? "" : "s"} (${reply.duplicates_dropped} repeated id${reply.duplicates_dropped === 1 ? "" : "s"} dropped)`
+       : `Audit started over ${reply.count} item${reply.count === 1 ? "" : "s"}`,
+     ),
+    onError: (cause: unknown) =>
+     toast.error(`Could not start the audit: ${cause instanceof Error ? cause.message : "the server refused it"}`),
+   },
+  );
  };
 
  const columns = useMemo<Column<Exchange>[]>(
@@ -808,14 +839,12 @@ export function HistoryPage(): JSX.Element {
       <Checkbox
        label={<span className="sr-only">{`Select row ${id}`}</span>}
        checked={checkedRows.has(id)}
-       onCheckedChange={(on) =>
-        setCheckedRows((current) => {
-         const next = new Set(current);
-         if (on) next.add(id);
-         else next.delete(id);
-         return next;
-        })
-       }
+       onCheckedChange={(on) => {
+        const next = new Set(checkedRows);
+        if (on) next.add(id);
+        else next.delete(id);
+        setCheckedExchanges([...next]);
+       }}
       />
      );
     },
@@ -1007,8 +1036,9 @@ export function HistoryPage(): JSX.Element {
    },
   ],
   // checkedRows is read inside the tick cell, so the memo tracks it (the Checkbox is fully
-  // controlled; without this a re-tick would not re-render the header count on the button).
-  [checkedRows],
+  // controlled; without this a re-tick would not re-render the header count on the button). The
+  // setter is stable, but it is named here too because the cell is the only writer.
+  [checkedRows, setCheckedExchanges],
  );
 
  const detail = selected ? (
@@ -1135,6 +1165,23 @@ export function HistoryPage(): JSX.Element {
        <Button variant="outline" size="small" onClick={exportCSV} disabled={!data || data.length === 0}>
         <Download size={14} />
         Export CSV
+       </Button>
+       {/* Burp's third scan kind, launched from the selection the way Burp launches it: right-click
+           or toolbar, on the items you ticked, as one task. It sits next to Delete items because that
+           is the other action on the tick column, and both are disabled with the same reason. */}
+       <Button
+        variant="outline"
+        size="small"
+        onClick={launchSelectedAudit}
+        disabled={checkedRows.size === 0 || auditSelected.isPending}
+        title={
+         checkedRows.size === 0
+          ? "Tick rows to audit"
+          : `Audit ${checkedRows.size} ticked item${checkedRows.size === 1 ? "" : "s"} as one scan`
+        }
+       >
+        <Crosshair size={14} />
+        Audit selected items
        </Button>
        <Button
         variant="danger"

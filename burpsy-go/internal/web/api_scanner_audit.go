@@ -236,6 +236,194 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 	return body
 }
 
+// ---- Auditing a selection, rather than one exchange or everything ---------------------------------
+//
+// Burp's New-scan dialog's third option is "Audit selected items" — "Identifies vulnerabilities in the
+// selected items" (Zhw0) — and burpsy had no way to run it: POST /api/audit/{id} and its legacy alias
+// audit one exchange per call, and the live sweep decides for itself which traffic to look at. The
+// nearest thing to a bulk audit was the crawl-and-audit phase, which has a list of ids for the same
+// reason this door does: something else decided which exchanges they are.
+//
+// That is the whole shape of this file's addition. The engine work is scanner.AuditSession; what was
+// missing was a launch surface that takes a selection, and a place for both surfaces to share the
+// half-dozen side effects of running one (the task row, the queue, the findings, the event, the two
+// change notifications).
+
+// auditSelectedReq is the POST body of the selection-driven launch.
+type auditSelectedReq struct {
+	// ExchangeIDs is the selection. Required and non-empty: an audit of nothing is not a scan, and
+	// accepting one would put a task row on the dashboard whose meaning is "the operator's click did
+	// nothing". Refused rather than started-and-immediately-finished, because the two look the same in
+	// the task list and only one of them is a mistake worth naming.
+	//
+	// Duplicates are dropped rather than refused — see uniqueExchangeIDs — because a selection is a set
+	// and a caller that assembled one from two tables has not made an error about the work.
+	ExchangeIDs []core.ExchangeID `json:"exchange_ids"`
+	// Config and Pool are the same two knobs /api/audit/{id} takes, resolved by the same code, so the
+	// three doors cannot disagree about what a named configuration or a named pool means.
+	Config string `json:"config,omitempty"`
+	Pool   string `json:"pool,omitempty"`
+}
+
+// handleAuditSelected serves POST /api/audit/selected: one active scan over a list of captured
+// exchanges, launched from an operator's selection in the console.
+//
+// # Why this answers 202 where its two siblings answer with the outcome
+//
+// /api/audit/{id} audits one exchange and answers when it is finished, and that is honest for one
+// item: the caller waits a bounded time for a bounded answer. A selection has no such bound — the
+// operator ticks what they ticked — so a synchronous reply would be an HTTP request held open for the
+// length of a scan, which times out in a browser, in a proxy, and in front of whichever reverse proxy
+// an engagement hides behind. The task row is the answer instead, which is exactly how /api/crawl
+// reports a launched scan, and the dashboard already renders that row.
+//
+// # What it refuses to leave unsaid
+//
+// The reply echoes the count actually handed to the engine and the number of duplicates dropped, so a
+// caller whose list was twice as long as the work cannot conclude the scan was twice as big. It also
+// carries the configuration name and any settings the preset could not apply, for the reason SCAN-03
+// exists: an endpoint that accepts a configuration name and runs something else must be detectable
+// from its own reply.
+func (s *Server) handleAuditSelected(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req auditSelectedReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	// Resolved before anything is registered, so a bad configuration or a pool that is not saved is a
+	// status code the caller can act on rather than a task row that failed already.
+	cfg, named, unapplied, cerr := s.resolveAuditConfig(req.Config)
+	if cerr != nil {
+		http.Error(w, cerr.Error(), http.StatusBadRequest)
+		return
+	}
+	limiter, perr := s.poolLimiter(req.Pool)
+	if perr != nil {
+		http.Error(w, perr.Error(), http.StatusNotFound)
+		return
+	}
+	ids, dropped := uniqueExchangeIDs(req.ExchangeIDs)
+	if len(ids) == 0 {
+		http.Error(w, "at least one exchange id is required — tick the items to audit, or POST "+
+			"/api/audit/{id} to audit a single exchange", http.StatusBadRequest)
+		return
+	}
+	target := selectionTarget(s.store, ids)
+	task := s.tasks.Start(dash.KindAuditSession, target, uint64(len(ids)))
+
+	// Detached from the request context, and with the task's own cancel attached: a scan outlives the
+	// HTTP call that started it, and the dashboard's Cancel on this row has to reach the run or the row
+	// is advertising a control that does nothing. Handle.WithCancel is nil-safe, so a server with no
+	// task registry still gets a cancellable context here.
+	go func() {
+		ctx, cancel := task.WithCancel(context.Background())
+		defer cancel()
+		s.runBulkAudit(pool.WithLimiter(ctx, limiter), task, target, ids, cfg, "no items were selected")
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"task_id":            task.ID(),
+		"kind":               string(dash.KindAuditSession),
+		"count":              len(ids),
+		"exchange_ids":       ids,
+		"duplicates_dropped": dropped,
+		"target":             target,
+		"config_name":        named,
+		"unapplied":          unapplied,
+		"pool":               req.Pool,
+	})
+}
+
+// runBulkAudit runs one active scan over a fixed list of exchanges and reports it against the task it
+// was given. Shared by the two launch surfaces that audit many exchanges at once — the audit half of a
+// crawl-and-audit, and a selection — so the two cannot disagree about what a bulk audit does: the same
+// item queue attached, the same findings landed on the same task, the same bounded-run caveats logged.
+//
+// It does not register the task, because both callers need the id before the run starts: one is inside
+// a goroutine belonging to a crawl that must finish its own report first, and the other has to answer
+// an HTTP request with the id while the scan continues.
+func (s *Server) runBulkAudit(ctx context.Context, task *dash.Handle, target string, ids []core.ExchangeID, cfg scanner.AuditConfig, emptyNote string) *scanner.SessionOutcome {
+	// The task is finished even when there is nothing to audit, because "there was nothing to audit"
+	// and "the audit did not run" are different facts and only one of them is a problem. The callers
+	// that can be empty say which of the two the row means in their own words.
+	if len(ids) == 0 {
+		task.FinishWithNote(dash.Breakdown{}, emptyNote)
+		return nil
+	}
+	// The queue, for the same reason the live sweep attaches it: a bulk audit is exactly the caller that
+	// makes "which of these did the budget bound" answerable.
+	cfg.Items = s.auditItems
+	active := s.activeScanner()
+	outcome, findings := active.AuditSession(ctx, ids, cfg)
+	task.Advance(uint64(len(ids)))
+	// A cancelled run is reported as stopped, not done. Those two rows mean different things to the
+	// operator reading them — "the scan looked at all of it" and "someone stopped it after four of two
+	// hundred" — and only one of them is a result. SessionOutcome carries no cancelled flag of its own,
+	// because the per-item states already say how far it got; the context is the only thing that knows
+	// the difference between finishing and being stopped.
+	if ctx.Err() != nil {
+		task.Stop(outcome.Breakdown(), "stopped: "+outcome.Summary())
+	} else {
+		task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
+	}
+	for _, f := range findings {
+		s.findings.Add(s.activeFinding(f, task.ID()))
+	}
+	s.events.RecordFor(task.ID(), dash.EventAuditBounded, auditOutcomeSeverity(outcome), fmt.Sprintf(
+		"audit of %s: %s", target, outcome.Summary()))
+	s.logger.Debug("bulk audit",
+		zap.Int("exchanges", len(ids)),
+		zap.Int("findings", len(findings)),
+		zap.String("engine", outcome.Summary()))
+	if outcome.Paused || outcome.TimedOut {
+		s.logger.Warn("a bulk audit was bounded before it finished",
+			zap.Int("exchanges", len(ids)),
+			zap.Int("checks_not_admitted", outcome.NotAdmitted()),
+			zap.Bool("paused", outcome.Paused),
+			zap.Bool("timed_out", outcome.TimedOut))
+	}
+	s.live.notify(changeIssues)
+	s.live.notify(changeDashboard)
+	return outcome
+}
+
+// uniqueExchangeIDs drops repeats while preserving the caller's order, and returns how many it
+// dropped. The count is returned rather than merely logged because it is the difference between the
+// selection the caller sent and the work that ran, and a reply that reported only the latter could not
+// be told apart from one that silently ignored half of a malformed list.
+//
+// Deliberately not api_toolkit.go's dedupeExchangeIDs, which is a different function with a similar
+// name: that one assumes its input is already sorted and collapses runs of equal ids in place, which
+// is what its callers have (site-map node id lists) and is not what a selection is. A selection's
+// order is the operator's — the table's order at the time they ticked — so collapsing in place would
+// reorder the work and report nothing about what it dropped.
+func uniqueExchangeIDs(in []core.ExchangeID) ([]core.ExchangeID, int) {
+	seen := make(map[core.ExchangeID]struct{}, len(in))
+	out := make([]core.ExchangeID, 0, len(in))
+	for _, id := range in {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out, len(in) - len(out)
+}
+
+// selectionTarget names a selection for the task row: the first item the operator picked, then how
+// many follow it. Naming only the first would read as a scan of that one exchange with no sign that
+// more were involved; naming only a count would leave the row with nothing an operator can recognise.
+func selectionTarget(store *core.TrafficStore, ids []core.ExchangeID) string {
+	if len(ids) == 1 {
+		return "1 selected item: " + auditTarget(store, ids[0])
+	}
+	return fmt.Sprintf("%d selected items: %s and %d more", len(ids), auditTarget(store, ids[0]), len(ids)-1)
+}
+
 // activeFinding converts one active-scanner finding into a store finding, carrying the two links
 // that make it usable: the exchange it was found at, and the run that produced it.
 //

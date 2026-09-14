@@ -93,6 +93,29 @@ export function usePassiveScanBranch() {
  });
 }
 
+/** Audit a selection of captured exchanges as one run — Burp's "Audit selected items".
+ *
+ *  Resolves when the server has accepted it and registered the task, not when the scan finishes, for
+ *  the same reason useStartCrawl does: a selection has no bound on its size, so the work is followed
+ *  through the task row rather than through a held-open request. The reply's `count` is the number of
+ *  items actually taken on and `duplicates_dropped` says how many were repeated, so the toast can
+ *  state the work rather than the length of the list that was sent. */
+export function useAuditSelected() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (body: { exchange_ids: number[]; config?: string; pool?: string }) =>
+   api<{ task_id: number; kind: string; count: number; duplicates_dropped: number; target: string }>(
+    "/api/audit/selected",
+    json("POST", body),
+   ),
+  // The audit's own row is the progress; findings and the dashboard's counters move when it lands.
+  // The same three key prefixes the passive-branch audit invalidates, and by their literals for the
+  // same reason it uses literals: `keys` has no "scanner" entry, and inventing one here would make
+  // this the only hook invalidating a key the rest of the app spells differently.
+  onSuccess: () => invalidate([["issues"], ["dashboard"], ["scanner"]]),
+ });
+}
+
 /** Start a crawl. Resolves as soon as the server has accepted it and registered the task — not when
  * the crawl finishes — so the caller gets a task id to follow rather than a blocked promise. */
 export function useStartCrawl() {
