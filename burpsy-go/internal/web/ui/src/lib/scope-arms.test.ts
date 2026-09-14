@@ -8,6 +8,7 @@ import {
   pathArmProblem,
   RANGE_ARM_TAG,
   REGEX_ARM_TAG,
+  type HostArmMode,
 } from "./scope-arms";
 
 // The arms ride inside the pattern and path strings, which are also the rule's identity on remove,
