@@ -145,8 +145,8 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | POST | `/api/tools/compare` | read | Diff two messages or two pasted buffers. |
 | GET, POST | `/api/tools/organizer` | local-write | The organizer's saved items. |
 | POST, DELETE | `/api/tools/organizer/{id}` | local-write | One organizer item: POST updates title/note/highlight, DELETE removes it. |
-| GET, PUT | `/api/tools/rules` | local-write | Match & Replace rule set (PUT replaces the whole ordered set). |
-| POST | `/api/tools/rules/test` | read | Test a Match & Replace rule against a sample. |
+| GET, PUT | `/api/tools/rules` | local-write | Match & Replace rule set (PUT replaces the whole ordered set). Carries the two set-wide switches, `update_content_length` and Burp's `in_scope_only` ("Only apply to in-scope items"); GET also reports `scope_skipped`, how many messages the restriction turned away. A rule carrying a per-rule `scope` or `query` is refused with a 400 — Burp's rule model has neither, and dropping the condition on save would silently widen what the rule touches. |
+| POST | `/api/tools/rules/test` | read | Test a Match & Replace rule against a sample. Refuses the same unrepresentable rule fields the live path refuses. |
 | GET, DELETE | `/api/tools/log` | **destructive** | GET: every request this process sent, per tool, with what it dropped at the bound. DELETE: **clears it**, discarding the record of what was sent to the target. |
 
 ## WebSocket capture

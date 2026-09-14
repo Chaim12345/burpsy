@@ -1108,9 +1108,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		// (burpsy-react-ui-c05): stage 0 after the tunnel's origin-form normalisation, stage 1 after
 		// the automatic rules and before the hold. See messageStages.
 		reqStages := messageStages{original: requestData}
-		if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
-			requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
-		}
+		requestData = s.applyMatchReplace(matchreplace.DirRequest, requestData, reqHost, reqPort, path, reqTLS)
 		reqStages.auto = requestData
 		// Intercept: hold the decrypted request before it is forwarded upstream.
 		if s.config.intercept != nil {
@@ -1328,9 +1326,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// and before the hold. See messageStages.
 	respStages := messageStages{original: responseData}
 	// Apply Match & Replace on response
-	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
-		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
-	}
+	responseData = s.applyMatchReplace(matchreplace.DirResponse, responseData, host, port, path, tls)
 	// Then the blanket response modification rules. This order, not the other one:
 	// a Match & Replace rule is a pattern the operator wrote against the origin's
 	// own bytes, and running "remove all JavaScript" first would delete the text
@@ -1584,19 +1580,20 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// and gating the capture on "M&R ran" would lose the stages of an exchange the operator edited
 	// by hand. See messageStages.
 	reqStages := messageStages{original: requestData}
-	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirRequest) {
-		requestData = s.config.matchReplace.Apply(matchreplace.DirRequest, requestData)
-	}
+	// scheme is the destination's scheme, and it is a variable rather than the literal `false` this
+	// path knows it starts as, because a retarget can change it (burpsy-react-ui-akv). Everything
+	// downstream that asks "is this TLS" — the Match & Replace scope gate below, the scope check, the
+	// egress authorisation, the record — has to answer about the destination the bytes will actually
+	// reach, not the one the client originally named. Declared above the gate so the gate reads the
+	// destination in hand rather than one declared after it; the retarget the hold below may apply is
+	// the one case this gate cannot see, and applyMatchReplace's comment says so.
+	scheme := false
+	requestData = s.applyMatchReplace(matchreplace.DirRequest, requestData, host, port, path, scheme)
 	reqStages.auto = requestData
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
 	// connection without reaching upstream. heldNote/heldHighlight carry the
 	// operator's annotation from the hold to the recorded exchange (5q8u).
-	// scheme is the destination's scheme, and it is a variable rather than a literal `false` from here
-	// on because a retarget can change it (burpsy-react-ui-akv). Everything downstream that asks "is
-	// this TLS" — the scope check, the egress authorisation, the record — has to answer about the
-	// destination the bytes will actually reach, not the one the client originally named.
-	scheme := false
 	var heldNote, heldHighlight string
 	// requestEdited is the operator's own edit to this request, threaded to whichever record this
 	// exchange ends in — the plain response below or a WebSocket handshake. See
@@ -1687,8 +1684,10 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// before this check.
 	if !inScope && s.config.options.Get(OptDontLogOutOfScope) {
 		s.config.options.NoteOutOfScopeDrop()
-		// Forward without storing
-		s.forwardOnly(clientConn, reader, requestData, host, port)
+		// Forward without storing. path travels because the response-direction Match & Replace
+		// rules run on this path too and they need the target for their scope verdict — see
+		// forwardOnly.
+		s.forwardOnly(clientConn, reader, requestData, host, port, path)
 		return
 	}
 
@@ -1751,9 +1750,7 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	respStages := messageStages{original: responseData}
 	// Apply Match & Replace on response, then the blanket response modification
 	// rules — same order, and for the same reason, as handleTLSResponse.
-	if s.config.matchReplace != nil && s.config.matchReplace.Affects(matchreplace.DirResponse) {
-		responseData = s.config.matchReplace.Apply(matchreplace.DirResponse, responseData)
-	}
+	responseData = s.applyMatchReplace(matchreplace.DirResponse, responseData, host, port, path, tls)
 	responseData = s.applyResponseRules(responseData)
 	respStages.auto = responseData
 
@@ -1887,6 +1884,65 @@ func (s *Server) applyResponseRulesUnrecorded(responseData []byte) []byte {
 		s.config.options.NoteUnrecordedModification()
 	}
 	return out
+}
+
+// applyMatchReplace runs the Match & Replace rules over one message, honouring the set's
+// "Only apply to in-scope items" restriction.
+//
+// # Why this replaced six inlined `if Affects(...) { Apply(...) }` blocks
+//
+// The restriction is a property of the rule set and a verdict about the target, so every
+// call site has to ask both questions, in the right order, and only pay for the scope
+// lookup when the restriction is on. Six copies of that is six places for the seventh call
+// site — added later, by someone who has not read any of them — to get it wrong, and there
+// were already two shapes in the wild: the HTTP sites asked Affects first and then applied,
+// while the WebSocket call re-derived the direction by hand and asked its own question.
+//
+// # Why the gate is here and not in the engine
+//
+// internal/matchreplace sits below core in this tree's dependency direction and imports
+// neither the scope matcher nor the store. The engine carries the *flag* because an operator
+// edits it through the same endpoint that edits the rules and one object cannot be
+// half-persisted; the proxy carries the *decision* because it already knows the target and
+// already holds the scope. When the restriction turns a message away the engine is told, so
+// the panel can distinguish "no rule matched" from "no rule was allowed to look".
+//
+// host/port/path/tls identify the exchange, and they are the destination the client named.
+// On the plaintext and TLS request paths that is the destination in hand at this point,
+// because the rules run above intercept: an operator's retarget applied in the hold is a
+// destination this gate never saw. Documented rather than papered over — the alternative is
+// running the rules after the hold, which would put bytes in history the operator never
+// approved (see the ordering note at the call site in completeResponse).
+func (s *Server) applyMatchReplace(dir matchreplace.Direction, raw []byte, host string, port uint16, path string, tls bool) []byte {
+	rs := s.config.matchReplace
+	if rs == nil || !rs.Affects(dir) {
+		return raw
+	}
+	if rs.InScopeOnly() && !s.config.scope.Contains(host, port, path, tls) {
+		rs.NoteScopeSkipped()
+		return raw
+	}
+	return rs.Apply(dir, raw)
+}
+
+// matchReplaceApplies reports whether a rule will actually rewrite a message on this target,
+// which is the question the WebSocket frame path needs and a different one from Affects.
+//
+// With the in-scope restriction on and this connection's target out of scope, the rules
+// exist and will not run — and parsing every frame of the connection into whole messages in
+// order to run nothing is work the operator's own setting asked not to be done. Burp's
+// WebSocket table honours the same toggle, and its relay makes the same trade: an
+// out-of-scope connection is relayed as opaque chunks and never reassembled.
+//
+// The count in NoteScopeSkipped therefore does not include messages on a connection that
+// never entered the frame path: those were never offered to the gate, and counting them
+// would mean inventing a message count for a relay that deliberately does not parse one.
+func (s *Server) matchReplaceApplies(dir matchreplace.Direction, host string, port uint16, path string, tls bool) bool {
+	rs := s.config.matchReplace
+	if rs == nil || !rs.Affects(dir) {
+		return false
+	}
+	return !rs.InScopeOnly() || s.config.scope.Contains(host, port, path, tls)
 }
 
 // applyRequestRules runs the request-direction options over one outgoing request.
@@ -2262,7 +2318,29 @@ func wsRetargetRefusalResponse() []byte {
 		"Connection: close\r\n\r\n" + body)
 }
 
-func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16) {
+// forwardOnly forwards one out-of-scope exchange without retaining it.
+//
+// # The rules still run here, and that is the whole point of the function
+//
+// Scope decides what is *retained*, never what is *rewritten*. Both the request-direction options and
+// the request-direction Match & Replace rules have already run by the time this is called — the
+// caller's comment says so — and this function is where the response direction catches up: the
+// response options and now the response Match & Replace rules as well.
+//
+// # Why Match & Replace was the last one missing
+//
+// handleTLSResponse has always applied the Match & Replace response rules before its own scope
+// check, so an out-of-scope HTTPS response was rewritten while an out-of-scope plaintext one was
+// written through untouched: same rule set, same scope verdict, opposite behaviour decided by which
+// port the destination happened to listen on. That is the same asymmetry the response *options* had
+// here before they were fixed (see the comment on the copy below), and it matters for the same
+// reason: a rule that silently lapses for part of the traffic is worse than one that is off, because
+// the panel says it is on. It also broke the invariant the request side is built on — that an
+// out-of-scope forward sends exactly the bytes the recorded path would — for the response half only.
+//
+// Found by this file's own test for the in-scope restriction (burpsy-react-ui-rfgs), which asserted
+// both directions were rewritten with the restriction off and got one.
+func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16, path string) {
 	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
 	if err != nil {
 		return
@@ -2294,7 +2372,12 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 		if err != nil {
 			return
 		}
-		clientConn.Write(s.applyResponseRulesUnrecorded(append(head, body...)))
+		// A response that is not the 101 is an ordinary response — the upgrade was refused — so it
+		// takes the same two steps as the plaintext copy below, in the same order and for the same
+		// reason. The 101 itself is deliberately left alone: rewriting a handshake would break it,
+		// and that is true on this path exactly as it is on the recorded one.
+		resp := s.applyMatchReplace(matchreplace.DirResponse, append(head, body...), host, port, path, false)
+		clientConn.Write(s.applyResponseRulesUnrecorded(resp))
 		return
 	}
 
@@ -2318,6 +2401,11 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 	// Unrecorded, hence the counter: nothing here is stored, so the rewrite is real but
 	// invisible in history, and Counters.ModifiedUnrecorded is what makes it accountable.
 	if resp, err := readHTTPResponse(upstreamConn); err == nil {
+		// Match & Replace first, then the blanket response modification rules — the same order, and
+		// for the same reason, as handleTLSResponse and completeResponse: a Match & Replace rule is
+		// written against the origin's own bytes, and running "remove all JavaScript" first would
+		// delete the text the rule was written to find.
+		resp = s.applyMatchReplace(matchreplace.DirResponse, resp, host, port, path, false)
 		clientConn.Write(s.applyResponseRulesUnrecorded(resp))
 	}
 }

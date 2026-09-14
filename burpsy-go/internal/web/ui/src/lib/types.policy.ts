@@ -50,9 +50,16 @@ export interface MatchReplaceTestResponse {
 }
 
 /**
- * One rule as the wire carries it. `scope` and `query` are accepted by the Go decoder
- * but dropped by matchReplacePut, so a rule that arrives with either keeps it only
- * until the next save — surfaced read-only rather than silently round-tripped.
+ * One rule as the wire carries it: exactly Burp's own rule model, which is rule_type, enabled,
+ * category, string_match, string_replace and comment and nothing else.
+ *
+ * # What is deliberately not here
+ *
+ * The Rust-era shape carried `scope` and `query` per rule. Burp's model has neither — its rule
+ * table has seven columns and no scope (CoreComponent5002), and its serializer writes those six
+ * fields (Zejh.ZY) — so the server refuses a rule carrying either rather than saving it without
+ * the condition, and never serves one back. Declaring them here would advertise a payload the
+ * server rejects.
  */
 export interface MatchReplaceRuleSpec {
  rule_type: MatchReplaceTarget;
@@ -61,8 +68,6 @@ export interface MatchReplaceRuleSpec {
  string_replace: string;
  category: MatchReplaceCategory;
  comment: string;
- scope?: unknown;
- query?: string;
 }
 
 /* --- session -------------------------------------------------------------- */

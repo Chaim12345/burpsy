@@ -677,11 +677,25 @@ export interface TrafficRule {
 export interface MatchReplaceConfig {
  rules: TrafficRule[];
  update_content_length: boolean;
+ /**
+  * Burp's "Only apply to in-scope items": when on, a message whose target the scope
+  * excludes is not rewritten. Named after the checkbox rather than the config key it is
+  * persisted under (`proxy.match_replace_disable_out_of_scope`), which reads as its
+  * opposite.
+  */
+ in_scope_only: boolean;
 }
 
 export interface MatchReplaceResponse {
  affects_requests: boolean;
  affects_responses: boolean;
+ /**
+  * Messages the rules declined to rewrite because they were out of scope — the live count,
+  * since the last restart. Zero with the restriction off and zero with it on and nothing
+  * excluded, which is why the page only reports it alongside the switch's state rather
+  * than on its own.
+  */
+ scope_skipped: number;
  config: MatchReplaceConfig;
 }
 

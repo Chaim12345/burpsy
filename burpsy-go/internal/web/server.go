@@ -544,7 +544,10 @@ func (s *Server) persistScope() {
 
 func (s *Server) persistMatchReplace() {
 	if s.persist != nil {
-		s.persist.SaveMatchRules(s.matchReplace.Rules(), s.matchReplace.UpdateContentLength())
+		s.persist.SaveMatchRules(s.matchReplace.Rules(), persist.MatchRuleSettings{
+			UpdateContentLength: s.matchReplace.UpdateContentLength(),
+			InScopeOnly:         s.matchReplace.InScopeOnly(),
+		})
 	}
 }
 

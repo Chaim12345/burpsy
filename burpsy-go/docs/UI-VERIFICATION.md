@@ -102,6 +102,15 @@ default run exactly two things appear:
   there is no CA to hand out and the console asks before offering one. **That 404 is correct
   behaviour**; a console driver that flagged it would be crying wolf on every load.
 
+  It is **one probe per page load, from the app shell** (`src/app.tsx:171`), not one per route — the
+  earlier version of this section attributed it to `#dashboard` and `#settings` and called those "the
+  two that mount the CA probe". That is wrong, and it became visible while verifying Match & Replace:
+  the error appears on `#matchreplace` too, because the shell mounts the probe for every route. In a
+  multi-route sweep the fetch happens once and is cached, so the single console line lands against
+  whichever route the sweep opened first — which is how it came to look route-specific. `#dashboard`
+  and `#settings` do also read the result, which is why a *rendered* "no CA" message appears on those
+  two only.
+
 Anything else at error level is a finding. Chromium's "Failed to load resource" line names no URL, so
 attribute it by listing what the page requested rather than guessing from the text:
 

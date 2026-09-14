@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // Target names match Burp's rule_type config values.
@@ -99,11 +100,20 @@ func (d Direction) IsWebSocket() bool {
 	return d == DirWebSocketToServer || d == DirWebSocketToClient
 }
 
-// RuleSet is an ordered set of compiled rules.
+// RuleSet is an ordered set of compiled rules, plus the two set-wide switches that sit
+// beside them: whether a body rewrite fixes Content-Length, and Burp's "Only apply to
+// in-scope items".
 type RuleSet struct {
 	mu                  sync.RWMutex
 	rules               []*Rule
 	updateContentLength bool
+	inScopeOnly         bool
+
+	// scopeSkipped is the count of messages that reached the rules for a direction and were
+	// left alone because inScopeOnly is on and their target is not in scope. An atomic
+	// because it is written from the proxy's per-message path and read only when someone
+	// opens the panel.
+	scopeSkipped atomic.Uint64
 }
 
 func NewRuleSet() *RuleSet { return &RuleSet{} }
@@ -128,6 +138,65 @@ func (rs *RuleSet) UpdateContentLength() bool {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 	return rs.updateContentLength
+}
+
+// SetInScopeOnly turns Burp's "Only apply to in-scope items" restriction on or off.
+//
+// # Why the name is the checkbox and not the config key
+//
+// Burp persists this as `proxy.match_replace_disable_out_of_scope`, which reads as the
+// opposite of the control an operator actually ticks: the checkbox is the *disablement of
+// out-of-scope application*, so ticked means "in scope only". Carrying the key's name into
+// this field would put a boolean in the code whose true means no, and the next person to
+// read `if inScopeOnly` would have to go and check. The field is named after the checkbox
+// and the config key is written down here, once, so the divergence is findable.
+func (rs *RuleSet) SetInScopeOnly(on bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.inScopeOnly = on
+}
+
+// InScopeOnly reports whether the set is restricted to in-scope items.
+func (rs *RuleSet) InScopeOnly() bool {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+	return rs.inScopeOnly
+}
+
+// NoteScopeSkipped records that one message reached the rules for a direction and was left
+// alone because the set is restricted to in-scope items and its target is not in scope.
+//
+// # Why this counter exists
+//
+// The same reason proxy.Options distinguishes SkippedCompressed from Unchanged: "the rule
+// ran and found nothing" and "the rule was never allowed to look" are different facts, and
+// an operator watching a rule do nothing has to be able to tell which one they are in. With
+// the restriction off, the second state is impossible; with it on it becomes routine, and a
+// rule that has stopped matching because scope was narrowed at lunchtime looks exactly like
+// a rule that has stopped matching because the site changed.
+//
+// # Why the proxy calls this and not Apply
+//
+// The verdict is a scope decision, and this package does not own the scope. Internal/matchreplace
+// sits below core in this tree's dependency direction and imports neither the scope matcher
+// nor the store; an in-scope question in here would drag both into a package whose job is
+// turning bytes into other bytes. So the engine carries the flag — it must, because an
+// operator edits it through the same endpoint that edits the rules and one object cannot be
+// half-persisted — and the caller, which already knows the target and already holds the
+// scope, carries the decision and reports it here.
+func (rs *RuleSet) NoteScopeSkipped() {
+	if rs == nil {
+		return
+	}
+	rs.scopeSkipped.Add(1)
+}
+
+// ScopeSkipped returns how many messages the in-scope restriction has turned away.
+func (rs *RuleSet) ScopeSkipped() uint64 {
+	if rs == nil {
+		return 0
+	}
+	return rs.scopeSkipped.Load()
 }
 
 // AddRule appends a rule.
@@ -169,6 +238,11 @@ func (rs *RuleSet) Affects(dir Direction) bool {
 // returning the rewritten bytes. If no rule fires, raw is returned
 // unchanged (no copy). When UpdateContentLength is enabled, the
 // Content-Length header is recomputed after a body rewrite.
+//
+// This is the byte-level primitive, not the whole call-site contract. It does not consult
+// InScopeOnly, because the in-scope verdict belongs to whoever holds the scope — see
+// NoteScopeSkipped. The proxy's only door onto this set is its own applyMatchReplace, which
+// asks Affects, then the scope question, then calls this.
 func (rs *RuleSet) Apply(dir Direction, raw []byte) []byte {
 	rs.mu.RLock()
 	rules := rs.rules

@@ -1301,8 +1301,23 @@ func (s *Store) LoadInterceptLive() bool {
 
 // ---- Match & Replace ---------------------------------------------------------------------------
 
-// SaveMatchRules replaces the match & replace rule set and content-length flag.
-func (s *Store) SaveMatchRules(rules []*matchreplace.Rule, updateContentLength bool) {
+// MatchRuleSettings is the set-wide state that travels with the Match & Replace rule list.
+//
+// A struct rather than one more return value, and the reason is the shape of the mistake a
+// growing return tuple invites: LoadMatchRules used to answer three values, and the caller
+// destructured all three positionally. A fourth — which is what the in-scope restriction
+// added — is a fourth chance to write the flags in the wrong order, and both are bools, so
+// the compiler would accept a swap and the panel would then report the wrong switch.
+type MatchRuleSettings struct {
+	// UpdateContentLength is whether a body rewrite fixes the Content-Length header.
+	UpdateContentLength bool
+	// InScopeOnly is Burp's "Only apply to in-scope items" (config key
+	// `proxy.match_replace_disable_out_of_scope`). See matchreplace.RuleSet.SetInScopeOnly.
+	InScopeOnly bool
+}
+
+// SaveMatchRules replaces the match & replace rule set and its set-wide switches.
+func (s *Store) SaveMatchRules(rules []*matchreplace.Rule, settings MatchRuleSettings) {
 	if _, err := s.db.Exec(`DELETE FROM matchreplace_rules`); err != nil {
 		s.log("matchreplace clear", err)
 		return
@@ -1318,16 +1333,24 @@ func (s *Store) SaveMatchRules(rules []*matchreplace.Rule, updateContentLength b
 			return
 		}
 	}
-	if err := s.setSetting("matchreplace.update_content_length", fmt.Sprint(updateContentLength)); err != nil {
+	if err := s.setSetting("matchreplace.update_content_length", fmt.Sprint(settings.UpdateContentLength)); err != nil {
 		s.log("matchreplace flag", err)
+	}
+	if err := s.setSetting("matchreplace.in_scope_only", fmt.Sprint(settings.InScopeOnly)); err != nil {
+		s.log("matchreplace scope flag", err)
 	}
 }
 
-// LoadMatchRules restores the rule set (recompiling regexes) and the flag.
-func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, bool, error) {
+// LoadMatchRules restores the rule set (recompiling regexes) and its set-wide switches.
+//
+// An absent switch row reads as off, which is the engine's own default and Burp's: a project
+// saved before the in-scope restriction existed must not come back with rules silently
+// narrowed to whatever scope happens to be loaded at the time. Absent-means-off is the only
+// answer that cannot turn a restoration into a behaviour change.
+func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, MatchRuleSettings, error) {
 	rows, err := s.db.Query(`SELECT target, category, match, replace, comment, enabled FROM matchreplace_rules ORDER BY ord`)
 	if err != nil {
-		return nil, false, err
+		return nil, MatchRuleSettings{}, err
 	}
 	defer rows.Close()
 	var rules []*matchreplace.Rule
@@ -1336,20 +1359,28 @@ func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, bool, error) {
 		var match, replace, comment string
 		var enabled int
 		if err := rows.Scan(&target, &cat, &match, &replace, &comment, &enabled); err != nil {
-			return nil, false, err
+			return nil, MatchRuleSettings{}, err
 		}
 		r, err := matchreplace.NewRule(matchreplace.Target(target), matchreplace.Category(cat), match, replace, comment)
 		if err != nil {
-			return nil, false, err
+			return nil, MatchRuleSettings{}, err
 		}
 		r.Enabled = enabled != 0
 		rules = append(rules, r)
 	}
-	flag := false
-	if v, err := s.getSetting("matchreplace.update_content_length"); err == nil && v != "" {
-		flag = v == "true"
-	}
-	return rules, flag, nil
+	return rules, MatchRuleSettings{
+		UpdateContentLength: s.loadFlag("matchreplace.update_content_length"),
+		InScopeOnly:         s.loadFlag("matchreplace.in_scope_only"),
+	}, nil
+}
+
+// loadFlag reads one boolean settings row, treating an absent or unreadable row as off.
+//
+// The one place that decides what a missing flag means, so a flag added later cannot answer
+// the question differently by accident: true is exactly the string "true".
+func (s *Store) loadFlag(key string) bool {
+	v, err := s.getSetting(key)
+	return err == nil && v == "true"
 }
 
 // ---- Network authentication: platform credentials and client certificates ----------------------
@@ -2043,12 +2074,13 @@ func (s *Store) Restore(
 	}
 
 	if mr != nil {
-		mrRules, flag, err := s.LoadMatchRules()
+		mrRules, settings, err := s.LoadMatchRules()
 		if err != nil {
 			return fmt.Errorf("load matchreplace: %w", err)
 		}
 		mr.SetRules(mrRules)
-		mr.SetUpdateContentLength(flag)
+		mr.SetUpdateContentLength(settings.UpdateContentLength)
+		mr.SetInScopeOnly(settings.InScopeOnly)
 	}
 
 	if sess != nil {

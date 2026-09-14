@@ -64,21 +64,35 @@ Rust crate's `tls.rs` has been extracted to `internal/alpn` here (see that packa
   (with a recorded marker) but never the connection. `stripWsHandshake` removes
   `Sec-WebSocket-Extensions` before forwarding only when configured, and only if the handshake parses —
   an unparseable one is forwarded untouched and nothing is claimed; a real strip records a verbatim note
-  naming the removed offer. Interception is not wired for WebSocket.
+  naming the removed offer. WebSocket interception and WebSocket match & replace both work on the frame
+  path (`wsOfferMessage`), which is why frames are reassembled for either reason — and never for neither.
 - **HTTP/2 is relayed and recorded, not intercepted.** `relayH2Stream` renders the request into HTTP/1
   shape (`burpsyhttp2.RenderRequest`) only when in scope, and captures both halves together through the
   shared producer. The stored bytes are a re-rendering, not the wire octets (HPACK makes byte-exact
   replay impossible).
-- **Match-and-replace runs on both directions, and the request side runs before the store.** The response
-  path applies `matchReplace.Apply(matchreplace.DirResponse, …)` in `handleTLSResponse` and `completeResponse`;
-  the request path applies `matchreplace.DirRequest` in `handleHTTP` (right after `toOriginForm`) and in the
-  `interceptTLS` loop — in both, before intercept and before the scope-gated capture, so the bytes forwarded
-  upstream are the bytes recorded (`request_first_line`, `request_header`, `request_body` could never fire
-  before this). The `*matchreplace.RuleSet` is nil until `WithMatchReplace` attaches one; `cmd/burpsy` attaches
-  the *same* object the web layer mutates so the Match & Replace page and the proxy cannot disagree. A body
-  rule's Content-Length fix rides on `Apply`'s `updateContentLength` path, not on proxy code. The h2 relay
-  applies neither direction (it does not intercept), which is why request M&R is wired only into the two
-  HTTP/1 paths that already applied the response direction.
+- **Match-and-replace runs on both directions, and the request side runs before the store.** Every call site
+  goes through `Server.applyMatchReplace` — two on the request side (`handleHTTP` right after `toOriginForm`,
+  and the `interceptTLS` loop), two on the response side (`handleTLSResponse`, `completeResponse`), one on the
+  WebSocket frame path (`wsOfferMessage`) and one on the out-of-scope forward (`forwardOnly`). Request M&R
+  runs before intercept and before the scope-gated capture, so the bytes forwarded upstream are the bytes
+  recorded. The `*matchreplace.RuleSet` is nil until `WithMatchReplace` attaches one; `cmd/burpsy` attaches the
+  *same* object the web layer mutates so the Match & Replace page and the proxy cannot disagree. A body rule's
+  Content-Length fix rides on `Apply`'s `updateContentLength` path, not on proxy code. The h2 relay applies
+  neither direction (it does not intercept), which is why request M&R is wired only into the two HTTP/1 paths
+  that already applied the response direction.
+- **There is one Match & Replace door, and the in-scope restriction lives behind it.**
+  `applyMatchReplace(dir, raw, host, port, path, tls)` asks `Affects`, then — only if the set's restriction is
+  on — the scope, then `Apply`. Six inlined copies of that used to exist. A seventh call site must use the
+  helper: calling `matchReplace.Apply` directly skips the restriction entirely, which rewrites traffic the
+  operator excluded, silently. `matchReplaceApplies` is the companion question the WebSocket frame path asks
+  ("will a rule actually rewrite here?"), and it can differ from `Affects` — an out-of-scope connection with the
+  restriction on is relayed as opaque chunks rather than reassembled to feed rules that would refuse it.
+- **Scope decides what is *retained*, never what is *rewritten*, on the out-of-scope path too.** `forwardOnly`
+  runs the response-direction rules over the origin's bytes before writing them through; the response *options*
+  were the first half of that fix and Match & Replace the second, and both were missing for the same reason
+  (the TLS path applied them and the plaintext path returned early). Both directions now behave the same on the
+  forward-only path as on the recorded one, which is what "the bytes the client receives are the bytes that
+  would have been recorded" means.
 
 ## Testing Requirements
 

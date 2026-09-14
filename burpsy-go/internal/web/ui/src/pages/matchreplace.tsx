@@ -71,6 +71,8 @@ function asCategory(value: string): MatchReplaceCategory {
 interface Draft {
   rules: MatchReplaceRuleSpec[];
   update_content_length: boolean;
+  /** Burp's "Only apply to in-scope items". Set-wide, not per rule — see types.ts. */
+  in_scope_only: boolean;
 }
 
 const SAMPLE_PLACEHOLDER = "Paste a raw request or response to run the draft rules against.";
@@ -104,6 +106,7 @@ export function MatchReplacePage(): JSX.Element {
         comment: rule.comment ?? "",
       })),
       update_content_length: data.config.update_content_length,
+      in_scope_only: data.config.in_scope_only,
     };
     const next = JSON.stringify(normalised);
     if (next === baseline) return;
@@ -149,7 +152,11 @@ export function MatchReplacePage(): JSX.Element {
 
   const onSave = () => {
     if (!draft) return;
-    const payload = { rules: draft.rules, update_content_length: draft.update_content_length };
+    const payload = {
+      rules: draft.rules,
+      update_content_length: draft.update_content_length,
+      in_scope_only: draft.in_scope_only,
+    };
     save.mutate(payload, {
       onSuccess: () => {
         setBaseline(JSON.stringify(draft));
@@ -267,7 +274,28 @@ export function MatchReplacePage(): JSX.Element {
               onCheckedChange={(checked) => setDraft({ ...draft, update_content_length: checked })}
             />
           </Field>
+          <Field
+            label="Only apply to in-scope items"
+            hint="A message whose URL the Target scope excludes is passed through untouched. Burp has this one switch and no per-rule scope."
+            htmlFor="mr-scope"
+          >
+            <Switch
+              id="mr-scope"
+              label="Only apply these rules to in-scope items"
+              checked={draft.in_scope_only}
+              onCheckedChange={(checked) => setDraft({ ...draft, in_scope_only: checked })}
+            />
+          </Field>
           <Badge>{rules.filter((rule) => rule.enabled).length} of {rules.length} enabled</Badge>
+          {/*
+            The evidence that the switch is doing something. "A rule that stopped matching" and
+            "a rule that scope no longer lets look" are the same thing to watch and different
+            things to fix, so when any message has been turned away the page says so with a
+            number rather than leaving the operator to guess whether their rules still run.
+          */}
+          {data && data.scope_skipped > 0 ? (
+            <Badge tone="warn">{data.scope_skipped} message(s) left alone by scope</Badge>
+          ) : null}
         </Toolbar>
 
         {rules.length === 0 ? (
@@ -390,14 +418,6 @@ export function MatchReplacePage(): JSX.Element {
           </SimpleTable>
         )}
 
-        {rules.some((rule) => rule.scope !== undefined || rule.query !== undefined) ? (
-          <div className="notice notice-warn">
-            <span>
-              A rule carries a scope or query condition. This build's rule endpoint does not persist either, so
-              saving from here drops it.
-            </span>
-          </div>
-        ) : null}
       </Card>
 
       <Card>

@@ -627,7 +627,24 @@ func nodeKey(host string, port uint16, tls bool, path string) string {
 
 // ---- Match & Replace ---------------------------------------------------------------------------
 
-// matchReplaceRuleSpec mirrors matchreplace.ts's RuleSpec.
+// matchReplaceRuleSpec mirrors the UI's RuleSpec.
+//
+// # Why Scope and Query are declared only to be refused
+//
+// Both come from the Rust-era wire shape, which carried a per-rule scope and a query
+// condition. Burp's match/replace rule model has neither: its persisted rule is exactly
+// rule_type, enabled, category, string_match, string_replace and comment (see
+// Zho_/CoreComponent5145 in the decompiled build, and Ekijh's serializer, which write those
+// six and nothing else), its rule table has seven columns and none of them is a scope (see
+// CoreComponent5002), and its documentation's only scope control is the panel-wide "Only
+// apply to in-scope items" checkbox. So there is no per-rule scope to persist, and the old
+// behaviour — accept the field, drop it on save, warn in the UI — was the worst of the three
+// options: a rule that survives one save and not the next is a rule whose behaviour changed
+// without anyone editing it.
+//
+// Declared here rather than ignored so the refusal can name the field. `*any` and `*string`
+// are nil for an absent key and for an explicit null, and non-nil for anything a caller
+// actually meant to set, which is the distinction the refusal needs.
 type matchReplaceRuleSpec struct {
 	RuleType      string  `json:"rule_type"`
 	Enabled       bool    `json:"enabled"`
@@ -639,16 +656,28 @@ type matchReplaceRuleSpec struct {
 	Query         *string `json:"query,omitempty"`
 }
 
-// matchReplaceSetSpec mirrors matchreplace.ts's RuleSetSpec.
+// matchReplaceSetSpec mirrors the UI's RuleSetSpec.
+//
+// InScopeOnly is Burp's "Only apply to in-scope items"; its config key is
+// `proxy.match_replace_disable_out_of_scope` and this field is named after the checkbox,
+// for the reason matchreplace.RuleSet.SetInScopeOnly gives.
 type matchReplaceSetSpec struct {
 	Rules               []matchReplaceRuleSpec `json:"rules"`
 	UpdateContentLength bool                   `json:"update_content_length"`
+	InScopeOnly         bool                   `json:"in_scope_only"`
 }
 
-// matchReplaceGetResp mirrors matchreplace.ts's RulesGetResp.
+// matchReplaceGetResp mirrors the UI's RulesGetResp.
+//
+// ScopeSkipped is the live count of messages the rules declined to rewrite because they were
+// out of scope. It is on this response rather than on the proxy's options snapshot because
+// it is a property of the rule set and it is the only evidence an operator has that a rule
+// which stopped matching did so because scope was narrowed rather than because the site
+// changed — the same distinction proxy.Options draws with its Skipped* counters.
 type matchReplaceGetResp struct {
 	AffectsRequests  bool                `json:"affects_requests"`
 	AffectsResponses bool                `json:"affects_responses"`
+	ScopeSkipped     uint64              `json:"scope_skipped"`
 	Config           matchReplaceSetSpec `json:"config"`
 }
 
@@ -740,14 +769,16 @@ func (s *Server) matchReplaceGet(w http.ResponseWriter, r *http.Request) {
 			Comment:       rule.Comment,
 		})
 	}
-	config := matchReplaceSetSpec{Rules: specs}
-	if s.matchReplace.UpdateContentLength() {
-		config.UpdateContentLength = true
+	config := matchReplaceSetSpec{
+		Rules:               specs,
+		UpdateContentLength: s.matchReplace.UpdateContentLength(),
+		InScopeOnly:         s.matchReplace.InScopeOnly(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(matchReplaceGetResp{
 		AffectsRequests:  s.matchReplace.Affects(matchreplace.DirRequest),
 		AffectsResponses: s.matchReplace.Affects(matchreplace.DirResponse),
+		ScopeSkipped:     s.matchReplace.ScopeSkipped(),
 		Config:           config,
 	})
 }
@@ -768,6 +799,10 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("Rule %d: %s", i, err.Error()), http.StatusBadRequest)
 			return
 		}
+		if err := refuseUnrepresentableRuleFields(i, spec); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		cat := matchreplace.CategoryLiteral
 		if spec.Category == "regex" {
 			cat = matchreplace.CategoryRegex
@@ -782,6 +817,7 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 	}
 	s.matchReplace.SetRules(rules)
 	s.matchReplace.SetUpdateContentLength(set.UpdateContentLength)
+	s.matchReplace.SetInScopeOnly(set.InScopeOnly)
 	s.persistMatchReplace()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"compiled": len(rules)})
@@ -832,12 +868,42 @@ func matchReplaceCategoryName(c matchreplace.Category) string {
 	return "literal"
 }
 
+// refuseUnrepresentableRuleFields rejects a rule carrying a field this build's model — which is
+// Burp's model — has no place for.
+//
+// # Why a refusal and not a silent drop
+//
+// The previous behaviour accepted `scope` and `query`, saved the rule without either, and
+// warned about it in the UI. That is the failure this project refuses everywhere else: the
+// operator's rule is stored, the next GET reads it back without the condition, and the rule
+// then applies to traffic the operator believed was excluded. A dropped condition is worse
+// than a rejected rule, because a rejected rule is a 400 they can act on and a dropped one is
+// a silent widening of what the rules touch.
+//
+// The message names the alternative rather than only the rejection: an operator who wanted
+// "only these items" has one control available, and it is the panel-wide toggle.
+func refuseUnrepresentableRuleFields(index int, spec matchReplaceRuleSpec) error {
+	if spec.Scope != nil {
+		return fmt.Errorf("Rule %d: per-rule scope is not part of Burp's match/replace model, and this build has no way to honour it; to limit the rules to in-scope traffic use the 'Only apply to in-scope items' setting", index)
+	}
+	if spec.Query != nil {
+		return fmt.Errorf("Rule %d: a per-rule query condition is not part of Burp's match/replace model, and this build has no way to honour it", index)
+	}
+	return nil
+}
+
 func (s *Server) handleMatchReplaceRules(w http.ResponseWriter, r *http.Request) {
 	s.matchReplaceRulesHandler(w, r)
 }
 
 // handleMatchReplaceTest compiles draft rules and applies them to an input, mirroring the UI's
 // "original vs auto-modified" test.
+//
+// It deliberately does not consult the set's "Only apply to in-scope items" restriction, and it takes
+// no target to consult it against: the box holds raw bytes someone pasted, which name no URL this
+// server can resolve. Burp's own rule test behaves the same way — it answers "what do these rules do
+// to this input", and scope is a question about an exchange. Reporting a rule as skipped here would
+// be inventing a verdict from a URL nobody supplied.
 func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -860,6 +926,10 @@ func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) 
 		target, err := targetToCategory(spec.RuleType)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Draft rule %d: %s", i, err.Error()), http.StatusBadRequest)
+			return
+		}
+		if err := refuseUnrepresentableRuleFields(i, spec); err != nil {
+			http.Error(w, "Draft "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		cat := matchreplace.CategoryLiteral

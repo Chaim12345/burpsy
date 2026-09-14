@@ -372,7 +372,7 @@ func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst 
 			// A buffered fragment counts too: mid-message, the accumulator holds bytes that have not
 			// been relayed, so switching to the chunk path would emit the rest of the message ahead
 			// of its own beginning.
-			if !degraded && (s.wsNeedsFrames(fromClient) || len(pending) > 0 || frag.active) {
+			if !degraded && (s.wsNeedsFrames(fromClient, peer) || len(pending) > 0 || frag.active) {
 				fault, gone := s.wsIntercept(dir, &pending, chunk, dst, rs, exchangeID, fromClient, peer, stats, &frag)
 				if gone {
 					return ""
@@ -448,17 +448,19 @@ func (s *Server) wsInterceptDirection(fromClient bool) (intercept.Direction, boo
 	return dir, s.config.intercept.Rules(dir).Active
 }
 
-// wsMatchReplaceDirection is the match/replace direction for this side of the relay, and whether any
-// enabled rule targets it.
-func (s *Server) wsMatchReplaceDirection(fromClient bool) (matchreplace.Direction, bool) {
+// wsMatchReplaceDirection is the match/replace direction for this side of the relay, and whether a
+// message on this connection will actually be rewritten.
+//
+// The second answer is matchReplaceApplies, not Affects, and the difference is the in-scope
+// restriction: with it on and this connection's target out of scope, the rules exist and will not
+// run. Asking Affects here would put every frame of an out-of-scope connection through reassembly
+// to feed rules that are then refused.
+func (s *Server) wsMatchReplaceDirection(fromClient bool, peer wsPeer) (matchreplace.Direction, bool) {
 	dir := matchreplace.DirWebSocketToClient
 	if fromClient {
 		dir = matchreplace.DirWebSocketToServer
 	}
-	if s.config.matchReplace == nil {
-		return dir, false
-	}
-	return dir, s.config.matchReplace.Affects(dir)
+	return dir, s.matchReplaceApplies(dir, peer.host, peer.port, peer.path, peer.tls)
 }
 
 // wsNeedsFrames reports whether this direction must be parsed into frames rather than relayed as
@@ -469,11 +471,11 @@ func (s *Server) wsMatchReplaceDirection(fromClient bool) (matchreplace.Directio
 // real bug for a moment during this work — WebSocket match/replace rules would have installed,
 // reported success, and rewritten nothing whenever interception happened to be off, which is the
 // decorative-control failure this project keeps finding.
-func (s *Server) wsNeedsFrames(fromClient bool) bool {
+func (s *Server) wsNeedsFrames(fromClient bool, peer wsPeer) bool {
 	if _, holding := s.wsInterceptDirection(fromClient); holding {
 		return true
 	}
-	_, rewriting := s.wsMatchReplaceDirection(fromClient)
+	_, rewriting := s.wsMatchReplaceDirection(fromClient, peer)
 	return rewriting
 }
 
@@ -701,16 +703,13 @@ func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, p
 	// operator's standing rewrite rules are part of what the peer is deemed to have sent, so the
 	// message offered for interception is the rewritten one. The other order would show the operator
 	// a message, then silently alter it after they approved it.
-	rewritten := payload
-	if s.config.matchReplace != nil {
-		mrDir := matchreplace.DirWebSocketToClient
-		if fromClient {
-			mrDir = matchreplace.DirWebSocketToServer
-		}
-		if s.config.matchReplace.Affects(mrDir) {
-			rewritten = s.config.matchReplace.Apply(mrDir, payload)
-		}
+	mrDir := matchreplace.DirWebSocketToClient
+	if fromClient {
+		mrDir = matchreplace.DirWebSocketToServer
 	}
+	// A WebSocket's host, port, scheme and path are fixed for the connection's whole life — see
+	// wsPeer — so the scope verdict for a message is the connection's verdict.
+	rewritten := s.applyMatchReplace(mrDir, payload, peer.host, peer.port, peer.path, peer.tls)
 	// A rewrite means the original frames are no longer what should go out, so the untouched-relay
 	// shortcut below must not fire on them.
 	rewrote := !bytes.Equal(rewritten, payload)

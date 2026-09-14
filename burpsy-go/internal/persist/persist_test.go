@@ -141,6 +141,33 @@ func TestRestore_RoundTripsFindingsAndOrganizer(t *testing.T) {
 	}
 }
 
+// persistSettings is what the two production callers pass: the rule set's own view of its
+// set-wide switches, rather than a hand-written literal a test could get wrong in a way that
+// matches a bug in the callers.
+func persistSettings(mr *matchreplace.RuleSet) MatchRuleSettings {
+	return MatchRuleSettings{
+		UpdateContentLength: mr.UpdateContentLength(),
+		InScopeOnly:         mr.InScopeOnly(),
+	}
+}
+
+// TestMatchRulesAbsentSwitchReadsAsOff states the migration rule: a project written before the
+// in-scope restriction existed has no row for it, and restoring one must not narrow its rules to
+// whatever scope happens to be loaded. Absent means off, which is the engine's default and Burp's.
+func TestMatchRulesAbsentSwitchReadsAsOff(t *testing.T) {
+	p := newTestStore(t)
+	rules, settings, err := p.LoadMatchRules()
+	if err != nil {
+		t.Fatalf("LoadMatchRules on an empty store: %v", err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("rules from an empty store = %+v, want none", rules)
+	}
+	if settings.InScopeOnly || settings.UpdateContentLength {
+		t.Fatalf("settings from an empty store = %+v, want every switch off", settings)
+	}
+}
+
 func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	p := newTestStore(t)
 	scope := core.NewScope()
@@ -153,7 +180,11 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	}
 	mr.SetRules([]*matchreplace.Rule{rule})
 	mr.SetUpdateContentLength(true)
-	p.SaveMatchRules(mr.Rules(), mr.UpdateContentLength())
+	// Both set-wide switches, and deliberately not both the same value: two booleans saved
+	// through one struct is exactly the shape where a swapped pair compiles and passes, so the
+	// one that must survive is the one that is not the default.
+	mr.SetInScopeOnly(true)
+	p.SaveMatchRules(mr.Rules(), persistSettings(mr))
 
 	sess := session.NewCoordinator(zap.NewNop())
 	sessRule := session.NewSessionRule("login", []string{"127.0.0.1"}, []session.MacroStep{
@@ -192,6 +223,9 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	}
 	if !restoredMR.UpdateContentLength() {
 		t.Fatalf("content-length flag did not survive restore")
+	}
+	if !restoredMR.InScopeOnly() {
+		t.Fatalf("the 'only apply to in-scope items' flag did not survive restore; a rule set restored without it rewrites out-of-scope traffic the operator had excluded")
 	}
 	mrRules := restoredMR.Rules()
 	if len(mrRules) != 1 || mrRules[0].StringMatch != `X-(\d+)` {

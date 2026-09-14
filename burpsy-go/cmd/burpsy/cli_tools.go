@@ -49,7 +49,7 @@ func init() {
 		},
 		&cliCommand{
 			name:  "matchreplace",
-			usage: "manage match & replace rules: burpsy matchreplace (set|test|list|content-length)",
+			usage: "manage match & replace rules: burpsy matchreplace (set|test|list|content-length|in-scope-only)",
 			run:   cmdMatchReplace,
 		},
 		&cliCommand{
@@ -561,8 +561,10 @@ func cmdMatchReplace(ctx *cliContext, args []string) error {
 		return mrList(ctx, args)
 	case "content-length":
 		return mrContentLength(ctx, args)
+	case "in-scope-only":
+		return mrInScopeOnly(ctx, args)
 	default:
-		return fmt.Errorf("usage: burpsy matchreplace (set|test|list|content-length)")
+		return fmt.Errorf("usage: burpsy matchreplace (set|test|list|content-length|in-scope-only)")
 	}
 }
 
@@ -681,6 +683,38 @@ func mrContentLength(ctx *cliContext, args []string) error {
 		ctx.saveState()
 	case "get", "":
 		if ctx.mr.UpdateContentLength() {
+			fmt.Fprintln(ctx.out, "on")
+		} else {
+			fmt.Fprintln(ctx.out, "off")
+		}
+		return nil
+	default:
+		return fmt.Errorf("state must be on, off, or get")
+	}
+	return nil
+}
+
+// mrInScopeOnly sets or reads Burp's "Only apply to in-scope items" switch.
+//
+// A sibling of content-length rather than a flag on `set`, because it is not a property of the
+// rule being set: it applies to the whole ordered list, the same way Burp's checkbox sits above
+// the table rather than in the rule dialog. Two subcommands whose names are the wire names keeps
+// the CLI and /api/tools/rules describing the same object.
+func mrInScopeOnly(ctx *cliContext, args []string) error {
+	fs := newFlagSet("matchreplace in-scope-only")
+	state := fs.String("state", "", "on | off | get")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	switch strings.ToLower(*state) {
+	case "on":
+		ctx.mr.SetInScopeOnly(true)
+		ctx.saveState()
+	case "off":
+		ctx.mr.SetInScopeOnly(false)
+		ctx.saveState()
+	case "get", "":
+		if ctx.mr.InScopeOnly() {
 			fmt.Fprintln(ctx.out, "on")
 		} else {
 			fmt.Fprintln(ctx.out, "off")
