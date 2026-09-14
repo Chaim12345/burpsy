@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,11 +19,60 @@ const (
 	ScopeExclude
 )
 
+// Arm tags. A rule's host pattern and path arm are plain strings — a host glob and a path prefix —
+// and these two prefixes are how a rule says the string is something else: a regular expression for
+// that URL component, or an IP range (burpsy-react-ui-c09). Burp states the same two arms as one
+// field each ("Specify a regular expression to match each URL component"; "Host or IP range").
+//
+// # Why the tag rides inside the string instead of being a new field
+//
+// The arm has to survive a restart, an export/import round trip and a rule's own identity, and all
+// three carry exactly these two strings: persist.Store.SaveScope writes `pattern` and `path_prefix`
+// and scanScopeRows rebuilds every rule with NewScopeRule(kind, pattern) plus a direct PathPrefix
+// assignment; api_config's bundle carries the same two; and RemoveScoped, ReplaceScoped and
+// SetRuleEnabled all identify a rule by (kind, pattern, path, port).
+//
+// A parallel `host_regex` column would have to land in all four before a regex rule could be
+// removed, edited, exported or reloaded — and until it did, a `regex:` rule would come back from
+// the database as a *literal glob*. For an include that means a rule that silently matches nothing;
+// for an exclude it means traffic the operator excluded being allowed again, which is the one
+// failure direction this package exists to prevent. Encoding the arm in the value the store already
+// round-trips makes the interpretation a pure function of what is stored, so every reconstruction
+// path agrees by construction rather than by four separate patches staying in step.
+//
+// The tags cannot collide with a host pattern: a host has no colon in it (the port is its own
+// field), and a verified sweep of the tree found no existing pattern, fixture or bundle beginning
+// with either.
+const (
+	// ScopeRegexArm marks a host pattern or a path arm as a regular expression.
+	ScopeRegexArm = "regex:"
+	// ScopeRangeArm marks a host pattern as an IP range in CIDR form (or a bare IP literal).
+	ScopeRangeArm = "range:"
+)
+
 // ScopeRule represents a single scope rule.
 type ScopeRule struct {
 	Kind    ScopeRuleKind
 	Pattern string
-	Regex   *regexp.Regexp
+	// Regex is the compiled *glob* form of Pattern — the historical arm, and still the default.
+	// It is nil exactly when Pattern carries an arm tag, because a tagged pattern is not a glob and
+	// compiling it as one would produce a rule that matches a host nobody wrote.
+	Regex *regexp.Regexp
+	// HostRegex is the compiled `regex:` host arm: the whole host must match it. Nil means the
+	// rule does not use this arm, never "matches anything".
+	HostRegex *regexp.Regexp
+	// HostRange is the compiled `range:` host arm: the host must be an IP literal inside this
+	// prefix. Nil means the rule does not use this arm.
+	HostRange *netip.Prefix
+	// PathRegex is the compiled `regex:` path arm: the whole request path must match it. Nil means
+	// the path arm is the literal prefix in PathPrefix (or, with PathPrefix nil, any path).
+	PathRegex *regexp.Regexp
+	// Invalid records why this rule's arms could not be interpreted. Every entry point refuses such
+	// a rule before it is stored (NewScopeRuleFrom returns the error, and the endpoints answer 400),
+	// so a rule reaches this state only from a store written by hand or by an older build. It is not
+	// a rule that "matches nothing": see ArmFault and Scope.Validate — a scope holding one authorises
+	// nothing and retains nothing, rather than quietly dropping an exclude.
+	Invalid error
 	Port    *uint16
 	// PathPrefix, when set, limits the rule to paths starting with it. Nil matches any path,
 	// which is what every host-only rule built before this field existed means.
@@ -37,10 +87,26 @@ type ScopeRule struct {
 }
 
 // NewScopeRule creates a new scope rule from a pattern.
+//
+// The pattern is a host glob unless it carries an arm tag (ScopeRegexArm / ScopeRangeArm), in which
+// case it is compiled as that arm instead. A tag that cannot be compiled leaves the rule Invalid —
+// it is never compiled as a glob and it never panics, because this function is on the restore path
+// (persist.scanScopeRows) and a MustCompile there would turn one bad database row into a server that
+// cannot start. Callers that can report an error should use NewScopeRuleFrom, which does.
 func NewScopeRule(kind ScopeRuleKind, pattern string) *ScopeRule {
 	rule := &ScopeRule{
 		Kind:    kind,
 		Pattern: pattern,
+	}
+	// Default enabled: every rule this function ever built behaved as an active rule, and so
+	// does every rule built from here on unless a caller says otherwise. Set before the arm
+	// compile so a tagged pattern that fails still produces a rule whose only difference from a
+	// working one is Invalid.
+	rule.Enabled = true
+
+	if isTaggedArm(pattern) {
+		rule.compileHostArm()
+		return rule
 	}
 
 	// Convert wildcard pattern to regex
@@ -65,10 +131,176 @@ func NewScopeRule(kind ScopeRuleKind, pattern string) *ScopeRule {
 	regexPattern += "$"
 
 	rule.Regex = regexp.MustCompile(regexPattern)
-	// Default enabled: every rule this function ever built behaved as an active rule, and so
-	// does every rule built from here on unless a caller says otherwise.
-	rule.Enabled = true
 	return rule
+}
+
+// isTaggedArm reports whether a stored arm string states an arm other than the default one.
+func isTaggedArm(arm string) bool {
+	return strings.HasPrefix(arm, ScopeRegexArm) || strings.HasPrefix(arm, ScopeRangeArm)
+}
+
+// armRegexp compiles a `regex:` arm body, anchored to the whole component.
+//
+// # Anchoring
+//
+// The expression is wrapped in \A(?:...)\z, so it must match the entire host or the entire path.
+// That is the glob arm's own semantics — NewScopeRule builds ^...$ — and a rule table whose two
+// host arms disagreed about whether `example\.com` also covers `example.com.attacker.test` would be
+// a trap worse than either choice alone. The Burp idiom `^www\.example\.com$` is unchanged by the
+// wrapping, because Go's ^ and $ are text anchors without (?m).
+//
+// It has a cost, and it is not the safe direction in every case: an operator porting an *unanchored*
+// exclude (`admin` meaning "anything containing admin") gets a rule that excludes less than they
+// expect, which widens what is authorised. It is stated in the UI hint beside the field for exactly
+// that reason — use `.*admin.*` to mean "contains". The alternative, leaving it unanchored, widens
+// every *include* instead, silently and for everyone rather than for operators porting one shape.
+//
+// No implicit (?i): a case-insensitive match is `(?i)` written by the operator, and inserting it
+// here would make a rule match hosts its author did not write.
+func armRegexp(what, body string) (*regexp.Regexp, error) {
+	if strings.TrimSpace(body) == "" {
+		// Burp's "leave blank to match any item" is precisely the implicit-widening trap this
+		// package refuses: an empty expression here would compile to \A(?:)\z, a rule that looks
+		// armed and matches only the empty string. A rule that cannot say what it means is refused
+		// where the operator can still fix it.
+		return nil, fmt.Errorf("a %s regular expression is empty; write the expression after %q, or drop the tag to match on the host pattern instead", what, ScopeRegexArm)
+	}
+	re, err := regexp.Compile(`\A(?:` + body + `)\z`)
+	if err != nil {
+		return nil, fmt.Errorf("the %s regular expression %q does not compile: %w", what, body, err)
+	}
+	return re, nil
+}
+
+// armPrefix parses a `range:` arm body into an IP prefix.
+//
+// A bare address means that address alone (a /32 or /128), because "range: 10.0.0.5" is the obvious
+// way to write one host and refusing it would teach operators to write /32 by hand for no gain.
+//
+// Host bits are refused rather than masked: `range:10.0.0.5/8` is either a typo for 10.0.0.0/8 — two
+// orders of magnitude wider than what is written — or for 10.0.0.5/32. Guessing which one is meant
+// is guessing at the size of an authorised network, so it is refused where the operator can see it.
+func armPrefix(body string) (*netip.Prefix, error) {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return nil, fmt.Errorf("an IP range is empty; write a CIDR block or an address after %q", ScopeRangeArm)
+	}
+	if addr, err := netip.ParseAddr(trimmed); err == nil {
+		if addr.Zone() != "" {
+			return nil, fmt.Errorf("the IP range %q carries a zone; a scope rule cannot decide what a link-local zone means on the host that sent the request", trimmed)
+		}
+		addr = addr.Unmap()
+		p := netip.PrefixFrom(addr, addr.BitLen())
+		return &p, nil
+	}
+	p, err := netip.ParsePrefix(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("the IP range %q is neither an address nor a CIDR block: %w", trimmed, err)
+	}
+	if p.Addr().Is4In6() {
+		return nil, fmt.Errorf("the IP range %q is an IPv4 range written in IPv6 form; write it as dotted quads (for example 10.0.0.0/8) so its width reads the way it matches", trimmed)
+	}
+	if masked := p.Masked(); masked != p {
+		return nil, fmt.Errorf("the IP range %q has host bits set; write %q for the network or %q for that one address", trimmed, masked.String(), p.Addr().String())
+	}
+	return &p, nil
+}
+
+// compileHostArm (re)derives the host arm from Pattern, recording the reason on failure. Idempotent,
+// so calling it on a rule built by NewScopeRule costs a recompile and changes nothing.
+func (r *ScopeRule) compileHostArm() {
+	r.Regex, r.HostRegex, r.HostRange, r.Invalid = nil, nil, nil, nil
+	switch {
+	case strings.HasPrefix(r.Pattern, ScopeRegexArm):
+		re, err := armRegexp("host", strings.TrimPrefix(r.Pattern, ScopeRegexArm))
+		if err != nil {
+			r.Invalid = err
+			return
+		}
+		r.HostRegex = re
+	case strings.HasPrefix(r.Pattern, ScopeRangeArm):
+		prefix, err := armPrefix(strings.TrimPrefix(r.Pattern, ScopeRangeArm))
+		if err != nil {
+			r.Invalid = err
+			return
+		}
+		r.HostRange = prefix
+	default:
+		rebuilt := NewScopeRule(r.Kind, r.Pattern)
+		r.Regex = rebuilt.Regex
+	}
+}
+
+// compilePathArm (re)derives the path arm from PathPrefix. A nil or untagged prefix leaves PathRegex
+// nil, which is the literal-prefix arm every rule has always had.
+func (r *ScopeRule) compilePathArm() {
+	r.PathRegex = nil
+	if r.PathPrefix == nil || !strings.HasPrefix(*r.PathPrefix, ScopeRegexArm) {
+		return
+	}
+	re, err := armRegexp("path", strings.TrimPrefix(*r.PathPrefix, ScopeRegexArm))
+	if err != nil {
+		if r.Invalid == nil {
+			r.Invalid = err
+		}
+		return
+	}
+	r.PathRegex = re
+}
+
+// compileArms derives both arms from the strings the rule stores. Scope.Add and Scope.ReplaceScoped
+// call it on every rule they take, which is what makes the restore path safe: persist's scanScopeRows
+// assigns PathPrefix directly, so a `regex:` path arm read back from the database has no compiled
+// form until something recompiles it, and an uncompiled path arm on an *exclude* would let through
+// exactly the requests the operator excluded.
+func (r *ScopeRule) compileArms() {
+	r.compileHostArm()
+	r.compilePathArm()
+}
+
+// ArmFault reports why this rule cannot be interpreted, or nil when it can.
+//
+// It is deliberately more than "is Invalid set": a rule whose stored strings carry an arm tag with no
+// compiled form is a rule that was assembled field by field and never compiled, and treating that as
+// "no arm, match on the glob" or as "matches nothing" are both ways of quietly changing what the
+// operator wrote. Naming it as a fault is what lets Scope refuse instead of guess.
+func (r *ScopeRule) ArmFault() error {
+	if r.Invalid != nil {
+		return r.Invalid
+	}
+	if strings.HasPrefix(r.Pattern, ScopeRegexArm) && r.HostRegex == nil {
+		return fmt.Errorf("host pattern %q states a regular expression that was never compiled", r.Pattern)
+	}
+	if strings.HasPrefix(r.Pattern, ScopeRangeArm) && r.HostRange == nil {
+		return fmt.Errorf("host pattern %q states an IP range that was never parsed", r.Pattern)
+	}
+	if !isTaggedArm(r.Pattern) && r.Regex == nil {
+		return fmt.Errorf("host pattern %q has no compiled form at all", r.Pattern)
+	}
+	if r.PathPrefix != nil && strings.HasPrefix(*r.PathPrefix, ScopeRegexArm) && r.PathRegex == nil {
+		return fmt.Errorf("path arm %q states a regular expression that was never compiled", *r.PathPrefix)
+	}
+	return nil
+}
+
+// NewScopeRuleFrom builds a rule from the arms an endpoint received, refusing loudly what
+// NewScopeRule can only record. This is the constructor every caller that can answer 400 should use:
+// a bad regular expression or a bad IP range is an operator typo, and the moment it can still be
+// fixed is before the rule is stored.
+//
+// path, port and protocol are the already-normalised optional arms (nil meaning "any"), so the
+// endpoint keeps its own vocabulary checks — a path must start with "/", a protocol must be http or
+// https — and this owns the arm tags, which are the part no endpoint should re-implement.
+func NewScopeRuleFrom(kind ScopeRuleKind, pattern string, path *string, port *uint16, protocol *string) (*ScopeRule, error) {
+	rule := NewScopeRule(kind, pattern)
+	rule.PathPrefix = path
+	rule.Port = port
+	rule.Protocol = protocol
+	rule.compileArms()
+	if err := rule.ArmFault(); err != nil {
+		return nil, err
+	}
+	return rule, nil
 }
 
 // NewScopeRuleWithPort creates a scope rule with a specific port.
@@ -83,6 +315,9 @@ func NewScopeRuleWithPort(kind ScopeRuleKind, pattern string, port uint16) *Scop
 func NewScopeRuleWithPath(kind ScopeRuleKind, pattern string, pathPrefix string) *ScopeRule {
 	rule := NewScopeRule(kind, pattern)
 	rule.PathPrefix = &pathPrefix
+	// The prefix may itself state a `regex:` arm, and a path arm assigned without being compiled is
+	// a rule that does not mean what it says — see compileArms.
+	rule.compilePathArm()
 	return rule
 }
 
@@ -93,13 +328,68 @@ func (r *ScopeRule) Matches(host string, port uint16) bool {
 	if !r.Enabled {
 		return false
 	}
+	// A rule whose arms cannot be interpreted matches nothing. It does not therefore *allow*
+	// anything: Scope refuses outright when it holds one (see Scope.Validate), because an exclude
+	// that matches nothing is an exclude that has quietly lapsed.
+	if r.ArmFault() != nil {
+		return false
+	}
 	if r.Port != nil && *r.Port != port {
 		return false
 	}
-	return r.Regex.MatchString(host)
+	return r.matchesHost(host)
 }
 
-// MatchesRequest checks host, port, path prefix and protocol against one request.
+// matchesHost applies whichever host arm the rule carries. The final default is the one line this
+// package cannot afford to get wrong: a rule with no compiled pattern at all does not match, it does
+// not match everything. core.Scope is what internal/sender asks before every dial, so "nothing
+// compiled" reading as "matches" would authorise the whole internet from a rule that failed to build.
+func (r *ScopeRule) matchesHost(host string) bool {
+	switch {
+	case r.HostRange != nil:
+		return hostInRange(host, *r.HostRange)
+	case r.HostRegex != nil:
+		return r.HostRegex.MatchString(host)
+	case r.Regex != nil:
+		return r.Regex.MatchString(host)
+	default:
+		return false
+	}
+}
+
+// matchesPath applies whichever path arm the rule carries: the compiled regular expression when it
+// has one, otherwise the literal prefix, otherwise any path (a rule with no path arm).
+func (r *ScopeRule) matchesPath(path string) bool {
+	if r.PathRegex != nil {
+		return r.PathRegex.MatchString(path)
+	}
+	if r.PathPrefix != nil {
+		return strings.HasPrefix(path, *r.PathPrefix)
+	}
+	return true
+}
+
+// hostInRange reports whether a request's host is an IP literal inside the prefix.
+//
+// A host that is not an IP literal never matches an IP-range arm, and the name is deliberately not
+// resolved: a scope decision that depended on a DNS answer would be a decision an attacker with a
+// resolver could move, and it would leak the target to that resolver before the operator had been
+// told the request was authorised. Burp's own arm reads the host component, and so does this.
+//
+// The address is unmapped first, so an ::ffff:10.0.0.1 literal is inside 10.0.0.0/8 — the same host
+// written two ways must not get two answers. A zoned literal (fe80::1%eth0) never matches: the zone
+// names an interface on some machine, and this process cannot know it is the same one.
+func hostInRange(host string, prefix netip.Prefix) bool {
+	trimmed := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	addr, err := netip.ParseAddr(trimmed)
+	if err != nil || addr.Zone() != "" {
+		return false
+	}
+	return prefix.Contains(addr.Unmap())
+}
+
+// MatchesRequest checks host, port, path and protocol against one request. The path arm is the
+// literal prefix or, when the rule states one, a regular expression over the whole path.
 func (r *ScopeRule) MatchesRequest(host string, port uint16, path string, isTLS bool) bool {
 	if !r.Matches(host, port) {
 		return false
@@ -111,10 +401,7 @@ func (r *ScopeRule) MatchesRequest(host string, port uint16, path string, isTLS 
 			return false
 		}
 	}
-	if r.PathPrefix != nil && !strings.HasPrefix(path, *r.PathPrefix) {
-		return false
-	}
-	return true
+	return r.matchesPath(path)
 }
 
 // Scope represents the URL scope for capture and authorization.
@@ -153,7 +440,17 @@ func NewScopeAllowEverything() *Scope {
 }
 
 // Add adds a rule to the scope.
+//
+// It compiles the rule's arms first, which matters for one caller in particular: persist's restore
+// path rebuilds a rule with NewScopeRule and then assigns PathPrefix directly, so a `regex:` path arm
+// read back from the database arrives here with no compiled form. Compiling at the door means a
+// restored scope means exactly what the stored one did, rather than depending on which field the
+// writer happened to set through a constructor.
 func (s *Scope) Add(rule *ScopeRule) {
+	if rule == nil {
+		return
+	}
+	rule.compileArms()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rules = append(s.rules, rule)
@@ -294,6 +591,7 @@ func (s *Scope) ReplaceScoped(kind ScopeRuleKind, pattern string, pathPrefix *st
 	if replacement == nil {
 		return false
 	}
+	replacement.compileArms()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -331,6 +629,35 @@ func (s *Scope) Clear() {
 	s.rules = s.rules[:0]
 }
 
+// Validate returns the first rule whose arms cannot be interpreted, naming which rule and why, or
+// nil when every rule can be. It is the checkable form of the invariant the scope decisions rely on:
+// they refuse everything while it is broken, so an operator needs one call that says which rule to
+// fix rather than a proxy that has gone quiet.
+//
+// Every endpoint refuses an uninterpretable rule before storing it (NewScopeRuleFrom), so a scope
+// only fails this after a store was written by hand, edited outside the tool, or produced by a build
+// that did not know an arm — which is exactly when the operator needs to be told the offender.
+func (s *Scope) Validate() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, err := s.faultLocked()
+	return err
+}
+
+// faultLocked finds the first uninterpretable rule. Callers hold at least the read lock.
+func (s *Scope) faultLocked() (int, error) {
+	for i, rule := range s.rules {
+		if err := rule.ArmFault(); err != nil {
+			kind := "include"
+			if rule.Kind == ScopeExclude {
+				kind = "exclude"
+			}
+			return i, fmt.Errorf("scope rule %d (%s %q) cannot be interpreted: %w", i, kind, rule.Pattern, err)
+		}
+	}
+	return -1, nil
+}
+
 // Contains checks if a URL is within scope. Excludes always win; a matching exclude rule takes
 // the host out of scope regardless of any include rules. Rules with a path prefix only apply
 // when the request's path falls under that prefix.
@@ -340,6 +667,25 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 
 	if s.allowAll {
 		return true
+	}
+
+	// A scope holding a rule it cannot interpret contains nothing at all.
+	//
+	// The tempting alternative — skip the broken rule and evaluate the rest — is fail-open by
+	// arithmetic: if the unreadable rule is an *exclude*, skipping it hands back "in scope" for
+	// precisely the requests the operator wrote that rule to keep out, and nothing in the answer
+	// says a rule was dropped. Answering "in scope: no" to everything is loud, is recoverable
+	// (Validate names the offending rule, and Explain says so to the operator), and cannot authorise
+	// a single request the document did not authorise. It is unreachable through the endpoints,
+	// which refuse such a rule before it is stored.
+	//
+	// It is "authorises nothing and retains nothing", not "refuses every request": pass-through proxy
+	// traffic still goes out while the drop switch is off, because AuthoriseRequest forwards whatever
+	// Contains refuses in that configuration — the same as for any out-of-scope request, and the
+	// whole content of that setting. What stops is every gate that reads Contains: retention,
+	// AuthoriseRaw, and the tools that ask before they send.
+	if _, err := s.faultLocked(); err != nil {
+		return false
 	}
 
 	// Excludes always win: a matching exclude rule takes the host out of scope
@@ -426,6 +772,12 @@ func (s *Scope) MayContainHost(host string, port uint16, isTLS bool) bool {
 	defer s.mu.RUnlock()
 	if s.allowAll {
 		return true
+	}
+	// The same refusal Contains makes, for the same reason: the pre-filter must not be the one gate
+	// that keeps saying yes while the scope document is unreadable — Repeater and Intruder apply it
+	// and nothing else to their target.
+	if _, err := s.faultLocked(); err != nil {
+		return false
 	}
 	// A whole-host exclude puts the host beyond reach, whatever the includes say — excludes win
 	// here for the same reason they win in Contains. Path- and protocol-scoped excludes are skipped:
@@ -547,6 +899,12 @@ func (s *Scope) Explain(host string, port uint16, path string, isTLS bool) strin
 	where := fmt.Sprintf("%s:%d%s", host, port, path)
 	if s.allowAll {
 		return "allowed: " + where + " (scope allows everything)"
+	}
+	// Named before anything else, because this refusal has a different cause and a different fix
+	// from every other one: reporting "matches no include rule" while the real reason is a rule that
+	// does not compile sends the operator to edit the wrong thing.
+	if _, err := s.faultLocked(); err != nil {
+		return "refused: " + where + " — the scope cannot be applied: " + err.Error()
 	}
 	for _, rule := range s.rules {
 		if rule.Kind == ScopeExclude && rule.MatchesRequest(host, port, path, isTLS) {

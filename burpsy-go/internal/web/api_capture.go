@@ -290,13 +290,23 @@ type ScopeRequest struct {
 // A prefix must start with "/", because it is matched with strings.HasPrefix against a request path
 // that always does: accepting "admin" would build a rule that silently matches nothing, which is the
 // worst outcome for a scope rule — the operator believes a restriction is in force and it is not.
+//
+// A path arm tagged core.ScopeRegexArm is a regular expression over the whole path instead
+// (burpsy-react-ui-c09), and is exempt from the leading "/" rule because an expression may legally
+// begin with a group or a character class. The expression itself is checked by core, not here: the
+// same string is the rule's identity on remove, toggle and edit, so this function normalises it and
+// core.NewScopeRuleFrom decides whether it compiles. Both halves matter — add and remove have to
+// normalise identically or a rule becomes unremovable.
 func normaliseScopePath(raw string) (*string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return nil, nil
 	}
+	if strings.HasPrefix(trimmed, core.ScopeRegexArm) {
+		return &trimmed, nil
+	}
 	if !strings.HasPrefix(trimmed, "/") {
-		return nil, fmt.Errorf("A scope path must start with /, so it can match a request path; got %q", trimmed)
+		return nil, fmt.Errorf("A scope path must start with /, so it can match a request path; got %q. To match the path with a regular expression instead, prefix it with %q.", trimmed, core.ScopeRegexArm)
 	}
 	return &trimmed, nil
 }
@@ -318,6 +328,16 @@ func normaliseScopeProtocol(raw string) (*string, error) {
 }
 
 // buildScopeRule turns a request into the narrowest rule it describes.
+//
+// The arm tags — a `regex:` host pattern or path, a `range:` IP block — are compiled by
+// core.NewScopeRuleFrom rather than checked here, deliberately: this endpoint and the config
+// importer both build rules, and a second copy of "does this regular expression compile" is a second
+// answer waiting to disagree with the engine that actually matches. What this layer still owns is
+// its own vocabulary — a path starts with "/", a protocol is http or https.
+//
+// The error is a 400 at both callers. A scope rule whose arm cannot be read is an operator typo, and
+// the only moment it can be fixed cheaply is before it is stored: once stored, the engine refuses
+// every request rather than applying a document it cannot read.
 func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule, error) {
 	path, err := normaliseScopePath(req.Path)
 	if err != nil {
@@ -327,14 +347,10 @@ func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule,
 	if err != nil {
 		return nil, err
 	}
-	rule := core.NewScopeRule(kind, req.Pattern)
-	if path != nil {
-		rule.PathPrefix = path
+	rule, err := core.NewScopeRuleFrom(kind, req.Pattern, path, req.Port, protocol)
+	if err != nil {
+		return nil, err
 	}
-	if req.Port != nil {
-		rule.Port = req.Port
-	}
-	rule.Protocol = protocol
 	if req.Enabled != nil {
 		rule.Enabled = *req.Enabled
 	}

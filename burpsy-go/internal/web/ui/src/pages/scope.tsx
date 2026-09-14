@@ -3,6 +3,17 @@ import { Plus, Trash2, Pencil, ClipboardPaste, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
 import { useScopeView, useUpdateScope } from "../lib/data.policy";
 import { describeScopeRule, parseScopePaste, type ScopeRuleArms } from "../lib/scope-paste";
+import {
+ decodeHostArm,
+ decodePathArm,
+ encodeHostArm,
+ encodePathArm,
+ hostArmLabel,
+ hostArmProblem,
+ pathArmProblem,
+ type HostArmMode,
+ type PathArmMode,
+} from "../lib/scope-arms";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
@@ -36,6 +47,25 @@ const rowKey = (row: ScopeRow) =>
  * reasons, because the failure this feature has to avoid is a host that quietly never became a
  * rule: the scan then touches something the operator did not authorise, or skips something they
  * did, and nothing afterwards says which.
+ *
+ * # Host and path arms (c09)
+ *
+ * Burp reads each URL component as a regular expression, and the host field as a regex *or* an IP
+ * range. burpsy read the host as a glob and the path as a literal prefix and nothing else. Both new
+ * arms are here as a mode selector beside the field they change, because one field read three ways
+ * with no visible statement of which is exactly how an operator ends up believing a restriction is
+ * in force when it is not. The mode is not a new wire field: it is encoded into the same pattern and
+ * path strings the rule has always carried (lib/scope-arms.ts, and core/scope.go for why).
+ *
+ * # Simple and advanced (c09)
+ *
+ * Burp ships both — "enable advanced scope control" — where simple mode is a flat list of URL
+ * prefixes and advanced is the rule table. burpsy has only ever had the middle: more than prefixes,
+ * less than regex. The toggle below offers Burp's simple entry form, which turns one pasted URL into
+ * the arms it decomposes to, and it is *only* an entry form: it is component state, it never reaches
+ * the wire, the rules table is the same table in both modes, and no stored rule changes meaning when
+ * it is flipped. Advanced is the default, because that is what this page has always shown and
+ * hiding working controls behind a toggle nobody knew to look for is its own regression.
  */
 export function ScopePage(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = useScopeView();
@@ -46,6 +76,13 @@ export function ScopePage(): JSX.Element {
  const [port, setPort] = useState("");
  const [path, setPath] = useState("");
  const [protocol, setProtocol] = useState<"" | "http" | "https">("");
+ const [hostMode, setHostMode] = useState<HostArmMode>("wildcard");
+ const [pathMode, setPathMode] = useState<PathArmMode>("prefix");
+ // Burp's "enable advanced scope control", defaulting the other way round: see the header note.
+ const [advanced, setAdvanced] = useState(true);
+ // Simple mode's only field: one URL whose prefix is the scope, decomposed by the same parser the
+ // paste box uses, so the two entry points cannot disagree about what a URL means.
+ const [simpleURL, setSimpleURL] = useState("");
  const [selected, setSelected] = useState<ScopeRow | null>(null);
 
  // The paste dialog's own box. Kept out of the five Add fields deliberately: a pasted entry is
@@ -69,8 +106,17 @@ export function ScopePage(): JSX.Element {
    : "Out-of-scope requests will be forwarded");
 
  const addRule = () => {
-  if (!pattern.trim()) {
-   toast.error("A host pattern is required.");
+  // The arm checks run before the port check and before anything is sent, and they are the same
+  // checks the server makes: a rule refused here is refused there, so the round trip only exists to
+  // tell the operator something this page could have told them at the keystroke.
+  const hostProblem = hostArmProblem(hostMode, pattern);
+  if (hostProblem) {
+   toast.error(hostProblem);
+   return;
+  }
+  const pathProblem = pathArmProblem(pathMode, path);
+  if (pathProblem) {
+   toast.error(pathProblem);
    return;
   }
   const trimmedPort = port.trim();
@@ -79,20 +125,59 @@ export function ScopePage(): JSX.Element {
    toast.error("Port must be an integer between 1 and 65535.");
    return;
   }
+  const encodedHost = encodeHostArm(hostMode, pattern);
+  const encodedPath = encodePathArm(pathMode, path);
   run(
    {
     action: kind,
-    pattern: pattern.trim(),
+    pattern: encodedHost,
     ...(parsedPort !== undefined ? { port: parsedPort } : {}),
-    ...(path.trim() ? { path: path.trim() } : {}),
+    ...(encodedPath ? { path: encodedPath } : {}),
     ...(protocol ? { protocol } : {}),
    },
-   `${kind === "include" ? "Included" : "Excluded"} ${pattern.trim()}`,
+   `${kind === "include" ? "Included" : "Excluded"} ${encodedHost}`,
   );
   setPattern("");
   setPort("");
   setPath("");
   setProtocol("");
+ };
+
+ /**
+  * Simple mode's Add: one URL prefix becomes one rule.
+  *
+  * It goes through parseScopePaste rather than a second decomposition, because "what does this URL
+  * mean as a rule" is a question this page must answer the same way everywhere — the paste box, the
+  * file loader and this field are three doors into one answer. A line that is not a rule is reported
+  * with the parser's own reason rather than a generic failure.
+  */
+ const addSimpleRule = () => {
+  const parsed = parseScopePaste(simpleURL);
+  const refusal = parsed.refused[0];
+  if (refusal) {
+   toast.error(`${refusal.text} is not a URL or host pattern: ${refusal.reason}.`);
+   return;
+  }
+  const rule = parsed.rules[0];
+  if (!rule) {
+   toast.error("Write a URL such as https://example.com/app, or a host pattern such as *.example.com.");
+   return;
+  }
+  if (parsed.rules.length > 1) {
+   toast.error("One entry per rule here. Use Paste URL for a list.");
+   return;
+  }
+  run(
+   {
+    action: kind,
+    pattern: rule.pattern,
+    ...(rule.port !== undefined ? { port: rule.port } : {}),
+    ...(rule.path ? { path: rule.path } : {}),
+    ...(rule.protocol ? { protocol: rule.protocol } : {}),
+   },
+   `${kind === "include" ? "Included" : "Excluded"} ${describeScopeRule(rule)}`,
+  );
+  setSimpleURL("");
  };
 
  // The edit affordance (k5l): Burp's "Edit the selected item" button. The dialog pre-fills from
@@ -103,23 +188,43 @@ export function ScopePage(): JSX.Element {
  const [editPort, setEditPort] = useState("");
  const [editPath, setEditPath] = useState("");
  const [editProtocol, setEditProtocol] = useState<"" | "http" | "https">("");
+ const [editHostMode, setEditHostMode] = useState<HostArmMode>("wildcard");
+ const [editPathMode, setEditPathMode] = useState<PathArmMode>("prefix");
 
  const openEdit = () => {
   if (!selected) return;
   setEditKind(selected.kind.toLowerCase() as "include" | "exclude");
-  setEditPattern(selected.host);
+  // The dialog shows the arm the rule actually carries, not the string it is stored as: an operator
+  // editing a regex rule must see a regex field, or their next save turns it into a glob named after
+  // an expression — a rule that matches nothing and looks like it matches something.
+  const host = decodeHostArm(selected.host);
+  setEditHostMode(host.mode);
+  setEditPattern(host.value);
+  const rulePath = decodePathArm(selected.path);
+  setEditPathMode(rulePath.mode);
+  setEditPath(rulePath.value);
   setEditPort(selected.port !== null ? String(selected.port) : "");
-  setEditPath(selected.path ?? "");
   setEditProtocol((selected.protocol as "http" | "https" | null) ?? "");
   setEditing(true);
  };
 
  const saveEdit = () => {
   if (!selected) return;
-  if (!editPattern.trim()) {
-   toast.error("Host is required");
+  const hostProblem = hostArmProblem(editHostMode, editPattern);
+  if (hostProblem) {
+   toast.error(hostProblem);
    return;
   }
+  const pathProblem = pathArmProblem(editPathMode, editPath);
+  if (pathProblem) {
+   toast.error(pathProblem);
+   return;
+  }
+  // old_* is the row exactly as the table showed it — the stored strings, tags and all — because
+  // that tuple is the rule's identity on the server. Decoding it for display and sending the decoded
+  // form back would name a rule that does not exist, and the edit would 404.
+  const encodedHost = encodeHostArm(editHostMode, editPattern);
+  const encodedPath = encodePathArm(editPathMode, editPath);
   run(
    {
     action: "edit",
@@ -129,12 +234,12 @@ export function ScopePage(): JSX.Element {
     ...(selected.path !== null ? { old_path: selected.path } : {}),
     ...(selected.protocol !== null ? { old_protocol: selected.protocol as "http" | "https" } : {}),
     kind: editKind,
-    pattern: editPattern.trim(),
+    pattern: encodedHost,
     ...(editPort.trim() ? { port: Number(editPort) } : {}),
-    ...(editPath.trim() ? { path: editPath.trim() } : {}),
+    ...(encodedPath ? { path: encodedPath } : {}),
     ...(editProtocol ? { protocol: editProtocol } : {}),
    },
-   `Edited rule: ${selected.host} → ${editPattern.trim()}`,
+   `Edited rule: ${selected.host} → ${encodedHost}`,
   );
   setEditing(false);
   setSelected(null);
@@ -269,7 +374,24 @@ export function ScopePage(): JSX.Element {
     },
    },
    { accessorKey: "kind", header: "Kind", size: 90 },
-   { accessorKey: "host", header: "Host", size: 260 },
+   {
+    accessorKey: "host",
+    header: "Host",
+    size: 260,
+    // The arm is named beside the value, not left for the reader to infer from the tag. A regex and
+    // a glob that happen to read alike authorise very different sets of hosts, and the column is
+    // where an operator checks what they wrote.
+    cell: (info) => {
+     const arm = decodeHostArm(info.getValue<string>());
+     return arm.mode === "wildcard" ? (
+      <span>{arm.value}</span>
+     ) : (
+      <span>
+       <code>{arm.value}</code> <span className="cell-dim">{hostArmLabel(arm.mode)}</span>
+      </span>
+     );
+    },
+   },
    {
     accessorKey: "port",
     header: "Port",
@@ -289,11 +411,21 @@ export function ScopePage(): JSX.Element {
     },
    },
    {
+    // "Path", not "Path prefix": a prefix is now one of the two things this column can hold, and a
+    // header naming only one of them would misdescribe every regex rule under it.
     accessorKey: "path",
-    header: "Path prefix",
+    header: "Path",
     cell: (info) => {
      const value = info.getValue<string | null>();
-     return value === null ? <span className="cell-dim">any</span> : <code>{value}</code>;
+     if (value === null) return <span className="cell-dim">any</span>;
+     const arm = decodePathArm(value);
+     return arm.mode === "prefix" ? (
+      <code>{arm.value}</code>
+     ) : (
+      <span>
+       <code>{arm.value}</code> <span className="cell-dim">regex</span>
+      </span>
+     );
     },
    },
   ],
@@ -328,7 +460,21 @@ export function ScopePage(): JSX.Element {
    </div>
 
    <Card>
-    <SectionHeading title="Add scope rule" detail="Port and path are optional arms; a rule without them covers the whole host." />
+    <SectionHeading
+     title="Add scope rule"
+     detail={
+      advanced
+       ? "Port and path are optional arms; a rule without them covers the whole host. The host can be a wildcard pattern, a regular expression or an IP range."
+       : "Simple mode takes one URL and scopes what sits under it, the way Burp's simple scope does. Everything already in the table keeps working exactly as it is — this changes the form, not the rules."
+     }
+     actions={
+      <Checkbox
+       label="Advanced scope control"
+       checked={advanced}
+       onCheckedChange={setAdvanced}
+      />
+     }
+    />
     {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
     {isLoading ? <LoadingPanel label="Loading scope" /> : null}
     <Toolbar>
@@ -340,28 +486,110 @@ export function ScopePage(): JSX.Element {
        </Select>
       )}
      </Field>
-     <Field label="Host pattern" hint="For example api.example.com or *.example.com.">
-      {(id) => <Input id={id} value={pattern} onChange={(event) => setPattern(event.target.value)} placeholder="api.example.com" />}
-     </Field>
-     <Field label="Port" hint="Optional; blank means any port.">
-      {(id) => <Input id={id} value={port} onChange={(event) => setPort(event.target.value)} placeholder="8443" inputMode="numeric" style={{ maxWidth: "var(--w-xs)" }} />}
-     </Field>
-     <Field label="Path prefix" hint="Optional; must start with /.">
-      {(id) => <Input id={id} value={path} onChange={(event) => setPath(event.target.value)} placeholder="/v2" style={{ maxWidth: "var(--w-sm)" }} />}
-     </Field>
-     <Field label="Protocol" hint="Optional; blank means either scheme.">
-      {(id) => (
-       <Select id={id} value={protocol} onChange={(event) => setProtocol(event.target.value === "http" ? "http" : event.target.value === "https" ? "https" : "")} style={{ maxWidth: "var(--w-xs)" }}>
-        <option value="">Any</option>
-        <option value="http">HTTP</option>
-        <option value="https">HTTPS</option>
-       </Select>
-      )}
-     </Field>
-     <Button variant="primary" onClick={addRule}>
-      <Plus size={14} />
-      Add rule
-     </Button>
+     {advanced ? (
+      <>
+       <Field label="Host match" hint="How the host field below is read.">
+        {(id) => (
+         <Select
+          id={id}
+          value={hostMode}
+          onChange={(event) => setHostMode(event.target.value as HostArmMode)}
+          style={{ maxWidth: "var(--w-sm)" }}
+         >
+          <option value="wildcard">Wildcard</option>
+          <option value="regex">Regular expression</option>
+          <option value="range">IP range</option>
+         </Select>
+        )}
+       </Field>
+       <Field
+        label="Host"
+        hint={
+         hostMode === "regex"
+          ? "Matches the whole host: write .* for anything either side, as in .*\\.example\\.com."
+          : hostMode === "range"
+            ? "A CIDR block such as 10.0.0.0/8, or one address. Only IP literals match it — a hostname is never resolved to decide scope."
+            : "For example api.example.com or *.example.com."
+        }
+       >
+        {(id) => (
+         <Input
+          id={id}
+          value={pattern}
+          onChange={(event) => setPattern(event.target.value)}
+          placeholder={hostMode === "regex" ? "api[0-9]+\\.example\\.com" : hostMode === "range" ? "10.0.0.0/8" : "api.example.com"}
+         />
+        )}
+       </Field>
+       <Field label="Port" hint="Optional; blank means any port.">
+        {(id) => <Input id={id} value={port} onChange={(event) => setPort(event.target.value)} placeholder="8443" inputMode="numeric" style={{ maxWidth: "var(--w-xs)" }} />}
+       </Field>
+       <Field label="Path match" hint="How the path field below is read.">
+        {(id) => (
+         <Select
+          id={id}
+          value={pathMode}
+          onChange={(event) => setPathMode(event.target.value as PathArmMode)}
+          style={{ maxWidth: "var(--w-sm)" }}
+         >
+          <option value="prefix">Prefix</option>
+          <option value="regex">Regular expression</option>
+         </Select>
+        )}
+       </Field>
+       <Field
+        label="Path"
+        hint={
+         pathMode === "regex"
+          ? "Optional; matches the whole path, so /admin.* is needed to cover what is under /admin."
+          : "Optional; must start with /."
+        }
+       >
+        {(id) => (
+         <Input
+          id={id}
+          value={path}
+          onChange={(event) => setPath(event.target.value)}
+          placeholder={pathMode === "regex" ? "/v[0-9]+/orders.*" : "/v2"}
+          style={{ maxWidth: "var(--w-sm)" }}
+         />
+        )}
+       </Field>
+       <Field label="Protocol" hint="Optional; blank means either scheme.">
+        {(id) => (
+         <Select id={id} value={protocol} onChange={(event) => setProtocol(event.target.value === "http" ? "http" : event.target.value === "https" ? "https" : "")} style={{ maxWidth: "var(--w-xs)" }}>
+          <option value="">Any</option>
+          <option value="http">HTTP</option>
+          <option value="https">HTTPS</option>
+         </Select>
+        )}
+       </Field>
+       <Button variant="primary" onClick={addRule}>
+        <Plus size={14} />
+        Add rule
+       </Button>
+      </>
+     ) : (
+      <>
+       <Field
+        label={kind === "include" ? "Prefix for in-scope URLs" : "Prefix for out-of-scope URLs"}
+        hint="One URL, such as https://example.com/app. Its host, port, scheme and path become the rule's arms — the table below shows exactly what was created."
+       >
+        {(id) => (
+         <Input
+          id={id}
+          value={simpleURL}
+          onChange={(event) => setSimpleURL(event.target.value)}
+          placeholder="https://example.com/app"
+         />
+        )}
+       </Field>
+       <Button variant="primary" onClick={addSimpleRule}>
+        <Plus size={14} />
+        Add rule
+       </Button>
+      </>
+     )}
      {/* Burp's second entry point, beside the form: a list of URLs into a list of rules. */}
      <Button variant="outline" onClick={() => setPasting(true)}>
       <ClipboardPaste size={14} />
@@ -518,13 +746,39 @@ export function ScopePage(): JSX.Element {
        </Select>
       )}
      </Field>
-     <Field label="Host">
+     <Field label="Host match" hint="How the host below is read.">
+      {(id) => (
+       <Select id={id} value={editHostMode} onChange={(e) => setEditHostMode(e.target.value as HostArmMode)}>
+        <option value="wildcard">Wildcard</option>
+        <option value="regex">Regular expression</option>
+        <option value="range">IP range</option>
+       </Select>
+      )}
+     </Field>
+     <Field
+      label="Host"
+      hint={
+       editHostMode === "regex"
+        ? "Matches the whole host."
+        : editHostMode === "range"
+          ? "A CIDR block or one address; only IP literals match it."
+          : "A wildcard pattern, such as *.example.com."
+      }
+     >
       {(id) => <Input id={id} value={editPattern} onChange={(e) => setEditPattern(e.target.value)} placeholder="*.example.com" />}
      </Field>
      <Field label="Port" hint="Blank matches any port.">
       {(id) => <Input id={id} value={editPort} onChange={(e) => setEditPort(e.target.value)} placeholder="443" />}
      </Field>
-     <Field label="Path prefix" hint="Blank covers the whole host.">
+     <Field label="Path match" hint="How the path below is read.">
+      {(id) => (
+       <Select id={id} value={editPathMode} onChange={(e) => setEditPathMode(e.target.value as PathArmMode)}>
+        <option value="prefix">Prefix</option>
+        <option value="regex">Regular expression</option>
+       </Select>
+      )}
+     </Field>
+     <Field label="Path" hint={editPathMode === "regex" ? "Blank covers the whole host; otherwise matches the whole path." : "Blank covers the whole host."}>
       {(id) => <Input id={id} value={editPath} onChange={(e) => setEditPath(e.target.value)} placeholder="/api" />}
      </Field>
      <Field label="Protocol" hint="Blank matches either scheme.">
