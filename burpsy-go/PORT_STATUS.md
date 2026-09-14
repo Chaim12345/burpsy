@@ -27,13 +27,22 @@ Ported `crates/bcheck/src/insertion.rs` (722 lines) to `internal/bcheck/insertio
   `Content-Length`; appending keeps the base value, replacing overwrites it.
 - Encoding escapes only the bytes that decide how the container parses
   (percent-escape for form containers, JSON-escape inside string literals,
-  nothing for header values). The base value is never re-encoded — that would
-  rewrite bytes the check did not ask to change.
-- Honest counting: a multipart, XML or non-UTF-8 body is **declined** (recorded
-  as skipped), never silently empty. An unparseable request is also declined.
-- 22 tests in `insertion_test.go` mirroring the Rust suite word for word
-  (fixed order, no-`=` clauses skipped, JSON string-only points, reserved
-  headers, mid-codepoint splice flooring, Content-Length following the body).
+  XML-escape in text nodes and attribute values, backslash-escape inside a MIME
+  quoted-string, nothing for header values or a multipart part's content). The
+  base value is never re-encoded — that would rewrite bytes the check did not ask
+  to change. A container with no escape (a part's content) refuses a payload that
+  would end it rather than rewriting it.
+- Honest counting: a plain-text or non-UTF-8 body, or a multipart body whose
+  framing cannot be read, is **declined** (recorded as skipped), never silently
+  empty. An unparseable request is also declined. XML bodies, multipart parts
+  and multipart attributes are modelled (burpsy-react-ui-63jg) and yield points
+  of their own.
+- `insertion_test.go` mirrors the Rust suite's insertion-point cases word for
+  word (fixed order, no-`=` clauses skipped, JSON string-only points, reserved
+  headers, mid-codepoint splice flooring, Content-Length following the body) and
+  carries the Go-only families beside them: synthetic headers, the six
+  relocations, the per-request cap, XML and multipart containers, and the
+  refusals described above.
 
 **Found and fixed along the way:** `messageFields` (the `{…response.body}` /
 `{…request.body}` resolver in `bcheck.go`) and the new `parseRequest` both

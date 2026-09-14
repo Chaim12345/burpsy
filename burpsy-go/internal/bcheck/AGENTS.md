@@ -71,6 +71,22 @@ to an already-mutated request, splices at offsets that no longer mean what they 
 are deliberately **not** enumerated (a miss, never a false positive); `any` **includes headers**
 (JWT checks depend on it).
 
+### One container model, shared with Intruder
+
+`bodyPoints` dispatches on what the body *is*: JSON string values, XML text nodes and attribute
+values, multipart part contents and their `name`/`filename` attributes, form pairs, and the
+JSON/base64/XML hidden inside any parameter value (nested points). Each is spliced with the escape
+its container needs, and a container with no escape refuses a payload that would end it (a boundary
+delimiter inside its own part's content, a line break inside a quoted header attribute) rather than
+rewriting the payload into something the check did not send. A body that is no container — plain
+text, non-UTF-8, a multipart body whose framing cannot be read — is **declined and named**, never
+silently empty.
+
+`internal/intruder` does not keep a second parser for any of this: it adopts the enumerator's points
+through `InsertionPoint.BodyWindow` and rebuilds payloads through `WireValue` (burpsy-react-ui-33t,
+63jg). Adding or changing a container means changing it here — a parser added beside this one would
+be a second model of the same format, and the two would drift.
+
 ### Go-specific hardening not in the Rust reference
 
 - `compiledRegexCache` (a `sync.Map`) memoises regex compilation across `run for each` iterations.

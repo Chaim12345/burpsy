@@ -27,7 +27,8 @@
 // events with three different causes, and this file keeps them apart on purpose:
 //
 //   - A **skipped insertion point** is a place in the request the enumerator would not build a point
-//     for — a multipart body it does not model, or a point past the per-request ceiling. Nothing was
+//     for — a plain-text body it models no container in, the parts of a multipart body whose framing
+//     it cannot read, or a point past the per-request ceiling. Nothing was
 //     dispatched there and nothing failed; the request simply has attack surface this tool declines
 //     to reach. Carried as AuditItemPoint rows with a skipped status and the enumerator's own reason.
 //   - An **abandoned dispatch unit** is a unit the check-failure breaker gave up on after
@@ -570,7 +571,7 @@ func (l *AuditItemLedger) setStateLocked(row *AuditItem, state ItemState, cancel
 // resolvePoints attributes the item's outcome to each enumerated point.
 //
 // The two skip statuses are left alone: they are the enumerator's answer about a place, decided
-// before any dispatch, and an audit's outcome cannot change whether a multipart body was modelled.
+// before any dispatch, and an audit's outcome cannot change whether a body's container was modelled.
 func resolvePoints(row *AuditItem, o AuditOutcome) {
 	status := pointStatusFor(row, o)
 	detail := ""

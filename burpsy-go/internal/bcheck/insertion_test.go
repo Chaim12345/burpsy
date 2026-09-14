@@ -2,6 +2,10 @@ package bcheck
 
 import (
 	"encoding/base64"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"mime/multipart"
 	"reflect"
 	"strconv"
 	"strings"
@@ -23,6 +27,43 @@ func names(ps []InsertionPoint) []string {
 	}
 	return out
 }
+
+func baseValues(ps []InsertionPoint) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.BaseValue)
+	}
+	return out
+}
+
+// postBody builds a POST whose Content-Length actually matches the body, so a
+// test never depends on what a parser does with a stale length.
+func postBody(ctype, body string) []byte {
+	return []byte(fmt.Sprintf("POST /u HTTP/1.1\r\nHost: x\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n%s", ctype, len(body), body))
+}
+
+// bodyOf returns the body of a raw request. SplitN with n=2 matters: a
+// multipart body contains blank lines of its own.
+func bodyOf(t *testing.T, raw []byte) string {
+	t.Helper()
+	half := strings.SplitN(string(raw), "\r\n\r\n", 2)
+	if len(half) != 2 {
+		t.Fatalf("spliced request has no header/body separator, so nothing was sent as a body: %q", raw)
+	}
+	return half[1]
+}
+
+// twoPartForm is a well-formed multipart body: a plain field and a file part.
+const twoPartForm = "--B\r\n" +
+	"Content-Disposition: form-data; name=\"user\"\r\n" +
+	"\r\n" +
+	"bo\r\n" +
+	"--B\r\n" +
+	"Content-Disposition: form-data; name=\"avatar\"; filename=\"a.txt\"\r\n" +
+	"Content-Type: text/plain\r\n" +
+	"\r\n" +
+	"hello\r\n" +
+	"--B--\r\n"
 
 func TestAnyEnumeratesQueryHeadersAndCookiesInAFixedOrder(t *testing.T) {
 	r := req(t, "GET /s?q=cat&page=2 HTTP/1.1\r\nHost: x.test\r\nUser-Agent: burpsy\r\nCookie: sid=abc; theme=dark\r\n\r\n")
@@ -72,14 +113,154 @@ func TestJSONStringValuesArePointsAndNumbersAreNot(t *testing.T) {
 	}
 }
 
-func TestAMultipartBodyYieldsNoPoints(t *testing.T) {
-	// We do not model multipart framing, and a payload spliced blind into it
-	// produces a body the server rejects before the application sees the payload.
-	r := req(t, "POST /u HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n")
-	ps, _ := Enumerate(r, []string{"any"})
-	for _, p := range ps {
-		if p.Kind == IpBody {
-			t.Errorf("multipart body produced a body point %q; framing is not modelled", p.Name)
+func TestAMultipartBodyYieldsAPointPerPartContentNameAndFilename(t *testing.T) {
+	// A multipart form's parameters are the parts. Falling back to one
+	// entire-body point would report "the body is injectable" without ever
+	// saying which field, which is not a finding.
+	r := postBody("multipart/form-data; boundary=B", twoPartForm)
+	ps, declined := Enumerate(r, []string{"body"})
+	want := []string{"body:user", "body:user name", "body:avatar", "body:avatar name", "body:avatar filename"}
+	if !reflect.DeepEqual(names(ps), want) {
+		t.Errorf("points = %v, want %v (each part contributes its content and each Content-Disposition attribute it declares)", names(ps), want)
+	}
+	wantBase := []string{"bo", "user", "hello", "avatar", "a.txt"}
+	if !reflect.DeepEqual(baseValues(ps), wantBase) {
+		t.Errorf("BaseValues = %v, want %v (the raw wire value, with an attribute's quotes stripped)", baseValues(ps), wantBase)
+	}
+	if len(declined) != 0 {
+		t.Errorf("declined = %v, want none (multipart framing is modelled now, so nothing about this body is skipped)", declined)
+	}
+}
+
+func TestAMultipartPartWithNoNameAttributeIsLabelledByItsPartIndex(t *testing.T) {
+	// A nameless part is still a place a payload goes, so it gets a label a
+	// finding can be attributed to rather than being dropped.
+	body := "--B\r\n" +
+		"Content-Disposition: form-data; name=\"user\"\r\n\r\nbo\r\n" +
+		"--B\r\n" +
+		"Content-Type: text/plain\r\n\r\nraw\r\n" +
+		"--B--\r\n"
+	r := postBody("multipart/form-data; boundary=B", body)
+	ps, _ := Enumerate(r, []string{"body"})
+	want := []string{"body:user", "body:user name", "body:part[1]"}
+	if !reflect.DeepEqual(names(ps), want) {
+		t.Errorf("points = %v, want %v (the nameless part is labelled by its own 0-based index, and declares no attribute to inject into)", names(ps), want)
+	}
+	if ps[2].BaseValue != "raw" {
+		t.Errorf("part[1].BaseValue = %q, want %q (the label is synthesised, the value is still read off the wire)", ps[2].BaseValue, "raw")
+	}
+}
+
+func TestAPayloadSplicedIntoOneMultipartPartLeavesTheWholeBodyParseable(t *testing.T) {
+	// The point of splicing one part rather than the whole body: a real
+	// multipart parser must still find every part, and the payload must reach
+	// the application as the bytes the check wrote.
+	r := postBody("multipart/form-data; boundary=B", twoPartForm)
+	ps, _ := Enumerate(r, []string{"body"})
+	const payload = `<script>alert("x")</script>`
+	out, err := ps[0].Apply(r, payload, false)
+	if err != nil {
+		t.Fatalf("a payload with no boundary delimiter in it is spliceable, but Apply refused it: %v", err)
+	}
+	mr := multipart.NewReader(strings.NewReader(bodyOf(t, out)), "B")
+
+	first, err := mr.NextPart()
+	if err != nil {
+		t.Fatalf("the spliced body no longer reads as a part list, so the server would reject it before the payload was seen: %v", err)
+	}
+	if first.FormName() != "user" {
+		t.Errorf("first part is named %q, want %q (the splice must not disturb the part's own headers)", first.FormName(), "user")
+	}
+	got, err := io.ReadAll(first)
+	if err != nil {
+		t.Fatalf("reading the spliced part failed, so its content is not recoverable: %v", err)
+	}
+	if string(got) != payload {
+		t.Errorf("the application would receive %q, not the %q the check wrote: a part's content has no escape, so it must arrive verbatim", got, payload)
+	}
+
+	second, err := mr.NextPart()
+	if err != nil {
+		t.Fatalf("the sibling part disappeared from the spliced body: %v", err)
+	}
+	if second.FormName() != "avatar" || second.FileName() != "a.txt" {
+		t.Errorf("sibling part is %q/%q, want avatar/a.txt (splicing one point must leave every other byte alone)", second.FormName(), second.FileName())
+	}
+	if sib, _ := io.ReadAll(second); string(sib) != "hello" {
+		t.Errorf("sibling part content = %q, want %q (a finding is only attributable if nothing else moved)", sib, "hello")
+	}
+	if _, err := mr.NextPart(); err != io.EOF {
+		t.Errorf("the part list did not end where it should (err = %v); a spliced body that grew a part is framing the check invented", err)
+	}
+}
+
+func TestAMultipartAttributeSpliceBackslashEscapesQuotesAndBackslashes(t *testing.T) {
+	// A part's `name` lives in a MIME quoted-string. An unescaped quote would
+	// end the attribute and the header would mean something the check did not write.
+	r := postBody("multipart/form-data; boundary=B", twoPartForm)
+	ps, _ := Enumerate(r, []string{"body"})
+	if ps[1].Name != "user name" {
+		t.Fatalf("ps[1] is %q, want the `user name` attribute point", ps[1].Name)
+	}
+	out, err := ps[1].Apply(r, `a"b\c`, false)
+	if err != nil {
+		t.Fatalf("a quote and a backslash are escapable in a quoted-string, so Apply should not refuse them: %v", err)
+	}
+	const wantAttr = `name="a\"b\\c"`
+	if !strings.Contains(bodyOf(t, out), wantAttr) {
+		t.Errorf("body = %q, want it to carry %s so the quoted-string still closes where it started and the header keeps meaning what the check wrote", bodyOf(t, out), wantAttr)
+	}
+}
+
+func TestAMultipartPartContentRefusesAPayloadCarryingTheBoundaryDelimiter(t *testing.T) {
+	// A part's content has no escape, so a payload that would start the next
+	// part cannot be written into one. Rewriting it would send bytes the check
+	// never wrote; refusing says so out loud.
+	r := postBody("multipart/form-data; boundary=B", twoPartForm)
+	ps, _ := Enumerate(r, []string{"body"})
+	if _, err := ps[0].Apply(r, "x\r\n--Bevil", false); err == nil {
+		t.Error("Apply accepted a payload containing CRLF + the boundary delimiter; that payload re-frames every part after it, so the request under test is no longer the one the check described")
+	}
+}
+
+func TestANestedPointInsideAMultipartPartRefusesTheBoundaryDelimiter(t *testing.T) {
+	// The outer container decides what a payload may contain, and the check
+	// happens on the value that is actually spliced — not on the payload. XML
+	// escaping leaves a CRLF and the delimiter bytes themselves intact, so a
+	// nested point whose rebuilt inner value would re-frame its part has to be
+	// refused for exactly the reason its parent is.
+	body := "--B\r\n" +
+		"Content-Disposition: form-data; name=\"doc\"\r\n" +
+		"\r\n" +
+		"<r><v>seed</v></r>\r\n" +
+		"--B--\r\n"
+	r := postBody("multipart/form-data; boundary=B", body)
+	ps, _ := Enumerate(r, []string{"body"})
+	var nested *InsertionPoint
+	for i := range ps {
+		if ps[i].coding == codingNested {
+			nested = &ps[i]
+		}
+	}
+	if nested == nil {
+		t.Fatalf("no nested point inside the part's XML value: %v", names(ps))
+	}
+	if _, err := nested.Apply(r, "ok", false); err != nil {
+		t.Fatalf("an ordinary payload must still splice into the nested value, but Apply refused it: %v", err)
+	}
+	if _, err := nested.Apply(r, "x\r\n--Bevil", false); err == nil {
+		t.Error("a nested payload that rebuilds to CRLF + the delimiter was accepted; it re-frames the part exactly as a raw one would, so the refusal must survive the inner escape")
+	}
+}
+
+func TestAMultipartAttributeRefusesACarriageReturnLineFeedOrNUL(t *testing.T) {
+	// There is no spelling of a line break inside a MIME quoted-string, so
+	// these payloads end the header line instead of landing in the value.
+	r := postBody("multipart/form-data; boundary=B", twoPartForm)
+	ps, _ := Enumerate(r, []string{"body"})
+	for _, bad := range []string{"a\rb", "a\nb", "a\x00b"} {
+		if _, err := ps[1].Apply(r, bad, false); err == nil {
+			t.Errorf("Apply accepted %q into a Content-Disposition attribute; that byte cannot appear in a quoted-string, so the header would end early and the probe would not be the one described", bad)
 		}
 	}
 }
@@ -302,15 +483,15 @@ func TestARelocateQueryToBodyOntoAMultipartBodyIsDeclinedNotClean(t *testing.T) 
 	}
 }
 
-func TestARelocateBodyToQueryFromAnUnmodelledBodySimplyHasNoPairs(t *testing.T) {
-	// The direction asymmetry: body→query reads the *source* (formKVPairs), so
-	// a multipart body has no relocatable pairs and yields nothing, while
-	// query→body reads the *target* and must decline. Neither claim is "tested,
-	// found nothing".
+func TestARelocateBodyToQueryFromAMultipartBodySimplyHasNoPairs(t *testing.T) {
+	// The direction asymmetry: body→query reads the *source* through the form
+	// parser, and a multipart body is not a form, so it has no relocatable
+	// pairs and yields nothing — while query→body reads the *target* and must
+	// decline. Neither claim is "tested, found nothing".
 	r := req(t, "POST /u?user=bo HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n")
 	ps, declined := Enumerate(r, []string{"relocate_body_to_query"})
 	if len(ps) != 0 {
-		t.Errorf("points = %v, want none (multipart body is not parsed as a form)", names(ps))
+		t.Errorf("points = %v, want none (a multipart body has no k=v pairs to relocate, whatever its parts are)", names(ps))
 	}
 	if len(declined) != 0 {
 		t.Errorf("declined = %v, want none (the source does not parse as a form, so there is nothing to relocate)", declined)
@@ -374,24 +555,59 @@ func TestARequestWithNowhereToInjectYieldsNoPoints(t *testing.T) {
 	}
 }
 
-func TestAMultipartBodyIsReportedAsDeclinedNotSilentlyEmpty(t *testing.T) {
-	// The old behaviour (before the Declined type existed) returned no points
-	// and no record of the refusal, so a `given body insertion point` check
-	// against a multipart form reported "tested, found nothing" while testing
-	// nothing at all — the silent false negative.
-	r := req(t, "POST /u HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 40\r\n\r\n--B\r\nContent-Disposition: form-data\r\n\r\nv\r\n")
+func TestAMultipartBodyWithNoBoundaryParameterIsDeclinedNotSilentlyEmpty(t *testing.T) {
+	// The delimiter is the whole framing. Without it there is no way to know
+	// where a part begins, and a blind splice would invent framing the server
+	// rejects before the application sees the payload — so it is recorded as
+	// skipped rather than reported as tested-and-clean.
+	r := postBody("multipart/form-data", twoPartForm)
 	ps, declined := Enumerate(r, []string{"body"})
 	if len(ps) != 0 {
-		t.Errorf("points = %v, want none (multipart framing is not spliced into)", names(ps))
+		t.Errorf("points = %v, want none (the parts cannot be located without a boundary)", names(ps))
 	}
 	if len(declined) != 1 {
-		t.Fatalf("declined = %d, want 1 (the refusal is recorded, not swallowed)", len(declined))
+		t.Fatalf("declined = %d, want exactly 1 (the refusal is recorded, not swallowed into a clean empty result)", len(declined))
 	}
 	if declined[0].What != "request body" {
-		t.Errorf("declined.What = %q, want %q", declined[0].What, "request body")
+		t.Errorf("declined.What = %q, want %q so the operator knows which place was skipped", declined[0].What, "request body")
 	}
 	if !strings.Contains(declined[0].Reason, "multipart") {
-		t.Errorf("declined.Reason = %q, want it to name what was refused", declined[0].Reason)
+		t.Errorf("declined.Reason = %q, want it to name multipart framing as the thing that could not be read", declined[0].Reason)
+	}
+}
+
+func TestAMultipartBodyWhosePartListNeverClosesIsDeclined(t *testing.T) {
+	// A part list with no closing `--B--` was only half read. Splicing into a
+	// half-read list is guessing at framing, which is the one thing the
+	// enumerator refuses to do.
+	r := postBody("multipart/form-data; boundary=B", "--B\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nv\r\n")
+	ps, declined := Enumerate(r, []string{"body"})
+	if len(ps) != 0 {
+		t.Errorf("points = %v, want none (the part list was never closed, so its parts are not trustworthy ranges)", names(ps))
+	}
+	if len(declined) != 1 {
+		t.Fatalf("declined = %d, want exactly 1", len(declined))
+	}
+	if !strings.Contains(declined[0].Reason, "multipart") {
+		t.Errorf("declined.Reason = %q, want it to name multipart framing", declined[0].Reason)
+	}
+}
+
+func TestAPlainTextBodyIsDeclinedWithoutClaimingItWasMultipartOrXML(t *testing.T) {
+	// A body in no modelled container is still skipped rather than reported
+	// clean — but the reason has to name what was actually there, or the
+	// operator reads a decline about a container the request never carried.
+	r := postBody("text/plain", "not a container at all")
+	ps, declined := Enumerate(r, []string{"body"})
+	if len(ps) != 0 {
+		t.Errorf("points = %v, want none (plain text has no parameter structure to target)", names(ps))
+	}
+	if len(declined) != 1 {
+		t.Fatalf("declined = %d, want exactly 1", len(declined))
+	}
+	low := strings.ToLower(declined[0].Reason)
+	if strings.Contains(low, "multipart") || strings.Contains(low, "xml") {
+		t.Errorf("declined.Reason = %q, but this body is neither multipart nor XML; a decline that misnames the container misdirects whoever reads it", declined[0].Reason)
 	}
 }
 
@@ -1103,24 +1319,115 @@ func Test_expandNested_max_bound(t *testing.T) {
 	}
 }
 
-func Test_xmlTextSpans_basic(t *testing.T) {
-	spans := xmlTextSpans("<a>one</a><b>two</b>")
-	if len(spans) != 2 {
-		t.Fatalf("got %d spans: %v", len(spans), spans)
+func Test_xmlPoints_namesEachTextNodeAfterItsElementAndRecordsItsSpan(t *testing.T) {
+	pts := xmlPoints("<a>one</a><b>two</b>")
+	if len(pts) != 2 {
+		t.Fatalf("got %d points %v, want one per text node: both `one` and `two` are values an application reads", len(pts), pts)
 	}
-	if spans[0] != [2]int{3, 6} {
-		t.Errorf("span[0] = %v, want [3,6]", spans[0])
+	if pts[0].name != "a" || pts[0].start != 3 || pts[0].end != 6 {
+		t.Errorf("point[0] = %+v, want name a spanning [3,6); a span that is not the exact bytes of `one` splices over the tags around it", pts[0])
 	}
-	// The second text node "two" is at byte 13..16 (between '>' and '<').
-	if spans[1] != [2]int{13, 16} {
-		t.Errorf("span[1] = %v, want [13,16]", spans[1])
+	if pts[1].name != "b" || pts[1].start != 13 || pts[1].end != 16 {
+		t.Errorf("point[1] = %+v, want name b spanning [13,16)", pts[1])
 	}
 }
 
-func Test_xmlTextSkipsWhitespaceOnly(t *testing.T) {
-	spans := xmlTextSpans("<a>   </a>")
-	if len(spans) != 0 {
-		t.Fatalf("whitespace-only text node should be skipped, got %v", spans)
+func Test_xmlPoints_skipsAWhitespaceOnlyTextNode(t *testing.T) {
+	// Whitespace between tags is layout, not a value: a payload spliced there
+	// is not reaching any field the application reads.
+	if pts := xmlPoints("<a>   </a>"); len(pts) != 0 {
+		t.Fatalf("got %v, want no points for a text node that is only whitespace", pts)
+	}
+}
+
+func TestAnXMLBodyYieldsAPointPerTextNodeAndAttributeValueNamedByElementPath(t *testing.T) {
+	// XML fields used to fall back to one entire-body point, which reports
+	// "the body is injectable" without naming the element — not a finding.
+	// Repeated siblings need distinguishing for the same reason.
+	r := postBody("application/xml", `<order id="7"><item>bolt</item><item>nut</item></order>`)
+	ps, declined := Enumerate(r, []string{"body"})
+	want := []string{"body:order@id", "body:order/item", "body:order/item[1]"}
+	if !reflect.DeepEqual(names(ps), want) {
+		t.Errorf("points = %v, want %v (an attribute is named `path@attr`, and the second `item` is indexed so two findings cannot collapse into one name)", names(ps), want)
+	}
+	wantBase := []string{"7", "bolt", "nut"}
+	if !reflect.DeepEqual(baseValues(ps), wantBase) {
+		t.Errorf("BaseValues = %v, want %v (the value already on the wire, without its quotes or surrounding tags)", baseValues(ps), wantBase)
+	}
+	if len(declined) != 0 {
+		t.Errorf("declined = %v, want none (an XML body is a modelled container now)", declined)
+	}
+}
+
+func TestAnXMLBodyIsRecognisedByItsOwnShapeNotOnlyByContentType(t *testing.T) {
+	// The same document posted as text/plain is the same document; requiring
+	// the header would leave those bodies untested.
+	r := postBody("text/plain", `<order><item>bolt</item></order>`)
+	ps, declined := Enumerate(r, []string{"body"})
+	if !reflect.DeepEqual(names(ps), []string{"body:order/item"}) {
+		t.Errorf("points = %v, want [body:order/item]", names(ps))
+	}
+	if len(declined) != 0 {
+		t.Errorf("declined = %v, want none", declined)
+	}
+}
+
+func TestAPayloadSplicedIntoAnXMLTextNodeKeepsTheDocumentParseable(t *testing.T) {
+	// The escape has to survive a round trip: a real parser must still read the
+	// document, and it must hand the application back exactly the bytes the
+	// check wrote, not the entities they were spelled with on the wire.
+	r := postBody("application/xml", `<order id="7"><item>bolt</item><item>nut</item></order>`)
+	ps, _ := Enumerate(r, []string{"body"})
+	if ps[1].Name != "order/item" {
+		t.Fatalf("ps[1] is %q, want the first item's text node", ps[1].Name)
+	}
+	const payload = `x<y>&"z'`
+	out, err := ps[1].Apply(r, payload, false)
+	if err != nil {
+		t.Fatalf("every byte of this payload is escapable in XML, so Apply should not refuse it: %v", err)
+	}
+	var got struct {
+		ID    string   `xml:"id,attr"`
+		Items []string `xml:"item"`
+	}
+	if err := xml.Unmarshal([]byte(bodyOf(t, out)), &got); err != nil {
+		t.Fatalf("the spliced document no longer parses, so the server would reject it before the payload was seen: %v", err)
+	}
+	if len(got.Items) != 2 {
+		t.Fatalf("the spliced document has %d items, want 2: the splice reshaped the tree instead of filling one value", len(got.Items))
+	}
+	if got.Items[0] != payload {
+		t.Errorf("the application would receive %q, not the %q the check wrote: the entities must decode back to the payload byte for byte", got.Items[0], payload)
+	}
+	if got.Items[1] != "nut" || got.ID != "7" {
+		t.Errorf("sibling item = %q and id = %q, want nut/7: splicing one point must leave every other value alone", got.Items[1], got.ID)
+	}
+}
+
+func TestAPayloadSplicedIntoAnXMLAttributeKeepsTheAttributeQuoted(t *testing.T) {
+	// A bare quote in an attribute value ends the attribute, and everything
+	// after it becomes markup the check never wrote.
+	r := postBody("application/xml", `<order id="7"><item>bolt</item></order>`)
+	ps, _ := Enumerate(r, []string{"body"})
+	if ps[0].Name != "order@id" {
+		t.Fatalf("ps[0] is %q, want the id attribute point", ps[0].Name)
+	}
+	out, err := ps[0].Apply(r, `9" evil="1`, false)
+	if err != nil {
+		t.Fatalf("a quote is escapable in an attribute value, so Apply should not refuse it: %v", err)
+	}
+	var got struct {
+		ID   string `xml:"id,attr"`
+		Evil string `xml:"evil,attr"`
+	}
+	if err := xml.Unmarshal([]byte(bodyOf(t, out)), &got); err != nil {
+		t.Fatalf("the spliced document no longer parses: %v", err)
+	}
+	if got.ID != `9" evil="1` {
+		t.Errorf("id decoded to %q, want the payload verbatim", got.ID)
+	}
+	if got.Evil != "" {
+		t.Errorf("the splice grew a second attribute evil=%q; the payload broke out of the value it was written into", got.Evil)
 	}
 }
 

@@ -317,7 +317,7 @@ func TestCoverageReportsDeclinedPointsThatWereNeverTested(t *testing.T) {
 		t.Fatalf("NewProbeHarness: %v", err)
 	}
 	h.declined = append(h.declined, bcheck.Declined{
-		What: "request body", Reason: "multipart body: framing not modelled"})
+		What: "request body", Reason: "plain text: matches no modelled container"})
 
 	cov := h.Coverage(nil, 1)
 	if cov.PointsDeclined != 1 {

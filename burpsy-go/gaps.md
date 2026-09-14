@@ -163,6 +163,23 @@
 > Evidence convention: Rust paths are crate-relative (`crates/scanner/...`);
 > Go paths are repo-relative (`internal/scanner/...`).
 
+> **Dated divergence — 2026-09-14: XML and multipart bodies are modelled, and the
+> oracle is not.** Rust `crates/bcheck/src/insertion.rs`'s `body_points` refuses
+> an XML or multipart body outright (`"body matches no modelled container
+> (multipart, XML or plain text)"`), so a `given body insertion point` check
+> against one is skipped in full and Intruder falls back to a single
+> entire-body position (the Rust tree is frozen; this is not a
+> "fix the oracle" note). Go now models both — `internal/bcheck/insertion.go`'s
+> `multipartBodyPoints` (one point per part's content, plus its `name` and
+> `filename` attributes) and `xmlPoints` (one point per text node and attribute
+> value, named by element path) — and `internal/intruder/points_bcheck.go`
+> adopts them, so the two consumers of the enumerator keep one container model.
+> This is deliberate: a blunt entire-body position makes XML and multipart
+> attacks noisier than Burp's, and the single-parser rule only holds if the
+> containers live in `internal/bcheck`. Declines remain for a non-UTF-8 body, a
+> plain-text body, and a multipart body whose framing cannot be read
+> (burpsy-react-ui-63jg).
+>
 > **Dated divergence — 2026-08-19: HTTP history is proxy traffic, by attribution.**
 > Rust leaks tool traffic into Proxy history: `repeater_send`
 > (`crates/web/src/lib.rs:679`) calls `store.add_exchange` and `history`

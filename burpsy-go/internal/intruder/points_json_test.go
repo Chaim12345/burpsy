@@ -339,17 +339,6 @@ func contentLength(raw []byte) int {
 	return -1
 }
 
-func TestMultipartBodyGainsNoContainerPoints(t *testing.T) {
-	body := "--X\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nv\r\n--X--"
-	raw := "POST /up HTTP/1.1\r\nHost: t.test\r\nContent-Type: multipart/form-data; boundary=X\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body
-	pts := FindPoints(storeReq(t, raw), AllPointConfig())
-	for _, p := range pts {
-		if p.Kind == PointBodyJSONValue || p.Kind == PointBodyNestedValue {
-			t.Errorf("multipart must not gain container points: %+v", p)
-		}
-	}
-}
-
 func bodyOf(raw []byte) []byte {
 	if i := indexOf(raw, []byte("\r\n\r\n")); i >= 0 {
 		return raw[i+4:]

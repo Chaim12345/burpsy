@@ -36,6 +36,13 @@ const (
 	PointHeaderValue
 	PointBodyJSONValue
 	PointBodyNestedValue
+	// PointBodyXMLValue is a text node or attribute value of an XML body.
+	PointBodyXMLValue
+	// PointBodyMultipartValue is one part's content in a multipart body.
+	PointBodyMultipartValue
+	// PointBodyMultipartAttr is a quoted parameter value on a multipart part's
+	// Content-Disposition header — its `name` or `filename`.
+	PointBodyMultipartAttr
 	PointManual
 )
 
@@ -63,6 +70,12 @@ func (k PointKind) String() string {
 		return "body_json_value"
 	case PointBodyNestedValue:
 		return "body_nested_value"
+	case PointBodyXMLValue:
+		return "body_xml_value"
+	case PointBodyMultipartValue:
+		return "body_multipart_value"
+	case PointBodyMultipartAttr:
+		return "body_multipart_attr"
 	case PointManual:
 		return "manual"
 	default:
@@ -74,16 +87,22 @@ func (k PointKind) String() string {
 // point's window. Native intruder points splice raw bytes — wire-faithful, the
 // operator's payload crosses exactly as typed. Points adopted from the scanner
 // enumerator (internal/bcheck, see points_bcheck.go) live inside a container
-// whose framing must survive the splice: a JSON string value needs its payload
-// escaped, and a value nested inside base64/XML needs the whole outer wire
-// value rebuilt. escapeNone is the zero value so every point constructed
-// before this existed behaves exactly as before.
+// whose framing must survive the splice, and the enumerator already knows the
+// escape for each one: JSON string, XML text node or attribute value, MIME
+// quoted-string, or a rebuilt JSON/base64/XML-nested wire value. escapeNone is
+// the zero value so every point constructed before this existed behaves exactly
+// as before.
 type escapeKind uint8
 
 const (
 	escapeNone escapeKind = iota
-	escapeJSON
-	escapeNested
+	// escapeBcheck rebuilds the point's whole wire value through the enumerator
+	// that produced it (bcheck.InsertionPoint.WireValue), which is the single
+	// definition of how a payload is escaped for each container, shared with the
+	// scanner. A payload the container cannot hold at all is refused there and
+	// the splice is skipped, never rewritten into something the operator did not
+	// type.
+	escapeBcheck
 )
 
 // InsertionPoint is an attack position: a span into the request plus what it is.
@@ -93,8 +112,8 @@ type InsertionPoint struct {
 	Label string
 
 	// escape and bc are zero/nil for every natively discovered point. bc points
-	// at the scanner-side point for body_nested_value positions, whose wire
-	// value must be rebuilt per payload (decode → splice → re-encode).
+	// at the scanner-side point for every position adopted from the enumerator
+	// (JSON, XML, multipart, nested), whose wire value is rebuilt per payload.
 	escape escapeKind
 	bc     *bcheck.InsertionPoint
 }
@@ -279,10 +298,11 @@ func FindPoints(msg *core.StoredMessage, cfg *PointConfig) []InsertionPoint {
 				PointBodyParamValue, PointBodyParamName, &out)
 		}
 		if cfg.BodyParams {
-			// JSON fields (and base64/XML nested inside body values) come from the
-			// scanner's enumerator — see points_bcheck.go for why Intruder keeps
-			// exactly one body-container parser.
-			out = appendJSONAndNestedPoints(raw, msg, body, raw[body.Offset:body.End()], out)
+			// Every other body container — JSON fields, XML nodes and attributes,
+			// multipart parts and their attributes, and base64/XML nested inside any
+			// of them — comes from the scanner's enumerator; see points_bcheck.go for
+			// why Intruder keeps exactly one body-container parser.
+			out = appendContainerPoints(raw, msg, body, raw[body.Offset:body.End()], out)
 		}
 		if cfg.EntireBody {
 			out = append(out, InsertionPoint{
@@ -349,10 +369,19 @@ func ApplyAll(raw []byte, places []ApplyPlace) []byte {
 	for _, pl := range places {
 		payload, ok := escapePayload(pl.Point, pl.Payload)
 		if !ok {
-			// A nested wire value failed to rebuild. Enumeration decoded the very
-			// same bytes, so this is unreachable in practice; skipping the splice
-			// keeps the guarantee below — the output is always a well-formed
-			// request — rather than splicing a payload that corrupts the container.
+			// The payload cannot be written into its container at all: a multipart
+			// part's content carrying that part's boundary delimiter, a line break
+			// inside a quoted header attribute, a nested wire value that failed to
+			// rebuild. Splicing it anyway would end the container and send a request
+			// that is corrupt rather than mutated, so the position is dropped and the
+			// guarantee below holds — the output is always a well-formed request.
+			//
+			// What this layer cannot do is SAY so: ApplyAll returns bytes, and the
+			// attempt goes out as the unmodified base request. The scanner refuses
+			// the same payload at the same point and reports it (bcheck's Apply
+			// returns the refusal as an error), so the two consumers agree about
+			// what is unsendable; surfacing the dropped attempt in the attack
+			// report is its own gap (burpsy-react-ui-194b).
 			continue
 		}
 		start := pl.Point.Span.Offset

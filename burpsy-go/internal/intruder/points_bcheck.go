@@ -12,25 +12,28 @@ import (
 // Intruder used to keep its own body parser, and it only knew form-encoding:
 // a JSON body yielded a single entire-body position, so no individual field of
 // a JSON API request could be attacked (burpsy-react-ui-33t). The scanner's
-// enumerator in internal/bcheck already models JSON string values and
-// base64/XML nested containers, escapes payloads per container and refuses
-// bodies it would corrupt. Rather than grow a second parser beside it — two
-// parsers means two container models drifting apart — Intruder now consumes
-// that enumerator for body containers the form walker cannot read.
+// enumerator in internal/bcheck already models body containers — JSON string
+// values, base64/XML nested values, and (since burpsy-react-ui-63jg) XML text
+// nodes and attributes and multipart parts — escapes payloads per container and
+// refuses bodies it would corrupt. Rather than grow a second parser beside it —
+// two parsers means two container models drifting apart — Intruder consumes
+// that enumerator for every body container the native walker cannot read.
 //
 // What is deliberately *not* taken from bcheck: form bodies (the native
 // form walker already covers them, wire-faithful and unescaped), cookies,
 // headers, query and path (same reason). Only positions the native discovery
-// cannot express arrive here: body_json_value and body_nested_value.
+// cannot express arrive here, and bcheck tells Intruder which container each one
+// is (ContainerCode) so the kind reported to the operator names it.
 //
-// Top-level XML and multipart bodies stay absent on purpose: bcheck declines
-// them today, and the single-parser policy says Intruder grows XML support the
-// day the scanner does — those bodies keep the entire-body fallback meanwhile.
+// A body container bcheck declines — plain text, a non-UTF-8 body, a multipart
+// body whose framing cannot be read — contributes no position and keeps the
+// entire-body fallback, which is what a request with no modelled structure has
+// always had.
 
-// appendJSONAndNestedPoints maps the scanner enumerator's body points onto
-// intruder positions. bcheck's windows are body-relative; intruder's spans are
-// absolute into the raw request, so every window is shifted by the body span.
-// The enumerator's refusals are ignored by design: a declined body simply
+// appendContainerPoints maps the scanner enumerator's body points onto intruder
+// positions. bcheck's windows are body-relative; intruder's spans are absolute
+// into the raw request, so every window is shifted by the body span. The
+// enumerator's refusals are ignored by design: a declined body simply
 // contributes no new positions, which is what the pre-33t behaviour was.
 //
 // Chunked bodies are the rrm6 seam. ParseRequestEdit dechunks before
@@ -41,9 +44,9 @@ import (
 // chunk size before the splice intact — the only thing rewriteBodyFraming has
 // to fix afterwards is the last chunk's size. A window whose endpoints fall in
 // different chunks has no wire span at all: refusing it keeps the guarantee
-// that an attack request is never a half-spliced one, the same posture the
-// multipart decline takes.
-func appendJSONAndNestedPoints(raw []byte, msg *core.StoredMessage, body core.Span, rawBody []byte, out []InsertionPoint) []InsertionPoint {
+// that an attack request is never a half-spliced one, the same posture a
+// declined container takes.
+func appendContainerPoints(raw []byte, msg *core.StoredMessage, body core.Span, rawBody []byte, out []InsertionPoint) []InsertionPoint {
 	// A negative limit is uncapped: the scanner's per-request ceiling guards
 	// audit cost, while an attack is bounded by its own max-payload and
 	// position-count limits downstream.
@@ -51,34 +54,48 @@ func appendJSONAndNestedPoints(raw []byte, msg *core.StoredMessage, body core.Sp
 	points, _ := bcheck.EnumerateWithLimit(raw, []string{string(bcheck.IpBody)}, -1)
 	for i := range points {
 		p := &points[i]
-		if start, end, ok := p.BodyJSONWindow(); ok {
-			off, ln, ok := wireWindow(rawBody, start, end, chunked)
-			if !ok {
-				continue
-			}
-			out = append(out, InsertionPoint{
-				Kind:   PointBodyJSONValue,
-				Span:   core.Span{Offset: body.Offset + off, Len: ln},
-				Label:  p.Name,
-				escape: escapeJSON,
-			})
+		start, end, code, ok := p.BodyWindow()
+		if !ok {
 			continue
 		}
-		if start, end, ok := p.BodyNestedWindow(); ok {
-			off, ln, ok := wireWindow(rawBody, start, end, chunked)
-			if !ok {
-				continue
-			}
-			out = append(out, InsertionPoint{
-				Kind:   PointBodyNestedValue,
-				Span:   core.Span{Offset: body.Offset + off, Len: ln},
-				Label:  p.Name,
-				escape: escapeNested,
-				bc:     p,
-			})
+		kind, ok := kindForContainer(code)
+		if !ok {
+			continue
 		}
+		off, ln, ok := wireWindow(rawBody, start, end, chunked)
+		if !ok {
+			continue
+		}
+		out = append(out, InsertionPoint{
+			Kind:   kind,
+			Span:   core.Span{Offset: body.Offset + off, Len: ln},
+			Label:  p.Name,
+			escape: escapeBcheck,
+			bc:     p,
+		})
 	}
 	return out
+}
+
+// kindForContainer names, for the operator, where a payload adopted from the
+// enumerator lands. A container with no kind is not a position Intruder can
+// report — the accessor returns ContainerNone for exactly the points the native
+// walker already discovers, and a new container added to bcheck without a kind
+// here is skipped rather than mislabelled.
+func kindForContainer(code bcheck.ContainerCode) (PointKind, bool) {
+	switch code {
+	case bcheck.ContainerJSON:
+		return PointBodyJSONValue, true
+	case bcheck.ContainerNested:
+		return PointBodyNestedValue, true
+	case bcheck.ContainerXML:
+		return PointBodyXMLValue, true
+	case bcheck.ContainerMultipartValue:
+		return PointBodyMultipartValue, true
+	case bcheck.ContainerMultipartAttr:
+		return PointBodyMultipartAttr, true
+	}
+	return 0, false
 }
 
 // wireWindow maps a decoded-frame window [start,end) onto the wire frame and
@@ -174,18 +191,19 @@ func isChunkedBody(raw []byte, msg *core.StoredMessage) bool {
 }
 
 // escapePayload prepares one payload for splicing into its point, per the
-// point's container. Native points pass the payload through byte-for-byte.
+// point's container. Native points pass the payload through byte-for-byte;
+// points adopted from the scanner enumerator are rebuilt by the enumerator
+// itself, so Intruder cannot drift from what the scanner would have sent. A
+// payload the container cannot hold (a part's boundary delimiter inside that
+// part's content, a line break inside a header attribute) is refused here and
+// the payload is skipped rather than rewritten.
 func escapePayload(p *InsertionPoint, payload []byte) ([]byte, bool) {
-	switch p.escape {
-	case escapeJSON:
-		return []byte(bcheck.EscapeJSON(string(payload))), true
-	case escapeNested:
-		v, err := p.bc.WireValue(string(payload))
-		if err != nil {
-			return nil, false
-		}
-		return []byte(v), true
-	default:
+	if p.escape != escapeBcheck {
 		return payload, true
 	}
+	v, err := p.bc.WireValue(string(payload))
+	if err != nil {
+		return nil, false
+	}
+	return []byte(v), true
 }
