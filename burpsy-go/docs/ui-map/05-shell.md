@@ -102,7 +102,15 @@ The dialog displays groups:
 
 ## Menu bar
 
-Rendered at line 422–435. Five top-level menus with dropdown interface.
+Rendered in `src/app.tsx`'s `MENUS`. Five top-level menus with dropdown interface: `burpsy`,
+`File`, `Repeater`, `View`, `Help`.
+
+**Corrected 2026-09-14 (burpsy-react-ui-lje3):** this section used to call the second menu
+"Project", and listed a five-item set that included a `Tools` menu. Neither was true of the live
+console: the menu is labelled **File**, and `Tools` — a burpsy invention, absent from Burp — was
+deleted when the tab list moved into `View` as Burp's visibility switches. The Burp-side comparison
+(what Burp's six menus contain, item by item) is in
+`../ui-parity-verify-2026-09-14-shell-settings.md`.
 
 ### burpsy menu
 **Actions:**
@@ -110,7 +118,7 @@ Rendered at line 422–435. Five top-level menus with dropdown interface.
 - **Command palette** | Shortcut: `mod+K` | Opens palette | Always enabled
 - **Keyboard shortcuts** | Shortcut: `?` | Opens shortcut help modal | Always enabled
 
-### Project menu
+### File menu
 **Actions (grouped):**
 - **Export report (HTML)** | Opens `/api/report/html` in new window | Always enabled
 - **Export report (JSON)** | Opens `/api/report/json` in new window | Always enabled
@@ -124,6 +132,12 @@ Rendered at line 422–435. Five top-level menus with dropdown interface.
 
 ### View menu
 **Actions (grouped):**
+- **Top-level tabs** (group title) — one checkable entry per tool tab, checked when the tab is
+  showing. Unchecking hides it from the strip; the preference is `burpsy.tooltabs.hidden` in
+  localStorage, read back through `lib/tool-tabs.ts`, whose reader treats anything that is not a
+  list of ids as "nothing is hidden".
+- **Restore default tab layout** — clears that preference; disabled when nothing is hidden.
+  (Burp's `mainViewMenuRestoreDefaultLayout`.)
 - **[Light|Dark] theme** | Shortcut: `mod+shift+L` | Toggles between light and dark | Always enabled | Icon: Sun or Moon (context-aware)
 - **Follow the system theme** | Navigates to `"system"` theme setting | Disabled when `theme === "system"` | No shortcut
 - **[Comfortable|Compact] table rows** | Toggles density | Always enabled | Icon: Rows3
@@ -597,7 +611,19 @@ Rendered at line 422–435. Five top-level menus with dropdown interface.
 - Title attribute: Shows hotkey hint (e.g., "Dashboard (alt+1)")
 - Active state: `tool-tab-active` class + `aria-current="page"`
 - Click: Navigates to entry leaf of tool
+- Right-click: a context menu with **Detach tab** (opens the route in a new browser window) and
+  **Hide tab** (writes the same `burpsy.tooltabs.hidden` preference the View menu's checkboxes do)
+- Hidden tabs are not rendered — the operator's View-menu choice wins over the strip, and the tab
+  is still reachable by hotkey, by the command palette and by any link into one of its routes
 - CSS classes: `toolbar-row`, `tool-tabs`, `tool-tab`, `tool-tab-active`
+
+**The fifteen tabs, in strip order** (read off the live console on 2026-09-14, and matching
+`src/nav.ts`): Dashboard `alt+1` · Target `alt+2` · Proxy
+`alt+3` · Intruder `alt+4` · Repeater `alt+5` · Collaborator · Sequencer `alt+6` · Decoder `alt+7`
+· Comparer `alt+8` · Logger `alt+9` · Organizer `alt+0` · Session · Extensions · Discover ·
+Settings. A tab with no hotkey is reachable by click and from the command palette. This section
+previously listed none of them, so the three tabs added after it was written — Extensions, Discover
+and Collaborator — appeared nowhere in this map.
 
 **Toolbar right section (lines 462–479):**
 - **Connection badge**: Tone "good" (green, "live") or "warn" (orange, "offline")
@@ -685,7 +711,7 @@ Rendered at line 422–435. Five top-level menus with dropdown interface.
 <div class="app-shell [has-subtabs]">
   <div class="menu-bar">
     [DropdownMenu] (burpsy)
-    [DropdownMenu] (Project)
+    [DropdownMenu] (File)
     [DropdownMenu] (Repeater)
     [DropdownMenu] (View)
     [DropdownMenu] (Help)
