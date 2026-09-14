@@ -598,6 +598,7 @@ type BuiltInConfig struct {
 	ConsecutiveCheckFailuresToAbandonUnit OptUint32
 	ConsecutiveUnitFailuresToFailItem     OptUint32
 	PauseSessionAfterFailedItems          OptUint32
+	PauseSessionAtFailedItemPercentage    OptUint32
 	// MaximumAuditTimeMinutes is `scanner/audit_optimization/maximum_crawl_and_audit_time`.
 	MaximumAuditTimeMinutes OptUint32
 
@@ -612,6 +613,17 @@ type BuiltInConfig struct {
 	InsertURLPathFilename OptUint32
 	InsertURLPathFolders  OptUint32
 	InsertEntireBody      OptUint32
+
+	// The six `scanner/modifying_parameter_locations/*` keys: whether the run also probes a
+	// parameter that has been *moved* to another location, which is how Burp finds checks that
+	// resolve a parameter differently depending on where it arrives. Each maps 1:1 onto the
+	// bcheck relocation kind of the same name; `url` in Burp's spelling is the query string.
+	RelocateBodyToURL    OptUint32
+	RelocateBodyToCookie OptUint32
+	RelocateURLToBody    OptUint32
+	RelocateURLToCookie  OptUint32
+	RelocateCookieToBody OptUint32
+	RelocateCookieToURL  OptUint32
 
 	// The nine `scanner/issues_reported/*` keys. See AuditConfig for how each is honoured; the three
 	// per-issue selection keys (scan_only_selected_issues, select_individual_issues, selected_issues)
@@ -659,6 +671,10 @@ var builtInConfigKeys = []struct {
 	read func(BuiltInConfig) OptUint32
 	// apply overlays the value onto a run configuration. Nil on an applies=false row.
 	apply func(*AuditConfig, uint32)
+	// max is the largest value this key can carry, or 0 for unbounded. The parser refuses a larger
+	// one rather than truncating it: a percentage of 300 is a corrupted file, and loading it as 44
+	// would run a configuration nobody wrote.
+	max uint32
 	// applies reports whether the key changes engine behaviour when set.
 	applies bool
 }{
@@ -684,6 +700,15 @@ var builtInConfigKeys = []struct {
 		what:    "how many failed items pause the whole session (0 means never pause on a count)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.PauseSessionAfterFailedItems },
 		apply:   func(a *AuditConfig, v uint32) { a.PauseSessionAfterFailedItems = v },
+		applies: true,
+	},
+	{
+		name:    "pause_session_at_failed_item_percentage",
+		burpKey: "scanner/error_handling/pause_task_failed_audit_item_percentage",
+		what:    "the percentage of failed items that pauses the whole session (0 means never pause on a percentage)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.PauseSessionAtFailedItemPercentage },
+		apply:   func(a *AuditConfig, v uint32) { a.PauseSessionAtFailedItemPercentage = uint8(v) },
+		max:     100,
 		applies: true,
 	},
 	{
@@ -763,6 +788,59 @@ var builtInConfigKeys = []struct {
 		applies: true,
 	},
 
+	// scanner/modifying_parameter_locations — the six relocations. Each adds (or removes) one
+	// relocation kind on top of whatever point set the preset selected: a preset that names only a
+	// relocation starts from the engine's own default set, because these keys are additions to the
+	// standard points rather than a replacement for them (see applyParameterLocations).
+	{
+		name:    "relocate_body_to_url",
+		burpKey: "scanner/modifying_parameter_locations/body_to_url",
+		what:    "whether a request also probes each form body parameter as if it had been moved into the query string",
+		read:    func(c BuiltInConfig) OptUint32 { return c.RelocateBodyToURL },
+		apply:   applyInsertionKind("relocate_body_to_query"),
+		applies: true,
+	},
+	{
+		name:    "relocate_body_to_cookie",
+		burpKey: "scanner/modifying_parameter_locations/body_to_cookie",
+		what:    "whether a request also probes each form body parameter as if it had been moved into a cookie",
+		read:    func(c BuiltInConfig) OptUint32 { return c.RelocateBodyToCookie },
+		apply:   applyInsertionKind("relocate_body_to_cookie"),
+		applies: true,
+	},
+	{
+		name:    "relocate_url_to_body",
+		burpKey: "scanner/modifying_parameter_locations/url_to_body",
+		what:    "whether a request also probes each query parameter as if it had been moved into the form body",
+		read:    func(c BuiltInConfig) OptUint32 { return c.RelocateURLToBody },
+		apply:   applyInsertionKind("relocate_query_to_body"),
+		applies: true,
+	},
+	{
+		name:    "relocate_url_to_cookie",
+		burpKey: "scanner/modifying_parameter_locations/url_to_cookie",
+		what:    "whether a request also probes each query parameter as if it had been moved into a cookie",
+		read:    func(c BuiltInConfig) OptUint32 { return c.RelocateURLToCookie },
+		apply:   applyInsertionKind("relocate_query_to_cookie"),
+		applies: true,
+	},
+	{
+		name:    "relocate_cookie_to_body",
+		burpKey: "scanner/modifying_parameter_locations/cookie_to_body",
+		what:    "whether a request also probes each cookie as if it had been moved into the form body",
+		read:    func(c BuiltInConfig) OptUint32 { return c.RelocateCookieToBody },
+		apply:   applyInsertionKind("relocate_cookie_to_body"),
+		applies: true,
+	},
+	{
+		name:    "relocate_cookie_to_url",
+		burpKey: "scanner/modifying_parameter_locations/cookie_to_url",
+		what:    "whether a request also probes each cookie as if it had been moved into the query string",
+		read:    func(c BuiltInConfig) OptUint32 { return c.RelocateCookieToURL },
+		apply:   applyInsertionKind("relocate_cookie_to_query"),
+		applies: true,
+	},
+
 	// scanner/issues_reported — which check classes the run admits. The mapping is documented on
 	// AuditConfig and auditLevelNotes; per-check intrusiveness ranking does not exist here, so the
 	// three Burp tiers collapse to one active gate.
@@ -832,6 +910,178 @@ var builtInConfigKeys = []struct {
 		what:    "not applied: this engine has no per-issue selection, only family switches",
 		applies: false,
 	},
+
+	// The rest of Burp's scanner keys, listed so that a configuration naming one is told which key
+	// did nothing rather than being left to compare its file against this engine's behaviour. Every
+	// key in Burp's 29 shipped configurations has a row here or above; a row with no `read` is
+	// reported by ApplyWithReport and never applied, and its `what` says why.
+	//
+	// This is the honest half of a partial capability: the alternative — omitting the row — made the
+	// key invisible, because ApplyWithReport can only name a key it has a row for. A scan
+	// configuration that says "follow redirects" and silently does not is the same defect class as a
+	// scan that reports a partial result as a complete one.
+	{
+		name:    "number_of_follow_up_passes",
+		burpKey: "scanner/error_handling/number_of_follow_up_passes",
+		what:    "not applied: an audit item's checks run once per dispatch unit; this engine has no follow-up pass to repeat them",
+		applies: false,
+	},
+	{
+		name:    "consolidate_passive_issues",
+		burpKey: "scanner/audit_optimization/consolidate_passive_issues",
+		what:    "not applied: the passive tracker already records one finding per issue per response; there is no scan-wide consolidation step to switch",
+		applies: false,
+	},
+	{
+		name:    "follow_redirections",
+		burpKey: "scanner/audit_optimization/follow_redirections",
+		what:    "not applied: redirect following is the sender's policy for the whole engagement, not a per-run audit key this engine reads",
+		applies: false,
+	},
+	{
+		name:    "maintain_session",
+		burpKey: "scanner/audit_optimization/maintain_session",
+		what:    "not applied: this engine does not drive the session coordinator for its own audit probes",
+		applies: false,
+	},
+	{
+		name:    "scan_accuracy",
+		burpKey: "scanner/audit_optimization/scan_accuracy",
+		what:    "not applied: Burp's accuracy presets change which checks run per issue type; here the check set is decided by the family switches",
+		applies: false,
+	},
+	{
+		name:    "scan_speed",
+		burpKey: "scanner/audit_optimization/scan_speed",
+		what:    "not applied: Burp's speed presets trade check coverage for time; a run here is bounded by request budget and wall clock instead",
+		applies: false,
+	},
+	{
+		name:    "skip_ineffective_checks",
+		burpKey: "scanner/audit_optimization/skip_ineffective_checks",
+		what:    "not applied: this engine infers nothing about a check's effectiveness, so it has nothing to skip on",
+		applies: false,
+	},
+	{
+		name:    "audit_connect_timeout",
+		burpKey: "scanner/audit_project_option_overrides/connect_timeout",
+		what:    "not applied: probe timeouts come from the sender's own configuration, which an audit run does not override",
+		applies: false,
+	},
+	{
+		name:    "audit_normal_timeout",
+		burpKey: "scanner/audit_project_option_overrides/normal_timeout",
+		what:    "not applied: probe timeouts come from the sender's own configuration, which an audit run does not override",
+		applies: false,
+	},
+	{
+		name:    "quick_scan_url_params",
+		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_url_params",
+		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
+		applies: false,
+	},
+	{
+		name:    "quick_scan_body_params",
+		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_body_params",
+		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
+		applies: false,
+	},
+	{
+		name:    "quick_scan_cookies",
+		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_cookies",
+		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
+		applies: false,
+	},
+	{
+		name:    "quick_scan_http_headers",
+		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_http_headers",
+		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
+		applies: false,
+	},
+	{
+		name:    "quick_scan_param_name",
+		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_param_name",
+		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
+		applies: false,
+	},
+	{
+		name:    "quick_scan_entire_body",
+		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_entire_body",
+		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
+		applies: false,
+	},
+	{
+		name:    "quick_scan_url_path_filename",
+		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_url_path_filename",
+		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
+		applies: false,
+	},
+	{
+		name:    "quick_scan_url_path_folders",
+		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_url_path_folders",
+		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
+		applies: false,
+	},
+	{
+		name:    "skip_all_tests_for_parameters",
+		burpKey: "scanner/ignored_insertion_points/skip_all_tests_for_parameters",
+		what:    "not applied: the enumerator has no parameter-name exclusion list; every point of a selected class is probed",
+		applies: false,
+	},
+	{
+		name:    "skip_server_side_injection_for_parameters",
+		burpKey: "scanner/ignored_insertion_points/skip_server_side_injection_for_parameters",
+		what:    "not applied: every check takes the run's point set; there is no per-check parameter exclusion",
+		applies: false,
+	},
+	{
+		name:    "javascript_use_static_analysis",
+		burpKey: "scanner/javascript_analysis/use_static_analysis",
+		what:    "not applied: DOM analysis is selected as a family (scanner/issues_reported/scan_type_javascript_analysis); this engine has no static-only mode to choose",
+		applies: false,
+	},
+	{
+		name:    "javascript_use_dynamic_analysis",
+		burpKey: "scanner/javascript_analysis/use_dynamic_analysis",
+		what:    "not applied: this engine runs one DOM pass per item and has no separate dynamic-only mode to choose",
+		applies: false,
+	},
+	{
+		name:    "javascript_fetch_out_of_scope_resources",
+		burpKey: "scanner/javascript_analysis/fetch_out_of_scope_resources",
+		what:    "not applied: resource fetching is the DOM engine's own scope policy, not a key an audit run carries",
+		applies: false,
+	},
+	{
+		name:    "javascript_request_missing_dependencies",
+		burpKey: "scanner/javascript_analysis/request_missing_dependencies",
+		what:    "not applied: this engine does not re-request a page's missing script dependencies",
+		applies: false,
+	},
+	{
+		name:    "javascript_max_static_time_per_item",
+		burpKey: "scanner/javascript_analysis/max_static_time_per_item",
+		what:    "not applied: DOM analysis is time-bounded by its own engine, not by the audit configuration",
+		applies: false,
+	},
+	{
+		name:    "javascript_max_dynamic_time_per_item",
+		burpKey: "scanner/javascript_analysis/max_dynamic_time_per_item",
+		what:    "not applied: DOM analysis is time-bounded by its own engine, not by the audit configuration",
+		applies: false,
+	},
+	{
+		name:    "max_insertion_points_per_base_request",
+		burpKey: "scanner/misc_insertion_point_options/max_insertion_points_per_base_request",
+		what:    "not applied: the per-request point ceiling is fixed at Burp's own default (30, bcheck.DefaultMaxInsertionPoints) and reported on the audit row's caveats; nothing carries an operator's value into a run yet",
+		applies: false,
+	},
+	{
+		name:    "use_nested_insertion_points",
+		burpKey: "scanner/misc_insertion_point_options/use_nested_insertion_points",
+		what:    "not applied: nested points are always enumerated here (the enumerator expands JSON/base64/XML inside a parameter value); the key cannot turn them off",
+		applies: false,
+	},
 }
 
 // BuiltInConfigKey is one key a shipped configuration can carry, with this preset's value for it or
@@ -855,6 +1105,26 @@ type BuiltInConfigKey struct {
 	// anyway — a shipped configuration loads without silently dropping keys — and Apply reports
 	// them as unapplied.
 	Applies bool `json:"applies"`
+}
+
+// BuiltInConfigKeys returns every key this engine's scan-configuration table knows, each carrying
+// what setting it changes and whether this engine applies it. `Applies` false means the key is
+// accepted, described and reported — never applied.
+//
+// It is the whole-set counterpart of BuiltInConfig.Keys, which answers the same question for one
+// preset. A caller listing what a configuration *could* carry needs this one; a caller showing what
+// a particular preset does needs that one.
+func BuiltInConfigKeys() []BuiltInConfigKey {
+	out := make([]BuiltInConfigKey, 0, len(builtInConfigKeys))
+	for _, k := range builtInConfigKeys {
+		out = append(out, BuiltInConfigKey{
+			Name:    k.name,
+			BurpKey: k.burpKey,
+			What:    k.what,
+			Applies: k.applies,
+		})
+	}
+	return out
 }
 
 // Keys returns every key a shipped configuration can carry, in a fixed order, each carrying this
@@ -979,6 +1249,40 @@ func (c BuiltInConfig) applyInsertionPointTypes(a *AuditConfig) {
 	}
 }
 
+// anyRelocationKeySet reports whether the preset touches modifying_parameter_locations at all.
+func (c BuiltInConfig) anyRelocationKeySet() bool {
+	for _, k := range builtInConfigKeys {
+		if strings.HasPrefix(k.burpKey, "scanner/modifying_parameter_locations/") && k.read != nil {
+			if k.read(c).Set {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// applyParameterLocations adds or removes each relocation kind the preset names.
+//
+// The base matters. A relocation key is an *addition* to the run's standard points, so a preset that
+// names only a relocation must not end up with a point set containing that relocation alone — the
+// engine default is materialised first when nothing else has selected a set. When the preset already
+// named insertion_point_types, that materialisation has happened and this only adds to it, so the two
+// sections compose instead of one silently replacing the other. Called once from ApplyWithReport
+// before the table walk.
+func (c BuiltInConfig) applyParameterLocations(a *AuditConfig) {
+	if len(a.InsertionKinds) == 0 {
+		a.InsertionKinds = append([]string(nil), DefaultProbeInsertionKinds...)
+	}
+	for _, k := range builtInConfigKeys {
+		if !strings.HasPrefix(k.burpKey, "scanner/modifying_parameter_locations/") || k.read == nil {
+			continue
+		}
+		if v := k.read(c); v.Set {
+			k.apply(a, v.Value)
+		}
+	}
+}
+
 // Apply overlays this preset's keys onto a base configuration, leaving unset keys alone.
 //
 // Keys this engine cannot apply (Applies false in Keys) are recorded by ApplyWithReport; this
@@ -995,10 +1299,17 @@ func (c BuiltInConfig) Apply(base AuditConfig) AuditConfig {
 // nothing here rather than letting them vanish.
 //
 // A field-less key counts as set only when UnrepresentableKeys records it — the parser's record of
-// keys the source named that have no field to land in.
+// keys the source named that have no field to land in. The match accepts either spelling of that
+// record: the section-qualified path the parser writes (`issues_reported/selected_issues`, which is
+// what an operator can find in their file) or the bare row name a caller may set by hand. Matching
+// only the bare name was a silent drop: a parsed per-issue key was recorded, never reported, and a
+// configuration saying "scan only these issues" read as fully honoured.
 func (c BuiltInConfig) ApplyWithReport(base AuditConfig) (AuditConfig, []string) {
 	if c.anyInsertionKeySet() {
 		c.applyInsertionPointTypes(&base)
+	}
+	if c.anyRelocationKeySet() {
+		c.applyParameterLocations(&base)
 	}
 	parsed := make(map[string]bool, len(c.UnrepresentableKeys))
 	for _, name := range c.UnrepresentableKeys {
@@ -1008,7 +1319,7 @@ func (c BuiltInConfig) ApplyWithReport(base AuditConfig) (AuditConfig, []string)
 	for _, k := range builtInConfigKeys {
 		switch {
 		case k.read == nil:
-			if parsed[k.name] {
+			if parsed[strings.TrimPrefix(k.burpKey, "scanner/")] || parsed[k.name] {
 				unapplied = append(unapplied, k.name)
 			}
 		case k.read(c).Set && !k.applies:

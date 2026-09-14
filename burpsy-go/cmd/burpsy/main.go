@@ -72,7 +72,7 @@ func main() {
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
-	scanConfig := flag.String("scan-config", "", `run audits under a built-in scan configuration by name ("list" prints them)`)
+	scanConfig := flag.String("scan-config", "", `run audits under a built-in scan configuration by name ("list" prints them, "list-unapplied" prints the keys this engine cannot apply)`)
 	// DOM execution is operator policy for the same reason -tools is: "chrome" launches a browser
 	// process, and a ws:// endpoint hands page control to a server this process did not start.
 	// Empty is the behaviour this binary had unconditionally until now — every DOM-based check
@@ -727,12 +727,6 @@ func main() {
 	}
 }
 
-// resolveScanConfig turns -scan-config into the AuditConfig every audit this process runs defaults to.
-//
-// Three answers, kept apart: an empty flag is the shipped default; "list" prints the available names and
-// exits 0, because a name containing spaces and hyphens is not guessable and an operator should not have
-// to read the source to find one; anything else must resolve, and a name that does not is fatal rather
-// than a warning that starts the process under a configuration the operator did not ask for.
 // domEngineOptions turns the -dom flag into domexec options, or nil for "no DOM engine".
 //
 // The form is inferred from the value rather than declared by a second mode flag, because a mode
@@ -764,13 +758,14 @@ func domEngineOptions(flagValue string) (*domexec.Options, error) {
 
 // resolveScanConfig turns -scan-config into the AuditConfig every audit this process runs defaults to.
 //
-// Four answers, kept apart: an empty flag is the shipped default; "list" prints the available names and
+// Five answers, kept apart: an empty flag is the shipped default; "list" prints the available names and
 // exits 0, because a name containing spaces and hyphens is not guessable and an operator should not have
-// to read the source to find one; a path ending in .json (or containing a path separator) is one of
-// Burp's own configuration files, parsed with ParseBurpConfig so the engine honours its
-// insertion-point and check-class keys and reports what it cannot apply; anything else must resolve as a
-// built-in name, and a name that does not is fatal rather than a warning that starts the process under a
-// configuration the operator did not ask for.
+// to read the source to find one; "list-unapplied" prints every key this engine accepts but does not
+// apply, with the reason, which is the other half of what a scan configuration can say; a path ending in
+// .json (or containing a path separator) is one of Burp's own configuration files, parsed with
+// ParseBurpConfig so the engine honours its insertion-point, relocation and check-class keys and reports
+// what it cannot apply; anything else must resolve as a built-in name, and a name that does not is fatal
+// rather than a warning that starts the process under a configuration the operator did not ask for.
 func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 	base := scanner.DefaultAuditConfig()
 	switch name {
@@ -780,19 +775,38 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 		fmt.Println("built-in scan configurations (-scan-config NAME, or -scan-config /path/to/burp-config.json):")
 		for _, c := range scanner.BuiltInConfigs {
 			fmt.Printf("  %s\n", c.Name)
+			unsetHonoured := 0
 			for _, k := range c.Keys() {
-				if k.Set {
+				switch {
+				case k.Set && k.Applies:
 					fmt.Printf("      %-42s = %-5d  %s\n", k.Name, k.Value, k.What)
-				} else {
-					fmt.Printf("      %-42s   unset  (inherits the default)\n", k.Name)
+				case k.Set && !k.Applies:
+					// A key this engine cannot apply is reported, never printed as if it had a
+					// value that means something here.
+					fmt.Printf("      %-42s  set, but not applied here: %s\n", k.Name, k.What)
+				case !k.Set && k.Applies:
+					unsetHonoured++
 				}
 			}
+			fmt.Printf("      (%d further key(s) this engine honours are left unset by this configuration)\n", unsetHonoured)
 		}
-		fmt.Printf("\n%d of the %d configurations Burp ships set a key this engine implements; the rest\n"+
-			"configure crawling and per-issue selection, which this engine does not have, and their\n"+
-			"unapplied keys are reported rather than dropped. A Burp configuration file can be loaded\n"+
-			"directly by passing its path instead of a name.\n",
+		fmt.Printf("\n%d of the %d configurations Burp ships set a key this engine honours. Those\n"+
+			"configurations also set crawl-tuning, per-issue-selection and DOM-analysis keys this\n"+
+			"engine has no equivalent of: every such key is attributed rather than dropped, listed\n"+
+			"by `-scan-config list-unapplied`. A Burp configuration file can be loaded directly by\n"+
+			"passing its path instead of a name.\n",
 			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount)
+		os.Exit(0)
+	case "list-unapplied":
+		// The other half of the accounting, in the form an operator comparing against Burp's own
+		// settings UI can use: every key the engine cannot apply, with the reason, rather than a
+		// count nobody can act on.
+		fmt.Println("keys under scanner/* that this engine accepts but does not apply:")
+		for _, k := range scanner.BuiltInConfigKeys() {
+			if !k.Applies {
+				fmt.Printf("  %-72s  %s\n", k.BurpKey, k.What)
+			}
+		}
 		os.Exit(0)
 	}
 	if strings.HasSuffix(name, ".json") || strings.ContainsRune(name, '/') || strings.ContainsRune(name, os.PathSeparator) {

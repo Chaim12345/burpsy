@@ -22,13 +22,22 @@ type burpConfigFile struct {
 }
 
 // burpConfigSections are the `scanner` sub-objects Burp nests its keys under, mapped to the key
-// prefix each becomes. Burp's shipped files are two levels deep — `scanner.insertion_point_types.
-// insert_url_params` — and walking the four known sections is what lets a nested key meet its row.
+// prefix each becomes. Burp's shipped files nest each key one level under its section —
+// `scanner.insertion_point_types.insert_url_params` — and walking these sections is what lets a
+// nested key meet its row. Every section Burp's own 29 shipped configurations use is listed, not
+// just the ones with fields behind them: an unlisted section is reported as one opaque section name,
+// which hides *which* keys an operator's file set and did nothing with.
 var burpConfigSections = map[string]string{
-	"insertion_point_types": "scanner/insertion_point_types/",
-	"issues_reported":       "scanner/issues_reported/",
-	"error_handling":        "scanner/error_handling/",
-	"audit_optimization":    "scanner/audit_optimization/",
+	"insertion_point_types":                 "scanner/insertion_point_types/",
+	"issues_reported":                       "scanner/issues_reported/",
+	"error_handling":                        "scanner/error_handling/",
+	"audit_optimization":                    "scanner/audit_optimization/",
+	"modifying_parameter_locations":         "scanner/modifying_parameter_locations/",
+	"frequently_occurring_insertion_points": "scanner/frequently_occurring_insertion_points/",
+	"ignored_insertion_points":              "scanner/ignored_insertion_points/",
+	"misc_insertion_point_options":          "scanner/misc_insertion_point_options/",
+	"javascript_analysis":                   "scanner/javascript_analysis/",
+	"audit_project_option_overrides":        "scanner/audit_project_option_overrides/",
 }
 
 // ParseBurpConfig reads one of Burp's shipped (or exported) scan configurations.
@@ -59,6 +68,10 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 			n, err := burpConfigUint(raw)
 			if err != nil {
 				return fmt.Errorf("burp scan configuration: %s: %w", k.burpKey, err)
+			}
+			if k.max != 0 && n > k.max {
+				return fmt.Errorf("burp scan configuration: %s: %d is above the largest value this key can carry (%d)",
+					k.burpKey, n, k.max)
 			}
 			setBurpConfigField(&out, k.name, SomeUint32(n))
 			return nil
@@ -118,6 +131,8 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.ConsecutiveUnitFailuresToFailItem = val
 	case "pause_session_after_failed_items":
 		c.PauseSessionAfterFailedItems = val
+	case "pause_session_at_failed_item_percentage":
+		c.PauseSessionAtFailedItemPercentage = val
 	case "maximum_audit_time_minutes":
 		c.MaximumAuditTimeMinutes = val
 	case "insert_url_params":
@@ -148,6 +163,18 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.JavaScriptAnalysis = val
 	case "store_issues_within_queue_items":
 		c.StoreQueueItems = val
+	case "relocate_body_to_url":
+		c.RelocateBodyToURL = val
+	case "relocate_body_to_cookie":
+		c.RelocateBodyToCookie = val
+	case "relocate_url_to_body":
+		c.RelocateURLToBody = val
+	case "relocate_url_to_cookie":
+		c.RelocateURLToCookie = val
+	case "relocate_cookie_to_body":
+		c.RelocateCookieToBody = val
+	case "relocate_cookie_to_url":
+		c.RelocateCookieToURL = val
 	}
 }
 

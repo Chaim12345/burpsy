@@ -722,6 +722,8 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				got, wantSet, wantUnset = uint64(applied.ConsecutiveUnitFailuresToFailItem), uint64(k.Value), uint64(base.ConsecutiveUnitFailuresToFailItem)
 			case "pause_session_after_failed_items":
 				got, wantSet, wantUnset = uint64(applied.PauseSessionAfterFailedItems), uint64(k.Value), uint64(base.PauseSessionAfterFailedItems)
+			case "pause_session_at_failed_item_percentage":
+				got, wantSet, wantUnset = uint64(applied.PauseSessionAtFailedItemPercentage), uint64(k.Value), uint64(base.PauseSessionAtFailedItemPercentage)
 			case "maximum_audit_time_minutes":
 				got = uint64(applied.TimeBudget)
 				wantSet = uint64(time.Duration(k.Value) * time.Minute)
@@ -743,6 +745,13 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				// Applies false, and Apply reports the key unapplied. Nothing on the applied config
 				// to check beyond that it must not have been treated as a scalar.
 				got, wantSet, wantUnset = 1, 1, 1
+			case "relocate_body_to_url", "relocate_body_to_cookie", "relocate_url_to_body",
+				"relocate_url_to_cookie", "relocate_cookie_to_body", "relocate_cookie_to_url":
+				// A relocation key adds one point class to the run's set rather than landing in a
+				// scalar field. Which class each name maps to is pinned against the enumerator's own
+				// kind constants by Test_each_relocation_key_adds_exactly_its_own_point_class; here
+				// only the set/unset contract is checked.
+				got, wantSet, wantUnset = uint64(len(applied.InsertionKinds)), 1, 0
 			case "insert_url_params", "insert_body_params", "insert_cookies", "insert_http_headers",
 				"insert_param_name", "insert_url_path_filename", "insert_url_path_folders", "insert_entire_body":
 				// Insertion keys land in the point-class list, not a scalar field; the dedicated overlay
@@ -750,7 +759,16 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				// is checked: a set key must have produced a point list.
 				got, wantSet, wantUnset = uint64(len(applied.InsertionKinds)), 1, 0
 			default:
-				t.Fatalf("%s reports key %q, which this test does not know how to check — add it here rather than letting it go unverified", c.Name, k.Name)
+				// A key with no field and no apply path can only be reported, never overlaid, so the
+				// contract this test checks for it is that it did not reach a scalar. Naming all of
+				// them here would verify nothing more and would need editing every time Burp adds a
+				// key this engine does not implement. A key that *applies* must be named above: that
+				// is the half of this oracle worth keeping, because it is where a row can be pointed
+				// at the wrong field.
+				if k.Applies {
+					t.Fatalf("%s reports key %q as applying, which this test does not know how to check — add it here rather than letting it go unverified", c.Name, k.Name)
+				}
+				got, wantSet, wantUnset = 1, 1, 1
 			}
 			if k.Set && got != wantSet {
 				t.Errorf("%s sets %s to %d but the applied config holds %d", c.Name, k.Name, wantSet, got)

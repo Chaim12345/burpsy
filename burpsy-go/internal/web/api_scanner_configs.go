@@ -120,11 +120,14 @@ func (s *Server) handleScannerConfigs(w http.ResponseWriter, r *http.Request) {
 		// The default is what an audit with no `config` runs under, so a caller can see what a preset
 		// actually changes rather than reading absolute numbers with nothing to compare them to.
 		"default": newAuditConfigView(base),
-		// Burp ships 29; six of them set a key this engine implements. Reported rather than left to be
-		// inferred from the length of the list, because "6 configurations" reads as Burp having six.
+		// Burp ships 29 configurations; six of them set a key this engine implements, and both
+		// numbers are reported rather than left to be inferred from the length of the list, because
+		// "6 configurations" reads as Burp having six. The reason names what is honoured instead of
+		// implying the rest does nothing: every key Burp's own 29 shipped configurations set has a
+		// row in the engine's table, so a key it cannot apply is reported by name with its reason.
 		"shipped_by_burp":   scanner.BurpShippedConfigCount,
 		"implemented_here":  len(scanner.BuiltInConfigs),
-		"omitted_reason":    "the other configurations set only crawl, parameter-relocation and per-issue selection keys; insertion-point and check-class keys are honoured, per-issue selection and crawl tuning are not, and anything unapplied is reported per run rather than dropped",
+		"omitted_reason":    "those configurations mostly set crawl tuning, per-issue selection and JavaScript-analysis keys, which this engine has no equivalent of; every key they set is listed with applies=false and a reason, and honouring key counts are pinned by internal/scanner's own tests",
 		"how_to_run_under":  "POST /api/audit/{exchange_id} or /api/scanner/audit with {\"config\": \"<name>\"}",
 		"applies_to_server": "the CLI flag -scan-config sets the default above for every audit this server runs",
 	})
