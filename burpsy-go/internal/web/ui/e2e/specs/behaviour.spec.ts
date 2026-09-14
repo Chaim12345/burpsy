@@ -152,9 +152,14 @@ test.describe("data views", () => {
  test("a table header sorts, and reorders the rows", async ({ page, consoleErrors }) => {
   await gotoRoute(page, route("history"));
   const rows = page.locator("tr.data-row");
-  // Five rows exactly: the Repeater send no longer leaks into history (see the test above), so
-  // the count is the five proxied exchanges and nothing else.
-  await expect(rows).toHaveCount(5);
+  // More than one, so an ascending sort has something to move — read rather than hardcoded,
+  // because this is a count of the whole capture and it drifts with everything else in the file.
+  // That is exactly how the in-scope-only test's hardcoded five became thirteen and started
+  // failing in a full-file run (burpsy-react-ui-23ne). The claim that the Repeater send is not in
+  // here is asserted by name in the test above (no row matches /repeated), which says more than a
+  // count does: a count cannot tell a leak from a missing seed.
+  await expect(rows.first()).toBeVisible();
+  expect(await rows.count()).toBeGreaterThan(1);
 
   // All five path cells: only the Path column renders a <code> element, so targeting it
   // avoids the column-index fragility that .nth(3) across a flattened td list caused (it
@@ -729,7 +734,15 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
  test("the in-scope-only toggle filters the rows and shows in the query", async ({ page, consoleErrors }) => {
   await gotoRoute(page, route("history"));
   const rows = page.locator("tr.data-row");
-  await expect(rows).toHaveCount(5);
+  await expect(rows.first()).toBeVisible();
+  // Read, not hardcoded: this number is a count of *everything else in the file*, because earlier
+  // tests in this file proxy their own traffic into the one shared capture. It was 5 when the file
+  // was smaller, which is how it came to fail in a full-file run and pass in isolation
+  // (burpsy-react-ui-23ne) — and bumping it would only put the next drift off. What this test causes
+  // is the delta, so the count is taken once and the same reading is asserted after the filter is
+  // lifted, which is a claim about this test's effect rather than about the file's history.
+  const seeded = await rows.count();
+  expect(seeded).toBeGreaterThan(0);
 
   // Every seeded exchange shares one host (the harness's throwaway origin) and it is served over
   // bare 127.0.0.1, so a single exclude rule on that host takes the whole capture out of scope —
@@ -749,7 +762,7 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
    // Turning it back off restores the capture and removes exactly the clause it added.
    await page.getByRole("button", { name: "In scope only" }).click();
    await expect(queryBox).toHaveValue("");
-   await expect(rows).toHaveCount(5);
+   await expect(rows).toHaveCount(seeded);
   } finally {
    // Single shared server for the whole file (workers: 1) — leaving this rule in place would take
    // every later test's traffic out of scope too.
