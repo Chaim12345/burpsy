@@ -94,3 +94,33 @@ describe("refusing an arm the server would refuse", () => {
   expect(hostArmProblem("wildcard", "*.example.com")).toBeNull();
  });
 });
+
+// A pasted arm must not be tagged twice. The table renders what is stored, tag and all, so copying a
+// pattern out of it and pasting it into a field whose mode already states that arm is the natural
+// mistake — and it used to save: `regex:regex:^api\\.example\\.com$` compiles, because `regex:` is a
+// valid thing for a pattern to match literally, so the rule rendered as armed and could never match a
+// host. Same for a range, and for a path.
+test("a pasted tag is refused instead of being tagged twice", () => {
+  const hostCases: [HostArmMode, string, string][] = [
+    ["regex", "regex:^api\\.example\\.com$", "regex:"],
+    ["range", "range:10.0.0.0/24", "range:"],
+    ["wildcard", "regex:^a$", "regex:"],
+  ];
+  for (const [mode, pasted, tag] of hostCases) {
+    const problem = hostArmProblem(mode, pasted);
+    expect(problem, `host mode ${mode} accepted ${pasted}`).not.toBeNull();
+    expect(problem).toContain(tag);
+  }
+
+  const pathProblem = pathArmProblem("regex", "regex:/v1/.*");
+  expect(pathProblem).not.toBeNull();
+  expect(pathProblem).toContain("regex:");
+
+  // The refusal has to say what to write instead, or the operator's next attempt is a guess.
+  expect(hostArmProblem("regex", "regex:^api\\.example\\.com$")).toContain("^api\\.example\\.com$");
+  expect(pathArmProblem("regex", "regex:/v1/.*")).toContain("/v1/.*");
+
+  // And a value that merely *contains* a tag is untouched: only a leading one is the mistake.
+  expect(hostArmProblem("regex", "^api-regex:example$")).toBeNull();
+  expect(pathArmProblem("regex", "/v1/regex:thing")).toBeNull();
+});
