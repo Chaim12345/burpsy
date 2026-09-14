@@ -20,8 +20,15 @@
 >   `Send to…` on the message-editor context menu.
 >
 > Those two documents are the accurate record for the pages they cover; this one remains the
-> checklist for the pages no sweep has reached (the tool pages — Intruder, Repeater, Sequencer,
-> Decoder, Comparer, Logger, Organizer — have a third sweep still running).
+> checklist for the pages no sweep has reached. A third sweep covers the tool pages —
+> [`ui-parity-verify-2026-09-14-intruder-tools.md`](./ui-parity-verify-2026-09-14-intruder-tools.md)
+> (Intruder, Repeater, Sequencer, Decoder, Comparer, Logger, Organizer). It corrects this audit
+> again — Intruder's Settings section describes the *scanner's* launch dialog (three of its six rows
+> have zero hits in Burp's own strings), "Max permutations" does not exist in Burp at all, and it
+> calls Sequencer's two HIGH rows already-shipped — and its top finding is a live defect this audit
+> could not have seen: a running Intruder attack cannot be paused or stopped from the console
+> (Pause/Resume/Stop never render, no progress indicator) because the page never identifies its own
+> attack id, while the backend serves both the counts and the control routes.
 >
 > Re-verified against the running console (`./ui-live.sh`, port 18281, seeded
 > traffic) on 2026-09-14, reading the rendered DOM rather than the source:
