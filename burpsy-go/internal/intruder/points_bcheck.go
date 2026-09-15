@@ -195,15 +195,21 @@ func isChunkedBody(raw []byte, msg *core.StoredMessage) bool {
 // points adopted from the scanner enumerator are rebuilt by the enumerator
 // itself, so Intruder cannot drift from what the scanner would have sent. A
 // payload the container cannot hold (a part's boundary delimiter inside that
-// part's content, a line break inside a header attribute) is refused here and
-// the payload is skipped rather than rewritten.
-func escapePayload(p *InsertionPoint, payload []byte) ([]byte, bool) {
+// part's content, a line break inside a header attribute) is refused here.
+//
+// The refusal is returned as an error, not swallowed as a bool: it carries the
+// enumerator's own reason string (bcheck.InsertionPoint.WireValue → refuseValue,
+// e.g. `value contains "\r", which would end the container it is spliced into`),
+// and the attack driver names that reason in the report's skipped row rather
+// than reinventing one — the same text the scanner's check reports for the same
+// payload at the same point (burpsy-react-ui-194b).
+func escapePayload(p *InsertionPoint, payload []byte) ([]byte, error) {
 	if p.escape != escapeBcheck {
-		return payload, true
+		return payload, nil
 	}
 	v, err := p.bc.WireValue(string(payload))
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	return []byte(v), true
+	return []byte(v), nil
 }

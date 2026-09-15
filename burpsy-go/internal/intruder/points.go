@@ -364,24 +364,36 @@ func Apply(raw []byte, point *InsertionPoint, payload []byte) []byte {
 // BodyParamValue, and a UrlParamName sits directly against its value. The rule is
 // earliest-starting span wins, later overlapping spans are skipped, so the output is always a
 // well-formed request and never a half-spliced one.
+//
+// ApplyAll is the byte-only view for callers that cannot act on a refusal (Apply, and the
+// splice-shape tests): a payload the container cannot hold is dropped and the request is built
+// from what remains. The attack driver uses applyAllChecked instead, so it can record the
+// dropped attempt as skipped rather than sending it — see that function.
 func ApplyAll(raw []byte, places []ApplyPlace) []byte {
+	out, _ := applyAllChecked(raw, places)
+	return out
+}
+
+// applyAllChecked is ApplyAll with the refusals surfaced. refusals holds one reason per place
+// whose payload the container refused, in the enumerator's own words (escapePayload → bcheck's
+// WireValue). Its emptiness is the contract the driver acts on: a non-empty refusals means this
+// attempt could not be represented as the operator asked, so the driver records it as skipped
+// and never sends the bytes — otherwise a single-position attack whose only payload was refused
+// would go out as the unmodified base request and read in the report as a real send
+// (burpsy-react-ui-194b). The returned bytes are still a well-formed request (the refused places
+// simply do not appear in it), so a caller that only wants a request can ignore refusals.
+func applyAllChecked(raw []byte, places []ApplyPlace) (out []byte, refusals []string) {
 	sl := make([]spliced, 0, len(places))
 	for _, pl := range places {
-		payload, ok := escapePayload(pl.Point, pl.Payload)
-		if !ok {
+		payload, err := escapePayload(pl.Point, pl.Payload)
+		if err != nil {
 			// The payload cannot be written into its container at all: a multipart
 			// part's content carrying that part's boundary delimiter, a line break
 			// inside a quoted header attribute, a nested wire value that failed to
 			// rebuild. Splicing it anyway would end the container and send a request
-			// that is corrupt rather than mutated, so the position is dropped and the
-			// guarantee below holds — the output is always a well-formed request.
-			//
-			// What this layer cannot do is SAY so: ApplyAll returns bytes, and the
-			// attempt goes out as the unmodified base request. The scanner refuses
-			// the same payload at the same point and reports it (bcheck's Apply
-			// returns the refusal as an error), so the two consumers agree about
-			// what is unsendable; surfacing the dropped attempt in the attack
-			// report is its own gap (burpsy-react-ui-194b).
+			// that is corrupt rather than mutated, so the position is dropped from the
+			// spliced output and its reason is carried out for the driver to record.
+			refusals = append(refusals, err.Error())
 			continue
 		}
 		start := pl.Point.Span.Offset
@@ -403,17 +415,17 @@ func ApplyAll(raw []byte, places []ApplyPlace) []byte {
 	for _, s := range sl {
 		extra += len(s.payload)
 	}
-	out := make([]byte, 0, len(raw)+extra)
+	built := make([]byte, 0, len(raw)+extra)
 	cursor := 0
 	for _, s := range sl {
 		if s.start < cursor {
 			continue
 		}
-		out = append(out, raw[cursor:s.start]...)
-		out = append(out, s.payload...)
+		built = append(built, raw[cursor:s.start]...)
+		built = append(built, s.payload...)
 		cursor = s.end
 	}
-	out = append(out, raw[cursor:]...)
+	built = append(built, raw[cursor:]...)
 
 	// A chunked request's body is a sequence of size-prefixed chunks, and the
 	// splices above changed the bytes inside one of them. Every size before the
@@ -428,10 +440,10 @@ func ApplyAll(raw []byte, places []ApplyPlace) []byte {
 	if shape, err := core.Parse(raw, core.DirectionRequest); err == nil {
 		if te := headerSpan(raw, shape, "transfer-encoding"); te != nil &&
 			bytes.Contains(bytes.ToLower(raw[te.Offset:te.End()]), []byte("chunked")) {
-			return rewriteChunkedBody(raw, out)
+			return rewriteChunkedBody(raw, built), refusals
 		}
 	}
-	return fixContentLength(out)
+	return fixContentLength(built), refusals
 }
 
 // sortSpans orders by (start, end) ascending, matching the Rust sort_by_key.

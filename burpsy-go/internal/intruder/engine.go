@@ -893,6 +893,15 @@ func (c *collector) absorb(o outcome) {
 	}
 }
 
+// errPayloadRefused is the error an attempt carries when its payload could not be written into
+// its insertion point at all. It names the container's own reason (escapePayload, which is
+// bcheck's WireValue) rather than a generic message, so the report says WHY the attempt could not
+// be represented — the scanner already reports the identical refusal for the identical payload at
+// the identical point, and the two consumers must not describe it differently.
+func errPayloadRefused(refusals []string) error {
+	return fmt.Errorf("payload could not be placed in its insertion point: %s", strings.Join(refusals, "; "))
+}
+
 // noteError grows the error groups. Distinct messages beyond maxBuckets stop being tracked —
 // their sends are still counted in failed.
 func (c *collector) noteError(ordinal int, message string) {
@@ -1071,7 +1080,18 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			}
 
 			permit := limiter.Acquire()
-			req := ApplyAll(a.Base, places)
+			// applyAllChecked, not ApplyAll: a payload its container cannot hold is dropped from
+			// the splice, and the request built from what remains is the BASE request for a
+			// single-position attack. Sending that would put an unmodified request in the report
+			// among the real sends, indistinguishable from a payload that was actually tried
+			// (burpsy-react-ui-194b). The attempt is recorded with the enumerator's own reason and
+			// never sent, which is the same shape the guard refusal below already takes.
+			req, refusals := applyAllChecked(a.Base, places)
+			if len(refusals) > 0 {
+				permit.Release()
+				results <- outcome{ordinal: baselineShift(a) + i, err: errPayloadRefused(refusals), sentAt: time.Now()}
+				continue
+			}
 			if a.Guard != nil {
 				if err := a.Guard(req); err != nil {
 					permit.Release()
@@ -1164,7 +1184,16 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 			payloads = append(payloads, current)
 		}
 		permit := limiter.Acquire()
-		req := ApplyAll(a.Base, places)
+		// See the plan loop: a refused payload must be recorded, not sent as the base request.
+		req, refusals := applyAllChecked(a.Base, places)
+		if len(refusals) > 0 {
+			permit.Release()
+			col.absorb(outcome{ordinal: ordinal, err: errPayloadRefused(refusals), sentAt: time.Now()})
+			a.Control.note(false)
+			// Nothing was sent, so there is no response to extract the chain's next payload from —
+			// the same reason the guard refusal below stops rather than retrying the same bytes.
+			break
+		}
 		if a.Guard != nil {
 			if err := a.Guard(req); err != nil {
 				permit.Release()
