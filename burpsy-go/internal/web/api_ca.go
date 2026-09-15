@@ -143,17 +143,83 @@ func (s *Server) handleCAImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+// handleCARegenerate serves POST /api/proxy/ca/regenerate — Burp's "Regenerate CA
+// certificate", beside import/export in BurpClass9617.
+//
+// It mints a brand-new self-signed CA and installs it as the signing CA, discarding
+// the previous one. Unlike import it takes nothing from the caller: the new key is
+// generated inside the process and, like the imported one, never leaves it except as
+// the public certificate at /ca.crt — not in this response, not in a log line.
+//
+// It is deliberately destructive and, once persisted, irreversible. The previous CA
+// stops signing the moment RegenerateCA returns, every cached leaf is discarded, and
+// persisting the new pair overwrites the old signing key on disk with no way back.
+// Every client that trusted the old CA must be given the new one — the old
+// certificate signs nothing from here on. That is why the manifest classifies this
+// route riskDestructive and an unattended caller must confirm before invoking it.
+func (s *Server) handleCARegenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.tlsEngine == nil {
+		// Nothing would sign with a regenerated CA, so minting one would change nothing.
+		http.Error(w, "TLS interception is off, so there is no signing CA to regenerate; start burpsy "+
+			"with -intercept-tls", http.StatusServiceUnavailable)
+		return
+	}
+
+	// RegenerateCA validates the minted pair before swapping, so on the (near-impossible)
+	// failure path the running CA and the leaf cache are untouched. The error never carries
+	// key material.
+	certPEM, keyPEM, err := s.tlsEngine.RegenerateCA()
+	if err != nil {
+		http.Error(w, "CA regeneration failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	status := s.caStatus()
+	// Reuses the import path's persistence: same directory, same modes, same
+	// in-force-but-not-durable reporting when the write cannot complete.
+	status.Persisted, status.PersistError = s.persistCA(caImportRequest{
+		CertPEM: string(certPEM),
+		KeyPEM:  string(keyPEM),
+	})
+
+	// Logged because rotating the signing CA has consequences beyond this process —
+	// every client trusting the old CA must be updated. Subject only; no key, no PEM.
+	s.logger.Info("CA certificate regenerated; leaf cache cleared",
+		zap.String("subject", status.Subject),
+		zap.String("not_after", status.NotAfter),
+		zap.Bool("persisted", status.Persisted))
+
+	if !status.Persisted {
+		status.Hint = "A new CA is in force for this process only — it was not written to disk, so a " +
+			"restart returns to the previous CA. Either way, every client that trusted the old CA must " +
+			"now be given the new one; download it from /ca.crt."
+	} else {
+		status.Hint = "A new CA is now signing and the previous one is gone. Every client that trusted " +
+			"the old certificate must now be given the new one — the previous certificate signs nothing. " +
+			"Download it from /ca.crt."
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 // persistCA writes the imported pair to -ca-dir so it survives a restart.
 //
 // Returns (false, reason) rather than failing the request: the CA is already installed and signing by
 // the time this runs, so reporting an error would tell the operator the import failed when it did
 // not. The distinction — in force but not durable — is carried in the response instead.
 //
-// Writes the certificate first. If the key write then fails, the directory holds a certificate whose
-// key is missing, and LoadOrGenerateCA requires *both* files before it will load a pair — so the next
-// start generates a fresh CA rather than loading a half-written one. That is the safe direction to
-// fail in, and the reason the order is not the other way round: a key on disk with no certificate is
-// key material lying around for a CA nobody can identify.
+// Writes the certificate first. The order is deliberate — a key on disk with no certificate is key
+// material lying around for a CA nobody can identify — but its consequence differs by what was there
+// before. On a first import into an empty directory a failed key write leaves a lone certificate, and
+// LoadOrGenerateCA requires *both* files before it will load a pair, so the next start mints a fresh
+// CA. When a previous ca.key is already present (every regenerate, and any re-import), a failed key
+// write leaves the NEW certificate beside the OLD key: LoadOrGenerateCA finds both files, loadCA runs
+// them through validateCA, the keys do not match, and the next start REFUSES to load rather than
+// falling through to generate. Both outcomes are reported honestly by the message below; neither is
+// silently papered over.
 func (s *Server) persistCA(req caImportRequest) (bool, string) {
 	if s.caDir == "" {
 		return false, "no CA directory is configured"
@@ -173,9 +239,10 @@ func (s *Server) persistCA(req caImportRequest) (bool, string) {
 	if err := os.WriteFile(keyPath, []byte(req.KeyPEM), 0o600); err != nil {
 		// Leave the certificate in place and say so. Removing it would be a second write that can
 		// also fail, and LoadOrGenerateCA needs both files, so a lone certificate is already inert.
-		return false, fmt.Sprintf("the certificate was written but the key was not (%v); %s now holds "+
-			"a certificate without its key, and the next start will generate a fresh CA rather than "+
-			"load an incomplete pair", err, s.caDir)
+		return false, fmt.Sprintf("the certificate was written but the key was not (%v); the pair in %s "+
+			"is now inconsistent — if a previous key is still present it will not match the new "+
+			"certificate and the next start will refuse to load it; remove ca.crt and ca.key from %s to "+
+			"force a fresh CA", err, s.caDir, s.caDir)
 	}
 	return true, ""
 }

@@ -799,6 +799,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/headers/uninteresting", s.handleUninterestingHeaders)
 	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
 	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
+	s.mux.HandleFunc("/api/proxy/ca/regenerate", s.handleCARegenerate)
 	s.mux.HandleFunc("/api/scope", s.handleScope)
 	s.mux.HandleFunc("/api/scanner/config", s.handleScannerConfig)
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)

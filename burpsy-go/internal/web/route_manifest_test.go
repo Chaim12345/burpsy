@@ -546,6 +546,23 @@ var manifest = map[string]route{
 		summary: "import an operator-supplied CA certificate and private key, replacing the signing CA " +
 			"and clearing the leaf cache; refuses the whole pair if it is not a usable CA",
 	},
+	"/api/proxy/ca/regenerate": {
+		// riskDestructive, not riskLocal or riskCredential. riskLocal would put "throw away the trust
+		// anchor this proxy signs every intercepted site with" in the same class as a table-density
+		// preference. riskCredential is the class its sibling import sits in, but that class's stated
+		// rationale is "takes a long-lived private key over HTTP" — this route takes nothing; it mints
+		// the key itself and never serves it.
+		//
+		// What it does do is destroy: the previous CA stops signing, every cached leaf is discarded,
+		// and persisting the new pair overwrites the old signing key on disk with no way back. Unlike
+		// import, where the operator still holds the pair they pasted, a regenerated-over key is gone
+		// for good — which is the point of rotation. That irreversibility is what riskDestructive marks,
+		// alongside the tool-log clear and the backup prune, and it is why an unattended caller must
+		// confirm before invoking it.
+		methods: []string{"POST"}, risk: riskDestructive,
+		summary: "regenerate the signing CA: mint a fresh self-signed CA, install it, and clear the " +
+			"leaf cache; the previous CA is discarded and every client must be re-given the new one",
+	},
 	"/api/proxy/listener": {
 		methods: []string{"GET", "PUT", "POST", "DELETE"}, risk: riskLocal,
 		summary: "the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot",
@@ -1181,7 +1198,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// it is the mildest member here; it sits in the class because making a worked branch invisible
 	// is closer to "discard evidence" than to "write burpsy's own state", and because an unattended
 	// caller trimming the map would hide what the operator is being shown.
-	equal("destructive", destructive, []string{"/api/backup", "/api/issues/", "/api/sitemap", "/api/tools/log"})
+	// /api/proxy/ca/regenerate joins the destructive class because it irreversibly discards the
+	// current signing CA: the previous certificate stops signing, every cached leaf is dropped, and
+	// persisting the new pair overwrites the old key on disk with no path back. See its manifest entry
+	// for why it is not the credential class its sibling import sits in.
+	equal("destructive", destructive, []string{"/api/backup", "/api/issues/", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

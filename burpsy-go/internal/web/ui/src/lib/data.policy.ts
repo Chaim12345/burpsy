@@ -140,6 +140,30 @@ export function useImportCaCert() {
  });
 }
 
+/**
+ * Regenerate the signing CA — Burp's "Regenerate CA certificate" (BurpClass9617), beside
+ * import/export.
+ *
+ * Where import brings the operator's own pair, this mints a fresh self-signed CA server-side and
+ * installs it as the signing CA. It takes no body: the new private key is generated inside burpsy and
+ * never crosses the wire — the response describes the new certificate, never its key.
+ *
+ * It is destructive and, once persisted, irreversible: the previous CA stops signing, every per-host
+ * leaf is discarded, and the old key is overwritten on disk. Every client that trusted the old CA
+ * must be re-given the new one, so like import this invalidates the `/ca.crt` probe as well as the
+ * status — the download link must now serve the new certificate.
+ */
+export function useRegenerateCaCert() {
+ const client = useQueryClient();
+ return useMutation<CaStatus, Error, void>({
+  mutationFn: () => api<CaStatus>("/api/proxy/ca/regenerate", json("POST", {})),
+  onSuccess: () => {
+   void client.invalidateQueries({ queryKey: policyKeys.caStatus });
+   void client.invalidateQueries({ queryKey: policyKeys.caCert });
+  },
+ });
+}
+
 /** What a project backup reports. Mirrors internal/web/api_backup.go's backupResult. */
 export interface BackupResult {
  path: string;
