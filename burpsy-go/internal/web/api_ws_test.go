@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -145,6 +146,52 @@ func TestWsConnectionsGroupsMessagesByHandshakeAndCountsEachDirection(t *testing
 	}
 	if alpha.LastMs != 1800 {
 		t.Errorf("last_ms = %d, want the newest message's timestamp 1800", alpha.LastMs)
+	}
+}
+
+// The "Edited" fact reaches the JSON wshistory.ts reads (burpsy-react-ui-d7bu). A frame the operator
+// edited in the hold must come back as "edited":true, and one nobody touched as "edited":false — a
+// stated fact, not an absent key, so the column can render blank rather than unknown. Asserted on the
+// marshalled body, because a struct field set correctly under the wrong JSON key would leave the tab
+// showing every row as unedited.
+func TestWsHistoryReportsWhetherTheOperatorEditedEachFrame(t *testing.T) {
+	s, store := wsTestServer()
+	ex := addWsHandshake(store, "chat.test", 80, "/socket")
+	store.AddWsMessage(&core.WsMessage{
+		Exchange: ex, FromClient: true, Opcode: core.WsOpcodeText,
+		Len: 5, Fragments: 1, AtMs: 1000,
+	}, []byte("plain"))
+	store.AddWsMessage(&core.WsMessage{
+		Exchange: ex, FromClient: true, Opcode: core.WsOpcodeText,
+		Len: 5, Fragments: 1, AtMs: 2000, UserEdited: true,
+	}, []byte("edited"))
+
+	rec := get(t, s, "/api/ws/history")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/ws/history = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	// Both facts must be present in the wire bytes, spelled with the key the UI reads.
+	if !strings.Contains(body, `"edited":true`) {
+		t.Errorf("the edited frame is not reported as edited in the JSON: %s", body)
+	}
+	if !strings.Contains(body, `"edited":false`) {
+		t.Errorf("the untouched frame lost its stated \"edited\":false (absent key reads as unknown): %s", body)
+	}
+
+	var resp wsHistoryResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+	if len(resp.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(resp.Rows))
+	}
+	// Newest first: the edited (at_ms 2000) row is row 0.
+	if !resp.Rows[0].Edited {
+		t.Error("the newest row was the edited frame but came back Edited=false")
+	}
+	if resp.Rows[1].Edited {
+		t.Error("the untouched frame came back Edited=true")
 	}
 }
 

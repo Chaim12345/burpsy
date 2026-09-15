@@ -198,6 +198,19 @@ export function WebSocketPage(): JSX.Element {
      );
     },
    },
+   {
+    // Burp's "Edited" column for WebSocket messages (burpsy-react-ui-d7bu), the frame-level twin of
+    // HTTP history's. It flags a message the *operator* changed by hand in Intercept, not one a Match
+    // & Replace rule rewrote — the fact is decided in the hold and carried out, never recomputed from
+    // the bytes. The `—` empty state matches every other column, so an unedited row does not read as a
+    // field this build forgot to populate; the badge is what stands out on the rows that carry an edit.
+    id: "edited",
+    header: "Edited",
+    size: 76,
+    accessorFn: (row: WsRow) => row.edited,
+    cell: (info) =>
+     info.getValue<boolean>() ? <Badge tone="warn">edited</Badge> : <span className="cell-dim">—</span>,
+   },
    { accessorKey: "at_ms", header: "Age", size: 90, cell: (info) => <span className="cell-dim">{relativeTime(info.getValue<number>())}</span> },
   ],
   [],
