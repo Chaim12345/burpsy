@@ -998,3 +998,60 @@ func TestTimeoutIsTrueOnlyForTheDeadlineNotForAnyOtherFailure(t *testing.T) {
 		t.Fatalf("ordinal 3 is a guard refusal, not a timeout: %+v", byOrdinal[3])
 	}
 }
+
+// A payload its container cannot hold must be reported, never sent as the base request.
+//
+// ApplyAll drops a position whose payload escapePayload refuses and builds the request from what
+// remains. For a single-position attack "what remains" is the BASE request — so the attempt went
+// out unmodified and landed in the report among the real sends, indistinguishable from a payload
+// that was actually tried. An operator reading that report would conclude the payload had been
+// delivered and the target was unmoved by it, when in fact it was never delivered at all. That is
+// the worst kind of wrong answer this tool can give: a negative result that was never tested.
+func TestAPayloadItsContainerRefusesIsReportedAndTheBaseRequestIsNeverSentInstead(t *testing.T) {
+	raw, _ := multipartFixture()
+	m := storeReq(t, raw)
+	pts := FindPoints(m, DefaultPointConfig())
+	user := findPoint(t, pts, PointBodyMultipartValue, "user")
+	sel := []InsertionPoint{*user}
+
+	// A CRLF followed by this body's boundary delimiter cannot live inside a part's content: those
+	// bytes ARE the end of the part, so splicing them would terminate the container the payload is
+	// spliced into and send a corrupt request rather than a mutated one. (A bare `--X` with no CRLF
+	// in front of it is legal and IS spliced verbatim — see the sibling test — so this payload is
+	// specifically the refused shape, not merely a suspicious-looking one.)
+	payloads := sets([]string{"before\r\n--X after"})
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{1}, 10)
+	var seen [][]byte
+	var mu sync.Mutex
+
+	a := NewAttack(m.Raw(), sel, payloads, plan).WithLimits(Unthrottled(2))
+	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+
+	mu.Lock()
+	sent := append([][]byte(nil), seen...)
+	mu.Unlock()
+
+	if len(sent) != 0 {
+		t.Fatalf("a request was sent for a payload the container refused; the bytes on the wire were the unmodified base request, which the report would have counted as a real send: %q", string(sent[0]))
+	}
+	if r.Sent != 0 {
+		t.Fatalf("sent = %d, want 0 — nothing could be delivered, so nothing may be counted as delivered", r.Sent)
+	}
+	if r.Failed != 1 {
+		t.Fatalf("failed = %d, want the refused attempt counted rather than dropped silently", r.Failed)
+	}
+	// The reason must be the enumerator's own, so Intruder and the scanner describe the same
+	// refusal of the same payload at the same point identically.
+	var reasons []string
+	for _, at := range r.Attempts {
+		if at.Error != nil {
+			reasons = append(reasons, *at.Error)
+		}
+	}
+	if len(reasons) != 1 {
+		t.Fatalf("attempts carrying an error = %d, want 1 naming the refusal; a refusal the operator cannot read is indistinguishable from a target that said nothing", len(reasons))
+	}
+	if !strings.Contains(reasons[0], "could not be placed") {
+		t.Errorf("the reported reason %q does not name the container's own refusal, so the report cannot say WHY the payload was undeliverable", reasons[0])
+	}
+}
