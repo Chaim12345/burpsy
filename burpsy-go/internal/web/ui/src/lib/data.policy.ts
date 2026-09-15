@@ -39,7 +39,8 @@ export interface CaCertState {
  * which is not what types.ts's `Scope` describes. Shares the ["scope"] key so a
  * scope change invalidates both readers.
  */
-export const useScopeView = (): UseQueryResult<ScopeView> => useResource<ScopeView>(keys.scope, "/api/scope");
+export const useScopeView = (): UseQueryResult<ScopeViewWithLibraries> =>
+ useResource<ScopeViewWithLibraries>(keys.scope, "/api/scope");
 
 /** The full session rule shape: steps, extractions, validity, scope, max_attempts. */
 export const useSessionRulesFull = (): UseQueryResult<SessionRulesResponse> =>
@@ -310,5 +311,74 @@ export function useRemovePassthrough() {
   mutationFn: (pattern: string) =>
    api<PassthroughView>(`/api/proxy/passthrough?pattern=${encodeURIComponent(pattern)}`, json("DELETE")),
   onSuccess: () => invalidate([policyKeys.passthrough]),
+ });
+}
+
+/* --- scope libraries (burpsy-react-ui-e365) ------------------------------- */
+
+/**
+ * One saved rule set as GET /api/scope lists it: what it is called, how many rules it holds and when
+ * it was written. The rules themselves are deliberately not here — the list feeds a picker, and a
+ * library's rules are only ever wanted by the one load that installs them.
+ */
+export interface ScopeLibraryEntry {
+ name: string;
+ /**
+  * The rule count, or -1 for a library whose stored document cannot be read. -1 rather than 0
+  * because 0 is a real, loadable rule set and "unreadable" is not: an empty scope is default-allow,
+  * so the two must never render the same. The picker shows such a row as damaged and refuses to
+  * offer it for loading.
+  */
+ rules: number;
+ /** Unix milliseconds. */
+ saved_at: number;
+}
+
+/**
+ * The scope resource as this page reads it: everything ScopeView describes, plus the saved libraries
+ * the same GET carries. Declared here rather than in types.policy.ts because the libraries are what
+ * this change added to the response, and one widened type beside the hook that reads it is easier to
+ * keep true than a second declaration two files away.
+ */
+export interface ScopeViewWithLibraries extends ScopeView {
+ libraries?: ScopeLibraryEntry[];
+ /** Present only when the saved libraries could not be read. An empty list would say "nothing is
+  *  saved", which is a different and misleading claim. */
+ libraries_error?: string;
+}
+
+/** POST /api/scope. One action per call, like every other arm of that endpoint. */
+export interface ScopeLibraryUpdate {
+ action: "library_save" | "library_load" | "library_delete";
+ name: string;
+}
+
+/** What the three actions report back, so a toast can state what actually happened. */
+export interface ScopeLibraryResult {
+ name?: string;
+ saved?: boolean;
+ /** True when a save overwrote a library that already carried that name. */
+ replaced?: boolean;
+ loaded?: boolean;
+ deleted?: boolean;
+ /** On save, how many rules were stored; on load, how many are now in force. */
+ rules?: number;
+}
+
+/**
+ * Save, load or delete a named rule set.
+ *
+ * It posts to /api/scope, not to a library route of its own: a library is a saved copy of the scope
+ * resource's state. The scope key is invalidated on success, and `library_load` is the reason — it
+ * rewrites the live rule list, so a mutation that refreshed nothing would leave the rules table
+ * showing the scope the operator had *before* the load, on the one screen where a stale render is a
+ * statement about what traffic is authorised.
+ */
+export function useUpdateScopeLibrary() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (update: ScopeLibraryUpdate) =>
+   api<ScopeLibraryResult>("/api/scope", json("POST", update)),
+  onSuccess: () => invalidate([keys.scope]),
  });
 }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/query"
 	"go.uber.org/zap"
 )
@@ -258,9 +260,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // ScopeRequest represents a scope modification request.
 type ScopeRequest struct {
-	Action  string `json:"action"` // "include", "exclude", "remove", "edit", "clear", "toggle" or "drop_out_of_scope"
-	Kind    string `json:"kind"`   // optional rule kind for "remove" and "toggle": "include" or "exclude"
+	// Action is "include", "exclude", "remove", "edit", "clear", "toggle", "drop_out_of_scope", or one
+	// of the three library actions — "library_save", "library_load", "library_delete" — which operate
+	// on a named copy of the whole rule set rather than on one rule. See updateScopeLibrary for why
+	// they are actions here rather than a route of their own.
+	Action  string `json:"action"`
+	Kind    string `json:"kind"` // optional rule kind for "remove" and "toggle": "include" or "exclude"
 	Pattern string `json:"pattern"`
+	// Name is the library a library_* action names. Unused by every other action, and deliberately
+	// separate from Pattern: a library is named after an engagement, not after a host.
+	Name string `json:"name,omitempty"`
 	// Path limits the rule to requests whose path starts with it, and Port to one port. Both optional;
 	// omitted means the rule covers the whole host, which is what every rule meant before these
 	// existed. core.Scope has supported both since it was written — NewScopeRuleWithPath and
@@ -409,21 +418,44 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 		pattern := rule.Pattern
 		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port, Protocol: rule.Protocol, Enabled: rule.Enabled})
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	// The saved rule sets ride this response rather than a second route: they are state of the same
+	// resource, and a page that had to read two URLs to draw one scope could draw a scope that never
+	// existed at either of them. Cheap, too — names and counts, no rule bodies.
+	libraries, librariesErr := s.scopeLibraries()
+	body := map[string]interface{}{
 		"allow_all": s.scope.AllowAll(),
 		"rules":     views,
 		"empty":     s.scope.Empty(),
 		// Burp's "Out-of-scope request handling: Drop all out-of-scope requests". Reported
 		// unconditionally, like enabled: the UI's switch has to read the state it toggles.
 		"drop_out_of_scope": s.scope.DropOutOfScope(),
-	})
+		// Always an array, never null: the console reads .length on it, and a nil slice marshals to
+		// null, which would take the page down instead of showing an empty picker.
+		"libraries": libraries,
+	}
+	if librariesErr != nil {
+		// Reported rather than swallowed. An empty list from a failed read says "nothing is saved",
+		// and an operator who believes that re-creates a rule set that is already on disk — or, worse,
+		// stops trusting the one they saved.
+		body["libraries_error"] = librariesErr.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(body)
 }
 
 func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 	var req ScopeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// The library actions answer for themselves — a count, and whether a save replaced something —
+	// so they return before the shared "status: ok" tail below, and before persistScope: a save or a
+	// delete does not touch the live rule list, and a load persists it itself.
+	switch req.Action {
+	case "library_save", "library_load", "library_delete":
+		s.updateScopeLibrary(w, req)
 		return
 	}
 
@@ -552,13 +584,181 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 	case "clear":
 		s.scope.Clear()
 	default:
-		http.Error(w, "Unknown scope action", http.StatusBadRequest)
+		http.Error(w, "Unknown scope action: expected include, exclude, remove, edit, toggle, clear, drop_out_of_scope, library_save, library_load or library_delete", http.StatusBadRequest)
 		return
 	}
 	s.persistScope()
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// ---- scope libraries (burpsy-react-ui-e365) ------------------------------------------------------
+//
+// Burp's scope panel carries "Save to library": a rule set is named, stored, and loaded back later —
+// across projects, and across the "clear it and try something else" step that otherwise costs an
+// operator the scope they spent an afternoon getting right. burpsy had only the live rule list.
+//
+// # Why this is the same resource rather than /api/scope/library
+//
+// A library is a saved copy of this endpoint's own state, so it lives on this endpoint: the actions
+// ride the switch POST /api/scope already multiplexes (include, exclude, remove, edit, toggle,
+// clear, drop_out_of_scope), and the listing rides the GET that already reports the rule list. The
+// rejected alternative was a second route, /api/scope/library, which reads tidier — until you notice
+// it would give the console two URLs that can disagree about what the scope is, and a client would
+// have to read both to draw one page. One resource, one round trip, one answer.
+
+// scopeLibraryName trims the operator's name and refuses an empty one.
+//
+// Whitespace-only is refused rather than trimmed to "" and accepted, because an unnamed library
+// cannot be found again by the person who saved it — it would sit in the picker as a blank row, and
+// the next save under the same blank name would replace it without anyone being able to tell the two
+// apart. Trimming happens here *and* in persist, deliberately: the two must agree on identity or a
+// library becomes unloadable by the name the picker shows.
+func scopeLibraryName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", errors.New("A scope library needs a name, so it can be found again")
+	}
+	return name, nil
+}
+
+// scopeLibraryNamesInStore lists what exists, for a 404 body. A refusal that only says "not found"
+// leaves an operator guessing at their own typo; one that names the libraries that do exist is a
+// refusal they can act on in one step.
+func (s *Server) scopeLibraryNamesInStore() string {
+	libs, err := s.persist.LoadScopeLibraries()
+	if err != nil || len(libs) == 0 {
+		return "no scope libraries are saved"
+	}
+	names := make([]string, 0, len(libs))
+	for _, lib := range libs {
+		names = append(names, strconv.Quote(lib.Name))
+	}
+	return "saved libraries: " + strings.Join(names, ", ")
+}
+
+// scopeLibraries is what GET /api/scope reports beside the rules: every saved rule set as name, rule
+// count and write time. The rule bodies are not included — the list feeds a picker, and a library's
+// rules are only ever wanted by the one load that installs them.
+//
+// The error is returned rather than swallowed so the GET can carry it as a field. An empty list on a
+// failed read would tell the operator "nothing is saved", which is the same shape of lie as loading a
+// corrupt library as an empty scope: they would go and re-create a rule set that is already there.
+func (s *Server) scopeLibraries() ([]persist.ScopeLibrary, error) {
+	if s.persist == nil {
+		// No project database: libraries are a durable thing and this console has nowhere durable.
+		// Not an error — the console runs like this on purpose — so the list is simply empty.
+		return []persist.ScopeLibrary{}, nil
+	}
+	libs, err := s.persist.LoadScopeLibraries()
+	if err != nil {
+		return []persist.ScopeLibrary{}, err
+	}
+	return libs, nil
+}
+
+// updateScopeLibrary serves the three library actions of POST /api/scope. It writes its own response
+// — a count and whether a save replaced something — because "status: ok" cannot say how many rules
+// are now in force, which is the one number the operator needs after a load.
+func (s *Server) updateScopeLibrary(w http.ResponseWriter, req ScopeRequest) {
+	// A library only exists on disk, so a console running without a project database has nowhere to
+	// put one. 503, not 500: the request is well formed and this configuration simply cannot serve
+	// it — the same reading /api/backup takes of the same condition.
+	if s.persist == nil {
+		http.Error(w, "No project database is open, so scope libraries cannot be saved or loaded", http.StatusServiceUnavailable)
+		return
+	}
+	name, err := scopeLibraryName(req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	switch req.Action {
+	case "library_save":
+		// The live rule list as it stands, which is what the operator can see on the page. Disabled
+		// rules go in as disabled: a library is a photograph of the scope, not an edit of it.
+		rules := s.scope.Rules()
+		replaced, err := s.persist.SaveScopeLibrary(name, rules)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"saved": true, "replaced": replaced, "rules": len(rules), "name": name})
+	case "library_load":
+		// # Why the live scope is not touched until every rule has been built
+		//
+		// Loading replaces the rule list. The obvious shape — clear, then add each stored rule — leaves
+		// the scope empty if any rule fails to build, and an empty core.Scope is default-allow: a
+		// library with one uncompilable regular expression would take an engagement from "these six
+		// hosts" to "everything" and report an error while it did. So every rule is constructed first,
+		// through core.NewScopeRuleFrom (which compiles the `regex:` and `range:` arms and refuses what
+		// does not compile — see core/scope.go), and the live scope is only cleared once all of them
+		// exist. A refused load leaves the operator with exactly the scope they already had.
+		stored, found, err := s.persist.LoadScopeLibrary(name)
+		if err != nil {
+			// The library exists and cannot be read. Refused by name rather than loaded as the empty
+			// list json.Unmarshal would otherwise leave behind.
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, fmt.Sprintf("No scope library called %q; %s", name, s.scopeLibraryNamesInStore()), http.StatusNotFound)
+			return
+		}
+		built := make([]*core.ScopeRule, 0, len(stored))
+		for i, row := range stored {
+			// The kind is read strictly rather than defaulted. A stored "excluded" — a typo, an older
+			// vocabulary, a hand-edited document — falling through to include would turn an exclusion
+			// into an authorisation, which is the widening this whole endpoint refuses by name
+			// elsewhere; it must not arrive through a default branch here.
+			var kind core.ScopeRuleKind
+			switch {
+			case strings.EqualFold(row.Kind, "include"):
+				kind = core.ScopeInclude
+			case strings.EqualFold(row.Kind, "exclude"):
+				kind = core.ScopeExclude
+			default:
+				http.Error(w, fmt.Sprintf("Scope library %q cannot be loaded: rule %d (%s) states a kind that is neither include nor exclude — the current scope is unchanged",
+					name, i+1, row.Kind), http.StatusInternalServerError)
+				return
+			}
+			rule, err := core.NewScopeRuleFrom(kind, row.Pattern, row.PathPrefix, row.Port, row.Protocol)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Scope library %q cannot be loaded: rule %d (%s %s) does not compile: %v — the current scope is unchanged",
+					name, i+1, row.Kind, row.Pattern, err), http.StatusInternalServerError)
+				return
+			}
+			rule.Enabled = row.Enabled
+			built = append(built, rule)
+		}
+		// Replace, not merge. Merging would make loading a library twice a different result from
+		// loading it once, and would leave an operator unable to *narrow* a scope with a library at
+		// all — the rules they wanted gone would still be there, which is the failure direction that
+		// matters. The page says so before it calls this; see pages/scope.tsx.
+		s.scope.Clear()
+		for _, rule := range built {
+			s.scope.Add(rule)
+		}
+		// The live rule list has changed, so the durable one has to follow — the same write every
+		// other arm of this endpoint ends with.
+		s.persistScope()
+		writeJSON(w, http.StatusOK, map[string]any{"loaded": true, "rules": len(built), "name": name})
+	case "library_delete":
+		deleted, err := s.persist.DeleteScopeLibrary(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !deleted {
+			// 404 rather than a silent ok: an operator told "deleted" about a name they mistyped
+			// believes a rule set is gone while it is still on disk, and stops looking for it.
+			http.Error(w, fmt.Sprintf("No scope library called %q; %s", name, s.scopeLibraryNamesInStore()), http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "name": name})
+	}
 }
 
 // ---- issues / findings -------------------------------------------------------------------------

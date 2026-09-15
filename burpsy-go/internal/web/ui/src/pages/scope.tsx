@@ -1,7 +1,16 @@
 import { useMemo, useRef, useState } from "react";
-import { Plus, Trash2, Pencil, ClipboardPaste, FolderOpen } from "lucide-react";
+import { Plus, Trash2, Pencil, ClipboardPaste, FolderOpen, BookMarked, Library } from "lucide-react";
 import { toast } from "sonner";
-import { useScopeView, useUpdateScope } from "../lib/data.policy";
+import { useScopeView, useUpdateScope, useUpdateScopeLibrary, type ScopeLibraryEntry } from "../lib/data.policy";
+import {
+ describeScopeLibraryAge,
+ describeScopeLibraryDelete,
+ describeScopeLibraryLoad,
+ describeScopeLibraryLoaded,
+ describeScopeLibrarySaved,
+ isScopeLibraryDamaged,
+ scopeRuleCount,
+} from "../lib/scope-library";
 import { describeScopeRule, parseScopePaste, type ScopeRuleArms } from "../lib/scope-paste";
 import {
  decodeHostArm,
@@ -94,11 +103,87 @@ export function ScopePage(): JSX.Element {
  // the DOM to be clicked — the same shape the message editor's paste-from-file uses.
  const pasteFileRef = useRef<HTMLInputElement>(null);
 
+ // Burp's "Save to library" (burpsy-react-ui-e365): a rule set is named, stored and brought back
+ // later. The dialogs are state here rather than routes because a library is an operation on this
+ // page's rules, and the operator has to be able to see the table they are about to replace.
+ const updateLibrary = useUpdateScopeLibrary();
+ const [saving, setSaving] = useState(false);
+ const [libraryName, setLibraryName] = useState("");
+ const [browsing, setBrowsing] = useState(false);
+ // The second step of a load or a delete: the entry the operator picked, held so the dialog can
+ // state what the click is about to do *before* it does it. A load replaces the live rule list and
+ // a delete destroys the only copy of a rule set, and neither is a thing to learn from a toast.
+ const [pendingLoad, setPendingLoad] = useState<ScopeLibraryEntry | null>(null);
+ const [pendingDelete, setPendingDelete] = useState<ScopeLibraryEntry | null>(null);
+
  const run = (body: Parameters<typeof update.mutate>[0], message: string) =>
   update.mutate(body, {
    onSuccess: () => toast.success(message),
    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Scope change failed"),
   });
+
+ // How many rules the load is about to replace. Read from the same response the table renders, so
+ // the sentence in the dialog and the rows on the page can never disagree about what is in scope.
+ const liveRuleCount = data?.rules.length ?? 0;
+ // The libraries ride the same GET as the rules, so the picker and the table can never disagree
+ // about which scope the sentences below are describing.
+ const savedLibraries = data?.libraries ?? [];
+ const existingLibrary = savedLibraries.find((entry) => entry.name === libraryName.trim());
+
+ const saveLibrary = () => {
+  const name = libraryName.trim();
+  // Refused here and at the server both: a blank name cannot be picked out of the list again, and
+  // the next blank save would replace it with nothing to tell the two apart.
+  if (name === "") {
+   toast.error("Give the library a name, so you can find it again");
+   return;
+  }
+  updateLibrary.mutate(
+   { action: "library_save", name },
+   {
+    onSuccess: (result) => {
+     toast.success(describeScopeLibrarySaved(name, result));
+     setSaving(false);
+     setLibraryName("");
+    },
+    onError: (failure: unknown) =>
+     toast.error(failure instanceof Error ? failure.message : "The scope library could not be saved"),
+   },
+  );
+ };
+
+ const loadLibrary = (entry: ScopeLibraryEntry) => {
+  updateLibrary.mutate(
+   { action: "library_load", name: entry.name },
+   {
+    onSuccess: (result) => {
+     toast.success(describeScopeLibraryLoaded(entry.name, result));
+     setPendingLoad(null);
+     setBrowsing(false);
+     // The selected row belonged to the rule list that has just been replaced.
+     setSelected(null);
+    },
+    onError: (failure: unknown) =>
+     // The server refuses a library it cannot read rather than installing it as an empty rule
+     // list, and its refusal names the library — so it is shown as it arrived.
+     toast.error(failure instanceof Error ? failure.message : "The scope library could not be loaded"),
+   },
+  );
+ };
+
+ const deleteLibrary = (entry: ScopeLibraryEntry) => {
+  updateLibrary.mutate(
+   { action: "library_delete", name: entry.name },
+   {
+    onSuccess: () => {
+     toast.success(`Deleted the scope library “${entry.name}”`);
+     setPendingDelete(null);
+    },
+    onError: (failure: unknown) =>
+     toast.error(failure instanceof Error ? failure.message : "The scope library could not be deleted"),
+   },
+  );
+ };
 
  const setDropOutOfScope = (on: boolean) =>
   run({ action: "drop_out_of_scope", enabled: on }, on
@@ -453,6 +538,18 @@ export function ScopePage(): JSX.Element {
         <Trash2 size={13} />
         Clear scope
        </Button>
+       {/* Burp's "Save to library" and its counterpart, beside Clear scope because those three are
+           the operations on the rule set as a whole. Save is disabled with nothing to save: a
+           library holding no rules is an empty scope, which allows every host, and storing one
+           under a name is a trap to load later. */}
+       <Button variant="outline" size="small" onClick={() => setSaving(true)} disabled={!data || data.empty}>
+        <BookMarked size={13} />
+        Save to library
+       </Button>
+       <Button variant="outline" size="small" onClick={() => setBrowsing(true)}>
+        <Library size={13} />
+        Load…
+       </Button>
        <RefreshButton onClick={() => void refetch()} loading={isFetching} />
       </>
      }
@@ -638,6 +735,165 @@ export function ScopePage(): JSX.Element {
      onSelect={setSelected}
      empty={<Empty title="No scope rules" detail="An empty scope means everything is in scope. Add a rule to restrict what burpsy touches." />}
     />
+
+   {/*
+     * Save to library (burpsy-react-ui-e365). A name and nothing else: what gets stored is the rule
+     * list the table is showing, so a second field describing it would be a second thing to keep
+     * true. An existing name is allowed and called out — the ordinary second save is "the same
+     * engagement, after I fixed a rule", and making that an error would push operators into
+     * inventing names they will not recognise tomorrow.
+     */}
+   <Modal
+    open={saving}
+    onOpenChange={(open) => {
+     setSaving(open);
+     if (!open) setLibraryName("");
+    }}
+    title="Save scope to library"
+    description={`Stores the ${scopeRuleCount(liveRuleCount)} in scope now under a name, so this rule set can be loaded back later — including in another project.`}
+   >
+    <div className="stack">
+     <Field
+      label="Library name"
+      hint="What you will look for when you want these rules back: the engagement, the target, the phase."
+     >
+      {(id) => (
+       <Input
+        id={id}
+        value={libraryName}
+        onChange={(event) => setLibraryName(event.target.value)}
+        placeholder="acme-external-q3"
+        onKeyDown={(event) => {
+         if (event.key === "Enter") saveLibrary();
+        }}
+       />
+      )}
+     </Field>
+     {existingLibrary ? (
+      <p>
+       A library called “{existingLibrary.name}” already exists, saved {describeScopeLibraryAge(existingLibrary.saved_at)}
+       {isScopeLibraryDamaged(existingLibrary) ? "" : ` with ${scopeRuleCount(existingLibrary.rules)}`}. Saving replaces it.
+      </p>
+     ) : null}
+     <div className="page-actions">
+      <Button variant="outline" onClick={() => setSaving(false)}>
+       Cancel
+      </Button>
+      <Button disabled={updateLibrary.isPending || libraryName.trim() === ""} onClick={saveLibrary}>
+       {existingLibrary ? "Replace library" : "Save library"}
+      </Button>
+     </div>
+    </div>
+   </Modal>
+
+   {/*
+     * Load… — the picker, and the page's statement of what loading means. Nothing loads from this
+     * list directly: picking one opens the sentence that says how many rules it will take away and
+     * how many it will put back, because a load REPLACES the rule list and the rules it removes are
+     * the ones the operator cannot see from a button labelled "Load".
+     */}
+   <Modal
+    open={browsing}
+    onOpenChange={(open) => {
+     setBrowsing(open);
+     if (!open) {
+      setPendingLoad(null);
+      setPendingDelete(null);
+     }
+    }}
+    title="Scope libraries"
+    description="Saved rule sets. Loading one replaces every rule in your scope with the rules it holds — it is not merged into what is there."
+    wide
+   >
+    <div className="stack">
+     {data?.libraries_error ? (
+      // The server could not read the saved libraries. Shown rather than drawn as an empty picker:
+      // "nothing is saved" and "I could not find out what is saved" are different things to tell
+      // someone who is about to re-create a rule set.
+      <ErrorNotice
+       title="The saved libraries could not be read"
+       error={new Error(data.libraries_error)}
+       onRetry={() => void refetch()}
+      />
+     ) : isLoading ? (
+      <p>Reading the saved libraries…</p>
+     ) : savedLibraries.length === 0 ? (
+      <Empty
+       title="No scope libraries saved"
+       detail="Save to library stores the rules you have now under a name. They stay available after a restart and in other projects."
+      />
+     ) : (
+      savedLibraries.map((entry) => (
+       <div key={entry.name} className="stack">
+        <p>
+         <strong>{entry.name}</strong>{" "}
+         <span className="cell-dim">
+          {isScopeLibraryDamaged(entry) ? "unreadable" : scopeRuleCount(entry.rules)} · saved{" "}
+          {describeScopeLibraryAge(entry.saved_at)}
+         </span>
+        </p>
+        <Toolbar>
+         <Button
+          variant="outline"
+          size="small"
+          disabled={isScopeLibraryDamaged(entry) || updateLibrary.isPending}
+          onClick={() => {
+           setPendingDelete(null);
+           setPendingLoad(entry);
+          }}
+         >
+          <Library size={13} />
+          Load…
+         </Button>
+         <Button
+          variant="outline"
+          size="small"
+          disabled={updateLibrary.isPending}
+          onClick={() => {
+           setPendingLoad(null);
+           setPendingDelete(entry);
+          }}
+         >
+          <Trash2 size={13} />
+          Delete
+         </Button>
+        </Toolbar>
+        {pendingLoad?.name === entry.name ? (
+         <div className="stack">
+          <p>{describeScopeLibraryLoad(entry, liveRuleCount)}</p>
+          <Toolbar>
+           <Button variant="outline" size="small" onClick={() => setPendingLoad(null)}>
+            Keep my rules
+           </Button>
+           <Button size="small" disabled={updateLibrary.isPending} onClick={() => loadLibrary(entry)}>
+            Replace {scopeRuleCount(liveRuleCount)} with “{entry.name}”
+           </Button>
+          </Toolbar>
+         </div>
+        ) : null}
+        {pendingDelete?.name === entry.name ? (
+         <div className="stack">
+          <p>{describeScopeLibraryDelete(entry)}</p>
+          <Toolbar>
+           <Button variant="outline" size="small" onClick={() => setPendingDelete(null)}>
+            Keep it
+           </Button>
+           <Button size="small" disabled={updateLibrary.isPending} onClick={() => deleteLibrary(entry)}>
+            Delete “{entry.name}”
+           </Button>
+          </Toolbar>
+         </div>
+        ) : null}
+       </div>
+      ))
+     )}
+     <div className="page-actions">
+      <Button variant="outline" onClick={() => setBrowsing(false)}>
+       Close
+      </Button>
+     </div>
+    </div>
+   </Modal>
 
    <Modal
     open={pasting}

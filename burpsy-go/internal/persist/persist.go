@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
@@ -176,6 +177,11 @@ CREATE TABLE IF NOT EXISTS scope_rules_v3 (
 	path_prefix TEXT,
 	protocol    TEXT,
 	enabled     INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS scope_libraries (
+	name       TEXT PRIMARY KEY,
+	rules_json TEXT NOT NULL,
+	saved_at   INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS matchreplace_rules (
 	ord      INTEGER PRIMARY KEY,
@@ -1251,6 +1257,198 @@ func scanScopeRows(rows *sql.Rows, withPath, hasProtocol, hasEnabled bool) ([]*c
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ---- Scope libraries (burpsy-react-ui-e365) ------------------------------------------------------
+//
+// Burp's scope panel carries "Save to library": a rule set is named, stored, and loaded back later —
+// across projects, and across the "clear it and try something else" step that otherwise costs an
+// operator the scope they spent an afternoon getting right. burpsy had only the live rule list, so
+// the only way back to a previous scope was to retype it.
+//
+// A library is stored as one JSON document per name rather than as rows in a fourth scope table. The
+// rejected alternative was a scope_library_rules table keyed (name, ord), mirroring scope_rules_v3:
+// it would make a library queryable by rule, which nothing wants, and it would make every future
+// column on a scope rule a migration on two tables that must not drift — and drift between two
+// tables that both describe authorisation is precisely the failure scope_rules_v3 exists because of.
+// A library is never matched against traffic; it is only ever read back whole and handed to the live
+// scope, so a blob is the honest shape. What the blob costs is that a corrupt document cannot be
+// partially recovered — which is why LoadScopeLibrary refuses by name instead of returning what it
+// could parse: an empty core.Scope is default-allow, so a library that silently loaded as "no rules"
+// would widen authorisation to everything at the exact moment the operator believed they had
+// narrowed it.
+
+// ScopeLibraryRule is one rule as a library stores it: the same arms scope_rules_v3 holds, in the
+// same lowercase vocabulary scopeKindName writes, so a library round-trips through exactly what the
+// live table can hold and nothing is lost between the two. Deliberately not core.ScopeRule — that
+// type carries compiled regular expressions and is free to grow unexported state, and a stored
+// document has to keep meaning the same thing after it does.
+type ScopeLibraryRule struct {
+	Kind       string  `json:"kind"`
+	Pattern    string  `json:"pattern"`
+	Port       *uint16 `json:"port,omitempty"`
+	PathPrefix *string `json:"path_prefix,omitempty"`
+	Protocol   *string `json:"protocol,omitempty"`
+	// Enabled is written always, not omitempty, because a disabled rule must come back disabled and
+	// omitempty would drop exactly that state from the document. Note the consequence of the plain
+	// bool: an absent field unmarshals to false, i.e. disabled. Nothing written by SaveScopeLibrary
+	// ever omits it, so that path is unreachable today — and it is the safe direction anyway, since a
+	// rule that comes back inactive narrows nothing it should not.
+	Enabled bool `json:"enabled"`
+}
+
+// ScopeLibrary is one entry of the listing: what a library is called, how many rules it holds and
+// when it was written. The rule bodies are deliberately absent — the list exists to be shown in a
+// picker, and sending every rule of every library to render a row count is bytes nobody reads.
+type ScopeLibrary struct {
+	Name string `json:"name"`
+	// Rules is the count, not the rules. Read from the stored document at save time rather than
+	// re-parsed per listing, so listing a corrupt library still names it instead of failing the
+	// whole list — see LoadScopeLibraries.
+	Rules   int   `json:"rules"`
+	SavedAt int64 `json:"saved_at"`
+}
+
+// scopeLibraryRules converts live rules into the stored shape.
+func scopeLibraryRules(rules []*core.ScopeRule) []ScopeLibraryRule {
+	out := make([]ScopeLibraryRule, 0, len(rules))
+	for _, r := range rules {
+		if r == nil {
+			continue
+		}
+		out = append(out, ScopeLibraryRule{
+			Kind:       scopeKindName(r.Kind),
+			Pattern:    r.Pattern,
+			Port:       r.Port,
+			PathPrefix: r.PathPrefix,
+			Protocol:   r.Protocol,
+			Enabled:    r.Enabled,
+		})
+	}
+	return out
+}
+
+// SaveScopeLibrary stores rules under name, replacing any library already called that, and reports
+// whether it replaced one.
+//
+// # Why this returns an error where SaveScope logs and continues
+//
+// SaveScope is write-through: the live core.Scope is still authoritative in memory, so a failed
+// INSERT costs a restart, not the operator's belief about what just happened — logging and carrying
+// on is right there. A library has no live copy. If this swallowed a failure the page would toast
+// "Saved to library" for a library that does not exist, and the operator would clear the scope
+// believing they could get it back. So the write path that has no second copy reports, and the one
+// that has a second copy logs.
+//
+// Overwrite is allowed rather than refused, because refusing would make "save the scope again after
+// editing it" — the ordinary second save — an error the operator has to work around by inventing a
+// second name. It is reported instead: `replaced` reaches the toast, so an overwrite is something
+// the operator is told about rather than something they discover later.
+func (s *Store) SaveScopeLibrary(name string, rules []*core.ScopeRule) (replaced bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("no database is open, so there is nowhere to save a scope library")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, errors.New("a scope library needs a name, so it can be found again")
+	}
+	body, err := json.Marshal(scopeLibraryRules(rules))
+	if err != nil {
+		return false, fmt.Errorf("serialise scope library %q: %w", name, err)
+	}
+	// Existence is read in the same call rather than left to the caller: two round trips would let a
+	// concurrent save land between them and make `replaced` a statement about a moment that has passed.
+	var existing int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM scope_libraries WHERE name = ?`, name).Scan(&existing); err != nil {
+		return false, fmt.Errorf("look up scope library %q: %w", name, err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT OR REPLACE INTO scope_libraries (name, rules_json, saved_at) VALUES (?, ?, ?)`,
+		name, string(body), time.Now().UnixMilli()); err != nil {
+		return false, fmt.Errorf("save scope library %q: %w", name, err)
+	}
+	return existing > 0, nil
+}
+
+// LoadScopeLibraries lists every stored library, newest first.
+//
+// A library whose document cannot be parsed is still listed, with a rule count of -1 rather than 0.
+// Dropping it from the list would hide a name that exists — the operator would then save over it by
+// accident, or wonder where it went — and reporting 0 would be indistinguishable from an empty scope,
+// which is the one number that must never be guessed here. -1 is a count no real library can have, so
+// a caller that shows it cannot mistake it for a rule set.
+func (s *Store) LoadScopeLibraries() ([]ScopeLibrary, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("no database is open, so there are no scope libraries to list")
+	}
+	rows, err := s.db.Query(`SELECT name, rules_json, saved_at FROM scope_libraries ORDER BY saved_at DESC, name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ScopeLibrary{}
+	for rows.Next() {
+		var name, body string
+		var savedAt int64
+		if err := rows.Scan(&name, &body, &savedAt); err != nil {
+			return nil, err
+		}
+		count := -1
+		var parsed []ScopeLibraryRule
+		if err := json.Unmarshal([]byte(body), &parsed); err == nil {
+			count = len(parsed)
+		}
+		out = append(out, ScopeLibrary{Name: name, Rules: count, SavedAt: savedAt})
+	}
+	return out, rows.Err()
+}
+
+// LoadScopeLibrary reads one library back. found is false when no library carries that name, which is
+// a 404 at the endpoint; err is a document that exists and cannot be read, which is a 500 naming the
+// library and the parse failure.
+//
+// The two are kept apart because they mean opposite things to an operator: "there is no library
+// called that" is a typo, and "the library called that is unreadable" is data loss they need to know
+// about before they clear the scope they still have. Neither may become an empty rule list — see the
+// section header: an empty core.Scope is default-allow.
+func (s *Store) LoadScopeLibrary(name string) (rules []ScopeLibraryRule, found bool, err error) {
+	if s == nil || s.db == nil {
+		return nil, false, errors.New("no database is open, so there is no scope library to read")
+	}
+	name = strings.TrimSpace(name)
+	var body string
+	switch err := s.db.QueryRow(`SELECT rules_json FROM scope_libraries WHERE name = ?`, name).Scan(&body); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, fmt.Errorf("read scope library %q: %w", name, err)
+	}
+	var parsed []ScopeLibraryRule
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, true, fmt.Errorf("scope library %q cannot be read: %w", name, err)
+	}
+	return parsed, true, nil
+}
+
+// DeleteScopeLibrary removes a library and reports whether there was one to remove.
+//
+// The boolean exists so a delete of a name that is not there can be refused rather than reported as a
+// success: an operator who mistypes a name and is told "deleted" believes a library is gone that is
+// still on disk, and will not look for it again.
+func (s *Store) DeleteScopeLibrary(name string) (deleted bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("no database is open, so there is no scope library to delete")
+	}
+	name = strings.TrimSpace(name)
+	res, err := s.db.Exec(`DELETE FROM scope_libraries WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("delete scope library %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete scope library %q: %w", name, err)
+	}
+	return n > 0, nil
 }
 
 // ---- Interception startup state -----------------------------------------------------------------
