@@ -300,7 +300,15 @@ function App(): JSX.Element {
       event.preventDefault();
       setPaletteOpen(true);
     },
-    { enableOnFormTags: true },
+    // enableOnContentEditable, because the palette's "Convert selection" group (burpsy-react-ui-1wrb)
+    // acts on the selection in a message editor, and a CodeMirror editor is a contenteditable — so
+    // without this the one chord that reaches those commands was dead in the exact place an operator
+    // uses them, having just selected the text they want encoded. They still worked from a blurred
+    // editor, which made the group look intermittent rather than unreachable: the same keystroke did
+    // nothing or opened the palette depending on where the caret happened to be. Nothing is taken
+    // from the editor by claiming it — editor.tsx's own chords are s/u/h/b, and the handler
+    // preventDefaults so no browser default fires either.
+    { enableOnFormTags: true, enableOnContentEditable: true },
     [paletteChord, setPaletteOpen],
   );
 

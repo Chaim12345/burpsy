@@ -66,3 +66,24 @@ export function recordPaletteUse(actionId: string): void {
  record[actionId] = counter;
  write(record);
 }
+
+/**
+ * The ids of the commands most recently run, newest first (burpsy-react-ui-1wrb).
+ *
+ * `known` is the palette's current action list, and an id outside it is dropped: the ledger
+ * outlives the console that wrote it, so a command removed in a later build is still in an
+ * operator's storage — offering it would be a Recents row that cannot run. Filtering here rather
+ * than at the display site keeps "recent" one notion: the ledger the palette already sorts by.
+ */
+export function recentActionIds(
+ ledger: Record<string, number>,
+ known: Iterable<string>,
+ limit: number,
+): string[] {
+ const available = new Set(known);
+ return Object.entries(ledger)
+  .filter(([id]) => available.has(id))
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, Math.max(0, limit))
+  .map(([id]) => id);
+}
