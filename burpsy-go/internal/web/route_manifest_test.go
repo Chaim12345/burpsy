@@ -276,6 +276,13 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "running tasks, the activity log, and every coverage summary with its breakdown",
 	},
+	"/api/dashboard/events": {
+		// riskDestructive, not riskLocal: the event log holds scope.changed and crawl.refused — the
+		// trail of what the engagement was allowed to touch and what the tool refused to send — so a
+		// DELETE discards evidence, the exact shape this class was created for at /api/tools/log.
+		methods: []string{"DELETE"}, risk: riskDestructive,
+		summary: "clears the dashboard's event log (Burp's \"Clear event log\"); the SSE stream at /api/events is a different resource",
+	},
 	"/api/discovery": {
 		// riskAttack for the same reason /api/crawl is: a POST hands a wordlist to ffuf, which then
 		// sends one request per word — unbounded traffic at the target, chosen by a file rather than by
@@ -1202,7 +1209,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// current signing CA: the previous certificate stops signing, every cached leaf is dropped, and
 	// persisting the new pair overwrites the old key on disk with no path back. See its manifest entry
 	// for why it is not the credential class its sibling import sits in.
-	equal("destructive", destructive, []string{"/api/backup", "/api/issues/", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
+	//
+	// /api/dashboard/events joins because its DELETE clears the event log — scope.changed and
+	// crawl.refused are the record of what the engagement was allowed to touch and what the tool
+	// refused, so discarding them is discarding evidence, the same act as clearing the tool log.
+	equal("destructive", destructive, []string{"/api/backup", "/api/dashboard/events", "/api/issues/", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

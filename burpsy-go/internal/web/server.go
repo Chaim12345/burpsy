@@ -967,6 +967,9 @@ func (s *Server) setupRoutes() {
 	// Dashboard: running tasks, the activity log, and every summary count with its
 	// found/skipped/errored/gated breakdown.
 	s.mux.HandleFunc("/api/dashboard", s.handleDashboard)
+	// DELETE clears the event log the dashboard reads (Burp's "Clear event log"). Its own route, not
+	// a verb on /api/dashboard, so a DELETE names the one list it discards rather than the aggregate.
+	s.mux.HandleFunc("/api/dashboard/events", s.handleDashboardEvents)
 
 	// Live change events: the stream that replaced the UI's polling, plus its own honest counters.
 	s.mux.HandleFunc("/api/events", s.handleEvents)
