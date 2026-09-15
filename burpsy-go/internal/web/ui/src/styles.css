@@ -4300,6 +4300,68 @@ tbody td {
   background: color-mix(in srgb, var(--row-tint) var(--row-tint-alpha), var(--paper-raised));
 }
 
+/* --- Decoder encoding colour-coding (burpsy-react-ui-adrh) -------------------------------------
+   Burp's "The data is color-coded to indicate the type of encoding or decoding that is applied."
+   Each of the nine encoding families (see src/lib/decoder-colours.ts) borrows one colour from the
+   closed nine-colour highlight vocabulary above — already contrast-audited and theme-stable, and a
+   family means the same thing in both themes exactly as a row highlight does. The colour is a
+   supplementary cue: the step label and each detected badge already name the encoding in text, so
+   this carries no information that is only in the colour (WCAG 1.4.1). The span's faint background
+   reuses --row-tint-alpha (4% dark / 14% light), the same value proven to keep text at 4.5:1; the
+   underline sits below the glyphs and never touches text contrast. */
+[data-encoding="url"] {
+  --enc-tint: var(--highlight-blue);
+}
+[data-encoding="html"] {
+  --enc-tint: var(--highlight-green);
+}
+[data-encoding="base64"] {
+  --enc-tint: var(--highlight-orange);
+}
+[data-encoding="radix"] {
+  --enc-tint: var(--highlight-magenta);
+}
+[data-encoding="compress"] {
+  --enc-tint: var(--highlight-cyan);
+}
+[data-encoding="jwt"] {
+  --enc-tint: var(--highlight-pink);
+}
+[data-encoding="ascii"] {
+  --enc-tint: var(--highlight-yellow);
+}
+[data-encoding="rot13"] {
+  --enc-tint: var(--highlight-red);
+}
+[data-encoding="hash"] {
+  --enc-tint: var(--highlight-gray);
+}
+
+/* The transformed span in the Decoder output. Only the span carries the tint — any untouched
+   prefix/suffix from a per-selection transform stays plain, which is what makes the colour read
+   as "this part is <encoding>" rather than tinting the whole card. */
+.enc-span[data-encoding] {
+  background: color-mix(in srgb, var(--enc-tint) var(--row-tint-alpha), transparent);
+  border-bottom: 2px solid var(--enc-tint);
+  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
+  padding: 0 1px;
+}
+
+/* The swatch on each detected-layer badge. A small square rather than the picker's circle so it
+   reads as a code marker, not a chooser. */
+.enc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px; /* token-exempt: fixed 4px swatch gap, matches .highlight-picker above */
+}
+.enc-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
+  background: var(--enc-tint, var(--highlight-gray));
+}
+
 /* --- highlight picker: design/jsx/highlight-picker-default.jsx --------------------------------- */
 
 .highlight-picker {
