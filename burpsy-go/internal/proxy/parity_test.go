@@ -103,6 +103,17 @@ var exchangeFieldRules = map[string]fieldRule{
 	// claimed, so the test claims it by name — and it stays true on a fast machine, with no sleep anywhere
 	// to clear a threshold.
 	"Duration": ruleMayDiffer,
+	// TTFB is ruleMayDiffer, and the disagreement is the design rather than a gap to close later
+	// (burpsy-react-ui-jcdm). Time-to-first-byte is taken at the wire, inside the response reader, so
+	// only a producer that owns that read can state it: the proxy relays do, and the crawler — which
+	// fetches through a client that hands back a finished response — does not. It therefore records
+	// TTFB Unmeasured, which is a true statement about what it knows, not a zero standing in for one.
+	//
+	// Making this ruleIdentical would force one of two lies: the crawler inventing a first-byte
+	// instant it never observed, or the proxy discarding one it did. rulePopulated would be the same
+	// lie in weaker form. The pair (Measured, Us) is what keeps "nobody timed this" separable from
+	// "this was instant", and the wire preserves that by sending null rather than 0.
+	"TTFB": ruleMayDiffer,
 	// Source is the one field that must differ: it names which surface produced the row, and that is
 	// the point of it. Everything else being equal is what makes it useful.
 	"Source": ruleMayDiffer,

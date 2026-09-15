@@ -13,6 +13,19 @@ import (
 	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
+// ttfbMillis renders a measured time-to-first-byte as milliseconds and an unmeasured one as nil.
+// Separate from ExchangeDuration.Millis for one reason: Millis answers 0 for both an unmeasured
+// value and a genuinely sub-millisecond one, which duration_ms has always been able to live with
+// because a total of "0 ms" is merely imprecise. For TTFB it would be a claim — that the origin's
+// first byte arrived instantly — about exchanges nobody timed, which is most of them.
+func ttfbMillis(d core.ExchangeDuration) *uint64 {
+	if !d.Measured {
+		return nil
+	}
+	ms := d.Millis()
+	return &ms
+}
+
 // ExchangeView is the wire shape every exchange-facing endpoint serves. It mirrors the
 // `Exchange` interface in the UI's types.ts: ids into the message store rather than payloads,
 // `null` (never `0`) for an absent response or status, and a protocol token the UI switches on.
@@ -52,10 +65,21 @@ type ExchangeView struct {
 	// Carried on the index row rather than resolved per row, and that is not an optimisation detail:
 	// exchangeView is handed only a *core.Exchange and has no store access precisely so that listing
 	// 100k exchanges cannot start reading response bodies. See core.Exchange.Mime.
-	Mime       string  `json:"mime"`
-	StartedMs  uint64  `json:"started_ms"`
-	DurationMs uint64  `json:"duration_ms"`
-	Notes      *string `json:"notes"`
+	Mime       string `json:"mime"`
+	StartedMs  uint64 `json:"started_ms"`
+	DurationMs uint64 `json:"duration_ms"`
+	// TtfbMs is Burp's "Start response timer" — the request going out to the FIRST response byte
+	// arriving — against duration_ms's "End response timer" for the complete response. It is what
+	// separates an origin that took a second to think (long TTFB, quick body) from one that streamed
+	// a large body slowly (quick TTFB, long total); a single total reads identically for both.
+	//
+	// A POINTER, unlike duration_ms, and that asymmetry is deliberate rather than an oversight. Only
+	// the proxy relays time the first byte at the wire; Repeater, Intruder, the crawler and any row
+	// restored from before the field existed know the whole round trip and nothing else. Rendering
+	// those as 0 would claim an instantaneous first byte, which is the one reading that is certainly
+	// false. null means "this producer did not measure it", and the UI shows an em dash.
+	TtfbMs *uint64 `json:"ttfb_ms"`
+	Notes  *string `json:"notes"`
 	// Highlight is the operator's colour tag, "" when unset. See core.ValidHighlights for the
 	// vocabulary; PATCH /api/exchange/{id} is the only writer.
 	Highlight string `json:"highlight"`
@@ -222,15 +246,18 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		// Millis, not the raw microseconds: this field's JSON shape predates core.ExchangeDuration and
 		// stays exactly as it was. See the note under ExchangeView for what that cannot express.
 		DurationMs: ex.Duration.Millis(),
-		Notes:      ex.Notes,
-		Highlight:  ex.Highlight,
-		Related:    []any{},
-		Protocol:   protocolToken(ex.Protocol),
-		TaskID:     ex.TaskID,
-		ParentID:   ex.ParentID,
-		Cookies:    ex.Cookies,
-		Title:      ex.Title,
-		ServerIP:   ex.ServerIP,
+		// nil when this producer never timed the first byte, so "unmeasured" cannot be read as an
+		// instantaneous one. See the field's comment on ExchangeView.
+		TtfbMs:    ttfbMillis(ex.TTFB),
+		Notes:     ex.Notes,
+		Highlight: ex.Highlight,
+		Related:   []any{},
+		Protocol:  protocolToken(ex.Protocol),
+		TaskID:    ex.TaskID,
+		ParentID:  ex.ParentID,
+		Cookies:   ex.Cookies,
+		Title:     ex.Title,
+		ServerIP:  ex.ServerIP,
 		// uint16 on the wire so the column cannot render a negative or out-of-range port; the
 		// engine's own field is the same width for the same reason.
 		ListenerPort: ex.ListenerPort,

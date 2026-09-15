@@ -377,10 +377,22 @@ type Exchange struct {
 	// Sitemap columns both rely on exactly that pair — see the mimeLabel note in ui/src/lib/api.ts.
 	Mime      string
 	StartedMs uint64
-	// Duration is how long the exchange took, or the explicit "nobody measured this". See
-	// ExchangeDuration for why it is not a millisecond count.
+	// Duration is how long the exchange took start to finish — the request going out to the last
+	// response byte arriving — or the explicit "nobody measured this". It is Burp's "End response
+	// timer". See ExchangeDuration for why it is not a millisecond count.
 	Duration ExchangeDuration
-	Notes    *string
+	// TTFB is time-to-first-byte: the request going out to the *first* response byte arriving, or the
+	// explicit "nobody measured this". It is Burp's "Start response timer", and it is what tells a slow
+	// origin (long TTFB, quick body) apart from a slow-bodied one (quick TTFB, long total) — a
+	// distinction Duration alone erases, because both read as one large total.
+	//
+	// Measured only by producers that time the first byte at the wire: the HTTP/1 and HTTP/2 proxy
+	// relays. A producer that only ever knew the whole round trip — Repeater, Intruder, the crawler,
+	// a restore of a row written before this field existed — leaves it Unmeasured, which the wire and
+	// the UI render as "no split", never as an instantaneous first byte. Same fail-safe zero as
+	// Duration.
+	TTFB  ExchangeDuration
+	Notes *string
 	// Highlight is the operator's colour tag for this row, empty when unset. It mirrors the UI's
 	// Organizer highlight vocabulary (see ValidHighlights) rather than inventing a second one, so the
 	// same colour means the same thing whichever tool set it. Unlike organizer.Item.Highlight, the wire

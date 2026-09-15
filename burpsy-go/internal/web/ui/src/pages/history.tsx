@@ -1023,8 +1023,25 @@ export function HistoryPage(): JSX.Element {
     cell: (info) => <span className="cell-num">{formatBytes(info.getValue<number>())}</span>,
    },
    {
+    // Burp splits the response timer in two (burpsy-react-ui-jcdm). TTFB is the wait for the
+    // origin to start answering; Total is the whole transfer. An em dash rather than 0 where the
+    // producer never timed the first byte — claiming an instant first byte would be worse than
+    // admitting the row does not know.
+    accessorKey: "ttfb_ms",
+    header: "TTFB",
+    size: 78,
+    cell: (info) => {
+     const ms = info.getValue<number | null>();
+     return ms === null || ms === undefined ? (
+      <span className="cell-dim">—</span>
+     ) : (
+      <span className="cell-num">{formatDuration(ms)}</span>
+     );
+    },
+   },
+   {
     accessorKey: "duration_ms",
-    header: "Time",
+    header: "Total",
     size: 78,
     cell: (info) => <span className="cell-num">{formatDuration(info.getValue<number>())}</span>,
    },

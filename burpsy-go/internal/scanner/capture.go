@@ -117,6 +117,18 @@ type CapturedExchange struct {
 	// microsecond resolution and was not at millisecond resolution.
 	Started  time.Time
 	Duration time.Duration
+	// FirstByte is the instant the first response byte arrived from upstream, or the zero time when
+	// this producer did not time it. Started→FirstByte is the recorded exchange's TTFB (Burp's "Start
+	// response timer"; see core.Exchange.TTFB). The zero time is an unambiguous "unmeasured" — a real
+	// first-byte instant is never the zero time — so, unlike Duration below, it needs no "exact zero
+	// means unset" convention.
+	FirstByte time.Time
+	// Completed is the instant the last response byte finished being read from upstream, or the zero
+	// time when unset. When set, Started→Completed is the recorded total (Burp's "End response timer"),
+	// and it is taken at the wire — before any operator intercept hold or write back to the client — so
+	// the total is transfer time, not console latency. When unset, Duration is used instead, for
+	// producers that hand Record a whole-round-trip measurement rather than the two wire instants.
+	Completed time.Time
 	// Protocol is which protocol carried the exchange. The zero value is core.ProtocolHTTP1.
 	Protocol core.Protocol
 	// Source names the surface this exchange came from, so an operator reading history can tell traffic
@@ -250,6 +262,7 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		Method:      x.Method,
 		Path:        x.Path,
 		Duration:    x.duration(),
+		TTFB:        x.ttfb(),
 		StartedMs:   uint64(x.Started.UnixMilli()),
 		Protocol:    x.Protocol,
 		ResponseLen: len(x.Response),
@@ -338,10 +351,31 @@ func (c Capture) storeStages(what string, original, auto, final []byte, dir core
 // core.MeasuredDuration on the exchange it builds itself; this seam's contract is the zero rule, stated
 // on the field.
 func (x CapturedExchange) duration() core.ExchangeDuration {
+	// A producer that timed the two wire instants wins: Completed→Started is the transfer total, taken
+	// before any intercept hold, so it is not inflated by the operator's own hold time the way a
+	// record-site time.Since(startTime) would be. Falls back to the whole-round-trip Duration for
+	// producers that carry only that (Repeater, Intruder, the crawler), and to unmeasured for neither.
+	if !x.Completed.IsZero() && !x.Started.IsZero() {
+		return core.MeasuredDuration(x.Completed.Sub(x.Started))
+	}
 	if x.Duration == 0 {
 		return core.UnmeasuredDuration()
 	}
 	return core.MeasuredDuration(x.Duration)
+}
+
+// ttfb reads the time-to-first-byte from the two wire instants, or reports it unmeasured.
+//
+// Both instants must be set: a producer that has one but not the other has not timed the first byte
+// against the request, and inventing the difference from a half-set pair would be exactly the kind of
+// fabricated measurement core.ExchangeDuration's Measured flag exists to prevent. The zero time is the
+// honest "unset" here — no exact-zero-microseconds convention is needed, because a real instant is
+// never the zero time.
+func (x CapturedExchange) ttfb() core.ExchangeDuration {
+	if x.FirstByte.IsZero() || x.Started.IsZero() {
+		return core.UnmeasuredDuration()
+	}
+	return core.MeasuredDuration(x.FirstByte.Sub(x.Started))
 }
 
 // sourceOf picks the attribution for one row: what the exchange named, else what the handle defaults
