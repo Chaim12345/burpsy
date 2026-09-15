@@ -199,7 +199,7 @@ func TestProxyListenerPutRejectsAddressesItCannotMean(t *testing.T) {
 
 func TestProxyListenerWithoutAServerAttachedReports503(t *testing.T) {
 	ts := NewServer(core.NewTrafficStore(), core.NewScope())
-	for _, verb := range []string{http.MethodGet, http.MethodPut} {
+	for _, verb := range []string{http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		ts.mux.ServeHTTP(rec, httptest.NewRequest(verb, "/api/proxy/listener",
 			strings.NewReader(`{"bind":"127.0.0.1:8080"}`)))
@@ -209,15 +209,22 @@ func TestProxyListenerWithoutAServerAttachedReports503(t *testing.T) {
 	}
 }
 
+// POST used to be the wrong verb here. It is the add-a-listener verb since
+// burpsy-react-ui-pfeg, along with DELETE for removal, so the unsupported verb this asserts
+// about moved to PATCH — the point of the test is that the endpoint answers 405 with a
+// truthful Allow header, not which particular verb happens to be unsupported today.
 func TestProxyListenerWrongVerbIs405(t *testing.T) {
 	ts, _ := startAPIProxy(t)
 	rec := httptest.NewRecorder()
-	ts.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/proxy/listener",
+	ts.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/api/proxy/listener",
 		strings.NewReader(`{}`)))
 	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST /api/proxy/listener = %d, want 405", rec.Code)
+		t.Fatalf("PATCH /api/proxy/listener = %d, want 405", rec.Code)
 	}
-	if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") || !strings.Contains(allow, "PUT") {
-		t.Errorf("Allow header = %q, want GET, PUT", allow)
+	allow := rec.Header().Get("Allow")
+	for _, verb := range []string{"GET", "PUT", "POST", "DELETE"} {
+		if !strings.Contains(allow, verb) {
+			t.Errorf("Allow header = %q, want it to list %s", allow, verb)
+		}
 	}
 }

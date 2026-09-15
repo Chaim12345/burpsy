@@ -798,131 +798,194 @@ func (c *ProxyConfig) WithLogger(logger *zap.Logger) *ProxyConfig {
 type Server struct {
 	config *ProxyConfig
 
-	// listener is the socket the accept loop serves, and listenerMu guards both the
-	// pointer and the identity checks the loop makes after a failed Accept. Rebind
-	// serialises on rebindMu so two concurrent re-binds cannot interleave their
-	// listen/swap/close halves; the accept loop itself never takes rebindMu.
-	listener   net.Listener
-	listenerMu sync.Mutex
-	rebindMu   sync.Mutex
+	// listeners is the set of sockets this engine serves, keyed by id, and listenerOrder
+	// keeps them in report order with the boot listener first. listenerMu guards the map,
+	// the order, the id counter and serveCtx; each boundListener has its own mutex for the
+	// socket/spec pair the accept loop and the relay read. Rebind and the Add/Update/Remove
+	// calls serialise on rebindMu so two concurrent changes cannot interleave their
+	// listen/swap/close halves; the accept loops themselves never take rebindMu.
+	//
+	// serveCtx is ListenAndServe's context, kept so a listener added later can tie its
+	// accept loop to the same lifetime. It is nil before ListenAndServe starts, which is
+	// what makes AddListener refuse rather than bind a socket nothing would accept on.
+	listeners     map[string]*boundListener
+	listenerOrder []string
+	listenerSeq   int
+	serveCtx      context.Context
+	listenerMu    sync.Mutex
+	rebindMu      sync.Mutex
 }
 
 // NewServer creates a new proxy server.
 func NewServer(config *ProxyConfig) *Server {
 	return &Server{
-		config: config,
+		config:    config,
+		listeners: map[string]*boundListener{},
 	}
 }
 
-// ListenerAddr returns the address the live listener is bound to, in net.Addr form
-// (an ephemeral port is resolved), or "" when nothing is listening.
-func (s *Server) ListenerAddr() string {
+// bootListener is the entry -proxy-bind opened, or nil before ListenAndServe has started.
+func (s *Server) bootListener() *boundListener {
 	s.listenerMu.Lock()
 	defer s.listenerMu.Unlock()
-	if s.listener == nil {
-		return ""
-	}
-	return s.listener.Addr().String()
+	return s.listeners[bootListenerID]
 }
 
-// Rebind moves the live listener to addr without dropping the process: the new
-// socket is opened first, so a bind failure leaves the current listener serving
-// untouched and is returned as an error rather than becoming an outage. In-flight
-// connections on the old socket are not disturbed — only Accept is retired.
-// It answers with the address that was serving before the move.
+// ListenerAddr returns the address the boot listener is bound to, in net.Addr form (an
+// ephemeral port is resolved), or "" when nothing is listening.
+//
+// It answers about the boot listener specifically — the one -proxy-bind opened — because
+// that is the listener every caller of this method means: cmd/burpsy's startup banner, the
+// in-browser panel's proxy address and the single-listener half of the console's proxy
+// settings. Listeners added on that page are reported by Listeners(), which is the surface
+// that can describe more than one.
+func (s *Server) ListenerAddr() string {
+	bl := s.bootListener()
+	if bl == nil {
+		return ""
+	}
+	ln := bl.current()
+	if ln == nil {
+		return ""
+	}
+	return ln.Addr().String()
+}
+
+// Rebind moves the boot listener to addr without dropping the process: the new socket is
+// opened first, so a bind failure leaves the current listener serving untouched and is
+// returned as an error rather than becoming an outage. In-flight connections on the old
+// socket are not disturbed — only Accept is retired. It answers with the address that was
+// serving before the move.
+//
+// The listener's other settings (redirect, force-TLS, invisible) are carried across
+// unchanged: this is the move-the-socket call, not the edit-the-listener call, and an
+// operator who re-binds from the Binding field must not silently lose a redirect they set
+// on the same row. UpdateListener is the one that replaces a whole spec.
 func (s *Server) Rebind(addr string) (string, error) {
 	s.rebindMu.Lock()
-	defer s.rebindMu.Unlock()
+	bl := s.bootListener()
+	s.rebindMu.Unlock()
+	if bl == nil {
+		// Rebind before ListenAndServe: seed the boot entry so the accept loop binds from
+		// it when it starts. This is the pre-start case the previous implementation
+		// allowed, kept, and it is why ListenAndServe prefers a seeded bind over its own
+		// argument.
+		s.listenerMu.Lock()
+		if s.listeners == nil {
+			s.listeners = map[string]*boundListener{}
+		}
+		if s.listeners[bootListenerID] == nil {
+			s.listeners[bootListenerID] = &boundListener{spec: ListenerSpec{ID: bootListenerID, Bind: addr}}
+			s.listenerOrder = append([]string{bootListenerID}, s.listenerOrder...)
+		} else {
+			s.listeners[bootListenerID].spec.Bind = addr
+		}
+		s.listenerMu.Unlock()
+		return "", nil
+	}
 
 	previous := s.ListenerAddr()
-
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return previous, fmt.Errorf("failed to bind proxy on %s: %w", addr, err)
+	spec, _ := bl.snapshot()
+	spec.Bind = addr
+	if _, err := s.UpdateListener(bootListenerID, spec); err != nil {
+		return previous, err
 	}
-
-	s.listenerMu.Lock()
-	old := s.listener
-	s.listener = ln
-	s.listenerMu.Unlock()
-
-	// Closing the old socket unblocks its Accept; the loop's next iteration adopts
-	// the replacement. A nil old means Rebind was called before ListenAndServe —
-	// legitimate: the loop binds from this field when it starts.
-	if old != nil {
-		old.Close()
-	}
-	s.config.logger.Info("proxy listener rebound",
-		zap.String("addr", ln.Addr().String()),
-		zap.String("previous", previous))
 	return previous, nil
 }
 
-// currentListener hands the accept loop the socket to block on this iteration.
-func (s *Server) currentListener() net.Listener {
-	s.listenerMu.Lock()
-	defer s.listenerMu.Unlock()
-	return s.listener
-}
-
-// closeListener shuts the live socket down and clears it, so a second
-// ListenAndServe cannot inherit a closed listener by accident.
+// closeListener shuts every live socket down and clears the collection, so a second
+// ListenAndServe cannot inherit a closed listener by accident and the accept loops of
+// listeners added at runtime return instead of spinning on a dead socket.
 func (s *Server) closeListener() {
 	s.listenerMu.Lock()
-	defer s.listenerMu.Unlock()
-	if s.listener != nil {
-		s.listener.Close()
-		s.listener = nil
+	entries := make([]*boundListener, 0, len(s.listeners))
+	for _, bl := range s.listeners {
+		entries = append(entries, bl)
+	}
+	s.listeners = map[string]*boundListener{}
+	s.listenerOrder = nil
+	s.serveCtx = nil
+	s.listenerMu.Unlock()
+
+	for _, bl := range entries {
+		bl.mu.Lock()
+		bl.closed = true
+		ln := bl.ln
+		bl.ln = nil
+		bl.mu.Unlock()
+		if ln != nil {
+			ln.Close()
+		}
 	}
 }
 
-// ListenAndServe starts the proxy server.
+// ListenAndServe starts the proxy server. It binds the boot listener on addr and serves it
+// on this goroutine, so the blocking contract every caller relies on is unchanged; listeners
+// added later (AddListener) get their own accept loop tied to the same context.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
-	if s.currentListener() != nil {
+	if s.ListenerAddr() != "" {
 		return errors.New("proxy is already listening")
 	}
+	// A Rebind before start seeds the boot entry's bind; prefer it over the argument for
+	// the reason the previous implementation bound from the field rather than from addr.
+	s.listenerMu.Lock()
+	if s.listeners == nil {
+		s.listeners = map[string]*boundListener{}
+	}
+	if seeded := s.listeners[bootListenerID]; seeded != nil && seeded.spec.Bind != "" {
+		addr = seeded.spec.Bind
+	}
+	s.listenerMu.Unlock()
+
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to bind proxy on %s: %w", addr, err)
 	}
+
+	bl := &boundListener{spec: ListenerSpec{ID: bootListenerID, Bind: addr}, ln: listener}
 	s.listenerMu.Lock()
-	s.listener = listener
+	s.listeners[bootListenerID] = bl
+	// Assigned, not prepended: a Rebind before start has already put the boot id in the
+	// order, and appending it again would list one socket as two listeners. Nothing else can
+	// be in there — AddListener refuses until serveCtx is set, which is the line below.
+	s.listenerOrder = []string{bootListenerID}
+	s.serveCtx = ctx
 	s.listenerMu.Unlock()
 	defer s.closeListener()
 
-	s.config.logger.Info("proxy listening", zap.String("addr", addr))
-
-	for {
+	// Cancellation has to reach the sockets, not just the loop condition: Accept blocks, so
+	// a cancelled context that only the top of the loop consulted would leave every accept
+	// loop — the boot one and each added one — parked until the next connection arrived.
+	// Closing the sockets is what unblocks them.
+	stopped := make(chan struct{})
+	defer close(stopped)
+	go func() {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		default:
+			s.closeListener()
+		case <-stopped:
 		}
+	}()
 
-		// Re-read per iteration: after a Rebind the previous socket is closed and
-		// its Accept errors immediately, which reads below as a failure but is in
-		// fact the handover — the loop adopts the replacement instead of dying.
-		listener = s.currentListener()
-		if listener == nil {
-			return ctx.Err()
-		}
-		conn, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if s.currentListener() != listener {
-				continue
-			}
-			s.config.logger.Warn("accept failed", zap.Error(err))
-			continue
-		}
+	s.config.logger.Info("proxy listening", zap.String("addr", addr))
 
-		go s.handleConnection(conn)
-	}
+	s.serveListener(ctx, bl)
+	return ctx.Err()
 }
 
+// handleConnection relays one connection under the default listener spec: no redirect, no
+// forced TLS, invisible proxying inherited from the process-wide option. It is what the
+// engine did before there was a listener collection at all, and it is kept as the entry
+// point so a caller that has a connection and no listener behind it — the package's own
+// relay tests — gets exactly the behaviour it always had.
 func (s *Server) handleConnection(clientConn net.Conn) {
+	s.handleConnectionOn(clientConn, ListenerSpec{})
+}
+
+// handleConnectionOn relays one connection under the spec of the listener that accepted it.
+// The spec is a value, snapshotted at accept time: an operator editing a listener changes
+// what the next connection does and never what a connection already in flight does.
+func (s *Server) handleConnectionOn(clientConn net.Conn, spec ListenerSpec) {
 	defer clientConn.Close()
 
 	// Set keep-alive
@@ -961,15 +1024,15 @@ func (s *Server) handleConnection(clientConn net.Conn) {
 
 	// Handle CONNECT requests
 	if strings.ToUpper(method) == "CONNECT" {
-		s.handleConnect(clientConn, reader, target)
+		s.handleConnect(clientConn, reader, target, spec)
 		return
 	}
 
 	// Handle regular HTTP requests
-	s.handleHTTP(clientConn, reader, requestLine, method, target)
+	s.handleHTTP(clientConn, reader, requestLine, method, target, spec)
 }
 
-func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target string) {
+func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target string, spec ListenerSpec) {
 	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
 		host = target
@@ -983,22 +1046,48 @@ func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target
 		port = 443
 	}
 
-	// Passthrough hosts (or no engine configured) are blind-tunnelled.
-	if s.config.tls.ShouldPassthrough(host, uint16(port)) || s.config.tls.engine == nil {
-		s.tunnelConnection(clientConn, target)
+	// The listener's redirect (burpsy-react-ui-pfeg), applied here — before the passthrough
+	// decision's dial and before the certificate is signed — because everything downstream
+	// has to answer about the destination the bytes will actually reach.
+	//
+	// The one thing that keeps the client's own name is the leaf certificate, and that is
+	// not an inconsistency: a client that asked for shop.example.com and was handed a
+	// certificate for the redirect target would fail the handshake and never send the
+	// request the redirect exists to move. So the cert is signed for certName below, while
+	// the scope check, the egress fence and the recorded exchange all read the redirected
+	// destination — the same rule the operator's per-request "Edit target" follows, and for
+	// the same reason: a redirect must not be a way around the fence the engagement scope
+	// puts up.
+	//
+	// "Force use of TLS" has nothing to do on this path and is not silently ignored: a
+	// CONNECT tunnel's upstream leg is already TLS (interceptTLS re-encrypts to the origin,
+	// tunnelConnection carries the client's own session), so the setting is already
+	// satisfied for every byte that arrives this way. It is the plaintext path below that
+	// it changes.
+	certName := host
+	host, port16 := spec.redirectFor(host, uint16(port))
+
+	// Passthrough is decided on the name the CLIENT asked for, not the redirect target: the
+	// passthrough patterns are the operator's list of hosts not to decrypt, and they name
+	// the hosts their clients ask for.
+	if s.config.tls.ShouldPassthrough(certName, uint16(port)) || s.config.tls.engine == nil {
+		s.tunnelConnection(clientConn, net.JoinHostPort(host, strconv.Itoa(int(port16))))
 		return
 	}
 
 	// Intercept: present a CA-signed leaf cert to the client, terminate TLS,
 	// and re-encrypt to the origin so traffic can be recorded and scanned.
-	s.interceptTLS(clientConn, host, uint16(port))
+	s.interceptTLS(clientConn, host, port16, certName)
 }
 
 // interceptTLS decrypts a CONNECT tunnel: it answers with 200 Connection
 // Established, terminates the client's TLS session with a leaf certificate
 // signed by the configured CA, opens a second TLS session to the origin, and
 // forwards HTTP in the clear between them while recording exchanges.
-func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
+// certName is the name the client asked for in its CONNECT, which is the only name a leaf
+// certificate it will accept can carry. It is the same as host unless the listener redirects
+// — see handleConnect for why the two are allowed to differ, and why nothing else does.
+func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, certName string) {
 	// Signal the client that the tunnel is established.
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
@@ -1034,10 +1123,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16) {
 		return
 	}
 
-	// Sign a leaf certificate for this host.
-	leaf, err := s.config.tls.engine.GetCertificate(host)
+	// Sign a leaf certificate for the host the client asked for — not the destination, when
+	// a redirect has moved them apart. See the signature comment.
+	leaf, err := s.config.tls.engine.GetCertificate(certName)
 	if err != nil {
-		s.config.logger.Error("certificate signing failed", zap.String("host", host), zap.Error(err))
+		s.config.logger.Error("certificate signing failed", zap.String("host", certName), zap.Error(err))
 		return
 	}
 
@@ -1507,7 +1597,7 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 	<-done
 }
 
-func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLine, method, target string) {
+func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLine, method, target string, spec ListenerSpec) {
 	startTime := time.Now()
 
 	// Parse target
@@ -1539,7 +1629,13 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		// cannot attribute answers 400 below rather than guessing an authority out
 		// of the headers. Burp's switch ("enable only if needed"), honoured live
 		// through the option set so no restart separates the tick from the behaviour.
-		if h := headerValue(requestHead(requestData), "Host"); h != "" && s.config.options.Get(OptInvisibleProxy) {
+		//
+		// Per listener since burpsy-react-ui-pfeg: the tick on this listener's row decides,
+		// falling back to the process-wide switch when the row was left alone. That is what
+		// keeps the control from being a no-op — invisible_proxy is seeded ON, so a plain
+		// "listener OR global" would have made a listener ticked OFF still answer
+		// origin-form requests.
+		if h := headerValue(requestHead(requestData), "Host"); h != "" && spec.invisibleWith(s.config.options.Get(OptInvisibleProxy)) {
 			host, port = parseHostPort(h)
 		}
 	}
@@ -1548,6 +1644,24 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		clientConn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
+
+	// The listener's "Redirect to host" / "Redirect to port" (burpsy-react-ui-pfeg). Applied
+	// here, above everything: the Match & Replace scope gate, the intercept window, the scope
+	// check, the egress fence, the dial and the recorded exchange all then answer about the
+	// destination the bytes actually reach, which is the rule the operator's per-request
+	// "Edit target" already follows — a redirect must not be a way around the fence the
+	// engagement scope puts up.
+	//
+	// The Host header is deliberately NOT rewritten. Redirecting is how a request for one
+	// name is sent to another machine, and the name in that header is exactly what the
+	// receiving origin needs to serve the right vhost — which is the whole point of the
+	// non-proxy-aware setup this exists for. An operator who wants the header changed has
+	// Match & Replace, which runs below.
+	//
+	// A retarget the operator types into the intercept window runs after this and therefore
+	// wins: the listener's redirect is the standing rule, the hold is the one request they
+	// are looking at.
+	host, port = spec.redirectFor(host, port)
 
 	// A client speaking to a proxy sends absolute-form — `GET http://host/path HTTP/1.1` (RFC 9112
 	// §3.2.2) — but an origin server must be sent origin-form, `GET /path HTTP/1.1` (§3.2.1). This
@@ -1587,7 +1701,14 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// reach, not the one the client originally named. Declared above the gate so the gate reads the
 	// destination in hand rather than one declared after it; the retarget the hold below may apply is
 	// the one case this gate cannot see, and applyMatchReplace's comment says so.
-	scheme := false
+	//
+	// It starts at the listener's "Force use of TLS" rather than at false (burpsy-react-ui-pfeg):
+	// that switch means the connection this proxy opens to the destination is TLS whatever the
+	// client used to reach the listener, which is the sslstrip-shaped setup — a client speaking
+	// plaintext to a listener that speaks HTTPS onward. Because scheme is the destination's, the
+	// scope rules matched below are the https ones, and the exchange is recorded as the TLS
+	// exchange it was on the wire.
+	scheme := spec.ForceTLS
 	requestData = s.applyMatchReplace(matchreplace.DirRequest, requestData, host, port, path, scheme)
 	reqStages.auto = requestData
 	// Intercept: hold the request for the operator before it is forwarded.
@@ -1687,7 +1808,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		// Forward without storing. path travels because the response-direction Match & Replace
 		// rules run on this path too and they need the target for their scope verdict — see
 		// forwardOnly.
-		s.forwardOnly(clientConn, reader, requestData, host, port, path)
+		s.forwardOnly(clientConn, reader, requestData, host, port, path, scheme)
 		return
 	}
 
@@ -1703,7 +1824,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// after it are WebSocket frames, not a response body. Gated on the request,
 	// so every other request takes the identical path it always took.
 	if core.IsWsUpgradeRequest(requestData) {
-		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, requestData, reqStages, startTime, wsStripped, requestEdited)
+		s.handleWebSocketUpgrade(clientConn, reader, method, host, port, path, scheme, requestData, reqStages, startTime, wsStripped, requestEdited)
 		return
 	}
 
@@ -2340,8 +2461,13 @@ func wsRetargetRefusalResponse() []byte {
 //
 // Found by this file's own test for the in-scope restriction (burpsy-react-ui-rfgs), which asserted
 // both directions were rewritten with the restriction off and got one.
-func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16, path string) {
-	upstreamConn, err := s.dialUpstream(context.Background(), host, port)
+// tls is the destination's scheme, and it is threaded rather than assumed plaintext because a
+// listener with "Force use of TLS" set has to reach the origin over TLS on this path too
+// (burpsy-react-ui-pfeg). This is the forward-but-do-not-record path, so an out-of-scope request
+// on such a listener used to be the one request that quietly went out in the clear — the
+// no-op the setting must not have.
+func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16, path string, tls bool) {
+	upstreamConn, err := s.dialUpstreamFor(context.Background(), host, port, tls)
 	if err != nil {
 		return
 	}
@@ -2421,19 +2547,27 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 // request has nowhere to keep a connection: the item the operator edited is one exchange, and
 // holding a socket open to a host that the client never asked for would leave the proxy dialled into
 // a destination nobody is talking to any more.
-func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) ([]byte, string, error) {
-	var upstreamConn net.Conn
-	var err error
-	if tls {
-		// No ALPN offer: this path speaks HTTP/1.1 to the origin (the caller has already read the
-		// response head itself and is not negotiating a multiplexed connection), and offering h2
-		// while writing an HTTP/1.1 request line is how an origin that accepts h2 answers with a
-		// protocol error.
-		conn, _, dialErr := s.dialUpstreamTLS(host, net.JoinHostPort(host, strconv.Itoa(int(port))), nil)
-		upstreamConn, err = conn, dialErr
-	} else {
-		upstreamConn, err = s.dialUpstream(context.Background(), host, port)
+// dialUpstreamFor opens the connection to the destination in the destination's own scheme.
+// It is the one place the plaintext relay decides between a TCP dial and a TLS one, so
+// "Force use of TLS" reaches every caller by setting tls rather than by each caller
+// remembering to branch.
+func (s *Server) dialUpstreamFor(ctx context.Context, host string, port uint16, tls bool) (net.Conn, error) {
+	if !tls {
+		return s.dialUpstream(ctx, host, port)
 	}
+	// No ALPN offer: this path speaks HTTP/1.1 to the origin (the caller reads the response
+	// head itself and is not negotiating a multiplexed connection), and offering h2 while
+	// writing an HTTP/1.1 request line is how an origin that accepts h2 answers with a
+	// protocol error.
+	conn, _, err := s.dialUpstreamTLS(host, net.JoinHostPort(host, strconv.Itoa(int(port))), nil)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) ([]byte, string, error) {
+	upstreamConn, err := s.dialUpstreamFor(context.Background(), host, port, tls)
 	if err != nil {
 		return nil, "", err
 	}

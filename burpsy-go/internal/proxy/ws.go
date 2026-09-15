@@ -181,8 +181,12 @@ func wsStripNote(removed []string) *string {
 // requestEdited is whether the operator's own hold edited the handshake request, threaded in for the
 // same reason handleTLSResponse threads it: the hold resolved before this function was called, and
 // the row below is the only record of it.
-func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, reqStages messageStages, startTime time.Time, strippedExtensions []string, requestEdited bool) {
-	upstream, err := s.dialUpstream(context.Background(), host, port)
+// tls is the destination's scheme — see forwardOnly for why it is threaded rather than
+// assumed plaintext: a listener with "Force use of TLS" set has to reach the origin over TLS
+// for a WebSocket handshake too, or the setting would be a no-op for exactly the traffic
+// that stays open longest.
+func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, tls bool, requestData []byte, reqStages messageStages, startTime time.Time, strippedExtensions []string, requestEdited bool) {
+	upstream, err := s.dialUpstreamFor(context.Background(), host, port, tls)
 	if err != nil {
 		return
 	}
@@ -224,9 +228,12 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 	// stored it and never scanned it. A 101's headers are headers, and "the same
 	// path as proxied traffic" is the requirement.
 	handshake := s.record(scanner.CapturedExchange{
-		Host:     host,
-		Port:     port,
-		TLS:      false,
+		Host: host,
+		Port: port,
+		// The destination's scheme, not the literal false this used to be: a listener with
+		// "Force use of TLS" reached the origin over TLS, and history has to say so or the
+		// row would describe a handshake nobody performed.
+		TLS:      tls,
 		Method:   method,
 		Path:     path,
 		Request:  requestData,

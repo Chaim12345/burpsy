@@ -547,8 +547,8 @@ var manifest = map[string]route{
 			"and clearing the leaf cache; refuses the whole pair if it is not a usable CA",
 	},
 	"/api/proxy/listener": {
-		methods: []string{"GET", "PUT"}, risk: riskLocal,
-		summary: "the proxy listener's bind address: GET answers where it is bound now (ephemeral ports resolved), PUT re-binds it live; the new socket opens before the old closes, so a failed bind leaves the current listener serving. Not persisted: -proxy-bind stays authoritative at boot",
+		methods: []string{"GET", "PUT", "POST", "DELETE"}, risk: riskLocal,
+		summary: "the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot",
 	},
 	"/api/proxy/options": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
