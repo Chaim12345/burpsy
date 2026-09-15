@@ -168,12 +168,22 @@ export interface BuiltInConfigKey {
 
 export interface BuiltInConfigView {
   name: string;
+  /** Empty for a saved configuration: it is a resolved config, not an overlay of preset keys. */
   keys: BuiltInConfigKey[];
   resolved: AuditConfigView;
+  /** True for the configurations burpsy ships, which are read-only. The operator's own saved ones
+   *  are false, and only those can be renamed, overwritten or deleted. */
+  shipped: boolean;
+  /** A saved configuration whose stored document cannot be parsed. Listed so it does not vanish,
+   *  but never offered for a run — an audit under "whatever the default is", named as the
+   *  operator's configuration, is the outcome the library exists to prevent. */
+  damaged?: boolean;
 }
 
-/** GET /api/scanner/configs. Read-only: api_scanner_configs.go serves GET alone, so the console can
- * name a preset on an audit request but cannot edit the table. */
+/** GET /api/scanner/configs — the scan configurations an audit can run under: the shipped presets
+ * AND the operator's own saved ones (burpsy-react-ui-uxcs), in one array, each marked `shipped`.
+ * POST/PUT/DELETE on the same route save, clone, rename and delete a saved one; a shipped name is
+ * read-only and every write refuses it. */
 export interface ScannerConfigsResponse {
   configs: BuiltInConfigView[];
   default: AuditConfigView;

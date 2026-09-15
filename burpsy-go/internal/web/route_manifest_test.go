@@ -621,8 +621,8 @@ var manifest = map[string]route{
 		summary: "the audit families and performance knobs, readable and editable while the process runs; PUT persists the overrides",
 	},
 	"/api/scanner/configs": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the built-in scan configurations, generated from the table rather than listed by hand",
+		methods: []string{"GET", "POST", "PUT", "DELETE"}, risk: riskLocal,
+		summary: "the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding",
 	},
 	"/api/scanner/coverage": {
 		methods: []string{"GET"}, risk: riskRead,

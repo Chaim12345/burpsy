@@ -188,6 +188,20 @@ export function useDeleteTask() {
 
 export const useScannerConfigs = () => useResource<ScannerConfigsResponse>(keys.scannerConfigs, "/api/scanner/configs");
 
+/**
+ * Burp's Configuration library (burpsy-react-ui-uxcs): save, clone, rename and delete a named scan
+ * configuration. One mutation for all four because they share a route, a refusal vocabulary and an
+ * invalidation — a shipped name is refused with 409 whichever verb asks.
+ */
+export function useScanConfigLibrary() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (body: { action: "save" | "clone" | "rename" | "delete"; name: string; from?: string }) =>
+   api<Record<string, unknown>>("/api/scanner/configs", json(body.action === "delete" ? "DELETE" : "POST", body)),
+  onSuccess: () => invalidate([keys.scannerConfigs]),
+ });
+}
+
 export const useScannerCoverage = () => useResource<ScannerCoverage>(keys.scannerCoverage, "/api/scanner/coverage");
 
 /** Polls like Intercept: the sweep's swept/behind counters move as traffic is captured, and an

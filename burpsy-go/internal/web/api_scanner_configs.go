@@ -24,9 +24,13 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"go.uber.org/zap"
 )
 
 // auditConfigView is one AuditConfig as JSON.
@@ -96,12 +100,28 @@ type builtInConfigView struct {
 	Name     string                     `json:"name"`
 	Keys     []scanner.BuiltInConfigKey `json:"keys"`
 	Resolved auditConfigView            `json:"resolved"`
+	// Shipped marks the read-only configurations Burp bundles apart from the operator's own saved
+	// ones. A shipped configuration cannot be overwritten, renamed or deleted — the CRUD verbs refuse
+	// it by name — and the console disables those controls on its row rather than offering a button
+	// that would only ever answer 409. Both lists ride one array so the launch picker reads one place.
+	Shipped bool `json:"shipped"`
+	// Damaged marks a saved configuration whose stored document cannot be parsed. It is listed
+	// rather than hidden — an operator who saved one must not have it vanish — but it carries no
+	// resolved settings and the picker will not offer it, because running an audit under "whatever
+	// the default happens to be" while calling it by the operator's name is the one outcome worse
+	// than saying the row is broken.
+	Damaged bool `json:"damaged,omitempty"`
 }
 
 // handleScannerConfigs serves GET /api/scanner/configs: the shipped configurations an audit can be run
 // under, and the default it runs under when none is named.
 func (s *Server) handleScannerConfigs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+	case http.MethodPost, http.MethodPut, http.MethodDelete:
+		s.scannerConfigLibraryWrite(w, r)
+		return
+	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -112,7 +132,15 @@ func (s *Server) handleScannerConfigs(w http.ResponseWriter, r *http.Request) {
 			Name:     c.Name,
 			Keys:     c.Keys(),
 			Resolved: newAuditConfigView(c.Apply(base)),
+			Shipped:  true,
 		})
+	}
+	// The operator's own saved configurations, in the SAME list as the shipped ones and marked
+	// shipped:false. One array rather than two, because the launch picker asks "what can this audit
+	// run under?" and that question has one answer — a caller forced to merge two lists is a caller
+	// that will one day merge them differently from this one.
+	for _, saved := range s.savedScanConfigs() {
+		configs = append(configs, saved)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -159,10 +187,50 @@ func (s *Server) resolveAuditConfig(name string) (scanner.AuditConfig, string, [
 	}
 	preset, ok := scanner.BuiltInConfigByName(name)
 	if !ok {
-		return base, "", nil, &unknownConfigError{Name: name, Known: scanner.BuiltInConfigNames()}
+		// Not a shipped preset — it may be one the operator saved (burpsy-react-ui-uxcs). Resolved
+		// here rather than at the call sites so that every path that can run an audit under a name
+		// resolves that name the same way, and so the name this returns is the one the run records.
+		if cfg, found := s.savedScanConfig(name); found {
+			// No unapplied-key report: a saved configuration IS a resolved AuditConfig, not an
+			// overlay of keys, so there is no key that failed to apply — see the library's comment.
+			return cfg, name, nil, nil
+		}
+		return base, "", nil, &unknownConfigError{Name: name, Known: s.knownConfigNames()}
 	}
 	applied, unapplied := preset.ApplyWithReport(base)
 	return applied, preset.Name, unapplied, nil
+}
+
+// savedScanConfig resolves one of the operator's own configurations by name. A stored document that
+// cannot be parsed reports NOT FOUND rather than the default: running an audit under settings the
+// operator never chose, while the run record names their configuration, is the failure this whole
+// library is written to avoid.
+func (s *Server) savedScanConfig(name string) (scanner.AuditConfig, bool) {
+	if s.persist == nil {
+		return scanner.AuditConfig{}, false
+	}
+	doc, found, err := s.persist.LoadScanConfigLibrary(name)
+	if err != nil || !found {
+		return scanner.AuditConfig{}, false
+	}
+	return decodeSavedScanConfig(doc)
+}
+
+// knownConfigNames is every name an audit can be run under — shipped and saved — so an unknown-name
+// refusal lists what actually exists rather than only half of it.
+func (s *Server) knownConfigNames() []string {
+	names := scanner.BuiltInConfigNames()
+	if s.persist == nil {
+		return names
+	}
+	entries, err := s.persist.LoadScanConfigLibraries()
+	if err != nil {
+		return names
+	}
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	return names
 }
 
 // unknownConfigError names the configuration that was asked for and every one that exists, because
@@ -178,4 +246,175 @@ func (e *unknownConfigError) Error() string {
 		msg += "\n  " + k
 	}
 	return msg
+}
+
+// ---- The configuration library (burpsy-react-ui-uxcs) --------------------------------------------
+//
+// Burp's Settings tree carries a "Configuration library" of named scan configurations the operator
+// saves, clones and edits. burpsy had only the shipped presets, rendered read-only, so a tuning an
+// operator arrived at for one engagement could not be kept.
+//
+// A saved configuration is stored as the RESOLVED scanner.AuditConfig, one JSON document per name —
+// not as a diff against a preset. A diff would mean a saved configuration silently changed meaning
+// whenever the preset it was derived from changed, which is the drift the scope library refuses for
+// the same reason: what was saved is what must come back.
+//
+// The shipped presets are never stored here. They live in scanner.BuiltInConfigs and are read-only,
+// which is what makes a shipped name unshadowable — the writes below refuse one by name, so a saved
+// configuration can never quietly take over a name an audit already resolves to something else.
+
+// savedScanConfigs reads the operator's own configurations for the GET list. A store that cannot be
+// read yields nothing rather than failing the whole listing: the shipped presets are still the
+// truthful answer to "what can this audit run under?", and an empty library is not an error.
+func (s *Server) savedScanConfigs() []builtInConfigView {
+	if s.persist == nil {
+		return nil
+	}
+	entries, err := s.persist.LoadScanConfigLibraries()
+	if err != nil {
+		s.logger.Warn("scan configuration library could not be read", zap.Error(err))
+		return nil
+	}
+	out := make([]builtInConfigView, 0, len(entries))
+	for _, e := range entries {
+		cfg, ok := decodeSavedScanConfig(e.Doc)
+		if !ok {
+			// A document that cannot be parsed is listed as damaged rather than dropped or silently
+			// resolved to the default. Dropping it would leave the operator looking for a
+			// configuration they saved; resolving it to the default would run an audit under
+			// settings they never chose, under a name that says otherwise.
+			out = append(out, builtInConfigView{Name: e.Name, Shipped: false, Damaged: true})
+			continue
+		}
+		out = append(out, builtInConfigView{
+			Name:     e.Name,
+			Resolved: newAuditConfigView(cfg),
+			Shipped:  false,
+		})
+	}
+	return out
+}
+
+// decodeSavedScanConfig parses a stored document back into a configuration.
+func decodeSavedScanConfig(doc string) (scanner.AuditConfig, bool) {
+	var cfg scanner.AuditConfig
+	if err := json.Unmarshal([]byte(doc), &cfg); err != nil {
+		return scanner.AuditConfig{}, false
+	}
+	return cfg, true
+}
+
+// scanConfigWriteReq is the write surface: save (or overwrite) under a name, clone an existing
+// configuration under a new one, rename, and delete.
+type scanConfigWriteReq struct {
+	// Action is "save", "clone", "rename" or "delete". Anything else is refused naming the value,
+	// rather than falling through to a default that would act on the operator's data.
+	Action string `json:"action"`
+	Name   string `json:"name"`
+	// From is the configuration a clone or rename starts from. For a clone it may be a SHIPPED
+	// preset — that is the ordinary way to start from Burp's own tuning and adjust it.
+	From string `json:"from"`
+}
+
+// scannerConfigLibraryWrite serves POST/PUT/DELETE /api/scanner/configs.
+func (s *Server) scannerConfigLibraryWrite(w http.ResponseWriter, r *http.Request) {
+	if s.persist == nil {
+		http.Error(w, "no database is attached, so a saved scan configuration would not survive this "+
+			"process; start burpsy with -db to use the configuration library", http.StatusServiceUnavailable)
+		return
+	}
+	var req scanConfigWriteReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "body must be JSON with an action and a name", http.StatusBadRequest)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		http.Error(w, "a configuration must be named", http.StatusBadRequest)
+		return
+	}
+	// A shipped name is refused for every write. Allowing one would give two different answers to
+	// the same name depending on which list a reader consulted, and an audit resolves names.
+	if _, shipped := scanner.BuiltInConfigByName(req.Name); shipped {
+		http.Error(w, fmt.Sprintf(
+			"%s is a configuration burpsy ships, which is read-only: clone it under another name and edit that",
+			strconv.Quote(req.Name)), http.StatusConflict)
+		return
+	}
+
+	switch req.Action {
+	case "save", "clone":
+		// The configuration being stored: for a clone, whatever `from` resolves to (shipped or
+		// saved); for a plain save, the configuration the server is currently running audits under.
+		cfg := s.auditBaseConfig()
+		if req.From != "" {
+			resolved, _, _, err := s.resolveAuditConfig(req.From)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			cfg = resolved
+		}
+		doc, err := json.Marshal(cfg)
+		if err != nil {
+			http.Error(w, "the configuration could not be encoded: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		replaced, err := s.persist.SaveScanConfigLibrary(req.Name, string(doc))
+		if err != nil {
+			http.Error(w, "the configuration could not be saved: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"saved": req.Name, "replaced": replaced})
+
+	case "rename":
+		from := strings.TrimSpace(req.From)
+		if from == "" {
+			http.Error(w, "rename needs the configuration to rename in `from`", http.StatusBadRequest)
+			return
+		}
+		if _, shipped := scanner.BuiltInConfigByName(from); shipped {
+			http.Error(w, fmt.Sprintf(
+				"%s is a configuration burpsy ships and cannot be renamed: clone it under the name you want",
+				strconv.Quote(from)), http.StatusConflict)
+			return
+		}
+		doc, found, err := s.persist.LoadScanConfigLibrary(from)
+		if err != nil {
+			http.Error(w, "the configuration could not be read: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, fmt.Sprintf("no saved configuration is named %s", strconv.Quote(from)), http.StatusNotFound)
+			return
+		}
+		if _, err := s.persist.SaveScanConfigLibrary(req.Name, doc); err != nil {
+			http.Error(w, "the configuration could not be saved under its new name: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Deleted only after the new name is durably written: a rename that lost the configuration
+		// between the two steps would be worse than one that briefly left both.
+		if _, err := s.persist.DeleteScanConfigLibrary(from); err != nil {
+			http.Error(w, "the configuration was copied to its new name but the old one could not be removed: "+err.Error(),
+				http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"renamed": from, "to": req.Name})
+
+	case "delete":
+		deleted, err := s.persist.DeleteScanConfigLibrary(req.Name)
+		if err != nil {
+			http.Error(w, "the configuration could not be deleted: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !deleted {
+			http.Error(w, fmt.Sprintf("no saved configuration is named %s", strconv.Quote(req.Name)), http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": req.Name})
+
+	default:
+		http.Error(w, fmt.Sprintf(
+			"action %s is not one of save, clone, rename or delete", strconv.Quote(req.Action)), http.StatusBadRequest)
+	}
 }
