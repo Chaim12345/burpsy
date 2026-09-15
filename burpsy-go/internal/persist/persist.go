@@ -183,6 +183,11 @@ CREATE TABLE IF NOT EXISTS scope_libraries (
 	rules_json TEXT NOT NULL,
 	saved_at   INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS scan_config_library (
+	name     TEXT PRIMARY KEY,
+	doc      TEXT NOT NULL,
+	saved_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS matchreplace_rules (
 	ord      INTEGER PRIMARY KEY,
 	target   INTEGER NOT NULL,
@@ -1447,6 +1452,119 @@ func (s *Store) DeleteScopeLibrary(name string) (deleted bool, err error) {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("delete scope library %q: %w", name, err)
+	}
+	return n > 0, nil
+}
+
+// ---- Scan configuration library -----------------------------------------------------------------
+//
+// Burp's Configuration library: named scan configurations an operator saves, clones, renames and
+// deletes, and picks by name when launching a scan. The value is one opaque JSON document per name —
+// the web layer owns its shape (the resolved AuditConfig, so a restore reproduces exactly what the
+// operator last saw, not a sequence of edits) exactly as SaveScanConfig owns "scanconfig.overrides".
+//
+// The shipped built-in configurations are NOT stored here: they live in scanner.BuiltInConfigs and
+// are read-only, so the library is only the operator's own copies. That is what keeps a shipped name
+// unshadowable — the web layer refuses to save one under a shipped name, and the store never holds a
+// row that could compete with the built-in of the same name.
+//
+// # Why these return an error where SaveScanConfig logs
+//
+// Same split as the scope library: an override written to "scanconfig.overrides" still has its live
+// copy in the running scanner, so a failed write costs a restart. A saved configuration has no live
+// copy. If a failed save were swallowed the page would say "Saved" for a configuration that does not
+// exist, and the operator would rename or delete believing a durable copy is there. So this path
+// reports.
+
+// ScanConfigLibraryEntry is one stored configuration for the listing: its name, the opaque document,
+// and when it was written. The web layer decodes doc; the store treats it as bytes.
+type ScanConfigLibraryEntry struct {
+	Name    string
+	Doc     string
+	SavedAt int64
+}
+
+// SaveScanConfigLibrary stores doc under name, replacing any configuration already called that, and
+// reports whether it replaced one.
+//
+// Overwrite is allowed rather than refused, for the same reason SaveScopeLibrary allows it: re-saving
+// a configuration after editing it is the ordinary second save, and refusing would force a second
+// name. It is reported through `replaced` instead. Refusing a save onto a *shipped* name is the web
+// layer's job, because only it knows the built-in names — this store has no opinion about them.
+func (s *Store) SaveScanConfigLibrary(name, doc string) (replaced bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("no database is open, so there is nowhere to save a scan configuration")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, errors.New("a saved scan configuration needs a name, so it can be found again")
+	}
+	var existing int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM scan_config_library WHERE name = ?`, name).Scan(&existing); err != nil {
+		return false, fmt.Errorf("look up scan configuration %q: %w", name, err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT OR REPLACE INTO scan_config_library (name, doc, saved_at) VALUES (?, ?, ?)`,
+		name, doc, time.Now().UnixMilli()); err != nil {
+		return false, fmt.Errorf("save scan configuration %q: %w", name, err)
+	}
+	return existing > 0, nil
+}
+
+// LoadScanConfigLibraries lists every saved configuration, newest first, so the picker orders the
+// operator's most recent work at the top the way the scope library does.
+func (s *Store) LoadScanConfigLibraries() ([]ScanConfigLibraryEntry, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("no database is open, so there are no saved scan configurations to list")
+	}
+	rows, err := s.db.Query(`SELECT name, doc, saved_at FROM scan_config_library ORDER BY saved_at DESC, name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ScanConfigLibraryEntry{}
+	for rows.Next() {
+		var e ScanConfigLibraryEntry
+		if err := rows.Scan(&e.Name, &e.Doc, &e.SavedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// LoadScanConfigLibrary reads one saved configuration back. found is false when no configuration
+// carries that name — a 404 at the endpoint; err is a row that exists and cannot be read. The two are
+// kept apart because "there is none called that" is a typo and "the one called that is unreadable" is
+// data loss the operator needs to know about before they overwrite it.
+func (s *Store) LoadScanConfigLibrary(name string) (doc string, found bool, err error) {
+	if s == nil || s.db == nil {
+		return "", false, errors.New("no database is open, so there is no saved scan configuration to read")
+	}
+	name = strings.TrimSpace(name)
+	switch err := s.db.QueryRow(`SELECT doc FROM scan_config_library WHERE name = ?`, name).Scan(&doc); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("read scan configuration %q: %w", name, err)
+	}
+	return doc, true, nil
+}
+
+// DeleteScanConfigLibrary removes a saved configuration and reports whether there was one to remove,
+// so a delete of a mistyped name is refused rather than reported as a success.
+func (s *Store) DeleteScanConfigLibrary(name string) (deleted bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("no database is open, so there is no saved scan configuration to delete")
+	}
+	name = strings.TrimSpace(name)
+	res, err := s.db.Exec(`DELETE FROM scan_config_library WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("delete scan configuration %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete scan configuration %q: %w", name, err)
 	}
 	return n > 0, nil
 }

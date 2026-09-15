@@ -3,7 +3,7 @@ import { Download, Plus, Radar, RotateCcw, Save, Search, Trash2, X } from "lucid
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
-import { useScannerConfigs } from "../lib/data.attack";
+import { useScanConfigLibrary, useScannerConfigs } from "../lib/data.attack";
 import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
 import type { HostOverride, NetworkPatch, NetworkSettings, RedirectMode, ResolutionPolicy } from "../lib/data.network";
 import {
@@ -588,6 +588,11 @@ function DomEngineSection(): JSX.Element {
 // launches one. Settings keeps the read-only shipped-config table.
 function ScannerSettingsSection(): JSX.Element {
  const configs = useScannerConfigs();
+ // Burp's Configuration library (burpsy-react-ui-uxcs). One name box serves both "save as" and
+ // "rename to", because both answer the same question and two boxes would let them disagree.
+ const configLibrary = useScanConfigLibrary();
+ const [configName, setConfigName] = useState("");
+ const [configFrom, setConfigFrom] = useState("");
  return (
   <Card>
    <SectionHeading
@@ -618,14 +623,101 @@ function ScannerSettingsSection(): JSX.Element {
        ]} />
       </div>
      ) : null}
+     {/* Burp's Configuration library (burpsy-react-ui-uxcs). The shipped presets and the operator's
+         own saved configurations are ONE table, because an audit resolves one namespace and a reader
+         asking "what can this run under?" should not have to merge two lists. Shipped rows are
+         read-only and say so; only saved rows offer Rename and Delete, so no button is ever shown
+         that could only answer 409. */}
      <div className="stack" style={{ marginTop: "var(--gap)" }}>
-      <h4>Presets</h4>
-      <SimpleTable headers={["Name", "Keys set", ""]}>
+      <h4>Configuration library</h4>
+      <div className="toolbar">
+       <Input
+        aria-label="New configuration name"
+        value={configName}
+        onChange={(event) => setConfigName(event.target.value)}
+        placeholder="name this configuration"
+        style={{ maxWidth: "var(--w-md)" }}
+       />
+       <Button
+        size="small"
+        disabled={!configName.trim() || configLibrary.isPending}
+        onClick={() =>
+         configLibrary.mutate(
+          { action: "clone", name: configName.trim(), from: configFrom || undefined },
+          {
+           onSuccess: () => { toast.success(`Saved ${configName.trim()}`); setConfigName(""); },
+           onError: (cause: Error) => toast.error(cause.message),
+          },
+         )
+        }
+       >
+        {configFrom ? "Save a copy of the selected" : "Save current settings as…"}
+       </Button>
+       <Select
+        aria-label="Copy from"
+        value={configFrom}
+        onChange={(event) => setConfigFrom(event.target.value)}
+        style={{ maxWidth: "var(--w-md)" }}
+       >
+        <option value="">from the settings this server audits under</option>
+        {(configs.data.configs ?? []).filter((c) => !c.damaged).map((c) => (
+         <option key={c.name} value={c.name}>from {c.name}</option>
+        ))}
+       </Select>
+      </div>
+      <SimpleTable headers={["Name", "Source", "Keys set", "", ""]}>
        {(configs.data.configs ?? []).map((c) => (
         <tr key={c.name}>
          <td><strong>{c.name}</strong></td>
+         <td>
+          {c.damaged ? (
+           <Badge tone="warn">unreadable</Badge>
+          ) : c.shipped ? (
+           <span className="cell-dim">shipped (read-only)</span>
+          ) : (
+           <Badge>saved</Badge>
+          )}
+         </td>
          <td><span className="cell-num">{c.keys.length}</span></td>
          <td>{c.keys.map((k) => k.name).join(", ") || <span className="cell-dim">no extra keys</span>}</td>
+         <td>
+          {c.shipped ? (
+           <span className="cell-dim" title="burpsy ships this configuration; clone it under another name to edit it">—</span>
+          ) : (
+           <div className="toolbar">
+            <Button
+             variant="outline"
+             size="small"
+             disabled={!configName.trim() || configLibrary.isPending}
+             title={configName.trim() ? `Rename to ${configName.trim()}` : "Type the new name above first"}
+             onClick={() =>
+              configLibrary.mutate(
+               { action: "rename", name: configName.trim(), from: c.name },
+               {
+                onSuccess: () => { toast.success(`Renamed to ${configName.trim()}`); setConfigName(""); },
+                onError: (cause: Error) => toast.error(cause.message),
+               },
+              )
+             }
+            >
+             Rename
+            </Button>
+            <Button
+             variant="outline"
+             size="small"
+             disabled={configLibrary.isPending}
+             onClick={() =>
+              configLibrary.mutate({ action: "delete", name: c.name }, {
+               onSuccess: () => toast.success(`Deleted ${c.name}`),
+               onError: (cause: Error) => toast.error(cause.message),
+              })
+             }
+            >
+             Delete
+            </Button>
+           </div>
+          )}
+         </td>
         </tr>
        ))}
       </SimpleTable>
