@@ -295,16 +295,38 @@ func LoadOrGenerateCA(caDir string) (*TlsEngine, error) {
 		return loadCA(certData, keyData)
 	}
 
-	// Generate new CA
+	// No usable pair on disk: mint a fresh CA, persist it, and load it back so the
+	// freshly minted pair is validated by the same loadCA path a persisted one is.
+	caCertPEM, caKeyPEM, err := generateCAPEM()
+	if err != nil {
+		return nil, err
+	}
+	// The certificate is public; only the key is protected. The key is what
+	// re-signing from it would need, so it is 0600.
+	if err := os.WriteFile(caCertPath, caCertPEM, 0644); err != nil {
+		return nil, fmt.Errorf("failed to save CA certificate: %w", err)
+	}
+	if err := os.WriteFile(caKeyPath, caKeyPEM, 0600); err != nil {
+		return nil, fmt.Errorf("failed to save CA key: %w", err)
+	}
+	return loadCA(caCertPEM, caKeyPEM)
+}
+
+// generateCAPEM mints a fresh self-signed CA and returns its certificate and
+// private key as PEM. It is the single place a CA is created: LoadOrGenerateCA on
+// first run and (*TlsEngine).RegenerateCA at the operator's request both go through
+// it, so the two paths cannot drift into producing differently-shaped roots. The
+// 128-bit random serial and the new key mean two calls never produce the same CA,
+// which is the property regeneration depends on.
+func generateCAPEM() (certPEM, keyPEM []byte, err error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate RSA key: %w", err)
+		return nil, nil, fmt.Errorf("failed to generate RSA key: %w", err)
 	}
 
-	// Create CA certificate template
 	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate serial number: %w", err)
+		return nil, nil, fmt.Errorf("failed to generate serial number: %w", err)
 	}
 
 	caTemplate := x509.Certificate{
@@ -323,39 +345,19 @@ func LoadOrGenerateCA(caDir string) (*TlsEngine, error) {
 		MaxPathLen:            1,
 	}
 
-	// Self-sign the CA certificate
+	// Self-sign the CA certificate.
 	caBytes, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &priv.PublicKey, priv)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create CA certificate: %w", err)
+		return nil, nil, fmt.Errorf("failed to create CA certificate: %w", err)
 	}
-	caCert, err := x509.ParseCertificate(caBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse generated CA: %w", err)
-	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
 
-	// Encode certificate
-	caCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
-
-	// Encode private key
 	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal private key: %w", err)
+		return nil, nil, fmt.Errorf("failed to marshal private key: %w", err)
 	}
-	caKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
-
-	// The certificate is public; only the key is protected. The key is what
-	// re-signing from it would need, so it is 0600.
-	if err := os.WriteFile(caCertPath, caCertPEM, 0644); err != nil {
-		return nil, fmt.Errorf("failed to save CA certificate: %w", err)
-	}
-	if err := os.WriteFile(caKeyPath, caKeyPEM, 0600); err != nil {
-		return nil, fmt.Errorf("failed to save CA key: %w", err)
-	}
-
-	return &TlsEngine{
-		caCert: caCert,
-		caPriv: priv,
-	}, nil
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+	return certPEM, keyPEM, nil
 }
 
 // loadCA parses and validates a persisted CA pair, returning a ready engine.
@@ -444,6 +446,36 @@ func (e *TlsEngine) ImportCA(certPEM, keyPEM []byte) error {
 		return true
 	})
 	return nil
+}
+
+// RegenerateCA mints a brand-new self-signed CA, installs it as the signing CA,
+// and returns its PEM so the caller can persist it. This is Burp's "Regenerate CA
+// certificate" (BurpClass9617): the operator's escape hatch when the current CA's
+// private key may have been exposed, or when a CA installed into a client's trust
+// store during a finished engagement has to be retired.
+//
+// It reuses ImportCA rather than adding a second swap, so regeneration and import
+// share one path: the same validation, the same locked replacement, and — the part
+// that matters — the same leaf-cache invalidation. Every cached leaf was signed by
+// the CA just replaced; a client about to be told to trust the new CA would
+// otherwise keep being served a leaf it will reject. See ImportCA.
+//
+// The previous CA is gone from this process the moment this returns. If the caller
+// then persists the returned PEM over the old ca.key on disk, it is gone for good —
+// which is the point: a rotated-out signing key should not remain recoverable.
+func (e *TlsEngine) RegenerateCA() (certPEM, keyPEM []byte, err error) {
+	certPEM, keyPEM, err = generateCAPEM()
+	if err != nil {
+		return nil, nil, err
+	}
+	// generateCAPEM produced this pair, so ImportCA's validation cannot legitimately
+	// reject it. If it somehow does, ImportCA validates before swapping, so the
+	// running CA and the leaf cache are untouched — we surface the error rather than
+	// report a rotation that did not happen.
+	if err := e.ImportCA(certPEM, keyPEM); err != nil {
+		return nil, nil, fmt.Errorf("freshly generated CA failed validation: %w", err)
+	}
+	return certPEM, keyPEM, nil
 }
 
 // CertPEM returns the current CA certificate as PEM.

@@ -24,7 +24,7 @@ import {
  useRemoveNetworkProxyRule,
  useSaveNetworkProxy,
 } from "../lib/data.network";
-import { useBackupNow, useCaCert, useCaStatus, useImportCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
+import { useBackupNow, useCaCert, useCaStatus, useImportCaCert, useRegenerateCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useUninterestingHeaders, useSetUninterestingHeaders } from "../lib/data.workbench";
 import { cn } from "../lib/cn";
 import {
@@ -1477,8 +1477,10 @@ function UninterestingHeadersSection(): JSX.Element {
 function CaImportSection(): JSX.Element {
  const status = useCaStatus();
  const importCa = useImportCaCert();
+ const regenerateCa = useRegenerateCaCert();
  const [certPem, setCertPem] = useState("");
  const [keyPem, setKeyPem] = useState("");
+ const [confirmRegen, setConfirmRegen] = useState(false);
 
  const s = status.data;
  const ready = certPem.trim() !== "" && keyPem.trim() !== "" && !importCa.isPending;
@@ -1547,6 +1549,15 @@ function CaImportSection(): JSX.Element {
     >
      {importCa.isPending ? "Importing…" : "Import CA"}
     </Button>
+    <Button
+     size="small"
+     variant="outline"
+     disabled={!s?.configured || regenerateCa.isPending}
+     onClick={() => setConfirmRegen(true)}
+    >
+     <RotateCcw size={13} />
+     {regenerateCa.isPending ? "Regenerating…" : "Regenerate CA"}
+    </Button>
     {s?.configured && !s.persisted && s.persist_error ? (
      <Badge tone="warn">not saved to disk</Badge>
     ) : null}
@@ -1558,6 +1569,45 @@ function CaImportSection(): JSX.Element {
     <strong>every client trusting the old CA must be given the new one</strong> — the previous
     certificate signs nothing from that moment.
    </p>
+   <p className="field-hint">
+    <strong>Regenerate CA</strong> mints a fresh CA here instead of pasting one — Burp&apos;s
+    &ldquo;Regenerate CA certificate&rdquo;. It replaces the current CA immediately and cannot be
+    undone; the previous CA and its key are discarded, so every client that trusted it must be given
+    the new certificate.
+   </p>
+   <Modal
+    open={confirmRegen}
+    onOpenChange={setConfirmRegen}
+    title="Regenerate the CA certificate?"
+    description="A brand-new CA replaces the current one immediately. The previous certificate stops signing, every per-host certificate is discarded, and the old key is thrown away. Every client that trusted the old CA must be given the new certificate before it can be intercepted again. This cannot be undone."
+   >
+    <div className="page-actions">
+     <Button variant="outline" onClick={() => setConfirmRegen(false)}>
+      Cancel
+     </Button>
+     <Button
+      variant="danger"
+      disabled={regenerateCa.isPending}
+      onClick={() =>
+       regenerateCa.mutate(undefined, {
+        onSuccess: (next) => {
+         setConfirmRegen(false);
+         toast.success(
+          next.persisted
+           ? `A new CA is signing as ${next.subject}. Re-download the certificate and re-trust it in every client — the old one signs nothing now.`
+           : `A new CA is signing as ${next.subject}, for this run only — it was not saved: ${next.persist_error}. Re-download and re-trust it.`,
+         );
+        },
+        onError: (failure: unknown) =>
+         toast.error(failure instanceof Error ? failure.message : "CA regeneration failed"),
+       })
+      }
+     >
+      <RotateCcw size={13} />
+      Regenerate CA
+     </Button>
+    </div>
+   </Modal>
   </Card>
  );
 }
