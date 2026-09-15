@@ -167,6 +167,64 @@ export interface IntruderPayloadSnapshot {
  sets: (string[] | null)[];
 }
 
+/**
+ * A one-shot instruction from the menubar to the Intruder page.
+ *
+ * The menubar cannot launch an attack itself: `onRun` in pages/intruder.tsx owns the whole launch —
+ * the pre-launch snapshot of running attacks that lets the page identify its own task id, the
+ * payload snapshot the report is read through, the payload-source encoding, and the error handling.
+ * A second copy of that in app.tsx would be a second attack launcher that drifts from the first.
+ * So the menu states an intention and the page performs it, exactly as History's "Send to Intruder"
+ * states an intention through `intruderSeed`.
+ *
+ * `nonce` exists because "start" twice in a row is two instructions, not one: a bare string would
+ * be equal to itself and the page's effect would not re-fire.
+ */
+export interface IntruderCommand {
+  kind: "start" | "stop";
+  nonce: number;
+}
+
+/**
+ * What the Intruder page currently permits, published for the menubar to read.
+ *
+ * Only the mounted page knows whether an attack is in flight (the run mutation and the located task
+ * id are its state), so it says so here and the menu greys its items accordingly. `null` means the
+ * page is not mounted — the menu then falls back to `intruderLaunchBlocker`, which needs nothing
+ * but the stored configuration.
+ */
+export interface IntruderStatus {
+  /**
+   * Why the page would refuse to launch right now, or null when it would launch.
+   *
+   * A reason rather than a boolean: the menubar has to explain a greyed "Start attack", and the
+   * page is the only place that knows whether the obstacle is a missing message id, an unselected
+   * position or an empty payload set.
+   */
+  refusal: string | null;
+  /** True while an attack launched from this page is still running. */
+  running: boolean;
+  /** True once the running attack's task id has been located, i.e. once Stop can name its target. */
+  controllable: boolean;
+}
+
+/**
+ * Why the stored configuration cannot be launched, or null when nothing here stands in the way.
+ *
+ * Deliberately a NECESSARY condition, not a sufficient one — payload-set sizing needs the page's
+ * arithmetic over seven payload forms, and duplicating that here is how two launch guards start
+ * disagreeing. The menu uses this to grey an item it can be certain about; the page remains the
+ * authority and refuses with its own reason if it finds something this cannot see.
+ */
+export function intruderLaunchBlocker(config: IntruderConfig): string | null {
+  const id = config.msgId.trim();
+  if (id === "") return "Choose a stored message id on the Intruder page first.";
+  if (!Number.isInteger(Number(id)) || Number(id) < 0) return `"${config.msgId}" is not a stored message id.`;
+  if (config.target.trim() === "") return "The attack has no target authority yet.";
+  if (config.selected.length === 0) return "No insertion points are selected — discover and choose some first.";
+  return null;
+}
+
 /** A finished attack: the report, and enough context to read it. */
 export interface IntruderRun {
  view: RunView | null;
@@ -288,6 +346,14 @@ interface AppState {
  intruderRun: IntruderRun | null;
  /** Which Intruder sub-tab is open, so returning to the page lands where it was left. */
  intruderTab: string;
+ /** A pending menubar instruction for the Intruder page (burpsy-react-ui-yinb). Session-only and
+  *  cleared on arrival: it is a one-shot command, not a setting, and a stale one replayed after a
+  *  reload would launch an attack nobody asked for. */
+ intruderCommand: IntruderCommand | null;
+ /** What the mounted Intruder page permits, or null when no page is mounted. The menu reads it to
+  *  decide what to disable AND why — only the page can size the attack, so only the page can say
+  *  whether Start is possible. A menu item that cannot act must say the reason, never no-op. */
+ intruderStatus: IntruderStatus | null;
  comparerSlots: { a: string; b: string };
  /** Set when another page hands the Decoder an input to transform. Session-only, like
   *  intruderSeed: a stale payload surviving a reload would masquerade as current work. */
@@ -346,6 +412,11 @@ interface AppState {
  setIntruder: (next: IntruderConfig | ((current: IntruderConfig) => IntruderConfig)) => void;
  setIntruderRun: (run: IntruderRun | null) => void;
  setIntruderTab: (tab: string) => void;
+ /** Ask the Intruder page to start or stop its attack (burpsy-react-ui-yinb). The PAGE decides
+  *  whether it can — the menubar cannot size an attack, so it asks rather than asserts. */
+ requestIntruderCommand: (kind: IntruderCommand["kind"]) => void;
+ clearIntruderCommand: () => void;
+ setIntruderStatus: (status: IntruderStatus | null) => void;
  setDecoderSeed: (seed: { label: string; input: string } | null) => void;
  setComparerSlot: (slot: "a" | "b", value: string) => void;
  focusExchange: (id: number | null) => void;
@@ -388,6 +459,11 @@ export function persistedWorkspace(state: AppState) {
   // Deliberately absent: closedRepeaterTabs, and every *Seed / focus / query flag. A reopen stack
   // that survived a reload would resurrect drafts the operator closed days ago, and a persisted
   // intruderSeed would re-seed Intruder on every load, overwriting the attack above.
+  //
+  // intruderCommand and intruderStatus are out for the same reason and a sharper one
+  // (burpsy-react-ui-yinb): a persisted "start" would fire an attack against a live target on every
+  // page load, with no click behind it, and a persisted status would tell the menubar an attack is
+  // running when nothing is.
  };
 }
 
@@ -414,6 +490,8 @@ export const useApp = create<AppState>()(
    intruder: emptyIntruderConfig(),
    intruderRun: null,
    intruderTab: "positions",
+ intruderCommand: null,
+ intruderStatus: null,
    decoderSeed: null,
    comparerSlots: { a: "", b: "" },
    historyFocus: null,
@@ -572,6 +650,11 @@ export const useApp = create<AppState>()(
     set((state) => ({ intruder: typeof next === "function" ? next(state.intruder) : next })),
    setIntruderRun: (intruderRun) => set({ intruderRun }),
    setIntruderTab: (intruderTab) => set({ intruderTab }),
+   // The nonce counts instructions, so two identical clicks are two commands rather than one
+   // ignored repeat. Reusing the existing `sequence` counter keeps one source of monotonic ids.
+   requestIntruderCommand: (kind) => set({ intruderCommand: { kind, nonce: ++sequence } }),
+   clearIntruderCommand: () => set({ intruderCommand: null }),
+   setIntruderStatus: (intruderStatus) => set({ intruderStatus }),
    setDecoderSeed: (decoderSeed) => set({ decoderSeed }),
    setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
    focusExchange: (historyFocus) => set({ historyFocus }),
