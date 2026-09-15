@@ -638,6 +638,13 @@ export function SequencerPage(): JSX.Element {
  // says `significance_defaulted` back, so the page can label it as the default
  // rather than implying a choice was made.
  const [significancePercent, setSignificancePercent] = useState("");
+ // Burp's "Token handling" (burpsy-react-ui-i4u). These change the SAMPLE the analysis runs over,
+ // not how its numbers are interpreted, which is why they are decided before the run and echoed
+ // back in the report — a quoted finding has to carry which sample produced it.
+ const [padMode, setPadMode] = useState("");
+ const [padByte, setPadByte] = useState("0");
+ const [base64Decode, setBase64Decode] = useState(false);
+ const tokenHandling = { padMode, padByte, base64Decode };
  const [tokens, setTokens] = useState("");
  // Burp's Manual load offers Paste AND Load (burpsy-react-ui-ts3v): the hidden input is the
  // file affordance, the same pattern app.tsx uses for configuration import. Read as text —
@@ -705,7 +712,7 @@ export function SequencerPage(): JSX.Element {
 
  const runPaste = () =>
   analysePaste.mutate(
-   { text: tokens, encoding, significancePercent },
+   { text: tokens, encoding, significancePercent, tokens: tokenHandling },
    {
     onSuccess: (result) => toast.success(`${result.tokens.toLocaleString()} token(s) analysed`),
     onError: (cause) => toast.error(`Analysis failed: ${cause.message}`),
@@ -761,7 +768,7 @@ export function SequencerPage(): JSX.Element {
 
  const runCaptured = () =>
   analyseTokens.mutate(
-   { tokens: captured, encoding, significancePercent },
+   { tokens: captured, encoding, significancePercent, handling: tokenHandling },
    {
     onSuccess: (result) => toast.success(`${result.tokens.toLocaleString()} captured token(s) analysed`),
     onError: (cause) => toast.error(`Analysis failed: ${cause.message}`),
@@ -783,7 +790,7 @@ export function SequencerPage(): JSX.Element {
    if (analyseTokens.isPending) return;
    lastAnalysedCount.current = captured.length;
    analyseTokens.mutate(
-    { tokens: captured, encoding, significancePercent },
+    { tokens: captured, encoding, significancePercent, handling: tokenHandling },
     {
      onSuccess: (result) => toast.message(`Auto-analysis over ${result.tokens.toLocaleString()} token(s)`),
      onError: (cause) => toast.error(`Auto-analysis failed: ${cause.message}`),
@@ -793,7 +800,7 @@ export function SequencerPage(): JSX.Element {
   return () => window.clearInterval(timer);
   // analyseTokens identity changes with its internals; the interval only needs the trigger.
   // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [autoAnalyse, capture.data?.capturing, captured.length, encoding, significancePercent]);
+ }, [autoAnalyse, capture.data?.capturing, captured.length, encoding, significancePercent, padMode, padByte, base64Decode]);
 
  // Pause/resume the live capture (burpsy-react-ui-5kx). The gate is between sends server-side,
  // so the sample is never half-recorded; the capture keeps polling and shows the pause state.
@@ -865,6 +872,36 @@ export function SequencerPage(): JSX.Element {
         </option>
        ))}
       </Select>
+      {/* Burp's "Token handling". Padding exists because the statistical tests can only run over
+          tokens of one length; WHERE it goes changes which byte positions the analysis reads, so
+          Burp asks rather than choosing, and so does this. Base64-decode analyses the bytes a token
+          encodes rather than the alphabet it is written in. */}
+      <Select
+       aria-label="Pad short tokens"
+       title="Pad short tokens so every token is the same length — the statistical tests require it"
+       value={padMode}
+       onChange={(event) => setPadMode(event.target.value)}
+       style={{ maxWidth: "var(--w-sm)" }}
+      >
+       <option value="">padding: none</option>
+       <option value="start">pad short tokens at start</option>
+       <option value="end">pad short tokens at end</option>
+      </Select>
+      {padMode ? (
+       <Input
+        aria-label="Pad character"
+        title="The single character padding inserts. Burp's default is 0."
+        value={padByte}
+        onChange={(event) => setPadByte(event.target.value)}
+        maxLength={1}
+        style={{ maxWidth: "var(--w-xs)" }}
+       />
+      ) : null}
+      <Checkbox
+       checked={base64Decode}
+       onCheckedChange={setBase64Decode}
+       label="Base64-decode before analyzing"
+      />
       <Button
        onClick={source === "paste" ? runPaste : runCaptured}
        disabled={pending || (source === "paste" ? pastedCount === 0 : captured.length === 0)}

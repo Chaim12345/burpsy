@@ -1570,6 +1570,38 @@ type sequencerAnalyseReq struct {
 	// default and marked as defaulted, rather than being indistinguishable from
 	// an operator who typed the default.
 	SignificancePercent *float64 `json:"significance_percent"`
+	// Burp's "Token handling" (burpsy-react-ui-i4u). PadMode is "none" | "start" | "end"; the
+	// statistical tests can only run over tokens of one length, so a variable-length sample is
+	// padded up to the longest and WHERE decides which byte positions the analysis reads.
+	//
+	// Absent means none, which is what every existing caller means and what the analysis did before
+	// this existed. An unknown value is refused by name rather than falling back to none — a
+	// silently ignored pad mode would leave the operator reading an unpadded analysis believing it
+	// was padded.
+	PadMode *string `json:"pad_mode"`
+	// PadByte is the single character to pad with. Burp's own default is '0'. A string rather than a
+	// number so the wire carries what the operator typed; anything that is not exactly one byte is
+	// refused, because a two-character "pad byte" cannot mean anything.
+	PadByte *string `json:"pad_byte"`
+	// Base64Decode is Burp's "Base64-decode before analyzing": a base64 token's randomness is in the
+	// bytes it encodes, not the alphabet it is written in. A token that is not valid base64 is
+	// refused by the engine naming which one, rather than analysed as a different sample.
+	Base64Decode *bool `json:"base64_decode"`
+}
+
+// parsePadMode maps the wire's "none" | "start" | "end" onto the engine's PadMode. Unknown values
+// are refused naming the value, the same rule the encoding field follows: a pad mode that was
+// silently dropped would produce an unpadded report under a padded label.
+func parsePadMode(raw string) (sequencer.PadMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "none":
+		return sequencer.PadNone, nil
+	case "start":
+		return sequencer.PadStart, nil
+	case "end":
+		return sequencer.PadEnd, nil
+	}
+	return sequencer.PadNone, fmt.Errorf("pad_mode %s is not one of none, start or end", strconv.Quote(raw))
 }
 
 // parseEncoding maps the UI's "hex" | "base64" | "raw" onto the engine's
@@ -1627,9 +1659,40 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 	// An empty paste is answered rather than refused: the report says "no tokens
 	// were supplied", and that is more useful to whoever pasted the wrong buffer
 	// than a 400 with no analysis in it.
+	// Token handling, decided before the significance branch because it changes the SAMPLE rather
+	// than how the sample is interpreted.
+	opts := sequencer.Options{Encoding: encoding, PadByte: '0'}
+	if req.PadMode != nil {
+		mode, err := parsePadMode(*req.PadMode)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		opts.Pad = mode
+	}
+	if req.PadByte != nil {
+		if len([]byte(*req.PadByte)) != 1 {
+			http.Error(w, fmt.Sprintf(
+				"pad_byte %s is not a single byte; padding inserts one byte per position, so a pad character must be exactly one",
+				strconv.Quote(*req.PadByte)), http.StatusBadRequest)
+			return
+		}
+		opts.PadByte = (*req.PadByte)[0]
+	}
+	if req.Base64Decode != nil {
+		opts.Base64Decode = *req.Base64Decode
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if req.SignificancePercent == nil {
-		json.NewEncoder(w).Encode(sequencer.AnalyseAs(tokens, encoding))
+		opts.SignificancePercent = sequencer.DefaultSignificancePercent
+		opts.SignificanceDefaulted = true
+		rep, err := sequencer.AnalyseOpts(tokens, opts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(rep)
 		return
 	}
 	// Refused, not clamped. A level above 10% or below 0.001% is outside the
@@ -1643,7 +1706,13 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 			http.StatusBadRequest)
 		return
 	}
-	json.NewEncoder(w).Encode(sequencer.AnalyseWith(tokens, encoding, *req.SignificancePercent))
+	opts.SignificancePercent = *req.SignificancePercent
+	rep, err := sequencer.AnalyseOpts(tokens, opts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	json.NewEncoder(w).Encode(rep)
 }
 
 // helpers ----------------------------------------------------------------------------------------
