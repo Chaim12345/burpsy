@@ -49,6 +49,22 @@ export interface IntruderRunRequest {
   max_in_flight?: number;
   rps?: number;
   /**
+   * Burp's resource-pool "With random variations" (burpsy-react-ui-nn0n), as a percentage of the
+   * interval `rps` states: 25 makes every gap between requests land somewhere in ±25% of it. Part
+   * of the same exclusion as `rps` — a named pool states how its own delay behaves.
+   *
+   * The server refuses 100 or more (a downward variation would be a zero gap) rather than clamping,
+   * and the engine's schedule is seeded, so the delays a run takes can be replayed. See
+   * intruder.DelayVariation in internal/intruder/limit.go.
+   */
+  delay_jitter_percent?: number;
+  /** Burp's throttleIncrementMillis: every gap is this many milliseconds longer than the one
+   *  before it. 0..600000, Burp's own bound on a delay; a negative one is refused, not clamped. */
+  delay_increment_ms?: number;
+  /** Seeds the jitter. Omitted is 0, which is a seed like any other — the schedule is replayable
+   *  either way, and a different number is a differently-shaped run. */
+  delay_seed?: number;
+  /**
    * Burp's Intruder "Follow redirections" (tirx): "never" | "on_site" | "in_scope" | "always",
    * or omitted for the standing network-settings policy (never, by default). Each hop is
    * re-authorised through the same scope gate the first request went through — see

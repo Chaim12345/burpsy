@@ -136,6 +136,12 @@ export interface IntruderConfig {
  maxRequests: number;
  maxInFlight: number;
  rps: string;
+ /** Burp's resource-pool "With random variations" (nn0n), as a percentage of the interval `rps`
+  *  implies. Empty or "0" is the flat delay every attack had before. */
+ delayJitterPct: string;
+ /** Burp's throttleIncrementMillis (nn0n): every gap is this many ms longer than the one before.
+  *  Empty or "0" means a delay that does not ramp. */
+ delayIncrementMS: string;
  /** Burp's "Number of retries on network failure" (n39). Empty = the server's default (Burp's 3). */
  retries: string;
  /** Burp's "Pause before retry" in ms (n39). Empty = the server's default (Burp's 2000). */
@@ -200,6 +206,8 @@ export function emptyIntruderConfig(): IntruderConfig {
   maxRequests: 1000,
   maxInFlight: 8,
   rps: "",
+  delayJitterPct: "",
+  delayIncrementMS: "",
   retries: "",
   retryDelayMS: "",
   baseline: false,

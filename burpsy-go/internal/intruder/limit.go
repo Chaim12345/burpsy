@@ -44,7 +44,10 @@ package intruder
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
@@ -79,6 +82,122 @@ type RateLimit struct {
 	// AutoThrottle cuts the rate when the target starts saying no. nil is the default and changes
 	// nothing.
 	AutoThrottle *AutoThrottle
+	// variation is the delay schedule, unexported so the only way to set one is WithVariation,
+	// which refuses the combinations this limiter cannot honour and hands the refusal back as an
+	// error. A settable field would have to be checked by NewRateLimiter, which cannot return an
+	// error and would therefore have to either panic or quietly pace the attack at a rate nobody
+	// chose. Copying a RateLimit copies the pointer, which is what every caller that passes one
+	// around by value already expects of AutoThrottle.
+	variation *DelayVariation
+}
+
+// DelayVariation is Burp's "With random variations" and its per-request delay increment: the two
+// ways a resource pool's spacing stops being a constant.
+//
+// # Why an attack wants a delay that is not flat
+//
+// A constant rate is a signature. A lockout counter that a flat 20/s trips at request N trips at
+// request N on every run, and inter-arrival times that never move are what a defender's graph is
+// looking at when it decides this is a tool rather than a person. Burp offers the two variations
+// for that reason and they answer different questions: the jitter hides the shape of the traffic,
+// the increment backs the whole attack off as it goes, so a run that starts inside the target's
+// budget stays inside it as the window fills.
+//
+// # What it does to the limiter
+//
+// A variation REPLACES the token bucket's spacing with an explicit schedule. The k-th gap between
+// requests (k from 0, so gap 0 is the one after the first request) is
+//
+//	interval_k = (1/rps + k*IncrementMS) * (1 + Jitter*u_k),   u_k uniform in [-1, 1)
+//
+// and the grant after gap k is released interval_k after the previous grant was scheduled.
+//
+// The bucket is bypassed rather than layered under this, because the two cannot both hold: the
+// bucket's guarantee is that no gap is ever shorter than 1/rps, and half of what jitter means is
+// gaps shorter than that. Taking the larger of the two waits would keep the guarantee and throw
+// away the feature — every downward draw eaten, leaving a variation that only ever slows the
+// attack down. So with a variation configured the rate the operator typed is the rate the gaps are
+// drawn around rather than a per-window ceiling, which is what asking for variation says.
+//
+// One consequence worth stating: a gap is counted from when the caller comes back for its next
+// grant, which is after the previous request finished, so the realised rate is the nominal one
+// minus however long each request took. That is Burp's own "delay between requests" and not a
+// drift — but it does mean a varied pool on a slow target runs a little under its nominal rate,
+// where the bucket would have refilled through the wait and held it. Measured live at 10/s on the
+// fixture: a flat pool's gaps were 100.7/101.0/99.1/101.0/99.0ms, and the same pool with a 50ms
+// increment 102.7/153.3/203.0/256.7/304.7ms.
+//
+// With no variation — the nil default, and every caller that has ever existed — not one line of
+// this runs and the bucket is exactly what it was.
+//
+// # Seeded, because a timing claim has to be checkable
+//
+// u_k comes from a PCG generator seeded with Seed, so the schedule is a function of the seed and
+// the grant order and nothing else. The same seed replays the same delays, which is what lets a
+// test assert the delays an attack actually took rather than assert that some randomness happened.
+type DelayVariation struct {
+	// Jitter is the fraction of the nominal interval a gap may vary by, up or down: 0.25 is
+	// Burp's ±25%. Must be below 1 — at 1 a draw of -1 is a zero interval and above it a
+	// negative one, and neither is a delay anything can wait for.
+	Jitter float64 `json:"jitter"`
+	// IncrementMS is Burp's throttleIncrementMillis: every gap is this many milliseconds longer
+	// than the one before it. Must not be negative. A ramp that shortens each gap reaches zero
+	// and then goes negative, and the request that follows a negative delay is not a slower
+	// attack, it is an unbounded one.
+	IncrementMS int `json:"increment_ms"`
+	// Seed seeds the jitter. 0 is a seed like any other, not "unseeded": an operator who never
+	// names one still gets a schedule that can be replayed, and one who wants a different shape
+	// of traffic per run names a different seed.
+	Seed uint64 `json:"seed"`
+}
+
+// variationSeedStream is the second half of the PCG state. PCG takes two 64-bit words and a seed
+// of (0, 0) is a legal but degenerate state, so the operator's seed is paired with a fixed
+// non-zero constant rather than with a zero.
+const variationSeedStream uint64 = 0x9e3779b97f4a7c15
+
+// Variation is the delay schedule this limit carries, or nil for the flat spacing every pool had
+// before. Read-only by design — see RateLimit.variation.
+func (l RateLimit) Variation() *DelayVariation { return l.variation }
+
+// WithVariation attaches Burp's delay variations, or refuses them with a reason. nil removes one.
+//
+// It returns an error rather than clamping because every one of the refused combinations is a
+// request for something this limiter cannot do, and the operator's next move depends on which:
+// a jitter of 1.5 is not "as much jitter as possible", and a variation on an uncapped rate is not
+// "a little variation on nothing".
+func (l RateLimit) WithVariation(v *DelayVariation) (RateLimit, error) {
+	l.variation = v
+	if err := l.ValidateVariation(); err != nil {
+		return RateLimit{}, err
+	}
+	return l, nil
+}
+
+// ValidateVariation reports why this limit's variation cannot be honoured, or nil. Always nil when
+// no variation is set.
+func (l RateLimit) ValidateVariation() error {
+	v := l.variation
+	if v == nil {
+		return nil
+	}
+	switch {
+	case math.IsNaN(v.Jitter) || math.IsInf(v.Jitter, 0):
+		return fmt.Errorf("delay variation: a jitter of %v is not a number", v.Jitter)
+	case v.Jitter < 0:
+		return fmt.Errorf("delay variation: a jitter of %v is negative; it is the fraction of the interval a gap may move either way, so 0 is a fixed delay and 0.25 is Burp's ±25%%", v.Jitter)
+	case v.Jitter >= 1:
+		return fmt.Errorf("delay variation: a jitter of %v is 1 or more, so a downward draw would schedule a zero or negative gap; the largest variation that is still a delay is just under 1", v.Jitter)
+	case v.IncrementMS < 0:
+		return fmt.Errorf("delay variation: an increment of %dms shortens every gap until the interval reaches zero and then goes negative; Burp's increment only increases the delay", v.IncrementMS)
+	case v.Jitter == 0 && v.IncrementMS == 0:
+		return errors.New("delay variation: neither a jitter nor an increment was given, so there is nothing to vary; leave the variation off for a fixed delay")
+	case l.PerSecond == nil || *l.PerSecond <= 0:
+		return errors.New("delay variation: there is no rate cap to vary; a variation scales the interval between requests, and a pool with no rate has no interval")
+	case l.Burst > 1:
+		return fmt.Errorf("delay variation: a burst of %d and a varying delay are two answers to when the next request may go — the burst says several at once, the schedule spaces every one of them; set burst to 1 to vary the delay", l.Burst)
+	}
+	return nil
 }
 
 // NewRateLimit builds a limit with the two independent bounds. Use Unthrottled for
@@ -163,6 +282,22 @@ type RateLimiter struct {
 	slots     chan struct{}
 	name      string
 	auto      *autoState
+	// variation is the delay schedule, nil for the flat bucket. Guarded by mu, the bucket's own
+	// lock, because it is read and advanced only inside reserve — which already holds it — so a
+	// varied pool grows no second lock and no lock order to get wrong.
+	variation *variationState
+}
+
+// variationState is the running delay schedule: where the next grant is due, how many gaps have
+// been scheduled (the ramp's index and the jitter's draw index, which are the same number), and
+// the seeded generator the draws come from.
+type variationState struct {
+	jitter  float64
+	inc     time.Duration
+	rnd     *rand.Rand
+	gaps    int
+	started bool
+	nextAt  time.Time
 }
 
 // autoState is the auto-throttle's running state. Its own lock, so an attack with no auto-throttle
@@ -204,6 +339,16 @@ func NewRateLimiter(limit *RateLimit) *RateLimiter {
 	}
 	if limit.AutoThrottle != nil {
 		l.auto = &autoState{cfg: *limit.AutoThrottle}
+	}
+	// No validation here, and none needed: RateLimit.variation is unexported and WithVariation is
+	// the only thing that sets it, so anything that reaches this line was refused or accepted
+	// already.
+	if v := limit.variation; v != nil {
+		l.variation = &variationState{
+			jitter: v.Jitter,
+			inc:    time.Duration(v.IncrementMS) * time.Millisecond,
+			rnd:    rand.New(rand.NewPCG(v.Seed, v.Seed^variationSeedStream)),
+		}
 	}
 	return l
 }
@@ -271,6 +416,13 @@ func (l *RateLimiter) reserve(now time.Time) time.Duration {
 	// Consulted before the bucket lock is taken, so the two mutexes are never held at once and
 	// there is no lock order to get wrong. Observe only ever takes the auto lock.
 	rps := l.chargeThrottle(l.perSecond)
+	// A varied pool is paced by its schedule instead of by the bucket — see DelayVariation for why
+	// the two cannot both hold. The throttled rate is what the schedule's nominal interval is
+	// derived from, so the two features compose: a target that says 429 doubles the interval, and
+	// the jitter and the ramp then apply to the doubled one.
+	if l.variation != nil {
+		return l.reserveVaried(now, rps)
+	}
 	l.mu.Lock()
 	elapsed := now.Sub(l.last).Seconds()
 	l.last = now
@@ -287,6 +439,50 @@ func (l *RateLimiter) reserve(now time.Time) time.Duration {
 		return MAX_WAIT
 	}
 	return time.Duration(wait * float64(time.Second))
+}
+
+// reserveVaried is reserve for a pool with a delay schedule: it books this grant into the schedule
+// and returns how long the caller must wait for its slot.
+//
+// Scheduled from the later of the last slot and now, so a run whose sends take longer than their
+// gap does not accumulate a debt and then discharge it as a burst — the thing a variation exists
+// to avoid. A caller that waits exactly the returned duration therefore sees gap k land exactly
+// interval_k after gap k-1, which is the property the tests assert.
+func (l *RateLimiter) reserveVaried(now time.Time, rps float64) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	v := l.variation
+	if !v.started {
+		// The first grant has no gap in front of it — the same "the first request does not wait"
+		// the burst token gives an unvaried pool — and it draws no jitter, so draw k is gap k.
+		v.started = true
+		v.nextAt = now
+		return 0
+	}
+	interval := 1/rps + float64(v.gaps)*v.inc.Seconds()
+	if v.jitter > 0 {
+		// Float64 is [0, 1), so u is [-1, 1) and the interval stays positive for any jitter the
+		// validation allowed.
+		interval *= 1 + v.jitter*(2*v.rnd.Float64()-1)
+	}
+	v.gaps++
+	gap := time.Duration(interval * float64(time.Second))
+	// The same ceiling the bucket clamps to, applied to the interval rather than to the wait: a
+	// ramp that has run long enough to pass an hour a request must not push the schedule further
+	// and further into a future the attack will never reach.
+	if gap > MAX_WAIT {
+		gap = MAX_WAIT
+	}
+	from := v.nextAt
+	if from.Before(now) {
+		from = now
+	}
+	v.nextAt = from.Add(gap)
+	wait := v.nextAt.Sub(now)
+	if wait <= 0 {
+		return 0
+	}
+	return wait
 }
 
 // chargeThrottle returns the rate this grant is charged at, spending one grant of any active

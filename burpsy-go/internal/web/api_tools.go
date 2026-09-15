@@ -366,9 +366,13 @@ func (s *Server) cookieHeaderFor(host string, port uint16, tls bool) string {
 // there is one execution path, one rate limiter, and one place scope is enforced.
 
 const (
-	intruderDefaultRPS          = 20.0
-	intruderMinRPS              = 0.01
-	intruderMaxInFlightCeiling  = 999
+	intruderDefaultRPS         = 20.0
+	intruderMinRPS             = 0.01
+	intruderMaxInFlightCeiling = 999
+	// intruderMaxDelayIncrementMS is Burp's own validation bound on a delay in milliseconds
+	// (Zb33, the same 600000 that bounds "Pause before retry"). An increment is applied once per
+	// request, so beyond this a two-request attack is already an hour long.
+	intruderMaxDelayIncrementMS = 600000
 	intruderDefaultMaxPayloads  = 10_000
 	intruderMaxThrottleStatuses = 32
 	// The legacy form keeps its original 500-request cap so a fat paste cannot become an
@@ -514,8 +518,22 @@ type intruderRunReq struct {
 	AutoThrottle *intruder.AutoThrottle `json:"auto_throttle"`
 	RPS          *float64               `json:"rps"`
 	MaxInFlight  *int                   `json:"max_in_flight"`
-	MaxRequests  *int                   `json:"max_requests"`
-	TimeoutMS    *uint64                `json:"timeout_ms"`
+	// DelayJitterPercent is Burp's resource-pool "With random variations" (nn0n), as a percentage
+	// of the interval `rps` states: 25 makes every gap between requests land somewhere in ±25% of
+	// it. Percent rather than the engine's fraction because that is the number on the screen and
+	// the conversion belongs on one side of the wire, not in the browser. Omitted or 0 is the flat
+	// spacing every attack has always had.
+	DelayJitterPercent *float64 `json:"delay_jitter_percent"`
+	// DelayIncrementMS is Burp's throttleIncrementMillis: each gap is this many milliseconds
+	// longer than the one before it, so an attack that starts inside a rate-limit window stays
+	// inside it as the window fills. Bounded at both ends — see intruderMaxDelayIncrementMS.
+	DelayIncrementMS *int `json:"delay_increment_ms"`
+	// DelaySeed seeds the jitter. Omitted is 0, which is a seed like any other: the schedule is
+	// replayable either way, and an operator who wants a different shape of traffic per run sends
+	// a different number. See intruder.DelayVariation.
+	DelaySeed   *uint64 `json:"delay_seed"`
+	MaxRequests *int    `json:"max_requests"`
+	TimeoutMS   *uint64 `json:"timeout_ms"`
 	// FollowRedirects is Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/
 	// settings.html: Never / On-site only / In-scope only / Always). Nil or empty is the standing
 	// network policy — the same fallback repeaterSendOptions.RedirectMode uses for Repeater's own
@@ -547,10 +565,12 @@ type intruderRunReq struct {
 func (s *Server) intruderLimits(req intruderRunReq) (intruder.RateLimit, error) {
 	named := req.Pool != nil && strings.TrimSpace(*req.Pool) != ""
 	if named {
-		if req.RPS != nil || req.MaxInFlight != nil || req.AutoThrottle != nil {
+		if req.RPS != nil || req.MaxInFlight != nil || req.AutoThrottle != nil ||
+			req.DelayJitterPercent != nil || req.DelayIncrementMS != nil || req.DelaySeed != nil {
 			return intruder.RateLimit{}, fmt.Errorf(
 				"this attack names the pool %q and also sets its own limits; the pool already states "+
-					"rps, max_in_flight and automatic throttling, so send one or the other",
+					"rps, max_in_flight, automatic throttling and how its delay varies, so send one or "+
+					"the other",
 				strings.TrimSpace(*req.Pool))
 		}
 		limit, err := s.pools.Limit(strings.TrimSpace(*req.Pool))
@@ -588,6 +608,38 @@ func (s *Server) intruderLimits(req intruderRunReq) (intruder.RateLimit, error) 
 				len(at.Statuses), intruderMaxThrottleStatuses)
 		}
 		limits = limits.WithAutoThrottle(at)
+	}
+	// Burp's resource-pool variations (nn0n). Sent only when the operator asked for one, so an
+	// attack that never mentions them takes the flat spacing through a code path the engine
+	// short-circuits before any schedule exists. The engine refuses the combinations it cannot
+	// honour — a jitter that would schedule a zero gap, an increment that shortens one — and the
+	// refusal is handed straight back rather than clamped, so the operator learns which of their
+	// two numbers was the impossible one.
+	if req.DelayJitterPercent != nil || req.DelayIncrementMS != nil || req.DelaySeed != nil {
+		variation := intruder.DelayVariation{}
+		if p := req.DelayJitterPercent; p != nil {
+			if *p < 0 || *p >= 100 {
+				return intruder.RateLimit{}, fmt.Errorf(
+					"delay_jitter_percent must be at least 0 and below 100 (at 100%% a downward "+
+						"variation is a zero gap, and beyond it a negative one), got %v", *p)
+			}
+			variation.Jitter = *p / 100
+		}
+		if inc := req.DelayIncrementMS; inc != nil {
+			if *inc < 0 || *inc > intruderMaxDelayIncrementMS {
+				return intruder.RateLimit{}, fmt.Errorf(
+					"delay_increment_ms must be between 0 and %d, got %d", intruderMaxDelayIncrementMS, *inc)
+			}
+			variation.IncrementMS = *inc
+		}
+		if seed := req.DelaySeed; seed != nil {
+			variation.Seed = *seed
+		}
+		varied, err := limits.WithVariation(&variation)
+		if err != nil {
+			return intruder.RateLimit{}, err
+		}
+		limits = varied
 	}
 	return limits, nil
 }

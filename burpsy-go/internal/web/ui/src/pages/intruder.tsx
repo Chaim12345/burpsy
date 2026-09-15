@@ -20,6 +20,7 @@ import {
 import { usePools } from "../lib/data.pools";
 import { useMessage } from "../lib/data";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
+import { delayVariationFields } from "../lib/intruder-variation";
 import { filterTableRows } from "../lib/table-filter";
 import {
   DEFAULT_PAYLOADS,
@@ -1078,6 +1079,8 @@ export function IntruderPage(): JSX.Element {
     maxRequests,
     maxInFlight,
     rps,
+    delayJitterPct,
+    delayIncrementMS,
     retries,
     retryDelayMS,
     baseline,
@@ -1141,6 +1144,8 @@ export function IntruderPage(): JSX.Element {
   const setMaxRequests = field("maxRequests");
   const setMaxInFlight = field("maxInFlight");
   const setRps = field("rps");
+  const setDelayJitterPct = field("delayJitterPct");
+  const setDelayIncrementMS = field("delayIncrementMS");
   const setRetries = field("retries");
   const setRetryDelayMS = field("retryDelayMS");
   const setBaseline = field("baseline");
@@ -1521,7 +1526,14 @@ export function IntruderPage(): JSX.Element {
       // that carries both, so the inline pair is omitted rather than sent and dropped.
       ...(usePool
         ? { pool: poolName.trim() }
-        : { max_in_flight: maxInFlight, ...(rps.trim() ? { rps: Number(rps) } : {}) }),
+        : {
+            max_in_flight: maxInFlight,
+            ...(rps.trim() ? { rps: Number(rps) } : {}),
+            // Burp's resource-pool variations (nn0n). Omitted entirely when the operator left both
+            // blank or zeroed, so an attack that does not vary its delay posts the wire shape it
+            // always did — and the engine takes the flat token-bucket path it always took.
+            ...delayVariationFields(delayJitterPct, delayIncrementMS),
+          }),
       // Error handling (n39): empty means the server's default — Burp's own 3 retries with a
       // 2000ms pause. A field that names a number sends it; 0 disables retries.
       ...(retries.trim() !== "" ? { retries: Number(retries) } : {}),
@@ -2518,6 +2530,54 @@ export function IntruderPage(): JSX.Element {
                     value={poolName ? "" : rps}
                     onChange={(event) => setRps(event.target.value)}
                     placeholder={poolName ? "from the pool" : "unlimited"}
+                  />
+                )}
+              </Field>
+              {/* Burp's two resource-pool variations (nn0n). A flat rate is a signature: a lockout
+                  counter that a constant rate trips at request N trips at request N every run. The
+                  engine schedules each gap itself when either of these is set — seeded, so the
+                  delays a run took can be replayed — and refuses a variation it cannot honour
+                  rather than quietly moving it to one it can. */}
+              <Field
+                label="With random variations (± %)"
+                hint={
+                  poolName
+                    ? "Set by the selected pool."
+                    : "Burp's resource-pool option. Each gap between requests lands within this percentage of the interval the rate above states. Blank or 0 is a flat delay; 100 or more is refused."
+                }
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    max={99}
+                    step="5"
+                    disabled={poolName !== ""}
+                    value={poolName ? "" : delayJitterPct}
+                    onChange={(event) => setDelayJitterPct(event.target.value)}
+                    placeholder={poolName ? "from the pool" : "no variation"}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Increase delay between requests (ms)"
+                hint={
+                  poolName
+                    ? "Set by the selected pool."
+                    : "Burp's delay increment: every gap is this many milliseconds longer than the one before it, so an attack that starts inside a rate-limit window stays inside it as the window fills. Blank or 0 does not ramp."
+                }
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    max={600000}
+                    disabled={poolName !== ""}
+                    value={poolName ? "" : delayIncrementMS}
+                    onChange={(event) => setDelayIncrementMS(event.target.value)}
+                    placeholder={poolName ? "from the pool" : "no increase"}
                   />
                 )}
               </Field>
