@@ -501,6 +501,10 @@ export interface WsRow {
  len: number;
  at_ms: number;
  truncated: boolean;
+ /** Burp's "Edited" fact for this frame: the operator's own hold changed it before it was relayed
+  *  (burpsy-react-ui-d7bu). Non-optional because the Go handler always emits it — "edited":false is a
+  *  stated fact, not an absent key, so an older client cannot mistake "not edited" for "unknown". */
+ edited: boolean;
 }
 
 export interface WsHistory {

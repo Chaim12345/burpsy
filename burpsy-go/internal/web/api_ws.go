@@ -34,6 +34,11 @@ type wsRowView struct {
 	Fragments uint32          `json:"fragments"`
 	AtMs      uint64          `json:"at_ms"`
 	Note      string          `json:"note,omitempty"`
+	// Edited is Burp's "Edited" column for a WebSocket message: the operator's own hold changed this
+	// message before it was relayed. No omitempty — "edited":false is a stated fact the console renders
+	// as an empty column, and an absent key would make "not edited" indistinguishable from an older row
+	// that predates the field.
+	Edited bool `json:"edited"`
 }
 
 // wsHistoryResp mirrors wshistory.ts's HistoryResp.
@@ -90,6 +95,7 @@ func wsRowFromMessage(m *core.WsMessage) wsRowView {
 		Fragments: m.Fragments,
 		AtMs:      m.AtMs,
 		Note:      m.Note,
+		Edited:    m.UserEdited,
 	}
 }
 

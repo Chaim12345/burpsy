@@ -547,7 +547,7 @@ func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []b
 
 		// Zero or more frames out: a mid-message fragment relays nothing until the message is
 		// complete, and the final fragment may relay several at once. See wsFragments.
-		outs, drop := s.wsDecideFrames(dir, hdr, frame, fromClient, peer, frag)
+		outs, drop, edited := s.wsDecideFrames(dir, hdr, frame, fromClient, peer, frag)
 		if drop {
 			stats.dropped.Add(1)
 			continue
@@ -561,6 +561,13 @@ func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []b
 				// the relay-first path.
 				return fmt.Sprintf("%s: %v", wsWhich(fromClient), cerr), false
 			}
+		}
+		// An operator edit is Burp's "Edited" fact and must reach the recorded row. The edited message
+		// is one re-encoded frame that has just completed in the reassembler above, so stamp the event
+		// it produced — after the Feed, so which flush fired (the FIN flush or an interrupt flush of a
+		// stale partial) cannot misattribute it. drainWs carries the stamp on to the WsMessage.
+		if edited {
+			rs.MarkLastMessageUserEdited()
 		}
 	}
 }
@@ -630,13 +637,18 @@ func wsFramePayload(hdr *core.WsFrameHeader, frame []byte) []byte {
 // A slice rather than a single frame, because of fragmentation: a mid-message fragment relays
 // nothing, and a final fragment may relay several frames at once when the operator forwarded the
 // message unchanged. drop=true means the operator dropped it and nothing goes on the wire.
-func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader, frame []byte, fromClient bool, peer wsPeer, frag *wsFragments) ([][]byte, bool) {
+//
+// edited is Burp's "Edited" fact for the message these frames carry: the operator's own hold changed
+// it. It comes straight from wsOfferMessage's hold and is false for everything this function relays
+// without offering (control, compressed, orphaned or over-cap frames), because none of those was ever
+// put in front of the operator to edit.
+func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader, frame []byte, fromClient bool, peer wsPeer, frag *wsFragments) ([][]byte, bool, bool) {
 	// Control frames may be interleaved inside a fragmented message (RFC 6455 §5.4), so they are
 	// handled first and must never disturb the accumulator. Holding a ping stalls the peer's
 	// keepalive; holding a close leaves a socket that cannot be ended. Burp does not offer them
 	// either.
 	if hdr.Opcode.IsControl() {
-		return [][]byte{frame}, false
+		return [][]byte{frame}, false, false
 	}
 
 	// Compressed frames stay untouched: the payload is a DEFLATE block, so concatenating fragments
@@ -650,11 +662,11 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 			frag.reset()
 			s.config.logger.Debug("websocket reassembly abandoned: compressed frame mid-message",
 				zap.String("direction", wsWhich(fromClient)))
-			return out, false
+			return out, false, false
 		}
 		s.config.logger.Debug("websocket frame relayed without offering it for interception",
 			zap.String("direction", wsWhich(fromClient)), zap.String("reason", "compressed frame"))
-		return [][]byte{frame}, false
+		return [][]byte{frame}, false, false
 	}
 
 	continuation := hdr.Opcode == core.WsOpcodeContinuation
@@ -665,7 +677,7 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 		if continuation && !frag.active {
 			// A continuation with nothing to continue is a protocol error. Relay it and let the peers
 			// deal with it — inventing a message here would be worse than passing the fault along.
-			return [][]byte{frame}, false
+			return [][]byte{frame}, false, false
 		}
 		if !frag.add(hdr, frame, wsFramePayload(hdr, frame)) {
 			// Over the cap: flush and give up on this message rather than buffering without bound.
@@ -675,19 +687,19 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 			s.config.logger.Debug("websocket message too large to reassemble for interception",
 				zap.String("direction", wsWhich(fromClient)),
 				zap.Int("cap", core.DefaultMaxWsMessageBytes))
-			return out, false
+			return out, false, false
 		}
 		// Incomplete, so there is nothing to offer and nothing to relay yet.
-		return nil, false
+		return nil, false, false
 
 	case continuation && hdr.FIN:
 		if !frag.active {
-			return [][]byte{frame}, false
+			return [][]byte{frame}, false, false
 		}
 		if !frag.add(hdr, frame, wsFramePayload(hdr, frame)) {
 			out := append(frag.frames, frame)
 			frag.reset()
-			return out, false
+			return out, false, false
 		}
 		opcode, payload, originals := frag.opcode, frag.payload, frag.frames
 		frag.reset()
@@ -705,7 +717,13 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 // reassembled one — and they are relayed verbatim when the operator forwards without editing, so a
 // message that went through interception untouched is byte-identical to one that never entered it.
 // An edit is re-encoded as a single unfragmented frame, which is legal and is what Burp sends.
-func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, payload []byte, originals [][]byte, fromClient bool, peer wsPeer) ([][]byte, bool) {
+//
+// The third return is Burp's "Edited" fact: the operator's own hold changed this message. It is the
+// flag intercept.Held.Wait already decides (burpsy-react-ui-sd0d), carried out rather than recomputed
+// from the bytes — a message forwarded untouched is byte-identical whether or not a Match & Replace
+// rule rewrote it, so deriving the fact from a byte comparison would report the tool's rewrites as the
+// operator's. It is false whenever nothing was held: a message no rule matched was never offered.
+func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, payload []byte, originals [][]byte, fromClient bool, peer wsPeer) ([][]byte, bool, bool) {
 	// Match & replace runs before interception, exactly as it does on the HTTP path in proxy.go: the
 	// operator's standing rewrite rules are part of what the peer is deemed to have sent, so the
 	// message offered for interception is the rewritten one. The other order would show the operator
@@ -739,36 +757,38 @@ func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, p
 	if held == nil {
 		// No interception rule matched, so this was never offered. Relay exactly as it arrived —
 		// unless match & replace changed it, in which case the rewritten message is what goes out.
+		// Not edited either way: a rule the tool applied is not the operator's hand edit.
 		if rewrote {
-			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false
+			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false, false
 		}
-		return originals, false
+		return originals, false, false
 	}
 
 	// The destination is ignored: a WebSocket frame has no addressing of its own, and the engine
 	// refuses a retarget on one (see intercept.Engine.Forward). The value is still discarded here
 	// rather than defaulted so the compiler makes any future Wait caller state what it does with it.
 	//
-	// So is the edited flag. A frame is relayed, not recorded: this package's only rows for a
-	// WebSocket are the handshake's, and the handshake's own flag comes from the request hold. An
-	// edit to a frame therefore has nowhere to be reported — a gap rather than a decision, filed as
-	// burpsy-react-ui-d7bu so it does not read as an oversight here.
-	action, edited, _, _ := held.Wait()
+	// The fourth value, userEdited, is Burp's "Edited" fact and is now carried out (third return)
+	// rather than discarded: the relay stamps it onto the recorded message via
+	// MarkLastMessageUserEdited (burpsy-react-ui-d7bu). It is the hold's own decision, not the byte
+	// comparison below — the operator may retype identical bytes, which is still an edit, and a
+	// Match & Replace rewrite changes the bytes without being one.
+	action, edited, _, userEdited := held.Wait()
 	if action == intercept.ActionDrop {
-		return nil, true
+		return nil, true, false
 	}
 	if bytes.Equal(edited, payload) {
 		// Forwarded without further editing. If match & replace had rewritten it, that rewrite still
 		// has to reach the wire; only an entirely unmodified message relays its original frames.
 		if rewrote {
-			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false
+			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false, userEdited
 		}
-		return originals, false
+		return originals, false, userEdited
 	}
 
 	// A client-to-server frame must be masked and a server-to-client frame must not be
 	// (RFC 6455 §5.1). The direction decides, not what happened to arrive.
-	return [][]byte{s.wsEncode(opcode, edited, fromClient, originals)}, false
+	return [][]byte{s.wsEncode(opcode, edited, fromClient, originals)}, false, userEdited
 }
 
 // wsEncode frames a payload for the wire.
@@ -828,6 +848,10 @@ func (s *Server) drainWs(rs *core.WsReassembler, exchangeID core.ExchangeID, fro
 			Fragments:  ev.Fragments,
 			AtMs:       uint64(time.Now().UnixMilli()),
 			Note:       note,
+			// The operator's "Edited" fact, stamped on the event by the relay when a hold changed this
+			// message (burpsy-react-ui-d7bu). A message the reassembler produced on the plain relay path
+			// never carries it, so this is false for everything the operator did not touch.
+			UserEdited: ev.UserEdited,
 		}
 		s.config.store.AddWsMessage(m, payload)
 		stats.messages.Add(1)

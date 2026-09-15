@@ -243,6 +243,14 @@ type WsEvent struct {
 	// gets reworded; a consumer deciding whether to inflate needs a fact, and string-matching a
 	// human-readable sentence for it is the kind of coupling that breaks silently on a copy edit.
 	Compressed bool
+	// UserEdited is Burp's "Edited" fact for a WebSocket message: the operator's own hold changed the
+	// payload before it was relayed. It is stamped by the relay via MarkLastMessageUserEdited after it
+	// feeds an edited frame, never inferred from the bytes — a message the operator forwarded untouched
+	// is byte-identical whether a Match & Replace rule rewrote it or not, so "the recorded bytes differ
+	// from what arrived" would flag the tool's own rewrites as the operator's (burpsy-react-ui-sd0d).
+	// The same reasoning that put the fact on intercept.Held.Wait rather than a byte comparison keeps it
+	// here on the event rather than recomputed downstream.
+	UserEdited bool
 }
 
 // wsDest says where a frame's payload is going. A control frame interleaves
@@ -368,6 +376,23 @@ func (r *WsReassembler) Pop() *WsEvent {
 	ev := r.ready[0]
 	r.ready = r.ready[1:]
 	return ev
+}
+
+// MarkLastMessageUserEdited stamps the message that most recently completed as one the operator
+// edited in the hold. The relay calls it immediately after feeding the frame an edit produced: that
+// frame is a single EncodeWsFrame output, so it always parses and completes in one Feed, and the
+// event it flushes is the last one queued — even when a stale in-flight partial was flushed ahead of
+// it by the interrupt path (a fresh data frame arriving mid-message), because that partial is queued
+// first and the edited message last. Stamping after the fact rather than setting a pending flag
+// before the Feed is what makes this immune to which flush fires: the interrupt flush cannot claim
+// the flag for the wrong message because there is no flag to claim.
+//
+// A no-op when nothing is queued, which cannot happen on the edited path but guards a future caller.
+// Control-frame events never reach here: the relay only marks the data message an edit re-encoded.
+func (r *WsReassembler) MarkLastMessageUserEdited() {
+	if n := len(r.ready); n > 0 {
+		r.ready[n-1].UserEdited = true
+	}
 }
 
 func (r *WsReassembler) beginFrame(hdr *WsFrameHeader) {
@@ -711,6 +736,14 @@ type WsMessage struct {
 	Fragments uint32
 	AtMs      uint64
 	Note      string
+	// UserEdited is Burp's "Edited" fact for this message: the operator's own hold changed the payload
+	// before the relay sent it. Carried from the WsEvent the relay stamped (see WsEvent.UserEdited).
+	//
+	// It lives on the message row, not folded into the handshake exchange's flag, because a socket that
+	// carries ten thousand frames and one edit would then flag the handshake with nothing to say which
+	// frame — and the handshake's own flag already answers a different question, whether the upgrade
+	// *request* was edited in its hold. These are two facts; one bit for both would lose which happened.
+	UserEdited bool
 }
 
 // WsCloseStatus decodes a close frame's payload: two big-endian status bytes
