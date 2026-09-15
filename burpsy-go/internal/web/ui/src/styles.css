@@ -4526,3 +4526,125 @@ tbody td {
   color: var(--accent-strong);
   text-decoration: underline;
 }
+
+/* Settings' section rail and its search (burpsy-react-ui-f6a). Burp's Settings is a dialog with a
+ * left-hand tree; this is the same affordance on a page — a sticky column of the page's own
+ * sections beside the cards, and a search that filters both. Two columns rather than the chips row
+ * Discover uses: Discover has nine short section names and Settings has seventeen long ones, which
+ * as a wrapping row would be four lines of chrome above the first setting. It collapses to one
+ * column at the same 980px the other two-column pages do, where the rail stops being sticky — a
+ * sticky block on a narrow screen is a block that eats the screen. */
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 232px) minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+  min-width: 0;
+}
+
+.settings-rail {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: var(--s2);
+  align-content: start;
+  justify-items: start;
+  min-width: 0;
+}
+
+.settings-rail .search-field {
+  min-width: 0;
+  width: 100%;
+}
+
+.settings-nav {
+  display: grid;
+  gap: 1px; /* token-exempt: a hairline between adjacent list rows, not spacing between blocks */
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-nav-link {
+  border: 1px solid transparent;
+  border-left: var(--border-strong) solid transparent;
+  background: none;
+  color: var(--text-soft);
+  text-align: left;
+  padding: var(--s1) var(--s2);
+  font: var(--fs-xs) var(--font-sans);
+  cursor: pointer;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-nav-link:hover {
+  background: var(--chrome-hover);
+  color: var(--text);
+}
+
+/* The current section is marked with a bar and the body colour, not with colour alone: the
+ * difference has to survive a monochrome screen and a red-green reader. */
+.settings-nav-link.is-current {
+  border-left-color: var(--accent);
+  background: var(--paper-raised);
+  color: var(--text);
+  font-weight: var(--weight-bold);
+}
+
+.settings-sections {
+  display: grid;
+  align-content: start;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+/* The wrapper exists to be a scroll target and a focus target, so it must add no box of its own —
+ * no border, no padding — or every card would gain a second inset. Deliberately NOT display:
+ * contents, which would leave it with no box to scroll to and would also outrank the user agent's
+ * [hidden] rule, so a filtered-out section would stay on screen. */
+.settings-section {
+  display: grid;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+.settings-section[hidden] {
+  display: none;
+}
+
+/* A jump moves focus here, and the landing has to be visible: the same ring the scrollable table
+ * uses, so arriving by keyboard looks like arriving anywhere else in the console. */
+.settings-section:focus-visible {
+  outline: var(--border-strong) solid var(--accent);
+  outline-offset: 2px; /* token-exempt: an outline offset, not layout spacing */
+}
+
+@media (max-width: 980px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-rail {
+    position: static;
+  }
+}
+
+/* The control a settings search landed on, outlined for a moment (burpsy-react-ui-f6a). A card
+ * scrolled to its heading answers "somewhere in this section"; the operator asked which field.
+ * It fades rather than persists — a permanent mark would become chrome, and the next search
+ * would have to explain why two things are outlined. */
+[data-settings-hit] {
+  outline: var(--border-strong) solid var(--accent);
+  outline-offset: var(--s1);
+  animation: settings-hit-fade 1600ms ease-out forwards;
+}
+
+@keyframes settings-hit-fade {
+  0%,
+  70% {
+    outline-color: var(--accent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}

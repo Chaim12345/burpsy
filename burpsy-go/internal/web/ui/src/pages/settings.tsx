@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Download, Plus, Radar, RotateCcw, Save, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Download, Plus, Radar, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
@@ -26,6 +26,17 @@ import {
 } from "../lib/data.network";
 import { useBackupNow, useCaCert, useCaStatus, useImportCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useUninterestingHeaders, useSetUninterestingHeaders } from "../lib/data.workbench";
+import { cn } from "../lib/cn";
+import {
+ SETTINGS_SECTIONS,
+ filterSettingsSections,
+ matchesAllWords,
+ onSettingsSectionRequest,
+ settingsSectionAnchor,
+ takePendingSettingsSection,
+ type SettingsSection,
+ type SettingsSectionId,
+} from "../lib/settings-sections";
 import { useApp, type Density, type EditorFont, type Theme, type UiScale } from "../lib/store";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
@@ -1898,30 +1909,334 @@ function UpstreamProxySection(): JSX.Element {
  );
 }
 
+/**
+ * Which component renders each section in SETTINGS_SECTIONS.
+ *
+ * Typed as a total map over the section ids, so adding a row to SETTINGS_SECTIONS without
+ * a component here — or removing a component that the nav and the palette still offer —
+ * is a typecheck failure rather than a dead nav entry an operator discovers by clicking it.
+ * That, not the runtime test, is what makes the one-list rule hold.
+ */
+const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
+ proxy: ProxySettingsSection,
+ "resource-pools": ResourcePoolsSection,
+ "scheduled-tasks": ScheduledTasksSection,
+ protocols: ProtocolSection,
+ network: NetworkSection,
+ scanner: ScannerSettingsSection,
+ "browser-engine": DomEngineSection,
+ "upstream-proxy": UpstreamProxySection,
+ "platform-auth": PlatformAuthSection,
+ "client-certificates": ClientCertificatesSection,
+ appearance: AppearanceSection,
+ hotkeys: HotkeysSection,
+ certificate: CertificateSection,
+ "ca-import": CaImportSection,
+ "uninteresting-headers": UninterestingHeadersSection,
+ "project-backup": ProjectBackupSection,
+ diagnostics: DiagnosticsSection,
+};
+
+/**
+ * The smallest element inside a card that still contains every word of the search.
+ *
+ * Scrolling a matching *card* to the top is not finding the setting: type "redirect" and
+ * Network's heading lands at the top with the Redirections control below the fold, which is
+ * the same "somewhere on this page" answer the operator already had. So the page descends
+ * from the card into the deepest single element that still matches, which for a field is its
+ * label-and-control row, and shows that.
+ *
+ * Deepest rather than first: an ancestor always contains its descendants' text, so the
+ * outermost match is invariably the card itself. The descent stops when no single child
+ * carries the whole term — which is the right place to stop, because that is where the words
+ * are split across two siblings (a label and its hint) and the pair is what should be shown.
+ *
+ * The card's own heading is skipped. A word in the title or the standfirst is why the *card*
+ * matched, not which setting did: searching "redirect" first landed on Network's one-line
+ * description, which says "redirections" and is no more useful than the heading itself. With
+ * the heading out of the way the descent reaches the Redirections control, and a term that
+ * matches nothing but the heading returns the card — which then scrolls to its top, saying
+ * plainly that the section matched and no single field did.
+ */
+function deepestMatch(card: HTMLElement, term: string): HTMLElement {
+ let node: HTMLElement = card;
+ for (;;) {
+  const child = [...node.children].find(
+   (candidate): candidate is HTMLElement =>
+    candidate instanceof HTMLElement &&
+    !candidate.hidden &&
+    !candidate.classList.contains("section-heading") &&
+    matchesAllWords(candidate.textContent ?? "", term),
+  );
+  if (!child) return node;
+  node = child;
+ }
+}
+
+/** How long a found control stays outlined. Long enough to see it land, short enough not to become chrome. */
+const HIT_FLASH_MS = 1600;
+
+/**
+ * Settings: seventeen cards, a rail to reach them, and a search that reads what they render.
+ *
+ * Burp's Settings is a dialog with a left tree and a Search box; this page was the same
+ * seventeen cards on one scroll with no way to jump or find (burpsy-react-ui-f6a). The rail
+ * and the search both render from lib/settings-sections.ts, which the command palette also
+ * reads, so the three can never disagree about what a section is.
+ *
+ * Two deliberate choices about the filter. Non-matching sections are **hidden, not
+ * unmounted**: unmounting would throw away each card's loaded data and its unsaved edits
+ * (Network holds a dirty draft), and it would also destroy the rendered text the search
+ * reads. And the search reads that rendered text rather than a transcribed list of field
+ * names, so a field added to a card is findable the day it is added, without anyone
+ * remembering to index it.
+ *
+ * Burp's All/User/Project filter buttons are deliberately not here: burpsy has no
+ * project-file concept, so every setting on this page would answer to the same button and
+ * the other two would be empty. Filing that as its own gap is honest; drawing three buttons
+ * where one distinction exists is not.
+ */
 export function SettingsPage(): JSX.Element {
+ const [term, setTerm] = useState("");
+ const [visible, setVisible] = useState<SettingsSection[]>(() => [...SETTINGS_SECTIONS]);
+ const [active, setActive] = useState<string>(SETTINGS_SECTIONS[0].id);
+ const pageRef = useRef<HTMLDivElement>(null);
+
+ // The filter runs in an effect, not in a memo, because it reads the DOM: it asks each card
+ // what it currently prints. Every card stays mounted, so the text of a hidden one is still
+ // there to be searched — which is what lets a term bring a section back.
+ useEffect(() => {
+  setVisible(
+   filterSettingsSections(
+    term,
+    (section) => document.getElementById(settingsSectionAnchor(section.id))?.textContent ?? "",
+   ),
+  );
+ }, [term]);
+
+ /**
+  * Scroll a section to the top of the page, and keep it there while the page settles.
+  *
+  * A jump is not one scroll. Every card fetches its own data, so the page grows *under* the
+  * jump — driving the live console, the palette's "Settings › Network" landed 841px short,
+  * because Proxy and Resource pools filled in above Network after the scroll had already
+  * happened. So this is a scroll followed by a short correction window that re-aligns the
+  * target as cards arrive, and any deliberate move by the operator ends the window early: a
+  * page that keeps yanking itself back under someone who has started reading is worse than
+  * one that landed short.
+  */
+ const jumpTo = useCallback((id: string, match?: string) => {
+  const anchor = settingsSectionAnchor(id);
+  // Next frame, so this also works for a jump requested before the target was rendered:
+  // the command palette navigates here from another tool and asks for a section in the
+  // same tick, and the card does not exist until React has painted.
+  requestAnimationFrame(() => {
+   const container = pageRef.current;
+   const card = document.getElementById(anchor);
+   if (!container || !card) return;
+   // Focus moves with the scroll, or a keyboard user lands nowhere: the viewport would
+   // show the section while Tab continued from the rail button they just pressed. Focus goes
+   // to the card even when the search found a control inside it, because the card is what
+   // carries the accessible name — "Network", not an anonymous row.
+   card.focus({ preventScroll: true });
+
+   // With a term, land on the control that matched rather than on the card's heading, and
+   // outline it briefly so it is obvious which of a card's dozen fields answered the search.
+   const target = match?.trim() ? deepestMatch(card, match) : card;
+   const centred = target !== card;
+   for (const stale of document.querySelectorAll("[data-settings-hit]")) stale.removeAttribute("data-settings-hit");
+   if (centred) {
+    target.setAttribute("data-settings-hit", "true");
+    window.setTimeout(() => target.removeAttribute("data-settings-hit"), HIT_FLASH_MS);
+   }
+
+   // Smooth scrolling is motion, and this one crosses most of the page. An operator who has
+   // asked the system for reduced motion gets the jump instantly instead.
+   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+   target.scrollIntoView({ block: centred ? "center" : "start", behavior: reduced ? "auto" : "smooth" });
+   setActive(id);
+
+   // How far the target is from where it should be: the top of the page for a whole card,
+   // the middle for a single control — a field put at the top would hide the heading that
+   // says which section it belongs to.
+   const drift = (): number => {
+    const rect = target.getBoundingClientRect();
+    const box = container.getBoundingClientRect();
+    const want = centred ? box.top + Math.max(0, (container.clientHeight - rect.height) / 2) : box.top;
+    return rect.top - want;
+   };
+
+   const started = performance.now();
+   let cancelled = false;
+   const abort = () => {
+    cancelled = true;
+   };
+   const gestures = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+   for (const type of gestures) window.addEventListener(type, abort, { passive: true });
+   const release = () => {
+    for (const type of gestures) window.removeEventListener(type, abort);
+   };
+   const settle = () => {
+    const now = performance.now();
+    if (cancelled || !target.isConnected || now - started > 2000) {
+     release();
+     return;
+    }
+    // Corrections wait out the smooth scroll rather than interrupting it, and ignore the
+    // pixel or two of resting error an animation leaves behind.
+    const off = drift();
+    if (now - started > 450 && Math.abs(off) > 8) container.scrollTop += off;
+    requestAnimationFrame(settle);
+   };
+   requestAnimationFrame(settle);
+  });
+ }, []);
+
+ // A request from the command palette. Two paths because there are two cases: arriving from
+ // another tool (the pending id, read once on mount) and a palette fired while this page is
+ // already open (the event, where nothing mounts). The search is cleared first — a palette
+ // entry that lands on a section a stale filter is hiding would look broken.
+ useEffect(() => {
+  const open = (id: string) => {
+   setTerm("");
+   jumpTo(id);
+  };
+  const pending = takePendingSettingsSection();
+  if (pending) open(pending);
+  return onSettingsSectionRequest((id) => {
+   takePendingSettingsSection();
+   open(id);
+  });
+ }, [jumpTo]);
+
+ // Which section the rail marks as current. `.page` is the scrolling element (it carries
+ // overflow-y), so positions are measured against its box rather than the viewport's, and
+ // the last card whose top has passed it wins — the one the operator is reading.
+ useEffect(() => {
+  const container = pageRef.current;
+  if (!container) return;
+  let frame = 0;
+  const update = () => {
+   frame = 0;
+   // At the bottom of the scroll there is no more travel, so the last sections never reach the
+   // top and a "which heading has passed the top" rule would mark the wrong one — jumping to
+   // Diagnostics, the last card, left the rail pointing at Uninteresting headers. When the
+   // container is scrolled out, the last section on screen is the one being read.
+   if (container.scrollTop + container.clientHeight >= container.scrollHeight - 4) {
+    const last = visible[visible.length - 1];
+    if (last) {
+     setActive(last.id);
+     return;
+    }
+   }
+   const top = container.getBoundingClientRect().top;
+   let current = visible[0]?.id ?? "";
+   for (const section of visible) {
+    const element = document.getElementById(settingsSectionAnchor(section.id));
+    if (!element) continue;
+    if (element.getBoundingClientRect().top - top > 24) break;
+    current = section.id;
+   }
+   setActive(current);
+  };
+  const onScroll = () => {
+   if (!frame) frame = requestAnimationFrame(update);
+  };
+  container.addEventListener("scroll", onScroll, { passive: true });
+  update();
+  return () => {
+   container.removeEventListener("scroll", onScroll);
+   if (frame) cancelAnimationFrame(frame);
+  };
+ }, [visible]);
+
+ const shown = useMemo(() => new Set(visible.map((section) => section.id)), [visible]);
+
  return (
-  <div className="page">
+  <div className="page" ref={pageRef}>
    <PageHeader
     title="Settings"
     description="Protocol reporting, network credentials, appearance, the CA certificate, and the console's own diagnostics. Scope lives under Target."
    />
-   <ProxySettingsSection />
-   <ResourcePoolsSection />
-   <ScheduledTasksSection />
-   <ProtocolSection />
-   <NetworkSection />
-   <ScannerSettingsSection />
-   <DomEngineSection />
-   <UpstreamProxySection />
-   <PlatformAuthSection />
-   <ClientCertificatesSection />
-   <AppearanceSection />
-   <HotkeysSection />
-   <CertificateSection />
-   <CaImportSection />
-   <UninterestingHeadersSection />
-   <ProjectBackupSection />
-   <DiagnosticsSection />
+   <div className="settings-layout">
+    <div className="settings-rail">
+     <Field
+      label="Search settings"
+      hint="Matches a section's title and everything the section has rendered — field labels, hints and help text."
+     >
+      {(id) => (
+       <div className="search-field">
+        <Search size={15} />
+        <Input
+         id={id}
+         value={term}
+         onChange={(event) => setTerm(event.target.value)}
+         onKeyDown={(event) => {
+          // Enter is the "take me there" key: with a filter applied the first surviving
+          // section is the answer, and scrolling to it is how a match inside a card —
+          // a field label the heading never mentions — becomes visible.
+          const first = visible[0];
+          if (event.key === "Enter" && first) jumpTo(first.id, term);
+         }}
+         placeholder="tls, timeout, hotkey…"
+        />
+        {term ? (
+         <IconButton label="Clear the settings search" size="small" onClick={() => setTerm("")}>
+          <X size={13} />
+         </IconButton>
+        ) : null}
+       </div>
+      )}
+     </Field>
+     {/* A flat list, not a tree: these seventeen cards have no children, and inventing a
+         level of grouping would be this rail's opinion rather than the page's structure.
+         See lib/settings-sections.ts for the full argument. */}
+     <nav className="settings-nav" aria-label="Settings sections">
+      {visible.map((section) => (
+       <button
+        key={section.id}
+        type="button"
+        className={cn("settings-nav-link", active === section.id && "is-current")}
+        aria-current={active === section.id ? "true" : undefined}
+        onClick={() => jumpTo(section.id)}
+       >
+        {section.title}
+       </button>
+      ))}
+     </nav>
+     <Badge tone={term ? "info" : "neutral"}>
+      {term
+       ? `${visible.length} of ${SETTINGS_SECTIONS.length} sections`
+       : `${SETTINGS_SECTIONS.length} sections`}
+     </Badge>
+    </div>
+
+    <div className="settings-sections">
+     {SETTINGS_SECTIONS.map((section) => {
+      const Section = SECTION_COMPONENTS[section.id];
+      return (
+       // tabIndex -1 so a rail jump can put focus here; the accessible name makes the
+       // landing announce which section it is instead of an anonymous group.
+       <section
+        key={section.id}
+        id={settingsSectionAnchor(section.id)}
+        className="settings-section"
+        aria-label={section.title}
+        tabIndex={-1}
+        hidden={!shown.has(section.id)}
+       >
+        <Section />
+       </section>
+      );
+     })}
+     {visible.length === 0 ? (
+      <Empty
+       title={`No setting matches “${term}”`}
+       detail="The search reads each section's title and the text it has rendered — its field labels, hints and help. A section still loading matches on less than it eventually will."
+      />
+     ) : null}
+    </div>
+   </div>
   </div>
  );
 }

@@ -29,6 +29,7 @@ import { queryClient, useConnection, useEventStream, useIntercept, useScope, use
 import { attentionFor, attentionSignals } from "./lib/attention";
 import { useCaCert } from "./lib/data.policy";
 import { onDesktopEvent } from "./lib/runtime";
+import { settingsPaletteActions } from "./lib/settings-sections";
 import { resolveTheme, useApp } from "./lib/store";
 import type { Exchange } from "./lib/types";
 import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
@@ -453,7 +454,12 @@ function App(): JSX.Element {
       },
     ];
 
-    return [...navigation, ...commands];
+    // One entry per Settings section, built from the same list the page and its section rail
+    // render from (lib/settings-sections.ts). Burp's palette opens a *setting*, not a settings
+    // page — "find and open Burp's settings" is one of the jobs tools/command-palette.html gives
+    // it — and a second list written out here is exactly the thing that would drift the first
+    // time a section was added.
+    return [...navigation, ...settingsPaletteActions(navigate), ...commands];
   }, [navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen]);
 
   const hasSubTabs = tool.leaves.length > 1;
