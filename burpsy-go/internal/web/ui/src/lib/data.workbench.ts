@@ -123,27 +123,56 @@ export type SequencerAnalysisWithEntropy = SequencerAnalysis & { effective_entro
  * distinction survives to the report — `significance_defaulted` — so the page can
  * say "default" rather than implying a choice nobody made.
  */
-function analyseBody(base: Record<string, unknown>, encoding: string, significancePercent: string): Record<string, unknown> {
+export interface TokenHandling {
+ /** "" or "none" leaves the sample as supplied; "start"/"end" is Burp's pad position. */
+ padMode: string;
+ /** The single character to pad with. Burp's own default is "0". */
+ padByte: string;
+ /** Burp's "Base64-decode before analyzing". */
+ base64Decode: boolean;
+}
+
+function analyseBody(
+ base: Record<string, unknown>,
+ encoding: string,
+ significancePercent: string,
+ tokens?: TokenHandling,
+): Record<string, unknown> {
  return {
   ...base,
   ...(encoding ? { encoding } : {}),
   ...(significancePercent ? { significance_percent: Number(significancePercent) } : {}),
+  // Omitted when off, for the same reason an omitted encoding means "detect": the server's
+  // default is the behaviour that existed before these controls did, and sending "none"
+  // explicitly would be indistinguishable from an operator who chose it.
+  ...(tokens && tokens.padMode && tokens.padMode !== "none"
+   ? { pad_mode: tokens.padMode, ...(tokens.padByte ? { pad_byte: tokens.padByte } : {}) }
+   : {}),
+  ...(tokens && tokens.base64Decode ? { base64_decode: true } : {}),
  };
 }
 
 export function useSequencerAnalyse() {
- return useMutation<SequencerAnalysisWithEntropy, Error, { text: string; encoding: string; significancePercent: string }>({
+ return useMutation<
+  SequencerAnalysisWithEntropy,
+  Error,
+  { text: string; encoding: string; significancePercent: string; tokens?: TokenHandling }
+ >({
   // An omitted encoding is what makes the server detect one; sending "" is an error there.
-  mutationFn: ({ text, encoding, significancePercent }) =>
-   api<SequencerAnalysisWithEntropy>("/api/sequencer/analyse", json("POST", analyseBody({ text }, encoding, significancePercent))),
+  mutationFn: ({ text, encoding, significancePercent, tokens }) =>
+   api<SequencerAnalysisWithEntropy>("/api/sequencer/analyse", json("POST", analyseBody({ text }, encoding, significancePercent, tokens))),
  });
 }
 
 /** Analyse an already-collected token list rather than a pasted blob. */
 export function useSequencerAnalyseTokens() {
- return useMutation<SequencerAnalysisWithEntropy, Error, { tokens: string[]; encoding: string; significancePercent: string }>({
-  mutationFn: ({ tokens, encoding, significancePercent }) =>
-   api<SequencerAnalysisWithEntropy>("/api/sequencer/analyse", json("POST", analyseBody({ tokens }, encoding, significancePercent))),
+ return useMutation<
+  SequencerAnalysisWithEntropy,
+  Error,
+  { tokens: string[]; encoding: string; significancePercent: string; handling?: TokenHandling }
+ >({
+  mutationFn: ({ tokens, encoding, significancePercent, handling }) =>
+   api<SequencerAnalysisWithEntropy>("/api/sequencer/analyse", json("POST", analyseBody({ tokens }, encoding, significancePercent, handling))),
  });
 }
 
