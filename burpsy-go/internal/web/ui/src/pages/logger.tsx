@@ -136,6 +136,11 @@ export function LoggerPage(): JSX.Element {
  const [capStatus, setCapStatus] = useState<string[]>([]);
  const [capTerm, setCapTerm] = useState("");
  const [capRegex, setCapRegex] = useState(false);
+ // Burp's "Capture by MIME type" (burpsy-react-ui-73vm), as the EXCLUSION list the server holds:
+ // each entry is a media type whose rows are refused, so an empty box captures everything. Held as
+ // text because the set is open — core.MimeEssence produces whatever a target actually serves, not
+ // Burp's fixed category list — and split on save.
+ const [capMime, setCapMime] = useState("");
  const [capCase, setCapCase] = useState(false);
  const [capNegate, setCapNegate] = useState(false);
  const [capScopeOnly, setCapScopeOnly] = useState(false);
@@ -209,10 +214,11 @@ export function LoggerPage(): JSX.Element {
  // never fight. A bad regex comes back 400 with the old filter still in force.
  const saveCaptureFilter = () => {
   const body: {
-   filter?: { status: number[]; term: string; regex: boolean; case_sensitive: boolean; negate: boolean; scope_only: boolean };
+   filter?: { status: number[]; term: string; regex: boolean; case_sensitive: boolean; negate: boolean; scope_only: boolean; mime: string[] };
    capacity?: number;
   } = {};
-  if (capStatus.length || capTerm || capScopeOnly) {
+  const mimeList = capMime.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+  if (capStatus.length || capTerm || capScopeOnly || mimeList.length) {
    body.filter = {
     status: capStatus.map(Number),
     term: capTerm,
@@ -220,6 +226,7 @@ export function LoggerPage(): JSX.Element {
     case_sensitive: capCase,
     negate: capNegate,
     scope_only: capScopeOnly,
+    mime: mimeList,
    };
   }
   const parsed = Number.parseInt(capCapacity, 10);
@@ -568,6 +575,18 @@ export function LoggerPage(): JSX.Element {
       <Checkbox checked={capCase} onCheckedChange={setCapCase} label="Case sensitive" />
       <Checkbox checked={capNegate} onCheckedChange={setCapNegate} label="Negative" />
       <Checkbox checked={capScopeOnly} onCheckedChange={setCapScopeOnly} label={scopeAttached ? "In-scope only" : "In-scope only (no scope loaded — inert)"} />
+      <Field
+       label="Exclude MIME types"
+       hint="Comma-separated media types to refuse: an exact type/subtype, or type/* for a whole family — e.g. image/*, font/woff2. Empty captures everything. A pattern that is neither shape is refused with the reason rather than quietly kept, and a row whose response declared no type is never refused by this."
+      >
+       <Input
+        aria-label="Exclude MIME types from capture"
+        value={capMime}
+        onChange={(event) => setCapMime(event.target.value)}
+        placeholder="image/*, font/woff2"
+        style={{ minWidth: 240 }}
+       />
+      </Field>
       <Field label="Capture limit (rows)">
        <Input
         aria-label="Capture limit in rows"
@@ -592,6 +611,7 @@ export function LoggerPage(): JSX.Element {
          setCapCase(false);
          setCapNegate(false);
          setCapScopeOnly(false);
+         setCapMime("");
         }}
        >
         Reset axes (not yet saved)

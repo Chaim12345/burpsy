@@ -2180,8 +2180,22 @@ func (s *Server) noteProxied(x scanner.CapturedExchange, status int, respLen *in
 	if tl == nil {
 		return
 	}
-	tl.Record(toollog.ToolProxy, x.Host, x.Port, x.TLS, x.Method, x.Path, status,
-		respLen, uint64(x.Duration.Milliseconds()), note, exchange)
+	// The row carries the response's media type so the capture filter can refuse it by type
+	// (burpsy-react-ui-73vm) — this is the path a long engagement's log fills up from, and the
+	// images and fonts the operator wants out of it arrive here. Derived with core.MimeEssence,
+	// the same one-line answer Exchange.Mime uses, so a Logger row and a history row can never
+	// disagree about what a response was.
+	//
+	// nil, not "", when there is no response at all (a refused or failed exchange): "" is the
+	// positive fact that a response declared no usable Content-Type, and a row that never had a
+	// response is not that. The filter never judges a nil.
+	var mime *string
+	if len(x.Response) > 0 {
+		essence := core.MimeEssence(x.Response)
+		mime = &essence
+	}
+	tl.RecordMime(toollog.ToolProxy, x.Host, x.Port, x.TLS, x.Method, x.Path, status,
+		respLen, uint64(x.Duration.Milliseconds()), note, exchange, mime)
 }
 
 // runPassiveScan is gone with the last caller that needed it. It existed as the proxy's own name for

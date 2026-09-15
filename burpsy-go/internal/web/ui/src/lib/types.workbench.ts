@@ -392,6 +392,17 @@ export interface ToolLogView {
  /** Whether ScopeOnly can filter: without a scope it is inert. */
  scope_attached: boolean;
  /** The capture filter in force, echoed so the page renders what the server enforces. */
- filter: { status: number[]; term: string; regex: boolean; case_sensitive: boolean; negate: boolean; scope_only: boolean };
+ filter: {
+  status: number[];
+  term: string;
+  regex: boolean;
+  case_sensitive: boolean;
+  negate: boolean;
+  scope_only: boolean;
+  /** Burp's "Capture by MIME type" as an exclusion list (burpsy-react-ui-73vm): media types whose
+   *  rows are refused. Optional on the wire because the Go handler omits an empty one, and an empty
+   *  list and an absent key mean the same thing here — capture everything. */
+  mime?: string[];
+ };
  entries: ToolLogRow[];
 }
