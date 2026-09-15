@@ -11,6 +11,7 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ReadHTTPResponse reads one complete HTTP response from conn, respecting
@@ -23,19 +24,33 @@ import (
 // must use ReadResponseHead + ReadResponseBody on their own *bufio.Reader so
 // the leftover buffered bytes survive.
 func ReadHTTPResponse(conn net.Conn) ([]byte, error) {
+	data, _, err := ReadHTTPResponseTimed(conn)
+	return data, err
+}
+
+// ReadHTTPResponseTimed is ReadHTTPResponse plus the instant the response's first
+// byte arrived, so a caller can report time-to-first-byte (Burp's "Start response
+// timer") separately from the total (its "End response timer"). The read logic is
+// exactly ReadHTTPResponse's — the untimed form is now a wrapper of this one, not a
+// second copy of the parser — so the two cannot drift, which is the same rule the
+// proxy's one-producer capture path follows.
+//
+// firstByte is meaningful only when err is nil; on error it is the zero time. See
+// ReadResponseHeadTimed for how it is taken.
+func ReadHTTPResponseTimed(conn net.Conn) ([]byte, time.Time, error) {
 	br := bufio.NewReader(conn)
-	head, err := ReadResponseHead(br)
+	head, firstByte, err := ReadResponseHeadTimed(br)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	body, err := ReadResponseBody(br, head)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	result := make([]byte, 0, len(head)+len(body))
 	result = append(result, head...)
 	result = append(result, body...)
-	return result, nil
+	return result, firstByte, nil
 }
 
 // MaxResponseHeadBytes bounds a response head. A handshake answer is a few
@@ -55,21 +70,49 @@ const MaxResponseBodyBytes = 64 * 1024 * 1024
 // blank line, so on a 101 response the frame bytes that follow remain in br
 // for the caller. The head bytes are returned exactly as they arrived.
 func ReadResponseHead(br *bufio.Reader) ([]byte, error) {
+	head, _, err := readResponseHead(br, false)
+	return head, err
+}
+
+// ReadResponseHeadTimed reads one response head and reports when its first byte
+// arrived from the peer — the measurement Burp's "Start response timer" is built
+// on. The instant is taken by a one-byte Peek that blocks until data is readable,
+// so it is the moment the origin's first byte crossed the socket, not the moment
+// the whole head finished parsing. It reads nothing more than ReadResponseHead
+// does; the two share one loop, differing only in whether the first-byte time is
+// captured.
+//
+// firstByte is the zero time when err is non-nil.
+func ReadResponseHeadTimed(br *bufio.Reader) ([]byte, time.Time, error) {
+	return readResponseHead(br, true)
+}
+
+func readResponseHead(br *bufio.Reader, timed bool) ([]byte, time.Time, error) {
+	var firstByte time.Time
+	if timed {
+		// Peek blocks until at least one byte is buffered, which is exactly the arrival
+		// of the response's first byte; it consumes nothing, so the head read below is
+		// unaffected and the persistent upstream reader keeps its position.
+		if _, err := br.Peek(1); err != nil {
+			return nil, time.Time{}, fmt.Errorf("reading response head: %w", err)
+		}
+		firstByte = time.Now()
+	}
 	var head bytes.Buffer
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
-			return nil, fmt.Errorf("reading response head: %w", err)
+			return nil, time.Time{}, fmt.Errorf("reading response head: %w", err)
 		}
 		head.WriteString(line)
 		if head.Len() >= 4 && bytes.HasSuffix(head.Bytes(), []byte("\r\n\r\n")) {
 			break
 		}
 		if head.Len() > MaxResponseHeadBytes {
-			return nil, fmt.Errorf("response head exceeds %d bytes without a terminator", MaxResponseHeadBytes)
+			return nil, time.Time{}, fmt.Errorf("response head exceeds %d bytes without a terminator", MaxResponseHeadBytes)
 		}
 	}
-	return head.Bytes(), nil
+	return head.Bytes(), firstByte, nil
 }
 
 // ReadResponseBody reads the body that follows a response head, per the

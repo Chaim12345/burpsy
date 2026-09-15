@@ -90,6 +90,16 @@ export interface Exchange {
  response_len: number;
  started_ms: number;
  duration_ms: number;
+ /**
+  * Burp's "Start response timer" — request out to the FIRST response byte — against
+  * `duration_ms`'s "End response timer" for the complete response (burpsy-react-ui-jcdm). The pair
+  * tells a slow-to-respond origin apart from a slow-BODY one; one total reads the same for both.
+  *
+  * null when the producer never timed the first byte (Repeater, Intruder, the crawler, and rows
+  * stored before the field existed). Rendered as an em dash, never as 0 — a 0 here would claim an
+  * instantaneous first byte for every exchange nobody timed.
+  */
+ ttfb_ms: number | null;
  /** Whether the exchange was carried over TLS. This — not `protocol` — decides http vs https. */
  tls: boolean;
  /** The HTTP version the exchange used: "Http1" or "Http2". Never "http"/"https". */

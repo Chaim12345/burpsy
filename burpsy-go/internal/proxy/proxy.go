@@ -1283,12 +1283,13 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				tlsClient.Write(wsRetargetRefusalResponse())
 				continue
 			}
-			responseData, serverIP, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
+			responseData, serverIP, firstByte, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
 			if err != nil {
 				s.config.logger.Error("retargeted forward failed", zap.Error(err))
 				return
 			}
-			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIP, requestEdited) {
+			completed := time.Now()
+			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIP, requestEdited) {
 				return
 			}
 			continue
@@ -1305,7 +1306,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// This also ends the keep-alive loop — after an upgrade there are no
 		// more HTTP requests on this connection, by definition.
 		if core.IsWsUpgradeRequest(requestData) {
-			head, err := httputil.ReadResponseHead(upstreamBR)
+			// Timed, because the two response timers this path reports are the same two every
+			// other path reports (burpsy-react-ui-jcdm): firstByte is when the origin's first
+			// byte landed, completed is taken after the body below. An upgrade that is refused
+			// carries an ordinary response and must be measured like one.
+			head, firstByte, err := httputil.ReadResponseHeadTimed(upstreamBR)
 			if err != nil {
 				return
 			}
@@ -1315,7 +1320,8 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 					return
 				}
 				responseData := append(head, body...)
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream), requestEdited) {
+				completed := time.Now()
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited) {
 					return
 				}
 				continue
@@ -1375,7 +1381,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			return
 		}
 
-		head, err := httputil.ReadResponseHead(upstreamBR)
+		// Timed: firstByte is the instant the origin's first byte arrived, taken inside the
+		// reader rather than guessed from around it, and completed is taken once the body is
+		// in. The pair is what separates a slow-to-respond origin from a slow-BODY one, which a
+		// single total cannot say (burpsy-react-ui-jcdm).
+		head, firstByte, err := httputil.ReadResponseHeadTimed(upstreamBR)
 		if err != nil {
 			return
 		}
@@ -1384,8 +1394,9 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			return
 		}
 		responseData := append(head, body...)
+		completed := time.Now()
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, serverIPOf(upstream), requestEdited) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited) {
 			return
 		}
 	}
@@ -1410,7 +1421,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 // this function cannot see: the request hold resolved before the request was forwarded. It is
 // threaded in so the recorded row's "Edited" column reports an operator edit in either direction,
 // which is what Burp's flag means ("the request or response were modified by the user").
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, serverIP string, requestEdited bool) bool {
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool) bool {
 	// The response's stage boundaries, by the same rule as completeResponse's
 	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
 	// and before the hold. See messageStages.
@@ -1489,14 +1500,15 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 			// The destination's scheme, not the tunnel's: a request retargeted to an http origin is
 			// recorded as the plaintext exchange it was (burpsy-react-ui-akv). Recorded after the
 			// rewrite, like everything else here — history must show what went on the wire.
-			TLS:      tls,
-			Method:   method,
-			Path:     path,
-			Request:  requestData,
-			Response: responseData,
-			Started:  startTime,
-			Duration: time.Since(startTime),
-			Protocol: core.ProtocolHTTP1,
+			TLS:       tls,
+			Method:    method,
+			Path:      path,
+			Request:   requestData,
+			Response:  responseData,
+			Started:   startTime,
+			FirstByte: firstByte,
+			Completed: completed,
+			Protocol:  core.ProtocolHTTP1,
 
 			RequestOriginal:  reqStages.original,
 			RequestAuto:      reqStages.auto,
@@ -1829,13 +1841,17 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	}
 
 	// Forward to upstream
-	responseData, serverIP, err := s.forwardRequest(requestData, host, port, scheme)
+	responseData, serverIP, firstByte, err := s.forwardRequest(requestData, host, port, scheme)
 	if err != nil {
 		s.config.logger.Error("forward failed", zap.Error(err))
 		return
 	}
+	// The whole response has now been read, so this is the "End response timer" instant. Taken here
+	// rather than at the record site so the total is transfer time and not inflated by the intercept
+	// hold completeResponse may do before it captures the row.
+	completed := time.Now()
 
-	s.completeResponse(clientConn, method, host, port, scheme, path, requestData, reqStages, responseData, startTime, heldNote, heldHighlight, serverIP, requestEdited)
+	s.completeResponse(clientConn, method, host, port, scheme, path, requestData, reqStages, responseData, startTime, firstByte, completed, heldNote, heldHighlight, serverIP, requestEdited)
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1864,7 +1880,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // closed by the forwarder, so this is the last point the address is still knowable.
 // requestEdited is whether the operator's own hold edited the request half of this exchange; see
 // handleTLSResponse, which threads the same value for the same reason.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, heldNote, heldHighlight, serverIP string, requestEdited bool) {
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, firstByte, completed time.Time, heldNote, heldHighlight, serverIP string, requestEdited bool) {
 	// The response's stage boundaries (burpsy-react-ui-c05): stage 0 is the origin's bytes as the
 	// forwarder read them, stage 1 is after the automatic rules and before the hold. The recorded
 	// bytes are stage 2. Same rule as the request side's — see messageStages.
@@ -1927,16 +1943,17 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	}
 
 	s.record(scanner.CapturedExchange{
-		Host:     host,
-		Port:     port,
-		TLS:      tls,
-		Method:   method,
-		Path:     path,
-		Request:  requestData,
-		Response: responseData,
-		Started:  startTime,
-		Duration: time.Since(startTime),
-		Protocol: core.ProtocolHTTP1,
+		Host:      host,
+		Port:      port,
+		TLS:       tls,
+		Method:    method,
+		Path:      path,
+		Request:   requestData,
+		Response:  responseData,
+		Started:   startTime,
+		FirstByte: firstByte,
+		Completed: completed,
+		Protocol:  core.ProtocolHTTP1,
 
 		RequestOriginal:  reqStages.original,
 		RequestAuto:      reqStages.auto,
@@ -2526,7 +2543,7 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 	//
 	// Unrecorded, hence the counter: nothing here is stored, so the rewrite is real but
 	// invisible in history, and Counters.ModifiedUnrecorded is what makes it accountable.
-	if resp, err := readHTTPResponse(upstreamConn); err == nil {
+	if resp, _, err := readHTTPResponse(upstreamConn); err == nil {
 		// Match & Replace first, then the blanket response modification rules — the same order, and
 		// for the same reason, as handleTLSResponse and completeResponse: a Match & Replace rule is
 		// written against the origin's own bytes, and running "remove all JavaScript" first would
@@ -2566,27 +2583,31 @@ func (s *Server) dialUpstreamFor(ctx context.Context, host string, port uint16, 
 	return conn, nil
 }
 
-func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) ([]byte, string, error) {
+func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) ([]byte, string, time.Time, error) {
 	upstreamConn, err := s.dialUpstreamFor(context.Background(), host, port, tls)
 	if err != nil {
-		return nil, "", err
+		return nil, "", time.Time{}, err
 	}
 	defer upstreamConn.Close()
 	serverIP := serverIPOf(upstreamConn)
 
 	if _, err := upstreamConn.Write(requestData); err != nil {
-		return nil, serverIP, err
+		return nil, serverIP, time.Time{}, err
 	}
 
-	resp, err := readHTTPResponse(upstreamConn)
-	return resp, serverIP, err
+	// The first-byte instant is read here so a caller building an exchange row can report TTFB
+	// (Burp's "Start response timer") separately from the total. The caller takes the completion
+	// instant itself, right after this returns, which is when the last byte was read.
+	resp, firstByte, err := readHTTPResponse(upstreamConn)
+	return resp, serverIP, firstByte, err
 }
 
 // readHTTPResponse reads one complete HTTP response from conn, respecting
 // Content-Length and chunked transfer encoding instead of waiting for EOF
-// (which never comes on a keep-alive connection).
-func readHTTPResponse(conn net.Conn) ([]byte, error) {
-	return httputil.ReadHTTPResponse(conn)
+// (which never comes on a keep-alive connection). It also reports the instant the
+// first response byte arrived, for a caller reporting time-to-first-byte.
+func readHTTPResponse(conn net.Conn) ([]byte, time.Time, error) {
+	return httputil.ReadHTTPResponseTimed(conn)
 }
 
 // The proxy's own status-line parser used to live here. It is gone rather than

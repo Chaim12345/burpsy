@@ -197,7 +197,9 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 	}
 	upstreamBR := bufio.NewReader(upstream)
 
-	head, err := httputil.ReadResponseHead(upstreamBR)
+	// Timed for the same reason the ordinary path is (burpsy-react-ui-jcdm): an origin that
+	// REFUSES the upgrade answers with an ordinary response, and it is measured like one below.
+	head, firstByte, err := httputil.ReadResponseHeadTimed(upstreamBR)
 	if err != nil {
 		return
 	}
@@ -211,7 +213,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 			return
 		}
 		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, "", "", serverIPOf(upstream), requestEdited)
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, firstByte, time.Now(), "", "", serverIPOf(upstream), requestEdited)
 		return
 	}
 
