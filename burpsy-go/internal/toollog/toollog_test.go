@@ -160,3 +160,35 @@ func Test_record_links_exchange_and_copies_it(t *testing.T) {
 		t.Fatalf("unlinked entry exchange = %v, want nil", entries[1].Exchange)
 	}
 }
+
+// The MIME capture filter refuses a row by the type that row actually carried.
+//
+// Burp's "Capture by MIME type" exists so a long engagement's log is not swamped by images and
+// fonts. The filter is an EXCLUSION list, so an empty one captures everything — which is what the
+// log did before this existed and what every caller that names no types still means.
+//
+// The distinction this pins is between the two kinds of "no type": a row recorded through Record,
+// whose caller never measured one, must never be refused (nil), while a response that genuinely
+// declared no usable Content-Type ("") is a measured fact that simply matches no pattern. Judging
+// the first would silently drop rows from tools that have nothing to do with media types.
+func TestTheMimeFilterRefusesARowByTheTypeItCarriedAndNeverJudgesAnUnmeasuredOne(t *testing.T) {
+	l := New()
+	if err := l.SetFilter(CaptureFilter{MIME: []string{"image/png"}}); err != nil {
+		t.Fatalf("SetFilter: %v", err)
+	}
+	png, html, none := "image/png", "text/html", ""
+
+	if id := l.RecordMime(ToolProxy, "t.test", 80, false, "GET", "/logo.png", 200, nil, 0, "", nil, &png); id != 0 {
+		t.Errorf("a row whose response was image/png was captured, so the exclusion did nothing and the log still fills with images")
+	}
+	if id := l.RecordMime(ToolProxy, "t.test", 80, false, "GET", "/index.html", 200, nil, 0, "", nil, &html); id == 0 {
+		t.Errorf("a text/html row was refused by an image/png exclusion, so the filter is refusing types it was not asked to")
+	}
+	if id := l.RecordMime(ToolProxy, "t.test", 80, false, "GET", "/typeless", 200, nil, 0, "", nil, &none); id == 0 {
+		t.Errorf("a response that declared no Content-Type was refused; \"\" matches no pattern and must be captured")
+	}
+	// Record's whole point: a caller with no media type to declare passes nil, and nil is never judged.
+	if id := l.Record(ToolScanner, "t.test", 80, false, "GET", "/audit", 0, nil, 0, "audit", nil); id == 0 {
+		t.Errorf("a row recorded without a measured media type was refused by a MIME exclusion; an unmeasured type is not a type, and judging it drops rows from tools that never had one")
+	}
+}

@@ -1053,6 +1053,13 @@ type toolLogFilterView struct {
 	Case      bool   `json:"case_sensitive"`
 	Negate    bool   `json:"negate"`
 	ScopeOnly bool   `json:"scope_only"`
+	// MIME is Burp's "Capture by MIME type" as an EXCLUSION list (burpsy-react-ui-73vm): each
+	// entry is a media type whose rows are refused, so an empty list captures everything — which
+	// is what every existing caller means by omitting it, and what the log did before this existed.
+	// Burp presents per-type checkboxes over a fixed category list; this is the open set of
+	// Content-Type essences core.MimeEssence actually produces, so a type Burp never listed can
+	// still be excluded. A row whose type was never measured is never judged by it.
+	MIME []string `json:"mime,omitempty"`
 }
 
 func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
@@ -1091,6 +1098,7 @@ func (s *Server) toolLogSetCapture(w http.ResponseWriter, r *http.Request) {
 		f := toollog.CaptureFilter{
 			Status:    req.Filter.Status,
 			ScopeOnly: req.Filter.ScopeOnly,
+			MIME:      req.Filter.MIME,
 		}
 		f.Search.Term = req.Filter.Term
 		f.Search.Regex = req.Filter.Regex
@@ -1211,6 +1219,9 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 			Case:      f.Search.CaseSensitive,
 			Negate:    f.Search.Negate,
 			ScopeOnly: f.ScopeOnly,
+			// Read back so the choice survives a reload: the filter is server state, and a page
+			// that could set it but not see it would show an empty list over a live exclusion.
+			MIME: f.MIME,
 		},
 	})
 }

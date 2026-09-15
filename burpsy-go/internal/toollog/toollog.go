@@ -149,6 +149,18 @@ type Entry struct {
 	// here: the traffic store already holds the bytes once, and a second copy would double the
 	// memory Burp manages with its explicit capture limit.
 	Exchange *core.ExchangeID
+	// Mime is the response media type this row was recorded with — the same core.MimeEssence value
+	// the linked exchange carries, copied here so the type the capture filter judged (burpsy-react-ui-73vm)
+	// stays with the row even after its exchange is evicted, and so a MIME column reads without a
+	// traffic-store lookup per row.
+	//
+	// A pointer for the same reason ResponseLen is: nil and "" are different facts. Nil means the
+	// producer measured no type — a send that failed at the transport, or a row standing for a whole
+	// run (an audit) that is not one response — and is what a row recorded through Record (rather than
+	// RecordMime) carries, and what every row written before this field existed reads back as. ""
+	// means a response arrived that declared no usable Content-Type. The MIME capture filter never
+	// judges a nil row and never matches a "" one, so neither is silently dropped.
+	Mime *string
 }
 
 // Bytes wraps a measured response length for Record's respLen argument. Callers that received no
@@ -255,11 +267,53 @@ type CaptureFilter struct {
 	// ScopeOnly keeps in-scope traffic. Needs a scope via SetScope; without one it is
 	// inert rather than emptying the log.
 	ScopeOnly bool
+	// MIME is a list of response media types to REFUSE — an exclusion list, not an inclusion one
+	// (burpsy-react-ui-73vm): the empty default captures everything, and adding "image/*" or "font/*"
+	// stops a long engagement's log being swamped by them. Exclusion because burpsy's vocabulary is
+	// the open set of Content-Type essences core.MimeEssence produces, not Burp's fixed category list:
+	// an inclusion list over an open set would silently refuse every type the operator never thought to
+	// add, which is the unsafe default. A "type/*" pattern refuses a whole top-level type; an exact
+	// "type/subtype" refuses one. Patterns are validated and lowercased at compile time so a matches()
+	// on the record path is a plain compare against the already-lowercased essence.
+	MIME []string
+}
+
+// normalizeMimePattern lowercases and validates one MIME exclusion pattern, returning the normalized
+// form or an error naming the bad input. A pattern is "type/subtype" or "type/*"; anything without
+// exactly one slash, or with an empty type or subtype, is refused rather than silently kept — a
+// pattern that matches nothing is a capture filter the operator believes they set and did not.
+func normalizeMimePattern(p string) (string, error) {
+	norm := strings.ToLower(strings.TrimSpace(p))
+	slash := strings.IndexByte(norm, '/')
+	if slash <= 0 || slash != strings.LastIndexByte(norm, '/') || slash == len(norm)-1 {
+		return "", fmt.Errorf("invalid MIME pattern %q: want type/subtype or type/*", p)
+	}
+	return norm, nil
+}
+
+// mimePatternMatches reports whether an already-lowercased essence is refused by one pattern. A
+// "type/*" pattern matches every subtype of its top-level type; any other pattern is an exact match.
+func mimePatternMatches(pattern, essence string) bool {
+	if strings.HasSuffix(pattern, "/*") {
+		return strings.HasPrefix(essence, pattern[:len(pattern)-1])
+	}
+	return essence == pattern
 }
 
 // compile validates the search term the way rules are validated: a bad regex is refused
 // when the filter is saved, not per record. Called with the term this filter carries.
 func (f *CaptureFilter) compile() error {
+	if len(f.MIME) > 0 {
+		norm := make([]string, len(f.MIME))
+		for i, p := range f.MIME {
+			n, err := normalizeMimePattern(p)
+			if err != nil {
+				return err
+			}
+			norm[i] = n
+		}
+		f.MIME = norm
+	}
 	if f.Search.Term == "" || !f.Search.Regex {
 		f.Search.re = nil
 		return nil
@@ -274,7 +328,17 @@ func (f *CaptureFilter) compile() error {
 
 // matches reports whether one record survives the filter. Scope is passed in because it
 // lives on the log, not in the filter value.
-func (f *CaptureFilter) matches(host string, port uint16, tls bool, method, path string, status int, scope ScopeChecker) bool {
+func (f *CaptureFilter) matches(host string, port uint16, tls bool, method, path string, status int, mime *string, scope ScopeChecker) bool {
+	// MIME is judged before scope and search because it is the cheapest reason to refuse a row and the
+	// one the bead exists for. A nil mime is a row whose type was never measured (an error, a whole-run
+	// row) and is never judged; a "" mime is a response that declared no type and matches no pattern.
+	if len(f.MIME) > 0 && mime != nil && *mime != "" {
+		for _, p := range f.MIME {
+			if mimePatternMatches(p, *mime) {
+				return false
+			}
+		}
+	}
 	if len(f.Status) > 0 {
 		hit := false
 		for _, class := range f.Status {
@@ -450,7 +514,20 @@ func (l *ToolLog) fire(e *Entry) {
 //
 // 0 is unambiguous as the refusal marker because ids come from nextID, which
 // counts *stored* rows from 1: a stored row never has id 0.
+// Record is RecordMime for callers that have no media type to declare. It passes nil rather than
+// "": nil is "this caller did not supply one", which is exactly what a row written before the MIME
+// field existed reads back as, while "" is the positive fact that a response declared no usable
+// Content-Type. The MIME capture filter treats the two differently, so collapsing them here would
+// make an un-typed caller's rows indistinguishable from typed rows that genuinely had no type.
 func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, path string, status int, respLen *int, durMs uint64, note string, exchange *core.ExchangeID) uint64 {
+	return l.RecordMime(tool, host, port, tls, method, path, status, respLen, durMs, note, exchange, nil)
+}
+
+// RecordMime is Record with the response's media type, which the MIME capture filter needs in order
+// to refuse a row by its type. It is a separate entry point rather than a twelfth argument on every
+// existing caller so that the callers that genuinely know the type (the proxy and repeater paths)
+// declare it, and the ones that do not keep saying so.
+func (l *ToolLog) RecordMime(tool Tool, host string, port uint16, tls bool, method, path string, status int, respLen *int, durMs uint64, note string, exchange *core.ExchangeID, mime *string) uint64 {
 	if !l.Capturing(tool) {
 		if tool >= 0 && int(tool) < len(l.uncaptured) {
 			l.uncaptured[tool].Add(1)
@@ -458,7 +535,7 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		return 0
 	}
 	l.mu.RLock()
-	keep := l.filter.matches(host, port, tls, method, path, status, l.scope)
+	keep := l.filter.matches(host, port, tls, method, path, status, mime, l.scope)
 	l.mu.RUnlock()
 	if !keep {
 		l.filtered.Add(1)
@@ -479,6 +556,12 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		id := *exchange
 		ex = &id
 	}
+	// Same copy, same reason as the two above.
+	var mimeCopy *string
+	if mime != nil {
+		v := *mime
+		mimeCopy = &v
+	}
 	e := &Entry{
 		ID:          id,
 		Tool:        tool,
@@ -493,6 +576,7 @@ func (l *ToolLog) Record(tool Tool, host string, port uint16, tls bool, method, 
 		DurationMs:  durMs,
 		Note:        note,
 		Exchange:    ex,
+		Mime:        mimeCopy,
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
