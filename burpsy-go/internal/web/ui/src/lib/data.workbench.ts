@@ -294,16 +294,23 @@ export function useSetUninterestingHeaders() {
 }
 
 /**
- * The handler reads flat `a` / `b` strings and has no granularity parameter, so
- * every comparison is byte-level.
+ * Compares two messages, byte-by-byte or word-by-word.
+ *
+ * `granularity` is the operator's choice (Burp's two compare modes). It is sent explicitly rather
+ * than defaulted here, because the result is labelled with the mode that produced it and a label
+ * that can disagree with what ran is worse than no label; the endpoint echoes the mode back.
  */
 export function useCompare() {
- return useMutation<CompareResponse, Error, { a: string; b: string; response?: boolean }>({
+ return useMutation<
+  CompareResponse,
+  Error,
+  { a: string; b: string; response?: boolean; granularity?: "bytes" | "words" }
+ >({
   // `response` selects which uninteresting-header list applies (W6 #81/#82). Omitted means the
   // request list, which is empty unless the operator populated it — so leaving it out reproduces
   // the behaviour this endpoint had before the field existed.
-  mutationFn: ({ a, b, response }) =>
-   api<CompareResponse>("/api/tools/compare", json("POST", { a, b, response })),
+  mutationFn: ({ a, b, response, granularity }) =>
+   api<CompareResponse>("/api/tools/compare", json("POST", { a, b, response, granularity })),
  });
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash } from "lucide-react";
+import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash, Type } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes } from "../lib/api";
 import { useCompare, useLoadMessage } from "../lib/data.workbench";
@@ -282,6 +282,13 @@ export function ComparerPage(): JSX.Element {
    */
   const [side, setSide] = useState<"response" | "request">("response");
   const [view, setView] = useState<"text" | "hex">("text");
+  /**
+   * Burp's two compare modes. Bytes is the default because that is what this page did before the
+   * modes existed, so an operator who never touches the control gets the same answer as yesterday —
+   * and the result always says which mode produced it, so the control cannot be mistaken for a
+   * label.
+   */
+  const [granularity, setGranularity] = useState<"bytes" | "words">("bytes");
   const paneRef = useRef<HTMLDivElement>(null);
 
   const compare = useCompare();
@@ -351,10 +358,16 @@ export function ComparerPage(): JSX.Element {
     });
   };
 
+  // formatCount renders a counter in the unit the comparison produced: bytes for a byte comparison,
+  // words for a word comparison. One function rather than a ternary at each site, so a future metric
+  // cannot pick the wrong unit by forgetting which mode it is in.
+  const formatCount = (n: number, mode: "bytes" | "words") =>
+    mode === "words" ? `${n} ${n === 1 ? "word" : "words"}` : formatBytes(n);
+
   const run = () => {
     setCurrentHunk(-1);
     compare.mutate(
-      { a, b, response: side === "response" },
+      { a, b, response: side === "response", granularity },
       {
         onSuccess: (response) =>
           response.identical
@@ -417,7 +430,19 @@ export function ComparerPage(): JSX.Element {
         title="Comparer"
         actions={
           <>
-            <Badge>byte-level</Badge>
+            {/* The mode that ran, taken from the response rather than from the control: a control
+                that can disagree with what the endpoint actually did is the defect this label
+                exists to avoid. Before the first run there is nothing to label, so it says which
+                mode the next run will use. */}
+            <Badge>{result ? `${result.granularity}-level` : `${granularity}-level`}</Badge>
+            <Button variant={granularity === "bytes" ? "primary" : "outline"} size="small" aria-pressed={granularity === "bytes"} onClick={() => setGranularity("bytes")}>
+              <Braces size={13} />
+              Bytes
+            </Button>
+            <Button variant={granularity === "words" ? "primary" : "outline"} size="small" aria-pressed={granularity === "words"} onClick={() => setGranularity("words")}>
+              <Type size={13} />
+              Words
+            </Button>
             <Button variant={view === "text" ? "primary" : "outline"} size="small" aria-pressed={view === "text"} onClick={() => setView("text")}>
               <Braces size={13} />
               Text
@@ -438,16 +463,16 @@ export function ComparerPage(): JSX.Element {
         }
       />
 
-      {/* The handler reads two flat strings and has no granularity parameter, so a
-          word-level option here would be a control that changes nothing. */}
-      {/* The old wording said only that this build compares BYTES rather than words. That was true
+      {/* The old wording said only that this build compares BYTES rather than words, which was true
           about granularity and silent about something worse: the diff had no alignment at all, so one
-          inserted byte reported the whole remainder as changed. Now it aligns, and the notice says
-          what the actual remaining limit is. */}
+          inserted byte reported the whole remainder as changed. Now it aligns, both modes exist, and
+          the notice says what each mode is for and what the remaining limit is. */}
       <div className="notice">
-        Byte-level, aligned. Differences are matched up across insertions and deletions, so a
-        one-character change reads as a one-character change. There is no word-level mode, and none is
-        offered rather than a control that silently did the same thing.
+        Aligned, in the mode you choose. <strong>Bytes</strong> aligns character by character, so a
+        one-character change reads as a one-character change. <strong>Words</strong> aligns whole
+        words, so a changed word in a page of markup reads as that word rather than as the bytes a
+        character-level match happened to leave out of it — the counts beside the diff are words in
+        that mode and bytes in the other.
         {result?.truncated ? (
           <>
             {" "}
@@ -506,8 +531,12 @@ export function ComparerPage(): JSX.Element {
               detail={`${result.ops.length} aligned run(s)`}
             />
             <Metric label="Changed" value={formatBytes(replacedBytes)} detail="bytes differing in place" />
-            <Metric label="Deleted" value={formatBytes(result.deleted_tokens)} detail="only in A" />
-            <Metric label="Inserted" value={formatBytes(result.inserted_tokens)} detail="only in B" />
+            {/* The deleted/inserted counters are in the unit of the mode that ran, so they are
+                labelled in that unit: rendering a word count through formatBytes would print
+                "1 B" for one deleted word, which is a number nobody can act on. "Changed" stays
+                bytes in both modes because it is a byte count of the differing regions. */}
+            <Metric label="Deleted" value={formatCount(result.deleted_tokens, result.granularity)} detail="only in A" />
+            <Metric label="Inserted" value={formatCount(result.inserted_tokens, result.granularity)} detail="only in B" />
           </div>
 
           {result.uninteresting_ops > 0 ? (

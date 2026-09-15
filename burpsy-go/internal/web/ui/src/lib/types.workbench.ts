@@ -113,8 +113,15 @@ export interface CompareResponse {
  /** The list actually applied, so the panel and the result cannot disagree about what was used. */
  uninteresting_headers_applied: string[];
  /** Counts trailing-only runs: a "replace" is in neither total. */
+ /**
+  * Changed units in the mode that ran: byte lengths for a byte comparison, token counts for a
+  * word comparison. A replacement counts as neither — it is its own op kind — so a one-word
+  * substitution legitimately reports 0 and 0 here.
+  */
  deleted_tokens: number;
  inserted_tokens: number;
+ /** The mode that actually ran, echoed by the endpoint so the page can label the result. */
+ granularity: "bytes" | "words";
  truncated: boolean;
  ops_omitted: number;
  ops: CompareOp[];

@@ -1660,9 +1660,14 @@ type compareOp struct {
 	Uninteresting bool `json:"uninteresting,omitempty"`
 }
 
-// handleToolsCompare mirrors comparer.ts's CompareResp. The engine produces a byte-level
-// comparison; this folds consecutive differences into equal/replace/insert/delete ops so the
-// UI can render unified columns.
+// handleToolsCompare mirrors comparer.ts's CompareResp. The engine aligns the two inputs —
+// byte-by-byte or word-by-word, the operator's choice — and this folds consecutive differences into
+// equal/replace/insert/delete ops so the UI can render unified columns.
+//
+// The response echoes the granularity that actually ran, so the console can label the result rather
+// than leave the operator guessing which mode produced it. An unknown value is refused instead of
+// silently defaulting: "I asked for words and got bytes" is exactly the kind of quiet substitution
+// this engine does not do.
 func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1675,13 +1680,28 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		// request list, which is empty unless the operator populated it — so an old client that
 		// does not send this field gets exactly the behaviour it had before the field existed.
 		Response bool `json:"response"`
+		// Granularity is "bytes" (default, and what a client that omits it gets) or "words".
+		Granularity string `json:"granularity"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	a, b := []byte(req.A), []byte(req.B)
-	diff := diffBytes(a, b)
+	granularity := strings.ToLower(strings.TrimSpace(req.Granularity))
+	if granularity == "" {
+		granularity = "bytes"
+	}
+	var diff diffResult
+	switch granularity {
+	case "bytes":
+		diff = diffBytes(a, b)
+	case "words":
+		diff = diffWords(a, b)
+	default:
+		http.Error(w, `granularity must be "bytes" or "words", got `+strconv.Quote(req.Granularity), http.StatusBadRequest)
+		return
+	}
 	ops := diff.Ops
 
 	// Tag differences that fall inside a discounted header. Spans are computed per side because the
@@ -1690,7 +1710,25 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 	spansA := uninterestingSpansIn(a, s.uninteresting, req.Response)
 	spansB := uninterestingSpansIn(b, s.uninteresting, req.Response)
 
+	// The deleted/inserted counters are byte lengths when the comparison is byte-level, and token
+	// counts when it is word-level. Summing bytes under a field the console labels in tokens would
+	// report "12 tokens" for one changed word; the token starts let the count be exact instead.
 	deleted, inserted, discounted := 0, 0, 0
+	var startsA, startsB []int
+	if granularity == "words" {
+		for _, w := range tokeniseWords(a) {
+			startsA = append(startsA, w.start)
+		}
+		for _, w := range tokeniseWords(b) {
+			startsB = append(startsB, w.start)
+		}
+	}
+	countIn := func(starts []int, off, ln int) int {
+		if starts == nil {
+			return ln
+		}
+		return sort.SearchInts(starts, off+ln) - sort.SearchInts(starts, off)
+	}
 	for i := range ops {
 		op := &ops[i]
 		if op.Kind == "equal" {
@@ -1712,9 +1750,9 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 			discounted++
 		}
 		if op.Kind == "delete" {
-			deleted += op.ALen
+			deleted += countIn(startsA, op.AOffset, op.ALen)
 		} else if op.Kind == "insert" {
-			inserted += op.BLen
+			inserted += countIn(startsB, op.BOffset, op.BLen)
 		}
 	}
 
@@ -1738,11 +1776,13 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		"identical_ignoring_uninteresting": identicalIgnoring,
 		"uninteresting_ops":                discounted,
 		"uninteresting_headers_applied":    s.uninteresting.headers(req.Response),
-		"deleted_tokens":                   deleted,
-		"inserted_tokens":                  inserted,
-		"truncated":                        diff.Truncated,
-		"ops_omitted":                      0,
-		"ops":                              ops,
+		// Echoed so the console labels the result with the mode that produced it.
+		"granularity":     granularity,
+		"deleted_tokens":  deleted,
+		"inserted_tokens": inserted,
+		"truncated":       diff.Truncated,
+		"ops_omitted":     0,
+		"ops":             ops,
 	})
 }
 
