@@ -85,6 +85,23 @@ function CoverageCard({ summary }: { summary: CoverageSummary }): JSX.Element {
  );
 }
 
+/**
+ * Burp's "Clear event log" (burp.Zbuz). DELETE /api/dashboard/events clears the EventLog the
+ * dashboard reads — the source, not a view of it — so after this the feed is genuinely empty for
+ * every browser watching, not just the one that clicked.
+ */
+function useClearEventLog() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: () => api<{ cleared: boolean }>("/api/dashboard/events", { method: "DELETE" }),
+  onSuccess: () => {
+   toast.success("Event log cleared");
+   invalidate([["dashboard"]]);
+  },
+  onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Clearing the event log failed"),
+ });
+}
+
 function useCancelTask() {
  const invalidate = useInvalidate();
  return useMutation({
@@ -1005,6 +1022,11 @@ export function DashboardPage(): JSX.Element {
        summaries={data?.summaries ?? []}
        sources={sources}
        events={data?.events ?? []}
+       eventWindow={{
+        shown: data?.events_shown ?? data?.events?.length ?? 0,
+        total: data?.events_total ?? data?.events?.length ?? 0,
+        dropped: data?.events_dropped ?? 0,
+       }}
        activity={data?.activity ?? []}
        onFilterHistory={(query) => {
         setHistoryQuery(query);
@@ -1037,6 +1059,7 @@ function TaskDetail({
  summaries,
  sources,
  events,
+ eventWindow,
  activity,
  onFilterHistory,
 }: {
@@ -1047,10 +1070,12 @@ function TaskDetail({
  summaries: CoverageSummary[];
  sources: [string, number][];
  events: ToolEvent[];
+ eventWindow: { shown: number; total: number; dropped: number };
  activity: ActivityRow[];
  onFilterHistory: (query: string) => void;
 }): JSX.Element {
  const cancel = useCancelTask();
+ const clearEvents = useClearEventLog();
  const setLive = useSetScannerLive();
  // The same cache key the Issues page reads, so a finding that arrives mid-scan is here on the
  // next render without a second request. Reverse-chronological by id: the store is a dense counter
@@ -1330,10 +1355,34 @@ function TaskDetail({
 
     <TabsContent value="events">
      <Card>
-      <SectionHeading title="Event log" detail="State changes that are not requests." />
+      {/*
+        * The feed used to render events.slice(0, 20): rows 21 and beyond were dropped on the floor
+        * with nothing saying so, which is the half of burpsy-react-ui-voc that made the log unable
+        * to answer "what happened". Every row the server sends is now rendered, and the window is
+        * stated from the server's own counters rather than re-derived here. The real bound is the
+        * EventLog's, which already counts what it discarded — a second, silent cap in the browser
+        * could only disagree with it.
+        */}
+      <SectionHeading
+       title="Event log"
+       detail={
+        eventWindow.dropped > 0
+         ? `State changes that are not requests. Showing all ${eventWindow.shown} the log holds; ${eventWindow.dropped} older event(s) have been discarded as it filled.`
+         : "State changes that are not requests. The log shows key task events, such as start times, alerts, and progress updates."
+       }
+       actions={
+        <Button
+         variant="outline"
+         disabled={!events.length || clearEvents.isPending}
+         onClick={() => clearEvents.mutate()}
+        >
+         {clearEvents.isPending ? "Clearing…" : "Clear event log"}
+        </Button>
+       }
+      />
       {events.length ? (
-       <div className="event-list">
-        {events.slice(0, 20).map((event, index) => (
+       <div className="event-list event-list-scroll">
+        {events.map((event, index) => (
          <div className="event-row" key={`${event.kind}-${event.at_ms}-${index}`}>
           <span className={`event-dot event-${event.severity}`} />
           <div>
@@ -1345,7 +1394,10 @@ function TaskDetail({
         ))}
        </div>
       ) : (
-       <Empty title="No events" detail="Start an audit, a crawl or an attack to populate this feed." />
+       <Empty
+        title="No event log items to show"
+        detail="The event log shows key task events, such as start times, alerts, and progress updates."
+       />
       )}
      </Card>
     </TabsContent>

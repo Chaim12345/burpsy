@@ -239,6 +239,14 @@ export interface Dashboard {
  tasks_running: number;
  activity: ActivityRow[];
  events: ToolEvent[];
+ /** The event log as a WINDOW, the way the server already accounts for it (burpsy-react-ui-voc):
+  *  how many rows came back, how many the log holds, and how many it has thrown away since it
+  *  filled. The page renders every row it is sent and states these numbers, rather than slicing the
+  *  list to a literal — a client-side cap hides rows the server was willing to show and says
+  *  nothing, which is the bug this replaced. */
+ events_shown: number;
+ events_total: number;
+ events_dropped: number;
  exchanges: number;
  messages: number;
  sources: Record<string, number>;

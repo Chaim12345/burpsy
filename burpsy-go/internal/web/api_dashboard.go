@@ -125,6 +125,26 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDashboardEvents serves DELETE /api/dashboard/events: the "Clear event log" action (Burp's
+// burp.Zbuz). It clears the EventLog the dashboard reads — the source, not a client-side view — so
+// the feed is genuinely empty afterwards and the next thing the tool does is its first row again.
+//
+// A separate route from /api/dashboard (which stays GET-only) rather than a DELETE verb on it: the
+// dashboard aggregates tasks, activity, coverage and the event log, and a DELETE there would name
+// the whole aggregate when only one list is being discarded. It is not filed under /api/events
+// either — that prefix is the SSE change stream, a different resource — so this names the EventLog
+// the dashboard reads and nothing else. DELETE only; anything else is a 405 the route manifest's
+// verb test checks for.
+func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.events.Clear()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"cleared": true})
+}
+
 // dashboardSummaries builds every count the dashboard shows, each through dash.NewSummary so a
 // caveat can never travel without a reason naming it.
 //
