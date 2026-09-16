@@ -82,7 +82,7 @@ const (
 	DefaultMaxRegistrations = 64
 )
 
-// Kind is one of the three registration points that have an honest web analogue.
+// Kind is one of the registration points that have an honest web analogue.
 type Kind string
 
 const (
@@ -95,12 +95,25 @@ const (
 	// registerHttpRequestEditorProvider. See the package doc for why the other half
 	// (caret position, live selection) is not represented.
 	KindEditorTab Kind = "editor-tab"
+	// KindSessionAction is the analogue of registerSessionHandlingAction: a rule's
+	// "Invoke an extension" action. Distinct from KindContextMenu because the input
+	// and the output are different: a context-menu item is handed a selected
+	// exchange and may return text, while a session action is handed the request a
+	// session rule has built so far and returns the request that should be sent.
+	//
+	// The return value is why this is a kind rather than a menu item the operator
+	// triggers by hand: without it the rule could ask a plugin a question and then
+	// send its own request unchanged, which is a rule reporting success while doing
+	// nothing — the failure the invoke-extension action refuses rather than hides.
+	KindSessionAction Kind = "session-action"
 )
 
 // validKinds is the closed set. A registration naming anything else is refused
 // and counted rather than accepted as an inert row, because an inert row in the
 // UI is indistinguishable from a working one.
-var validKinds = map[Kind]bool{KindContextMenu: true, KindMenu: true, KindEditorTab: true}
+var validKinds = map[Kind]bool{
+	KindContextMenu: true, KindMenu: true, KindEditorTab: true, KindSessionAction: true,
+}
 
 // Registration is one thing a plugin declared at handshake.
 type Registration struct {
@@ -150,6 +163,18 @@ type InvokeParams struct {
 	Registration string `json:"registration"`
 	Exchange     *int   `json:"exchange,omitempty"`
 	Message      *int   `json:"message,omitempty"`
+	// Request, Response and Values are sessionAction.invoke's payload: the request the rule has built
+	// so far, the response the rule is reacting to (nil when it has not observed one), and the
+	// {{name}} values a macro action extracted earlier in the same rule.
+	//
+	// Structured fields rather than one raw message, unlike editor.render's `raw`. The reason is the
+	// return value: a plugin answers with a *request*, and a raw round trip would need an HTTP
+	// serialiser and a parser on both sides of a JSON-RPC boundary, each able to disagree with the
+	// sender that actually dials. The fields are the sender's own vocabulary (method, absolute URL,
+	// ordered headers, body), so nothing has to be re-encoded on the way in or out.
+	Request  *SessionRequest   `json:"request,omitempty"`
+	Response *SessionResponse  `json:"response,omitempty"`
+	Values   map[string]string `json:"values,omitempty"`
 	// Raw is the message bytes for editor.render, as text. Carried in the call
 	// rather than fetched by the plugin because a plugin has no route to this
 	// process's traffic store, and giving it one would be a second egress path.
@@ -164,6 +189,33 @@ type InvokeParams struct {
 type InvokeResult struct {
 	Text   string `json:"text,omitempty"`
 	Output string `json:"output,omitempty"`
+	// Request is what a session-action's plugin wants sent — sessionAction.invoke's only functional
+	// answer. Omitted means "send what the rule already built", which is a real and useful answer
+	// (a plugin that only observes, or only rewrote the jar through burpsy's cookies), and is
+	// therefore distinguished from an empty object only by being absent.
+	Request *SessionRequest `json:"request,omitempty"`
+}
+
+// SessionRequest is one request inside a sessionAction.invoke call, in the sender's own vocabulary.
+//
+// Headers are an ordered list of pairs rather than a map: a Go map has no order and a JSON object
+// has none either, so a plugin handed a map could only answer with an order it invented, and header
+// order is part of the request the target receives. The pair-array shape is the one this tree
+// already uses for the same reason (sessionStepDto.Headers, and the console's header editors).
+type SessionRequest struct {
+	Method  string     `json:"method"`
+	URL     string     `json:"url"`
+	Headers [][]string `json:"headers,omitempty"`
+	Body    string     `json:"body,omitempty"`
+}
+
+// SessionResponse is the observed response a session action is shown. Status is carried as the
+// number that was on the wire, including 0 when no response arrived — which is a fact about the
+// request rather than a missing value.
+type SessionResponse struct {
+	Status  int        `json:"status"`
+	Headers [][]string `json:"headers,omitempty"`
+	Body    string     `json:"body,omitempty"`
 }
 
 // LogParams is the one notification a plugin sends the host.
@@ -279,6 +331,17 @@ var MethodSpecs = []MethodSpec{
 			"registerHttpRequestEditorProvider: Burp gives that provider the caret position and the live " +
 			"selection, and a request/response round trip cannot carry either, so the editing half is " +
 			"not offered rather than offered and broken.",
+	},
+	{
+		Name: "sessionAction.invoke", Direction: HostToPlugin, Call: "request", Kind: KindSessionAction,
+		Params: `{"registration": string, "request": {method, url, headers, body}, "response"?: {status, headers, body}, "values"?: {name: value}}`,
+		Result: `{"request"?: {method, url, headers, body}, "output"?: string}`,
+		Why: "The analogue of registerSessionHandlingAction: a session rule's Invoke-an-extension action. " +
+			"The plugin is handed the request the rule has built so far — after its earlier actions ran, " +
+			"including any macro — and answers with the request it wants sent. Request and response are " +
+			"structured rather than raw because the answer is a request: a raw round trip would need a " +
+			"serialiser and a parser on each side of the boundary, each able to disagree with the sender " +
+			"that actually dials.",
 	},
 	{
 		Name: "log", Direction: PluginToHost, Call: "notification",

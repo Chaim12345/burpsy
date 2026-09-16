@@ -5,6 +5,7 @@ import { useDeleteSessionRule, useSaveSessionRule } from "../lib/data";
 import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useUpdateSessionMacro, useCookieJarWrite } from "../lib/data.policy";
 import { MacroRecorder } from "../ui/macro-recorder";
 import type {
+ SessionAction,
  SessionExtractFrom,
  SessionExtractHow,
  SessionExtraction,
@@ -68,6 +69,39 @@ interface RuleDraft {
  /** Kept as text so "" can mean "the server's default" rather than one attempt. */
  maxAttempts: string;
  steps: StepDraft[];
+ /**
+  * Burp's rule shape (burpsy-react-ui-ayi): the ordered list of things the rule does, and what the
+  * proxy actually runs. `steps` below is the login flow a "Run a macro" action replays — one entry
+  * of this list, not the list itself.
+  *
+  * Never empty, because the server never sends an empty one: a rule written before actions existed
+  * arrives as the synthesis "check validity, and if not valid run the macro", which is what it
+  * already behaved as. So the editor always has at least one row to show, and an operator clearing
+  * every row is refused rather than silently given the login rule back.
+  */
+ actions: ActionDraft[];
+}
+
+/**
+ * One rule action as the editor holds it. Nested children are kept only under `check_validity`,
+ * which is where Burp nests and the only place the executor looks.
+ */
+interface ActionDraft {
+ kind: string;
+ enabled: boolean;
+ stop: boolean;
+ /** A RunMacro action's own steps; empty means the rule's own macro below. */
+ macro: StepDraft[];
+ then: ActionDraft[];
+ else: ActionDraft[];
+ name: string;
+ value: string;
+ in: "" | "query" | "body";
+ match: string;
+ replacement: string;
+ regex: boolean;
+ /** An InvokeExtension action's registration id. */
+ extension: string;
 }
 
 const VALIDITY_FIELDS: { key: "body_contains" | "body_not_contains" | "header_present" | "header_absent"; label: string; hint: string }[] = [
@@ -138,6 +172,94 @@ function stepIn(step: SessionMacroStep): StepDraft {
  };
 }
 
+/**
+ * One wire action as an editable draft, recursively.
+ *
+ * `macro` is left empty when the wire omits it, and that is the whole point of the field: an action
+ * with no steps of its own runs the rule's macro below, so materialising the rule's steps into the
+ * action here would launder a reference into a copy — the operator would edit the macro underneath
+ * and find this action still sending the old text, with nothing on screen saying so.
+ */
+function actionIn(action: SessionAction): ActionDraft {
+ return {
+  kind: action.kind,
+  enabled: action.enabled,
+  stop: action.stop === true,
+  macro: (action.macro ?? []).map(stepIn),
+  then: (action.then ?? []).map(actionIn),
+  else: (action.else ?? []).map(actionIn),
+  name: action.name ?? "",
+  value: action.value ?? "",
+  in: (action.in as ActionDraft["in"]) ?? "",
+  match: action.match ?? "",
+  replacement: action.replacement ?? "",
+  regex: action.regex === true,
+  extension: action.extension ?? "",
+ };
+}
+
+/**
+ * Back to the wire. Fields a kind does not read are omitted rather than sent empty, because the
+ * server *refuses* a kind-only field it does not use: sending the whole draft would make every rule
+ * with a conditional check unsaveable the moment the editor carried a stray field.
+ */
+function actionOut(draft: ActionDraft): SessionAction {
+ // `label` is deliberately not sent: it is the server's own words for the kind, and echoing a copy
+ // back would make the editor's vocabulary look like the client's.
+ const out: SessionAction = { kind: draft.kind, label: "", enabled: draft.enabled };
+ if (draft.stop) out.stop = true;
+ const macro = draft.macro.filter((step) => !isBlankStep(step)).map(stepOut);
+ if (macro.length) out.macro = macro;
+ if (draft.kind === "check_validity") {
+  const then = draft.then.map(actionOut);
+  const otherwise = draft.else.map(actionOut);
+  if (then.length) out.then = then;
+  if (otherwise.length) out.else = otherwise;
+ }
+ switch (draft.kind) {
+  case "set_cookie":
+  case "set_header":
+   out.name = draft.name.trim();
+   out.value = draft.value;
+   break;
+  case "set_param":
+   out.name = draft.name.trim();
+   out.value = draft.value;
+   if (draft.in) out.in = draft.in;
+   break;
+  case "replace":
+   out.match = draft.match;
+   out.replacement = draft.replacement;
+   if (draft.regex) out.regex = true;
+   break;
+  case "invoke_extension":
+   out.extension = draft.extension.trim();
+   break;
+  default:
+   break;
+ }
+ return out;
+}
+
+/** One fresh action of a kind, with the fields that kind requires pre-filled where there is a choice. */
+function emptyAction(kind: string): ActionDraft {
+ return {
+  kind,
+  enabled: true,
+  stop: false,
+  macro: [],
+  then: [],
+  else: [],
+  name: "",
+  value: "",
+  in: "",
+  match: "",
+  replacement: "",
+  regex: false,
+  extension: "",
+ };
+}
+
 function ruleIn(rule: SessionRuleFull): RuleDraft {
  const draft: RuleDraft = {
   name: rule.name,
@@ -152,24 +274,34 @@ function ruleIn(rule: SessionRuleFull): RuleDraft {
   validity: rule.validity ?? {},
   maxAttempts: rule.max_attempts === undefined ? "" : String(rule.max_attempts),
   steps: (rule.steps ?? []).map(stepIn),
+  actions: (rule.actions ?? []).map(actionIn),
  };
  if (rule.id !== undefined) draft.id = rule.id;
  return draft;
 }
 
+function stepOut(step: StepDraft): SessionMacroStep {
+ const wire: SessionMacroStep = {
+  method: step.method.trim() || "GET",
+  url: step.url.trim(),
+  headers: step.headers.filter(([name]) => name.trim() !== ""),
+  body: step.body,
+ };
+ const extract = step.extract.filter((entry) => entry.name.trim() !== "").map(extractionOut);
+ if (extract.length) wire.extract = extract;
+ return wire;
+}
+
 function ruleOut(draft: RuleDraft): SessionRuleFull {
- const steps: SessionMacroStep[] = draft.steps.map((step) => {
-  const wire: SessionMacroStep = {
-   method: step.method.trim() || "GET",
-   url: step.url.trim(),
-   headers: step.headers.filter(([name]) => name.trim() !== ""),
-   body: step.body,
-  };
-  const extract = step.extract.filter((entry) => entry.name.trim() !== "").map(extractionOut);
-  if (extract.length) wire.extract = extract;
-  return wire;
- });
- const out: SessionRuleFull = { name: draft.name.trim(), enabled: draft.enabled, steps, validity: draft.validity };
+ const steps: SessionMacroStep[] = draft.steps.map(stepOut);
+ const actions: SessionAction[] = draft.actions.map(actionOut);
+ const out: SessionRuleFull = {
+  name: draft.name.trim(),
+  enabled: draft.enabled,
+  steps,
+  validity: draft.validity,
+  actions,
+ };
  if (draft.id !== undefined) out.id = draft.id;
  // Omitted rather than sent empty: absent means "applies everywhere", and a stated
  // but empty scope is refused by the server because it would match nothing.
@@ -260,6 +392,12 @@ function emptyRule(): RuleDraft {
   validity: { status_is: 200 },
   maxAttempts: "",
   steps: [{ method: "POST", url: "", headers: [], body: "", extract: [] }],
+  // A new rule starts as the flow burpsy already had — check, then log in — rather than as an empty
+  // list, for the reason the server refuses an empty one: a rule with no actions does nothing, and
+  // the operator's next step is to add to this list, not to discover it is inert.
+  actions: [
+   { ...emptyAction("check_validity"), else: [emptyAction("run_macro")] },
+  ],
  };
 }
 
@@ -519,6 +657,278 @@ function StepCard({
  );
 }
 
+/**
+ * One action row, and its branches when it is a validity check.
+ *
+ * # Why the branches are edited here rather than as a separate list
+ *
+ * Burp nests sub-actions under "Check whether the current session is valid, and perform sub-actions
+ * conditionally on the result", and that nesting *is* the parallelism an operator reasons about —
+ * flattening it into one list with a "branch" column would make two runs of the same rule look like
+ * one sequence. So the shape on screen is the shape the executor walks.
+ *
+ * Depth is bounded at two levels of check, and the add control says so rather than disappearing: a
+ * check inside a check inside a check is a rule nobody can read the outcome of, and the server's own
+ * validation walks the tree rather than bounding it, so the bound belongs to the editor's judgement
+ * and is stated where an operator would look for it.
+ */
+function ActionCard({
+ action,
+ index,
+ total,
+ depth,
+ palette,
+ ruleStepCount,
+ disabled,
+ onChange,
+ onMove,
+ onRemove,
+}: {
+ action: ActionDraft;
+ index: number;
+ total: number;
+ depth: number;
+ palette: { kind: string; label: string }[];
+ /** How many steps the rule's own macro has, so a RunMacro action can say what it will replay. */
+ ruleStepCount: number;
+ disabled?: boolean;
+ onChange: (next: ActionDraft) => void;
+ onMove: (delta: number) => void;
+ onRemove: () => void;
+}): JSX.Element {
+ const label = palette.find((entry) => entry.kind === action.kind)?.label ?? action.kind;
+ const isCheck = action.kind === "check_validity";
+ const isMacro = action.kind === "run_macro" || action.kind === "run_post_request_macro";
+ const patch = (next: Partial<ActionDraft>) => onChange({ ...action, ...next });
+
+ const branch = (which: "then" | "else") => (
+  <div className="stack-tight">
+   <span className="eyebrow">{which === "then" ? "If the session is valid" : "If it is not (or cannot be told)"}</span>
+   {action[which].length === 0 ? (
+    <small className="field-hint">
+     {which === "then"
+      ? "Nothing runs when the check says the session is valid."
+      : "Nothing runs when the check says the session is not valid. An undecidable check takes this branch too — reading \u201cI could not tell\u201d as \u201cit is fine\u201d is the wrong way to fail."}
+    </small>
+   ) : null}
+   {action[which].map((child, childIndex) => (
+    <ActionCard
+     key={childIndex}
+     action={child}
+     index={childIndex}
+     total={action[which].length}
+     depth={depth + 1}
+     palette={palette}
+     ruleStepCount={ruleStepCount}
+     disabled={disabled}
+     onChange={(next) => patch({ [which]: action[which].map((value, i) => (i === childIndex ? next : value)) } as Partial<ActionDraft>)}
+     onMove={(delta) => {
+      const list = [...action[which]];
+      const to = childIndex + delta;
+      if (to < 0 || to >= list.length) return;
+      const moved = list[childIndex];
+      const target = list[to];
+      if (moved === undefined || target === undefined) return;
+      list[to] = moved;
+      list[childIndex] = target;
+      patch({ [which]: list } as Partial<ActionDraft>);
+     }}
+     onRemove={() => patch({ [which]: action[which].filter((_, i) => i !== childIndex) } as Partial<ActionDraft>)}
+    />
+   ))}
+   <div className="inline-add">
+    <Select
+     aria-label={`Add an action to the ${which} branch`}
+     title={`Add an action to the ${which} branch`}
+     value=""
+     disabled={disabled || depth >= 2}
+     onChange={(event) => {
+      if (!event.target.value) return;
+      patch({ [which]: [...action[which], emptyAction(event.target.value)] } as Partial<ActionDraft>);
+     }}
+    >
+     <option value="">{depth >= 2 ? "Nesting stops here" : "Add an action\u2026"}</option>
+     {palette.map((entry) => (
+      <option key={entry.kind} value={entry.kind}>
+       {entry.label}
+      </option>
+     ))}
+    </Select>
+   </div>
+  </div>
+ );
+
+ return (
+  <div className="step-card" style={depth > 0 ? { marginLeft: "1rem" } : undefined}>
+   <div className="step-head">
+    <Badge tone={action.enabled ? "info" : "neutral"}>{index + 1}</Badge>
+    <Select
+     aria-label={`Action ${index + 1} kind`}
+     title={`Action ${index + 1} kind`}
+     value={action.kind}
+     disabled={disabled}
+     onChange={(event) => patch({ kind: event.target.value })}
+    >
+     {palette.map((entry) => (
+      <option key={entry.kind} value={entry.kind}>
+       {entry.label}
+      </option>
+     ))}
+    </Select>
+    <IconButton label={`Move action ${index + 1} up`} size="small" disabled={disabled || index === 0} onClick={() => onMove(-1)}>
+     <ArrowUp size={13} />
+    </IconButton>
+    <IconButton
+     label={`Move action ${index + 1} down`}
+     size="small"
+     disabled={disabled || index === total - 1}
+     onClick={() => onMove(1)}
+    >
+     <ArrowDown size={13} />
+    </IconButton>
+    <IconButton label={`Remove action ${index + 1}`} size="small" disabled={disabled} onClick={onRemove}>
+     <Trash2 size={13} />
+    </IconButton>
+   </div>
+   <div className="inline-add">
+    <Checkbox
+     label="Enabled"
+     checked={action.enabled}
+     disabled={disabled}
+     onCheckedChange={(on) => patch({ enabled: on })}
+    />
+    {/* Burp's "unless one of the actions specifies that no further actions should be applied to
+        the request". Offered on every kind, because that is what Burp does — the switch is about
+        the request, not about the action that happens to carry it. */}
+    <Checkbox
+     label="No further actions apply to this request"
+     checked={action.stop}
+     disabled={disabled}
+     onCheckedChange={(on) => patch({ stop: on })}
+    />
+   </div>
+
+   {isMacro ? (
+    action.macro.length > 0 ? (
+     <div className="notice notice-warn">
+      <span>
+       This action carries its own {action.macro.length} step(s), so it replays those and not the
+       rule&apos;s macro below. That is what the rule already states — it is shown rather than folded
+       into the macro section, because editing that section would otherwise appear to change this
+       action and would not.
+      </span>
+      <Button variant="outline" size="small" disabled={disabled} onClick={() => patch({ macro: [] })}>
+       Use the rule&apos;s macro instead
+      </Button>
+     </div>
+    ) : (
+     <small className="field-hint">
+      Runs the rule&apos;s {ruleStepCount} macro step(s) below. A macro action never sends the request
+      being processed — for that, use "Run a post-request macro".
+     </small>
+    )
+   ) : null}
+
+   {action.kind === "add_cookies_from_jar" ? (
+    <small className="field-hint">
+     Attaches the session-handling jar&apos;s cookies for this request&apos;s own host, port and
+     scheme. That used to happen implicitly on every send; as an action it can be ordered against a
+     macro that rewrites the cookie the request should carry.
+    </small>
+   ) : null}
+
+   {action.kind === "set_cookie" || action.kind === "set_header" || action.kind === "set_param" ? (
+    <div className="form-grid">
+     <Field label={action.kind === "set_cookie" ? "Cookie name" : action.kind === "set_header" ? "Header name" : "Parameter name"}>
+      {(id) => (
+       <Input id={id} value={action.name} disabled={disabled} onChange={(event) => patch({ name: event.target.value })} />
+      )}
+     </Field>
+     <Field label="Value" hint="{{name}} is replaced by a value a macro action extracted earlier in this list.">
+      {(id) => (
+       <Input id={id} value={action.value} disabled={disabled} onChange={(event) => patch({ value: event.target.value })} />
+      )}
+     </Field>
+     {action.kind === "set_param" ? (
+      <Field label="Where" hint="Blank means wherever the parameter already is, and the query string when it is nowhere.">
+       {(id) => (
+        <Select
+         id={id}
+         value={action.in}
+         disabled={disabled}
+         onChange={(event) => patch({ in: event.target.value as ActionDraft["in"] })}
+        >
+         <option value="">Wherever it is</option>
+         <option value="query">Query string</option>
+         <option value="body">Form body</option>
+        </Select>
+       )}
+      </Field>
+     ) : null}
+    </div>
+   ) : null}
+
+   {action.kind === "replace" ? (
+    <>
+     <div className="form-grid">
+      <Field label="Match">
+       {(id) => <Input id={id} value={action.match} disabled={disabled} onChange={(event) => patch({ match: event.target.value })} />}
+      </Field>
+      <Field label="Replace with">
+       {(id) => (
+        <Input id={id} value={action.replacement} disabled={disabled} onChange={(event) => patch({ replacement: event.target.value })} />
+       )}
+      </Field>
+     </div>
+     <div className="inline-add">
+      <Checkbox
+       label="Regular expression"
+       checked={action.regex}
+       disabled={disabled}
+       onCheckedChange={(on) => patch({ regex: on })}
+      />
+     </div>
+     <small className="field-hint">
+      Applied to the URL, every header name and value, and the body — over the request as the actions
+      before it left it.
+     </small>
+    </>
+   ) : null}
+
+   {action.kind === "invoke_extension" ? (
+    <>
+     <Field
+      label="Extension registration"
+      hint="The registration id a loaded plugin declared as a session-handling action. The plugin is resolved by that id, so two plugins must not use the same one."
+     >
+      {(id) => (
+       <Input id={id} value={action.extension} disabled={disabled} onChange={(event) => patch({ extension: event.target.value })} />
+      )}
+     </Field>
+     <small className="field-hint">
+      The plugin is handed the request as the actions before this one left it, and answers with the
+      request to send. With no plugin loaded the action is refused and says so — nothing is sent
+      silently unchanged.
+     </small>
+    </>
+   ) : null}
+
+   {isCheck ? (
+    <>
+     <small className="field-hint">
+      Evaluated against the rule&apos;s validity check below, unless this action states one of its
+      own (in which case that one is used, and the section below is not consulted by this action).
+     </small>
+     {branch("then")}
+     {branch("else")}
+    </>
+   ) : null}
+
+   <p className="field-hint">Kind: {label}</p>
+  </div>
+ );
+}
+
 export function SessionPage(): JSX.Element {
  const rulesQuery = useSessionRulesFull();
  const cookiesQuery = useSessionCookies();
@@ -569,6 +979,10 @@ export function SessionPage(): JSX.Element {
 
  const wired = rulesQuery.data?.wired ?? true;
  const rules = rulesQuery.data?.rules ?? [];
+ // The action palette and the declined list come from the same response as the rules, so the
+ // editor's vocabulary cannot drift from what this build validates — see the response's own note.
+ const actionKinds = rulesQuery.data?.action_kinds;
+ const declinedActions = rulesQuery.data?.declined_actions;
  const dirty = editing !== null && JSON.stringify(editing) !== baseline;
 
  // Re-adopt the server's copy of the open rule only while nothing is unsaved.
@@ -1308,6 +1722,81 @@ export function SessionPage(): JSX.Element {
         )}
        </Field>
       </div>
+
+      {/* Burp's rule shape: the action list is what the rule does, and the macro below is the flow
+          a "Run a macro" action replays. It is placed above the macro section for that reason — the
+          macro is a thing the actions refer to, not the rule's behaviour. */}
+      <SectionHeading
+       title="Rule actions"
+       detail="Run in order. This is what the rule does; the macro below is the login flow a \u201cRun a macro\u201d action replays."
+       actions={
+        <div className="page-actions">
+         <Select
+          aria-label="Add a rule action"
+          title="Add a rule action"
+          value=""
+          disabled={!wired}
+          onChange={(event) => {
+           if (!event.target.value) return;
+           setEditing((current) =>
+            current === null ? current : { ...current, actions: [...current.actions, emptyAction(event.target.value)] },
+           );
+          }}
+         >
+          <option value="">Add an action\u2026</option>
+          {(actionKinds ?? []).map((entry) => (
+           <option key={entry.kind} value={entry.kind}>
+            {entry.label}
+           </option>
+          ))}
+         </Select>
+        </div>
+       }
+      />
+      {editing.actions.length === 0 ? (
+       <Empty
+        title="No actions"
+        detail="A rule with no actions does nothing, and the server refuses one rather than quietly running a login instead."
+       />
+      ) : (
+       <div className="stack">
+        {editing.actions.map((action, index) => (
+         <ActionCard
+          key={index}
+          action={action}
+          index={index}
+          total={editing.actions.length}
+          depth={0}
+          palette={actionKinds ?? []}
+          ruleStepCount={editing.steps.length}
+          disabled={!wired}
+          onChange={(next) => setEditing({ ...editing, actions: editing.actions.map((value, i) => (i === index ? next : value)) })}
+          onMove={(delta) => {
+           const to = index + delta;
+           if (to < 0 || to >= editing.actions.length) return;
+           const list = [...editing.actions];
+           const moved = list[index];
+           const target = list[to];
+           if (moved === undefined || target === undefined) return;
+           list[to] = moved;
+           list[index] = target;
+           setEditing({ ...editing, actions: list });
+          }}
+          onRemove={() => setEditing({ ...editing, actions: editing.actions.filter((_, i) => i !== index) })}
+         />
+        ))}
+       </div>
+      )}
+      {/* Burp's rule editor shows nine actions and this build shows eight. Named here with the reason
+          so an operator following Burp's documentation learns what is missing and what to use
+          instead, rather than concluding the ninth was overlooked. */}
+      {(declinedActions ?? []).map((entry) => (
+       <div className="notice notice-warn" key={entry.name}>
+        <span>
+         <strong>Not implemented: {entry.name}.</strong> {entry.reason}
+        </span>
+       </div>
+      ))}
 
       <SectionHeading
        title="Macro steps"

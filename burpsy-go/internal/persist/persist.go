@@ -215,7 +215,8 @@ CREATE TABLE IF NOT EXISTS session_rules (
 	macro          TEXT NOT NULL,
 	validity       TEXT,
 	max_attempts   INTEGER NOT NULL,
-	extractions    TEXT
+	extractions    TEXT,
+	actions        TEXT
 );
 CREATE TABLE IF NOT EXISTS organizer_items (
 	id        INTEGER PRIMARY KEY,
@@ -337,6 +338,24 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	// Empty is the unrestricted rule every row written before this column carried, which is the only
 	// safe default: reading a legacy rule as restricted to some tool would silently stop it firing.
 	if err := s.addColumn("session_rules", "scope_tools", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// session_rules gained `actions` (burpsy-react-ui-ayi): the ordered list of things a rule does,
+	// which replaced "check validity, then always replay the macro" as the only shape a rule could
+	// have. A JSON array in one column for the reason scope_tools is: the list is read whole or not
+	// at all and is never queried across rules.
+	//
+	// **Empty means "this row predates the column", and that is load-bearing.** The columns beside it
+	// (macro, validity, max_attempts) still describe such a rule completely, and an empty actions
+	// column is the signal the loader leaves the rule's list empty for session.Coordinator.RestoreRule
+	// to materialise — the one door every rule enters through, so a migrated rule and a freshly-typed
+	// one are converted by the same code rather than by two implementations of the same rule.
+	//
+	// The conversion is not written back by the *loader*: doing it here would make the load path and
+	// the AddRule path two places that decide what an untouched rule looks like, and they would drift.
+	// Once restored, the rule is saved with its list, which is correct — by then it has been through
+	// the door and is, in fact, a rule with actions.
+	if err := s.addColumn("session_rules", "actions", "TEXT"); err != nil {
 		return err
 	}
 	// exchanges gained the four earlier-stage message ids (burpsy-react-ui-c05), so a Match & Replace
@@ -1844,6 +1863,14 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		if len(r.Extractions) > 0 {
 			exts, _ = json.Marshal(r.Extractions)
 		}
+		// Omitted when the list is empty, which only a rule that never went through the coordinator's
+		// door can be — the caller saves Coordinator.AllRules(), and every rule installed there has
+		// had its list materialised. Writing an empty array instead would be indistinguishable on the
+		// way back in from a NULL, and the loader is written to treat both as "pre-action row".
+		var actions []byte
+		if len(r.Actions) > 0 {
+			actions, _ = json.Marshal(r.Actions)
+		}
 		// The URL-scope arms are written as their own columns rather than folded into the hosts
 		// blob: they are a different axis (origin vs URL-shape), and a single blob would make a
 		// legacy row's *absence* of arms indistinguishable from a row that states none.
@@ -1854,10 +1881,10 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		if _, err := s.db.Exec(
 			`INSERT OR REPLACE INTO session_rules
 			 (id, name, enabled, scope_hosts, scope_params, scope_mode, scope_path, scope_port, scope_protocol,
-			  scope_tools, macro, validity, max_attempts, extractions, ord)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  scope_tools, macro, validity, max_attempts, extractions, actions, ord)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, params, r.ScopeMode, r.ScopePathPrefix, scopePort,
-			r.ScopeProtocol, tools, macro, validity, r.MaxAttempts, exts, i); err != nil {
+			r.ScopeProtocol, tools, macro, validity, r.MaxAttempts, exts, actions, i); err != nil {
 			s.log("session rule", err)
 			return
 		}
@@ -1874,7 +1901,7 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, enabled, scope_hosts, scope_params, scope_mode, scope_path, scope_port, scope_protocol,
-		        scope_tools, macro, validity, max_attempts, extractions
+		        scope_tools, macro, validity, max_attempts, extractions, actions
 		 FROM session_rules ORDER BY COALESCE(ord, id), id`)
 	if err != nil {
 		return nil, err
@@ -1885,13 +1912,13 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 		r := &session.SessionRule{}
 		var id int64
 		var enabled int
-		var hosts, params, macro, validity, exts, tools []byte
+		var hosts, params, macro, validity, exts, tools, actions []byte
 		var maxAttempts int
 		// Nullable on purpose: NULL is "no port arm", which is a fact about the rule, not a
 		// number. A legacy row reads back NULL here and the rule keeps the unrestricted port.
 		var scopePort *int64
 		if err := rows.Scan(&id, &r.Name, &enabled, &hosts, &params, &r.ScopeMode, &r.ScopePathPrefix,
-			&scopePort, &r.ScopeProtocol, &tools, &macro, &validity, &maxAttempts, &exts); err != nil {
+			&scopePort, &r.ScopeProtocol, &tools, &macro, &validity, &maxAttempts, &exts, &actions); err != nil {
 			return nil, err
 		}
 		r.ID = session.RuleID(id)
@@ -1947,6 +1974,16 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 				}
 			}
 			r.Extractions = parsed
+		}
+		// NULL or empty leaves the list empty on purpose, and the rule then runs exactly what
+		// macro/validity/max_attempts describe once RestoreRule has materialised it — see the column's
+		// migration note above for why the conversion is not done here.
+		if len(actions) > 0 {
+			var parsed []*session.Action
+			if err := json.Unmarshal(actions, &parsed); err != nil {
+				return nil, err
+			}
+			r.Actions = parsed
 		}
 		out = append(out, r)
 	}

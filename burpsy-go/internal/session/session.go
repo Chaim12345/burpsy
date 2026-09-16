@@ -891,7 +891,20 @@ type SessionRule struct {
 	// package's enum would be a number this package's persisted JSON and SQLite rows could not
 	// be read back from once that enum's order changed, which toollog's own Tool doc says is
 	// exactly why a new tool goes on the end and never in the middle.
-	ScopeTools  []string      `json:"scope_tools,omitempty"`
+	ScopeTools []string `json:"scope_tools,omitempty"`
+	// Actions is the ordered list of actions this rule performs, Burp's own model — see
+	// actions.go for the nine kinds, the one declined, and why the list is a flat ordered walk with
+	// conditionality nesting only inside a validity check.
+	//
+	// Empty is not "a rule that does nothing": EffectiveActions synthesises the pre-action shape
+	// (check validity, then run the macro) from Steps/Validity/MaxAttempts, and NormaliseActions
+	// writes that list on at the door every rule enters through. So a rule loaded from a project
+	// written before actions existed runs exactly what it ran before, and an operator who writes a
+	// rule from scratch always has an explicit list to edit.
+	Actions []*Action `json:"actions,omitempty"`
+	// Steps is the rule's macro: what a RunMacro action with no Macro of its own runs, and what
+	// every rule that predates actions keeps as its login flow. Kept rather than folded into the
+	// action list so a saved project's macro, its extractions and "update macro" all go on working.
 	Steps       []MacroStep   `json:"macro"`
 	Validity    *ValidityRule `json:"validity"`
 	MaxAttempts int           `json:"max_attempts"`
@@ -1110,6 +1123,11 @@ func (r *SessionRule) extractionsFor(index int) []*Extraction {
 // finish assembling before anything can be judged. ValidateRule is where every mistake that can be
 // caught without a network is caught, and Coordinator.AddRule / UpdateRule run it so no rule can be
 // installed behind validation's back.
+// NewSessionRule builds the inert spec for a rule: name, scope, macro. It does not add an action
+// list — a caller that wants the list materialised calls NormaliseActions, and Coordinator.AddRule
+// does it at the door. Leaving it out here is deliberate: this constructor is also what tests and
+// DTO conversions use to build a rule field by field, and a list materialised at construction would
+// then be stale the moment the caller set Validity or MaxAttempts afterwards.
 func NewSessionRule(name string, hosts []string, steps []MacroStep) *SessionRule {
 	if steps == nil {
 		steps = make([]MacroStep, 0)
@@ -1156,6 +1174,13 @@ type Coordinator struct {
 	// not become silently unreachable from them. A caller that owns a scope passes its own predicate
 	// to MatchingRuleForRequest instead; that one wins, because the caller is closer to the request.
 	suiteScope func(RequestIdentity) bool
+
+	// extensionInvoker is the extension host, when one is attached, for the invoke-extension rule
+	// action. A seam rather than an import: internal/extension sits above this package in the
+	// dependency direction, so this package declares the one method it needs and the console adapts
+	// its host to it. Nil is a valid state, and the action reports it rather than doing nothing
+	// quietly — see actionWalk.invokeExtension.
+	extensionInvoker SessionActionInvoker
 }
 
 func NewCoordinator(logger *zap.Logger) *Coordinator {
@@ -1237,6 +1262,10 @@ func (c *Coordinator) AddRule(rule *SessionRule) (RuleID, error) {
 	if err := ValidateRule(rule); err != nil {
 		return 0, err
 	}
+	// Materialised at the door, after validation and before the rule is reachable: from here on
+	// there is exactly one shape of rule in the tree, so the executor, the persisted row and the
+	// wire answer all describe the same list (see NormaliseActions).
+	rule.NormaliseActions()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := RuleID(atomic.AddInt64(&c.nextID, 1))
@@ -1278,6 +1307,10 @@ func (c *Coordinator) RestoreRule(rule *SessionRule) error {
 	if err := ValidateRule(rule); err != nil {
 		return err
 	}
+	// The second door, and the one a project written before actions comes through: a rule whose
+	// `actions` column is absent loads with an empty list and acquires the synthesised one here, so
+	// the migration happens once per stored rule rather than in every reader.
+	rule.NormaliseActions()
 	if rule.ID <= 0 {
 		return &RuleError{
 			Rule: ruleLabel(rule),
@@ -1322,6 +1355,7 @@ func (c *Coordinator) UpdateRule(id RuleID, rule *SessionRule) error {
 	if err := ValidateRule(rule); err != nil {
 		return err
 	}
+	rule.NormaliseActions()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cur, ok := c.rules[id]
