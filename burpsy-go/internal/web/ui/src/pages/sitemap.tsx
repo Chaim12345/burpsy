@@ -761,7 +761,12 @@ export function SiteMapPage(): JSX.Element {
          // siteMapEngagementToolsMenuItem hangs here, and Find comments / Find scripts exist
          // nowhere else — they are site-map searches. A host node seeds no path, which is the
          // difference between "references to this host" and "references to this branch".
-         engagementGroup({ host: target.host, path: target.depth === 0 ? "" : target.node.path }),
+         engagementGroup({
+          host: target.host,
+          path: target.depth === 0 ? "" : target.node.path,
+          port: target.node.port,
+          tls: target.node.tls,
+         }),
          {
           id: "delete",
           actions: [
