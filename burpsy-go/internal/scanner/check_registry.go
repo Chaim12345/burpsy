@@ -111,7 +111,7 @@ func wrapDescriptor(d CheckDescriptor) func(*ActiveScanner, context.Context, *co
 		if d.Scope == DispatchScopeStoredPerInsertionPoint && s != nil && s.store != nil && exchange != nil {
 			stored, _ = s.store.PriorExchange(exchange.Host, exchange.Port, exchange.TLS, exchange.Path, exchange.ID)
 		}
-		return d.Run(ctx, NewCheckContext(s, exchange, stored))
+		return d.Run(ctx, newCheckContextForRun(ctx, s, exchange, stored))
 	}
 }
 

@@ -56,6 +56,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 )
 
@@ -537,6 +538,58 @@ type AuditConfig struct {
 	// asks the caller that owns the queue not to attach it. Unset or true leaves the caller's own
 	// behaviour alone — the engine never builds the queue itself.
 	StoreQueueItems OptUint32
+	// MaxInsertionPointsPerRequest is Burp's
+	// `scanner/misc_insertion_point_options/max_insertion_points_per_base_request`: how many
+	// insertion points one base request may yield before the rest are dropped and reported.
+	//
+	// Unset takes bcheck.DefaultMaxInsertionPoints (30, Burp's own shipped default). A set value of
+	// zero is NOT "no ceiling" and is not accepted anywhere an operator can reach — it would
+	// enumerate nothing and audit nothing while reporting a completed run, so the parser and the
+	// write endpoint refuse it by name rather than clamping it to something the operator did not
+	// ask for.
+	MaxInsertionPointsPerRequest OptUint32
+	// NestedInsertionPoints is Burp's
+	// `scanner/misc_insertion_point_options/use_nested_insertion_points`: false stops the
+	// enumerator expanding the JSON/base64/XML structure inside a parameter value, so only the flat
+	// parameter is probed.
+	//
+	// Unset inherits the engine default, which is on — Burp ships it true. The points given up are
+	// counted onto the run's own record as a bcheck.Declined, so a run with it off cannot be
+	// mistaken for one that found nothing nested.
+	NestedInsertionPoints OptUint32
+}
+
+// enumerateOptions is how this configuration tunes the insertion-point enumerator.
+//
+// One method rather than two field reads at each call site: the probe harness, the audit-item
+// ledger and the check context all need the same pair, and a site that read the cap but forgot the
+// nested flag would enumerate a point set no configuration asked for.
+func (cfg AuditConfig) enumerateOptions() bcheck.EnumerateOptions {
+	opts := bcheck.EnumerateOptions{Max: bcheck.DefaultMaxInsertionPoints}
+	if cfg.MaxInsertionPointsPerRequest.Set && cfg.MaxInsertionPointsPerRequest.Value > 0 {
+		opts.Max = int(cfg.MaxInsertionPointsPerRequest.Value)
+	}
+	// Set-and-zero is the only spelling that turns nesting off. Unset inherits the engine default
+	// (on), which is what every caller had before the key existed.
+	if cfg.NestedInsertionPoints.Set && cfg.NestedInsertionPoints.Value == 0 {
+		opts.NoNested = true
+	}
+	return opts
+}
+
+// MaxInsertionPointsPerBaseRequest is the ceiling this configuration enumerates under, resolved:
+// the operator's value when they set one, bcheck.DefaultMaxInsertionPoints otherwise.
+//
+// Exported because the audit-queue row reports the threshold behind every skipped-past-the-limit
+// point, and reporting the constant there while the run used something else is precisely the
+// mismatch this key was filed for.
+func (cfg AuditConfig) MaxInsertionPointsPerBaseRequest() int {
+	return cfg.enumerateOptions().Max
+}
+
+// NestedInsertionPointsEnabled reports whether this configuration expands nested points.
+func (cfg AuditConfig) NestedInsertionPointsEnabled() bool {
+	return !cfg.enumerateOptions().NoNested
 }
 
 // DefaultAuditBudget is the default wall-clock budget for one audit run.
