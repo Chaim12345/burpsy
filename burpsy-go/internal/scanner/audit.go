@@ -577,6 +577,13 @@ func (cfg AuditConfig) enumerateOptions() bcheck.EnumerateOptions {
 	return opts
 }
 
+// InsertionKindsOrDefault is the point classes this configuration enumerates, resolved: its own
+// list when it carries one, DefaultProbeInsertionKinds otherwise. The exported counterpart of
+// insertionKinds, for surfaces outside this package that report what a run would do.
+func (cfg AuditConfig) InsertionKindsOrDefault() []string {
+	return cfg.insertionKinds()
+}
+
 // MaxInsertionPointsPerBaseRequest is the ceiling this configuration enumerates under, resolved:
 // the operator's value when they set one, bcheck.DefaultMaxInsertionPoints otherwise.
 //

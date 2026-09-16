@@ -36,7 +36,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 )
@@ -199,10 +198,23 @@ type auditItemCaveatsView struct {
 	// about that point specifically, because this engine keys one unit per request for both
 	// insertion-point scopes.
 	PointGranularity string `json:"point_granularity"`
-	// MaxInsertionPointsPerRequest is the enumerator's ceiling — the threshold behind every point
-	// counted in insertion_points_skipped_at_limit.
-	MaxInsertionPointsPerRequest int `json:"max_insertion_points_per_request"`
+	// MaxInsertionPointsPerRequest and NestedInsertionPoints are the two
+	// `scanner/misc_insertion_point_options/*` settings the server's DEFAULT configuration carries.
+	//
+	// Queue-wide, so they are the default and not any one run's answer: an audit launched under a
+	// named configuration can use different ones, and each item's own `breakers` block records what
+	// that item was actually audited under. PerRunNote says so rather than leaving a reader to
+	// assume the number here applied to every row.
+	MaxInsertionPointsPerRequest int  `json:"max_insertion_points_per_request"`
+	NestedInsertionPoints        bool `json:"nested_insertion_points"`
+	// PerRunNote points at the per-item record, because these two values used to be reported here as
+	// engine constants while a run could not change them. Now it can.
+	PerRunNote string `json:"per_run_note"`
 }
+
+const auditItemPerRunNote = "these two values are the server's default configuration; an audit " +
+	"launched under a named scan configuration may use different ones, and each item's own breakers " +
+	"block records the ceiling and the nested-points setting that item was audited under"
 
 const auditItemPointGranularity = "This engine keys one dispatch unit per request for both " +
 	"insertion-point scopes, because a check's own run walks every point of that request internally. " +
@@ -234,6 +246,9 @@ func (s *Server) handleScannerAuditItems(w http.ResponseWriter, r *http.Request)
 		}
 		limit = n
 	}
+	// The server's own default, so the caveats block reports what an unnamed audit would run under
+	// rather than three engine constants that a configuration can now move.
+	base := s.auditBaseConfig()
 	items := s.auditItems.Items(limit)
 	stats := s.auditItems.Stats()
 	view := auditItemsView{
@@ -249,9 +264,11 @@ func (s *Server) handleScannerAuditItems(w http.ResponseWriter, r *http.Request)
 			NotModelled:          scanner.BurpStatusesNotModelled,
 		},
 		Caveats: auditItemCaveatsView{
-			InsertionPointKinds:          scanner.DefaultProbeInsertionKinds,
+			InsertionPointKinds:          base.InsertionKindsOrDefault(),
 			PointGranularity:             auditItemPointGranularity,
-			MaxInsertionPointsPerRequest: bcheck.DefaultMaxInsertionPoints,
+			MaxInsertionPointsPerRequest: base.MaxInsertionPointsPerBaseRequest(),
+			NestedInsertionPoints:        base.NestedInsertionPointsEnabled(),
+			PerRunNote:                   auditItemPerRunNote,
 		},
 	}
 	// An empty array is a real answer and gets a reason, so "nothing has been audited" is
