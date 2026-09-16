@@ -745,6 +745,9 @@ export function HistoryPage(): JSX.Element {
     value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
     filename={`exchange-${selected.id}-request-${requestVariant}.txt`}
     menuGroups={actions.menu(selected)}
+    // The stored-message id behind this reading, so a loaded plugin's editor tab can render
+    // from the bytes the operator is looking at (burpsy-react-ui-ww5).
+    messageId={requestId ?? undefined}
    />,
   )
  ) : null;
@@ -765,6 +768,9 @@ export function HistoryPage(): JSX.Element {
     bodyBase64={response.data?.body_base64}
     filename={`exchange-${selected.id}-response-${responseVariant}.txt`}
     menuGroups={actions.menu(selected)}
+    // Same rule as the request pane: the response message id, undefined when this exchange
+    // has no response to derive from.
+    messageId={selected.response === null ? undefined : (responseId ?? undefined)}
    />,
   )
  ) : null;

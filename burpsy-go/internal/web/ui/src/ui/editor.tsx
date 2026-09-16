@@ -33,6 +33,7 @@ const CONSTRUCT_DIALECTS: Record<ConstructDialect, string> = {
  sql_mysql: "SQL for MySQL",
 };
 import { cn } from "../lib/cn";
+import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
 import { useMintPayload } from "../lib/data.collab";
 import { HexEditor } from "./hex-editor";
 import { ContextMenu, DropdownMenu, hasMenuActions, type MenuGroup } from "./menu";
@@ -320,6 +321,7 @@ export function HttpEditor({
  views = true,
  menuGroups,
  payloadMarks,
+ messageId,
 }: {
  value: string;
  /** The body's exact octets, base64 (MessageView.body_base64). Given, the Render view's image
@@ -355,6 +357,15 @@ export function HttpEditor({
  payloadMarks?: {
   onAdd: (span: { start: number; end: number; text: string }) => void;
  };
+ /**
+  * The stored-message id behind this editor's value, when there is one. This is what makes a
+  * loaded plugin's editor-tab registrations real (burpsy-react-ui-ww5): `editor.render` takes
+  * {message, raw} and a plugin has no route to the traffic store, so the id both identifies the
+  * message on the wire and names the bytes the tab fetches. Omit it for an editor with no
+  * stored message (a draft, a token blob, the Decoder's input) — a plugin tab there could only
+  * render from bytes that do not exist, and the strip stays honest by not offering it.
+  */
+ messageId?: number;
 }): JSX.Element {
  const [wrap, setWrap] = useState(true);
  // Burp's \n toggle (burpsy-react-ui-1e4): off by default, and a pure decoration - the
@@ -588,6 +599,13 @@ export function HttpEditor({
  const graphql = useMemo(() => (views ? detectGraphQL(value) : null), [views, value]);
  const jwt = useMemo(() => (views ? findJwts(value) : null), [views, value]);
  const params = useMemo(() => (views ? paramsOf(value) : null), [views, value]);
+
+ // A loaded plugin's editor-tab registrations, when this editor has a stored message behind it
+ // (burpsy-react-ui-ww5). The built-in typed views each warrant themselves by the message's
+ // content; a plugin tab warrants itself by the operator having loaded the plugin, which is a
+ // different fact, so the two lists are computed independently and the plugin tabs are appended
+ // after the built-ins — an extension's view sits at the end of the strip in Burp too.
+ const pluginTabs = usePluginEditorTabs(messageId);
 
  const available: MessageView[] = !views
   ? []
@@ -825,18 +843,45 @@ export function HttpEditor({
   <div className={cn("editor-shell", className)}>
    <div className="editor-bar">
     <span className="editor-label-inline">{label}</span>
-    {available.length ? (
+    {available.length || pluginTabs.entries.length ? (
      <div className="editor-views" role="tablist" aria-label={`${label} view`}>
       {available.map((candidate) => (
        <button
         key={candidate}
         type="button"
         role="tab"
-        aria-selected={candidate === active}
-        className={candidate === active ? "editor-view editor-view-active" : "editor-view"}
-        onClick={() => pick(candidate)}
+        // A plugin tab open means the built-in views are deselected, including the one
+        // `active` still names: `active` is the fallback the view returns to when the
+        // plugin tab closes, and a tablist with two selected tabs is a broken tablist.
+        aria-selected={candidate === active && pluginTabs.openKey === null}
+        className={candidate === active && pluginTabs.openKey === null ? "editor-view editor-view-active" : "editor-view"}
+        onClick={() => {
+         pluginTabs.close();
+         pick(candidate);
+        }}
        >
         {VIEW_LABELS[candidate]}
+       </button>
+      ))}
+      {pluginTabs.entries.map((entry) => (
+       <button
+        key={`plugin-${entry.key}`}
+        type="button"
+        role="tab"
+        aria-selected={pluginTabs.openKey === entry.key}
+        className={pluginTabs.openKey === entry.key ? "editor-view editor-view-active" : "editor-view"}
+        title={entry.invocation.registration.hint ?? `View rendered by the ${entry.invocation.plugin} plugin`}
+        onClick={() => {
+         // Toggling, like every built-in tab: clicking the open plugin tab closes it, and
+         // the view falls back to Raw — the one view every message has.
+         if (pluginTabs.openKey === entry.key) {
+          pluginTabs.close();
+         } else {
+          pluginTabs.open(entry.key);
+         }
+        }}
+       >
+        {entry.invocation.registration.label}
        </button>
       ))}
      </div>
@@ -945,7 +990,25 @@ export function HttpEditor({
           the browser's own "open image in new tab" affordances on rendered content for no gain. */}
    <ContextMenu groups={active === "render" ? [] : allGroups}>
     <div className="editor-body" style={{ height }}>
-     {active === "render" && imageDataUrl ? (
+     {pluginTabs.openKey !== null && pluginTabs.content ? (
+      // A plugin's editor tab: read-only by contract (KindEditorTab is the read-only half of
+      // registerHttpRequestEditorProvider — the caret half a JSON round trip cannot carry, see
+      // protocol.go). The content is the plugin's own words; the editor wraps it in the same
+      // pre-scroll the typed views use, so every tab in the strip reads like the same control.
+      // Loading and failure are in-tab rather than toasts: an operator who clicks a tab and
+      // sees a blank body reads the plugin as having rendered nothing.
+      <div className="editor-plugin-tab" role="tabpanel">
+       {pluginTabs.content.loading ? (
+        <p className="editor-plugin-note">Rendering…</p>
+       ) : pluginTabs.content.error ? (
+        <div className="notice notice-warn" role="status">
+         <span>{pluginTabs.content.error}</span>
+        </div>
+       ) : (
+        <pre className="editor-plugin-text">{pluginTabs.content.text}</pre>
+       )}
+      </div>
+     ) : active === "render" && imageDataUrl ? (
       // An image response: render the stored bytes as the browser would show them. Same
       // attacker-controlled caution as the iframe — the data URL renders pixels and runs
       // nothing; it is an <img>, not an <object> or <embed>.
