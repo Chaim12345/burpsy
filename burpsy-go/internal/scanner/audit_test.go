@@ -765,6 +765,21 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				got, wantSet, wantUnset = optField(applied.JavaScriptAnalysis), uint64(k.Value), optField(base.JavaScriptAnalysis)
 			case "store_issues_within_queue_items":
 				got, wantSet, wantUnset = optField(applied.StoreQueueItems), uint64(k.Value), optField(base.StoreQueueItems)
+			case "use_nested_insertion_points":
+				// A switch carried as OptUint32, so what is checked is the VALUE (1 on, 0 off), not
+				// whether the option is present. 0 is the meaningful setting here — it is what stops
+				// the enumerator expanding a point inside an already-spliced value — so a check that
+				// only asked "is it set?" would pass while the preset turned the feature the wrong
+				// way (burpsy-react-ui-iueb).
+				got, wantSet, wantUnset = optField(applied.NestedInsertionPoints), uint64(k.Value), optField(base.NestedInsertionPoints)
+			case "max_insertion_points_per_base_request":
+				// A cap, not a flag: the value itself is what must land on the field, so this checks
+				// the number rather than a presence bit. An unset key must leave the base's value
+				// alone — the enumerator falls back to bcheck.DefaultMaxInsertionPoints only when the
+				// field is unset, and a preset silently overwriting that default with 0 would turn
+				// "no cap stated" into "admit nothing", which is the one reading that is certainly
+				// wrong (burpsy-react-ui-iueb).
+				got, wantSet, wantUnset = optField(applied.MaxInsertionPointsPerRequest), uint64(k.Value), optField(base.MaxInsertionPointsPerRequest)
 			case "scan_only_selected_issues", "select_individual_issues", "selected_issues":
 				// Field-less by design: this engine has no per-issue selection, the row reports
 				// Applies false, and Apply reports the key unapplied. Nothing on the applied config
