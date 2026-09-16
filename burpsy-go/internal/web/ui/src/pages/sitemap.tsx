@@ -6,6 +6,9 @@ import { useCrawls, useDeleteSitemap, usePassiveScanBranch, useSitemapDetailed, 
 import { useIssuesDetailed } from "../lib/data.attack";
 import type { FindingDetail } from "../lib/types.attack";
 import { exchangeUrl, useExchangeActions, useSendShortcuts } from "../lib/actions";
+import { engagementToolsGroup, type EngagementSeed } from "../lib/engagement-menu";
+import { putSeed } from "../lib/page-seed";
+import { requestSettingsSection } from "../lib/settings-sections";
 import { useApp } from "../lib/store";
 import { toast } from "sonner";
 import type { SiteNodeDetail as SiteNode } from "../lib/types.observe";
@@ -20,7 +23,7 @@ import { Checkbox } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable, VirtualTable, type Column } from "../ui/table";
 import { CrawlPathsView } from "../ui/crawlpaths";
-import { EngagementView } from "./engagement";
+import { EngagementView, type EngagementSeedRequest } from "./engagement";
 import { cn } from "../lib/cn";
 
 interface FlatRow {
@@ -332,6 +335,57 @@ export function SiteMapPage(): JSX.Element {
   * has crawled yet — which reads as a broken site map rather than as a remembered preference.
   */
  const [view, setView] = useState<"urls" | "paths" | "engagement">("urls");
+ /**
+  * The search a right-click on the tree asked for (burpsy-react-ui-gupj), or undefined when the
+  * Engagement tools view was opened by its own button. Held here rather than inside the view
+  * because the menu that seeds it lives in this page, and the view is this page's child.
+  */
+ const [engagementSeed, setEngagementSeed] = useState<EngagementSeedRequest | undefined>(undefined);
+ /**
+  * Burp's Engagement tools submenu for one right-clicked thing (burpsy-react-ui-gupj).
+  *
+  * The dispositions — which of Burp's eight act, which is greyed with its reason, which two are
+  * absent and why — are decided in lib/engagement-menu.ts and asserted there. This supplies only
+  * the three things a page can do: show a seeded search, open Content discovery on a target, and
+  * open the schedule settings with the target to hand.
+  */
+ const engagementGroup = (seed: EngagementSeed, url?: string): MenuGroup =>
+  engagementToolsGroup(
+   seed,
+   {
+    runSearch: (search) => {
+     // Date.now() is the nonce: right-clicking the same node twice must be two searches, not one
+     // ignored repeat, and the seed's identity is what the view's effect keys on.
+     setEngagementSeed({ kind: search.kind, q: search.q, host: search.host, nonce: Date.now() });
+     setView("engagement");
+    },
+    discoverContent: (target) => {
+     putSeed("discovery-target", target);
+     setRoute("contentdiscovery");
+    },
+    scheduleTask: (target) => {
+     // The schedule form lives in Settings and reads no seed, so this takes the operator as far as
+     // burpsy honestly can: the right section, with the URL on the clipboard to paste into a new
+     // schedule's crawl seeds. The menu row's hint says exactly this, so nobody leaves believing a
+     // schedule was created.
+     void copyToClipboard(target).then(
+      () => toast.success(`Scheduled tasks opened — ${target} copied, paste it into a new crawl schedule`),
+      () => toast.error(`Scheduled tasks opened, but ${target} could not be copied to the clipboard`),
+     );
+     setRoute("settings");
+     requestSettingsSection("scheduled-tasks");
+    },
+   },
+   url,
+  );
+ /**
+  * The same group for one captured exchange rather than a tree node. The exchange knows its
+  * scheme and port, so its real URL is passed through instead of letting the module rebuild one
+  * from host and path — a rebuilt URL guesses https and no port, which would aim a content-
+  * discovery sweep at the wrong origin.
+  */
+ const exchangeEngagement = (exchange: Exchange): MenuGroup =>
+  engagementGroup({ host: exchange.host, path: exchange.path }, exchangeUrl(exchange));
  const crawls = useCrawls();
  const passiveScan = usePassiveScanBranch();
  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -703,6 +757,11 @@ export function SiteMapPage(): JSX.Element {
            },
           ],
          },
+         // Burp's Engagement tools (burpsy-react-ui-gupj), seeded from the node. Burp's own
+         // siteMapEngagementToolsMenuItem hangs here, and Find comments / Find scripts exist
+         // nowhere else — they are site-map searches. A host node seeds no path, which is the
+         // difference between "references to this host" and "references to this branch".
+         engagementGroup({ host: target.host, path: target.depth === 0 ? "" : target.node.path }),
          {
           id: "delete",
           actions: [
@@ -799,7 +858,7 @@ export function SiteMapPage(): JSX.Element {
      readOnly
      value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
      filename={`exchange-${activeExchange.id}-request.txt`}
-     menuGroups={actions.menu(activeExchange)}
+     menuGroups={actions.menu(activeExchange, [exchangeEngagement(activeExchange)])}
     />
     <HttpEditor
      label="Response"
@@ -811,7 +870,7 @@ export function SiteMapPage(): JSX.Element {
      }
      bodyBase64={response.data?.body_base64}
      filename={`exchange-${activeExchange.id}-response.txt`}
-     menuGroups={actions.menu(activeExchange)}
+     menuGroups={actions.menu(activeExchange, [exchangeEngagement(activeExchange)])}
     />
     {inspector ? (
      <Inspector
@@ -939,7 +998,7 @@ export function SiteMapPage(): JSX.Element {
        selectedId={selectedExchange === null ? null : String(selectedExchange)}
        onSelect={(row) => setSelectedExchange(row.id)}
        onActivate={(row) => void actions.sendToRepeater(row)}
-       menuGroups={(row) => actions.menu(row)}
+       menuGroups={(row) => actions.menu(row, [exchangeEngagement(row)])}
        rowClassName={(row) => (row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined)}
       />
      )
@@ -1057,7 +1116,7 @@ export function SiteMapPage(): JSX.Element {
    {view === "paths" ? (
     <CrawlPathsView runs={crawls.data?.crawls ?? []} />
    ) : view === "engagement" ? (
-    <EngagementView />
+    <EngagementView seed={engagementSeed} />
    ) : (
     <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
    )}
