@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, hexDumpBytes, isResponse, parseMessage, prettyMessage } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans } from "../lib/message";
 import { breakGlyphs, byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
 import {
  base64Decode,
@@ -34,6 +34,9 @@ const CONSTRUCT_DIALECTS: Record<ConstructDialect, string> = {
 };
 import { cn } from "../lib/cn";
 import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
+import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
+import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
+import { SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { useMintPayload } from "../lib/data.collab";
 import { HexEditor } from "./hex-editor";
 import { ContextMenu, DropdownMenu, hasMenuActions, type MenuGroup } from "./menu";
@@ -270,7 +273,21 @@ const burpEditorKeys = Prec.high(
  * inspection (history detail), because operators expect the same affordances —
  * line numbers, find, wrapping — in both.
  */
-type MessageView = "pretty" | "raw" | "hex" | "render" | "graphql" | "jwt" | "params";
+// The five operator-added tabs (t94i) are part of the same union: they ride the same strip,
+// the same pick()/active machinery and the same aria-selected rules as the built-ins.
+type MessageView =
+ | "pretty"
+ | "raw"
+ | "hex"
+ | "render"
+ | "graphql"
+ | "jwt"
+ | "params"
+ | "headers"
+ | "queryparams"
+ | "bodyparams"
+ | "cookies"
+ | "attributes";
 
 // The tab bar's labels, keyed by view. Kept next to the type so a view added to the
 // union fails to compile here first — a tab that renders its key instead of a label is
@@ -283,7 +300,23 @@ const VIEW_LABELS: Record<MessageView, string> = {
  graphql: "GraphQL",
  jwt: "JWT",
  params: "Params",
+ headers: "Headers",
+ queryparams: "Query params",
+ bodyparams: "Body params",
+ cookies: "Cookies",
+ attributes: "Attributes",
 };
+
+/**
+ * Whether a message has cookie rows to read: a response's Set-Cookie lines, or a request's
+ * Cookie header. Decides whether the Cookies tab exists for this message.
+ */
+function cookiesToRead(value: string): { name: string; value: string }[] {
+  if (isResponse(value)) {
+    return cookiesOf(parseMessage(value).headers, true).map(([name, val]) => ({ name, value: val }));
+  }
+  return cookieSpans(value).map((pair) => ({ name: pair.name, value: pair.value }));
+}
 
 /**
  * Raw HTTP message editor with Burp's message-editor views.
@@ -606,6 +639,44 @@ export function HttpEditor({
  // different fact, so the two lists are computed independently and the plugin tabs are appended
  // after the built-ins — an extension's view sits at the end of the strip in Burp too.
  const pluginTabs = usePluginEditorTabs(messageId);
+ // The strip preferences this editor reads; moveEditorTab and the hidden-array edits go
+ // through the store so every editor on every page moves together — one strip shape, not one
+ // per surface (t94i).
+ const setEditorTabs = useApp((state) => state.setEditorTabs);
+
+ // The five operator-added tabs (t94i). Each warrants itself by the message's own content —
+ // a Headers tab exists for every HTTP message (every message has a head), Query/Body
+ // params and Cookies exist when there is something to read, Attributes always. The
+ // prefs decide which of these are hidden and their order, but never invent a tab the
+ // message cannot fill.
+ const extraTabs: OptionalEditorTab[] = ["headers", "attributes"];
+ if (querySpans(value).length > 0) extraTabs.push("queryparams");
+ if (bodyParamSpans(value).length > 0 || cookiesToRead(value).length > 0) {
+  if (bodyParamSpans(value).length > 0) extraTabs.push("bodyparams");
+  if (cookiesToRead(value).length > 0) extraTabs.push("cookies");
+ }
+
+ // Preferences: hidden tabs leave the strip, the order array reorders it. A pref naming a
+ // tab the message does not warrant is inert — the strip still only offers what it can fill.
+ const editorTabs = useApp((state) => state.editorTabs) ?? defaultEditorTabPrefs;
+
+ const orderedOptional = useMemo((): MessageView[] => {
+  const optional: MessageView[] = [
+   ...(renderable ? (["render"] as MessageView[]) : []),
+   ...(graphql ? (["graphql"] as MessageView[]) : []),
+   ...(jwt && jwt.tokens.length ? (["jwt"] as MessageView[]) : []),
+   ...(params && params.rows.length ? (["params"] as MessageView[]) : []),
+   ...extraTabs,
+  ];
+  const order = editorTabs.order.length ? editorTabs.order : [];
+  const rank = (tab: MessageView) => {
+   const idx = order.indexOf(tab as OptionalEditorTab);
+   return idx < 0 ? order.length : idx;
+  };
+  return optional.filter((tab) => !editorTabs.hidden.includes(tab as OptionalEditorTab)).sort((a, b) => rank(a) - rank(b));
+  // extraTabs is derived from value; listing it would double-count. value covers it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [renderable, graphql, jwt, params, editorTabs, value]);
 
  const available: MessageView[] = !views
   ? []
@@ -613,16 +684,14 @@ export function HttpEditor({
    ? // Pretty/Render/GraphQL/JWT/Params all assume the platform-default decoding of `value`; showing
      // them unchanged while the operator has deliberately asked to view the body under a different
      // charset would look like the charset applied everywhere when it only applies to Raw. Hex stays
-     // — it is a byte-exact view the charset choice was never about.
+     // — it is a byte-exact view the charset choice was never about. The operator-added tabs read
+     // the same `value`, so they sit this out too.
      (["raw", "hex"] as MessageView[])
    : ([
     ...(canPretty ? ["pretty"] : []),
     "raw",
     "hex",
-    ...(renderable ? ["render"] : []),
-    ...(graphql ? ["graphql"] : []),
-    ...(jwt && jwt.tokens.length ? ["jwt"] : []),
-    ...(params && params.rows.length ? ["params"] : []),
+    ...orderedOptional,
    ] as MessageView[]);
 
  // Resolve the active view. The "raw" initial state means "the operator has not
@@ -942,6 +1011,62 @@ export function HttpEditor({
        style={{ maxWidth: "14ch" }}
       />
      ) : null}
+     {views ? (
+      // The tab-strip settings (t94i): Burp's settings/ui/message-editor "Show" checkboxes
+      // and Up/Down reorder, on the editor itself so the strip being edited is the one on
+      // screen. A details/summary rather than a Radix popover: the strip is already dense
+      // with portaled triggers, and a native disclosure cannot z-fight them.
+      <details className="editor-tabs-settings">
+       <summary className="icon-button icon-button-sm" aria-label="Message editor tabs settings" title="Show, hide and reorder this editor's tabs">
+        <SlidersHorizontal size={13} />
+       </summary>
+       <div className="editor-tabs-settings-panel" role="group" aria-label="Optional tabs">
+        <p className="field-hint">Pretty and Raw are always shown — Raw is the bytes themselves.</p>
+        {(["render", "graphql", "jwt", "params", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]).map((tab) => {
+         const hidden = editorTabs.hidden.includes(tab);
+         const order = editorTabs.order.length
+          ? editorTabs.order
+          : (["render", "graphql", "jwt", "params", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]);
+         const at = order.indexOf(tab);
+         return (
+          <div key={tab} className="editor-tabs-settings-row">
+           <label>
+            <input
+             type="checkbox"
+             checked={!hidden}
+             onChange={(event) => {
+              const next = event.target.checked
+               ? editorTabs.hidden.filter((t) => t !== tab)
+               : [...editorTabs.hidden, tab];
+              setEditorTabs({ ...editorTabs, hidden: next });
+             }}
+            />
+            {" "}{VIEW_LABELS[tab]}
+           </label>
+           <span className="editor-tabs-settings-move">
+            <IconButton
+             label={`Move ${VIEW_LABELS[tab]} tab up`}
+             size="small"
+             disabled={at <= 0}
+             onClick={() => setEditorTabs(moveEditorTab(editorTabs, tab, -1))}
+            >
+             <ChevronUp size={12} />
+            </IconButton>
+            <IconButton
+             label={`Move ${VIEW_LABELS[tab]} tab down`}
+             size="small"
+             disabled={at < 0 || at >= order.length - 1}
+             onClick={() => setEditorTabs(moveEditorTab(editorTabs, tab, 1))}
+            >
+             <ChevronDown size={12} />
+            </IconButton>
+           </span>
+          </div>
+         );
+        })}
+       </div>
+      </details>
+     ) : null}
      {/* Wrapping is a CodeMirror setting, so the toggle is offered only on the two
               views CodeMirror renders. It used to be hidden for Render alone, which left
               a dead control on Hex. */}
@@ -1053,6 +1178,16 @@ export function HttpEditor({
       <JwtView report={jwt} />
      ) : active === "params" && params ? (
       <ParamsView report={params} />
+     ) : active === "headers" ? (
+      <HeadersTab raw={value} />
+     ) : active === "queryparams" ? (
+      <QueryParamsTab raw={value} />
+     ) : active === "bodyparams" ? (
+      <BodyParamsTab raw={value} />
+     ) : active === "cookies" ? (
+      <CookiesTab raw={value} />
+     ) : active === "attributes" ? (
+      <AttributesTab raw={value} />
      ) : (
       <CodeMirror
        value={shown}

@@ -42,6 +42,48 @@ export type InspectorDock = "left" | "right";
  */
 export type InspectorPanelState = "auto" | "collapsed";
 
+/**
+ * The optional message-editor tabs an operator can add, remove and reorder
+ * (burpsy-react-ui-t94i). Pretty/Raw/Hex are Burp's always-there core and stay outside this
+ * model — Raw cannot be removed (it is the bytes themselves), and a model that could hide the
+ * one view every message has would let an operator strand themselves.
+ */
+export type OptionalEditorTab = "render" | "graphql" | "jwt" | "params" | "headers" | "queryparams" | "bodyparams" | "cookies" | "attributes";
+
+/**
+ * Tab order: the strip renders hidden-off, then in this order. The stored list need not name
+ * every optional tab — any tab missing from it is shown in its default position (the array's
+ * end, before nothing), which keeps a preference written by an older build loadable.
+ */
+export interface EditorTabPrefs {
+ /** Which optional tabs are hidden. Absent = shown; Burp's default is every tab the message warrants. */
+ hidden: OptionalEditorTab[];
+ /** The order to render the optional tabs in. Tabs absent from this array follow their defaults. */
+ order: OptionalEditorTab[];
+}
+
+export const defaultEditorTabPrefs: EditorTabPrefs = { hidden: [], order: [] };
+
+/**
+ * Move one tab one place, within the optional set. Returns the new order; callers persist it.
+ * A tab not in the order array is appended first, so a reorder of a never-reordered strip
+ * materialises the default order once and then moves within it.
+ */
+export function moveEditorTab(prefs: EditorTabPrefs, tab: OptionalEditorTab, direction: -1 | 1): EditorTabPrefs {
+ const base = prefs.order.length
+  ? prefs.order
+  : (["render", "graphql", "jwt", "params", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]);
+ const at = base.indexOf(tab);
+ if (at < 0) return { ...prefs, order: base };
+ const to = at + direction;
+ if (to < 0 || to >= base.length) return { ...prefs, order: base };
+ const order = [...base];
+ const [moved] = order.splice(at, 1);
+ if (moved === undefined) return { ...prefs, order: base };
+ order.splice(to, 0, moved);
+ return { ...prefs, order };
+}
+
 export interface RepeaterTab {
  id: string;
  name: string;
@@ -329,6 +371,14 @@ interface AppState {
  shortcutsOpen: boolean;
  inspectorDock: InspectorDock;
  inspectorPanelState: InspectorPanelState;
+ /**
+  * Message-editor tab preferences (burpsy-react-ui-t94i): which of the optional tabs are
+  * shown, and in what order — Burp's settings/ui/message-editor "Show" checkboxes plus
+  * Up/Down reordering. Persisted, because an operator who has curated the strip has made a
+  * layout choice, the same class of fact as inspectorDock.
+  */
+ editorTabs: EditorTabPrefs;
+ setEditorTabs: (prefs: EditorTabPrefs) => void;
 
  repeaterTabs: RepeaterTab[];
  activeRepeaterTab: string | null;
@@ -446,6 +496,8 @@ export function persistedWorkspace(state: AppState) {
   // their own so there is exactly one place per-browser UI state lives.
   inspectorDock: state.inspectorDock,
   inspectorPanelState: state.inspectorPanelState,
+  // The tab strip's show/hide and order (t94i): layout the operator curates once.
+  editorTabs: state.editorTabs,
   repeaterTabs: state.repeaterTabs,
   activeRepeaterTab: state.activeRepeaterTab,
   // Groups are layout the operator curates — same persistence class as tab drafts.
@@ -481,6 +533,8 @@ export const useApp = create<AppState>()(
    shortcutsOpen: false,
    inspectorDock: "right",
    inspectorPanelState: "auto",
+  editorTabs: defaultEditorTabPrefs,
+  setEditorTabs: (prefs) => set({ editorTabs: prefs }),
    repeaterTabs: [],
    activeRepeaterTab: null,
    closedRepeaterTabs: [],
