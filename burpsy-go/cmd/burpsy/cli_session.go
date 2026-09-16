@@ -283,6 +283,11 @@ func sessionLogin(ctx *cliContext, args []string) error {
 		fmt.Fprintf(ctx.out, "no_rule_applies url=%s\n", outcome.URL)
 	case session.RecoveryAlreadyValid:
 		fmt.Fprintf(ctx.out, "already_valid rule=%s\n", rule.Name)
+	case session.RecoveryRuleApplied:
+		// No login was attempted: the rule's actions rewrote the request and it was re-sent. Reported
+		// apart from recovered for the reason the kinds are apart — "a session was established" and
+		// "a header was set" are different things to go and check.
+		fmt.Fprintf(ctx.out, "rule_applied rule=%s actions=%d\n", rule.Name, len(outcome.Actions))
 	case session.RecoveryRecovered:
 		fmt.Fprintf(ctx.out, "recovered rule=%s login_attempts=%d\n", rule.Name, outcome.LoginAttempts)
 	case session.RecoveryStillInvalidAfterRelogin:

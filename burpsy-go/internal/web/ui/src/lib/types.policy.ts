@@ -160,7 +160,70 @@ export interface SessionRuleFull {
  steps: SessionMacroStep[];
  validity: SessionValidity;
  max_attempts?: number;
-}export interface SessionRulesResponse {
+	/**
+	 * The rule's ordered action list (burpsy-react-ui-ayi) — Burp's rule shape, and what the executor
+	 * actually runs.
+	 *
+	 * Served as the *effective* list, never as a bare stored one: a rule written before actions
+	 * existed (or whose row predates the column) behaves as the synthesis "check validity, and if not
+	 * valid run the macro", and the server sends that list rather than an empty table. So this is
+	 * never empty, and an empty array in an editor means the client invented one — sending it back is
+	 * refused, because a rule with no actions does nothing and the server would otherwise silently
+	 * restore the login flow.
+	 */
+	actions: SessionAction[];
+}
+
+/**
+ * One rule action. Recursive only where Burp recurses: a CheckValidity action's `then`/`else` are
+ * lists of the same shape, and its executor is the only kind that reads them.
+ */
+export interface SessionAction {
+	/** One of `action_kinds[].kind` from the same response. */
+	kind: string;
+	/**
+	 * Burp's own words for the action, served by the server rather than spelled here. A copy in this
+	 * file would be a second vocabulary, and the failure it produces is silent: an editor that offers
+	 * a kind the API refuses, or spells one it does not accept.
+	 */
+	label: string;
+	/** Burp's per-action checkbox. A disabled action is skipped and the list continues. */
+	enabled: boolean;
+	/** Burp's "no further actions should be applied to the request". */
+	stop?: boolean;
+	/** A RunMacro action's own steps. Absent means the rule's own `steps`, not a copy of them. */
+	macro?: SessionMacroStep[];
+	then?: SessionAction[];
+	else?: SessionAction[];
+	/** SetCookie's cookie name / SetParam's parameter name / SetHeader's header name. */
+	name?: string;
+	/** A value that may carry {{name}} placeholders a macro action extracted earlier in the list. */
+	value?: string;
+	/** SetParam's target: absent (wherever it already is, else the query), "query" or "body". */
+	in?: string;
+	match?: string;
+	replacement?: string;
+	regex?: boolean;
+	/** InvokeExtension's target: a plugin registration id, which the server resolves to a plugin. */
+	extension?: string;
+}
+
+/** One entry of the action palette, served so the editor cannot drift from what the server accepts. */
+export interface SessionActionKind {
+	kind: string;
+	label: string;
+}
+
+/**
+ * A Burp action this build deliberately does not implement, with the reason. Served so the editor
+ * can show it with the reason rather than leaving the operator to conclude it was overlooked.
+ */
+export interface SessionDeclinedAction {
+	name: string;
+	reason: string;
+}
+
+export interface SessionRulesResponse {
 	wired: boolean;
 	rules: SessionRuleFull[];
 	hint?: string;
@@ -170,6 +233,10 @@ export interface SessionRuleFull {
 	 * the rules list is empty.
 	 */
 	tools: string[];
+	/** The action palette, from the same source. Always present, same reason. */
+	action_kinds: SessionActionKind[];
+	/** The Burp actions this build does not implement. Always present, same reason. */
+	declined_actions: SessionDeclinedAction[];
 }
 
 export interface SessionCookiePair {

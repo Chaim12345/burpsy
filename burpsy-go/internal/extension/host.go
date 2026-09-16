@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -204,6 +205,59 @@ func (h *Host) lookup(name string) (*plugin, error) {
 		return nil, fmt.Errorf("%q: %w", name, ErrUnknownPlugin)
 	}
 	return p, nil
+}
+
+// ResolveRegistration finds the loaded plugin that declares `id` with kind `kind`.
+//
+// It exists because a session rule's Invoke-an-extension action names a *registration*, not a
+// plugin: Burp's action points at an extension's session-handling action by name, and making the
+// operator also name the plugin that owns it would be a second field that must agree with the
+// first. Resolution is by registration id across the loaded plugins, and the two ways it can fail
+// are separated on purpose — "no plugin offers this" and "two plugins offer this" need different
+// fixes, and a rule that silently picked one of the two would send a real request through the wrong
+// plugin.
+func (h *Host) ResolveRegistration(id string, kind Kind) (string, error) {
+	if id == "" {
+		return "", errors.New("the registration id is empty, so no plugin can be resolved")
+	}
+	h.mu.Lock()
+	names := append([]string(nil), h.ordered...)
+	byName := make(map[string]*plugin, len(h.byName))
+	for name, p := range h.byName {
+		byName[name] = p
+	}
+	h.mu.Unlock()
+	var owners []string
+	for _, name := range names {
+		p := byName[name]
+		p.mu.Lock()
+		loaded := p.state == StateLoaded && p.session != nil
+		var declares bool
+		for _, reg := range p.registrations {
+			if reg.ID == id && reg.Kind == kind {
+				declares = true
+				break
+			}
+		}
+		p.mu.Unlock()
+		if declares && loaded {
+			owners = append(owners, name)
+		}
+	}
+	switch len(owners) {
+	case 0:
+		return "", fmt.Errorf("no loaded plugin registers %q as a %s; a plugin must be loaded and must declare "+
+			"the registration in its manifest", id, kind)
+	case 1:
+		return owners[0], nil
+	default:
+		// Named, not chosen. Burp's own model has one extension per action, and here the id is the
+		// plugin's own handle — two plugins using the same one is an ambiguity only the operator
+		// can resolve, and guessing would fire the wrong code against a live engagement.
+		return "", fmt.Errorf("two loaded plugins register %q as a %s (%s); rename one, because a rule "+
+			"that picked one would send a real request through whichever it happened to choose",
+			id, kind, strings.Join(owners, ", "))
+	}
 }
 
 // List reports every allowlisted plugin and the state breakdown across them.
@@ -532,6 +586,8 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		err = sess.call(callCtx, "menu.invoke", params, &result)
 	case KindEditorTab:
 		err = sess.call(callCtx, "editor.render", params, &result)
+	case KindSessionAction:
+		err = sess.call(callCtx, "sessionAction.invoke", params, &result)
 	default:
 		// Unreachable: validate() refuses any other kind at load. Kept as a real
 		// error rather than a panic so a future kind added to validKinds and not
