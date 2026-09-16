@@ -1065,6 +1065,19 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			if !a.Plan.Fill(i, &asg) {
 				break
 			}
+			// gateForSend, not limiter.Acquire: the gate above ran before this ordinal queued for
+			// an in-flight slot, and a pause raised WHILE it queued — which is every auto-pause,
+			// since the predicate reads the response of the send that frees the slot — was
+			// invisible to it. Re-asking with the permit in hand is what makes a halt halt the
+			// next request rather than the one after it (burpsy-react-ui-xqwe). nil is stopped.
+			//
+			// Above enumerated++, so a stop here does not put a position the attack never sent
+			// into the report's denominator: Enumerated is what the loop reached, and this
+			// ordinal was abandoned before it reached anything.
+			permit := gateForSend(a.Control, limiter)
+			if permit == nil {
+				break
+			}
 			enumerated++
 			places := make([]ApplyPlace, 0, len(asg.Slots))
 			payloads := make([][]byte, 0, len(asg.Slots))
@@ -1079,7 +1092,6 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				payloads = append(payloads, payload)
 			}
 
-			permit := limiter.Acquire()
 			// applyAllChecked, not ApplyAll: a payload its container cannot hold is dropped from
 			// the splice, and the request built from what remains is the BASE request for a
 			// single-position attack. Sending that would put an unmodified request in the report

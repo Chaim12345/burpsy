@@ -1,6 +1,7 @@
 package intruder
 
 import (
+	"errors"
 	"strconv"
 	"sync"
 	"testing"
@@ -170,6 +171,137 @@ func TestAutoPauseRegexEntriesCompileAsGiven(t *testing.T) {
 func TestAutoPauseRefusesAnUncompilableExpression(t *testing.T) {
 	if _, err := NewAutoPause([]string{"([bad"}, false, false, false); err == nil {
 		t.Fatal("an uncompilable regex was accepted; the attack would run uncontrolled while the panel says it is armed")
+	}
+}
+
+// The hold, proved without a sleep-and-hope. burpsy-react-ui-xqwe filed
+// TestAutoPauseHaltsWhenTheExpressionAppears as flaky; it was not flaky, it was intermittently
+// TELLING THE TRUTH about a real ordering hole in the driver (see the plan loop's re-gate in
+// engine.go). This test closes the window the old one only sometimes saw.
+//
+// The synchronisation is the sender itself: `starts` is unbuffered, so no request can proceed
+// until this goroutine reads its ordinal. That turns "did a fourth request go out" from a timing
+// question into a channel read. The only bounded wait left is the quiet window, and it is in the
+// safe direction: with the hold intact the driver is parked in cond.Wait() and NO length of wait
+// can produce a start, so a loaded machine cannot make this test red. Without the hold the start
+// is already queued on `starts` before the window opens.
+func TestAutoPauseStartsNoFurtherRequestOnceItHasFired(t *testing.T) {
+	a, _ := autoPauseBase(t)
+	ap, err := NewAutoPause([]string{"ACCOUNT LOCKED"}, true, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.WithAutoPause(ap)
+
+	abort := make(chan struct{})
+	t.Cleanup(func() { close(abort) })
+	starts := make(chan int)
+
+	var mu sync.Mutex
+	sent := 0
+	var whilePaused []int
+	send := func(raw []byte) (Sent, error) {
+		mu.Lock()
+		sent++
+		n := sent
+		// Read at the moment the request begins. Once the auto-pause has fired, the pause is
+		// published before the in-flight permit is released, and a later request can only begin
+		// by taking that permit — so a request that starts after the trigger is GUARANTEED to
+		// observe StatusPaused here. There is no window in which the bug hides.
+		if a.Control.Status() == StatusPaused {
+			whilePaused = append(whilePaused, n)
+		}
+		mu.Unlock()
+		select {
+		case starts <- n:
+		case <-abort:
+			return Sent{}, errors.New("test over")
+		}
+		b := "welcome"
+		if n == 3 {
+			b = "ACCOUNT LOCKED: too many attempts"
+		}
+		return Sent{Raw: []byte("HTTP/1.1 200 OK\r\nContent-Length: " + strconv.Itoa(len(b)) + "\r\n\r\n" + b), Status: intPtrHelper(200)}, nil
+	}
+
+	var r *AttackReport
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r = Run(a, send, nil)
+	}()
+
+	// Step the attack up to and including the request that trips the lockout.
+	for want := 1; want <= 3; want++ {
+		select {
+		case got := <-starts:
+			if got != want {
+				t.Fatalf("requests are not serial at concurrency 1: expected request %d to start, got %d", want, got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("request %d never started; the attack stalled before the lockout response", want)
+		}
+	}
+
+	// The trigger is evaluated after send 3 returns, so the pause is certain to arrive; only its
+	// latency is unknown. Waiting for the state rather than for a duration is what makes the
+	// assertion below mean something.
+	deadline := time.Now().Add(5 * time.Second)
+	for a.Control.Status() != StatusPaused {
+		if time.Now().After(deadline) {
+			t.Fatalf("the lockout response did not pause the attack; auto-pause never fired")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	select {
+	case n := <-starts:
+		t.Fatalf("request %d was started AFTER auto-pause fired on the lockout response: the engine sends one more request past its own halt. For a lockout predicate that is one extra attempt against an account the operator already knows is locked", n)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	if !a.Control.Resume() {
+		t.Fatal("the paused attack refused to resume")
+	}
+	// The hold released exactly what it held: enumeration picks up at request 4, nothing was
+	// skipped and nothing was duplicated.
+	select {
+	case got := <-starts:
+		if got != 4 {
+			t.Fatalf("after resume the attack started request %d, not 4; the hold lost or repeated a plan position", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the attack never resumed after Resume() returned true")
+	}
+	for want := 5; want <= 6; want++ {
+		select {
+		case got := <-starts:
+			if got != want {
+				t.Fatalf("expected request %d after resume, got %d", want, got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("request %d never started after the resume", want)
+		}
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run never returned after the last request")
+	}
+
+	mu.Lock()
+	offenders := append([]int(nil), whilePaused...)
+	total := sent
+	mu.Unlock()
+	if len(offenders) > 0 {
+		t.Errorf("requests %v began while the control read StatusPaused; auto-pause is advisory, not a halt", offenders)
+	}
+	if total != 6 {
+		t.Errorf("the attack sent %d requests, want the 6 the plan holds", total)
+	}
+	if r.AutoPaused != 1 {
+		t.Errorf("the report says the auto-pause fired %d times; the lockout page appeared exactly once", r.AutoPaused)
 	}
 }
 
