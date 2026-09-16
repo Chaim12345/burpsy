@@ -35,6 +35,17 @@ export interface EngagementSeed {
   host: string;
   /** The node's path, or the exchange's path. "" means the whole host. */
   path: string;
+  /**
+   * The origin's port and whether it was reached over TLS.
+   *
+   * Both are carried rather than assumed because the rows that hand a target to another page hand
+   * it an *origin*, and guessing one is how a content-discovery sweep gets pointed somewhere the
+   * operator never captured. Site-map nodes carry both (`sitemapNodeView`), so there is nothing to
+   * guess; they stay optional only for callers that genuinely have neither, and `seedUrl` then
+   * falls back to https with no port — a guess, which is why every caller in this repo passes them.
+   */
+  port?: number;
+  tls?: boolean;
 }
 
 /** A search as the endpoint takes it: GET /api/engagement/{kind}?q=&host=. */
@@ -110,13 +121,20 @@ export interface EngagementHandlers {
 /**
  * The seed's URL, used by the two rows that hand a target to another page.
  *
- * The site map tree does not carry the scheme or port on a node, so this is built from what the
- * row has. Callers that hold a real exchange should pass its `exchangeUrl` through `url` instead
- * of letting this guess.
+ * This was live-verified into existence: the first version assumed https and no port, and the
+ * Discover content row on a site-map node then read "Opens Content discovery with
+ * https://127.0.0.1/checkout" for traffic actually captured on http://127.0.0.1:19222. A sweep
+ * launched from that would have been aimed at an origin the operator never visited, and the hint
+ * stated the wrong URL confidently enough to be believed.
+ *
+ * Callers holding a real exchange still pass its `exchangeUrl` through `url`, which wins outright.
  */
 export function seedUrl(seed: EngagementSeed, url?: string): string {
   if (url) return url;
-  return `https://${seed.host}${seed.path}`;
+  const scheme = seed.tls === false ? "http" : "https";
+  const defaultPort = scheme === "https" ? 443 : 80;
+  const authority = seed.port === undefined || seed.port === defaultPort ? seed.host : `${seed.host}:${seed.port}`;
+  return `${scheme}://${authority}${seed.path}`;
 }
 
 /**

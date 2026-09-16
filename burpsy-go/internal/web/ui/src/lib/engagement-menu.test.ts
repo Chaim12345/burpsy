@@ -116,10 +116,21 @@ describe("the scope burpsy can honour is stated, not implied", () => {
 
 describe("the rows that hand a target to another page hand it a usable one", () => {
   test("an exchange row's real URL wins over one rebuilt from host and path", () => {
-    // The tree knows no scheme or port, so a rebuilt URL guesses https and no port. A caller
-    // holding the exchange must be able to pass the truth through.
     expect(seedUrl(BRANCH_NODE, "http://shop.test:8080/checkout")).toBe("http://shop.test:8080/checkout");
-    expect(seedUrl(BRANCH_NODE)).toBe("https://shop.test/checkout");
+  });
+
+  test("a plain-HTTP node on a non-default port keeps both, rather than being promoted to https", () => {
+    // Caught live, not in review: the first version assumed https and dropped the port, so a node
+    // captured on http://127.0.0.1:19222 offered to sweep https://127.0.0.1 — an origin the
+    // operator had never visited, named confidently in the row's own hint.
+    expect(seedUrl({ host: "127.0.0.1", path: "/checkout", port: 19222, tls: false })).toBe(
+      "http://127.0.0.1:19222/checkout",
+    );
+  });
+
+  test("default ports are left off, so the URL reads the way an operator would type it", () => {
+    expect(seedUrl({ host: "shop.test", path: "/checkout", port: 443, tls: true })).toBe("https://shop.test/checkout");
+    expect(seedUrl({ host: "shop.test", path: "/checkout", port: 80, tls: false })).toBe("http://shop.test/checkout");
   });
 
   test("Discover content and Schedule task pass the seed's URL to their handler", () => {
