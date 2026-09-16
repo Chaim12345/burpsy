@@ -442,6 +442,31 @@ type Attack struct {
 	// position. Nil is the uncontrolled attack: it runs to completion, which is what every caller
 	// got before Control existed. See internal/intruder/control.go.
 	Control *Control
+	// SetConnectionClose is Burp's "Set Connection header" attack setting (burpsy-react-ui-fmxv):
+	// "Add or update the Connection header with the value close." Applied to every request this
+	// attack sends — the spliced ones, the baseline, and each link of a recursive chain — after
+	// the payloads are in place, because insertion points are byte offsets and a header added
+	// ahead of them would move every span that follows. False leaves the template's own Connection
+	// header, whatever it says, exactly as the operator wrote it. See connection.go.
+	SetConnectionClose bool
+	// StorePayloads is Burp's "Store full payloads" attack setting (burpsy-react-ui-fmxv): "Store
+	// the full payload values for each result. This consumes additional memory but may be required
+	// to perform certain actions at runtime."
+	//
+	// What it costs here is worth stating plainly, because memory frugality is this project's
+	// reason to exist. The payload SETS are materialised either way — the splice reads them, so
+	// they exist for the length of the attack no matter what this says, and neither setting can
+	// change that. What this buys is a per-result copy: Attempt.Payloads, one []string per kept
+	// attempt row, holding the same string values the sets already hold. Go strings are immutable
+	// and shared, so the bytes are not copied; the cost is the slice header plus one 16-byte string
+	// header per payload per row, bounded by DetailLimit. For the default 500-row limit and a
+	// two-position cluster bomb that is on the order of 28 KB, and it is paid only when asked for.
+	//
+	// What it buys is a report that can name its own payloads. Without it an Attempt row carries an
+	// ordinal, and recovering the payload behind that ordinal means holding the plan AND the
+	// resolved sets and replaying the plan's arithmetic — which is fine inside the handler that
+	// just ran the attack and impossible for anything handed the report afterwards.
+	StorePayloads bool
 }
 
 // NewAttack builds an attack with defaults sized for a UI: enough rows to render a small attack,
@@ -487,6 +512,53 @@ func (a *Attack) WithGrep(g Grep) *Attack {
 // WithAutoPause attaches the auto-pause predicate. Nil is unconfigured.
 func (a *Attack) WithAutoPause(ap *AutoPause) *Attack {
 	a.AutoPause = ap
+	return a
+}
+
+// egress shapes the bytes that will actually go on the wire, after the payloads are spliced and
+// before the guard reads them.
+//
+// Before the guard, deliberately: the guard is the scope chokepoint, and its contract is that it
+// sees "the request a payload actually produced". Showing it one request and sending another would
+// make that contract false for the sake of one header.
+//
+// After the splice, equally deliberately: insertion points are byte offsets into the base request,
+// so a header added ahead of them would move every span that follows.
+//
+// The returned slice is the caller's input untouched when no setting applies, so an attack that
+// configures none of these allocates nothing per request.
+func (a *Attack) egress(raw []byte) []byte {
+	if a == nil || !a.SetConnectionClose {
+		return raw
+	}
+	return setConnectionClose(raw)
+}
+
+// storedPayloads is the per-attempt payload record, or nil when the attack did not ask for one.
+// nil rather than an empty slice, because Attempt.Payloads is omitempty and the absence is what
+// says "this attack did not store payload values" — see Attempt.Payloads.
+func (a *Attack) storedPayloads(payloads [][]byte) []string {
+	if a == nil || !a.StorePayloads || len(payloads) == 0 {
+		return nil
+	}
+	out := make([]string, len(payloads))
+	for i, p := range payloads {
+		out[i] = string(p)
+	}
+	return out
+}
+
+// WithSetConnectionClose attaches Burp's "Set Connection header" setting. See
+// Attack.SetConnectionClose.
+func (a *Attack) WithSetConnectionClose(b bool) *Attack {
+	a.SetConnectionClose = b
+	return a
+}
+
+// WithStorePayloads attaches Burp's "Store full payloads" setting. See Attack.StorePayloads for
+// what it costs and what it buys.
+func (a *Attack) WithStorePayloads(b bool) *Attack {
+	a.StorePayloads = b
 	return a
 }
 
@@ -641,6 +713,16 @@ type Attempt struct {
 	// whatever else was happening against the target at that moment. Set unconditionally, so it is
 	// never the zero time even for a row that never reached the network.
 	TimeOfDay time.Time `json:"time_of_day"`
+	// Payloads are the payload values spliced into this attempt's insertion points, in position
+	// order — Burp's "Store full payloads" (burpsy-react-ui-fmxv). Present only when the attack
+	// asked for them (Attack.StorePayloads); ABSENT from the JSON otherwise, never an empty array.
+	//
+	// That distinction is the whole point. An empty array would read as "this attempt had no
+	// payloads", which is a real state — the baseline row (v34) is exactly that. An absent field
+	// reads as "this attack did not store payload values", which is a different fact about the
+	// report rather than about the request. A reader that cannot tell them apart would label the
+	// baseline and every row of a frugal attack the same way.
+	Payloads []string `json:"payloads,omitempty"`
 	// Cookies are the names Set-Cookie carried in this attempt's response — Burp: "any cookies
 	// received in the response". Names only, never values: an attack report is a document that gets
 	// pasted into tickets, and a session token belongs in the stored response (ResponseID above), not
@@ -753,6 +835,11 @@ type outcome struct {
 	err     error
 	// sentAt is when this ordinal was dispatched or refused. See Attempt.TimeOfDay.
 	sentAt time.Time
+	// payloads are this ordinal's payload values, carried only when the attack asked to store
+	// them (Attack.StorePayloads) and nil otherwise, so an attack that did not ask allocates
+	// nothing per outcome. Set on refusals and guard failures too: the payload a container would
+	// not hold is exactly the one an operator needs named. See Attempt.Payloads.
+	payloads []string
 }
 
 // collector reduces a stream of outcomes into the report. Buckets are keyed by behaviour, not
@@ -825,7 +912,7 @@ func (c *collector) absorb(o outcome) {
 				// match-count array holds to the same contract: [] for a send that never produced
 				// a response, not null (irt).
 				Ordinal: o.ordinal, Error: &e, TimeOfDay: o.sentAt, Timeout: isTimeout(o.err),
-				Cookies: []string{}, GrepMatchCounts: []int{},
+				Cookies: []string{}, GrepMatchCounts: []int{}, Payloads: o.payloads,
 			})
 		}
 		c.noteError(o.ordinal, o.err.Error())
@@ -888,7 +975,7 @@ func (c *collector) absorb(o outcome) {
 			Reflected: h.reflected, RequestID: requestID, ResponseID: responseID,
 			GrepMatched: h.grepMatched, GrepExtract: h.grepExtract,
 			GrepMatchCounts: emptyCounts(h.grepCounts),
-			TimeOfDay:       o.sentAt, Cookies: h.cookies,
+			TimeOfDay:       o.sentAt, Cookies: h.cookies, Payloads: o.payloads,
 		})
 	}
 }
@@ -1015,9 +1102,15 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				if a.SuiteGate != nil {
 					a.SuiteGate(context.Background())
 				}
+				// The baseline is "the template request with all payload positions set to their
+				// base values" — the request the attack rows are compared against. It therefore
+				// carries the same egress settings every attack row does: a baseline sent without
+				// Connection: close while every attack row has it would make the one row that
+				// exists to be comparable the one row that is not.
+				baseReq := a.egress(a.Base)
 				permit := limiter.Acquire()
 				if a.Guard != nil {
-					if err := a.Guard(a.Base); err != nil {
+					if err := a.Guard(baseReq); err != nil {
 						permit.Release()
 						results <- outcome{ordinal: 0, err: err, sentAt: time.Now()}
 					} else {
@@ -1026,9 +1119,9 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 							defer wg.Done()
 							defer permit.Release()
 							sentAt := time.Now()
-							h, err := doSend(a, limiter, send, a.Base, nil, ctx)
+							h, err := doSend(a, limiter, send, baseReq, nil, ctx)
 							if h != nil {
-								h.request = a.Base
+								h.request = baseReq
 							}
 							results <- outcome{ordinal: 0, hit: h, err: err, sentAt: sentAt}
 						}()
@@ -1039,9 +1132,9 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 						defer wg.Done()
 						defer permit.Release()
 						sentAt := time.Now()
-						h, err := doSend(a, limiter, send, a.Base, nil, ctx)
+						h, err := doSend(a, limiter, send, baseReq, nil, ctx)
 						if h != nil {
-							h.request = a.Base
+							h.request = baseReq
 						}
 						results <- outcome{ordinal: 0, hit: h, err: err, sentAt: sentAt}
 					}()
@@ -1099,20 +1192,25 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			// (burpsy-react-ui-194b). The attempt is recorded with the enumerator's own reason and
 			// never sent, which is the same shape the guard refusal below already takes.
 			req, refusals := applyAllChecked(a.Base, places)
+			// Stored once per ordinal and shared by every outcome this ordinal can produce — the
+			// send, the refusal and the guard failure — so a report that names payloads names them
+			// on the rows where the operator most needs them. nil when the attack did not ask.
+			stored := a.storedPayloads(payloads)
 			if len(refusals) > 0 {
 				permit.Release()
-				results <- outcome{ordinal: baselineShift(a) + i, err: errPayloadRefused(refusals), sentAt: time.Now()}
+				results <- outcome{ordinal: baselineShift(a) + i, err: errPayloadRefused(refusals), sentAt: time.Now(), payloads: stored}
 				continue
 			}
+			req = a.egress(req)
 			if a.Guard != nil {
 				if err := a.Guard(req); err != nil {
 					permit.Release()
-					results <- outcome{ordinal: baselineShift(a) + i, err: err, sentAt: time.Now()}
+					results <- outcome{ordinal: baselineShift(a) + i, err: err, sentAt: time.Now(), payloads: stored}
 					continue
 				}
 			}
 			wg.Add(1)
-			go func(ordinal int, raw []byte, payloads [][]byte, permit *Permit) {
+			go func(ordinal int, raw []byte, payloads [][]byte, stored []string, permit *Permit) {
 				defer wg.Done()
 				defer permit.Release()
 				// Captured here, not before the permit or the guard: this is the closest point to the
@@ -1122,15 +1220,15 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				sentAt := time.Now()
 				defer func() {
 					if r := recover(); r != nil {
-						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt}
+						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt, payloads: stored}
 					}
 				}()
 				h, err := doSend(a, limiter, send, raw, payloads, ctx)
 				if h != nil {
 					h.request = raw
 				}
-				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt}
-			}(baselineShift(a)+i, req, payloads, permit)
+				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt, payloads: stored}
+			}(baselineShift(a)+i, req, payloads, stored, permit)
 		}
 		wg.Wait()
 	}()
@@ -1198,18 +1296,24 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 		permit := limiter.Acquire()
 		// See the plan loop: a refused payload must be recorded, not sent as the base request.
 		req, refusals := applyAllChecked(a.Base, places)
+		// The chain already records its payloads per ordinal unconditionally (ChainPayloads) —
+		// plan arithmetic cannot name a response-derived payload, so the driver has no choice.
+		// Attempt.Payloads is still filled when asked, so a row means the same thing whichever
+		// driver produced it and a reader does not need to know which one did.
+		stored := a.storedPayloads(payloads)
 		if len(refusals) > 0 {
 			permit.Release()
-			col.absorb(outcome{ordinal: ordinal, err: errPayloadRefused(refusals), sentAt: time.Now()})
+			col.absorb(outcome{ordinal: ordinal, err: errPayloadRefused(refusals), sentAt: time.Now(), payloads: stored})
 			a.Control.note(false)
 			// Nothing was sent, so there is no response to extract the chain's next payload from —
 			// the same reason the guard refusal below stops rather than retrying the same bytes.
 			break
 		}
+		req = a.egress(req)
 		if a.Guard != nil {
 			if err := a.Guard(req); err != nil {
 				permit.Release()
-				col.absorb(outcome{ordinal: ordinal, err: err, sentAt: time.Now()})
+				col.absorb(outcome{ordinal: ordinal, err: err, sentAt: time.Now(), payloads: stored})
 				// The live progress view is fed here too, not only on the success path: this
 				// outcome is a settled failure and the report will count it, and control.go's
 				// contract is that a poll cannot disagree with the report. Leaving it out made a
@@ -1229,7 +1333,7 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 		// deadlock the chain at max_in_flight=1 — the very limit this driver runs under.
 		permit.Release()
 		if err != nil {
-			col.absorb(outcome{ordinal: ordinal, err: err, sentAt: sentAt})
+			col.absorb(outcome{ordinal: ordinal, err: err, sentAt: sentAt, payloads: stored})
 			// Same as the guard refusal above: a counted failure is a settled failure.
 			a.Control.note(false)
 			// Same reasoning as the guard refusal: no response, no extraction, no chain. The
@@ -1238,7 +1342,7 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 			break
 		}
 		h.request = req
-		col.absorb(outcome{ordinal: ordinal, hit: h, sentAt: sentAt})
+		col.absorb(outcome{ordinal: ordinal, hit: h, sentAt: sentAt, payloads: stored})
 		a.Control.note(true)
 
 		next, ok := a.Recursive.extract(h.raw)
