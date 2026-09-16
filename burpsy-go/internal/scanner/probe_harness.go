@@ -80,7 +80,7 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 	}
 
 	h := &ProbeHarness{scanner: s, exchange: exchange, reqBytes: raw}
-	h.points, h.declined = bcheck.Enumerate(raw, kinds)
+	h.points, h.declined = bcheck.EnumerateWith(raw, kinds, cc.ProbeEnumerateOptions())
 
 	baseline, err := h.send(ctx, raw)
 	if err != nil {

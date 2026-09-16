@@ -381,6 +381,38 @@ func meterFrom(ctx context.Context) *probeMeter {
 	return m
 }
 
+// runCfgKey is the context key the *run's* audit configuration rides on.
+//
+// It exists because AuditWithin and AuditSession take a configuration per call — that is how
+// /api/audit/{id} honours `{"config": "<name>"}` — while NewCheckContext could only read
+// ActiveScanner.AuditConfig(), the server-wide default set once at startup by -scan-config. So a
+// named configuration reached the run's budgets, breakers and queue row and reached no check: an
+// audit launched under a configuration that selects different insertion points enumerated the
+// server default's points and reported the operator's name over them. The queue row said one thing
+// and the wire did another.
+//
+// The same argument the meter makes applies here and is why this is a context value rather than a
+// parameter: the dispatch closure wrapDescriptor builds has a fixed signature shared by every
+// check, and widening it would put the configuration in the signature of every future check — which
+// could then forget it. There is exactly one place a check context is built for a dispatched check,
+// and it is the only place that reads this.
+type runCfgKey struct{}
+
+func withRunConfig(ctx context.Context, cfg AuditConfig) context.Context {
+	return context.WithValue(ctx, runCfgKey{}, cfg)
+}
+
+// runConfigFrom returns the audit configuration this dispatch is running under, and whether ctx
+// carried one. False means the caller reached a check outside a dispatched audit — a direct
+// evaluator test, say — and the scanner's own configuration is the honest fallback.
+func runConfigFrom(ctx context.Context) (AuditConfig, bool) {
+	if ctx == nil {
+		return AuditConfig{}, false
+	}
+	cfg, ok := ctx.Value(runCfgKey{}).(AuditConfig)
+	return cfg, ok
+}
+
 // auditRun is the shared state for one audit run: the clock, the budgets, and the ledger.
 //
 // Mutex-guarded because Go's AuditSession dispatches items concurrently where the Rust original
@@ -1016,7 +1048,9 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 
 	o.State = ItemStateAuditing
 	meter := &probeMeter{}
-	ictx := withMeter(ctx, meter)
+	// The run's configuration travels with the dispatch context so every check enumerates under the
+	// configuration this audit was launched with, not the server-wide default. See runCfgKey.
+	ictx := withRunConfig(withMeter(ctx, meter), run.cfg)
 	breaker := newItemBreaker(run.cfg)
 
 	// The plan is built before anything is dispatched, so "how much did we not do" is answerable at
@@ -1030,7 +1064,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// skipped entirely when nothing is reading the queue — it is one request parse, cheap beside a
 	// probe but not free, and a CLI audit should not pay for a table it has no way to show.
 	if run.cfg.Items != nil {
-		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds())
+		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds(), run.cfg.enumerateOptions())
 		run.cfg.Items.Begin(exchangeID, ex, run.cfg, len(units), len(steps), points, kinds)
 	}
 

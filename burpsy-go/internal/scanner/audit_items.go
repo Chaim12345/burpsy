@@ -203,6 +203,13 @@ const (
 	// nothing failed: this is attack surface the tool declines to reach, and it is the one status
 	// here that is a property of the place rather than of the audit.
 	AuditItemPointSkippedDeclined
+	// AuditItemPointSkippedNested is Burp's "Skipped as nested insertion points not enabled": the
+	// place is inside an already-decoded parameter value and the run turned nested expansion off.
+	//
+	// Distinct from SkippedDeclined, which is attack surface the enumerator *cannot* reach. This is
+	// surface it deliberately did not reach because the operator configured it that way, and the
+	// two must not read alike: one is a tool limitation to file, the other is a setting to change.
+	AuditItemPointSkippedNested
 )
 
 // Label is the operator-facing label, using Burp's own string for the four statuses that have one.
@@ -226,6 +233,8 @@ func (s AuditItemPointStatus) Label() string {
 		return "Skipped as limit exceeded"
 	case AuditItemPointSkippedDeclined:
 		return "Skipped"
+	case AuditItemPointSkippedNested:
+		return "Skipped as nested insertion points not enabled"
 	}
 	return "Unknown"
 }
@@ -233,7 +242,8 @@ func (s AuditItemPointStatus) Label() string {
 // IsSkip reports whether this status means no work was dispatched at this point. The two skip
 // statuses are properties of the place; the rest describe what the audit did with it.
 func (s AuditItemPointStatus) IsSkip() bool {
-	return s == AuditItemPointSkippedLimit || s == AuditItemPointSkippedDeclined
+	return s == AuditItemPointSkippedLimit || s == AuditItemPointSkippedDeclined ||
+		s == AuditItemPointSkippedNested
 }
 
 // MarshalJSON writes the label rather than the ordinal, matching DispatchScope and Disposition — the
@@ -279,8 +289,13 @@ type AuditItemBreakers struct {
 	PauseSessionAfterFailedItems          uint32  `json:"pause_session_after_failed_items"`
 	PauseSessionAtFailedItemPercentage    uint8   `json:"pause_session_at_failed_item_percentage"`
 	// MaxInsertionPointsPerRequest is the enumerator's per-request ceiling — the threshold behind
-	// every AuditItemPointSkippedLimit row.
+	// every AuditItemPointSkippedLimit row. The run's own value, not the engine default: an
+	// operator who lowered the ceiling and read 30 here would be reading about a run that never
+	// happened.
 	MaxInsertionPointsPerRequest int `json:"max_insertion_points_per_request"`
+	// NestedInsertionPoints reports whether this run expanded the JSON/base64/XML structure inside
+	// parameter values. False is the explanation for every AuditItemPointSkippedNested row.
+	NestedInsertionPoints bool `json:"nested_insertion_points"`
 }
 
 func newAuditItemBreakers(cfg AuditConfig) AuditItemBreakers {
@@ -290,7 +305,8 @@ func newAuditItemBreakers(cfg AuditConfig) AuditItemBreakers {
 		ConsecutiveUnitFailuresToFailItem:     cfg.ConsecutiveUnitFailuresToFailItem,
 		PauseSessionAfterFailedItems:          cfg.PauseSessionAfterFailedItems,
 		PauseSessionAtFailedItemPercentage:    cfg.PauseSessionAtFailedItemPercentage,
-		MaxInsertionPointsPerRequest:          bcheck.DefaultMaxInsertionPoints,
+		MaxInsertionPointsPerRequest:          cfg.MaxInsertionPointsPerBaseRequest(),
+		NestedInsertionPoints:                 cfg.NestedInsertionPointsEnabled(),
 	}
 	if cfg.MaxRequests.Set {
 		n := cfg.MaxRequests.Value
@@ -743,7 +759,7 @@ func (l *AuditItemLedger) StateCounts() []ItemStateCount {
 // trusting a position, and it is protected the same way: Test_a_capped_enumeration_is_labelled_as_the
 // _limit_being_exceeded fails if bcheck's wording moves, rather than the label silently degrading to
 // a generic skip.
-const declinedPastLimitPrefix = "insertion points past the per-request limit"
+const declinedPastLimitPrefix = bcheck.DeclinedPastLimitWhat
 
 // auditItemPoints enumerates one request's insertion points and the places the enumerator declined,
 // as queue rows in Pending status.
@@ -751,11 +767,11 @@ const declinedPastLimitPrefix = "insertion points past the per-request limit"
 // kinds is returned alongside because the count is meaningless without it — see
 // AuditItem.PointKinds. Enumeration happens only when an item ledger is attached, so a CLI audit and
 // a unit test pay nothing: it is one request parse per item, cheap beside a probe but not free.
-func auditItemPoints(raw []byte, kinds []string) ([]AuditItemPoint, []string) {
+func auditItemPoints(raw []byte, kinds []string, opts bcheck.EnumerateOptions) ([]AuditItemPoint, []string) {
 	if len(raw) == 0 {
 		return nil, kinds
 	}
-	points, declined := bcheck.Enumerate(raw, kinds)
+	points, declined := bcheck.EnumerateWith(raw, kinds, opts)
 	out := make([]AuditItemPoint, 0, len(points)+len(declined))
 	for _, p := range points {
 		out = append(out, AuditItemPoint{
@@ -766,8 +782,11 @@ func auditItemPoints(raw []byte, kinds []string) ([]AuditItemPoint, []string) {
 	}
 	for _, d := range declined {
 		status := AuditItemPointSkippedDeclined
-		if strings.HasPrefix(d.What, declinedPastLimitPrefix) {
+		switch {
+		case strings.HasPrefix(d.What, declinedPastLimitPrefix):
 			status = AuditItemPointSkippedLimit
+		case strings.HasPrefix(d.What, bcheck.DeclinedNestedDisabledWhat):
+			status = AuditItemPointSkippedNested
 		}
 		out = append(out, AuditItemPoint{Name: d.What, Status: status, Detail: d.Reason})
 	}

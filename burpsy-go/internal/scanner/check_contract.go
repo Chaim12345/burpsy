@@ -51,6 +51,27 @@ type CheckContext struct {
 	// configuration reached only the audit-queue row. Turning cookie insertion off changed what
 	// the queue displayed and not one byte of what was sent (burpsy-react-ui-povm).
 	InsertionKinds []string
+	// EnumerateOptions is the run's insertion-point tuning — the per-request ceiling
+	// (`max_insertion_points_per_base_request`) and whether nested points are expanded
+	// (`use_nested_insertion_points`). The zero value is the engine default, which is what a
+	// context built outside a dispatched audit gets.
+	//
+	// Beside InsertionKinds rather than folded into it because the two answer different questions:
+	// InsertionKinds is *which classes of place*, this is *how many and how deep*. A check reads
+	// both through ProbeEnumerateOptions, which is the only spelling a probe site should use.
+	EnumerateOptions bcheck.EnumerateOptions
+}
+
+// ProbeEnumerateOptions is the enumerator tuning an active probe must enumerate under: the run's
+// when a dispatched audit supplied one, the engine default otherwise.
+//
+// Paired with ProbeInsertionKinds — a probe site needs both, and a site that passed the kinds but
+// enumerated with a default cap would send probes the operator's ceiling had excluded.
+func (cc *CheckContext) ProbeEnumerateOptions() bcheck.EnumerateOptions {
+	if cc == nil {
+		return bcheck.EnumerateOptions{}
+	}
+	return cc.EnumerateOptions
 }
 
 // ProbeInsertionKinds is the point classes an active probe may use: the audit configuration's when
@@ -75,24 +96,40 @@ func NewCheckContext(scanner *ActiveScanner, exchange, stored *core.Exchange) *C
 		snd = scanner.sender
 		cfg = scanner.config
 	}
-	// Read from the scanner's effective audit configuration, which is exactly what the audit entry
-	// points run under: scanner.go's ActiveAudit and ActiveAuditSession both pass
-	// s.AuditConfig() as the run's cfg. A caller invoking AuditWithin/AuditSession directly with a
-	// bespoke config is the one case where this could differ from run.cfg, and it is stated here
-	// rather than papered over — threading run.cfg to this constructor would mean widening the
-	// dispatch closure signature that wrapDescriptor builds for every check.
-	var kinds []string
+	// The scanner's effective audit configuration is the fallback, not the answer. It is right for
+	// a caller building a context outside a dispatched audit (a direct evaluator test), and it was
+	// WRONG for every audit launched under a named configuration: AuditWithin and AuditSession take
+	// a configuration per call, so `{"config": "<name>"}` reached the run's budgets and the queue
+	// row while every check still enumerated the server-wide default's points. newCheckContextForRun
+	// is the dispatched path and overrides both fields from the run — see runCfgKey.
+	base := DefaultAuditConfig()
 	if scanner != nil {
-		kinds = scanner.AuditConfig().insertionKinds()
+		base = scanner.AuditConfig()
 	}
 	return &CheckContext{
-		Scanner:        scanner,
-		Exchange:       exchange,
-		StoredExchange: stored,
-		Sender:         snd,
-		Config:         cfg,
-		InsertionKinds: kinds,
+		Scanner:          scanner,
+		Exchange:         exchange,
+		StoredExchange:   stored,
+		Sender:           snd,
+		Config:           cfg,
+		InsertionKinds:   base.insertionKinds(),
+		EnumerateOptions: base.enumerateOptions(),
 	}
+}
+
+// newCheckContextForRun builds the context for a check dispatched by an audit: NewCheckContext plus
+// the configuration THIS run was launched under, which ctx carries.
+//
+// Separate from NewCheckContext, and not a replacement for it, because the exported constructor has
+// callers that hold no run. Those callers keep the scanner's configuration; a dispatched check must
+// not, or a named configuration is a label on a run that ignored it.
+func newCheckContextForRun(ctx context.Context, scanner *ActiveScanner, exchange, stored *core.Exchange) *CheckContext {
+	cc := NewCheckContext(scanner, exchange, stored)
+	if cfg, ok := runConfigFrom(ctx); ok {
+		cc.InsertionKinds = cfg.insertionKinds()
+		cc.EnumerateOptions = cfg.enumerateOptions()
+	}
+	return cc
 }
 
 // CheckRunner evaluates one admitted check unit. A refusal is represented by the
