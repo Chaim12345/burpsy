@@ -293,7 +293,14 @@ func (c *Coordinator) runMacroOnce(rule *SessionRule, runner MacroStepRunner) (*
 // the retried original request, which is how a session cookie a login step sets reaches the request
 // that needed it.
 func (c *Coordinator) sendWithJar(runner MacroStepRunner, step MacroStep) (*StepResult, error) {
-	effective := c.applyJar(step)
+	return c.sendWithJarAnd(runner, step, nil)
+}
+
+// sendWithJarAnd is sendWithJar carrying the cookies a rule's set_cookie actions named. See
+// applyJarWith for why they have to travel this far rather than being written into the request's
+// headers by the action itself.
+func (c *Coordinator) sendWithJarAnd(runner MacroStepRunner, step MacroStep, overrides []CookieOverride) (*StepResult, error) {
+	effective := c.applyJarWith(step, overrides)
 	resp, err := runner(effective)
 	if err != nil {
 		return nil, err
@@ -314,6 +321,26 @@ func (c *Coordinator) sendWithJar(runner MacroStepRunner, step MacroStep) (*Step
 // one for its host. The jar is the single source of truth for session state across steps, so a
 // recorded step's own Cookie header (stale the moment it was captured) never reaches the wire.
 func (c *Coordinator) applyJar(step MacroStep) MacroStep {
+	return c.applyJarWith(step, nil)
+}
+
+// applyJarWith is applyJar plus the cookies a rule's Set-a-specific-cookie actions named, overlaid on
+// top of the jar's.
+//
+// The overlay exists because the two cookies are not the same kind of fact and the jar-wins rule
+// above is right for only one of them. A recorded macro step's Cookie header is a stale capture, so
+// discarding it is correct. A set_cookie action is the operator stating, now, that this request
+// carries this cookie — and it was being discarded by the same line. The action wrote the header, the
+// trace said "set cookie flavour=oatmeal", and applyJar deleted it on the way to the wire: an action
+// that reported success and did nothing, which is the one outcome this package refuses to produce.
+// Verified against a live target before and after; the received Cookie header went from
+// `sid=sess-abc123` to `sid=sess-abc123; flavour=oatmeal`.
+//
+// Overlaid rather than replacing wholesale, and applied after the jar, so a rule can both carry its
+// session and override one named cookie within it — which is what Burp's action does. A cookie the
+// operator named wins over the jar's value for the same name, because the operator naming it is the
+// later and more specific statement.
+func (c *Coordinator) applyJarWith(step MacroStep, overrides []CookieOverride) MacroStep {
 	if len(step.Headers) > 0 {
 		filtered := make(map[string]string, len(step.Headers))
 		for k, v := range step.Headers {
@@ -325,13 +352,24 @@ func (c *Coordinator) applyJar(step MacroStep) MacroStep {
 		step.Headers = filtered
 	}
 	host, port, tls := authorityOf(step.URL)
-	if cookie := c.jarMgr.CookieHeader(host, port, tls); cookie != "" {
+	cookie := c.jarMgr.CookieHeader(host, port, tls)
+	for _, o := range overrides {
+		cookie = setCookiePair(cookie, o.Name, o.Value)
+	}
+	if cookie != "" {
 		if step.Headers == nil {
 			step.Headers = make(map[string]string)
 		}
 		step.Headers["Cookie"] = cookie
 	}
 	return step
+}
+
+// CookieOverride is one cookie a rule's set_cookie action named, carried from the action walk to the
+// send so the jar cannot erase it. Name and value are already placeholder-substituted.
+type CookieOverride struct {
+	Name  string
+	Value string
 }
 
 func (c *Coordinator) recordObserved(id RuleID, sent []MacroStep) {
@@ -464,7 +502,10 @@ func (c *Coordinator) recover(id RuleID, rule *SessionRule, original MacroStep, 
 		return RecoveryOutcome{Kind: RecoveryAlreadyValid, Actions: res.Trace}
 	}
 
-	resp, err := c.sendWithJar(runner, res.Request)
+	// res.CookieOverrides, not just res.Request: the walk wrote its set_cookie values into the
+	// request's Cookie header, and applyJar is about to drop that header on the floor. Carrying them
+	// separately is what makes the action real on the wire rather than only in the trace.
+	resp, err := c.sendWithJarAnd(runner, res.Request, res.CookieOverrides)
 	if err != nil {
 		return RecoveryOutcome{Kind: RecoveryRetryFailed, LoginAttempts: res.MacroOutcome.Attempts,
 			Error: err.Error(), Actions: res.Trace}
