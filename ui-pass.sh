@@ -54,7 +54,16 @@ fi
 # on 2026-09-14: 26 failed routes became 0 after this line was added, with no application change.
 agent-browser open "http://127.0.0.1:${WEB_PORT}/" >/dev/null 2>&1
 agent-browser reload >/dev/null 2>&1
-sleep 1
+# ...and then wait for the shell to boot. The first route of a sweep opens onto a page that has just
+# been reloaded, and the SPA's mount takes longer than the per-route wait: measured on 2026-09-16,
+# #dashboard read an empty h1 while all 25 later routes passed, because they inherit a mounted app.
+# Waiting here once is cheaper than padding the per-route wait, and it keeps the sweep's first row
+# from being a different test than its last.
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  H1=$(agent-browser eval 'document.querySelector("h1")?.textContent?.trim() ?? ""' 2>/dev/null | tr -d '\n' | sed 's/^"//; s/"$//')
+  [ -n "$H1" ] && break
+  sleep 0.5
+done
 
 # routes.ts is the contract (id + the exact h1 the page must render), so this reads it rather than
 # keeping a second list that would drift the first time a page is renamed.
