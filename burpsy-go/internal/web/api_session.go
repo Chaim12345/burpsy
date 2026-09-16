@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
@@ -308,9 +309,22 @@ type sessionHostCookies struct {
 	Cookies []sessionCookiePair `json:"cookies"`
 }
 
+// sessionCookiePair is one cookie as the Session page's table renders it. The value-only shape
+// could not show the jar's scoping facts at all, and d18r's whole defect was that the table
+// implied the jar had none: a cookie set with Path=/admin was displayed identically to one set
+// for the whole site, and the jar sent both everywhere. The attributes here are the jar's own
+// (RFC 6265 §5.3 model), so what the table says is what the jar does.
 type sessionCookiePair struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+	Path  string `json:"path,omitempty"`
+	// Domain is the cookie's Domain attribute, empty for a host-only cookie. It is not the jar's
+	// authority: an .example.com cookie lives in example.com's jar and can be sent to
+	// subdomains, and the table is where that difference is visible.
+	Domain   string    `json:"domain,omitempty"`
+	Expires  time.Time `json:"expires,omitempty"`
+	Secure   bool      `json:"secure,omitempty"`
+	HTTPOnly bool      `json:"http_only,omitempty"`
 }
 
 // sessionLoginReq mirrors the UI's login probe.
@@ -1246,7 +1260,7 @@ func (s *Server) macroRunner(ctx context.Context) session.MacroStepRunner {
 		// The coordinator attaches the jar's cookie to a step it owns; only fill one in when the step
 		// did not carry one (the operator's own probe, typed by hand).
 		if _, has := req.Headers["Cookie"]; !has {
-			if cookie := s.sessionCoordinator.CookieHeader(host, port, tls); cookie != "" {
+			if cookie := s.sessionCoordinator.CookieHeader(host, port, tls, path); cookie != "" {
 				req.Headers["Cookie"] = cookie
 			}
 		}
@@ -1558,7 +1572,8 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 		sort.Strings(names)
 		pairs := make([]sessionCookiePair, 0, len(names))
 		for _, name := range names {
-			pairs = append(pairs, sessionCookiePair{Name: name, Value: entry.Cookies[name]})
+			attrs := entry.Cookies[name]
+			pairs = append(pairs, sessionCookiePair{Name: name, Value: attrs.Value, Path: attrs.Path, Domain: attrs.Domain, Expires: attrs.Expires, Secure: attrs.Secure, HTTPOnly: attrs.HTTPOnly})
 		}
 		out = append(out, sessionHostCookies{
 			Host:    net.JoinHostPort(entry.Host, strconv.Itoa(int(entry.Port))),

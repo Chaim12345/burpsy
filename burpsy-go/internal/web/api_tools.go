@@ -150,7 +150,7 @@ func (s *Server) prepareRepeaterSend(
 	// The transforms run before the scope gate on the transformed bytes — though the gate is
 	// host-level and no transform changes the authority, so this ordering is about the stored
 	// exchange recording what actually went out, not about which bytes the gate saw.
-	raw := opts.applyToRequest([]byte(request), s.cookieHeaderFor(host, port, tls))
+	raw := opts.applyToRequest([]byte(request), s.cookieHeaderFor(host, port, tls, targetPathOf(target)))
 	// The repeater sends to whatever target the operator types, so it is gated
 	// by scope for the same reason the intruder is: a scope the operator set to
 	// constrain outbound traffic must not be bypassable by sending raw bytes
@@ -348,14 +348,37 @@ func (s *Server) followRepeaterRedirects(
 	}
 }
 
+// targetPathOf extracts the request path from a wire target for the cookie jar's §5.4
+// path-match ("http://host:port/api/x" -> "/api/x"). The cookie jar decides per request which
+// cookies the request carries, and the path is the component of the target that decides it —
+// the same split targetParts performs for the authority, for the other half of the rule.
+func targetPathOf(target string) string {
+	rest := target
+	if cut := strings.Index(rest, "://"); cut >= 0 {
+		rest = rest[cut+3:]
+	}
+	start := strings.IndexAny(rest, "/?#")
+	if start < 0 {
+		return "/"
+	}
+	rest = rest[start:]
+	if end := strings.IndexAny(rest, "?#"); end >= 0 {
+		rest = rest[:end]
+	}
+	if rest == "" {
+		return "/"
+	}
+	return rest
+}
+
 // cookieHeaderFor returns the session coordinator's cookie header for the target, or empty when
 // there is no coordinator — a nil check, not a hope: the coordinator is an optional capability and
 // a nil dereference here would take the whole send down for an option that is off by default.
-func (s *Server) cookieHeaderFor(host string, port uint16, tls bool) string {
+func (s *Server) cookieHeaderFor(host string, port uint16, tls bool, path string) string {
 	if s.sessionCoordinator == nil {
 		return ""
 	}
-	return s.sessionCoordinator.CookieHeader(host, port, tls)
+	return s.sessionCoordinator.CookieHeader(host, port, tls, path)
 }
 
 // ---- Intruder ----------------------------------------------------------------------------------
@@ -1055,7 +1078,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// makes a request that manipulates a cookie […] the session handling action is not applied to
 	// that request." Refreshing the position being fuzzed from the jar would send the same request
 	// every time and produce one meaningless bucket. See internal/web/intruder_cookies.go.
-	jarHeader := s.cookieHeaderFor(host, port, tls)
+	jarHeader := s.cookieHeaderFor(host, port, tls, targetPathOf(req.Target))
 	exemptCookies := exemptCookieNames(selected)
 
 	// redirectsFollowed counts every hop this attack actually sent, across every attempt — the

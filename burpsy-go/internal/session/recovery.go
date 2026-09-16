@@ -352,7 +352,10 @@ func (c *Coordinator) applyJarWith(step MacroStep, overrides []CookieOverride) M
 		step.Headers = filtered
 	}
 	host, port, tls := authorityOf(step.URL)
-	cookie := c.jarMgr.CookieHeader(host, port, tls)
+	// The step's own path, so the jar's §5.4 path-match decides which cookies this step
+	// actually carries — the same rule the wire applies, rather than every cookie the
+	// authority ever set.
+	cookie := c.jarMgr.CookieHeader(host, port, tls, pathOf(step.URL))
 	for _, o := range overrides {
 		cookie = setCookiePair(cookie, o.Name, o.Value)
 	}

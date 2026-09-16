@@ -69,7 +69,7 @@ func TestProxiedTrafficFillsTheSessionCookieJar(t *testing.T) {
 	proxiedGet(t, proxyAddr, fmt.Sprintf("http://%s:%s/login", host, portStr), "/login", store)
 
 	port := mustPort(t, portStr)
-	got := coord.CookieHeader(host, port, false)
+	got := coord.CookieHeader(host, port, false, "/")
 	if got == "" {
 		t.Fatalf("the cookie jar for %s:%d is empty after a proxied response that set two cookies; "+
 			"the Session page tells the operator this traffic fills it", host, port)
@@ -110,7 +110,7 @@ func TestAProxyWithNoCookieJarAbsorbsNothingAndSaysSo(t *testing.T) {
 
 	proxiedGet(t, proxyAddr, fmt.Sprintf("http://%s:%s/ok", host, portStr), "/ok", store)
 
-	if h := coord.CookieHeader(host, mustPort(t, portStr), false); h != "" {
+	if h := coord.CookieHeader(host, mustPort(t, portStr), false, "/"); h != "" {
 		t.Errorf("an unattached coordinator holds %q", h)
 	}
 	// The point of the assertion: the jar reports that nothing feeds it, so an empty table is not

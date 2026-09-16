@@ -109,7 +109,7 @@ func checkBrokenAccessControl(ctx context.Context, cc *CheckContext) ([]*Finding
 	if cc.Exchange == nil {
 		return nil, nil
 	}
-	authed, _ := AuthContextsFrom(coord, cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS)
+	authed, _ := AuthContextsFrom(coord, cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS, cc.Exchange.Path)
 
 	h, err := NewProbeHarness(ctx, cc, []string{"header"})
 	if err != nil {
@@ -168,7 +168,7 @@ func checkCSRF(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if strings.EqualFold(cc.Exchange.Method, "GET") || strings.EqualFold(cc.Exchange.Method, "HEAD") {
 		return nil, nil
 	}
-	authed, _ := AuthContextsFrom(coord, cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS)
+	authed, _ := AuthContextsFrom(coord, cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS, cc.Exchange.Path)
 	if !authed.HasCredentials {
 		// Without a session there is nothing to ride, and comparing two anonymous
 		// requests would report every endpoint as vulnerable.

@@ -339,7 +339,7 @@ func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 		// The coordinator attaches the jar's cookie to a step it owns; fill one in only when the step
 		// did not carry one (the operator's own probe).
 		if _, has := req.Headers["Cookie"]; !has {
-			if cookie := ctx.sess.CookieHeader(host, port, tls); cookie != "" {
+			if cookie := ctx.sess.CookieHeader(host, port, tls, sessionPathOf(step.URL)); cookie != "" {
 				req.Headers["Cookie"] = cookie
 			}
 		}
@@ -383,11 +383,39 @@ func sessionCookies(ctx *cliContext, args []string) error {
 	if *host == "" {
 		return fmt.Errorf("usage: burpsy session cookies -host HOST")
 	}
-	cookie := ctx.sess.CookieHeader(*host, 80, false)
+	// The command's question is "what would the jar send": CookieHeader applies the full §5.4
+	// filter, so the answer is the header the jar would really attach. Port 80 over plaintext
+	// is the CLI's standing denominator (below); "/" asks for every cookie the authority holds
+	// that matches the whole site — a path-scoped cookie the jar would NOT send elsewhere is
+	// still listed here, and one scoped to a deeper path shows with its own line.
+	cookie := ctx.sess.CookieHeader(*host, 80, false, "/")
 	if cookie == "" {
 		fmt.Fprintln(ctx.out, "(no cookies held)")
 		return nil
 	}
 	fmt.Fprintln(ctx.out, cookie)
 	return nil
+}
+
+// sessionPathOf extracts the request path from a step URL for the cookie jar's RFC 6265
+// path-match. Same split as the web layer's targetPathOf: everything after the authority,
+// up to the query. Unreadable shapes answer "/" — the path-match then sends every cookie
+// the jar holds, which is the safe direction (a cookie sent, not one silently dropped).
+func sessionPathOf(rawURL string) string {
+	rest := rawURL
+	if cut := strings.Index(rest, "://"); cut >= 0 {
+		rest = rest[cut+3:]
+	}
+	start := strings.IndexAny(rest, "/?#")
+	if start < 0 {
+		return "/"
+	}
+	rest = rest[start:]
+	if end := strings.IndexAny(rest, "?#"); end >= 0 {
+		rest = rest[:end]
+	}
+	if rest == "" {
+		return "/"
+	}
+	return rest
 }

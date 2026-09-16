@@ -1142,6 +1142,13 @@ export function SessionPage(): JSX.Element {
      scheme: jar.tls ? "https" : "http",
      name: cookie.name,
      value: cookie.value,
+     // The jar's own scoping facts (d18r): until the jar modelled these there was nothing to
+     // display, and displaying a policy the jar did not enforce would have been a lie. The jar
+     // now enforces them at send time, so the table reports what the jar does.
+     path: cookie.path ?? "/",
+     domain: cookie.domain ?? "",
+     secure: cookie.secure ?? false,
+     httpOnly: cookie.http_only ?? false,
     })),
    ),
   [cookiesQuery.data],
@@ -1995,9 +2002,9 @@ export function SessionPage(): JSX.Element {
       }
      />
     ) : (
-     <SimpleTable headers={["Authority", "Name", "Value", ""]}>
+     <SimpleTable headers={["Authority", "Name", "Value", "Scoping", ""]}>
       {cookieRows.map((row, index) => (
-       <tr key={`${row.scheme}-${row.host}-${row.name}-${index}`}>
+       <tr key={`${row.scheme}-${row.host}-${row.name}-${row.path}-${index}`}>
         <td>
          {row.host}
          <span className="cell-dim"> · {row.scheme}</span>
@@ -2007,6 +2014,18 @@ export function SessionPage(): JSX.Element {
         </td>
         <td>
          <span className="cell-dim">{row.value}</span>
+        </td>
+        <td>
+         {/* The scoping column is the jar's §5.4 policy in one cell: path-match and
+             domain-match are what the jar sends on, so what the table says and what the
+             jar does cannot diverge. Host-only answers "host-only" rather than repeating
+             the authority, because the cookie's own Domain attribute is the fact. */}
+         <div className="stack-tight">
+          <span className="cell-dim">{row.path === "/" ? "all paths" : `path ${row.path}`}</span>
+          <span className="cell-dim">{row.domain ? `domain ${row.domain}` : "host-only"}</span>
+          {row.secure ? <span className="cell-dim">secure</span> : null}
+          {row.httpOnly ? <span className="cell-dim">HttpOnly</span> : null}
+         </div>
         </td>
         <td>
          <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>

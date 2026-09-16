@@ -21,7 +21,7 @@ func Test_the_cookie_jar_set_remove_and_clear_are_visible_on_the_read_side(t *te
 
 	// Seed one absorbed cookie so the jar exists, then edit through the route.
 	jar.AbsorbCookie("app.test", 443, true, "SESSION=abc")
-	if got := jar.CookieHeader("app.test", 443, true); got != "SESSION=abc" {
+	if got := jar.CookieHeader("app.test", 443, true, "/"); got != "SESSION=abc" {
 		t.Fatalf("seed absorbed: %q", got)
 	}
 
@@ -33,13 +33,13 @@ func Test_the_cookie_jar_set_remove_and_clear_are_visible_on_the_read_side(t *te
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set = %d: %s", rec.Code, strings.TrimSpace(rec.Body.String()))
 	}
-	if got := jar.CookieHeader("app.test", 443, true); got != "SESSION=rotated" {
+	if got := jar.CookieHeader("app.test", 443, true, "/"); got != "SESSION=rotated" {
 		t.Fatalf("the edit should replace the value, header = %q", got)
 	}
 
 	// The read side names the change — a write the table cannot see is the old lie reshaped.
 	view := cookiesView(t, s)
-	if len(view) != 1 || view[0].Cookies["SESSION"] != "rotated" {
+	if len(view) != 1 || view[0].Cookies["SESSION"].Value != "rotated" {
 		t.Fatalf("the read side should show the edited value, got %+v", view)
 	}
 
@@ -61,7 +61,7 @@ func Test_the_cookie_jar_set_remove_and_clear_are_visible_on_the_read_side(t *te
 	if _, still := view[0].Cookies["SESSION"]; still {
 		t.Fatalf("the removed cookie must not survive on the read side, got %+v", view[0].Cookies)
 	}
-	if view[0].Cookies["CSRF"] != "tok" {
+	if view[0].Cookies["CSRF"].Value != "tok" {
 		t.Fatalf("the untouched cookie must survive a per-cookie removal, got %+v", view[0].Cookies)
 	}
 
@@ -72,7 +72,7 @@ func Test_the_cookie_jar_set_remove_and_clear_are_visible_on_the_read_side(t *te
 	if rec4.Code != http.StatusOK {
 		t.Fatalf("clear = %d: %s", rec4.Code, strings.TrimSpace(rec4.Body.String()))
 	}
-	if got := jar.CookieHeader("app.test", 443, true); got != "" {
+	if got := jar.CookieHeader("app.test", 443, true, "/"); got != "" {
 		t.Fatalf("an emptied jar sends no cookies, header = %q", got)
 	}
 }
@@ -155,12 +155,12 @@ func cookiesView(t *testing.T, s *Server) []session.CookieJarEntry {
 	}
 	out := make([]session.CookieJarEntry, 0, len(view.Cookies))
 	for _, h := range view.Cookies {
-		entry := session.CookieJarEntry{Cookies: map[string]string{}}
+		entry := session.CookieJarEntry{Cookies: map[string]session.CookieAttrs{}}
 		// The wire host is "example.com:443" — split for the entry's fields where it parses;
 		// only the map matters to these assertions, so a host that does not split keeps its key.
 		entry.Host = h.Host
 		for _, c := range h.Cookies {
-			entry.Cookies[c.Name] = c.Value
+			entry.Cookies[c.Name] = session.CookieAttrs{Value: c.Value}
 		}
 		out = append(out, entry)
 	}

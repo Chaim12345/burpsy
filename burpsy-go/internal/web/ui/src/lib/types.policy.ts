@@ -242,6 +242,14 @@ export interface SessionRulesResponse {
 export interface SessionCookiePair {
  name: string;
  value: string;
+ /** The cookie's own Path attribute. Absent means "/" — the jar's default-path. */
+ path?: string;
+ /** The cookie's own Domain attribute (empty = host-only), not the jar's authority. */
+ domain?: string;
+ /** Zero/absent for a session cookie; a Max-Age/Expires in the past is a deletion. */
+ expires?: string;
+ secure?: boolean;
+ http_only?: boolean;
 }
 
 export interface SessionHostCookies {

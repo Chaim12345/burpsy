@@ -21,7 +21,7 @@ func TestAbsorbResponseCookiesTakesEverySetCookieLine(t *testing.T) {
 	if n := c.AbsorbResponseCookies("example.com", 443, true, raw); n != 2 {
 		t.Fatalf("absorbed %d Set-Cookie lines, want 2", n)
 	}
-	got := c.CookieHeader("example.com", 443, true)
+	got := c.CookieHeader("example.com", 443, true, "/")
 	// Order within the header is the jar's, not the response's, so both memberships are asserted
 	// rather than a single formatted string.
 	for _, want := range []string{"sessid=abc123", "csrf=deadbeef"} {
@@ -38,13 +38,13 @@ func TestAbsorbResponseCookiesIsKeyedByAuthority(t *testing.T) {
 
 	// A different port, and the same host over plaintext, are different jars. A cookie leaking
 	// across them would send an engagement's session to a service it was never issued for.
-	if h := c.CookieHeader("example.com", 8443, true); h != "" {
+	if h := c.CookieHeader("example.com", 8443, true, "/"); h != "" {
 		t.Errorf("port 8443 jar returned %q, want empty", h)
 	}
-	if h := c.CookieHeader("example.com", 443, false); h != "" {
+	if h := c.CookieHeader("example.com", 443, false, "/"); h != "" {
 		t.Errorf("plaintext jar returned %q, want empty", h)
 	}
-	if h := c.CookieHeader("other.example", 443, true); h != "" {
+	if h := c.CookieHeader("other.example", 443, true, "/"); h != "" {
 		t.Errorf("other host jar returned %q, want empty", h)
 	}
 }
@@ -84,7 +84,7 @@ func TestAbsorbResponseCookiesUnframedResponseAbsorbsNothing(t *testing.T) {
 	// Headers cut off mid-block. A partial Set-Cookie is not a cookie, and guessing at one would put
 	// a truncated session token in the jar and send it to the target.
 	c.AbsorbResponseCookies("example.com", 443, true, []byte("HTTP/1.1 200 OK\r\nSet-Cookie: sessid=abc"))
-	if h := c.CookieHeader("example.com", 443, true); h != "" {
+	if h := c.CookieHeader("example.com", 443, true, "/"); h != "" {
 		t.Errorf("cookie header %q, want empty for an unterminated head", h)
 	}
 	if obs := c.Observation(); obs.ResponsesObserved != 1 {

@@ -83,7 +83,7 @@ type SessionCoordinator interface {
 	HandleResponseFor(req session.RequestIdentity, status int, hdrs map[string]string, body []byte, scopeContains func() bool)
 	// CookieHeader returns the jar's Cookie header value for an origin, or "" when
 	// the jar holds nothing for it.
-	CookieHeader(host string, port uint16, tls bool) string
+	CookieHeader(host string, port uint16, tls bool, path string) string
 }
 
 // loggedOut is the expiry detector's verdict for one response.
@@ -182,7 +182,7 @@ func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *Li
 	}
 
 	tls := strings.EqualFold(item.url.Scheme, "https")
-	cookie := c.cfg.SessionCoordinator.CookieHeader(host, portOf(item.url), tls)
+	cookie := c.cfg.SessionCoordinator.CookieHeader(host, portOf(item.url), tls, item.url.Path)
 	if cookie == "" {
 		// The login ran and the jar came back empty: the macro completed without
 		// establishing anything the request could use. Retrying with no cookie is
@@ -280,7 +280,7 @@ func (c *Crawler) crawlSessionRunner(ctx context.Context) session.MacroStepRunne
 		// The coordinator attaches the jar's cookie to a step it owns; only fill one in
 		// when the step did not carry one, matching the web runner.
 		if _, has := req.Headers["Cookie"]; !has {
-			if cookie := c.cfg.SessionCoordinator.CookieHeader(host, port, tls); cookie != "" {
+			if cookie := c.cfg.SessionCoordinator.CookieHeader(host, port, tls, req.Path); cookie != "" {
 				req.Headers["Cookie"] = cookie
 			}
 		}

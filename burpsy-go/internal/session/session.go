@@ -5,11 +5,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -621,6 +625,40 @@ type MacroStep struct {
 
 // --- CookieJar ---
 
+// jarCookie is one stored cookie with the attributes RFC 6265 §5.3 says a storage model keeps:
+// its path and domain (which decide where it is sent), its expiry, and the Secure flag (which
+// decides whether it is sent at all on a plaintext connection).
+//
+// Attributes were dropped when the jar was name->value, with a comment disclosing the
+// simplification. The disclosure was honest and the state it described was not fixable in the UI:
+// two cookies differing only by path cannot be held in a map keyed on name, so there was nothing
+// to display. This struct is the fix the disclosure asked for — the jar now *has* the attributes
+// and enforces them, so a column can report a fact rather than imply one. An operator reading
+// "Path=/admin" in the table now has the jar's actual behaviour behind it, which is the difference
+// between a column and a lie.
+type jarCookie struct {
+	Value string
+	Path  string
+	// Domain is the cookie's own Domain attribute, verbatim minus the leading dot; empty means
+	// host-only. The jar key is (domain, path, name) per §5.3's storage model, so this is the key
+	// component, not a display extra.
+	Domain string
+	// Expires is zero for a session cookie. A zero time is not "never" in RFC 6265 terms — a
+	// Max-Age or Expires in the past is a deletion instruction — and expiryFilter keeps that
+	// distinction by only judging cookies that carry a real time.
+	Expires time.Time
+	// Secure keeps the cookie out of plaintext requests (§5.4 step 1). Stored rather than assumed,
+	// because the flag travels with the Set-Cookie that carried it and the jar's authority key
+	// already includes a tls bool of its own: the two are different facts, one about the cookie and
+	// one about the connection the cookie was learned on.
+	Secure bool
+	// HttpOnly has no send-time behaviour to enforce — it constrains document.cookie, not the
+	// Cookie header, and burpsy has no document. It is kept anyway: the jar is also the operator's
+	// view of what the server set, and a flag a real server set disappearing between the response
+	// and the table is a lie told for tidiness.
+	HTTPOnly bool
+}
+
 type cookieJar struct {
 	sync.RWMutex
 	// The authority this jar belongs to, kept alongside the cookies rather than recovered from the
@@ -631,19 +669,45 @@ type cookieJar struct {
 	host string
 	port uint16
 	tls  bool
-	m    map[string]string
+	// m is keyed (domain|path|name) — the three components §5.3 says distinguish two cookies. The
+	// separator is a control character that cannot appear in any of the three, so a cookie named
+	// with a pipe in it cannot alias another cookie's key.
+	m map[string]jarCookie
 }
 
 func newCookieJar(host string, port uint16, tls bool) *cookieJar {
-	return &cookieJar{host: host, port: port, tls: tls, m: make(map[string]string)}
+	return &cookieJar{host: host, port: port, tls: tls, m: make(map[string]jarCookie)}
+}
+
+// jarKey is the (domain, path, name) storage key. Name-last so that a two-cookie family
+// (same domain and path, different names) is adjacent in iteration order and, more to the
+// point, so that RemoveCookie(name) can find every cookie the name covers — two authorities'
+// jars are separate maps, but within one jar a name can exist at several paths.
+func jarKey(domain, path, name string) string {
+	return domain + "\x01" + path + "\x01" + name
 }
 
 // CookieJarEntry is one authority's jar, flattened for reporting.
+// CookieAttrs is one cookie as the wire and the table see it: the value plus every
+// §5.3 attribute the jar models. The value-only shape this replaces could say that a cookie
+// existed and nothing else — which made a Path column impossible, because the jar held no
+// path to report (burpsy-react-ui-d18r).
+type CookieAttrs struct {
+	Value string `json:"value"`
+	Path  string `json:"path,omitempty"`
+	// Domain is the cookie's Domain attribute (empty = host-only), not the jar's authority. Both
+	// are reported because they differ for a domain cookie and the difference is the point.
+	Domain   string    `json:"domain,omitempty"`
+	Expires  time.Time `json:"expires,omitempty"`
+	Secure   bool      `json:"secure,omitempty"`
+	HTTPOnly bool      `json:"http_only,omitempty"`
+}
+
 type CookieJarEntry struct {
 	Host    string
 	Port    uint16
 	TLS     bool
-	Cookies map[string]string
+	Cookies map[string]CookieAttrs
 }
 
 // Jars returns every jar that holds at least one cookie, sorted by authority.
@@ -672,9 +736,13 @@ func (cjm *CookieJarManager) Jars() []CookieJarEntry {
 		// absorb() race a JSON encoder walking it.
 		jar.RLock()
 		if len(jar.m) > 0 {
-			cookies := make(map[string]string, len(jar.m))
-			for name, value := range jar.m {
-				cookies[name] = value
+			cookies := make(map[string]CookieAttrs, len(jar.m))
+			for k, c := range jar.m {
+				name := k[strings.LastIndex(k, "\x01")+1:]
+				cookies[name] = CookieAttrs{
+					Value: c.Value, Path: c.Path, Domain: c.Domain,
+					Expires: c.Expires, Secure: c.Secure, HTTPOnly: c.HTTPOnly,
+				}
 			}
 			out = append(out, CookieJarEntry{Host: jar.host, Port: jar.port, TLS: jar.tls, Cookies: cookies})
 		}
@@ -694,22 +762,129 @@ func (cjm *CookieJarManager) Jars() []CookieJarEntry {
 	return out
 }
 
-func (j *cookieJar) cookieHeader() string {
+// cookieHeader builds the Cookie header for a request to this authority's host and path.
+//
+// RFC 6265 §5.4, the four rules that make a cookie belong to a request rather than to an
+// authority: domain-match, path-match, expiry, and Secure-only-over-TLS. All four act here,
+// per request, because every one of them is a decision about THIS request — a jar that
+// pre-filtered at absorb time would have to guess the request's path, scheme and clock, and
+// would be right only by accident.
+//
+// Ordering: name-sorted within the jar's copy, the same stable order cookieHeader has always
+// produced. §5.4's longer-paths-first rule is a SHOULD for user agents, and the difference it
+// makes — which of two name-equal path-matching cookies wins — cannot arise here, because
+// the storage key includes the path and the header emits both.
+func (j *cookieJar) cookieHeader(path string) string {
+	return j.cookieHeaderFor(j.host, j.port, j.tls, path)
+}
+
+// cookieHeaderFor answers for a request to (host, tls, path) using this jar's cookies. The
+// authority split exists so the operator's table can group by authority; it is not a §5.4
+// boundary. A Domain=.app.test cookie set at app.test belongs to sub.app.test's requests too,
+// and the rule that says so compares the cookie's own Domain attribute against the request's
+// host — never the jar's. The jar's own tls flag is likewise not the request's: the manager
+// calls this for the exact authority when no other jar matches, and then jar and request agree,
+// but a domain cookie crossing jars must be judged by the request the header is being built for.
+// cookieHeaderPairs collects the (name, value) pairs this jar would contribute to a request to
+// (host, port, tls, path), after the full §5.4 filter. Shared by cookieHeaderFor (the string
+// form) and CookieJarManager.CookieHeader (the cross-jar scan, which needs pairs so it can
+// dedupe names).
+func (j *cookieJar) cookieHeaderPairs(host string, port uint16, tls bool, path string) []cookiePair {
 	j.RLock()
 	defer j.RUnlock()
-	if len(j.m) == 0 {
+	pairs := make([]cookiePair, 0, len(j.m))
+	now := time.Now()
+	for k, c := range j.m {
+		if c.Domain == "" {
+			// §5.3: a cookie with no Domain attribute is host-only — it matches exactly the
+			// authority it was set on (host, port, tls), which is this jar's own and never a
+			// cross-jar one. The port and TLS separation is the engagement boundary this jar
+			// has always enforced: a session set on 443 must not ride a request to the same
+			// host on 8080, which is a different service, or over plaintext, which is the
+			// same service failing its own Secure policy.
+			if !strings.EqualFold(strings.TrimSpace(host), j.host) || port != j.port || tls != j.tls {
+				continue
+			}
+		} else if !domainMatches(c.Domain, host) {
+			continue
+		}
+		if !pathMatches(c.Path, path) {
+			continue
+		}
+		if !c.Expires.IsZero() && !now.Before(c.Expires) {
+			continue
+		}
+		if c.Secure && !tls {
+			continue
+		}
+		// The name is the third component of the jar key, after the last separator.
+		name := k[strings.LastIndex(k, "\x01")+1:]
+		pairs = append(pairs, cookiePair{name, c.Value})
+	}
+	sort.Slice(pairs, func(a, b int) bool { return pairs[a].name < pairs[b].name })
+	return pairs
+}
+
+// cookieHeaderFor answers for a request to (host, tls, path) using this jar's cookies. The
+// authority split exists so the operator's table can group by authority; it is not a §5.4
+// boundary. A Domain=.app.test cookie set at app.test belongs to sub.app.test's requests too,
+// and the rule that says so compares the cookie's own Domain attribute against the request's
+// host — never the jar's. The request's tls flag judges Secure, not the jar's own.
+func (j *cookieJar) cookieHeaderFor(host string, port uint16, tls bool, path string) string {
+	pairs := j.cookieHeaderPairs(host, port, tls, path)
+	if len(pairs) == 0 {
 		return ""
 	}
-	keys := make([]string, 0, len(j.m))
-	for k := range j.m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+j.m[k])
+	parts := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		parts = append(parts, p.name+"="+p.value)
 	}
 	return strings.Join(parts, "; ")
+}
+
+// domainMatches implements RFC 6265 §5.1.3. An empty domain is a host-only cookie: it matches
+// exactly the host it was set on and nothing else, which is also what §5.3 says a cookie with no
+// Domain attribute is. A set domain matches itself and any subdomain of itself, case-insensitively
+// (hostnames are). The IP-literal exception (a Domain that is an IP matches only exactly) is not
+// special-cased because a dotted IP is nobody's subdomain under the string rule: it fails the
+// last-dot boundary and reads as no-match, which is the same answer.
+func domainMatches(domain, host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		// A host-only cookie matches exactly the host it was set on, and this function does
+		// not know that host — only the caller's jar does. Answering false here is what keeps
+		// a host-only cookie from leaking across authorities in the manager's cross-jar scan;
+		// the caller handles the empty-domain case itself before ever calling this.
+		return false
+	}
+	if host == domain {
+		return true
+	}
+	return strings.HasSuffix(host, "."+domain)
+}
+
+// pathMatches implements RFC 6265 §5.1.4: exact, or the cookie's path is a prefix of the request's
+// path that ends on a boundary. The default-path rule (§5.1.4 defaults a cookie with no Path
+// attribute to the set's directory) is applied at absorb time, so an empty Path here is the
+// attribute's own empty string — a cookie explicitly set with `Path=` — and §5.1.4's answer for
+// an empty cookie-path is "matches everything", which is what the fallthrough gives.
+func pathMatches(cookiePath, requestPath string) bool {
+	if cookiePath == "" {
+		return true
+	}
+	if cookiePath == requestPath {
+		return true
+	}
+	if strings.HasPrefix(requestPath, cookiePath) {
+		if strings.HasSuffix(cookiePath, "/") {
+			return true
+		}
+		if len(requestPath) > len(cookiePath) && requestPath[len(cookiePath)] == '/' {
+			return true
+		}
+	}
+	return false
 }
 
 // absorb takes one Set-Cookie header value.
@@ -731,30 +906,43 @@ func (j *cookieJar) cookieHeader() string {
 // on the same map.
 func (j *cookieJar) set(name, value string) {
 	j.Lock()
-	j.m[name] = value
+	j.m[jarKey("", "/", name)] = jarCookie{Value: value, Path: "/"}
 	j.Unlock()
 }
 
 // remove deletes one cookie and reports whether it was there.
 func (j *cookieJar) remove(name string) bool {
+	// Every cookie the name covers, not one: with path-scoped cookies a name can exist at several
+	// paths, and "remove" that left the other paths behind would answer true while the jar still
+	// sent a cookie the operator believes they deleted.
 	j.Lock()
 	defer j.Unlock()
-	_, ok := j.m[name]
-	if ok {
-		delete(j.m, name)
+	found := false
+	for k := range j.m {
+		if name == k[strings.LastIndex(k, "\x01")+1:] {
+			delete(j.m, k)
+			found = true
+		}
 	}
-	return ok
+	return found
 }
 
 // clear empties the jar's map, keeping the jar itself for the authority.
 func (j *cookieJar) clear() {
 	j.Lock()
-	j.m = make(map[string]string)
+	j.m = make(map[string]jarCookie)
 	j.Unlock()
 }
 
 func (j *cookieJar) absorb(val string) {
-	first, _, _ := strings.Cut(val, ";")
+	// §5.3: the name/value pair first, then the attributes. The old absorb stopped at the first
+	// semicolon and stored the pair — the fix for the bug where every attribute became its own
+	// cookie — and the comment on it disclosed that attributes were dropped. This pass keeps them,
+	// because keeping them is what makes the jar's own §5.4 rules enforceable and its table
+	// truthful. An attribute this reader does not model (SameSite, Priority) is skipped by name:
+	// skipping silently is right here, since §5.3 says a storage model keeps what it can use and
+	// ignores the rest, and inventing a partial SameSite would be worse than not holding it.
+	first, rest, _ := strings.Cut(val, ";")
 	name, value, ok := strings.Cut(first, "=")
 	if !ok {
 		// `Set-Cookie: HttpOnly` and friends carry no pair at all. Storing nothing is the whole
@@ -765,10 +953,83 @@ func (j *cookieJar) absorb(val string) {
 	if name == "" {
 		return
 	}
+	c := jarCookie{Value: value, Path: defaultPath("/", j.host)}
+	for part := rest; ; {
+		var attr string
+		attr, part, _ = strings.Cut(part, ";")
+		attr = strings.TrimSpace(attr)
+		if attr == "" {
+			if part == "" {
+				break
+			}
+			continue
+		}
+		key, av, hasValue := strings.Cut(attr, "=")
+		key = strings.TrimSpace(key)
+		lowerKey := strings.ToLower(key)
+		switch lowerKey {
+		case "path":
+			// §5.1.4: a Path that does not start with / is ignored and the default stands.
+			if hasValue && strings.HasPrefix(av, "/") {
+				c.Path = av
+			}
+		case "domain":
+			// §5.3: strip one leading dot, case-fold. A domain the host cannot match is kept
+			// anyway: §5.1.3 rejects it at *send* time, and rejecting it at absorb time would
+			// delete a cookie the server really set — the jar is the record of what the server
+			// said as well as the thing that sends cookies.
+			if hasValue {
+				c.Domain = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(av), "."))
+			}
+		case "expires":
+			// RFC 6265 §5.1.1's cookie-date grammar. Go's time package parses the two forms the
+			// grammar's three permitted separators and two year spellings produce (RFC 1123 and
+			// the asctime form), which is every date a real Set-Cookie carries.
+			if hasValue {
+				if t, err := http.ParseTime(strings.TrimSpace(av)); err == nil {
+					c.Expires = t
+				}
+			}
+		case "max-age":
+			// §5.2.2: seconds from now. §5.3's "a Max-Age of 0 or negative deletes": a zero or
+			// negative value marks the cookie as already-expired rather than deleting it in place,
+			// so the table shows a cookie the server withdrew and the header stops sending it —
+			// the same observable behaviour as deleting, but not silent about what happened.
+			if hasValue {
+				if n, err := strconv.Atoi(strings.TrimSpace(av)); err == nil {
+					if n <= 0 {
+						c.Expires = time.Now().Add(-1 * time.Second)
+					} else {
+						c.Expires = time.Now().Add(time.Duration(n) * time.Second)
+					}
+				}
+			}
+		case "secure":
+			c.Secure = true
+		case "httponly":
+			c.HTTPOnly = true
+		}
+		if part == "" {
+			break
+		}
+	}
 	j.Lock()
 	defer j.Unlock()
-	j.m[name] = value
+	j.m[jarKey(c.Domain, c.Path, name)] = c
 }
+
+// defaultPath is §5.1.4's default-path: the directory of the request URI that carried the
+// Set-Cookie, or "/" when the URI has no "/". This jar is created per authority on the first
+// Set-Cookie it sees and the wire path of that first response is not kept — the jar's contract is
+// host-keyed — so the default is "/" and the honest statement is that the jar sends cookies to
+// every path until a Path attribute narrows them, which is exactly what §5.1.4 with a "/" default
+// does. A cookie carrying its own Path attribute is never defaulted.
+func defaultPath(_, _ string) string { return "/" }
+
+// cookiePair is one name=value the jar would send. A tiny named type rather than a closure-local
+// struct because the manager's cross-jar scan needs to dedupe by name across jars, and a local
+// type would make the pairs unnameable outside this function.
+type cookiePair struct{ name, value string }
 
 type CookieJarManager struct {
 	mu   sync.RWMutex
@@ -779,15 +1040,76 @@ func NewCookieJarManager() *CookieJarManager {
 	return &CookieJarManager{jars: make(map[string]*cookieJar)}
 }
 
-func (cjm *CookieJarManager) CookieHeader(host string, port uint16, tls bool) string {
+// CookieHeader answers for a request to this authority and path. The exact-authority jar is
+// consulted first and separately, because a host-only cookie's domain-match is judged against
+// the jar's own host — but the authority split is not a §5.4 boundary. A Domain=.app.test cookie
+// absorbed at app.test belongs to sub.app.test's requests too, so after the exact jar every
+// other jar is scanned and each cookie's own Domain attribute is judged against the request's
+// host. Cookies from the exact jar are added first and a name must appear at most once in a
+// Cookie header: the exact jar wins a name clash, and among other jars the low-authority host
+// (the jar whose host is the longest suffix match — the cookie was set deepest in the tree)
+// has no precedence rule in RFC 6265, so the stable order is jar creation order under the
+// manager's sorted jar list, and the first claim on a name wins.
+func (cjm *CookieJarManager) CookieHeader(host string, port uint16, tls bool, path string) string {
 	key := fmt.Sprintf("%s:%d_%v", host, port, tls)
 	cjm.mu.RLock()
 	jar := cjm.jars[key]
-	cjm.mu.RUnlock()
-	if jar == nil {
-		return ""
+	// Snapshot the other jars under the manager lock, then judge each outside it: a jar's own
+	// mutex is the one that serialises absorb against this read, not the manager's.
+	others := make([]*cookieJar, 0, len(cjm.jars))
+	for k, other := range cjm.jars {
+		if k != key && other != nil {
+			others = append(others, other)
+		}
 	}
-	return jar.cookieHeader()
+	cjm.mu.RUnlock()
+	var b strings.Builder
+	taken := make(map[string]bool)
+	if jar != nil {
+		for _, p := range jar.cookieHeaderPairs(host, port, tls, path) {
+			b.WriteString(p.name)
+			b.WriteByte('=')
+			b.WriteString(p.value)
+			b.WriteString("; ")
+			taken[p.name] = true
+		}
+	}
+	// Sorted for determinism: jar iteration order is Go map order, and a header whose pairs
+	// reshuffle between requests is one an operator cannot diff.
+	slices.SortFunc(others, func(a, bb *cookieJar) int {
+		if a.host != bb.host {
+			return strings.Compare(a.host, bb.host)
+		}
+		if a.port != bb.port {
+			return int(a.port) - int(bb.port)
+		}
+		if a.tls != bb.tls {
+			if a.tls {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	for _, other := range others {
+		for _, pr := range other.cookieHeaderPairs(host, port, tls, path) {
+			if taken[pr.name] {
+				continue
+			}
+			taken[pr.name] = true
+			b.WriteString(pr.name)
+			b.WriteByte('=')
+			b.WriteString(pr.value)
+			b.WriteString("; ")
+		}
+	}
+	out := b.String()
+	// The exact jar's list and each other jar's list both end with "; " separators; the join
+	// convention this jar has always used is "n=v; n=v" — trim the final separator.
+	if strings.HasSuffix(out, "; ") {
+		out = strings.TrimSuffix(out, "; ")
+	}
+	return out
 }
 
 func (cjm *CookieJarManager) AbsorbSetCookie(host string, port uint16, tls bool, val string) {
@@ -1604,8 +1926,8 @@ func (c *Coordinator) logExtraction(rule *SessionRule, stepIndex int, ex *Extrac
 }
 
 // CookieHeader returns the cookie header for the authority.
-func (c *Coordinator) CookieHeader(host string, port uint16, tls bool) string {
-	return c.jarMgr.CookieHeader(host, port, tls)
+func (c *Coordinator) CookieHeader(host string, port uint16, tls bool, path string) string {
+	return c.jarMgr.CookieHeader(host, port, tls, path)
 }
 
 // ---- Macro execution ---------------------------------------------------------------------------
@@ -1644,7 +1966,7 @@ func (c *Coordinator) RunMacro(rule *SessionRule, runner MacroStepRunner) ([]Mac
 		}
 		// Attach the cookies the jar holds for this step's authority.
 		host, port, tls := authorityOf(step.URL)
-		if cookie := c.CookieHeader(host, port, tls); cookie != "" {
+		if cookie := c.CookieHeader(host, port, tls, pathOf(step.URL)); cookie != "" {
 			if step.Headers == nil {
 				step.Headers = make(map[string]string)
 			}
@@ -1767,7 +2089,7 @@ func (c *Coordinator) RunMacroDetailed(rule *SessionRule, runner MacroStepRunner
 			continue
 		}
 		host, port, tls := authorityOf(row.Sent.URL)
-		if cookie := c.CookieHeader(host, port, tls); cookie != "" {
+		if cookie := c.CookieHeader(host, port, tls, pathOf(row.Sent.URL)); cookie != "" {
 			if _, exists := row.Sent.Headers["Cookie"]; !exists {
 				if row.Sent.Headers == nil {
 					row.Sent.Headers = make(map[string]string)
@@ -1901,4 +2223,32 @@ func netSplitHostPort(s string) (string, uint16, error) {
 		}
 	}
 	return "", 0, fmt.Errorf("no port")
+}
+
+// pathOf extracts the request path from a step's URL for the jar's §5.4 path-match. The
+// step's URL is a wire path the macro runner built (or the operator typed), not a parsed
+// *url.URL, so the split is manual: everything after the authority, up to the query or
+// fragment. A URL whose shape cannot be read answers "/" rather than an error, because the
+// jar's path-match treats "/" as matching every path — the safe direction is a cookie the
+// jar sends, not one it silently drops.
+func pathOf(rawURL string) string {
+	// strip scheme://
+	rest := rawURL
+	if i := strings.Index(rest, "://"); i >= 0 {
+		rest = rest[i+3:]
+	}
+	// strip authority
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		rest = rest[i:]
+	} else {
+		return "/"
+	}
+	// strip query and fragment
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	if rest == "" {
+		return "/"
+	}
+	return rest
 }

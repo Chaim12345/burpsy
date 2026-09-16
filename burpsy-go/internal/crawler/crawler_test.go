@@ -1315,7 +1315,7 @@ func (f *fakeCoordinator) EnsureLoggedIn(rule *session.SessionRule, _ session.Ma
 func (f *fakeCoordinator) HandleResponseFor(_ session.RequestIdentity, _ int, _ map[string]string, _ []byte, _ func() bool) {
 }
 
-func (f *fakeCoordinator) CookieHeader(_ string, _ uint16, _ bool) string {
+func (f *fakeCoordinator) CookieHeader(_ string, _ uint16, _ bool, _ string) string {
 	return f.cookie
 }
 

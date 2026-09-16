@@ -116,10 +116,10 @@ type DifferentialSender interface {
 // another anonymous request, see identical responses (because they are the
 // same request), and misreport every endpoint on the target as broken access
 // control.
-func AuthContextsFrom(coord *session.Coordinator, host string, port uint16, tls bool) (authed, anon AuthContext) {
+func AuthContextsFrom(coord *session.Coordinator, host string, port uint16, tls bool, path string) (authed, anon AuthContext) {
 	var cookieHeader string
 	if coord != nil {
-		cookieHeader = coord.CookieHeader(host, port, tls)
+		cookieHeader = coord.CookieHeader(host, port, tls, path)
 	}
 	authed = AuthContext{
 		CookieHeader:   cookieHeader,
