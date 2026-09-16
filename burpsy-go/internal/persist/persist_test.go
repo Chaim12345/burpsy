@@ -1,6 +1,7 @@
 package persist
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -400,5 +401,99 @@ func TestRestore_RoundTripsFindingTaskID(t *testing.T) {
 		t.Fatalf("untracked finding %d did not survive the restore", untracked)
 	} else if got.TaskID != 0 {
 		t.Errorf("TaskID = %d, want 0 for a finding no task produced", got.TaskID)
+	}
+}
+
+// A rule's ordered action list must survive the round trip intact — every kind, every per-kind
+// field, the per-action Enabled and Stop flags, and the nested branches of a check.
+//
+// This test exists because the actions column was added to a table whose load path rebuilds a rule
+// field by field, and that is the shape where a saved column is written and never read back: the
+// rule returns looking plausible, carrying the *synthesised* legacy list (run the macro) instead of
+// the operator's own, and the difference is invisible until a real request goes out without the
+// header that authenticated it. persist_test.go already documents that exact defect for the four
+// scope fields (7nh2/6db6); this is the same assertion for the new column, so the next field added
+// here fails loudly rather than silently degrading to the pre-action behaviour.
+//
+// Asserted through the marshalled JSON rather than field by field: a hand-written comparison only
+// checks the fields whoever wrote it remembered, and the field that gets forgotten in the load path
+// is the same one that gets forgotten in the assertion.
+func TestRestore_SessionRuleActionListRoundTrips(t *testing.T) {
+	p := newTestStore(t)
+	sess := session.NewCoordinator(zap.NewNop())
+	rule := session.NewSessionRule("csrf", []string{"127.0.0.1"}, []session.MacroStep{
+		{Method: "GET", URL: "http://127.0.0.1/form"},
+	})
+	// The actions below spend {{csrf}}, and the rule is refused unless something extracts it — so
+	// the extraction is here to make the rule legal, not as a second thing under test.
+	csrf, err := session.NewExtraction("csrf", "header", `(.+)`, 1)
+	if err != nil {
+		t.Fatalf("NewExtraction: %v", err)
+	}
+	csrf.Header = "X-CSRF"
+	rule.Extractions = []*session.Extraction{csrf}
+	// The canonical Burp recipe this issue was filed about, plus a check with both branches
+	// populated: run a macro, then conditionally set a header or replace part of the request. Every
+	// action carries a non-default field, because a field left at its zero value round-trips
+	// correctly even when the load path drops it.
+	rule.Actions = []*session.Action{
+		{Kind: session.ActionRunMacro, Enabled: true},
+		{
+			Kind:    session.ActionCheckValidity,
+			Enabled: true,
+			Then: []*session.Action{
+				{Kind: session.ActionSetHeader, Enabled: true, Name: "X-CSRF", Value: "{{csrf}}"},
+			},
+			Else: []*session.Action{
+				{Kind: session.ActionSetParam, Enabled: true, Name: "tok", Value: "{{csrf}}", In: "body"},
+				{Kind: session.ActionSetCookie, Enabled: true, Name: "sid", Value: "{{csrf}}"},
+				{Kind: session.ActionReplace, Enabled: true, Match: `id=(\d+)`, Replacement: "id=1", Regex: true},
+			},
+		},
+		{Kind: session.ActionAddCookiesFromJar, Enabled: true},
+		// Disabled and stopping, both non-default: a load path that dropped either would leave a
+		// rule that runs an action the operator switched off, or runs past one they made final.
+		{Kind: session.ActionInvokeExtension, Enabled: false, Stop: true, Extension: "acme.session"},
+	}
+	if _, err := sess.AddRule(rule); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+	saved := sess.AllRules()
+	p.SaveSessionRules(saved)
+
+	restoredSess := session.NewCoordinator(zap.NewNop())
+	if err := p.Restore(nil, nil, nil, nil, restoredSess, nil, nil); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	rs := restoredSess.AllRules()
+	if len(rs) != 1 {
+		t.Fatalf("restored %d session rules, want the one that was saved", len(rs))
+	}
+	want, err := json.Marshal(saved[0].EffectiveActions())
+	if err != nil {
+		t.Fatalf("marshal saved actions: %v", err)
+	}
+	got, err := json.Marshal(rs[0].EffectiveActions())
+	if err != nil {
+		t.Fatalf("marshal restored actions: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("the rule's action list did not survive the round trip.\n got: %s\nwant: %s\n"+
+			"A rule that restores with a different action list runs something the operator never "+
+			"wrote — and because an absent list synthesises the legacy run-the-macro shape, the "+
+			"degraded rule still looks like a working one.", got, want)
+	}
+	// Named explicitly as well as compared, so a change that broke the nesting could not pass by
+	// making both sides equally wrong.
+	if n := len(rs[0].Actions); n != 4 {
+		t.Fatalf("restored %d top-level actions, want the 4 that were saved", n)
+	}
+	if n := len(rs[0].Actions[1].Else); n != 3 {
+		t.Fatalf("the check's else branch restored %d actions, want 3; a nested branch is the part "+
+			"of the list a flat load path silently loses", n)
+	}
+	if !rs[0].Actions[3].Stop || rs[0].Actions[3].Enabled {
+		t.Fatalf("the last action restored as enabled=%v stop=%v, want enabled=false stop=true",
+			rs[0].Actions[3].Enabled, rs[0].Actions[3].Stop)
 	}
 }
