@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { useExchangeActions, useSendShortcuts, exchangeUrl } from "../lib/actions";
+import { useSendShortcuts, exchangeUrl } from "../lib/actions";
+import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useMessage, useStats } from "../lib/data";
@@ -487,7 +488,7 @@ export function HistoryPage(): JSX.Element {
  // explicit that a count the data does not support is a defect, and "500 rows" on a 12,000-row
  // capture is exactly that -- the operator concludes they have seen everything.
  const stats = useStats();
- const actions = useExchangeActions();
+ const actions = usePluginExchangeActions();
  const scope = useScopeView();
  const annotate = useAnnotateExchange();
  const removeRows = useDeleteHistory();

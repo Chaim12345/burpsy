@@ -3,7 +3,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Crosshair, Plus
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
-import { useExchangeActions } from "../lib/actions";
+import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEncoding, type BodyEncoding } from "../lib/body-encoding";
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
@@ -437,7 +437,7 @@ export function RepeaterPage(): JSX.Element {
    * store has never seen under an id it does not have.
    */
   const sentExchange = useExchange(result?.exchange_id ?? null);
-  const actions = useExchangeActions();
+  const actions = usePluginExchangeActions();
   const messageMenu = sentExchange.data ? actions.menu(sentExchange.data) : undefined;
 
   if (!active) {

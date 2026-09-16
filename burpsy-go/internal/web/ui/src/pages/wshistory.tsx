@@ -6,7 +6,8 @@ import { useWsConnections, useWsHistory } from "../lib/data";
 import { useExchange, useWsMessageDetailed } from "../lib/data.observe";
 import { useMessage } from "../lib/data";
 import { useApp } from "../lib/store";
-import { useExchangeActions, useSendShortcuts } from "../lib/actions";
+import { useSendShortcuts } from "../lib/actions";
+import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import type { WsConnection, WsRow } from "../lib/types";
 import type { WsMessageDetail } from "../lib/types.observe";
 import { HttpEditor } from "../ui/editor";
@@ -117,7 +118,7 @@ export function WebSocketPage(): JSX.Element {
  const setRoute = useApp((state) => state.setRoute);
  const setComparerSlot = useApp((state) => state.setComparerSlot);
  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
- const actions = useExchangeActions();
+ const actions = usePluginExchangeActions();
 
  const [selectedExchange, setSelectedExchange] = useState<number | null>(null);
  const [selectedFrameId, setSelectedFrameId] = useState<number | null>(null);

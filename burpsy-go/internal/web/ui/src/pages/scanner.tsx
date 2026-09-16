@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
-import { useExchangeActions } from "../lib/actions";
+import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import { useIssueTriage, useIssuesDetailed } from "../lib/data.attack";
 import { triageMenuGroups } from "../lib/issue-triage";
@@ -181,7 +181,7 @@ export function ScannerPage(): JSX.Element {
  const focusExchange = useApp((state) => state.focusExchange);
  const setRoute = useApp((state) => state.setRoute);
  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
- const actions = useExchangeActions();
+ const actions = usePluginExchangeActions();
  const triage = useIssueTriage();
 
  const [severities, setSeverities] = useState<Set<string>>(new Set());

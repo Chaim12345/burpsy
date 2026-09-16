@@ -5,9 +5,10 @@ import { useDebounced, useInvalidate, useHistory, useMessage } from "../lib/data
 import { useCrawls, useDeleteSitemap, usePassiveScanBranch, useSitemapDetailed, useStartCrawl } from "../lib/data.observe";
 import { useIssuesDetailed } from "../lib/data.attack";
 import type { FindingDetail } from "../lib/types.attack";
-import { exchangeUrl, useExchangeActions, useSendShortcuts } from "../lib/actions";
+import { exchangeUrl, useSendShortcuts } from "../lib/actions";
 import { engagementToolsGroup, type EngagementSeed } from "../lib/engagement-menu";
 import { putSeed } from "../lib/page-seed";
+import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { requestSettingsSection } from "../lib/settings-sections";
 import { useApp } from "../lib/store";
 import { toast } from "sonner";
@@ -421,7 +422,7 @@ export function SiteMapPage(): JSX.Element {
  const removeNode = useDeleteSitemap();
  // The same cache key the HTTP history tab uses, so selecting a node costs no extra request.
  const { data: history } = useHistory("", 1000);
- const actions = useExchangeActions();
+ const actions = usePluginExchangeActions();
  const tree = data?.tree ?? [];
 
  const rows = useMemo(() => flatten(tree, 0, "", null, term, sfilter, expanded), [tree, term, sfilter, expanded]);

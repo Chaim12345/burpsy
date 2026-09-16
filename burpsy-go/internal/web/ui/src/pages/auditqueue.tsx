@@ -22,7 +22,7 @@ import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/l
 import { SimpleTable } from "../ui/table";
 import { useAuditItemAgain, useAuditItems } from "../lib/data.auditqueue";
 import { useHistory, useMessage } from "../lib/data";
-import { useExchangeActions } from "../lib/actions";
+import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { useApp } from "../lib/store";
 import { toast } from "sonner";
 
@@ -44,7 +44,7 @@ export function AuditQueuePage(): JSX.Element {
 
  const focusExchange = useApp((state) => state.focusExchange);
  const setRoute = useApp((state) => state.setRoute);
- const actions = useExchangeActions();
+ const actions = usePluginExchangeActions();
 
  // The same history cache key the history tab uses: the row carries the exchange id, the
  // ExchangeView carries the message ids, and the bytes come from /api/message only when this
