@@ -81,8 +81,11 @@ type actionWalk struct {
 	changed bool
 	// stopped is set by an action carrying "no further actions".
 	stopped bool
-	trace   []ActionRan
-	next    int
+	// cookieOverrides are the cookies set_cookie actions named, in the order they were set, carried
+	// to the send so the jar cannot overwrite them. See applyJarWith.
+	cookieOverrides []CookieOverride
+	trace           []ActionRan
+	next            int
 }
 
 func (w *actionWalk) record(kind ActionKind, detail string, changed bool) {
@@ -109,6 +112,9 @@ func (w *actionWalk) recordSkipped(kind ActionKind, reason string) {
 type actionResult struct {
 	// Request is the request the walk arrived at, which is what the caller re-sends.
 	Request MacroStep
+	// CookieOverrides are the cookies set_cookie actions named. Separate from Request.Headers
+	// because the send path rebuilds the Cookie header from the jar and would otherwise drop them.
+	CookieOverrides []CookieOverride
 	// Trace is what each action did, in the order it was reached.
 	Trace []ActionRan
 	// Changed is whether Request differs from the request the walk was handed.
@@ -133,16 +139,17 @@ func (c *Coordinator) runActions(rule *SessionRule, request MacroStep, response 
 		request: request, response: response,
 		values: make(map[string]string),
 	}
-	original := request
+	original := cloneMacroStep(request)
 	w.walk(rule.EffectiveActions())
 	return actionResult{
-		Request:      w.request,
-		Trace:        w.trace,
-		Changed:      !sameMacroStep(original, w.request),
-		Checked:      w.checked,
-		Validity:     w.validity,
-		MacroRan:     w.macroRan,
-		MacroOutcome: w.macroOutcome,
+		Request:         w.request,
+		CookieOverrides: w.cookieOverrides,
+		Trace:           w.trace,
+		Changed:         !sameMacroStep(original, w.request),
+		Checked:         w.checked,
+		Validity:        w.validity,
+		MacroRan:        w.macroRan,
+		MacroOutcome:    w.macroOutcome,
 	}
 }
 
@@ -176,7 +183,7 @@ func (w *actionWalk) perform(a *Action) {
 	case ActionRunMacro, ActionRunPostRequestMacro:
 		w.runMacro(a)
 	case ActionAddCookiesFromJar:
-		before := w.request
+		before := cloneMacroStep(w.request)
 		w.request = w.c.applyJar(w.request)
 		w.record(a.Kind, "attached the session cookie jar's cookies for this request",
 			!sameMacroStep(before, w.request))
@@ -283,18 +290,22 @@ func (w *actionWalk) enclosingValidity() *ValidityRule {
 
 func (w *actionWalk) setCookie(a *Action) {
 	value := actionsSubstituteValues(a.Value, w.values)
-	before := w.request
+	before := cloneMacroStep(w.request)
 	if w.request.Headers == nil {
 		w.request.Headers = make(map[string]string)
 	}
 	w.request.Headers["Cookie"] = setCookiePair(w.request.Headers["Cookie"], a.Name, value)
+	// Also recorded out-of-band, because writing the header is not enough to make this action real:
+	// the send path's applyJar replaces the whole Cookie header with the jar's, which used to delete
+	// this cookie between the trace saying it was set and the request going out. See applyJarWith.
+	w.cookieOverrides = append(w.cookieOverrides, CookieOverride{Name: a.Name, Value: value})
 	w.record(a.Kind, fmt.Sprintf("set cookie %s=%s", a.Name, value),
 		!sameMacroStep(before, w.request))
 }
 
 func (w *actionWalk) setHeader(a *Action) {
 	value := actionsSubstituteValues(a.Value, w.values)
-	before := w.request
+	before := cloneMacroStep(w.request)
 	if w.request.Headers == nil {
 		w.request.Headers = make(map[string]string)
 	}
@@ -342,7 +353,7 @@ func (w *actionWalk) setParam(a *Action) {
 			in = "query"
 		}
 	}
-	before := w.request
+	before := cloneMacroStep(w.request)
 	switch in {
 	case "query":
 		w.request.URL = setURLParam(w.request.URL, a.Name, value)
@@ -378,7 +389,7 @@ func (w *actionWalk) replace(a *Action) {
 		}
 		return strings.ReplaceAll(s, match, a.Replacement)
 	}
-	before := w.request
+	before := cloneMacroStep(w.request)
 	w.request.URL = apply(w.request.URL)
 	w.request.Body = apply(w.request.Body)
 	if len(w.request.Headers) > 0 {
@@ -430,7 +441,7 @@ func (w *actionWalk) invokeExtension(a *Action) {
 		w.record(a.Kind, "the extension refused or could not be reached: "+err.Error(), false)
 		return
 	}
-	before := w.request
+	before := cloneMacroStep(w.request)
 	w.request = next
 	w.record(a.Kind, fmt.Sprintf("invoked extension registration %q", a.Extension),
 		!sameMacroStep(before, w.request))
@@ -490,6 +501,25 @@ func copyValues(in map[string]string) map[string]string {
 
 // sameMacroStep reports whether two steps are byte-for-byte the same request, which is how the walk
 // answers "did this action change anything" and "does this rule's request need re-sending".
+// cloneMacroStep copies a step deeply enough to compare against after a mutation.
+//
+// MacroStep is a struct, so `before := w.request` reads like a snapshot and is not one: Headers is a
+// map, and the copy shares it. Every "did this action change anything" test in this file was
+// therefore comparing a map with itself and answering no. That was not cosmetic. recover() reads the
+// same answer at the whole-walk level and returns AlreadyValid *without sending* when nothing
+// changed, so a rule whose actions only set headers or cookies — the CSRF recipe this issue is
+// about — did all its work and then never put it on the wire.
+func cloneMacroStep(s MacroStep) MacroStep {
+	if s.Headers != nil {
+		h := make(map[string]string, len(s.Headers))
+		for k, v := range s.Headers {
+			h[k] = v
+		}
+		s.Headers = h
+	}
+	return s
+}
+
 func sameMacroStep(a, b MacroStep) bool {
 	if a.Method != b.Method || a.URL != b.URL || a.Body != b.Body {
 		return false

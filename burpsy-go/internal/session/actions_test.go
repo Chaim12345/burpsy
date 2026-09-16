@@ -427,3 +427,98 @@ func describeTrace(trace []ActionRan) string {
 	}
 	return b.String()
 }
+
+// TestASetCookieActionReachesTheWire pins the action against the send path that used to erase it.
+//
+// The action wrote its cookie into the request's Cookie header and the trace said so, but
+// sendWithJar re-derives that whole header from the cookie jar on the way out (applyJar drops any
+// Cookie header it finds, by design, so a recorded macro step's stale capture cannot reach the
+// wire). A set_cookie action is not a stale capture — it is the operator stating what this request
+// carries — and it was being deleted between the trace and the target. Found live, not by reading:
+// the trace said "set cookie flavour=oatmeal" and the target received `Cookie: sid=sess-abc123`.
+//
+// Asserted on what the sender received, never on the walk's own request, because the whole defect
+// lived downstream of the walk: a test reading w.request would have passed throughout.
+func TestASetCookieActionReachesTheWire(t *testing.T) {
+	fake := newFakeSender()
+	c := NewCoordinator(zap.NewNop())
+
+	// A jar cookie for the same host, so this also pins the part that makes the action useful rather
+	// than merely present: the rule's own cookie has to ride *alongside* the session, not replace it.
+	c.jarMgr.AbsorbSetCookie("example.com", 443, true, "sid=sess-abc123; Path=/")
+
+	rule := NewSessionRule("stamp a cookie", []string{"example.com"}, nil)
+	rule.Actions = []*Action{
+		{Kind: ActionSetCookie, Enabled: true, Name: "flavour", Value: "oatmeal"},
+	}
+	mustAddRule(t, c, rule)
+
+	fake.script("https://example.com/account", validResponse(), nil)
+	outcome := c.HandleRecovery("", getStep("https://example.com/account"), invalidResponse(), fake.runner())
+
+	sent := fake.sentSteps("https://example.com/account")
+	if len(sent) != 1 {
+		t.Fatalf("sent %d request(s), want 1 — outcome %v; the rewritten request was never re-sent, "+
+			"so no cookie could have reached the target", len(sent), outcome.Kind)
+	}
+	got := sent[0].Headers["Cookie"]
+	if !strings.Contains(got, "flavour=oatmeal") {
+		t.Errorf("the target received Cookie %q, which does not carry the cookie the rule set. The "+
+			"action reported success and the send path dropped it — a rule action that does nothing "+
+			"while saying it did is worse than one that is absent, because the operator stops looking.", got)
+	}
+	if !strings.Contains(got, "sid=sess-abc123") {
+		t.Errorf("the target received Cookie %q, which lost the jar's session cookie. A set_cookie "+
+			"action must add to the session, not replace it, or the request goes out unauthenticated.", got)
+	}
+}
+
+// TestAnActionThatOnlyRewritesHeadersIsStillSent pins the aliasing defect that made a whole class of
+// rule silent.
+//
+// MacroStep is a struct whose Headers is a map, so `before := w.request` shares the map and every
+// "did this action change anything" comparison in the walk was comparing a map with itself. recover()
+// reads the same answer at the whole-walk level and returns AlreadyValid *without sending* when
+// nothing changed — so a rule whose actions only touch headers did all its work and never put it on
+// the wire.
+//
+// The request here starts with a header already on it, and that is the entire point: with nil
+// headers the walk allocates a fresh map and the comparison accidentally succeeds, which is why
+// TestARuleOfStandingActionsNeedsNoMacro passed throughout and this defect survived. Any test whose
+// fixture starts from an empty header map cannot see it.
+func TestAnActionThatOnlyRewritesHeadersIsStillSent(t *testing.T) {
+	fake := newFakeSender()
+	c := NewCoordinator(zap.NewNop())
+
+	rule := NewSessionRule("stamp a header", []string{"example.com"}, nil)
+	rule.Actions = []*Action{setHeaderAction("X-CSRF", "tok-9f3a")}
+	mustAddRule(t, c, rule)
+
+	probe := getStep("https://example.com/account")
+	probe.Headers = map[string]string{"User-Agent": "burpsy-test"}
+
+	fake.script("https://example.com/account", validResponse(), nil)
+	outcome := c.HandleRecovery("", probe, invalidResponse(), fake.runner())
+
+	if outcome.Kind == RecoveryAlreadyValid {
+		t.Fatalf("outcome = RecoveryAlreadyValid: the walk reported that its actions changed nothing, " +
+			"so the rewritten request was never sent. The rule set a header and the operator is told " +
+			"the session was already fine.")
+	}
+	sent := fake.sentSteps("https://example.com/account")
+	if len(sent) != 1 {
+		t.Fatalf("sent %d request(s), want 1 — outcome %v", len(sent), outcome.Kind)
+	}
+	if got := sent[0].Headers["X-CSRF"]; got != "tok-9f3a" {
+		t.Errorf("the target received X-CSRF %q, want tok-9f3a", got)
+	}
+	// The pre-existing header must survive: an action that set one header and dropped another would
+	// satisfy the assertion above while breaking the request.
+	if got := sent[0].Headers["User-Agent"]; got != "burpsy-test" {
+		t.Errorf("the target received User-Agent %q, want the one the request arrived with", got)
+	}
+	if len(outcome.Actions) != 1 || !outcome.Actions[0].Changed {
+		t.Errorf("the trace reports %+v; the set-header action changed the request and must say so, "+
+			"because Changed is what recover() uses to decide whether to send at all", outcome.Actions)
+	}
+}
