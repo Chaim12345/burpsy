@@ -72,6 +72,29 @@ export function useUnloadExtension() {
 }
 
 /**
+ * Move one allowlisted plugin one place in the order (burpsy-react-ui-d3gj).
+ *
+ * The order is not decoration. It is the sequence every surface that offers a plugin's work reads —
+ * the palette group, the context-menu group, the message editor's plugin tabs — so moving a plugin
+ * up moves its registrations ahead of the others' everywhere they are invoked from. burpsy has no
+ * HTTP-handler registration kind, so this is not Burp's request pipeline and nothing claims it is;
+ * internal/extension/order.go says so at length.
+ *
+ * The server refuses the edges rather than clamping: up on the first plugin answers 409 and the
+ * failure carries the reason, which is why the buttons are disabled with a hint rather than left
+ * live to fail. Both halves exist on purpose — the disabled button is the honest affordance and the
+ * 409 is the honest answer to a caller that asked anyway.
+ */
+export function useMoveExtension() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: { name: string; direction: "up" | "down" }) =>
+      api<ExtensionList>("/api/extensions/order", json("POST", body)),
+    onSettled: () => invalidate([keys.extensions]),
+  });
+}
+
+/**
  * Run one registration a loaded plugin declared.
  *
  * `exchange` and `message` are optional and are sent as given: exchange 0 and message 0 are real ids
