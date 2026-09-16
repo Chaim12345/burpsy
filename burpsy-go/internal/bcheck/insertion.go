@@ -36,11 +36,14 @@
 // prefixed with 'Bearer'"*. A JWT check whose `any` skipped headers would never
 // fire on the one place JWTs live.
 //
-// **Nested points are not enumerated.** Burp audits inside an already-decoded
-// parameter and reports `"Skipped as nested insertion points not enabled"`
-// when that is switched off. Not implementing it is a miss, never a false
-// positive: fewer positions get probed, and every position that does get probed
-// is still exactly one.
+// **Nested points are enumerated, and can be turned off.** Burp audits inside an
+// already-decoded parameter and reports `"Skipped as nested insertion points not
+// enabled"` when that is switched off. expandNested does the same here, and
+// EnumerateOptions.NoNested is the switch — Burp's
+// `scanner.misc_insertion_point_options.use_nested_insertion_points`, whose
+// shipped default is true. Turning it off is a miss, never a false positive:
+// fewer positions get probed, and every position that does get probed is still
+// exactly one. The miss is recorded as a Declined rather than left implicit.
 //
 // # Encoding: escape the payload, never re-encode the base value
 //
@@ -316,10 +319,60 @@ func (d Declined) Describe() string {
 // an audit's whole budget.
 const DefaultMaxInsertionPoints = 30
 
+// The two `What` values the enumerator uses for a decline that is a *configured*
+// refusal rather than a request it could not read. Named constants because
+// internal/scanner classifies a queue row by matching on them, and that match was
+// previously a second copy of the literal in another package — a wording change
+// here would have silently reclassified every capped row as an ordinary decline.
+const (
+	// DeclinedPastLimitWhat names the points dropped by the per-request ceiling.
+	DeclinedPastLimitWhat = "insertion points past the per-request limit"
+	// DeclinedNestedDisabledWhat names the points not built because the run turned
+	// nested insertion points off.
+	DeclinedNestedDisabledWhat = "nested insertion points inside parameter values"
+)
+
+// EnumerateOptions is the per-run tuning an audit configuration carries into the
+// enumerator. The zero value is the engine default — capped at
+// DefaultMaxInsertionPoints, nested points enumerated — so a caller that does not
+// tune anything gets exactly the behaviour it had before options existed.
+//
+// It is a struct rather than two more positional arguments because both knobs come
+// from one place (the run's AuditConfig) and are read in one place. A third
+// max-style parameter on EnumerateWithLimit would eventually be mis-ordered at some
+// call site; a named field cannot be.
+type EnumerateOptions struct {
+	// Max bounds the returned point count: zero takes DefaultMaxInsertionPoints, a
+	// negative value lifts the cap entirely. Burp's
+	// `scanner.misc_insertion_point_options.max_insertion_points_per_base_request`.
+	Max int
+	// NoNested suppresses nested expansion — the JSON/base64/XML structure inside a
+	// parameter value is left alone and only the flat parameter is probed. Burp's
+	// `scanner.misc_insertion_point_options.use_nested_insertion_points` set false.
+	//
+	// Spelled as the negative so the zero value keeps nested points on, which is
+	// both Burp's shipped default (`"use_nested_insertion_points": true`) and what
+	// every caller here did before the flag existed.
+	//
+	// Suppression is never silent: the points that would have been built are counted
+	// and recorded as a Declined, because a run that probed only the outer parameter
+	// of a base64-wrapped JSON body has not tested that body, and a report that did
+	// not say so would be the false negative Declined exists to prevent.
+	NoNested bool
+}
+
 // Enumerate returns every insertion point of the requested kinds, capped at
-// DefaultMaxInsertionPoints. See EnumerateWithLimit for the cap's semantics.
+// DefaultMaxInsertionPoints. See EnumerateWith for the cap's semantics.
 func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
-	return EnumerateWithLimit(req, kinds, DefaultMaxInsertionPoints)
+	return EnumerateWith(req, kinds, EnumerateOptions{Max: DefaultMaxInsertionPoints})
+}
+
+// EnumerateWithLimit is EnumerateWith with an explicit cap and nested expansion
+// left on. Retained as the spelling Intruder's uncapped body enumeration uses —
+// Intruder wants every nested position and no ceiling, which is a property of
+// Intruder rather than of any audit configuration.
+func EnumerateWithLimit(req []byte, kinds []string, max int) ([]InsertionPoint, []Declined) {
+	return EnumerateWith(req, kinds, EnumerateOptions{Max: max})
 }
 
 // EnumerateWithLimit returns every insertion point of the requested kinds, in a fixed
@@ -343,7 +396,8 @@ func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
 // the tail of the fixed order and recorded as a Declined naming how many, so a
 // capped enumeration can never be mistaken for a request that simply had fewer
 // places to inject.
-func EnumerateWithLimit(req []byte, kinds []string, max int) ([]InsertionPoint, []Declined) {
+func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]InsertionPoint, []Declined) {
+	max := opts.Max
 	if max == 0 {
 		max = DefaultMaxInsertionPoints
 	}
@@ -613,11 +667,32 @@ func EnumerateWithLimit(req []byte, kinds []string, max int) ([]InsertionPoint, 
 
 	// Nested expansion: for each flat param point whose value decodes to
 	// JSON/base64/XML, append nested points that target the inner structure.
-	out, droppedNested := capPoints(append(out, expandNested(out)...), max)
+	//
+	// When the run turned nested points off, the expansion is still *computed* and
+	// then discarded, which looks wasteful and is deliberate: the count is the only
+	// way to say what was given up. Burp reports the same fact per point as
+	// "Skipped as nested insertion points not enabled", and a run that silently
+	// probed only the outer parameter of a base64-wrapped JSON body would read as
+	// having tested that body. The work is one decode per parameter, which is
+	// nothing beside the probe it replaces.
+	nested := expandNested(out)
+	var droppedNested int
+	if opts.NoNested {
+		if len(nested) > 0 {
+			declined = append(declined, Declined{
+				What: DeclinedNestedDisabledWhat,
+				Reason: fmt.Sprintf("%d point(s) inside decoded parameter values were not audited: nested insertion points are turned off for this run",
+					len(nested)),
+			})
+		}
+		out, droppedNested = capPoints(out, max)
+	} else {
+		out, droppedNested = capPoints(append(out, nested...), max)
+	}
 
 	if dropped := droppedFlat + droppedNested; dropped > 0 {
 		declined = append(declined, Declined{
-			What: "insertion points past the per-request limit",
+			What: DeclinedPastLimitWhat,
 			Reason: fmt.Sprintf("%d point(s) were not audited: this request reached the maximum of %d insertion points per base request",
 				dropped, max),
 		})
