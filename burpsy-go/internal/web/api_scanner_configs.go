@@ -24,6 +24,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -55,6 +56,15 @@ type auditConfigView struct {
 	// InsertionKinds is the point class list the run enumerates when the configuration carries an
 	// explicit one; null means the engine default (the four core classes).
 	InsertionKinds []string `json:"insertion_kinds"`
+	// MaxInsertionPointsPerRequest is Burp's max_insertion_points_per_base_request: how many
+	// insertion points one base request may yield before the rest are dropped and reported. A
+	// pointer for the same reason MaxRequests is one — null inherits Burp's shipped default of 30,
+	// and zero is refused rather than meaningful, so a plain number could not tell "the operator did
+	// not set this" from a value they chose.
+	MaxInsertionPointsPerRequest *uint32 `json:"max_insertion_points_per_request"`
+	// NestedInsertionPoints is Burp's use_nested_insertion_points: null inherits the default (on),
+	// false stops the enumerator expanding JSON/base64/XML inside a parameter value.
+	NestedInsertionPoints *bool `json:"nested_insertion_points"`
 }
 
 // optBoolPtr maps an OptUint32 bool onto a JSON pointer: unset becomes null.
@@ -87,7 +97,49 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 	if len(cfg.InsertionKinds) > 0 {
 		v.InsertionKinds = cfg.InsertionKinds
 	}
+	if cfg.MaxInsertionPointsPerRequest.Set {
+		n := cfg.MaxInsertionPointsPerRequest.Value
+		v.MaxInsertionPointsPerRequest = &n
+	}
+	v.NestedInsertionPoints = optBoolPtr(cfg.NestedInsertionPoints)
 	return v
+}
+
+// applyTo overlays the fields this view SETS onto cfg, leaving every null alone.
+//
+// Partial by design. The write endpoint takes a settings block on top of a base — the server's
+// current configuration, or whatever `from` resolved to — so an operator changing one ceiling does
+// not have to restate a whole configuration, and cannot silently reset the rest of it to this
+// struct's zero values by omitting them. Decoding the body straight into a scanner.AuditConfig
+// would have done exactly that: a save that sent only a ceiling would have stored a configuration
+// with a zero time budget and every breaker disabled, under the operator's name.
+//
+// Only the two misc_insertion_point_options keys are writable here so far. The rest of the view is
+// still read-only and says so at the endpoint, rather than accepting a field and storing nothing.
+func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, error) {
+	if v.MaxInsertionPointsPerRequest != nil {
+		n := *v.MaxInsertionPointsPerRequest
+		// Zero enumerates nothing, so the run would probe nothing and still report a completed
+		// audit. Refused by name rather than clamped, matching ParseBurpConfig's own refusal — an
+		// impossible setting must not become a different, possible one the operator did not choose.
+		if n == 0 {
+			return cfg, errors.New("max_insertion_points_per_request must be at least 1: a ceiling of zero " +
+				"enumerates no insertion points, so an audit under it would probe nothing and still report as complete")
+		}
+		cfg.MaxInsertionPointsPerRequest = scanner.SomeUint32(n)
+	}
+	if v.NestedInsertionPoints != nil {
+		cfg.NestedInsertionPoints = scanner.SomeUint32(b2u32(*v.NestedInsertionPoints))
+	}
+	return cfg, nil
+}
+
+// b2u32 is the bool spelling OptUint32 stores.
+func b2u32(b bool) uint32 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // builtInConfigView is one shipped configuration: its name, every key it can carry with whether it sets
@@ -314,6 +366,14 @@ type scanConfigWriteReq struct {
 	// From is the configuration a clone or rename starts from. For a clone it may be a SHIPPED
 	// preset — that is the ordinary way to start from Burp's own tuning and adjust it.
 	From string `json:"from"`
+	// Settings is the operator's own values, overlaid on whatever the save or clone started from.
+	//
+	// Without it the library could only ever snapshot the configuration the server was already
+	// running under: "save" stored auditBaseConfig() and "clone" stored what `from` resolved to, so
+	// an operator could name a configuration and could not change anything in it. A library of
+	// copies is not a library. Null leaves the base exactly as it was, which is what every existing
+	// caller sends.
+	Settings *auditConfigView `json:"settings,omitempty"`
 }
 
 // scannerConfigLibraryWrite serves POST/PUT/DELETE /api/scanner/configs.
@@ -354,6 +414,16 @@ func (s *Server) scannerConfigLibraryWrite(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			cfg = resolved
+		}
+		if req.Settings != nil {
+			overlaid, err := req.Settings.applyTo(cfg)
+			if err != nil {
+				// Refused before anything is written. A configuration saved under the operator's
+				// name that does not carry what they wrote is worse than a rejected save.
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			cfg = overlaid
 		}
 		doc, err := json.Marshal(cfg)
 		if err != nil {
