@@ -688,11 +688,19 @@ func jarKey(domain, path, name string) string {
 }
 
 // CookieJarEntry is one authority's jar, flattened for reporting.
-// CookieAttrs is one cookie as the wire and the table see it: the value plus every
+// CookieAttrs is one cookie as the wire and the table see it: the name, the value, and every
 // §5.3 attribute the jar models. The value-only shape this replaces could say that a cookie
 // existed and nothing else — which made a Path column impossible, because the jar held no
 // path to report (burpsy-react-ui-d18r).
+//
+// Name is on the row itself, not carried by a map key, because the jar's storage key is
+// (domain, path, name) and two cookies share a name while differing on the other two — the
+// exact case d18r's key was built to preserve. The old map[name]CookieAttrs projection here
+// overwrote one of every such pair before the API ever serialized it: a live fixture sending
+// DISPLAY_CHECK at Path=/ and at Path=/admin produced one table row where the jar held two
+// (burpsy-react-ui-loa1). A slice with the name inside keeps both.
 type CookieAttrs struct {
+	Name  string `json:"name"`
 	Value string `json:"value"`
 	Path  string `json:"path,omitempty"`
 	// Domain is the cookie's Domain attribute (empty = host-only), not the jar's authority. Both
@@ -707,7 +715,7 @@ type CookieJarEntry struct {
 	Host    string
 	Port    uint16
 	TLS     bool
-	Cookies map[string]CookieAttrs
+	Cookies []CookieAttrs
 }
 
 // Jars returns every jar that holds at least one cookie, sorted by authority.
@@ -736,14 +744,27 @@ func (cjm *CookieJarManager) Jars() []CookieJarEntry {
 		// absorb() race a JSON encoder walking it.
 		jar.RLock()
 		if len(jar.m) > 0 {
-			cookies := make(map[string]CookieAttrs, len(jar.m))
+			// A slice, not a map: the map keyed by name is what collapsed two same-name
+			// path-scoped cookies into one row. The name rides on the row, and the sort is
+			// (name, domain, path) so a name's path variants stay adjacent — the order an
+			// operator scanning for "which paths is my session cookie good for" reads.
+			cookies := make([]CookieAttrs, 0, len(jar.m))
 			for k, c := range jar.m {
 				name := k[strings.LastIndex(k, "\x01")+1:]
-				cookies[name] = CookieAttrs{
-					Value: c.Value, Path: c.Path, Domain: c.Domain,
+				cookies = append(cookies, CookieAttrs{
+					Name: name, Value: c.Value, Path: c.Path, Domain: c.Domain,
 					Expires: c.Expires, Secure: c.Secure, HTTPOnly: c.HTTPOnly,
-				}
+				})
 			}
+			sort.Slice(cookies, func(a, b int) bool {
+				if cookies[a].Name != cookies[b].Name {
+					return cookies[a].Name < cookies[b].Name
+				}
+				if cookies[a].Domain != cookies[b].Domain {
+					return cookies[a].Domain < cookies[b].Domain
+				}
+				return cookies[a].Path < cookies[b].Path
+			})
 			out = append(out, CookieJarEntry{Host: jar.host, Port: jar.port, TLS: jar.tls, Cookies: cookies})
 		}
 		jar.RUnlock()

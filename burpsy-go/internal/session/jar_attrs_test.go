@@ -18,8 +18,14 @@ func TestAbsorbKeepsTheAttributesTheOldJarDropped(t *testing.T) {
 	if len(jars) != 1 {
 		t.Fatalf("Cookies() returned %d jars, want 1 for a single authority", len(jars))
 	}
-	got, ok := jars[0].Cookies["SID"]
-	if !ok {
+	var got CookieAttrs
+	var found bool
+	for _, c := range jars[0].Cookies {
+		if c.Name == "SID" {
+			got, found = c, true
+		}
+	}
+	if !found {
 		t.Fatal("the absorbed cookie is not in the jar the operator reads")
 	}
 	if got.Path != "/admin" || got.Domain != "app.test" || !got.Secure || !got.HTTPOnly {
@@ -27,6 +33,35 @@ func TestAbsorbKeepsTheAttributesTheOldJarDropped(t *testing.T) {
 	}
 	if got.Value != "abc" {
 		t.Errorf("stored value = %q, want abc", got.Value)
+	}
+}
+
+// The reporting projection must not collapse two same-name cookies into one row. The jar's
+// storage key is (domain, path, name), so SID can exist at two paths — this is the case the
+// old map[name]CookieAttrs read side overwrote before the API ever serialized it, found live
+// when a fixture's two DISPLAY_CHECK cookies rendered as one table row (loa1).
+func TestTheReportingProjectionKeepsBothOfTwoSameNamePathScopedCookies(t *testing.T) {
+	c := NewCoordinator(nil)
+	c.AbsorbCookie("app.test", 443, true, "SID=root; Path=/")
+	c.AbsorbCookie("app.test", 443, true, "SID=admin; Path=/admin")
+	jars := c.Cookies()
+	if len(jars) != 1 {
+		t.Fatalf("Cookies() returned %d jars, want 1 for a single authority", len(jars))
+	}
+	var root, admin *CookieAttrs
+	for i := range jars[0].Cookies {
+		switch jars[0].Cookies[i].Path {
+		case "/":
+			root = &jars[0].Cookies[i]
+		case "/admin":
+			admin = &jars[0].Cookies[i]
+		}
+	}
+	if root == nil || admin == nil {
+		t.Fatalf("both SID variants must survive the projection, got %+v", jars[0].Cookies)
+	}
+	if root.Value != "root" || admin.Value != "admin" {
+		t.Errorf("values crossed: / = %q, /admin = %q, want root and admin", root.Value, admin.Value)
 	}
 }
 

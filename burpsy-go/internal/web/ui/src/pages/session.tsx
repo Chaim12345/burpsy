@@ -1149,6 +1149,10 @@ export function SessionPage(): JSX.Element {
      domain: cookie.domain ?? "",
      secure: cookie.secure ?? false,
      httpOnly: cookie.http_only ?? false,
+     // Expires reached the wire in d18r but was never rendered (loa1) — a cookie the server
+     // withdrew via Max-Age=0 is held as already-expired, and the row hiding that reads as
+     // a live cookie the jar refuses to send for no visible reason.
+     expires: cookie.expires ?? "",
     })),
    ),
   [cookiesQuery.data],
@@ -2025,6 +2029,12 @@ export function SessionPage(): JSX.Element {
           <span className="cell-dim">{row.domain ? `domain ${row.domain}` : "host-only"}</span>
           {row.secure ? <span className="cell-dim">secure</span> : null}
           {row.httpOnly ? <span className="cell-dim">HttpOnly</span> : null}
+          {/* The API has carried expires since d18r; rendering it is loa1. Session cookies
+              (no expiry) show nothing — the jar holds them for the life of the process, and a
+              blank is the honest rendering of "no stated end". */}
+          {row.expires && row.expires !== "0001-01-01T00:00:00Z" ? (
+           <span className="cell-dim">expires {new Date(row.expires).toLocaleDateString()}</span>
+          ) : null}
          </div>
         </td>
         <td>

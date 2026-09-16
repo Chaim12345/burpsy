@@ -889,6 +889,20 @@ func (s *Server) handleSessionRuleDetail(w http.ResponseWriter, r *http.Request)
 		s.sessionRuleTestMacro(w, r, idStr[:len(idStr)-len("/test")])
 		return
 	}
+	// Re-analyze (burpsy-react-ui-e23c): a dry-run plus the parameter-relationship
+	// analysis over its responses. Read-only like /test — the apply is a separate route,
+	// so an operator can look at what the analyzer found without committing to it.
+	if strings.HasSuffix(idStr, "/analyze") {
+		s.sessionRuleAnalyzeMacro(w, r, idStr[:len(idStr)-len("/analyze")])
+		return
+	}
+	// Apply: add the chosen suggestions to the rule as extractions. The write is what
+	// separates this from /analyze, and the split is the same one Test macro vs update-macro
+	// already draws: look first, commit separately.
+	if strings.HasSuffix(idStr, "/apply-extractions") {
+		s.sessionRuleApplyExtractions(w, r, idStr[:len(idStr)-len("/apply-extractions")])
+		return
+	}
 	if strings.HasSuffix(idStr, "/move") {
 		s.sessionRuleMove(w, r, idStr[:len(idStr)-len("/move")])
 		return
@@ -1563,17 +1577,11 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 	entries := s.sessionCoordinator.Cookies()
 	out := make([]sessionHostCookies, 0, len(entries))
 	for _, entry := range entries {
-		names := make([]string, 0, len(entry.Cookies))
-		for name := range entry.Cookies {
-			names = append(names, name)
-		}
-		// Sorted, because map order is not stable and a table that reorders itself on every refresh
-		// cannot be scanned for the one cookie an operator is looking for.
-		sort.Strings(names)
-		pairs := make([]sessionCookiePair, 0, len(names))
-		for _, name := range names {
-			attrs := entry.Cookies[name]
-			pairs = append(pairs, sessionCookiePair{Name: name, Value: attrs.Value, Path: attrs.Path, Domain: attrs.Domain, Expires: attrs.Expires, Secure: attrs.Secure, HTTPOnly: attrs.HTTPOnly})
+		// The jar projection is already a name-sorted slice (loa1), so the loop is a straight
+		// copy — the sort that used to live here was a patch over the map's lack of one.
+		pairs := make([]sessionCookiePair, 0, len(entry.Cookies))
+		for _, attrs := range entry.Cookies {
+			pairs = append(pairs, sessionCookiePair{Name: attrs.Name, Value: attrs.Value, Path: attrs.Path, Domain: attrs.Domain, Expires: attrs.Expires, Secure: attrs.Secure, HTTPOnly: attrs.HTTPOnly})
 		}
 		out = append(out, sessionHostCookies{
 			Host:    net.JoinHostPort(entry.Host, strconv.Itoa(int(entry.Port))),

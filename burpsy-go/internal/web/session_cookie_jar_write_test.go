@@ -39,7 +39,8 @@ func Test_the_cookie_jar_set_remove_and_clear_are_visible_on_the_read_side(t *te
 
 	// The read side names the change — a write the table cannot see is the old lie reshaped.
 	view := cookiesView(t, s)
-	if len(view) != 1 || view[0].Cookies["SESSION"].Value != "rotated" {
+	edited, ok := cookieByName(view[0], "SESSION")
+	if len(view) != 1 || !ok || edited.Value != "rotated" {
 		t.Fatalf("the read side should show the edited value, got %+v", view)
 	}
 
@@ -58,10 +59,10 @@ func Test_the_cookie_jar_set_remove_and_clear_are_visible_on_the_read_side(t *te
 		t.Fatalf("remove = %d: %s", rec3.Code, strings.TrimSpace(rec3.Body.String()))
 	}
 	view = cookiesView(t, s)
-	if _, still := view[0].Cookies["SESSION"]; still {
+	if _, still := cookieByName(view[0], "SESSION"); still {
 		t.Fatalf("the removed cookie must not survive on the read side, got %+v", view[0].Cookies)
 	}
-	if view[0].Cookies["CSRF"].Value != "tok" {
+	if csrf, ok := cookieByName(view[0], "CSRF"); !ok || csrf.Value != "tok" {
 		t.Fatalf("the untouched cookie must survive a per-cookie removal, got %+v", view[0].Cookies)
 	}
 
@@ -135,6 +136,17 @@ func newTestServerWithCoordinator(t *testing.T) *Server {
 
 // cookiesView reads the GET response in its wire shape and flattens it to
 // authority -> name -> value, the shape the assertions read.
+// cookieByName finds one cookie in an entry's slice by name — the map lookup this test file
+// used before loa1 moved CookieAttrs.Name onto the row.
+func cookieByName(e session.CookieJarEntry, name string) (session.CookieAttrs, bool) {
+	for _, c := range e.Cookies {
+		if c.Name == name {
+			return c, true
+		}
+	}
+	return session.CookieAttrs{}, false
+}
+
 func cookiesView(t *testing.T, s *Server) []session.CookieJarEntry {
 	t.Helper()
 	rec := get(t, s, "/api/session/cookies")
@@ -155,12 +167,10 @@ func cookiesView(t *testing.T, s *Server) []session.CookieJarEntry {
 	}
 	out := make([]session.CookieJarEntry, 0, len(view.Cookies))
 	for _, h := range view.Cookies {
-		entry := session.CookieJarEntry{Cookies: map[string]session.CookieAttrs{}}
-		// The wire host is "example.com:443" — split for the entry's fields where it parses;
-		// only the map matters to these assertions, so a host that does not split keeps its key.
+		entry := session.CookieJarEntry{}
 		entry.Host = h.Host
 		for _, c := range h.Cookies {
-			entry.Cookies[c.Name] = session.CookieAttrs{Value: c.Value}
+			entry.Cookies = append(entry.Cookies, session.CookieAttrs{Name: c.Name, Value: c.Value})
 		}
 		out = append(out, entry)
 	}
