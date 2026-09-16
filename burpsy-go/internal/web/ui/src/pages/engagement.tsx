@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, Empty, Input, Button, Badge, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
@@ -33,16 +33,48 @@ const KINDS = [
 
 type KindId = (typeof KINDS)[number]["id"];
 
-export function EngagementView() {
+/**
+ * A search arriving from the site map's Engagement tools context menu (burpsy-react-ui-gupj).
+ *
+ * `nonce` is what makes two identical right-clicks two searches rather than one ignored repeat —
+ * the same reason the Intruder menu's command carries one. Without it, right-clicking the same
+ * node twice would leave the second click doing nothing visible.
+ */
+export interface EngagementSeedRequest {
+ kind: KindId;
+ q: string;
+ /** Restricts which captured responses are read. "" means every captured host. */
+ host: string;
+ nonce: number;
+}
+
+export function EngagementView({ seed }: { seed?: EngagementSeedRequest } = {}) {
  const [kind, setKind] = useState<KindId>("comments");
  const [term, setTerm] = useState("");
- const [submitted, setSubmitted] = useState<{ kind: KindId; q: string }>({ kind: "comments", q: "" });
+ const [submitted, setSubmitted] = useState<{ kind: KindId; q: string; host: string }>({
+  kind: "comments",
+  q: "",
+  host: "",
+ });
+
+ // The seed is applied here rather than by resetting the component, so a search arriving from the
+ // menu leaves the panel in a state the operator can then edit and re-run by hand.
+ useEffect(() => {
+  if (!seed) return;
+  setKind(seed.kind);
+  setTerm(seed.q);
+  setSubmitted({ kind: seed.kind, q: seed.q, host: seed.host });
+ }, [seed?.nonce]);
 
  const search = useQuery({
-  queryKey: ["engagement", submitted.kind, submitted.q],
+  queryKey: ["engagement", submitted.kind, submitted.q, submitted.host],
   queryFn: () => {
    const params = new URLSearchParams();
    if (submitted.q.trim()) params.set("q", submitted.q.trim());
+   // The endpoint has always taken `host`; nothing sent it until the site-map menu needed to
+   // scope a search to the node that was right-clicked, so every search before this one read
+   // every captured host whatever the panel implied.
+   if (submitted.host.trim()) params.set("host", submitted.host.trim());
    params.set("limit", "200");
    const qs = params.toString();
    return api<EngagementResult>(`/api/engagement/${submitted.kind}${qs ? `?${qs}` : ""}`);
@@ -52,7 +84,9 @@ export function EngagementView() {
 
  const run = (k: KindId) => {
   setKind(k);
-  setSubmitted({ kind: k, q: term });
+  // A kind picked by hand in this panel searches everything: the host restriction belongs to the
+  // seed that carried it, and silently keeping it would narrow a search the operator widened.
+  setSubmitted({ kind: k, q: term, host: "" });
  };
 
  const rows = search.data?.rows ?? [];
@@ -96,9 +130,13 @@ export function EngagementView() {
      style={{ maxWidth: "var(--w-md)" }}
      disabled={kind !== "references"}
     />
-    <Button variant="outline" size="small" onClick={() => setSubmitted({ kind, q: term })}>
+    <Button variant="outline" size="small" onClick={() => setSubmitted({ kind, q: term, host: "" })}>
      Search
     </Button>
+    {/* What was actually searched, not what the buttons imply. A host-scoped search that looked
+        identical to a suite-wide one would let "no matches" be read as "this construct is
+        nowhere" when only one host was read. */}
+    {submitted.host ? <Badge tone="info">host {submitted.host}</Badge> : null}
     {search.data ? (
      <>
       <Badge>

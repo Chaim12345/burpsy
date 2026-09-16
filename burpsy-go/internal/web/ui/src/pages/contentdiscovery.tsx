@@ -2,6 +2,7 @@ import { AlertTriangle, Copy, ExternalLink, FolderTree, Globe, Link2, Play, Repe
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { copyToClipboard, formatBytes, formatCount, templateRequest } from "../lib/api";
+import { takeSeed } from "../lib/page-seed";
 import { useApp } from "../lib/store";
 import {
   useDiscoveryRuns,
@@ -128,7 +129,10 @@ function ToolUnavailable({ tool }: { tool: DiscoveryToolState }): JSX.Element {
 /** The launch form. Only target and wordlist are required; the rest fall through to ffuf's defaults. */
 function StartSweep({ tool }: { tool: DiscoveryToolState }): JSX.Element {
   const start = useStartDiscovery();
-  const [target, setTarget] = useState("");
+  // Seeded when this page was opened from the site map's Engagement tools › Discover content
+  // (burpsy-react-ui-gupj), blank otherwise. Read once at mount and cleared, so the seed cannot
+  // overwrite a target the operator has since typed — see lib/page-seed.ts.
+  const [target, setTarget] = useState(() => takeSeed("discovery-target") ?? "");
   const [wordlist, setWordlist] = useState("");
   const [extensions, setExtensions] = useState("");
   const [matchCodes, setMatchCodes] = useState("");
