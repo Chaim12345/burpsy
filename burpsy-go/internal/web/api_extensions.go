@@ -223,6 +223,59 @@ func (s *Server) handleExtensionInvoke(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"result": result})
 }
 
+// extensionOrderRequest is one move: which plugin, and which way.
+type extensionOrderRequest struct {
+	Name      string `json:"name"`
+	Direction string `json:"direction"`
+}
+
+// handleExtensionOrder serves POST /api/extensions/order: move one allowlisted plugin one place in
+// the order the console offers its registrations in (burpsy-react-ui-d3gj).
+//
+// riskLocal, not riskExecute: this permutes a slice in this process. Nothing is spawned and no
+// plugin is called — which is also why it works on an unloaded plugin, whose position an operator
+// will want set before they load it.
+//
+// The edges refuse rather than clamp. Up on the first plugin answers 409 with "already first"
+// instead of 200 and an unchanged list, because a control that reports success and changes nothing
+// is the defect this route exists to avoid: the reordering has to be the thing that dispatches, and
+// an operator has to be able to tell a move that happened from one that could not.
+func (s *Server) handleExtensionOrder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req extensionOrderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "unreadable move: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "name the allowlisted plugin to move: {\"name\": \"<name>\", \"direction\": \"up\"}", http.StatusBadRequest)
+		return
+	}
+	list, err := s.extensionHost().Move(req.Name, extension.MoveDirection(req.Direction))
+	if err != nil {
+		http.Error(w, err.Error(), extensionOrderStatus(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// extensionOrderStatus maps this route's own refusals. An unknown direction is 400 because the
+// request was malformed; an edge of the list is 409 because the request was well formed and about a
+// position the plugin is not in — the same distinction load and unload draw.
+func extensionOrderStatus(err error) int {
+	switch {
+	case errors.Is(err, extension.ErrBadDirection):
+		return http.StatusBadRequest
+	case errors.Is(err, extension.ErrAlreadyFirst), errors.Is(err, extension.ErrAlreadyLast):
+		return http.StatusConflict
+	default:
+		return extensionStatus(err, http.StatusInternalServerError)
+	}
+}
+
 // decodeExtensionName reads and validates the {name} body shared by load and unload.
 func decodeExtensionName(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if r.Method != http.MethodPost {

@@ -339,6 +339,12 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskExecute,
 		summary: "start one allowlisted plugin as a child process and complete the JSON-RPC handshake",
 	},
+	"/api/extensions/order": {
+		// riskLocal, not riskExecute: a move permutes this process's own slice. No plugin is spawned
+		// and none is called.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "move one allowlisted plugin one place in the order its registrations are offered and invoked in",
+	},
 	"/api/extensions/unload": {
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "stop a running plugin: ask it to exit, then close its stdin, then kill it",

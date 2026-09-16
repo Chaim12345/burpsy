@@ -1015,6 +1015,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/extensions/console", s.handleExtensionConsole)
 	s.mux.HandleFunc("/api/extensions/invoke", s.handleExtensionInvoke)
 	s.mux.HandleFunc("/api/extensions/load", s.handleExtensionLoad)
+	s.mux.HandleFunc("/api/extensions/order", s.handleExtensionOrder)
 	s.mux.HandleFunc("/api/extensions/unload", s.handleExtensionUnload)
 
 	// Scanner report export: /api/report/{json|sarif|html}
