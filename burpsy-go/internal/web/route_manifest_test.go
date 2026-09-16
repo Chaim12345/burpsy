@@ -772,6 +772,11 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "diff two messages or two pasted buffers",
 	},
+	"/api/tools/compare-sitemaps": {
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "the path-set diff between two runs' site maps — Burp's Compare site maps, the " +
+			"access-control view: what one crawl reached that the other did not",
+	},
 	"/api/tools/decode": {
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "run one decode layer over a buffer, reporting whether it was partial",

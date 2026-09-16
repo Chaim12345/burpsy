@@ -56,6 +56,10 @@ type exchangeQueryable struct {
 	body []byte
 }
 
+// TaskID answers from the exchange's own attribution: the CLI's history --query rows are real
+// captured rows and know their run, so 0 keeps meaning "no task owns this one".
+func (q exchangeQueryable) TaskID() (uint64, bool) { return q.ex.TaskID, true }
+
 func (q exchangeQueryable) Host() string   { return q.ex.Host }
 func (q exchangeQueryable) Method() string { return q.ex.Method }
 func (q exchangeQueryable) Path() string   { return q.ex.Path }

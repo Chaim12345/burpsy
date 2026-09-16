@@ -268,6 +268,10 @@ type auditedExchangeQuery struct {
 	resp     *core.StoredMessage
 }
 
+// TaskID answers from the audited exchange's own attribution: an audit row is a real captured
+// row and knows which run produced it — (id, true), with 0 meaning what it always meant.
+func (q *auditedExchangeQuery) TaskID() (uint64, bool) { return q.ex.TaskID, true }
+
 func (q *auditedExchangeQuery) Host() string   { return q.ex.Host }
 func (q *auditedExchangeQuery) Method() string { return q.ex.Method }
 func (q *auditedExchangeQuery) Path() string   { return q.ex.Path }

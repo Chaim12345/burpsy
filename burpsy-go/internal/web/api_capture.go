@@ -1326,6 +1326,11 @@ type filteredExchangeQuery struct {
 	ex    *core.Exchange
 }
 
+// TaskID answers from the exchange's own attribution — the whole point of the field existing.
+// (ex.TaskID, true): the history row knows what run produced it, and 0 is the real answer for
+// operator-proxied traffic, exactly the row `task != 0` is how you exclude.
+func (f filteredExchangeQuery) TaskID() (uint64, bool) { return f.ex.TaskID, true }
+
 func (f filteredExchangeQuery) Host() string   { return f.ex.Host }
 func (f filteredExchangeQuery) Method() string { return f.ex.Method }
 func (f filteredExchangeQuery) Path() string   { return f.ex.Path }

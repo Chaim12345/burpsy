@@ -989,6 +989,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/tools/encode", s.handleToolsEncode)
 	s.mux.HandleFunc("/api/tools/hash", s.handleToolsHash)
 	s.mux.HandleFunc("/api/tools/compare", s.handleToolsCompare)
+	// Compare site maps (burpsy-react-ui-k3a7): the path-set diff between two runs. Registered
+	// beside the byte Comparer because it is the same engagement decision — "what changed between
+	// these two things I captured" — at site-map granularity.
+	s.mux.HandleFunc("/api/tools/compare-sitemaps", s.handleToolsCompareSitemaps)
 	// PATCH /api/tools/log/{id} — the log comment/highlight write path. Registered as a subtree
 	// because "/api/tools/log" above takes the exact match; without this line toolLogSetComment was
 	// defined, declared in the manifest and reachable by nothing (burpsy-react-ui-5da).

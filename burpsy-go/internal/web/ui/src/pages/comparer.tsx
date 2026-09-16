@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash, Type } from "lucide-react";
+import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash, Network, Type } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes } from "../lib/api";
 import { useCompare, useLoadMessage } from "../lib/data.workbench";
+import { useCrawls } from "../lib/data.observe";
+import { useCompareSitemaps } from "../lib/data.observe";
+import { comparableRuns, sideLabel, type SitemapDiffResponse } from "../lib/sitemap-diff";
 import { useApp } from "../lib/store";
 import type { CompareOp } from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
-import { PageHeader } from "../ui/layout";
+import { PageHeader, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Input, Metric, Select, Toolbar } from "../ui/primitives";
+import { SimpleTable } from "../ui/table";
 
 /** Ops carry byte offsets, so slicing has to go through the same byte view the server used. */
 function byteSlice(text: string, offset: number, length: number): string {
@@ -269,6 +273,44 @@ export function ComparerPage(): JSX.Element {
   const slots = useApp((state) => state.comparerSlots);
   const setComparerSlot = useApp((state) => state.setComparerSlot);
 
+  // Burp's two Comparer subjects: two buffers (the page this file was before k3a7), and two
+  // site maps (burpsy-react-ui-k3a7). One page, because Burp also offers them from one tool —
+  // "Send to Comparer" on a message and "Compare site maps" on two crawls land in the same place.
+  const [mode, setMode] = useState<"buffers" | "sitemaps">("buffers");
+
+  // --- the site-maps half -------------------------------------------------
+  const crawls = useCrawls();
+  const compareSitemaps = useCompareSitemaps();
+  const finished = comparableRuns(crawls.data?.crawls);
+  const [taskA, setTaskA] = useState<number | null>(null);
+  const [taskB, setTaskB] = useState<number | null>(null);
+  // Auto-picked once, when the list first answers: the two most recent finished runs — the two
+  // crawls an operator just ran are the pair they meant, and making them re-select ids the
+  // dashboard already showed them is a round trip that serves nothing.
+  useEffect(() => {
+    if (taskA !== null || finished.length < 2) return;
+    const [first, second] = finished;
+    if (!first || !second) return;
+    setTaskA(first.task_id);
+    setTaskB(second.task_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finished.length > 0]);
+
+  const runSitemapDiff = () => {
+    if (taskA === null || taskB === null) return;
+    compareSitemaps.mutate(
+      { taskA, taskB },
+      {
+        onSuccess: (r) =>
+          r.only_a + r.only_b === 0
+            ? toast.success(`The two runs reached the same ${r.both} path(s)`)
+            : toast.success(`${r.only_a} path(s) only in run ${r.task_a}, ${r.only_b} only in run ${r.task_b}`),
+        onError: (cause) => toast.error(`Site-map comparison failed: ${cause.message}`),
+      },
+    );
+  };
+  const sitemapResult = compareSitemaps.data;
+
   const [a, setA] = useState("");
   const [b, setB] = useState("");
   const [msgA, setMsgA] = useState("");
@@ -430,6 +472,17 @@ export function ComparerPage(): JSX.Element {
         title="Comparer"
         actions={
           <>
+            {/* Burp's two Comparer subjects as two modes: two buffers, or two site maps
+                (k3a7). The active mode is pressed-state, not a highlight, so the control
+                answers "which comparison am I in" the same way Bytes/Words does. */}
+            <Button variant={mode === "buffers" ? "primary" : "outline"} size="small" aria-pressed={mode === "buffers"} onClick={() => setMode("buffers")}>
+              <GitCompare size={13} />
+              Buffers
+            </Button>
+            <Button variant={mode === "sitemaps" ? "primary" : "outline"} size="small" aria-pressed={mode === "sitemaps"} onClick={() => setMode("sitemaps")}>
+              <Network size={13} />
+              Site maps
+            </Button>
             {/* The mode that ran, taken from the response rather than from the control: a control
                 that can disagree with what the endpoint actually did is the defect this label
                 exists to avoid. Before the first run there is nothing to label, so it says which
@@ -463,6 +516,75 @@ export function ComparerPage(): JSX.Element {
         }
       />
 
+      {mode === "sitemaps" ? (
+        <Card className="card-flush">
+          <SectionHeading
+            title="Compare site maps"
+            detail="The path-set diff between two runs — what one crawl reached that the other did not. The access-control view: an anonymous crawl's map against an authenticated one's."
+          />
+          {finished.length < 2 ? (
+            <Empty
+              title="Not two finished runs yet"
+              detail="Comparing site maps takes two finished crawls or API scans. Start them from the Dashboard's New scan, wait for both to finish, and come back."
+            />
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <label htmlFor="sitemap-run-a" style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
+                  Run A
+                </label>
+                <Select
+                  id="sitemap-run-a"
+                  aria-label="Run A for the site-map comparison"
+                  value={taskA ?? ""}
+                  onChange={(e) => setTaskA(Number(e.target.value))}
+                  style={{ width: "auto" }}
+                >
+                  {finished.map((run) => (
+                    <option key={run.task_id} value={run.task_id}>
+                      #{run.task_id} · {(run.seeds ?? []).join(", ") || run.kind || "crawl"} · {run.state}
+                    </option>
+                  ))}
+                </Select>
+                <label htmlFor="sitemap-run-b" style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
+                  Run B
+                </label>
+                <Select
+                  id="sitemap-run-b"
+                  aria-label="Run B for the site-map comparison"
+                  value={taskB ?? ""}
+                  onChange={(e) => setTaskB(Number(e.target.value))}
+                  style={{ width: "auto" }}
+                >
+                  {finished.map((run) => (
+                    <option key={run.task_id} value={run.task_id}>
+                      #{run.task_id} · {(run.seeds ?? []).join(", ") || run.kind || "crawl"} · {run.state}
+                    </option>
+                  ))}
+                </Select>
+                <Button onClick={runSitemapDiff} disabled={taskA === null || taskB === null || taskA === taskB || compareSitemaps.isPending}>
+                  <GitCompare size={14} />
+                  {compareSitemaps.isPending ? "Comparing…" : "Compare site maps"}
+                </Button>
+                {taskA !== null && taskB !== null && taskA === taskB ? (
+                  <span className="field-hint">choose two different runs</span>
+                ) : null}
+              </div>
+              {compareSitemaps.error ? (
+                <ErrorNotice error={compareSitemaps.error} onRetry={runSitemapDiff} />
+              ) : sitemapResult ? (
+                <SitemapDiffPanel result={sitemapResult} />
+              ) : (
+                <Empty
+                  title="Nothing compared yet"
+                  detail="Pick two finished runs and compare their site maps. Paths only one run reached are the areas to inspect for access control."
+                />
+              )}
+            </>
+          )}
+        </Card>
+      ) : (
+      <>
       {/* The old wording said only that this build compares BYTES rather than words, which was true
           about granularity and silent about something worse: the diff had no alignment at all, so one
           inserted byte reported the whole remainder as changed. Now it aligns, both modes exist, and
@@ -601,6 +723,49 @@ export function ComparerPage(): JSX.Element {
           detail="Paste both sides, load them by stored message id, or use “Send to Comparer” from HTTP history, then compare."
         />
       )}
+      </>
+      )}
     </div>
+  );
+}
+
+/** The path-set diff table: one row per path, its verdict named in runs. */
+function SitemapDiffPanel({ result }: { result: SitemapDiffResponse }): JSX.Element {
+  // The interesting rows are the asymmetric ones, but hiding the shared surface would hide the
+  // "same" verdict the comparison also answers — a diff that cannot say "identical" cannot
+  // clear a control either. Both are shown; the asymmetric ones badge.
+  return (
+    <>
+      <div className="metric-grid">
+        <Metric label={`Only in run ${result.task_a}`} value={result.only_a} tone={result.only_a > 0 ? "warn" : "good"} accent />
+        <Metric label={`Only in run ${result.task_b}`} value={result.only_b} tone={result.only_b > 0 ? "warn" : "good"} accent />
+        <Metric label="Both runs" value={result.both} detail="paths the two maps share" />
+      </div>
+      <Card className="card-flush">
+        <SimpleTable headers={["Authority", "Path", "Side", "Status A", "Status B"]}>
+          {result.rows.map((row) => (
+            <tr key={`${row.host}:${row.port}:${row.tls}:${row.path}`}>
+              <td>
+                {row.host}:{row.port}
+                {row.tls ? <span className="cell-dim"> · https</span> : null}
+              </td>
+              <td>
+                <code>{row.path}</code>
+              </td>
+              <td>
+                <Badge tone={row.side === "both" ? "neutral" : "warn"}>{sideLabel(row.side, result.task_a, result.task_b)}</Badge>
+              </td>
+              <td>{row.status_a || "—"}</td>
+              <td>{row.status_b || "—"}</td>
+            </tr>
+          ))}
+        </SimpleTable>
+      </Card>
+      <p className="field-hint">
+        The rows each side is missing are the access-control surface: jump to HTTP history and
+        filter by <code>task = {result.task_a}</code> or <code>task = {result.task_b}</code> for
+        the bytes behind any row.
+      </p>
+    </>
   );
 }

@@ -9,6 +9,7 @@ import { api, json } from "./api";
 import { keys, useDebounced, useInvalidate, useResource } from "./data";
 import type { Exchange } from "./types";
 import type { APIScanAccepted, APIScanCheck, CrawlRun, SiteMapDetail, WsMessageDetail } from "./types.observe";
+import type { SitemapDiffResponse } from "./sitemap-diff";
 
 /** Full Exchange record for one id — used where a page only started with an exchange id (a WS
  * connection, a site-map node) and needs the whole row to offer the full send-to menu. */
@@ -50,6 +51,15 @@ export const useCrawls = () => {
  const running = (q.data?.crawls ?? []).some((c) => c.state === "running");
  return { ...q, running };
 };
+
+/** Compare site maps (k3a7): the path-set diff between two runs, as the server computed it. */
+export function useCompareSitemaps() {
+ return useMutation<SitemapDiffResponse, Error, { taskA: number; taskB: number }>({
+  // camelCase at the hook boundary, snake_case on the wire the same mutation body spells.
+  mutationFn: ({ taskA, taskB }) =>
+   api<SitemapDiffResponse>("/api/tools/compare-sitemaps", json("POST", { task_a: taskA, task_b: taskB })),
+ });
+}
 
 /**
  * The outcome of a passive re-scan of one site-map branch (burpsy-react-ui-p09).

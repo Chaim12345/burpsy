@@ -135,6 +135,13 @@ type Queryable interface {
 	// genuinely have no idea, and must fail every comparison rather than report everything
 	// unhighlighted.
 	Annotation() (highlight, comment string, known bool)
+	// TaskID reports the id of the dashboard task that produced this row, and whether anything
+	// tracked it. Mirrors ResponseLen's bool exactly: 0 is a real answer here ("no task owns
+	// this row" — everything the operator's own client proxied), not a placeholder for "unknown",
+	// so a bare uint64 could not tell an untracked row from one a consumer cannot answer. The
+	// crawler's frontier and a match/replace candidate return (0, false) and fail every task
+	// comparison, the same way they fail annotation ones.
+	TaskID() (uint64, bool)
 }
 
 // Expr is a parsed, type-checked query expression. Parse is the only way to obtain one, so every
@@ -192,6 +199,11 @@ const (
 	fieldParams
 	fieldHighlight
 	fieldComment
+	// fieldTask is the run attribution: the dashboard task id that produced the row, 0 when no
+	// task owns it (operator-proxied traffic). Numeric, so the operator writes `task = 3` and
+	// `task != 0` ("nothing tracked this one") — the two questions access-control site-map
+	// comparison is made of (burpsy-react-ui-k3a7).
+	fieldTask
 	// fieldCount is the number of fields the grammar has. Fields() sizes its seen-set from this.
 	//
 	// NOTE: adding a field here is NOT caught by the compiler in fieldOrder — a short
@@ -229,6 +241,8 @@ func (f field) String() string {
 		return "highlight"
 	case fieldComment:
 		return "comment"
+	case fieldTask:
+		return "task"
 	}
 	return "?"
 }
@@ -515,7 +529,7 @@ func (p *parser) parseCmp() (*Expr, error) {
 	if f == fieldStatus {
 		return p.parseStatusValue(o)
 	}
-	if f == fieldLength || f == fieldDuration || f == fieldParams {
+	if f == fieldLength || f == fieldDuration || f == fieldParams || f == fieldTask {
 		return p.parseNumericValue(f, o)
 	}
 	val, err := p.parseStringValue(f)
@@ -593,6 +607,8 @@ func fieldByName(name string) (field, bool) {
 		return fieldLength, true
 	case "duration":
 		return fieldDuration, true
+	case "task":
+		return fieldTask, true
 	case "header":
 		return fieldHeader, true
 	case "extension":
@@ -630,6 +646,11 @@ func fieldAllows(f field, o op) bool {
 	case fieldParams:
 		// A count, so the numeric set — including `in`, for "between two and five parameters".
 		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe || o == opIn
+	case fieldTask:
+		// An id, so the numeric set. `in` is deliberately excluded: task ids are equal or they
+		// are not, and a range over registry ids ("tasks 3 through 7") is a query about the
+		// registry's allocation order, which is not a fact about the traffic.
+		return o == opEq || o == opNe || o == opLt || o == opLe || o == opGt || o == opGe
 	}
 	return false
 }
@@ -651,6 +672,8 @@ func allowedOps(f field) string {
 		return "=, != and ~ (contains)"
 	case fieldParams:
 		return "=, !=, <, <=, >, >= and `in low..high`"
+	case fieldTask:
+		return "=, !=, <, <=, > and >= (a run id, not a range)"
 	}
 	return "=, != (case-insensitive for host and mime) and ~ (contains)"
 }
@@ -813,6 +836,11 @@ var numericUnits = map[field][]struct {
 	// with "\"\" is not a unit params accepts — length accepts b, kb, mb and gb", which is both a
 	// refusal of valid input and an offer of megabytes for a count.
 	fieldParams: {
+		{"", 1},
+	},
+	// task is a registry id, so like params the only accepted form is a bare number — same
+	// missing-entry trap as params, same entry shape.
+	fieldTask: {
 		{"", 1},
 	},
 }
@@ -1101,6 +1129,12 @@ func (e *Expr) matchCmp(q Queryable) bool {
 		// Case-insensitive: a comment is prose the operator wrote, not an identifier, and searching
 		// it case-sensitively would miss their own capitalisation.
 		return strOp(e.op, comment, e.str, true)
+	case fieldTask:
+		id, known := q.TaskID()
+		if !known {
+			return false // this consumer cannot answer attribution at all
+		}
+		return numOp(e, int64(id))
 	case fieldHeader:
 		values, present := q.Header(e.key)
 		if !present {

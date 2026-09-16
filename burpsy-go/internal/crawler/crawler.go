@@ -1704,6 +1704,9 @@ func (r frontierRow) Header(string) ([]string, bool) { return nil, false }
 // unhighlighted and uncommented — a claim rather than an absence.
 func (r frontierRow) Annotation() (string, string, bool) { return "", "", false }
 
+// See fetchedRow.TaskID: a frontier candidate has no run attribution to answer with.
+func (r frontierRow) TaskID() (uint64, bool) { return 0, false }
+
 // fetchedRow is what a crawl-retention query is evaluated against: a response that exists, so every
 // field the grammar has is a real answer rather than an absence. This is the difference between the
 // two DSL-03 gates, and the reason the pre-fetch one has to refuse queries this one accepts.
@@ -1748,6 +1751,11 @@ func (r fetchedRow) DurationUs() (int64, bool) { return 0, false }
 // fetch, before an operator has seen the row, so an annotation cannot exist yet. A later re-scan
 // through a different consumer can answer it.
 func (r fetchedRow) Annotation() (string, string, bool) { return "", "", false }
+
+// No run attribution: fetchedRow and frontierRow are per-fetch candidates, and the crawl's own
+// task id is not a fact about a candidate — it is a fact about the crawl that will decide on it.
+// (0, false): every task comparison fails, the same as the annotation ones.
+func (r fetchedRow) TaskID() (uint64, bool) { return 0, false }
 
 func (r fetchedRow) Header(name string) ([]string, bool) {
 	if r.resp == nil {

@@ -66,7 +66,7 @@ and-expr   := unary-expr ( "and" unary-expr )*
 unary-expr := "not" unary-expr | primary
 primary    := "(" or-expr ")" | comparison
 comparison := field op value
-field      := "host" | "status" | "method" | "path" | "mime" | "body"\n            | "length" | "duration" | "extension" | "params"\n            | "highlight" | "comment" | "header" "[" string "]"`;
+field      := "host" | "status" | "method" | "path" | "mime" | "body"\n            | "length" | "duration" | "extension" | "params"\n            | "highlight" | "comment" | "task" | "header" "[" string "]"`;
 
 /**
  * Filter examples, one complete query per entry.
@@ -85,6 +85,8 @@ export const QUERY_EXAMPLES: { query: string; means: string }[] = [
   { query: "status in 500..599", means: "Range, inclusive at both ends." },
   { query: "method = POST", means: "Case-sensitive: method = post matches nothing." },
   { query: "path ~ /admin", means: "Also case-sensitive, per RFC 3986." },
+  { query: "task = 3", means: "Only the traffic dashboard task 3 produced — a crawl, audit or attack run." },
+  { query: "task != 0", means: "Only traffic some run owns. task = 0 is everything you proxied yourself, which no run tracked." },
   { query: "mime ~ json", means: "Matched against the response Content-Type, case-insensitively." },
   { query: "length > 1mb", means: "Response size. b, kb, mb and gb are accepted; a bare number means bytes." },
   { query: "length in 1kb..1mb", means: "Size range, inclusive at both ends." },
