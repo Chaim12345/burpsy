@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, Columns3, Copy, Crosshair, Plus, RotateCcw, Send, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, Plus, Repeat2, RotateCcw, Send, SlidersHorizontal, X } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
@@ -84,6 +84,8 @@ export function RepeaterPage(): JSX.Element {
   const setActiveRepeaterTab = useApp((state) => state.setActiveRepeaterTab);
   const setIntruderSeed = useApp((state) => state.setIntruderSeed);
   const setRoute = useApp((state) => state.setRoute);
+  const setComparerSlot = useApp((state) => state.setComparerSlot);
+  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
 
   // U19: groups + reopen stack. U20: per-tab send options. All actions are individual selectors
   // to match the house zustand style — no whole-store subscription that re-renders on any keypress
@@ -440,6 +442,7 @@ export function RepeaterPage(): JSX.Element {
   const actions = usePluginExchangeActions();
   const messageMenu = sentExchange.data ? actions.menu(sentExchange.data) : undefined;
 
+
   if (!active) {
     return (
       <div className="page">
@@ -457,6 +460,86 @@ export function RepeaterPage(): JSX.Element {
       </div>
     );
   }
+
+  /**
+   * The Send to group for a draft that has never been sent (burpsy-react-ui-bg7j).
+   *
+   * # Why this cannot just call lib/actions.ts's menu()
+   *
+   * That factory takes an `Exchange`: a row in the traffic store with an id and message ids
+   * behind it. An unsent Repeater draft is none of those things — the bytes exist only in the
+   * editor, and no exchange row points at them. So the actions that need bytes are built here
+   * from the draft itself, and the ones that need the traffic store are left out rather than
+   * faked, exactly as Intercept's held-message menu reasons:
+   *
+   * - Send to Intruder is absent. Intruder splices payloads into a *stored* message id, which a
+   *   draft does not have. Send the request once — that creates the stored message — and send
+   *   to Intruder from HTTP history, or from this editor once the send's exchange menu appears.
+   * - Send to Sequencer is absent for the same reason a request-only hand-off is refused
+   *   elsewhere: Sequencer seeds from a request/response pair (the token lives in the
+   *   response), and a draft has no response to give it.
+   *
+   * Everything else is the same matrix every other HTTP surface offers, and is offered on BOTH
+   * the live draft and the paged-back "as written" pane, because both show the same draft's
+   * bytes — only the sent exchange's own menu differs.
+   *
+   * The draft's bytes, never a stale buffer: the group is rebuilt on every render from
+   * `draftRequest`, so a right-click after an edit acts on what the editor shows. (The menu
+   * opens on mousedown, so an edit keystroke landing between render and open cannot desync.)
+   */
+  const draftRequest = viewedRequest ?? active.request;
+  const draftSendMenu: MenuGroup[] = [
+    {
+      id: "send",
+      actions: [
+        {
+          id: "repeater",
+          label: "Send to Repeater",
+          icon: Repeat2,
+          onSelect: () => {
+            // A copy, not a move: the operator forks the draft to work on a variant beside it,
+            // and the source tab keeps its place in history — the same fork semantics every
+            // other surface's Send to Repeater has.
+            openRepeaterTab({
+              name: `${active.name} (copy)`.slice(0, 42),
+              target: active.target,
+              protocol: active.protocol,
+              request: draftRequest,
+            });
+            setRoute("repeater");
+            toast.success(`Copied to a new Repeater tab (from ${active.name})`);
+          },
+        },
+        {
+          id: "compare-a",
+          label: "Send to Comparer (A)",
+          icon: Combine,
+          onSelect: () => {
+            setComparerSlot("a", draftRequest);
+            setRoute("comparer");
+          },
+        },
+        {
+          id: "compare-b",
+          label: "Send to Comparer (B)",
+          icon: ArrowRightLeft,
+          onSelect: () => {
+            setComparerSlot("b", draftRequest);
+            setRoute("comparer");
+          },
+        },
+        {
+          id: "decoder",
+          label: "Send to Decoder",
+          icon: FileOutput,
+          onSelect: () => {
+            setDecoderSeed({ label: active.name, input: draftRequest });
+            setRoute("decoder");
+          },
+        },
+      ],
+    },
+  ];
 
   /**
    * Burp's "Change body encoding" and "Toggle body encoding", on the draft itself (wv5).
@@ -957,7 +1040,7 @@ export function RepeaterPage(): JSX.Element {
           onChange={(value) => updateRepeaterTab(active.id, { request: value })}
           filename="repeater-request.txt"
           placeholder="GET / HTTP/1.1"
-          menuGroups={[...(messageMenu ?? []), ...bodyEncodingMenu]}
+          menuGroups={[...(messageMenu ?? []), ...(sentExchange.data ? [] : draftSendMenu), ...bodyEncodingMenu]}
         />
         <div className="stack">
           {finalResponse != null ? (
