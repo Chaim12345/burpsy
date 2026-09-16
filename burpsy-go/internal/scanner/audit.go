@@ -689,6 +689,12 @@ type BuiltInConfig struct {
 	JavaScriptAnalysis    OptUint32
 	StoreQueueItems       OptUint32
 
+	// The two `scanner/misc_insertion_point_options/*` keys: how many insertion points one base
+	// request may yield, and whether the enumerator expands the structure inside a parameter value.
+	// Burp ships them as 30 and true.
+	MaxInsertionPointsPerRequest OptUint32
+	UseNestedInsertionPoints     OptUint32
+
 	// UnrepresentableKeys records keys a parsed source named that this engine has no field for — the
 	// per-issue selection trio. Only ParseBurpConfig fills it; the six transcribed presets never do.
 	// ApplyWithReport reports them unapplied, so a loaded configuration never drops a key silently.
@@ -728,6 +734,12 @@ var builtInConfigKeys = []struct {
 	// one rather than truncating it: a percentage of 300 is a corrupted file, and loading it as 44
 	// would run a configuration nobody wrote.
 	max uint32
+	// min is the smallest value this key can carry, or 0 for no floor. The parser refuses a smaller
+	// one for the same reason it refuses a larger one, and one key needs it: an insertion-point
+	// ceiling of zero enumerates nothing, so a run under it would audit nothing and report a
+	// completed audit. Clamping that to 1 would run a configuration nobody wrote; refusing names
+	// the value.
+	min uint32
 	// applies reports whether the key changes engine behaviour when set.
 	applies bool
 }{
@@ -1078,13 +1090,13 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "skip_all_tests_for_parameters",
 		burpKey: "scanner/ignored_insertion_points/skip_all_tests_for_parameters",
-		what:    "not applied: the enumerator has no parameter-name exclusion list; every point of a selected class is probed",
+		what:    "not applied: Burp's value is not a name list but a list of match rules ({enabled, parameter, item, match_type, expression} - e.g. match_type matches_regex over an xml_attribute name), and this engine has neither a rule matcher over parameter type and item nor a list-valued key: every row here reads through OptUint32, so the key has no shape to land in",
 		applies: false,
 	},
 	{
 		name:    "skip_server_side_injection_for_parameters",
 		burpKey: "scanner/ignored_insertion_points/skip_server_side_injection_for_parameters",
-		what:    "not applied: every check takes the run's point set; there is no per-check parameter exclusion",
+		what:    "not applied: needs the same rule matcher skip_all_tests_for_parameters needs, and additionally a server-side-injection classification of the check set - CheckDescriptor carries a phase and a dispatch scope but no injection-class grouping, so there is no set of checks to exclude a parameter from",
 		applies: false,
 	},
 	{
@@ -1126,14 +1138,19 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "max_insertion_points_per_base_request",
 		burpKey: "scanner/misc_insertion_point_options/max_insertion_points_per_base_request",
-		what:    "not applied: the per-request point ceiling is fixed at Burp's own default (30, bcheck.DefaultMaxInsertionPoints) and reported on the audit row's caveats; nothing carries an operator's value into a run yet",
-		applies: false,
+		what:    "how many insertion points one base request may yield before the rest are dropped and reported as skipped past the limit (unset takes Burp's default of 30)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.MaxInsertionPointsPerRequest },
+		apply:   func(a *AuditConfig, v uint32) { a.MaxInsertionPointsPerRequest = SomeUint32(v) },
+		min:     1,
+		applies: true,
 	},
 	{
 		name:    "use_nested_insertion_points",
 		burpKey: "scanner/misc_insertion_point_options/use_nested_insertion_points",
-		what:    "not applied: nested points are always enumerated here (the enumerator expands JSON/base64/XML inside a parameter value); the key cannot turn them off",
-		applies: false,
+		what:    "whether the enumerator expands the JSON/base64/XML structure inside a parameter value into its own insertion points (off leaves only the flat parameter, and says how many points it gave up)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.UseNestedInsertionPoints },
+		apply:   func(a *AuditConfig, v uint32) { a.NestedInsertionPoints = SomeUint32(v) },
+		applies: true,
 	},
 }
 

@@ -73,6 +73,11 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 				return fmt.Errorf("burp scan configuration: %s: %d is above the largest value this key can carry (%d)",
 					k.burpKey, n, k.max)
 			}
+			if k.min != 0 && n < k.min {
+				return fmt.Errorf("burp scan configuration: %s: %d is below the smallest value this key can carry (%d); "+
+					"a ceiling of zero would enumerate no insertion points, so the run would audit nothing and report a completed audit",
+					k.burpKey, n, k.min)
+			}
 			setBurpConfigField(&out, k.name, SomeUint32(n))
 			return nil
 		}
@@ -116,6 +121,12 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 // The error-handling keys are failure counts and the audit-optimization key is minutes; every
 // insertion_point_types and issues_reported key is a boolean in Burp's shipped files.
 func isNumericBurpKey(burpKey string) bool {
+	// Matched exactly, not by section prefix: misc_insertion_point_options carries one count and one
+	// boolean side by side, so a prefix rule would read `"use_nested_insertion_points": true` as a
+	// number and fail the whole file.
+	if burpKey == "scanner/misc_insertion_point_options/max_insertion_points_per_base_request" {
+		return true
+	}
 	return strings.HasPrefix(burpKey, "scanner/error_handling/") ||
 		strings.HasPrefix(burpKey, "scanner/audit_optimization/")
 }
@@ -135,6 +146,10 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.PauseSessionAtFailedItemPercentage = val
 	case "maximum_audit_time_minutes":
 		c.MaximumAuditTimeMinutes = val
+	case "max_insertion_points_per_base_request":
+		c.MaxInsertionPointsPerRequest = val
+	case "use_nested_insertion_points":
+		c.UseNestedInsertionPoints = val
 	case "insert_url_params":
 		c.InsertURLParams = val
 	case "insert_body_params":

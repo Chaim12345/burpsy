@@ -95,7 +95,7 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 
 	// The counts are pinned: promoting a key from reported to applied, or dropping a row, has to
 	// change this claim rather than quietly shifting what the project says it honours.
-	const wantApplied, wantReported = 25, 30
+	const wantApplied, wantReported = 27, 28
 	applied, reported := 0, 0
 	for _, k := range builtInConfigKeys {
 		if k.applies {
