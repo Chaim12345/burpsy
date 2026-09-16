@@ -112,8 +112,8 @@ func Test_the_apis_route_serves_the_protocol_contract(t *testing.T) {
 		t.Errorf("served %d method(s) against %d in the table — the tab renders this, so it has to be all of it",
 			len(view.Methods), len(extension.MethodSpecs))
 	}
-	if len(view.Kinds) != 3 {
-		t.Errorf("served %d registration kind(s), want the three with an honest web analogue", len(view.Kinds))
+	if len(view.Kinds) != 4 {
+		t.Errorf("served %d registration kind(s), want the four with an honest web analogue", len(view.Kinds))
 	}
 	if len(view.Unsupported) == 0 {
 		t.Error("nothing is declared unsupported, so the BApp Store's absence is left to be inferred")

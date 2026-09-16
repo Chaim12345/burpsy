@@ -189,12 +189,6 @@ func Test_every_registration_kind_has_exactly_one_invocation_method(t *testing.T
 	}
 	// Four, and stated as a number: the ten Montoya registration points that hand Burp a Swing object
 	// are deliberately absent, and a fifth appearing here should be a decision rather than a diff.
-	//
-	// Four rather than three since session-action, which is a kind rather than a second method on
-	// context-menu because what it renders as is different: a session rule's action, inside the
-	// session rule editor and nowhere else, with the request it hands back actually sent. A
-	// context-menu item is a button an operator presses against a selected exchange and has no say
-	// in what is sent next.
 	if len(validKinds) != 4 {
 		t.Errorf("this host accepts %d registration kinds, and the four with an honest web analogue "+
 			"are context-menu, menu, editor-tab and session-action. Adding a fifth means deciding what "+
