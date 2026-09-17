@@ -266,6 +266,11 @@ export interface SessionCookiesResponse {
  wired: boolean;
  cookies?: SessionHostCookies[];
  hint?: string;
+ /** The surfaces registered as feeding the jar (loa1's read-side honesty). */
+ absorbing_from?: string[];
+ /** The monitored-tool set in force (sn3j): which surfaces may absorb. Absent = every
+  * attached surface (the default). */
+ monitored?: string[];
 }
 
 export interface SessionLoginResponseView {

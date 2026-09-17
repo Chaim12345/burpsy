@@ -551,6 +551,15 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 	}
 	if err == nil && resp != nil {
 		meter.succeeded()
+		// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a probe response is a
+		// response the scanner drove, and Burp's jar can monitor the Scanner. Absorbed from the
+		// response's raw bytes at the one place every probe response passes. A probe session that
+		// sets a cookie is a real session fact — the audit's own auth-diff comparison
+		// (infra_authdiff.go) consumes the jar, so an audit against a rotating-session target
+		// keeps its authenticated context only if this line exists.
+		if s.sessions != nil {
+			s.sessions.AbsorbResponseCookies(session.SourceScanner, exchange.Host, exchange.Port, exchange.TLS, resp.Raw)
+		}
 		return resp
 	}
 	meter.failure()

@@ -938,7 +938,10 @@ export function SessionPage(): JSX.Element {
  const jarWrite = useCookieJarWrite();
  const [editingCookie, setEditingCookie] = useState<{ host: string; port: number; tls: boolean; name: string; value: string } | null>(null);
 
- const applyCookieWrite = (vars: { action: "set" | "remove" | "clear"; host: string; port: number; tls: boolean; name?: string; value?: string }, label: string) =>
+ const applyCookieWrite = (
+  vars: { action: "set" | "remove" | "clear" | "monitor"; host?: string; port?: number; tls?: boolean; name?: string; value?: string; tools?: string[] },
+  label: string,
+) =>
   jarWrite.mutate(vars, {
    onSuccess: (out) => {
     if (out.action === "remove" && out.removed === false) {
@@ -2074,7 +2077,45 @@ export function SessionPage(): JSX.Element {
        {/* Empty the jar altogether (dkb) — per authority of the first visible row group is not
            the Burp shape; Burp empties THE jar. burpsy's jar is per-authority by design, so the
            control clears every authority the read side currently lists. */}
-       {cookieRows.length > 0 ? (
+       {/* The monitored-tool set (sn3j): Burp's "configure the cookie jar to monitor any of the
+          following tools". Rendered from the server's own monitored/absorbing_from pair, so
+          "attached" and "absorbing" stay the two facts they are — a source switched off shows
+          unticked, not vanished. */}
+      <div className="stack-tight">
+       <span className="field-hint">Monitor for cookies:</span>
+       <div className="chip-row">
+        {(cookiesQuery.data?.absorbing_from ?? []).map((src) => {
+         const on = (cookiesQuery.data?.monitored ?? []).includes(src);
+         return (
+          <label key={src} className="check-row">
+           <input
+            type="checkbox"
+            checked={on}
+            aria-label={`Monitor ${src} for cookies`}
+            onChange={(event) => {
+             const set = new Set(cookiesQuery.data?.monitored ?? []);
+             if (event.target.checked) set.add(src);
+             else set.delete(src);
+             // Never fewer than one: un-monitoring every surface is a jar that can only stay
+             // empty, and the server refuses it — reflect that here rather than letting the
+             // click appear to work.
+             if (set.size === 0) {
+              toast.error("At least one tool must be monitored — the jar would never fill");
+              return;
+             }
+             applyCookieWrite(
+              { action: "monitor", tools: [...set] },
+              `Now monitoring ${set.size} tool${set.size === 1 ? "" : "s"} for cookies`,
+             );
+            }}
+           />
+           {" "}{src}
+          </label>
+         );
+        })}
+       </div>
+      </div>
+      {cookieRows.length > 0 ? (
         <Button
          variant="outline"
          size="small"

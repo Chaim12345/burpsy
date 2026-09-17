@@ -727,6 +727,14 @@ func (s *Server) Tasks() *dash.Registry { return s.tasks }
 // WithSessionCoordinator sets the session coordinator.
 func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
 	s.sessionCoordinator = sc
+	// The jar's monitored-tool set (burpsy-react-ui-sn3j): the web layer's own absorbing
+	// surfaces register here, the same wiring-time rule the proxy holds (it attaches itself in
+	// WithCookieJar). The Repeater's sends, the Intruder's stored exemplars and the audit's
+	// probe responses all reach this one coordinator, and Observation can then say which
+	// surfaces are attached independent of which are switched on to absorb.
+	sc.AttachAbsorptionSource(session.SourceRepeater)
+	sc.AttachAbsorptionSource(session.SourceIntruder)
+	sc.AttachAbsorptionSource(session.SourceScanner)
 	s.installSuiteScopePredicate()
 	// A rule's "Invoke an extension" action is wired here, beside the scope predicate and for the
 	// same reason: the seam has match sites inside internal/session where no host is in reach, and a

@@ -282,6 +282,11 @@ type sessionCookiesResp struct {
 	Wired   bool                 `json:"wired"`
 	Cookies []sessionHostCookies `json:"cookies,omitempty"`
 	Hint    string               `json:"hint,omitempty"`
+	// Monitored is the monitored-tool set in force (burpsy-react-ui-sn3j): which surfaces may
+	// absorb cookies. Reported beside AbsorbingFrom so the UI can render "attached" and
+	// "absorbing" as the two different facts they are — a source switched off shows attached
+	// in AbsorbingFrom and absent here.
+	Monitored []string `json:"monitored,omitempty"`
 	// AbsorbingFrom names the surfaces registered to feed the jar: "proxy", "macro", "crawler". This
 	// is what makes an empty table readable. Three states render identically without it — the jar is
 	// watched and nothing has flowed, the jar is watched and no origin has set a cookie, and nothing
@@ -1713,6 +1718,7 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 		AbsorbingFrom:      sources,
 		ResponsesObserved:  obs.ResponsesObserved,
 		SetCookiesAbsorbed: obs.SetCookiesAbsorbed,
+		Monitored:          s.sessionCoordinator.MonitoredSources(),
 	}
 	if len(out) == 0 {
 		// An empty table, an unread one and an unwatched one look the same on screen, so the empty
@@ -1766,9 +1772,31 @@ func (s *Server) handleSessionCookiesMutate(w http.ResponseWriter, r *http.Reque
 		TLS    bool   `json:"tls"`
 		Name   string `json:"name"`
 		Value  string `json:"value"`
+		// Tools is the monitored-tool set for the "monitor" action (burpsy-react-ui-sn3j) —
+		// Burp's "configure the cookie jar to monitor any of the following tools". Not read
+		// by any other action; a nil field keeps the current set.
+		Tools []string `json:"tools"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON", http.StatusBadRequest)
+		return
+	}
+	// The monitor action answers before the host check: it configures the jar as a whole,
+	// not one authority's cookies. An empty tools list is refused (see SetMonitoredSources)
+	// — un-monitoring every surface is a jar that can only stay empty, and the empty field is
+	// also what a client that never heard of this action sends for every other action.
+	if req.Action == "monitor" {
+		if len(req.Tools) == 0 {
+			http.Error(w, "tools is required to configure monitoring: name at least one surface for the jar to monitor", http.StatusBadRequest)
+			return
+		}
+		s.sessionCoordinator.SetMonitoredSources(req.Tools)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"action": "monitor",
+			// Echoed from the coordinator rather than the request: the set in force is the
+			// answer, and a trimmed name or a default the caller did not know about must show.
+			"monitoring": s.sessionCoordinator.MonitoredSources(),
+		})
 		return
 	}
 	if strings.TrimSpace(req.Host) == "" {

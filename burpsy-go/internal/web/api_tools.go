@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/session"
 	"math"
 	"net/http"
 	"net/url"
@@ -220,6 +221,16 @@ func (s *Server) recordRepeaterExchange(
 		Source: core.SourceRepeater,
 	}
 	s.store.AddExchange(ex)
+
+	// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a Repeater response is a
+	// response the operator drove by hand, and Burp's jar can be configured to monitor the
+	// Repeater for exactly this. Absorbed from the raw bytes at the capture point — the same
+	// discipline the proxy path holds — and after the store write so a jar error can never lose
+	// the exchange. Source-attributed so the toggle can tell this surface's responses from the
+	// proxy's in Observation.
+	if s.sessionCoordinator != nil {
+		s.sessionCoordinator.AbsorbResponseCookies(session.SourceRepeater, spec.Host, spec.Port, spec.TLS, rawResp)
+	}
 
 	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
 	// cannot disagree about the size of one send.
@@ -1132,6 +1143,15 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// recorder is attached to the attack after construction below, for the bounded attempt rows.
 	record := func(raw []byte) uint64 {
 		id, _ := s.store.Put(raw, core.DirectionResponse)
+		// The jar's monitored-tool set (burpsy-react-ui-sn3j): the exemplar is one stored
+		// response per result bucket, so this offers the jar the Set-Cookie lines of each
+		// distinct behaviour the attack actually saw — not one per request, which would multiply
+		// the same lines by the bucket's count and is the same restraint the engine's memory
+		// contract already holds. Absorbing here, beside the store write, keeps the capture
+		// point the one place a response becomes observable.
+		if s.sessionCoordinator != nil {
+			s.sessionCoordinator.AbsorbResponseCookies(session.SourceIntruder, host, port, tls, raw)
+		}
 		return uint64(id)
 	}
 

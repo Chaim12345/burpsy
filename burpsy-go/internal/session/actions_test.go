@@ -236,7 +236,7 @@ func TestTheJarCanBeAddedAsAnExplicitStep(t *testing.T) {
 	c := NewCoordinator(zap.NewNop())
 	// A raw response, because that is the shape the jar absorbs: the header-line form is what a
 	// response actually is, and the map-shaped variant can carry only one Set-Cookie.
-	c.AbsorbResponseCookies("example.com", 443, true,
+	c.AbsorbResponseCookies(SourceMacro, "example.com", 443, true,
 		[]byte("HTTP/1.1 200 OK\r\nSet-Cookie: SESSION=live\r\n\r\n"))
 
 	rule := NewSessionRule("carry the jar", []string{"example.com"}, nil)

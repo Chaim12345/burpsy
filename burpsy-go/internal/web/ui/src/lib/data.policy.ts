@@ -55,17 +55,19 @@ export const useSessionCookies = (): UseQueryResult<SessionCookiesResponse> =>
  *  empty the jar altogether". The response reports what changed, so the caller can toast the
  *  difference between "done" and "it was not there". */
 export interface CookieJarWriteResult {
- action: "set" | "remove" | "clear";
+ action: "set" | "remove" | "clear" | "monitor";
  host?: string;
  name?: string;
  ok?: boolean;
  removed?: boolean;
  cleared?: boolean;
+ /** For the monitor action (sn3j): the set in force, echoed from the coordinator. */
+ monitoring?: string[];
 }
 
 export function useCookieJarWrite() {
  const client = useQueryClient();
- return useMutation<CookieJarWriteResult, Error, { action: "set" | "remove" | "clear"; host: string; port: number; tls: boolean; name?: string; value?: string }>({
+ return useMutation<CookieJarWriteResult, Error, { action: "set" | "remove" | "clear" | "monitor"; host?: string; port?: number; tls?: boolean; name?: string; value?: string; tools?: string[] }>({
   mutationFn: (vars) => api<CookieJarWriteResult>("/api/session/cookies", json("POST", vars)),
   onSuccess: () => void client.invalidateQueries({ queryKey: keys.sessionCookies }),
  });

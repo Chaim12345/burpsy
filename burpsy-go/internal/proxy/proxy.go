@@ -769,7 +769,7 @@ func (c *ProxyConfig) WithToolLog(tl *toollog.ToolLog) *ProxyConfig {
 type CookieAbsorber interface {
 	// AbsorbResponseCookies folds every Set-Cookie header in `response` into the jar for this
 	// authority, returning how many it found.
-	AbsorbResponseCookies(host string, port uint16, tls bool, response []byte) int
+	AbsorbResponseCookies(src session.AbsorptionSource, host string, port uint16, tls bool, response []byte) int
 	// AttachAbsorptionSource records that this surface feeds the jar, so an empty jar can be told
 	// apart from a jar nothing is watching.
 	AttachAbsorptionSource(src session.AbsorptionSource)
@@ -2155,7 +2155,7 @@ func (s *Server) applyRequestRules(requestData []byte) []byte {
 // narrowed scope mid-engagement silently stops accumulating the session they are logged in to.
 func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
 	if s.config.cookieJar != nil && len(x.Response) > 0 {
-		s.config.cookieJar.AbsorbResponseCookies(x.Host, x.Port, x.TLS, x.Response)
+		s.config.cookieJar.AbsorbResponseCookies(session.SourceProxy, x.Host, x.Port, x.TLS, x.Response)
 	}
 	ex, err := s.capture().Record(x)
 	if err != nil {
