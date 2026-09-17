@@ -557,6 +557,17 @@ type AuditConfig struct {
 	// counted onto the run's own record as a bcheck.Declined, so a run with it off cannot be
 	// mistaken for one that found nothing nested.
 	NestedInsertionPoints OptUint32
+	// SkipAllTestsForParameters is Burp's
+	// scanner/ignored_insertion_points/skip_all_tests_for_parameters: parameters an operator
+	// exempted from testing entirely, by name. A named parameter's points are dropped from
+	// every kind before the per-request cap, and the drop is a bcheck.Declined so the audit
+	// item's queue row says the parameter was skipped rather than absent.
+	//
+	// Burp's softer sibling — skip_server_side_injection_for_parameters, which exempts only
+	// the injection checks — is deliberately not modelled: burpsy's check families do not yet
+	// partition into server-side-injection versus rest, and a skip list that could not name
+	// what it exempts would be a control silently testing more than it claims to skip.
+	SkipAllTestsForParameters []string
 }
 
 // enumerateOptions is how this configuration tunes the insertion-point enumerator.
@@ -574,6 +585,10 @@ func (cfg AuditConfig) enumerateOptions() bcheck.EnumerateOptions {
 	if cfg.NestedInsertionPoints.Set && cfg.NestedInsertionPoints.Value == 0 {
 		opts.NoNested = true
 	}
+	// The operator's parameter skip list rides every enumeration the run makes — probe
+	// harness, audit-item ledger and check context — because enumerateOptions is the one
+	// place all three read.
+	opts.SkipAllTestsForParameters = cfg.SkipAllTestsForParameters
 	return opts
 }
 

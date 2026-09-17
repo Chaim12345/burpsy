@@ -210,6 +210,13 @@ const (
 	// surface it deliberately did not reach because the operator configured it that way, and the
 	// two must not read alike: one is a tool limitation to file, the other is a setting to change.
 	AuditItemPointSkippedNested
+	// AuditItemPointSkippedOperator is Burp's operator skip list: the parameter was exempted
+	// from testing by name — scanner.ignored_insertion_points.skip_all_tests_for_parameters.
+	// A third "deliberate" status beside SkippedNested because the operator's exemption and a
+	// run-config toggle answer different questions: one names THIS parameter on THIS
+	// engagement, the other is a global audit configuration, and the operator reading the
+	// queue needs to know which setting to change.
+	AuditItemPointSkippedOperator
 )
 
 // Label is the operator-facing label, using Burp's own string for the four statuses that have one.
@@ -235,6 +242,8 @@ func (s AuditItemPointStatus) Label() string {
 		return "Skipped"
 	case AuditItemPointSkippedNested:
 		return "Skipped as nested insertion points not enabled"
+	case AuditItemPointSkippedOperator:
+		return "Skipped by the operator's parameter skip list"
 	}
 	return "Unknown"
 }
@@ -243,7 +252,7 @@ func (s AuditItemPointStatus) Label() string {
 // statuses are properties of the place; the rest describe what the audit did with it.
 func (s AuditItemPointStatus) IsSkip() bool {
 	return s == AuditItemPointSkippedLimit || s == AuditItemPointSkippedDeclined ||
-		s == AuditItemPointSkippedNested
+		s == AuditItemPointSkippedNested || s == AuditItemPointSkippedOperator
 }
 
 // MarshalJSON writes the label rather than the ordinal, matching DispatchScope and Disposition — the
@@ -787,6 +796,8 @@ func auditItemPoints(raw []byte, kinds []string, opts bcheck.EnumerateOptions) (
 			status = AuditItemPointSkippedLimit
 		case strings.HasPrefix(d.What, bcheck.DeclinedNestedDisabledWhat):
 			status = AuditItemPointSkippedNested
+		case strings.HasPrefix(d.What, bcheck.DeclinedSkippedParamWhat):
+			status = AuditItemPointSkippedOperator
 		}
 		out = append(out, AuditItemPoint{Name: d.What, Status: status, Detail: d.Reason})
 	}

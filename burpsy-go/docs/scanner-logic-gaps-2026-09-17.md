@@ -155,8 +155,13 @@ behavioral light-audit tier. The pieces, with citations:
   `insertion.go:28-31`): body→query and query→body are enumerated (:381), cookie relocation is
   implemented on the Apply side (`addToCookie` :1636-1647) but Burp's six `modifying_parameter_
   locations` toggles (map_root.tsv:7711-7742) have no per-direction config surface.
-- Per-check kind selection: `coreInjectionKinds = []string{"query","body","cookie"}` at
-  `checks_core_injection.go:52` — each check family picks its kinds; no per-run profile object.
+- Per-check kind selection: the three core rows (SQL injection, reflected XSS, file path
+  traversal) originally passed a package-level `coreInjectionKinds = []string{"query","body",
+  "cookie"}` — no `header`, so a header-borne reflection was structurally unreachable, and the
+  literal also overrode the operator's `scanner/insertion_point_types/*` choice, which every other
+  probe site honours through `cc.ProbeInsertionKinds()`. Fixed: all three now call
+  `cc.ProbeInsertionKinds()`, so the configured kinds govern and `header` is in the default set.
+  There is still no per-run *profile* object that varies kinds by check family.
 - `isReservedHeader` (`insertion.go:725-741`) excludes Host/Content-Length/Transfer-Encoding/
   Connection/whole-Cookie from header points — a judgment Burp makes in `Zp`-family checks; not
   key-for-key identical but same intent.

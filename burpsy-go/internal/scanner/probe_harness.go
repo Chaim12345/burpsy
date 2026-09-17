@@ -243,6 +243,11 @@ type ProbeCoverage struct {
 	PayloadsSent   int
 	// Inconclusive counts probes whose comparison could not be made.
 	Inconclusive int
+	// PointsCapped counts enumerated points the check did not probe because it hit
+	// MaxInjectionPointsPerCheck. Without it the finding reads "Probed 8 insertion points" for a
+	// request that had 20, which is a coverage claim the check did not earn. The cap is a bound on
+	// requests, not a statement that the extra points were tested and clean.
+	PointsCapped int
 }
 
 // Coverage summarises a probe set for reporting.

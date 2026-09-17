@@ -54,7 +54,12 @@ func runInjection(ctx context.Context, cc *CheckContext, kinds []string,
 	}
 	points := h.Points()
 	tested := len(points)
+	// capped is reported, not hidden: a check that probed 8 of 20 points has not tested the
+	// endpoint, and a coverage line that says otherwise is the silent false negative this
+	// package's Declined type exists to prevent.
+	capped := 0
 	if tested > MaxInjectionPointsPerCheck {
+		capped = tested - MaxInjectionPointsPerCheck
 		points = points[:MaxInjectionPointsPerCheck]
 		tested = MaxInjectionPointsPerCheck
 	}
@@ -69,7 +74,9 @@ func runInjection(ctx context.Context, cc *CheckContext, kinds []string,
 		}
 	}
 	best, confirmed := BestEvidence(probes)
-	return injectionResult{best: best, confirmed: confirmed, coverage: h.Coverage(probes, tested)}, nil
+	cov := h.Coverage(probes, tested)
+	cov.PointsCapped = capped
+	return injectionResult{best: best, confirmed: confirmed, coverage: cov}, nil
 }
 
 // unresolved reports the inconclusive sentinel when nothing confirmed but some probe was undecided.
@@ -97,6 +104,10 @@ func buildInjectionFinding(cc *CheckContext, name, severity string, res injectio
 		res.best.Detail, res.best.Evidence,
 		res.coverage.PointsTested, res.coverage.PayloadsSent,
 		res.coverage.Inconclusive, res.coverage.PointsDeclined)
+	if res.coverage.PointsCapped > 0 {
+		detail += fmt.Sprintf(" %d further point(s) were NOT probed: the per-check cap of %d was reached.",
+			res.coverage.PointsCapped, MaxInjectionPointsPerCheck)
+	}
 
 	f := buildHeaderFinding(cc, name, severity, confidence, res.best.Payload, detail)
 	if res.best.Detail != "" {
