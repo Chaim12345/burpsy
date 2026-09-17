@@ -233,6 +233,19 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 	for _, f := range findings {
 		s.findings.Add(s.activeFinding(f, task.ID()))
 	}
+	// The deferred half of a scan (gxbk). Stored-XSS claims cannot be answered by the audit itself —
+	// the canary is planted during it, so no response it saw could carry it. FinishScan re-fetches the
+	// targets the scan knows, renders the stored DOM surface when a browser is attached, and asks every
+	// registered claim once more. Guarded by PendingCount so an audit that planted nothing sends no
+	// second-pass traffic at all: a stored re-fetch is real traffic to the target, and paying it when
+	// no claim could settle would be a request the operator never got value from.
+	if s.scanner.PendingCount() > 0 {
+		deferred, completion := s.scanner.FinishScan(ctx)
+		body["deferred"] = completion
+		for _, f := range deferred {
+			s.findings.Add(s.activeFinding(f, task.ID()))
+		}
+	}
 	return body
 }
 
@@ -360,6 +373,23 @@ func (s *Server) runBulkAudit(ctx context.Context, task *dash.Handle, target str
 	active := s.activeScanner()
 	outcome, findings := active.AuditSession(ctx, ids, cfg)
 	task.Advance(uint64(len(ids)))
+	// The deferred half (gxbk), same guard and same reasoning as runAudit's tail: settle only when a
+	// claim was actually registered. This is the site crawl-audit and API scans land in, so it is the
+	// one that closes the gap for operator-launched batch scans.
+	//
+	// Deliberately BEFORE the task's finish call: the bulk paths' context is the task's own
+	// (Handle.WithCancel), and Handle.finish both calls and clears the task's cancel — a finished
+	// task must not be cancellable, but a finish invoked before the second look would cancel the
+	// re-fetch pass mid-flight. The stored re-fetch needs the live context, so it runs first and
+	// its findings land on the same task row the audit's did.
+	if active.PendingCount() > 0 {
+		deferred, completion := active.FinishScan(ctx)
+		s.events.RecordFor(task.ID(), dash.EventAuditBounded, dash.SeverityInfo, fmt.Sprintf(
+			"deferred phase of %s: %s (outstanding: %d)", target, completion.Pending, len(completion.Outstanding)))
+		for _, f := range deferred {
+			s.findings.Add(s.activeFinding(f, task.ID()))
+		}
+	}
 	// A cancelled run is reported as stopped, not done. Those two rows mean different things to the
 	// operator reading them — "the scan looked at all of it" and "someone stopped it after four of two
 	// hundred" — and only one of them is a result. SessionOutcome carries no cancelled flag of its own,
