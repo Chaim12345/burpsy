@@ -317,18 +317,37 @@ func TestAHeaderPayloadIsNotPercentEscaped(t *testing.T) {
 	}
 }
 
-func TestACookiePayloadTouchesOneCookieAndKeepsTheSeparators(t *testing.T) {
+func TestACookiePayloadArrivesVerbatimAndTouchesOneClause(t *testing.T) {
+	// A cookie value is an opaque octet run (codingCookieValue), not a
+	// percent-encoded form pair: whatever the check writes is what the server's
+	// cookie reader hands the application. Go's r.Cookie does not decode, so a
+	// percent-escaped `=` would arrive as `%3D` and an event-handler payload
+	// would be dead on arrival — the corruption the form codec produced here
+	// before. The `=` must travel raw, and the sibling clause must be untouched.
 	r := req(t, "GET / HTTP/1.1\r\nHost: x\r\nCookie: sid=abc; theme=dark\r\n\r\n")
 	ps, _ := Enumerate(r, []string{"cookie"})
-	out, err := ps[0].Apply(r, "';", true)
+	out, err := ps[0].Apply(r, `<svg onload=alert(1)>`, true)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
-	if !strings.Contains(string(out), "Cookie: sid=abc'%3B; theme=dark") {
-		t.Errorf("cookie = %q, want %q", string(out), "Cookie: sid=abc'%3B; theme=dark")
+	if !strings.Contains(string(out), "Cookie: sid=abc<svg onload=alert(1)>; theme=dark") {
+		t.Errorf("cookie = %q, want the payload verbatim in sid's clause with theme=dark intact", string(out))
 	}
 }
 
+func TestACookiePayloadCarryingAClauseTerminatorIsRefusedNotEscaped(t *testing.T) {
+	// `;` ends the cookie clause. There is no spelling of a terminator inside the
+	// value, and percent-escaping it would hand the server a payload other than
+	// the one the check wrote — so the point refuses it, exactly like the
+	// multipart container refuses a boundary. The old behaviour, escaping it to
+	// %3B, produced a wire value whose reflection could not carry a marker and
+	// whose meaning the server read differently from the check's own analysis.
+	r := req(t, "GET / HTTP/1.1\r\nHost: x\r\nCookie: sid=abc; theme=dark\r\n\r\n")
+	ps, _ := Enumerate(r, []string{"cookie"})
+	if _, err := ps[0].Apply(r, "';", true); err == nil {
+		t.Fatal("a payload containing `;` was applied; it would end sid's clause and splice itself into the cookie list, so it must be refused")
+	}
+}
 func TestAJSONPayloadIsEscapedSoTheBodyStaysWellFormed(t *testing.T) {
 	r := req(t, "POST /f HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 24\r\n\r\n{\"user\":\"bo\",\"role\":\"u\"}")
 	ps, _ := Enumerate(r, []string{"body"})
@@ -812,8 +831,12 @@ func TestARelocateQueryToCookiePointMovesThePairIntoTheCookieHeader(t *testing.T
 	if err != nil {
 		t.Fatalf("applied request no longer parses: %v", err)
 	}
-	if got := parsed.Header("cookie"); got != "user=x%26y%3Dz" {
-		t.Errorf("cookie = %q, want the escaped payload appended as k=v form encoding", got)
+	// The relocated pair becomes a Cookie clause value, which is an opaque octet
+	// run (codingCookieValue): `&` and `=` are not cookie delimiters and arrive
+	// verbatim — the server's cookie reader does not decode, so escaping them
+	// would hand it a payload other than the one the check wrote.
+	if got := parsed.Header("cookie"); got != "user=x&y=z" {
+		t.Errorf("cookie = %q, want the payload verbatim as a cookie value", got)
 	}
 	if ct := parsed.Header("content-type"); ct != "application/x-www-form-urlencoded" {
 		t.Errorf("Content-Type = %q, want it preserved unchanged", ct)

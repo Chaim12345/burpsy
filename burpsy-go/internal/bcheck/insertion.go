@@ -208,6 +208,22 @@ const (
 	// ends it is the boundary delimiter. A payload that would end the container is
 	// refused (see refusal) rather than altered into something that survives.
 	codingRawSafe
+	// codingCookieValue is the value half of one clause of a Cookie header. It is
+	// NOT the form container: RFC 6265 cookie values are opaque octets with no
+	// percent-encoding convention — browsers send document.cookie values raw and
+	// servers (Go's r.Cookie among them) never percent-decode them. A value needs
+	// to preserve only what would end the clause or the header line, so the point
+	// escapes nothing and refuses the payloads that would (see refusal). Coding
+	// a cookie with the form container hands the server percentEscape's
+	// `=`→`%3D` corruption: `<svg onload=alert(1)>` arrives as
+	// `<svg onload%3Dalert(1)>`, an event handler no parser sees.
+	//
+	// The `=` itself is the one character with a split personality here: raw `=`
+	// is what makes an event handler work, and it is legal in a cookie value
+	// (RFC 6265 §4.1.1 reserves `;` and DQUOTE, not `=`). Refuse DQUOTE rather
+	// than escape it — a cookie-value payload carrying a quote is asking to be
+	// re-parsed as a quoted value, which is not the injection the check wrote.
+	codingCookieValue
 	// codingMultipartAttr is inside a quoted parameter value of a part's
 	// Content-Disposition header. RFC 2045's quoted-string is the container:
 	// `\` and `"` are backslash-escaped, and CR/LF cannot appear in one at all.
@@ -330,6 +346,11 @@ const (
 	// DeclinedNestedDisabledWhat names the points not built because the run turned
 	// nested insertion points off.
 	DeclinedNestedDisabledWhat = "nested insertion points inside parameter values"
+	// DeclinedSkippedParamWhat names the points dropped because the operator exempted
+	// their parameter from testing — Burp's scanner.ignored_insertion_points
+	// skip_all_tests_for_parameters (Zwh1). Internal/scanner classifies queue rows by
+	// matching these literals, so a wording change here reclassifies rows there.
+	DeclinedSkippedParamWhat = "insertion points on operator-skipped parameters"
 )
 
 // EnumerateOptions is the per-run tuning an audit configuration carries into the
@@ -359,6 +380,20 @@ type EnumerateOptions struct {
 	// of a base64-wrapped JSON body has not tested that body, and a report that did
 	// not say so would be the false negative Declined exists to prevent.
 	NoNested bool
+	// SkipAllTestsForParameters names parameters an operator exempted from testing
+	// entirely — Burp's scanner.ignored_insertion_points.skip_all_tests_for_parameters.
+	// A point whose Name matches (case-insensitively; a parameter is an identifier and
+	// HTTP identifiers fold) is dropped from every kind, and the drop is counted in a
+	// Declined: an audit that skipped a parameter it was told to skip must say so, or
+	// the operator's own exemption reads as "nothing to test here".
+	//
+	// Burp has a second, softer list — skip_server_side_injection_for_parameters —
+	// which exempts a parameter from injection checks only, leaving passive/evidence
+	// checks running. burpsy's check families do not yet partition into
+	// server-side-injection versus rest, so that tier is declined rather than
+	// half-built: a list that exempted a parameter from checks this engine cannot
+	// name would be a control that silently tests more than it claims to skip.
+	SkipAllTestsForParameters []string
 }
 
 // Enumerate returns every insertion point of the requested kinds, capped at
@@ -463,7 +498,17 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 					Name:      h[1][kv.name[0]:kv.name[1]],
 					BaseValue: h[1][kv.value[0]:kv.value[1]],
 					loc:       loc{kind: locCookie, index: i, start: kv.value[0], end: kv.value[1]},
-					coding:    codingForm,
+					// A cookie value is an opaque octet run, not a percent-encoded
+					// form pair — see codingCookieValue. The codingForm this point
+					// used before handed every payload percentEscape's `=`→`%3D`,
+					// corruption no cookie reader undoes (Go's r.Cookie does not
+					// decode): an `onload=alert(1)` handler arrived as
+					// `onload%3Dalert(1)` and the reflection carried no marker.
+					coding: codingCookieValue,
+					// `;` would end this clause; CRLF/NUL would end the header
+					// line; DQUOTE would re-open the value as a quoted-string
+					// (RFC 6265 5.2), a container the payload did not ask for.
+					refuse: refusal{any: ";\r\n\x00\""},
 				})
 			}
 		}
@@ -604,7 +649,11 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 				Name:      e.Query[kv.name[0]:kv.name[1]],
 				BaseValue: e.Query[kv.value[0]:kv.value[1]],
 				loc:       loc{kind: locRelocateQueryToCookie, start: kv.name[0], end: kv.value[1]},
-				coding:    codingForm,
+				// The payload lands as a Cookie clause value (addToCookie), so it
+				// needs the cookie container, not the form one — see
+				// codingCookieValue; a form-coded handler arrives percent-mangled.
+				coding: codingCookieValue,
+				refuse: refusal{any: ";\r\n\x00\""},
 			})
 		}
 	}
@@ -616,8 +665,11 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 					Kind:      IpRelocateBodyToCookie,
 					Name:      string(e.Body[kv.name[0]:kv.name[1]]),
 					BaseValue: string(e.Body[kv.value[0]:kv.value[1]]),
-					loc:       loc{kind: locRelocateBodyToCookie, start: kv.name[0], end: kv.value[1]},
-					coding:    codingForm,
+					// Lands as a Cookie clause value (addToCookie) — cookie
+					// container, not the form one; see codingCookieValue.
+					loc:    loc{kind: locRelocateBodyToCookie, start: kv.name[0], end: kv.value[1]},
+					coding: codingCookieValue,
+					refuse: refusal{any: ";\r\n\x00\""},
 				})
 			}
 		}
@@ -675,6 +727,19 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 	// probed only the outer parameter of a base64-wrapped JSON body would read as
 	// having tested that body. The work is one decode per parameter, which is
 	// nothing beside the probe it replaces.
+	// The operator's skip list (m97j's neighbour, v9cg): a named parameter is exempted
+	// from testing entirely. Applied BEFORE the cap so the cap's "past the limit" count
+	// describes what remained after the operator's own exemptions — a point dropped by
+	// the operator is not also a point the cap dropped, and the two declines must not
+	// double-count one place.
+	if skipped := skipNamedPoints(&out, opts.SkipAllTestsForParameters); skipped > 0 {
+		declined = append(declined, Declined{
+			What: DeclinedSkippedParamWhat,
+			Reason: fmt.Sprintf("%d point(s) were not audited: their parameter is on the operator's skip-all-tests list",
+				skipped),
+		})
+	}
+
 	nested := expandNested(out)
 	var droppedNested int
 	if opts.NoNested {
@@ -699,6 +764,32 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 	}
 
 	return out, declined
+}
+
+// skipNamedPoints removes every point whose Name matches one of the operator's skipped
+// parameters (case-insensitively — a parameter is an identifier and HTTP identifiers fold),
+// returning how many it removed. The removal is in-place over the slice the enumerator built,
+// so the fixed order of the survivors is unchanged — order is observable (a check reports
+// one finding per point) and an exemption must not reorder what it did not exempt.
+func skipNamedPoints(pts *[]InsertionPoint, names []string) int {
+	if len(names) == 0 || len(*pts) == 0 {
+		return 0
+	}
+	skip := make(map[string]bool, len(names))
+	for _, n := range names {
+		skip[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	kept := (*pts)[:0]
+	removed := 0
+	for _, p := range *pts {
+		if skip[strings.ToLower(p.Name)] {
+			removed++
+			continue
+		}
+		kept = append(kept, p)
+	}
+	*pts = kept
+	return removed
 }
 
 // capPoints truncates pts to max, returning how many it dropped. A negative max
@@ -1481,6 +1572,14 @@ func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]by
 			return nil, err
 		}
 		escaped = payload
+	case codingCookieValue:
+		// Verbatim splice with a refusal, not an escape: see codingCookieValue.
+		// The clause terminator and header-line breakers cannot be written inside
+		// the value, and percent-escaping them would change what the server reads.
+		if err := p.refuseValue(payload); err != nil {
+			return nil, err
+		}
+		escaped = payload
 	case codingPath:
 		escaped = pathEscape(payload)
 	default:
@@ -1912,6 +2011,22 @@ func expandNested(parents []InsertionPoint) []InsertionPoint {
 		}
 		lvl1 := containerDecode(p.coding, p.BaseValue)
 		inner, kind, ok := tryDecodeNested(lvl1)
+		outer := p.coding
+		if !ok && p.coding == codingCookieValue {
+			// A cookie value is an opaque octet run (no percent layer of its
+			// own), but the APPLICATION may percent-encode its cookie params —
+			// session=%7B%22id%22%3A%2242%22%7D is common. The wire value then
+			// decodes to JSON only after percentDecode. Try that explicitly and,
+			// when it nests, keep codingForm as the outer container so the
+			// rebuilt value is re-encoded the way the wire form was — matching
+			// the round trip the application itself performs. A percent layer
+			// whose decoded form does not nest is left alone: decoding it would
+			// hand the inner splicer a value the application never sees.
+			if dec, kind2, ok2 := tryDecodeNested(percentDecode(p.BaseValue)); ok2 {
+				inner, kind, ok = dec, kind2, true
+				outer = codingForm
+			}
+		}
 		if !ok {
 			continue
 		}
@@ -1923,8 +2038,8 @@ func expandNested(parents []InsertionPoint) []InsertionPoint {
 				Kind:            p.Kind,
 				Name:            p.Name,
 				BaseValue:       p.BaseValue,
+				containerCoding: outer,
 				nested:          kind,
-				containerCoding: p.coding,
 				// The container's own refusal carries into the rebuilt value: a
 				// nested payload whose escape leaves a delimiter intact inside the
 				// outer container would end it exactly as a raw one would.
@@ -2054,7 +2169,16 @@ func trimTrailingWS(s string, i, end int) int {
 }
 
 // containerDecode strips the outer container encoding (percent-encoding for
-// query/form/cookie params, identity for headers and JSON body values).
+// query/form params, identity for headers, JSON body values and cookie values).
+//
+// Cookie values are identity on BOTH sides: an opaque octet run carries no
+// percent layer (codingCookieValue), so a percent-encoded JSON cookie is already
+// the literal characters `{`, `"` and `:` on the wire — tryDecodeNested reads it
+// directly, and applyNested re-splices those same literal bytes. Decoding here
+// used to mean percentDecode for cookies, which resurrected the form container
+// this engine retired: a JSON cookie decoded through percentDecode and was then
+// re-encoded through percentEscape on the way back, reintroducing the
+// `=`→`%3D` corruption the codec change exists to stop.
 func containerDecode(c coding, s string) string {
 	if c == codingForm {
 		return percentDecode(s)
@@ -2063,7 +2187,7 @@ func containerDecode(c coding, s string) string {
 }
 
 // containerEncode applies the outer container encoding (percent-encoding for
-// query/form/cookie params, identity for headers).
+// query/form params, identity for headers and cookie values).
 func containerEncode(c coding, s string) string {
 	if c == codingForm {
 		return percentEscape(s)
@@ -2334,6 +2458,12 @@ func (p InsertionPoint) WireValue(payload string) (string, error) {
 			return "", err
 		}
 		return multipartAttrEscape(payload), nil
+	case codingCookieValue:
+		// Same refusal as Apply's codingCookieValue case — see codingCookieValue.
+		if err := p.refuseValue(payload); err != nil {
+			return "", err
+		}
+		return payload, nil
 	case codingRawSafe:
 		if err := p.refuseValue(payload); err != nil {
 			return "", err
