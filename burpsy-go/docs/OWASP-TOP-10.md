@@ -1,485 +1,340 @@
-# OWASP Top 10 2021 Coverage Analysis
+# OWASP Top 10 (2021) Coverage Analysis
 
-**Does this scanner detect the OWASP Top 10 (2021), and how much is proven rather than merely registered?**
+**Which OWASP Top 10 categories do the 183 catalog rows cover, and how much is runtime-demonstrated rather than merely registered?**
 
-This document maps the burpsy scanner's 183-issue Burp Suite catalog to the OWASP Top 10 2021 categories, distinguishing between *registered* checks (descriptors exist) and *runtime-demonstrated* checks (vulnerabilities were planted in a deliberately vulnerable app and actually detected).
+This document is **derived, not asserted**: every issue name below was extracted from the 183-row catalog (`internal/scanner/catalog_data.go`), every TypeIndex cross-checked against it, every demonstrated row taken from the `Row:` strings the runtime harness actually asserts (`internal/vulnapp/*.go`), and every category assignment read from a code-verified mapping. A previous revision of this file named 19 issues that do not exist in the catalog and misprinted 12 of 15 sampled TypeIndexes; that revision was the defect class this project calls out in others — a partial result presented as complete — and this rewrite is the correction. Where this file and `docs/SCANNER-COVERAGE.md` both speak, SCANNER-COVERAGE is authoritative for the runtime split; this file adds only the OWASP axis.
 
-## Executive Summary
+## Mapping rationale (stated once)
 
-| Category | Registered | Runtime-Demonstrated | Gap |
-|----------|------------|---------------------|-----|
-| A01: Broken Access Control | 43 | 33 | 10 |
-| A02: Cryptographic Failures | 4 | 3 | 1 |
-| A03: Injection | 51 | 42 | 9 |
-| A04: Insecure Design | 2 | 0 | 2 |
-| A05: Security Misconfiguration | 64 | 54 | 10 |
+Burp's catalog carries no OWASP tag, so every category assignment is a judgement. The mapping below was produced by reading each catalog row's own name, description and CWE references and picking the single OWASP category the check actually tests, not the category its side effects touch: "External service interaction (DNS)" is A10 SSRF because the check's subject is the server's outbound request; the four generated-issue rows ("BCheck/Extension/Manually/Bambda generated issue") are provenance placeholders, not vulnerabilities, and are counted as their own meta group so they never inflate a category. Rows no category fits without distortion would be unmapped; there are none — every row has a defensible home, though for a handful (the WebSocket URL-poisoning family, HTTP request smuggling, client-side desync) the home is A05 security misconfiguration by the "the flaw is in how the server handles the input" reading rather than A03's "the input becomes code" one. Disagreement with Burp's own taxonomy on such rows is expected; the mapping is reproducible from the names below.
+
+## Category summary
+
+| Category | Registered rows | Runtime-demonstrated | Registered-only |
+|---|---:|---:|---:|
+| A01: Broken Access Control | 43 | 38 | 5 |
+| A02: Cryptographic Failures | 6 | 5 | 1 |
+| A03: Injection | 56 | 51 | 5 |
+| A04: Insecure Design | 0 | 0 | 0 |
+| A05: Security Misconfiguration | 61 | 57 | 4 |
 | A06: Vulnerable and Outdated Components | 1 | 1 | 0 |
-| A07: Authentication and Session Management Failures | 5 | 5 | 0 |
-| A08: Software and Data Integrity Failures | 6 | 5 | 1 |
-| A09: Logging and Monitoring Failures | 5 | 4 | 1 |
-| A10: Server-Side Request Forgery (SSRF) | 2 | 0 | 2 |
-| **TOTAL** | **183** | **147** | **36** |
+| A07: Identification and Authentication Failures | 4 | 4 | 0 |
+| A08: Software and Data Integrity Failures | 4 | 4 | 0 |
+| A09: Security Logging and Monitoring Failures | 0 | 0 | 0 |
+| A10: Server-Side Request Forgery | 4 | 0 | 4 |
+| Meta (generated-issue provenance rows) | 4 | 0 | 4 |
+| **Total** | **183** | **160** | **23** |
 
-**Verdict by category:**
-- **Fully Proven** (100% runtime-demonstrated): A06, A07
-- **Mostly Proven** (>80% runtime-demonstrated): A02, A03, A08, A09
-- **Partially Proven** (50-80% runtime-demonstrated): A01, A05
-- **Not Covered in Runtime**: A04, A10 (registered only, no runtime test endpoints)
+The 160/23 split is not this file's claim to defend: it is the runtime suite's, measured and pinned by `wantDemonstrated = 160` in `internal/scanner/runtime_coverage_test.go` (see `docs/SCANNER-COVERAGE.md`, "Runtime demonstration"). This file inherits it and distributes it across categories.
 
----
+## A01: Broken Access Control (43 registered, 38 demonstrated, 5 registered-only)
 
-## A01: Broken Access Control (43 registered, 33 demonstrated, 23 registered-only)
+CWE-284 improper access control and its path-traversal, CSRF-referenced and privilege cousins.
 
-Vulnerability class: Improper Access Control (CWE-284, CWE-200, CWE-201, CWE-352, CWE-434, CWE-639, CWE-613, CWE-22 Path Traversal).
+### Demonstrated (38 rows)
 
-### Demonstrated (33 rows)
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| Broken access control | 1050704 |
+| Content security policy: allows clickjacking | 2098439 |
+| Cookie manipulation (DOM-based) | 5245696 |
+| Cookie manipulation (reflected DOM-based) | 5245697 |
+| Cookie manipulation (stored DOM-based) | 5245698 |
+| Cross-origin resource sharing | 2098688 |
+| Cross-origin resource sharing: all subdomains trusted | 2098691 |
+| Cross-origin resource sharing: arbitrary origin trusted | 2098689 |
+| Cross-origin resource sharing: unencrypted origin trusted | 2098690 |
+| Cross-site request forgery | 2098944 |
+| Cross-site scripting (DOM-based) | 2097936 |
+| Cross-site scripting (reflected DOM-based) | 2097937 |
+| Cross-site scripting (reflected) | 2097920 |
+| Cross-site scripting (stored DOM-based) | 2097938 |
+| Cross-site scripting (stored) | 2097408 |
+| File path manipulation | 1051392 |
+| File path traversal | 1049344 |
+| Form action hijacking (reflected) | 5248256 |
+| Form action hijacking (stored) | 5248257 |
+| Frameable response (potential Clickjacking) | 5245344 |
+| HTML5 storage manipulation (DOM-based) | 5246720 |
+| HTML5 storage manipulation (reflected DOM-based) | 5246721 |
+| HTML5 storage manipulation (stored DOM-based) | 5246722 |
+| HTML5 web message manipulation (DOM-based) | 5246464 |
+| HTML5 web message manipulation (stored DOM-based) | 5246466 |
+| Link manipulation (DOM-based) | 5246976 |
+| Link manipulation (reflected DOM-based) | 5246977 |
+| Link manipulation (reflected) | 5246979 |
+| Link manipulation (stored DOM-based) | 5246978 |
+| Link manipulation (stored) | 5246980 |
+| Open redirection (DOM-based) | 5243152 |
+| Open redirection (reflected DOM-based) | 5243153 |
+| Open redirection (reflected) | 5243136 |
+| Open redirection (stored) | 5243137 |
+| Password returned in URL query string | 4195328 |
+| Password returned in later response | 4194816 |
+| Session token in URL | 5244672 |
+| Web cache deception | 2098768 |
 
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Evidence |
-|-------------------|-----------|--------|-------------------|----------|
-| Broken access control | 1049664 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| Browser cross-site scripting filter disabled | 1050432 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| Cross-site scripting (reflected) | 1049152 | CoreInjection | CheckXss | vulnapp endpoint |
-| Cross-site scripting (stored) | 1049168 | Stored | CheckStored | vulnapp endpoint |
-| Directory listing | 1049952 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| HTTP request smuggling | 1050304 | Final | CheckExtendedActive | vulnapp endpoint |
-| Cross-origin resource sharing: arbitrary origin trusted | 1050048 | Headers | CheckHeaders | vulnapp endpoint |
-| Cross-origin resource sharing: unencrypted origin trusted | 1050064 | Headers | CheckHeaders | vulnapp endpoint |
-| Cross-origin resource sharing: all subdomains trusted | 1050080 | Headers | CheckHeaders | vulnapp endpoint |
-| File path traversal | 1049344 | CoreInjection | CheckPathTraversal | vulnapp endpoint |
-| File path manipulation | 1048960 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Open redirection (reflected) | 1048976 | ReflectionProbe | CheckReflectionProbes | vulnapp endpoint |
-| Open redirection (stored) | 1048992 | Stored | CheckStored | vulnapp endpoint |
-| Open redirection (DOM-based) | 1049200 | DOM | CheckDOM | vulnapp endpoint |
-| Open redirection (reflected DOM-based) | 1049216 | DOM | CheckDOM | vulnapp endpoint |
-| Open redirection (stored DOM-based) | 1049232 | DOM | CheckDOM | vulnapp endpoint |
-| Cross-domain POST (reflected) | 1049664 | PassivePosture | CheckPassivePosture | vulnapp endpoint |
-| Cross-domain POST (stored) | 1049680 | PassivePosture | CheckPassivePosture | vulnapp endpoint |
-| Cookie scoped to parent domain | 1050288 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| Password returned in URL query string | 1049952 | PassivePosture | CheckPassivePosture | vulnapp endpoint |
-| Cookie manipulation (DOM-based) | 1049360 | DOM | CheckDOM | vulnapp endpoint |
-| Cookie manipulation (reflected DOM-based) | 1049376 | DOM | CheckDOM | vulnapp endpoint |
-| Cookie manipulation (stored DOM-based) | 1049392 | DOM | CheckDOM | vulnapp endpoint |
-| HTML5 storage manipulation (DOM-based) | 1049472 | DOM | CheckDOM | vulnapp endpoint |
-| HTML5 storage manipulation (reflected DOM-based) | 1049488 | DOM | CheckDOM | vulnapp endpoint |
-| HTML5 storage manipulation (stored DOM-based) | 1049504 | DOM | CheckDOM | vulnapp endpoint |
-| Form action hijacking (reflected) | 1049600 | DOM | CheckDOM | vulnapp endpoint |
-| Form action hijacking (stored) | 1049616 | DOM | CheckDOM | vulnapp endpoint |
-| HTML5 web message manipulation (DOM-based) | 1049440 | DOM | CheckDOM | vulnapp endpoint |
-| HTML5 web message manipulation (reflected DOM-based) | 1049456 | DOM | CheckDOM | vulnapp endpoint |
-| Local file path manipulation (DOM-based) | 1049216 | DOM | CheckDOM | vulnapp endpoint |
-| Local file path manipulation (reflected DOM-based) | 1049232 | DOM | CheckDOM | vulnapp endpoint |
-| Local file path manipulation (stored DOM-based) | 1049248 | DOM | CheckDOM | vulnapp endpoint |
+### Registered-only (5 rows)
 
-### Registered-Only (10 rows)
+A registered check descriptor exists; no deliberately vulnerable endpoint in the runtime corpus exercises it (the corpus's own `Row:` strings are the arbiter of demonstrated):
 
-These rows have a registered check descriptor but no deliberately vulnerable endpoint in the corpus. Reasons vary:
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| HTML5 web message manipulation (reflected DOM-based) | 5246465 |
+| Local file path manipulation (DOM-based) | 2098000 |
+| Local file path manipulation (reflected DOM-based) | 2098001 |
+| Local file path manipulation (stored DOM-based) | 2098002 |
+| Open redirection (stored DOM-based) | 5243154 |
 
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Why Not Demonstrated |
-|-------------------|-----------|--------|-------------------|----------------------|
-| Flash cross-domain policy | 1050192 | Remaining | CheckExtendedActive | Flash no longer widely supported; test target would require Flash plugin |
-| Silverlight cross-domain policy | 1050208 | Remaining | CheckExtendedActive | Silverlight is deprecated; test target would require Silverlight runtime |
-| HTTP response header injection | 1048944 | ReflectionProbe | CheckReflectionProbes | Header injection requires raw socket hijacking; corpus uses standard HTTP library |
-| Link manipulation (reflected) | 1049232 | Reflection | CheckReflectionProbes | Subset of link-based attacks; DOM variants are demonstrated |
-| Link manipulation (stored) | 1049248 | Reflection | CheckReflectionProbes | Stored variant would require stored endpoint; corpus focuses on DOM |
-| Document domain manipulation (DOM-based) | 1049328 | DOM | CheckDOM | Rare vulnerability; cross-domain window scenarios not modeled |
-| Document domain manipulation (reflected DOM-based) | 1049344 | DOM | CheckDOM | Rare vulnerability; cross-domain window scenarios not modeled |
-| Document domain manipulation (stored DOM-based) | 1049360 | DOM | CheckDOM | Rare vulnerability; cross-domain window scenarios not modeled |
-| Request URL override | 1049872 | PassiveAnalysis | CheckPassiveAnalysis | Specific to non-standard header overrides; not modeled |
-| Client-side HTTP parameter pollution (reflected) | 1049568 | DOM | CheckDOM | Rare in modern frameworks; corpus focuses on common attacks |
+## A02: Cryptographic Failures (6 registered, 5 demonstrated, 1 registered-only)
 
----
-
-## A02: Cryptographic Failures (4 registered, 3 demonstrated, 1 registered-only)
-
-Vulnerability class: Improper cryptographic practices (CWE-259, CWE-295, CWE-319, CWE-326, CWE-327, CWE-331, CWE-338, CWE-340, CWE-347, CWE-523, CWE-780).
-
-### Demonstrated (3 rows)
-
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Evidence |
-|-------------------|-----------|--------|-------------------|----------|
-| Unencrypted communications | 1050864 | PassivePosture | CheckPassivePosture | vulnapp endpoint |
-| TLS cookie without secure flag set | 1050272 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| Cacheable HTTPS response | 1050336 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-
-### Registered-Only (1 row)
-
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Why Not Demonstrated |
-|-------------------|-----------|--------|-------------------|----------------------|
-| TLS certificate | 1050880 | Final | CheckOutOfBand | Requires tlsx subprocess and TLS connectivity; not in standard test corpus |
-
----
-
-## A03: Injection (51 registered, 42 demonstrated, 9 registered-only)
-
-Vulnerability class: Code injection, command injection, SQL injection, LDAP injection, XPath injection (CWE-74, CWE-77, CWE-78, CWE-79, CWE-89, CWE-90, CWE-91, CWE-93, CWE-94, CWE-96, CWE-98, CWE-113, CWE-116, CWE-209, CWE-233, CWE-611, CWE-862).
-
-### Demonstrated (42 rows)
-
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Evidence |
-|-------------------|-----------|--------|-------------------|----------|
-| OS command injection | 1048832 | Injection | CheckActiveInjection | vulnapp endpoint |
-| SQL injection | 1049088 | CoreInjection | CheckSqli | vulnapp endpoint |
-| SQL injection (second order) | 1049104 | Stored | CheckStored | vulnapp endpoint |
-| LDAP injection | 1048848 | Injection | CheckActiveInjection | vulnapp endpoint |
-| XPath injection | 1048864 | Injection | CheckActiveInjection | vulnapp endpoint |
-| XML injection | 1048880 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Server-side template injection | 1048944 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Expression Language injection | 1048976 | Injection | CheckActiveInjection | vulnapp endpoint |
-| PHP code injection | 1048992 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Perl code injection | 1049008 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Ruby code injection | 1049024 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Python code injection | 1049040 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Server-side JavaScript code injection | 1049056 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Cross-site scripting (reflected) | 1049152 | CoreInjection | CheckXss | vulnapp endpoint |
-| Cross-site scripting (stored) | 1049168 | Stored | CheckStored | vulnapp endpoint |
-| CSS injection (reflected) | 1049184 | DOM | CheckDOM | vulnapp endpoint |
-| CSS injection (stored) | 1049200 | DOM | CheckDOM | vulnapp endpoint |
-| Eval-based code injection (DOM-based) | 1049264 | DOM | CheckDOM | vulnapp endpoint |
-| Eval-based code injection (reflected DOM-based) | 1049280 | DOM | CheckDOM | vulnapp endpoint |
-| Eval-based code injection (stored DOM-based) | 1049296 | DOM | CheckDOM | vulnapp endpoint |
-| JavaScript-based code injection (DOM-based) | 1049408 | DOM | CheckDOM | vulnapp endpoint |
-| JavaScript-based code injection (reflected DOM-based) | 1049424 | DOM | CheckDOM | vulnapp endpoint |
-| JavaScript-based code injection (stored DOM-based) | 1049440 | DOM | CheckDOM | vulnapp endpoint |
-| Unsafe innerHTML modifications (DOM-based) | 1049248 | DOM | CheckDOM | vulnapp endpoint |
-| Unsafe innerHTML modifications (reflected DOM-based) | 1049264 | DOM | CheckDOM | vulnapp endpoint |
-| Unsafe innerHTML modifications (stored DOM-based) | 1049280 | DOM | CheckDOM | vulnapp endpoint |
-| SQL statement in request parameter | 1049696 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| Link manipulation (reflected) | 1048976 | ReflectionProbe | CheckReflectionProbes | vulnapp endpoint |
-| Link manipulation (stored) | 1048992 | Stored | CheckStored | vulnapp endpoint |
-| Link manipulation (DOM-based) | 1049344 | DOM | CheckDOM | vulnapp endpoint |
-| Link manipulation (reflected DOM-based) | 1049360 | DOM | CheckDOM | vulnapp endpoint |
-| Link manipulation (stored DOM-based) | 1049376 | DOM | CheckDOM | vulnapp endpoint |
-| HTTP response header injection | 1048944 | ReflectionProbe | CheckReflectionProbes | vulnapp endpoint |
-| SMTP header injection | 1050544 | Final | CheckExtendedActive | vulnapp endpoint |
-| SSI injection | 1049072 | Injection | CheckActiveInjection | vulnapp endpoint |
-| Ajax request header manipulation (DOM-based) | 1049344 | DOM | CheckDOM | vulnapp endpoint |
-| Ajax request header manipulation (reflected DOM-based) | 1049360 | DOM | CheckDOM | vulnapp endpoint |
-| Ajax request header manipulation (stored DOM-based) | 1049376 | DOM | CheckDOM | vulnapp endpoint |
-| Client-side template injection | 1049120 | DOMExtra | CheckDOM | vulnapp endpoint |
-| Client-side prototype pollution | 1049136 | DOMExtra | CheckDOM | vulnapp endpoint |
-| React Server Components remote code execution (React2Shell) | 1050528 | Final | CheckExtendedActive | vulnapp endpoint |
-
-### Registered-Only (9 rows)
-
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Why Not Demonstrated |
-|-------------------|-----------|--------|-------------------|----------------------|
-| Unidentified code injection | 1049584 | ReflectionProbe | CheckReflectionProbes | Requires specific error signature matching; corpus endpoints use standard frameworks |
-| Input returned in response (reflected) | 1049648 | PassiveAnalysis | CheckPassiveAnalysis | Passive analysis only; requires response inspection |
-| Suspicious input transformation (reflected) | 1049664 | Final | CheckExtendedActive | Requires heuristic matching; hard to plant deterministically |
-| DOM data manipulation (reflected DOM-based) | 1049296 | DOM | CheckDOM | Rare vulnerability pattern; not modeled |
-| DOM data manipulation (stored DOM-based) | 1049312 | DOM | CheckDOM | Rare vulnerability pattern; not modeled |
-| Form action hijacking (reflected) | 1049568 | DOM | CheckDOM | Requires specific form scenario; complex to model |
-| Form action hijacking (stored) | 1049584 | DOM | CheckDOM | Requires specific form scenario; complex to model |
-| Input returned in response (stored) | 1049664 | Stored | CheckStored | Stored variant of passive reflection check |
-| Client-side HTTP parameter pollution (stored) | 1049584 | DOM | CheckDOM | Rare vulnerability; not commonly modeled |
-
----
-
-## A04: Insecure Design (2 registered, 0 demonstrated)
-
-Vulnerability class: Insecure design patterns (CWE-213, CWE-441, CWE-444, CWE-1021).
-
-### Registered-Only (2 rows)
-
-No runtime test endpoints for these rows. The category appears under-represented in burpsy's active scanning focus.
-
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Why Not Demonstrated |
-|-------------------|-----------|--------|-------------------|----------------------|
-| Weak cryptographic strength | 1050576 | Final | CheckExtendedActive | Requires cryptographic testing infrastructure not in corpus |
-| Overly permissive cross-origin resource sharing policy | 1050560 | Final | CheckExtendedActive | Subsumed by broader CORS checks in A01/A05 |
-
----
-
-## A05: Security Misconfiguration (64 registered, 54 demonstrated, 10 registered-only)
-
-Vulnerability class: Improper configuration, information disclosure, excessive permissions (CWE-2, CWE-7, CWE-10, CWE-11, CWE-13, CWE-15, CWE-16, CWE-18, CWE-204, CWE-215, CWE-220, CWE-234, CWE-276, CWE-310, CWE-400, CWE-404, CWE-436, CWE-500, CWE-502, CWE-521, CWE-524, CWE-525, CWE-530, CWE-538, CWE-565, CWE-598, CWE-610, CWE-614, CWE-642, CWE-650, CWE-668, CWE-693, CWE-698, CWE-732, CWE-776, CWE-833, CWE-912, CWE-942, CWE-1321).
-
-### Demonstrated (54 rows)
-
-**Core Misconfigurations (9):**
-- ASP.NET debugging enabled
-- ASP.NET tracing enabled
-- Database connection string disclosed
-- Source code disclosure
-- Backup file
-- Directory listing
-- Base64-encoded data in parameter
-- Cleartext submission of password
-- Password submitted using GET method
-
-**Headers & CORS (6):**
-- Cross-origin resource sharing: arbitrary origin trusted
-- Cross-origin resource sharing: unencrypted origin trusted
-- Cross-origin resource sharing: all subdomains trusted
-- Cross-origin resource sharing: credentials set to true
-- Multiple content types specified
-- Long redirection response
-
-**Caching (3):**
-- Web cache poisoning
-- Web cache deception
-- Cacheable HTTPS response
-
-**Transport Security (5):**
-- TLS cookie without secure flag set
-- Unencrypted communications
-- Hidden HTTP 2
-- Mixed content (HTTPS content over HTTP)
-- HSTS header missing
-
-**CSP & Security Headers (8):**
-- Content security policy: allows untrusted script execution
-- Content security policy: allows untrusted style execution
-- Content security policy: allows clickjacking
-- Content security policy: allows form hijacking
-- Content security policy: allows unsafe inline styles/scripts
-- Frameable response (potential Clickjacking)
-- X-Frame-Options header missing
-- Content-Security-Policy header missing
-
-**REST & API (4):**
-- GraphQL endpoint found
-- GraphQL endpoint discovered
-- GraphQL introspection enabled
-- HTTP PUT method is enabled
-
-**Cookie Security (6):**
-- Cookie manipulation (DOM-based)
-- Cookie manipulation (reflected DOM-based)
-- Cookie manipulation (stored DOM-based)
-- Cookie manipulation (reflected)
-- TLS cookie without secure flag set
-- Cookie scoped to parent domain
-
-**ViewState & Serialization (3):**
-- ASP.NET ViewState without MAC enabled
-- Serialized object in HTTP message
-- Serialized object in response
-
-**Other (4):**
-- Password returned in later response
-- HTML5 storage manipulation (multiple variants)
-- Extended DOM storage variants
-- Form field disclosed in URL
-
-### Registered-Only (10 rows)
-
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Why Not Demonstrated |
-|-------------------|-----------|--------|-------------------|----------------------|
-| Password returned in URL query string | 1049952 | PassivePosture | CheckPassivePosture | Variant of password disclosure; overlap with demonstrated row |
-| Content security policy: malformed syntax | 1050288 | Final | CheckExtendedActive | Passive analysis; no active probe corpus endpoint |
-| Content security policy: not enforced | 1050304 | Final | CheckExtendedActive | Passive analysis; no active probe corpus endpoint |
-| Extension generated issue | 1049936 | Meta | All | Meta-issue placeholder; no concrete vulnerability |
-| Manually generated issue | 1049952 | Meta | All | Meta-issue placeholder; no concrete vulnerability |
-| BCheck generated issue | 1049968 | Meta | All | Meta-issue placeholder; no concrete vulnerability |
-| Bambda generated issue | 1049984 | Meta | All | Meta-issue placeholder; no concrete vulnerability |
-| Flash cross-domain policy | 1050192 | Remaining | CheckExtendedActive | Flash deprecated; would require Flash runtime |
-| Silverlight cross-domain policy | 1050208 | Remaining | CheckExtendedActive | Silverlight deprecated; would require Silverlight runtime |
-| Request URL override | 1049872 | PassiveAnalysis | CheckPassiveAnalysis | Specific to non-standard header overrides; not modeled |
-
----
-
-## A06: Vulnerable and Outdated Components (1 registered, 1 demonstrated)
-
-Vulnerability class: Known vulnerable dependencies (CWE-937, CWE-1035, CWE-1104).
-
-### Demonstrated (1 row)
-
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Evidence |
-|-------------------|-----------|--------|-------------------|----------|
-| Vulnerable JavaScript dependency | 1049120 | Native | CheckJSVulns | vulnapp endpoint |
-
-**Note:** This check uses the retire.js database and requires JavaScript files with version-identifiable libraries. The corpus includes a deliberately vulnerable dependency in test endpoints.
-
----
-
-## A07: Authentication and Session Management Failures (5 registered, 5 demonstrated)
-
-Vulnerability class: Session management flaws, weak authentication (CWE-287, CWE-384, CWE-620, CWE-640, CWE-798, CWE-916).
+CWE-310/327 cryptographic practice failures.
 
 ### Demonstrated (5 rows)
 
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Evidence |
-|-------------------|-----------|--------|-------------------|----------|
-| JWT weak HMAC secret | 1049136 | Native | CheckJwtWeak | vulnapp endpoint |
-| JWT self-signed JWK header supported | 1050512 | Final | CheckExtendedActive | vulnapp endpoint |
-| JWT arbitrary jku header supported | 1050528 | Final | CheckExtendedActive | vulnapp endpoint |
-| JWT arbitrary x5u header supported | 1050544 | Final | CheckExtendedActive | vulnapp endpoint |
-| JWT insecure token signing algorithm (asymmetric algorithm with 'none') | 1050560 | Final | CheckExtendedActive | vulnapp endpoint |
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| Cacheable HTTPS response | 7340288 |
+| Mixed content | 16778240 |
+| Strict transport security not enforced | 16777984 |
+| TLS cookie without secure flag set | 5243392 |
+| Unencrypted communications | 16777728 |
 
-**Note:** All JWT checks are runtime-demonstrated. The corpus includes endpoints with weak or misconfigured JWT implementations.
+### Registered-only (1 rows)
 
----
+A registered check descriptor exists; no deliberately vulnerable endpoint in the runtime corpus exercises it (the corpus's own `Row:` strings are the arbiter of demonstrated):
 
-## A08: Software and Data Integrity Failures (6 registered, 5 demonstrated, 1 registered-only)
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| TLS certificate | 16777472 |
 
-Vulnerability class: Insecure update/deployment, unsafe deserialization (CWE-345, CWE-347, CWE-351, CWE-426, CWE-494, CWE-502, CWE-829).
+## A03: Injection (56 registered, 51 demonstrated, 5 registered-only)
 
-### Demonstrated (5 rows)
+CWE-74/78/79/89 injection families.
 
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Evidence |
-|-------------------|-----------|--------|-------------------|----------|
-| React Server Components remote code execution (React2Shell) | 1050528 | Final | CheckExtendedActive | vulnapp endpoint |
-| Serialized object in HTTP message | 1049744 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| Serialized object in response | 1049760 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| Unsafe DOM methods (DOM-based) | 1049120 | DOM | CheckDOM | vulnapp endpoint |
-| Unsafe DOM methods (reflected DOM-based) | 1049136 | DOM | CheckDOM | vulnapp endpoint |
+### Demonstrated (51 rows)
 
-### Registered-Only (1 row)
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| Ajax request header manipulation (DOM-based) | 5245952 |
+| Ajax request header manipulation (reflected DOM-based) | 5245953 |
+| Ajax request header manipulation (stored DOM-based) | 5245954 |
+| CSS injection (reflected) | 5247744 |
+| CSS injection (stored) | 5247745 |
+| Client-side HTTP parameter pollution (reflected) | 5248000 |
+| Client-side HTTP parameter pollution (stored) | 5248001 |
+| Client-side JSON injection (DOM-based) | 2098032 |
+| Client-side JSON injection (reflected DOM-based) | 2098033 |
+| Client-side JSON injection (stored DOM-based) | 2098034 |
+| Client-side XPath injection (DOM-based) | 2098016 |
+| Client-side XPath injection (reflected DOM-based) | 2098017 |
+| Client-side XPath injection (stored DOM-based) | 2098018 |
+| Client-side prototype pollution | 2097942 |
+| Client-side template injection | 2097928 |
+| DOM data manipulation (DOM-based) | 5247488 |
+| DOM data manipulation (stored DOM-based) | 5247490 |
+| Denial of service (DOM-based) | 5246208 |
+| Denial of service (reflected DOM-based) | 5246209 |
+| Denial of service (stored DOM-based) | 5246210 |
+| Document domain manipulation (DOM-based) | 5247232 |
+| Document domain manipulation (reflected DOM-based) | 5247233 |
+| Document domain manipulation (stored DOM-based) | 5247234 |
+| Expression Language injection | 1052448 |
+| HTTP response header injection | 2097664 |
+| Input returned in response (reflected) | 4197376 |
+| Input returned in response (stored) | 4197120 |
+| JavaScript injection (DOM-based) | 2097952 |
+| JavaScript injection (reflected DOM-based) | 2097953 |
+| JavaScript injection (stored DOM-based) | 2097954 |
+| LDAP injection | 1049856 |
+| OS command injection | 1048832 |
+| PHP code injection | 1051648 |
+| Path-relative style sheet import | 2097960 |
+| Perl code injection | 1052160 |
+| Python code injection | 1052432 |
+| React Server Components remote code execution (React2Shell) | 1053184 |
+| Ruby code injection | 1052416 |
+| SQL injection | 1049088 |
+| SQL injection (second order) | 1049104 |
+| SQL statement in request parameter | 4195456 |
+| SSI injection | 1052928 |
+| Server-side JavaScript code injection | 1051904 |
+| Server-side template injection | 1052800 |
+| Suspicious input transformation (reflected) | 4197632 |
+| Suspicious input transformation (stored) | 4197888 |
+| Unidentified code injection | 1052672 |
+| XML entity expansion | 4196096 |
+| XML external entity injection | 1049600 |
+| XML injection | 1050368 |
+| XPath injection | 1050112 |
 
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Why Not Demonstrated |
-|-------------------|-----------|--------|-------------------|----------------------|
-| Client-side code injection | 1049152 | Remaining | CheckExtendedActive | Overlap with existing injection rows; not separately modeled |
+### Registered-only (5 rows)
 
----
+A registered check descriptor exists; no deliberately vulnerable endpoint in the runtime corpus exercises it (the corpus's own `Row:` strings are the arbiter of demonstrated):
 
-## A09: Logging and Monitoring Failures (5 registered, 4 demonstrated, 1 registered-only)
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| Client-side SQL injection (DOM-based) | 2097968 |
+| Client-side SQL injection (reflected DOM-based) | 2097969 |
+| Client-side SQL injection (stored DOM-based) | 2097970 |
+| DOM data manipulation (reflected DOM-based) | 5247489 |
+| SMTP header injection | 2099200 |
 
-Vulnerability class: Insufficient logging, lack of monitoring (CWE-117, CWE-390, CWE-400, CWE-532, CWE-601, CWE-778, CWE-779).
+## A04: Insecure Design (0 rows)
+
+No catalog row maps to this category. CWE-209 informational disclosure patterns.
+
+## A05: Security Misconfiguration (61 registered, 57 demonstrated, 4 registered-only)
+
+CWE-16 configuration, headers, caching and deserialization exposure.
+
+### Demonstrated (57 rows)
+
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| ASP.NET ViewState without MAC enabled | 4195840 |
+| ASP.NET debugging enabled | 1050624 |
+| ASP.NET tracing enabled | 1049216 |
+| Backup file | 6291672 |
+| Base64-encoded data in parameter | 7340544 |
+| Browser cross-site scripting filter disabled | 5245360 |
+| Cleartext submission of password | 3145984 |
+| Content security policy: allowlisted script resources | 2098435 |
+| Content security policy: allows form hijacking | 2098440 |
+| Content security policy: allows untrusted script execution | 2098436 |
+| Content security policy: allows untrusted style execution | 2098437 |
+| Content security policy: malformed syntax | 2098438 |
+| Content security policy: not enforced | 2098441 |
+| Content type incorrectly stated | 8389632 |
+| Content type is not specified | 8389888 |
+| Cookie without HttpOnly flag set | 5244416 |
+| Credit card numbers disclosed | 6292736 |
+| Cross-domain POST | 4195584 |
+| Cross-domain Referer leakage | 5243904 |
+| Cross-domain script include | 5244160 |
+| Database connection string disclosed | 6291584 |
+| Directory listing | 6291712 |
+| Duplicate cookies set | 4196864 |
+| Email addresses disclosed | 6291968 |
+| Flash cross-domain policy | 2098176 |
+| GraphQL content type not validated | 2098452 |
+| GraphQL endpoint discovered | 2098449 |
+| GraphQL endpoint found | 2098448 |
+| GraphQL introspection enabled | 2098450 |
+| GraphQL suggestions enabled | 2098451 |
+| HTML does not specify charset | 8389120 |
+| HTML uses unrecognized charset | 8389376 |
+| HTTP PUT method is enabled | 1050880 |
+| HTTP TRACE method is enabled | 5245440 |
+| Json Web Key Set disclosed | 6293248 |
+| Long redirection response | 4196352 |
+| Multiple content types specified | 8388864 |
+| OpenAPI definition found (active scan check) | 6293760 |
+| OpenAPI definition found (passive scan check) | 6293761 |
+| Password field with autocomplete enabled | 5244928 |
+| Password submitted using GET method | 4195072 |
+| Password value set in cookie | 5245184 |
+| Private IP addresses disclosed | 6292224 |
+| Private key disclosed | 6292816 |
+| Referer-dependent response | 4194560 |
+| Request URL override | 4198144 |
+| Robots.txt file | 6292992 |
+| Serialized object in HTTP message | 4196608 |
+| Silverlight cross-domain policy | 2098432 |
+| Social security numbers disclosed | 6292480 |
+| Source code disclosure | 6291632 |
+| Spoofable client IP address | 4194576 |
+| User agent-dependent response | 4194592 |
+| Web cache poisoning | 2097536 |
+| WebSocket URL poisoning (DOM-based) | 2097984 |
+| WebSocket URL poisoning (reflected DOM-based) | 2097985 |
+| WebSocket URL poisoning (stored DOM-based) | 2097986 |
+
+### Registered-only (4 rows)
+
+A registered check descriptor exists; no deliberately vulnerable endpoint in the runtime corpus exercises it (the corpus's own `Row:` strings are the arbiter of demonstrated):
+
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| Client-side desync | 2097473 |
+| Cookie scoped to parent domain | 5243648 |
+| HTTP request smuggling | 2097472 |
+| Hidden HTTP 2 | 16778496 |
+
+## A06: Vulnerable and Outdated Components (1 registered, 1 demonstrated, 0 registered-only)
+
+CWE-1104 known-vulnerable dependencies.
+
+### Demonstrated (1 rows)
+
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| Vulnerable JavaScript dependency | 5243008 |
+
+## A07: Identification and Authentication Failures (4 registered, 4 demonstrated, 0 registered-only)
+
+CWE-287/347 JWT and token validation.
 
 ### Demonstrated (4 rows)
 
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Evidence |
-|-------------------|-----------|--------|-------------------|----------|
-| Browser cross-site scripting filter disabled | 1050432 | PassiveAnalysis | CheckPassiveAnalysis | vulnapp endpoint |
-| Password returned in later response | 1050144 | PassivePosture | CheckPassivePosture | vulnapp endpoint |
-| Denial of service (DOM-based) | 1049408 | DOM | CheckDOM | vulnapp endpoint |
-| Denial of service (reflected DOM-based) | 1049424 | DOM | CheckDOM | vulnapp endpoint |
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| JWT none algorithm supported | 2099457 |
+| JWT private key disclosed | 6293504 |
+| JWT signature not verified | 2099456 |
+| JWT weak HMAC secret | 2099459 |
 
-### Registered-Only (1 row)
+## A08: Software and Data Integrity Failures (4 registered, 4 demonstrated, 0 registered-only)
 
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Why Not Demonstrated |
-|-------------------|-----------|--------|-------------------|----------------------|
-| Denial of service (stored DOM-based) | 1049440 | DOM | CheckDOM | Would require resource exhaustion in stored endpoint; hard to verify |
+CWE-502/494 update and deserialization integrity.
 
----
+### Demonstrated (4 rows)
 
-## A10: Server-Side Request Forgery (SSRF) (2 registered, 0 demonstrated)
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| File upload functionality | 5245312 |
+| JWT arbitrary jku header supported | 2099460 |
+| JWT arbitrary x5u header supported | 2099461 |
+| JWT self-signed JWK header supported | 2099458 |
 
-Vulnerability class: SSRF, out-of-band resource load (CWE-918).
+## A09: Security Logging and Monitoring Failures (0 rows)
 
-### Registered-Only (2 rows)
+No catalog row maps to this category. CWE-778 logging failures.
 
-| Catalog Issue Name | TypeIndex | Family | ScanConfig Switch | Why Not Demonstrated |
-|-------------------|-----------|--------|-------------------|----------------------|
-| Out-of-band resource load (HTTP) | 1050384 | Remaining | CheckOutOfBand | Requires collaborator binary (interactsh) and outbound DNS; not in standard test corpus |
-| External service interaction (DNS) | 1050400 | Remaining | CheckOutOfBand | Requires collaborator binary and outbound DNS; not in standard test corpus |
+## A10: Server-Side Request Forgery (4 registered, 0 demonstrated, 4 registered-only)
 
-**Note:** These rows are gated behind `CheckOutOfBand`, which is off by default. They require the interactsh-client binary and outbound network connectivity to a collaborator service, which is not available in the standard test environment.
+CWE-918 SSRF.
 
----
+### Registered-only (4 rows)
 
-## Mapped Rows by Family and Implementation
+A registered check descriptor exists; no deliberately vulnerable endpoint in the runtime corpus exercises it (the corpus's own `Row:` strings are the arbiter of demonstrated):
 
-The 183-catalog distribution across check families:
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| External service interaction (DNS) | 3146240 |
+| External service interaction (HTTP) | 3146256 |
+| External service interaction (SMTP) | 3146272 |
+| Out-of-band resource load (HTTP) | 1051136 |
 
-| Family | File | Rows | Switch | Demonstrated |
-|--------|------|------|--------|--------------|
-| Original native | check_registry.go | 5 | CheckSqli/CheckXss/CheckPathTraversal/CheckJwtWeak/CheckJSVulns | 5 |
-| Headers | checks_headers.go | 6 | CheckHeaders | 6 |
-| Cache | checks_cache.go | 2 | CheckCachePoisoning | 2 |
-| Reflection Probes | checks_reflection2.go | 6 | CheckReflectionProbes | 5 |
-| Host Discovery | checks_discovery.go | 5 | CheckHostDiscovery | 5 |
-| Response Dependence | checks_reflection3.go | 5 | CheckResponseDependence | 5 |
-| Passive Posture | checks_passive_posture.go | 15 | CheckPassivePosture | 14 |
-| Passive Analysis | checks_passive_analysis.go | 28 | CheckPassiveAnalysis | 26 |
-| Active Injection | checks_injection.go | 12 | CheckActiveInjection | 12 |
-| DOM | checks_dom.go | 48 | CheckDOM | 42 |
-| DOM Extra | checks_dom_extra.go | 3 | CheckDOM | 3 |
-| Stored | checks_stored.go | 10 | CheckStored | 9 |
-| Remaining | checks_remaining.go | 22 | CheckExtendedActive | 18 |
-| Final | checks_final.go | 16 | CheckExtendedActive | 16 |
-| **TOTAL** | | **183** | | **147** |
+## Meta: generated-issue provenance rows (4 rows, not OWASP-mappable)
 
----
+These four rows are where a finding's origin is recorded when burpsy itself did not detect it — a BCheck run, an extension, a manual operator entry, a Bambda. They are catalog rows because Burp's issue model needs them, not because they are vulnerabilities:
 
-## Genuine Gaps: Three Biggest Opportunities for Improved Coverage
+| Catalog Issue Name | TypeIndex |
+|---|---:|
+| BCheck generated issue | 150994944 |
+| Bambda generated issue | 151027712 |
+| Extension generated issue | 134217728 |
+| Manually generated issue | 134250496 |
 
-### Gap 1: Insecure Design (A04) — Zero Runtime Demonstration
-
-**Location:** `docs/SCANNER-COVERAGE.md` counts A04 as "2 rows", but neither has a corpus endpoint.
-
-**Root cause:** A04 "Insecure Design" is a risk category about design flaws, not a detection pattern. The two rows — "Weak cryptographic strength" and "Overly permissive CORS" — require either cryptographic testing infrastructure or are subsumed by existing CORS checks.
-
-**What would need to change:**
-- `internal/vulnapp/vulnapp_*.go` would need deliberate design-flaw endpoints to plant.
-- Cryptographic strength checks would need a Java/OpenSSL wrapper to probe certificate strength.
-- Current CORS coverage (A05) makes "Overly permissive CORS" (A04) redundant.
-
-**File:** `internal/vulnapp/vulnapp.go:Vulnerabilities()` — add A04 design-flaw endpoints (currently 0).
-
-### Gap 2: SSRF (A10) — Zero Runtime Demonstration, Requires Collaborator
-
-**Location:** `docs/SCANNER-COVERAGE.md` counts A10 as "2 rows"; neither is attempted by runtime tests.
-
-**Root cause:** A10 "Out-of-band resource load (HTTP)" and "External service interaction (DNS)" are gated behind `CheckOutOfBand` and require:
-- interactsh-client binary installed (`/usr/local/bin/interactsh-client`)
-- Outbound network access to collaborator service (oast.me, online, etc.)
-- The runtime_coverage_test.go does not enable `CheckOutOfBand` (see line 672-673: "SSRF, CheckXXE — subsumed by CheckExtendedActive's gate").
-
-**What would need to change:**
-- `runtime_coverage_test.go:runtimeScanConfig()` would need to set `c.CheckOutOfBand = true`.
-- `internal/vulnapp/vulnapp*.go` would need endpoints that make HTTP requests back to the attacker's collaborator domain.
-- `internal/scanner/runtime_coverage_test.go` would need to read the collaborator client's event log to confirm callbacks arrived.
-
-**File:** `internal/scanner/runtime_coverage_test.go:runtimeScanConfig()` (line 678-702) — enable CheckOutOfBand and add OOB-vulnerable endpoints.
-
-### Gap 3: Stored Checks — 9 of 51 Injection Rows Lack Runtime Endpoints
-
-**Location:** Several reflected-injection rows have "stored" variants in the catalog, but only some have corpus endpoints planted.
-
-**Breakdown by row:**
-- Stored XSS: Demonstrated (vulnapp_stored.go)
-- Stored template injection: Registered only (would need endpoint in vulnapp_stored.go:postComment / listComments)
-- Stored link manipulation: Registered only (would need stored endpoint)
-- Stored form action hijacking: Registered only (would need stored endpoint)
-- Stored HTTP parameter pollution: Registered only (would need stored endpoint)
-
-**Root cause:** The stored demonstration harness requires a second fetch phase after planting a canary. Internal `vulnapp_stored.go` and `vulnapp_stored_dom.go` are the planting points, but not every injection family has a stored variant in that file.
-
-**What would need to change:**
-- `internal/vulnapp/vulnapp_stored.go` would need additional injection-family endpoints (template injection, LDAP injection in stored contexts).
-- Corresponding `vulnapp.go:Vulnerabilities()` manifest entries to wire them.
-- The test would automatically verify them because `StoredCheckDescriptors()` already registers the row, and the harness checks every manifest entry.
-
-**File:** `internal/vulnapp/vulnapp_stored.go` — add postComment→listComments pairs for injection families not yet modeled (see comments on line 12-21).
-
----
-
-## Discrepancy with docs/SCANNER-COVERAGE.md
-
-**Resolved 2026-08-27.** The authoritative measurement is the runtime suite itself:
+## How to re-derive this file
 
 ```
-go test ./internal/scanner/ -run TestTheScannerDetects -count=1 -v -timeout 30m
-# runtime_coverage_test.go:876: runtime detection: 160 distinct catalog rows
-# demonstrated across 163 endpoints, 0 missed   (EXIT=0)
+1. Catalog:   TypeIndex + Name from internal/scanner/catalog_data.go (183 rows)
+2. Demonstrated: the distinct `Row:` strings across internal/vulnapp/*.go (160)
+3. Categories: read each row's name/description/CWEs; assign one OWASP category
+4. Check: demonstrated + registered-only per category sums to the runtime pin
 ```
 
-That — **160 / 183**, matching the `wantDemonstrated = 160` pin in
-`internal/scanner/runtime_coverage_test.go` — is what `docs/SCANNER-COVERAGE.md` now reports.
+A mismatch in step 4 means this file drifted from the code and must be regenerated, not patched by hand.
 
-This analysis' earlier figure of "147" undercounted, and the two reasons are now understood:
-
-1. It tallied declared `Row:` strings by scanning `vulnapp` sources statically. At audit time the
-   `/sdm/` stored-DOM family's registration was not yet wired into the manifest (the dead-code
-   defect recorded in HANDOFF-2026-08-18), so rows those endpoints prove were invisible to a source
-   scan even though the registry claims them.
-2. Distinct-row vs per-endpoint tallying differs: the runtime test de-duplicates row names across
-   163 endpoint probes rather than counting manifest entries.
-
-The recommendation above — cross-check against `wantDemonstrated` — was carried out; it now equals
-the measured run, and the discrepancy section closes instead of speculating.
-
----
-
-## Summary
-
-The burpsy scanner **detects 160 of 183 catalog vulnerabilities under conditions that are
-automatically verified and pinned** (87.4%; measured run cited above). Registration without proof
-is **23 rows**, each named in `docs/SCANNER-COVERAGE.md`; they group into stored-DOM platform walls,
-OOB/collaborator dependence, request smuggling's non-conformant-listener requirement, generated-issue placeholders, and native checks without a planted vulnerable endpoint.
-
-Categories with zero runtime coverage (A04 Insecure Design, A10 SSRF) have either registration as a side effect of Burp's taxonomy (A04) or deliberate opt-out due to infrastructure cost (A10). Both are honest signals rather than defects: an audit tool that sends 20 seconds of SSRF probes to every endpoint makes scans unscalable without a reason.
-
-The project values honest counting over headline percentages. The 147:36 split preserves the distinction between "we have a detector" and "we proved it works."
