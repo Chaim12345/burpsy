@@ -526,3 +526,28 @@ export interface NetworkProxyUpdate {
  proxy?: string;
  default?: string;
 }
+
+/** One session-handling tracer entry (n29): a request a rule applied to, and what the
+ * coordinator did about it. Mirrors session.TraceEntry. */
+export interface SessionTraceEntry {
+ at: string;
+ tool?: string;
+ host: string;
+ path: string;
+ rule: string;
+ rule_id: number;
+ kind: string;
+ actions?: { index: number; kind: string; label: string; detail: string; changed: boolean; skipped?: string }[];
+}
+
+/** GET /api/session/trace. */
+export interface SessionTraceResponse {
+ enabled: boolean;
+ entries: SessionTraceEntry[];
+ capacity: number;
+}
+
+/** POST /api/session/trace/enable. */
+export interface SessionTraceEnableResponse {
+ enabled: boolean;
+}

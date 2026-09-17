@@ -1668,6 +1668,71 @@ func (s *Server) sessionRuleApplyExtractions(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// handleSessionTrace serves GET /api/session/trace and POST /api/session/trace/enable
+// (burpsy-react-ui-n29) — Burp's session-handling tracer.
+//
+// GET answers the recorded entries plus whether the tracer is on. POST {enabled: bool} turns
+// it on or off; turning it off keeps what was recorded (see traceRing.setEnabled) because the
+// entries are the evidence the operator enabled the tracer to collect.
+//
+// The routes are one subtree: /api/session/trace and /api/session/trace/enable. Two doors on
+// one store is how every other toggle here is served (the jar's monitor action lives beside
+// its reads), and a separate enable endpoint would be a second route file for one boolean.
+func (s *Server) handleSessionTrace(w http.ResponseWriter, r *http.Request) {
+	if s.sessionCoordinator == nil {
+		http.Error(w, "the session tracer is not attached to this process: no session coordinator is running", http.StatusServiceUnavailable)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/session/trace")
+	switch {
+	case rest == "" && r.Method == http.MethodGet:
+		// ActionRan has no json tags — raw, the wire would spell "Index"/"Kind" and the UI's
+		// case-sensitive reads would see undefined everywhere (the same projection discipline
+		// sessionTestStepView exists for). Projected here to the lowercase shape the UI holds.
+		entries := s.sessionCoordinator.TracerEntries()
+		views := make([]map[string]any, 0, len(entries))
+		for _, e := range entries {
+			view := map[string]any{
+				"at": e.At, "tool": e.Tool, "host": e.Host, "path": e.Path,
+				"rule": e.Rule, "rule_id": e.RuleID, "kind": e.Kind,
+			}
+			actions := make([]map[string]any, 0, len(e.Actions))
+			for _, a := range e.Actions {
+				actions = append(actions, map[string]any{
+					"index": a.Index, "kind": session.ActionKindName(a.Kind), "label": a.Label,
+					"detail": a.Detail, "changed": a.Changed, "skipped": a.Skipped,
+				})
+			}
+			view["actions"] = actions
+			views = append(views, view)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"enabled": s.sessionCoordinator.TracerEnabled(),
+			"entries": views,
+			// The bound is stated with the data because Burp's own overhead warning is the
+			// reason for both: an operator reading 200 entries should know that is the cap,
+			// not the total, and that the oldest were dropped.
+			"capacity": 200,
+		})
+	case rest == "/enable" && r.Method == http.MethodPost:
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil {
+			http.Error(w, "body must be JSON {enabled: bool}", http.StatusBadRequest)
+			return
+		}
+		s.sessionCoordinator.SetTracerEnabled(req.Enabled)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"enabled": s.sessionCoordinator.TracerEnabled(),
+		})
+	default:
+		http.Error(w, "Method not allowed: GET /api/session/trace, POST /api/session/trace/enable {enabled}", http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.handleSessionCookiesMutate(w, r)

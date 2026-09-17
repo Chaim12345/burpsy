@@ -734,6 +734,17 @@ var manifest = map[string]route{
 			"dry-run reporting each step's sent form, response, set cookies and extraction outcomes " +
 			"(no login-run memory is written), POST {id}/move reorders the rule",
 	},
+	"/api/session/trace": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the session-handling tracer's recorded entries, and whether it is recording",
+	},
+	"/api/session/trace/enable": {
+		// riskLocal: the toggle writes burpsy's own tracing state and sends nothing; the
+		// overhead Burp warns about lands on requests the engine already makes, not on new
+		// egress.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "turn the session-handling tracer on or off (off by default — it imposes a per-request overhead, which is why it is opt-in)",
+	},
 	"/api/sitemap": {
 		// DELETE is riskDestructive, not riskLocal, and the line between them is evidence: the
 		// suppression never touches the stored exchanges (that is the recorded decision on

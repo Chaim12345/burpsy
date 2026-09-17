@@ -907,6 +907,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/session/rules", s.handleSessionRules)
 	s.mux.HandleFunc("/api/session/rules/", s.handleSessionRuleDetail)
 	s.mux.HandleFunc("/api/session/cookies", s.handleSessionCookies)
+	// The session-handling tracer (burpsy-react-ui-n29): one subtree serving the entries and
+	// the enable toggle, the same one-door shape the jar's reads and writes hold.
+	s.mux.HandleFunc("/api/session/trace", s.handleSessionTrace)
+	s.mux.HandleFunc("/api/session/trace/enable", s.handleSessionTrace)
 	s.mux.HandleFunc("/api/session/login", s.handleSessionLogin)
 	// The macro recorder: turns selected Proxy-history rows into macro steps (burpsy-react-ui-escl).
 	// Bare POST, under /api/session/ but deliberately not under /api/session/rules/: it neither reads

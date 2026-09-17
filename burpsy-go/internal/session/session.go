@@ -1491,6 +1491,11 @@ type Coordinator struct {
 	jarMgr *CookieJarManager
 	logger *zap.Logger
 
+	// tracer is the opt-in session-handling tracer (burpsy-react-ui-n29). Off by default —
+	// see tracer.go for why an always-on tracer is the wrong default — and while off its
+	// only per-request cost is one atomic load.
+	tracer traceRing
+
 	// runs holds the login currently in flight for a rule. If N requests notice
 	// session loss at once — realistic under any concurrency — reacting to each
 	// independently would fire N logins at the engagement target. The first

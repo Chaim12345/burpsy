@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, History, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2, Upload, X , SearchCheck , Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { useDeleteSessionRule, useSaveSessionRule } from "../lib/data";
-import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useAnalyzeSessionRule, useApplySessionExtractions, useUpdateSessionMacro, useCookieJarWrite } from "../lib/data.policy";
+import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useAnalyzeSessionRule, useApplySessionExtractions, useUpdateSessionMacro, useCookieJarWrite, useSessionTrace, useSessionTraceEnable } from "../lib/data.policy";
 import { MacroRecorder } from "../ui/macro-recorder";
 import type {
  SessionAction,
@@ -933,6 +933,17 @@ function ActionCard({
 export function SessionPage(): JSX.Element {
  const rulesQuery = useSessionRulesFull();
  const cookiesQuery = useSessionCookies();
+ // The session-handling tracer (n29). Off by default; the toggle's cost is stated where the
+ // toggle is, because Burp's own overhead warning is the reason it is opt-in.
+ const traceQuery = useSessionTrace();
+ const traceEnable = useSessionTraceEnable();
+ const traceEnabled = traceQuery.data?.enabled ?? false;
+ const toggleTracer = (on: boolean) => {
+  traceEnable.mutate(on, {
+   onSuccess: () => toast.success(on ? "Tracer on — it adds work to every request a rule handles, so turn it off when you are done" : "Tracer off. What it recorded is kept below."),
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Toggling the tracer failed"),
+  });
+ };
  // The jar's write surface (dkb): edit, remove per cookie, clear per authority. Every action
  // goes through one mutation so the table cannot show a state the write side disagrees with.
  const jarWrite = useCookieJarWrite();
@@ -2229,6 +2240,69 @@ export function SessionPage(): JSX.Element {
        </tr>
       ))}
      </SimpleTable>
+    )}
+   </Card>
+
+   {/* The session-handling tracer (n29): Burp's "Open sessions tracer" — every request a
+       rule applied to, which rule, what the coordinator did, and the action walk with its
+       per-step changes. Opt-in with the overhead stated at the toggle, because Burp's own
+       prose is the design input: "The session handling tracer imposes a processing and
+       storage overhead on all affected HTTP requests." */}
+   <Card>
+    <SectionHeading
+     title="Session handling tracer"
+     detail={traceEnabled ? "Recording. Every request a rule handles is traced — the overhead is real; turn this off when you are done." : "Off. Turn it on to record, per request a rule handles, which rule matched and what each action changed. What a run recorded is kept after you switch it off."}
+     actions={
+      <>
+       <Badge tone={traceEnabled ? "good" : "neutral"}>{traceEnabled ? "recording" : "off"}</Badge>
+       <Button
+        variant="outline"
+        size="small"
+        disabled={traceEnable.isPending}
+        onClick={() => toggleTracer(!traceEnabled)}
+       >
+        {traceEnabled ? "Stop tracing" : "Start tracing"}
+       </Button>
+       <RefreshButton onClick={() => void traceQuery.refetch()} loading={traceQuery.isFetching} label="Refresh tracer" />
+      </>
+     }
+    />
+    {(traceQuery.data?.entries ?? []).length === 0 ? (
+     <Empty
+      title={traceEnabled ? "No request handled yet" : "Nothing recorded"}
+      detail={traceEnabled ? "Nothing a session rule has applied to yet. The tracer lists handled requests only — traffic no rule matches is not traced." : "Enable the tracer, drive some traffic a rule handles, and the sequence of rules and actions — with each step's change — is listed here."}
+     />
+    ) : (
+     <div className="stack-tight">
+      {(traceQuery.data?.entries ?? []).map((entry, index) => (
+       <div key={index} className="trace-entry">
+        <div className="trace-entry-head">
+         <code>{entry.host}{entry.path}</code>
+         <span className="cell-dim">{entry.tool ? `via ${entry.tool} · ` : ""}{new Date(entry.at).toLocaleTimeString()} · </span>
+         <Badge>{entry.rule}</Badge>
+         <Badge tone={entry.kind === "recovered" || entry.kind === "rule applied" ? "good" : entry.kind === "already valid" ? "neutral" : "warn"}>{entry.kind}</Badge>
+        </div>
+        {(entry.actions ?? []).length > 0 ? (
+         <ol className="trace-actions">
+          {(entry.actions ?? []).map((action) => (
+           <li key={action.index} className={action.skipped ? "cell-dim" : undefined}>
+            {" "}
+            <code>{action.kind}</code> {action.label}
+            {action.skipped ? ` — ${action.skipped}` : action.changed ? " — changed the request" : ""}
+            {action.detail && !action.skipped ? ` (${action.detail})` : ""}
+           </li>
+          ))}
+         </ol>
+        ) : (
+         <p className="field-hint">No actions ran for this request.</p>
+        )}
+       </div>
+      ))}
+      <p className="field-hint">
+       The tracer keeps the last {traceQuery.data?.capacity ?? 200} handled requests — older
+       entries are dropped, so leave it off when you are not troubleshooting.
+      </p>
+     </div>
     )}
    </Card>
 

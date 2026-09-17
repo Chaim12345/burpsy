@@ -4800,3 +4800,25 @@ tbody td {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ==== Session-handling tracer (burpsy-react-ui-n29) ==== */
+
+.trace-entry {
+  border-left: 2px solid var(--line, var(--border));
+  padding: var(--s1, 4px) 0 var(--s1, 4px) var(--s2, 8px);
+}
+
+.trace-entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s1, 4px);
+  flex-wrap: wrap;
+  font-size: var(--fs-xs, 11px);
+}
+
+.trace-actions {
+  margin: var(--s1, 4px) 0 0;
+  padding-left: var(--s3, 16px);
+  font-size: var(--fs-xs, 11px);
+  color: var(--fg-dim, var(--muted));
+}

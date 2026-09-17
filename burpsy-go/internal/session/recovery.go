@@ -411,7 +411,13 @@ func (c *Coordinator) HandleRecovery(tool string, original MacroStep, response *
 	if rule == nil {
 		return RecoveryOutcome{Kind: RecoveryNoRuleApplies, URL: original.URL}
 	}
-	return c.recover(id, rule, original, response, runner)
+	out := c.recover(id, rule, original, response, runner)
+	// The session-handling tracer (burpsy-react-ui-n29) records the handled request: this is
+	// Burp's "every request where at least one session rule has been applied", and the
+	// entry rides the outcome's own action walk. recordTrace is a no-op while the tracer is
+	// off — one atomic load, nothing else, on this per-response path.
+	c.recordTrace(tool, original, id, rule, out)
+	return out
 }
 
 // EnsureLoggedIn is the public single-flight re-login for a rule: it runs the rule's macro (once,

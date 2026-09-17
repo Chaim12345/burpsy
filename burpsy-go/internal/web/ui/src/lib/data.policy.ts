@@ -17,6 +17,8 @@ import type {
  SessionRulesResponse,
  SessionTestResponse,
  SessionAnalyzeResponse,
+ SessionTraceResponse,
+ SessionTraceEnableResponse,
  SessionApplyExtractionsResponse,
 } from "./types.policy";
 
@@ -26,6 +28,7 @@ export const policyKeys = {
  caCert: ["ca-cert"] as const,
  caStatus: ["ca-status"] as const,
  passthrough: ["tls-passthrough"] as const,
+ sessionTrace: ["session", "trace"] as const,
 };
 
 export interface CaCertState {
@@ -301,6 +304,24 @@ export function useTestSessionRule() {
  * fields, Set-Cookie names, query strings in links). Read-only like /test; the apply is a
  * separate call so the operator picks from what they were shown.
  */
+/** GET /api/session/trace — the session-handling tracer (n29): the recorded entries and
+ * whether it is recording. No refetch interval: the tracer's entries are the operator's
+ * troubleshooting evidence and the page refreshes them on demand, like the jar. */
+export function useSessionTrace() {
+ return useResource<SessionTraceResponse>(policyKeys.sessionTrace, "/api/session/trace");
+}
+
+/** POST /api/session/trace/enable — turn the tracer on or off. Off is the default; the
+ * overhead Burp warns about is why, and the Session page says so at the toggle. */
+export function useSessionTraceEnable() {
+ const client = useQueryClient();
+ return useMutation({
+  mutationFn: (enabled: boolean) =>
+   api<SessionTraceEnableResponse>("/api/session/trace/enable", json("POST", { enabled })),
+  onSuccess: () => void client.invalidateQueries({ queryKey: policyKeys.sessionTrace }),
+ });
+}
+
 export function useAnalyzeSessionRule() {
  return useMutation({
   mutationFn: (id: number) =>
