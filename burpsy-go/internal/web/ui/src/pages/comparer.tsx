@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash, Network, Type } from "lucide-react";
+import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash, Network, Type , Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes } from "../lib/api";
 import { useCompare, useLoadMessage } from "../lib/data.workbench";
 import { useCrawls } from "../lib/data.observe";
 import { useCompareSitemaps } from "../lib/data.observe";
 import { comparableRuns, sideLabel, type SitemapDiffResponse } from "../lib/sitemap-diff";
-import { useApp } from "../lib/store";
+import { useApp , newComparerItem } from "../lib/store";
 import type { CompareOp } from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Input, Metric, Select, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Metric, Select, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 /** Ops carry byte offsets, so slicing has to go through the same byte view the server used. */
@@ -36,6 +36,14 @@ interface Segment {
  * length is what keeps the two panes aligned rather than drifting apart.
  */
 const GAP_CHAR = "·";
+
+/** A hand-off's provenance label when the sender did not name one: the message's first
+ * line — the request line or status line — which is exactly what an operator scanning two
+ * item tables reads to tell one candidate from another (yy2). */
+function labelOf(value: string): string {
+ const first = value.split(/\r?\n/, 1)[0] ?? "";
+ return first.length > 72 ? `${first.slice(0, 69)}...` : first || "(no content)";
+}
 
 /** Ops drawn before the view stops. A pathological diff must not hang the tab. */
 const MAX_SEGMENTS = 2_000;
@@ -272,6 +280,14 @@ function HexPane({
 export function ComparerPage(): JSX.Element {
   const slots = useApp((state) => state.comparerSlots);
   const setComparerSlot = useApp((state) => state.setComparerSlot);
+  // Burp's item tables (burpsy-react-ui-yy2): each side is a LIST of what was sent, the
+  // comparison runs on the selected item from each, and send-to appends instead of destroying.
+  const items = useApp((state) => state.comparerItems);
+  const addComparerItem = useApp((state) => state.addComparerItem);
+  const removeComparerItem = useApp((state) => state.removeComparerItem);
+  const clearComparerItems = useApp((state) => state.clearComparerItems);
+  const [selectedA, setSelectedA] = useState<number | null>(null);
+  const [selectedB, setSelectedB] = useState<number | null>(null);
 
   // Burp's two Comparer subjects: two buffers (the page this file was before k3a7), and two
   // site maps (burpsy-react-ui-k3a7). One page, because Burp also offers them from one tool —
@@ -339,17 +355,24 @@ export function ComparerPage(): JSX.Element {
 
   // "Send to Comparer (A/B)" elsewhere in the app writes the raw bytes into the
   // store; consume them so a second hand-off of the same text still lands.
+  // The hand-off still lands as a pending slot; the page consumes it into the LIST (yy2), so
+  // the third send-to a side adds a row instead of destroying what was there. The label names
+  // the provenance because the item tables' visible column is "which exchange is this".
   useEffect(() => {
     if (!slots.a) return;
-    setA(slots.a);
+    const item = newComparerItem(labelOf(slots.a), slots.a);
+    addComparerItem("a", item);
+    setSelectedA(item.id);
     setComparerSlot("a", "");
-  }, [slots.a, setComparerSlot]);
+  }, [slots.a, setComparerSlot, addComparerItem]);
 
   useEffect(() => {
     if (!slots.b) return;
-    setB(slots.b);
+    const item = newComparerItem(labelOf(slots.b), slots.b);
+    addComparerItem("b", item);
+    setSelectedB(item.id);
     setComparerSlot("b", "");
-  }, [slots.b, setComparerSlot]);
+  }, [slots.b, setComparerSlot, addComparerItem]);
 
   const { segments, hunks, omitted } = useMemo(
     () => (result ? buildSegments(result.ops, a, b) : { segments: [], hunks: 0, omitted: 0 }),
@@ -435,6 +458,13 @@ export function ComparerPage(): JSX.Element {
     const value = slot === "a" ? a : b;
     const msg = slot === "a" ? msgA : msgB;
     const setMsg = slot === "a" ? setMsgA : setMsgB;
+    // Burp's item table for this side (yy2): every message SENT to this slot, listed; the
+    // comparison runs on the selected row. Selecting an item loads its bytes into the editor,
+    // where they stay editable as before — the list is the memory, the editor is the working
+    // copy, and an edit does not rewrite the stored item (the same deal Burp's tables offer).
+    const list = slot === "a" ? items.a : items.b;
+    const selected = slot === "a" ? selectedA : selectedB;
+    const setSelected = slot === "a" ? setSelectedA : setSelectedB;
     return (
       <Card className="card-flush">
         <Toolbar>
@@ -454,6 +484,61 @@ export function ComparerPage(): JSX.Element {
           </Button>
           <Badge>{formatBytes(new TextEncoder().encode(value).length)}</Badge>
         </Toolbar>
+        {list.length > 0 ? (
+          <div className="stack-tight" style={{ marginBottom: 8 }}>
+            <SimpleTable headers={["Sent to " + slot.toUpperCase(), `${list.length} item${list.length === 1 ? "" : "s"}`, ""]}>
+              {list.map((entry) => (
+                <tr key={entry.id}>
+                  <td>
+                    <button
+                      type="button"
+                      className={entry.id === selected ? "comparer-item comparer-item-selected" : "comparer-item"}
+                      aria-pressed={entry.id === selected}
+                      aria-label={`Select ${entry.label} for slot ${slot.toUpperCase()}`}
+                      onClick={() => {
+                        setSelected(entry.id);
+                        if (slot === "a") setA(entry.value);
+                        else setB(entry.value);
+                      }}
+                      style={{ textAlign: "left" }}
+                    >
+                      {entry.label}
+                    </button>
+                  </td>
+                  <td>
+                    <span className="cell-dim">{formatBytes(new TextEncoder().encode(entry.value).length)}</span>
+                  </td>
+                  <td>
+                    <IconButton
+                      label={`Remove ${entry.label} from slot ${slot.toUpperCase()}`}
+                      size="small"
+                      onClick={() => {
+                        if (entry.id === selected) {
+                          setSelected(null);
+                          if (slot === "a") setA("");
+                          else setB("");
+                        }
+                        removeComparerItem(slot, entry.id);
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </IconButton>
+                  </td>
+                </tr>
+              ))}
+            </SimpleTable>
+            {/* Burp's Clear: "Delete all items in the list." */}
+            <Button variant="outline" size="small" onClick={() => {
+              clearComparerItems(slot);
+              setSelected(null);
+              if (slot === "a") setA("");
+              else setB("");
+            }}>
+              <Trash2 size={13} />
+              Clear list
+            </Button>
+          </div>
+        ) : null}
         <HttpEditor
           label={`Side ${slot.toUpperCase()}`}
           value={value}

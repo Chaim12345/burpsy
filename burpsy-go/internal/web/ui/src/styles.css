@@ -4822,3 +4822,29 @@ tbody td {
   font-size: var(--fs-xs, 11px);
   color: var(--fg-dim, var(--muted));
 }
+
+/* ==== Comparer item tables (burpsy-react-ui-yy2) ==== */
+
+/* A listed item reads as a row: quiet until selected, and the selection must be obvious
+   because "which two am I about to compare" is the whole question the tables answer. */
+.comparer-item {
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-xs, 11px);
+  padding: 2px var(--s1, 4px);
+  cursor: pointer;
+  width: 100%;
+  border-radius: var(--radius-sm, 3px);
+}
+
+.comparer-item:hover {
+  background: var(--editor-active-line, rgb(0 0 0 / 5%));
+}
+
+.comparer-item-selected {
+  background: var(--accent-soft, rgb(0 0 0 / 10%));
+  color: var(--accent, var(--fg));
+  font-weight: var(--weight-bold, 600);
+}

@@ -357,6 +357,24 @@ function capRepeaterTabs(
  };
 }
 
+/** One item in a Comparer side's list (burpsy-react-ui-yy2). */
+export interface ComparerItem {
+ /** Stable per-session identity for React keys and per-item remove. */
+ id: number;
+ /** Where it came from — "Exchange #3", "Repeater draft", "pasted". The item tables' visible
+  * column; picking pairs out of a set is done by provenance, not by reading bytes. */
+ label: string;
+ /** The bytes themselves. */
+ value: string;
+}
+
+let comparerItemSeq = 0;
+/** Mint one item's identity. Monotonic per session, so a remove-then-add can never alias. */
+export function newComparerItem(label: string, value: string): ComparerItem {
+ comparerItemSeq += 1;
+ return { id: comparerItemSeq, label, value };
+}
+
 interface AppState {
  route: string;
  theme: Theme;
@@ -404,6 +422,13 @@ interface AppState {
   *  decide what to disable AND why — only the page can size the attack, so only the page can say
   *  whether Start is possible. A menu item that cannot act must say the reason, never no-op. */
  intruderStatus: IntruderStatus | null;
+ /** One Comparer item (burpsy-react-ui-yy2): a label naming where it came from and the bytes.
+  * The label is what the two item tables show, because "which exchange is this" is the question
+  * an operator picking pairs out of a set is asking. */
+ comparerItems: { a: ComparerItem[]; b: ComparerItem[] };
+ /** The pending one-shot hand-off, kept: senders still hand over raw bytes + a label, the
+  * Comparer consumes them into its list on arrival. Same consume-once shape as before, so
+  * every sender's call is unchanged. */
  comparerSlots: { a: string; b: string };
  /** Set when another page hands the Decoder an input to transform. Session-only, like
   *  intruderSeed: a stale payload surviving a reload would masquerade as current work. */
@@ -469,6 +494,13 @@ interface AppState {
  setIntruderStatus: (status: IntruderStatus | null) => void;
  setDecoderSeed: (seed: { label: string; input: string } | null) => void;
  setComparerSlot: (slot: "a" | "b", value: string) => void;
+ /** Append one item to a side's list (yy2): send-to adds; the comparison runs on the selected
+  * item from each list, so sending no longer discards what was there. */
+ addComparerItem: (slot: "a" | "b", item: ComparerItem) => void;
+ /** Remove one item from a side by id (Burp's Remove — "Delete the highlighted item"). */
+ removeComparerItem: (slot: "a" | "b", id: number) => void;
+ /** Clear one side's whole list (Burp's Clear — "Delete all items in the list"). */
+ clearComparerItems: (slot: "a" | "b") => void;
  focusExchange: (id: number | null) => void;
  setHistoryQuery: (value: string) => void;
  setCheckedExchanges: (ids: number[]) => void;
@@ -548,6 +580,7 @@ export const useApp = create<AppState>()(
  intruderStatus: null,
    decoderSeed: null,
    comparerSlots: { a: "", b: "" },
+ comparerItems: { a: [], b: [] },
    historyFocus: null,
    historyQuery: "",
    checkedExchanges: [],
@@ -711,6 +744,21 @@ export const useApp = create<AppState>()(
    setIntruderStatus: (intruderStatus) => set({ intruderStatus }),
    setDecoderSeed: (decoderSeed) => set({ decoderSeed }),
    setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
+ addComparerItem: (slot, item) =>
+  set({
+   comparerItems: {
+    ...get().comparerItems,
+    [slot]: [...get().comparerItems[slot], item],
+   },
+  }),
+ removeComparerItem: (slot, id) =>
+  set({
+   comparerItems: {
+    ...get().comparerItems,
+    [slot]: get().comparerItems[slot].filter((entry) => entry.id !== id),
+   },
+  }),
+ clearComparerItems: (slot) => set({ comparerItems: { ...get().comparerItems, [slot]: [] } }),
    focusExchange: (historyFocus) => set({ historyFocus }),
    setHistoryQuery: (historyQuery) => set({ historyQuery }),
    setCheckedExchanges: (checkedExchanges) => set({ checkedExchanges }),
