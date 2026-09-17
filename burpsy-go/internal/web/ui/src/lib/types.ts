@@ -307,6 +307,13 @@ export interface Finding {
  advisory?: Advisory | null;
  /** Present instead when it deliberately resolved to none, explaining why. */
  advisory_note?: string;
+ /**
+  * The DOM dynamic tier's machine verdict (m97j): "promoted" — a browser watched the static
+  * candidate's source actually feed a dangerous sink — "retired", "unavailable" or
+  * "unsupported-source". Absent for every finding the tier never saw, which is every
+  * finding that did not come from the static DOM pass.
+  */
+ confirm?: string;
 }
 
 export interface Issues {

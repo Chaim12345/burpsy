@@ -217,7 +217,7 @@ type Finding struct {
 	ID          uint64
 	Name        string
 	Severity    string // "info", "low", "medium", "high", "critical"
-	Confidence  string // "certain", "firm", "tentative"
+	Confidence  string // "certain", "firm", "tentative", "suppressed-negative"
 	Description string
 	URL         string
 	Method      string
@@ -226,6 +226,12 @@ type Finding struct {
 	Solution    string
 	ExchangeID  core.ExchangeID
 	Timestamp   time.Time
+	// Confirm is the DOM dynamic tier's verdict for a static-pass finding
+	// (burpsy-react-ui-m97j): promoted / retired / unavailable / unsupported-source, empty for
+	// every finding the tier never saw. Carried beside Confidence rather than folded into it,
+	// because Confidence is a graded belief and Confirm is a machine-checkable fact about one
+	// load — an operator filtering by either should not lose the other.
+	Confirm DOMConfirmState `json:"confirm,omitempty"`
 }
 
 // NewActiveScanner creates a new active scanner.

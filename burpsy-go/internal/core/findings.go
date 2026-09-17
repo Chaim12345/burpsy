@@ -42,6 +42,15 @@ const (
 	ConfidenceCertain Confidence = iota
 	ConfidenceFirm
 	ConfidenceTentative
+	// ConfidenceSuppressedNegative is the DOM dynamic tier's retired verdict
+	// (burpsy-react-ui-m97j): the static candidate is still named, and a real browser loaded
+	// the page with a canary in the flow's source and no instrumented sink received it. It is
+	// a weaker grade than Tentative — tentative says "we do not know", suppressed-negative says
+	// "we looked once and saw nothing", and one load is evidence against reachability, not
+	// proof of safety. Kept as a confidence grade rather than a boolean on the finding because
+	// the store, the issues API and the exports all grade confidence already; a second axis
+	// would have to be threaded through each of them to say one thing.
+	ConfidenceSuppressedNegative
 )
 
 func (c Confidence) String() string {
@@ -52,6 +61,8 @@ func (c Confidence) String() string {
 		return "Firm"
 	case ConfidenceTentative:
 		return "Tentative"
+	case ConfidenceSuppressedNegative:
+		return "Suppressed-negative"
 	default:
 		return "Unknown"
 	}
@@ -84,6 +95,8 @@ func ParseConfidence(v string) Confidence {
 		return ConfidenceCertain
 	case "firm":
 		return ConfidenceFirm
+	case "suppressed-negative":
+		return ConfidenceSuppressedNegative
 	default:
 		return ConfidenceTentative
 	}
@@ -207,6 +220,12 @@ type NewFinding struct {
 	// coverage summary and a finding count cannot be tied together: the dashboard can say an audit
 	// swept 200 exchanges and that 12 findings exist, and nothing relates the two.
 	TaskID uint64
+	// Confirm is the DOM dynamic tier's machine verdict for a static-pass finding
+	// (burpsy-react-ui-m97j): promoted / retired / unavailable / unsupported-source, "" for every
+	// finding the tier never saw. Carried beside Confidence because they answer different
+	// questions: Confidence is a graded belief a human filters on, Confirm is what one browser
+	// load actually observed about one finding.
+	Confirm string `json:"confirm,omitempty"`
 	// Param is the name of the parameter, header or cookie the finding was observed at, empty when
 	// the finding is about a resource rather than one of its inputs — a DOM sink's source
 	// expression, or an insertion point a BCheck fired at.
@@ -230,6 +249,10 @@ type Finding struct {
 	// TaskID is the run that produced this finding, or 0 when nothing tracked it. See NewFinding.
 	TaskID    uint64
 	Timestamp uint64
+	// Confirm is the DOM dynamic tier's machine verdict for a static-pass finding. See
+	// NewFinding.Confirm — empty for every finding the tier never saw, which is every finding
+	// except the DOM pass's own.
+	Confirm string `json:"confirm,omitempty"`
 	// Param names the parameter the finding was observed at, empty when it is about a resource.
 	// See NewFinding.Param. On a merged finding this is the *first* param observed; Params below is
 	// the full set and is what a reader should use.
@@ -444,6 +467,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		Occurrences: append([]Occurrence(nil), finding.Occurrences...),
 		Inserted:    finding.Inserted,
 		TaskID:      finding.TaskID,
+		Confirm:     finding.Confirm,
 		Timestamp:   uint64(getTimestamp()),
 		Param:       finding.Param,
 		Target:      finding.Target,

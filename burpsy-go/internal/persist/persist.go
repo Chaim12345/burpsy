@@ -517,6 +517,13 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("findings", "task_id", "INTEGER"); err != nil {
 		return err
 	}
+	// confirm is the DOM dynamic tier's machine verdict (m97j): promoted/retired/unavailable/
+	// unsupported-source, NULL for every finding the tier never saw. Carried to disk for the
+	// same reason task_id is: a verdict that survives only in memory means a confirmed DOM
+	// finding reverts to tentative on reload, and the issues list would contradict the log.
+	if err := s.addColumn("findings", "confirm", "TEXT"); err != nil {
+		return err
+	}
 	// Triage columns (burpsy-react-ui-pwd): the operator's severity/confidence override, the
 	// false-positive mark and a note must survive a restart exactly like the finding they modify.
 	// severity_override is NULL when the engine's own severity stands; false_positive defaults to 0
@@ -908,12 +915,12 @@ func (s *Store) SaveFinding(f *core.Finding) {
 		`INSERT OR REPLACE INTO findings
 		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
 		  target_host, target_port, target_tls, target_path, params, task_id,
-		  severity_override, confidence_override, false_positive, comment)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  severity_override, confidence_override, false_positive, comment, confirm)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
 		f.Remediation, occ, ins, f.Timestamp, f.Param,
 		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID,
-		sevOverride, confOverride, fp, f.Comment)
+		sevOverride, confOverride, fp, f.Comment, f.Confirm)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -924,7 +931,7 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
 		        target_host, target_port, target_tls, target_path, params, task_id,
-		        severity_override, confidence_override, false_positive, comment
+		        severity_override, confidence_override, false_positive, comment, confirm
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -939,6 +946,7 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		// zero target is exactly the right reading of that: unknown, so not eligible to merge.
 		var tHost, tPath sql.NullString
 		var tPort, tTLS, taskID sql.NullInt64
+		var confirmCol sql.NullString
 		// Triage columns are nullable: severity_override/confidence_override are NULL while the
 		// engine's own values stand, and every row written before they existed has NULLs for all
 		// four, which must load as "no triage" rather than fail the whole restore.
@@ -946,11 +954,12 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		var comment sql.NullString
 		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param,
 			&tHost, &tPort, &tTLS, &tPath, &params, &taskID,
-			&sevOverride, &confOverride, &fp, &comment); err != nil {
+			&sevOverride, &confOverride, &fp, &comment, &confirmCol); err != nil {
 			return nil, err
 		}
 		// NULL on a legacy row becomes 0, which is what an untracked finding already means in memory.
 		f.TaskID = uint64(taskID.Int64)
+		f.Confirm = confirmCol.String
 		f.Severity = core.Severity(sev)
 		f.Confidence = core.Confidence(conf)
 		f.Timestamp = uint64(ts)

@@ -1226,6 +1226,22 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			zap.Int("checks", len(checks)))
 	}
 
+	// Phase 12: the DOM dynamic confirmation tier (burpsy-react-ui-m97j), the half dom.go's
+	// header promised and never had. It re-runs the STATIC DOM analysis on this exchange's own
+	// response — the same free-standing pass Capture.ScanExchange runs — so the confirm sees the
+	// same flows the passive path reported, then plants a canary in each URL-kind flow's source
+	// and loads the page in the scan's browser. Promoted/retired verdicts ride the finding;
+	// without a browser attached (or on an unsupported source kind) the finding stays tentative
+	// AND SAYS SO in its evidence, because a caveat only in the operator's memory is the failure
+	// DOM-03 exists to prevent. Only when the DOM families are enabled: the tier confirms THIS
+	// pass's candidates, and running it with the families off would observe pages no static
+	// finding came from.
+	if s.DOMCapabilityConfigured() && s.config != nil && s.config.CheckDOM {
+		if confirmed := s.confirmDOMFindingsFor(ex); len(confirmed) > 0 {
+			found = append(found, confirmed...)
+		}
+	}
+
 	if len(found) > 0 {
 		s.findingsMu.Lock()
 		s.findings = append(s.findings, found...)

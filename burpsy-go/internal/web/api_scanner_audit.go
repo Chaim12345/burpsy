@@ -471,6 +471,10 @@ func (s *Server) activeFinding(f *scanner.Finding, taskID uint64) core.NewFindin
 		Remediation: f.Solution,
 		TaskID:      taskID,
 		Param:       f.Param,
+		// The DOM dynamic tier's verdict (m97j). Carried from the scanner Finding to the store
+		// here, beside Confidence — a confirmed DOM finding must reach the issues API with its
+		// verdict attached, or promotion is invisible everywhere but the log.
+		Confirm: string(f.Confirm),
 	}
 	// Resolved through the store so the occurrence carries the message ids the issues API reads, not
 	// just an exchange id. An exchange that has since rolled out of the store leaves the occurrence

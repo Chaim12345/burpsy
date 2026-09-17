@@ -849,6 +849,12 @@ type issueFindingView struct {
 	// TaskID is the run that produced this finding, omitted when nothing tracked it. It is what ties
 	// a coverage summary to the findings that came out of the same run.
 	TaskID uint64 `json:"task_id,omitempty"`
+	// Confirm is the DOM dynamic tier's machine verdict for a static-pass finding
+	// (burpsy-react-ui-m97j): "promoted", "retired", "unavailable" or "unsupported-source",
+	// omitted for every finding the tier never saw. Carried so the issues list can show which
+	// tentative DOM candidates a browser confirmed — a verdict visible only in the log is a
+	// verdict nobody receives.
+	Confirm string `json:"confirm,omitempty"`
 }
 
 // findingToIssueView converts a stored finding into the UI shape. Host is derived from the first
@@ -874,6 +880,7 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		Params:      f.Params,
 		TimesSeen:   len(f.Occurrences),
 		TaskID:      f.TaskID,
+		Confirm:     f.Confirm,
 	}
 	if f.SeverityOverride != nil {
 		over := f.SeverityOverride.String()
